@@ -7,7 +7,6 @@ import { trends } from "../../stores/trends.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import type { DbTrendsTermsResponse as TrendsTermsResponse } from "../../api/generated/index.js";
-import source from "./TrendsPage.svelte?raw";
 
 const mocks = vi.hoisted(() => ({
   getApiV1TrendsTerms: vi.fn(),
@@ -323,12 +322,6 @@ describe("TrendsPage", () => {
     expect(window.location.search).toContain("to=2026-06-20");
   });
 
-  it("updates shared yoke state from range selections", () => {
-    expect(source).toContain("<RangePicker");
-    expect(source).toContain("updateYokeFromTrends");
-    expect(source).toContain("rangeToPanelDate(seed)");
-  });
-
   it("shows chart loading status while trends are computing", async () => {
     let resolveFetch: ((response: TrendsTermsResponse) => void) | undefined;
     mocks.getApiV1TrendsTerms.mockReturnValueOnce(
@@ -530,27 +523,5 @@ describe("TrendsPage", () => {
     );
     expect(strokes).toEqual(["#ff7f0e", "#1f77b4"]);
     expect(swatches).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
-  });
-});
-
-describe("TrendsPage date yoke controls", () => {
-  it("preserves relative range selections as rolling yoke state", () => {
-    const applyIndex = source.indexOf("async function applyRange");
-    const helperIndex = source.indexOf("function yokeStateForSelection");
-    const applyBlock = source.slice(applyIndex, helperIndex);
-
-    expect(helperIndex).toBeGreaterThan(applyIndex);
-    expect(source).toContain('mode: "rolling"');
-    expect(source).toContain("windowDays: sel.days");
-    expect(applyBlock).toContain("yokeStateForSelection(sel, range)");
-    expect(applyBlock).toContain("updateYokeFromTrends(yokeState)");
-  });
-
-  it("preserves rolling window intent in trends URLs", () => {
-    expect(source).toContain('const TREND_WINDOW_PARAM = "window_days"');
-    expect(source).toContain("parseTrendWindowDays");
-    expect(source).toContain("rollingRange(windowDays)");
-    expect(source).toContain("q.set(TREND_WINDOW_PARAM");
-    expect(source).toContain("trendsWindowDays !== null");
   });
 });

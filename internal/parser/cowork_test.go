@@ -524,20 +524,3 @@ func TestResolveCoworkSessionRejectsSymlinkEscape(t *testing.T) {
 	assert.Empty(t, main, "symlinked escape rejected")
 	assert.Empty(t, encDir, "no enc dir for escape")
 }
-
-func TestCoworkDefaultDirs(t *testing.T) {
-	dirs := coworkDefaultDirs()
-	require.Len(t, dirs, 4, "macOS, Linux, Windows MSIX, Windows Roaming")
-	assert.Contains(t, dirs,
-		"AppData/Local/Packages/Claude_pzs8sxrjxfjjc/"+
-			"LocalCache/Roaming/Claude/local-agent-mode-sessions",
-		"Windows MSIX package-local path")
-	assert.Contains(t, dirs,
-		"AppData/Roaming/Claude/local-agent-mode-sessions",
-		"Windows Roaming fallback")
-	for _, d := range dirs {
-		assert.True(t, strings.HasSuffix(d, "local-agent-mode-sessions"),
-			"dir %q targets local-agent-mode-sessions", d,
-		)
-	}
-}

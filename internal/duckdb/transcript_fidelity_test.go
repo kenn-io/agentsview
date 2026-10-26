@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"encoding/json/v2"
 	"path/filepath"
 	"testing"
 
@@ -42,31 +41,4 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "high", got.TranscriptFidelity, "transcript_fidelity must survive push+read")
-}
-
-// TestDuckSessionFingerprintFieldsIncludesTranscriptFidelity verifies that
-// a change to TranscriptFidelity produces a different fingerprint, so the
-// push engine re-syncs when fidelity changes.
-func TestDuckSessionFingerprintFieldsIncludesTranscriptFidelity(t *testing.T) {
-	base := db.Session{
-		ID:               "sess-fidelity",
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     5,
-		UserMessageCount: 2,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}
-	encode := func(s db.Session) string {
-		data, err := json.Marshal(duckSessionFingerprintFields(s, "laptop"))
-		require.NoError(t, err)
-		return string(data)
-	}
-	fp1 := encode(base)
-
-	modified := base
-	modified.TranscriptFidelity = "low"
-	fp2 := encode(modified)
-
-	assert.NotEqual(t, fp1, fp2, "TranscriptFidelity change must alter fingerprint")
 }

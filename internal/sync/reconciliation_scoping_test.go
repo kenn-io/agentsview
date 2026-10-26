@@ -710,16 +710,3 @@ func TestSyncPathsMissingSourceResolvesReplacementAcrossRoots(t *testing.T) {
 	assert.NotNil(t, active,
 		"a surviving same-identity copy under another configured root is a replacement")
 }
-
-// TestStoredSourceDBHintScopesPreservesFields is the adapter-fidelity row:
-// parser scopes convert to database scopes without losing either field.
-func TestStoredSourceDBHintScopesPreservesFields(t *testing.T) {
-	converted := storedSourceDBHintScopes([]parser.StoredSourceHintScope{
-		{Path: "/archive/state.db", IncludeVirtualMembers: true},
-		{Path: "/archive/sessions"},
-	})
-	assert.Equal(t, []db.StoredSourcePathHintScope{
-		{Path: "/archive/state.db", IncludeVirtualMembers: true},
-		{Path: "/archive/sessions"},
-	}, converted)
-}

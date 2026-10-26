@@ -29,13 +29,12 @@ func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
 }
 
-func TestDialogueUpgradePreservesCompletedCodexRepositoryUpgrade(t *testing.T) {
-	// The version just before the dialogue upgrade (142), so later scoped
-	// upgrades still pass through it.
-	const completedVersion = 141
+func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
+	// The version before preserving classification, even after later upgrades.
+	const completedVersion = 145
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "completed Codex upgrade")
-	for _, agent := range []string{"codex", "pi"} {
+	for _, agent := range []string{"codex", "pi", "hermes"} {
 		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
 		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, completedVersion))
 	}
@@ -48,7 +47,8 @@ func TestDialogueUpgradePreservesCompletedCodexRepositoryUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	assert.False(t, reopened.NeedsResync())
-	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "codex"))
+	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "hermes"))
+	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "codex"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }
 

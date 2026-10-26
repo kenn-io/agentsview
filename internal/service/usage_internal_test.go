@@ -24,29 +24,6 @@ func TestUsageSummaryResultEmitsEmptyProjectsMap(t *testing.T) {
 	assert.Contains(t, string(b), `"projects":{}`)
 }
 
-func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
-	t.Parallel()
-	// SavingsVsUncached is computed per-model in the DB layer;
-	// computeCacheStats just forwards totals.CacheSavings. Verify the
-	// pass-through at the positive, negative, and zero boundaries so a
-	// future refactor that drops the field trips a test.
-	cases := []struct {
-		name string
-		in   money.Money
-	}{
-		{"positive", money.MustParseDollars("4.65")},
-		{"negative", money.MustParseDollars("-0.75")},
-		{"zero", money.Money{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cs := computeCacheStats(db.UsageTotals{CacheSavings: tc.in})
-			assert.Equal(t, tc.in, cs.SavingsVsUncached)
-		})
-	}
-}
-
 func TestComputeCacheStats_ZeroTotalsIsZero(t *testing.T) {
 	cs := computeCacheStats(db.UsageTotals{})
 	assert.Equal(t, money.Money{}, cs.SavingsVsUncached)

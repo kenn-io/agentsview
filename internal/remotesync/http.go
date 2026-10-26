@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/kit/spill"
+
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -144,14 +146,26 @@ func (hs RemoteSync) downloadIntoMirror(
 	fetch []string,
 	full bool,
 	mirrorRoot string,
+) error {
+	return hs.downloadFilesIntoMirror(
+		ctx, targets, fetch, full, mirrorRoot,
+		fmt.Sprintf("%d changed files", len(fetch)),
+	)
+}
+
+// downloadFilesIntoMirror is downloadIntoMirror with files naming the fetched
+// files in its progress labels.
+func (hs RemoteSync) downloadFilesIntoMirror(
+	ctx context.Context,
+	targets TargetSet,
+	fetch []string,
+	full bool,
+	mirrorRoot string,
+	files string,
 ) (err error) {
 	request := ArchiveRequest{TargetSet: targets}
-	downloadLabel := fmt.Sprintf(
-		"Downloading %d changed files from %s", len(fetch), hs.Host,
-	)
-	extractLabel := fmt.Sprintf(
-		"Extracting %d changed files from %s", len(fetch), hs.Host,
-	)
+	downloadLabel := fmt.Sprintf("Downloading %s from %s", files, hs.Host)
+	extractLabel := fmt.Sprintf("Extracting %s from %s", files, hs.Host)
 	if full {
 		downloadLabel = "Downloading session archive from " + hs.Host
 		extractLabel = "Extracting session archive from " + hs.Host
@@ -202,6 +216,88 @@ func (hs RemoteSync) downloadIntoMirror(
 		return fmt.Errorf("extract archive into mirror: %w", extractErr)
 	}
 	return nil
+}
+
+// applyLargeMirrorChange applies a change too large to hold in memory, one
+// batch of paths at a time. Deletions go first so remote file/directory type
+// changes cannot wedge the mirror. Fetches go out as delta archive requests
+// of at most mirrorBatchBytes of paths each. When every manifest file
+// changed, or the remote refuses a delta request, one full archive replaces
+// the fetched files instead. The journal is a full import by then, so
+// extracting the whole archive leaves nothing unrecorded.
+func (hs RemoteSync) applyLargeMirrorChange(
+	ctx context.Context,
+	targets TargetSet,
+	delta MirrorDelta,
+	mirrorRoot string,
+) error {
+	for batch, err := range pathBatches(delta.Deletions, mirrorBatchBytes) {
+		if err != nil {
+			return err
+		}
+		if err := ApplyMirrorDeletions(mirrorRoot, batch); err != nil {
+			return err
+		}
+	}
+	if delta.Fetch.Len() == 0 {
+		return nil
+	}
+	if delta.Fetch.Len() < delta.Total {
+		refused, err := hs.downloadMirrorBatches(ctx, targets, delta.Fetch, mirrorRoot)
+		if err != nil || !refused {
+			return err
+		}
+		hs.reportProgressDetail(hs.Host +
+			" refused a partial download; downloading the full session archive instead")
+	}
+	// The full archive omits a file that vanished after the manifest listed
+	// it, so the old copies go first.
+	for batch, err := range pathBatches(delta.Fetch, mirrorBatchBytes) {
+		if err != nil {
+			return err
+		}
+		if err := RemoveMirrorTypeConflicts(mirrorRoot, batch); err != nil {
+			return err
+		}
+		if err := RemoveMirrorFetchFiles(mirrorRoot, batch); err != nil {
+			return err
+		}
+	}
+	return hs.downloadIntoMirror(ctx, targets, nil, true, mirrorRoot)
+}
+
+// downloadMirrorBatches fetches the listed files as delta archive requests,
+// one batch at a time. It stops and reports refused when the remote refuses
+// a delta request.
+func (hs RemoteSync) downloadMirrorBatches(
+	ctx context.Context,
+	targets TargetSet,
+	fetch *spill.List,
+	mirrorRoot string,
+) (refused bool, err error) {
+	number, done := 0, 0
+	for batch, err := range pathBatches(fetch, mirrorBatchBytes) {
+		if err != nil {
+			return false, err
+		}
+		if err := RemoveMirrorTypeConflicts(mirrorRoot, batch); err != nil {
+			return false, err
+		}
+		number++
+		done += len(batch)
+		files := fmt.Sprintf("%d changed files", len(batch))
+		if number > 1 || done < fetch.Len() {
+			files = fmt.Sprintf("batch %d (%d of %d changed files)", number, done, fetch.Len())
+		}
+		err = hs.downloadFilesIntoMirror(ctx, targets, batch, false, mirrorRoot, files)
+		if isRemoteRefusal(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func (hs RemoteSync) downloadAndExtract(

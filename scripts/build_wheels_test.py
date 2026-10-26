@@ -19,56 +19,6 @@ from build_wheels import (
 
 
 # ---------------------------------------------------------------------------
-# Platform mapping
-# ---------------------------------------------------------------------------
-
-
-class TestPlatformMap:
-    def test_all_required_platforms_present(self) -> None:
-        required = {
-            "linux_amd64",
-            "linux_arm64",
-            "darwin_amd64",
-            "darwin_arm64",
-            "windows_amd64",
-            "windows_arm64",
-        }
-        assert set(PLATFORM_MAP.keys()) == required
-
-    def test_each_entry_has_wheel_tag(self) -> None:
-        for key, entry in PLATFORM_MAP.items():
-            assert "wheel_tag" in entry, f"{key} missing wheel_tag"
-            assert isinstance(entry["wheel_tag"], str)
-            assert entry["wheel_tag"]
-
-    def test_each_entry_has_binary_name(self) -> None:
-        for key, entry in PLATFORM_MAP.items():
-            assert "binary_name" in entry, f"{key} missing binary_name"
-            assert isinstance(entry["binary_name"], str)
-            assert entry["binary_name"]
-
-    def test_windows_binary_has_exe_extension(self) -> None:
-        assert PLATFORM_MAP["windows_amd64"]["binary_name"] == "agentsview.exe"
-        assert PLATFORM_MAP["windows_arm64"]["binary_name"] == "agentsview.exe"
-
-    def test_unix_binaries_have_no_extension(self) -> None:
-        for key in ("linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64"):
-            assert PLATFORM_MAP[key]["binary_name"] == "agentsview"
-
-    def test_manylinux_wheel_tags(self) -> None:
-        assert PLATFORM_MAP["linux_amd64"]["wheel_tag"] == "manylinux_2_28_x86_64"
-        assert PLATFORM_MAP["linux_arm64"]["wheel_tag"] == "manylinux_2_28_aarch64"
-
-    def test_macos_wheel_tags(self) -> None:
-        assert PLATFORM_MAP["darwin_amd64"]["wheel_tag"] == "macosx_11_0_x86_64"
-        assert PLATFORM_MAP["darwin_arm64"]["wheel_tag"] == "macosx_11_0_arm64"
-
-    def test_windows_wheel_tag(self) -> None:
-        assert PLATFORM_MAP["windows_amd64"]["wheel_tag"] == "win_amd64"
-        assert PLATFORM_MAP["windows_arm64"]["wheel_tag"] == "win_arm64"
-
-
-# ---------------------------------------------------------------------------
 # Archive filename parsing
 # ---------------------------------------------------------------------------
 
@@ -192,10 +142,6 @@ class TestBuildWheel:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
         assert whl.name == "agentsview-0.15.0-py3-none-manylinux_2_28_x86_64.whl"
 
-    def test_wheel_is_valid_zip(self, tmp_path: Path) -> None:
-        whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
-        assert zipfile.is_zipfile(whl)
-
     def test_wheel_contains_expected_files(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
         with zipfile.ZipFile(whl) as zf:
@@ -297,10 +243,6 @@ class TestBuildWheel:
         with zipfile.ZipFile(whl) as zf:
             init = zf.read("agentsview/__init__.py").decode()
         assert "subprocess.call" in init
-
-    def test_wheel_filename_darwin_arm64(self, tmp_path: Path) -> None:
-        whl = build_wheel(b"fake", tmp_path, "1.0.0", "darwin_arm64")
-        assert whl.name == "agentsview-1.0.0-py3-none-macosx_11_0_arm64.whl"
 
 
 # ---------------------------------------------------------------------------

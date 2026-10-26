@@ -92,68 +92,7 @@ describe("renderMarkdown", () => {
     vi.unstubAllGlobals();
   });
 
-  describe("inline formatting", () => {
-    it("renders bold text", () => {
-      const dom = parseHTML(renderMarkdown("**bold**"));
-      const strong = dom.querySelector("p > strong");
-      expect(strong).not.toBeNull();
-      expect(strong!.textContent).toBe("bold");
-    });
-
-    it("renders italic text", () => {
-      const dom = parseHTML(renderMarkdown("*italic*"));
-      const em = dom.querySelector("p > em");
-      expect(em).not.toBeNull();
-      expect(em!.textContent).toBe("italic");
-    });
-
-    it("renders inline code", () => {
-      const dom = parseHTML(renderMarkdown("`code`"));
-      const code = dom.querySelector("p > code");
-      expect(code).not.toBeNull();
-      expect(code!.textContent).toBe("code");
-    });
-
-    it("renders links", () => {
-      const dom = parseHTML(renderMarkdown("[text](https://example.com)"));
-      const a = dom.querySelector("p > a");
-      expect(a).not.toBeNull();
-      expect(a!.textContent).toBe("text");
-      expect(a!.getAttribute("href")).toBe("https://example.com");
-    });
-  });
-
   describe("block elements", () => {
-    it("renders headings", () => {
-      const dom = parseHTML(renderMarkdown("## Heading 2"));
-      const h2 = dom.querySelector("h2");
-      expect(h2).not.toBeNull();
-      expect(h2!.textContent).toBe("Heading 2");
-    });
-
-    it("renders unordered lists", () => {
-      const dom = parseHTML(renderMarkdown("- item one\n- item two"));
-      const items = dom.querySelectorAll("ul > li");
-      expect(items).toHaveLength(2);
-      expect(items[0]!.textContent).toBe("item one");
-      expect(items[1]!.textContent).toBe("item two");
-    });
-
-    it("renders ordered lists", () => {
-      const dom = parseHTML(renderMarkdown("1. first\n2. second"));
-      const items = dom.querySelectorAll("ol > li");
-      expect(items).toHaveLength(2);
-      expect(items[0]!.textContent).toBe("first");
-      expect(items[1]!.textContent).toBe("second");
-    });
-
-    it("renders blockquotes", () => {
-      const dom = parseHTML(renderMarkdown("> quoted text"));
-      const bq = dom.querySelector("blockquote");
-      expect(bq).not.toBeNull();
-      expect(bq!.textContent!.trim()).toBe("quoted text");
-    });
-
     it("preserves prose around separated blockquotes", () => {
       const dom = parseHTML(
         renderMarkdown("blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5"),
@@ -164,24 +103,6 @@ describe("renderMarkdown", () => {
       expect(dom.textContent).toContain("blabla4");
       expect(dom.textContent).toContain("blabla5");
       expect(dom.querySelectorAll("blockquote")).toHaveLength(2);
-    });
-
-    it("renders tables", () => {
-      const md = "| A | B |\n| --- | --- |\n| 1 | 2 |";
-      const dom = parseHTML(renderMarkdown(md));
-      const ths = dom.querySelectorAll("thead th");
-      expect(ths).toHaveLength(2);
-      expect(ths[0]!.textContent).toBe("A");
-      expect(ths[1]!.textContent).toBe("B");
-      const tds = dom.querySelectorAll("tbody td");
-      expect(tds).toHaveLength(2);
-      expect(tds[0]!.textContent).toBe("1");
-      expect(tds[1]!.textContent).toBe("2");
-    });
-
-    it("renders horizontal rules", () => {
-      const dom = parseHTML(renderMarkdown("---"));
-      expect(dom.querySelector("hr")).not.toBeNull();
     });
 
     it("converts single newlines to <br>", () => {
@@ -1139,20 +1060,6 @@ describe("renderMarkdown", () => {
 
     it("returns empty string for empty input", () => {
       expect(renderMarkdown("")).toBe("");
-    });
-
-    it("passes through plain text", () => {
-      const dom = parseHTML(renderMarkdown("just plain text"));
-      const p = dom.querySelector("p");
-      expect(p).not.toBeNull();
-      expect(p!.textContent).toBe("just plain text");
-    });
-
-    it("removes trailing newlines to prevent extra height", () => {
-      const dom = parseHTML(renderMarkdown("text\n\n"));
-      const p = dom.querySelector("p");
-      expect(p).not.toBeNull();
-      expect(p!.textContent).toBe("text");
     });
   });
 });

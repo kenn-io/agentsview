@@ -251,33 +251,6 @@ func TestDataProjectReclassificationCandidatesMissingProjectKey(t *testing.T) {
 	}
 }
 
-func TestDataRoutesRegistered(t *testing.T) {
-	te := setup(t)
-	paths := []string{
-		"/api/v1/data/projects",
-		"/api/v1/data/project-rules",
-		buildPathURL(
-			"/api/v1/data/project-reclassification/candidates",
-			map[string]string{"project_label": "example", "project_key": "pl1-example"},
-		),
-	}
-	for _, path := range paths {
-		w := te.get(t, path)
-		assert.NotEqual(t, http.StatusNotFound, w.Code, "path %q must be registered", path)
-		assert.Contains(t, w.Header().Get("Content-Type"), "application/json",
-			"path %q must be routed to a JSON handler, not the SPA fallback", path)
-	}
-	w := te.post(t, "/api/v1/data/compact", `{}`)
-	assert.NotEqual(t, http.StatusNotFound, w.Code)
-	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
-	wPreview := te.post(t, "/api/v1/data/strip-images/preview", `{}`)
-	assert.NotEqual(t, http.StatusNotFound, wPreview.Code)
-	assert.Contains(t, wPreview.Header().Get("Content-Type"), "application/json")
-	wStrip := te.post(t, "/api/v1/data/strip-images", `{}`)
-	assert.NotEqual(t, http.StatusNotFound, wStrip.Code)
-	assert.Contains(t, wStrip.Header().Get("Content-Type"), "application/json")
-}
-
 func TestDataStripImagesRejectsNonLocalhost(t *testing.T) {
 	const sid = "img-nonlocal-1"
 	te := setup(t)

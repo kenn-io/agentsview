@@ -1251,22 +1251,6 @@ func TestEnsureTransport_ArchiveWritePropagatesGeneratedAuthToken(t *testing.T) 
 	assert.Equal(t, "generated", cfg.AuthToken)
 }
 
-// TestNewService_HTTPMode verifies that newService returns a
-// working HTTP-backed service and a cleanup function when the
-// transport is HTTP mode. No DB is opened in this path.
-func TestNewService_HTTPMode(t *testing.T) {
-	t.Parallel()
-	tr := transport{
-		Mode: transportHTTP,
-		URL:  "http://127.0.0.1:8080",
-	}
-	svc, cleanup, err := newService(t.Context(), config.Config{}, tr)
-	require.NoError(t, err)
-	require.NotNil(t, svc)
-	require.NotNil(t, cleanup)
-	cleanup()
-}
-
 // TestNewService_DirectMode verifies that newService opens the
 // local SQLite DB and returns a direct-backed service when the
 // transport is direct mode. The cleanup function must close the

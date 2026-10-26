@@ -356,10 +356,11 @@ unless `--background` is specified. This is the same writable server managed by
 
 `serve` reuses or replaces an existing local writable daemon according to the
 [replacement rules below](#background-mode). Read-only replica servers are left
-running. When reusing a server, `serve` reports its URL and exits. Open that URL
-to use the web UI. Stopping the server with either `daemon stop` or `serve stop`
-also stops its sync and file watchers. `--no-sync` disables automatic sync in
-that process; it does not create a separate sync daemon.
+running. When reusing a server, `serve` reports its URL and exits with status 1
+so systemd's `Restart=on-failure` retries; `--background` exits with status 0.
+Open that URL to use the web UI. Stopping the server with either `daemon stop`
+or `serve stop` also stops its sync and file watchers. `--no-sync` disables
+automatic sync in that process; it does not create a separate sync daemon.
 
 ```bash
 agentsview serve [flags]
@@ -544,6 +545,9 @@ when no compatible daemon is running. That includes local `sync`,
 `pg push`/`pg push --watch`, `duckdb push`, and `clickhouse push`. If a writable
 daemon is known to own the archive but is not reachable, these commands refuse
 instead of writing directly.
+
+With `--no-start-daemon`, `pg push --watch` and `clickhouse push --watch` require
+an existing writable daemon.
 
 Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. Commands that require
 the daemon refuse while it is disabled. Direct write commands acquire the local
@@ -1240,18 +1244,19 @@ Sync sessions from local SQLite to PostgreSQL. See
 agentsview pg push [target] [flags]
 ```
 
-| Flag                 | Default | Description                                                    |
-| -------------------- | ------- | -------------------------------------------------------------- |
-| `--full`             | `false` | Force full local resync and re-push                            |
-| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run             |
+| Flag                 | Default | Description                                                                                                        |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--full`             | `false` | Force full local resync and re-push                                                                                |
+| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                                                                 |
 | `--embed`            | `false` | Push sessions first, then build and push vectors; watch builds after syncs and pushes vectors on the next interval |
-| `--projects`         |         | Comma-separated projects to push (inclusive)                   |
-| `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
-| `--all-projects`     | `false` | Ignore configured project filters for this run                 |
-| `--all`              | `false` | Push every configured PostgreSQL target sequentially           |
-| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor      |
-| `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only) |
-| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                  |
+| `--projects`         |         | Comma-separated projects to push (inclusive)                                                                       |
+| `--exclude-projects` |         | Comma-separated projects to exclude from push                                                                      |
+| `--all-projects`     | `false` | Ignore configured project filters for this run                                                                     |
+| `--all`              | `false` | Push every configured PostgreSQL target sequentially                                                               |
+| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                                                          |
+| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running; incompatible with `--embed`                    |
+| `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only)                                                     |
+| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                                                                      |
 
 See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) for
 details on how filtering interacts with the push watermark.
@@ -1310,6 +1315,12 @@ Install and manage the PostgreSQL auto-push service, which runs
 launchd on macOS and `systemd --user` on Linux. See
 [PostgreSQL Sync — `agentsview pg service`](/docs/pg-sync/#agentsview-pg-service)
 for setup notes.
+
+Use `service install --no-start-daemon` with your own collector. The push
+service exits if no writable daemon is running, and the service manager restarts
+it until the collector answers. Reinstalling restarts the service with the new
+arguments. The default installation still starts a missing daemon. Reinstalling
+without `--no-start-daemon` restores daemon autostart.
 
 ```bash
 agentsview pg service install
@@ -1401,7 +1412,8 @@ ClickHouse has no vector phase. `--all --watch` is rejected.
 
 `clickhouse serve` accepts the same serve flags as `pg serve`.
 `clickhouse service` installs `clickhouse push --watch` as a launchd or systemd
-user unit and writes `clickhouse-watch.log`.
+user unit and writes `clickhouse-watch.log`. Use
+`clickhouse service install --no-start-daemon` with your own collector.
 
 ______________________________________________________________________
 

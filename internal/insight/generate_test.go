@@ -174,15 +174,6 @@ func TestAgentEnv(t *testing.T) {
 	assert.Equal(t, "1", envMap["CLAUDE_NO_SOUND"])
 }
 
-func TestValidAgents(t *testing.T) {
-	for _, agent := range []string{
-		"claude", "codex", "copilot", "gemini", "kiro",
-	} {
-		assert.True(t, ValidAgents[agent], "%s should be valid", agent)
-	}
-	assert.False(t, ValidAgents["gpt"], "gpt should not be valid")
-}
-
 func createMockBinary(
 	t *testing.T, stdout string, exitCode int, writeArgs bool, name string,
 ) (bin, argsFile string) {

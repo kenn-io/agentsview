@@ -101,21 +101,6 @@ func newEmbeddingsTestServer(t *testing.T, m EmbeddingsManager) *Server {
 	return testServer(t, 0, opts...)
 }
 
-func TestEmbeddingsRoutesRegisteredWhenManagerNil(t *testing.T) {
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/status", nil)
-
-	withoutManager := newEmbeddingsTestServer(t, nil)
-	_, patternWithout := withoutManager.mux.Handler(req)
-	assert.NotEqual(t, "/", patternWithout)
-
-	w := serveGet(t, withoutManager, "/api/v1/embeddings/status")
-	assertRecorderStatus(t, w, http.StatusNotImplemented)
-
-	withManager := newEmbeddingsTestServer(t, &fakeEmbeddingsManager{})
-	_, patternWith := withManager.mux.Handler(req)
-	assert.NotEqual(t, "/", patternWith)
-}
-
 // TestEmbeddingsUnavailableReasonReplacesGeneric501 pins that a recorded
 // unavailability reason (e.g. vector serving disabled at startup because
 // vectors.write.lock was held) reaches the 501 body, so CLI users see why

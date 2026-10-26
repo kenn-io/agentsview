@@ -152,7 +152,9 @@ func TestBatchedFingerprintsMatchPerSession(t *testing.T) {
 	for _, id := range ids {
 		sum, maxLen, minLen, err := d.MessageContentFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
-		assert.Equal(t, MessageContentAggregate{Sum: sum, Max: maxLen, Min: minLen},
+		count, err := d.MessageCount(t.Context(), id)
+		require.NoError(t, err)
+		assert.Equal(t, MessageContentAggregate{Count: count, Sum: sum, Max: maxLen, Min: minLen},
 			content[id], "content aggregate %s", id)
 
 		wantToken, err := d.MessageTokenFingerprint(t.Context(), id)

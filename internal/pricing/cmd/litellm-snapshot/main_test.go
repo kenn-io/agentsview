@@ -146,24 +146,6 @@ func TestComputeVersion_DifferentInputDifferentHash(t *testing.T) {
 	assert.NotEqual(t, v1, v2)
 }
 
-func TestDefaultOutputPathTargetsIgnoredSnapshot(t *testing.T) {
-	assert.Equal(
-		t,
-		"internal/pricing/snapshot/litellm_snapshot.json.gz",
-		filepath.ToSlash(defaultOutputPath),
-	)
-}
-
-func TestDefaultSnapshotConstantsNonEmpty(t *testing.T) {
-	assert.NotEmpty(t, defaultSnapshotRef, "pinned ref must be set")
-	assert.Len(t, defaultSnapshotRef, 40, "pinned ref must be a full SHA-1")
-	assert.NotEmpty(t, defaultSnapshotSHA256, "pinned SHA256 must be set")
-	assert.Len(t, defaultSnapshotSHA256, 64, "pinned SHA256 must be a hex-encoded SHA-256")
-	assert.NotEmpty(t, defaultSnapshotBranch, "pinned branch must be set")
-	assert.NotEmpty(t, defaultSnapshotFile, "pinned file must be set")
-	assert.Len(t, defaultLiteLLMSourceRef, 40, "LiteLLM source must be a full commit SHA")
-}
-
 func TestFileURLForPathUsesFileScheme(t *testing.T) {
 	dir := t.TempDir()
 	abs, err := filepath.Abs(dir)

@@ -340,17 +340,6 @@ func TestClineClassifyPath_Teammates(t *testing.T) {
 	assert.Equal(t, metaPath, match.Path)
 }
 
-func TestClineProviderCapabilities(t *testing.T) {
-	provider, ok := NewProvider(AgentCline, ProviderConfig{Roots: []string{t.TempDir()}})
-	require.True(t, ok)
-	caps := provider.Capabilities()
-
-	assert.Equal(t, CapabilitySupported, caps.Source.StoredSourceHints)
-	assert.Equal(t, CapabilityNotApplicable, caps.Source.MultiSessionSource)
-	assert.Equal(t, CapabilityNotApplicable, caps.Source.ExcludedSessions)
-	assert.Equal(t, CapabilityNotApplicable, caps.Source.ForceReplaceOnParse)
-}
-
 func TestClineStoredSourceHintScope(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "data", "sessions")

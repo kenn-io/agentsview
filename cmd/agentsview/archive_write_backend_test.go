@@ -1725,3 +1725,43 @@ func TestDeferredDuckDBWatchPushKeepsFullUntilARebuild(t *testing.T) {
 	assert.Equal(t, []bool{true, true, true, false}, fullArgs)
 	assert.Equal(t, []bool{true, true, false, false}, notStarted)
 }
+
+func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
+	for _, tt := range []struct {
+		state       string
+		wantErr     error
+		wantMessage string
+	}{
+		{state: "absent", wantErr: errNoWritableDaemon},
+		{state: "read-only", wantErr: db.ErrReadOnly, wantMessage: "is read-only"},
+	} {
+		t.Run(tt.state, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), RequireDaemon: true}
+			starts := 0
+			stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+				starts++
+				return nil, errors.New("unexpected autostart")
+			})
+			switch tt.state {
+			case "read-only":
+				host, port := testPingServer(t)
+				writeDaemonRuntimeForTest(t, dir, host, port, version, true)
+			}
+			_, cleanup, err := resolveArchiveWriteBackend(t.Context(), cfg, transportIntentLongLived)
+			if cleanup != nil {
+				cleanup()
+			}
+			require.Error(t, err)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			}
+			if tt.wantMessage != "" {
+				require.ErrorContains(t, err, tt.wantMessage)
+				require.NotErrorIs(t, err, errNoWritableDaemon)
+			}
+			assert.Zero(t, starts)
+			assert.NoFileExists(t, cfg.DBPath)
+		})
+	}
+}

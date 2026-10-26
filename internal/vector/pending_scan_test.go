@@ -39,36 +39,6 @@ func explainVectorPlan(t *testing.T, ix *Index, query string, args ...any) []str
 	return details
 }
 
-// TestMirrorRevisionIndexExists asserts every store's mirror carries the
-// (doc_key, content_hash) index the stamp anti-joins depend on. The index is
-// additive, so an existing vectors.db picks it up from MirrorDDL on its next
-// write-path open rather than through a MirrorSchemaVersion bump.
-func TestMirrorRevisionIndexExists(t *testing.T) {
-	tests := []struct {
-		name  string
-		spec  IndexSpec
-		index string
-	}{
-		{"messages", MessageIndexSpec(), "idx_vector_messages_revision"},
-		{"recall", RecallIndexSpec(), "idx_vector_recall_entries_revision"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ix, err := OpenSpec(t.Context(),
-				filepath.Join(t.TempDir(), "vectors.db"), tt.spec, false, 4000)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, ix.Close()) })
-
-			var sql string
-			require.NoError(t, ix.db.QueryRowContext(t.Context(),
-				`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
-				tt.index).Scan(&sql))
-			assert.Contains(t, sql, tt.spec.DocsTable)
-			assert.Contains(t, strings.ReplaceAll(sql, " ", ""), "(doc_key,content_hash)")
-		})
-	}
-}
-
 // TestPendingContentQueryPlanSkipsStampedDocumentContent is the regression
 // guard for countPending reading every mirror document's content on every
 // after-sync refresh. The pending set must resolve through the mirror's

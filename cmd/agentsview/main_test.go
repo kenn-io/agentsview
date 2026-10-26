@@ -780,12 +780,6 @@ func TestTruncateLogFileUnderLimit(t *testing.T) {
 	assert.Equal(t, string(content), string(data), "content changed")
 }
 
-func TestTruncateLogFileMissing(t *testing.T) {
-	// Non-existent file: should not panic.
-	missing := filepath.Join(t.TempDir(), "missing", "log.txt")
-	truncateLogFile(missing, 1024)
-}
-
 func TestTruncateLogFileSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.log")

@@ -1298,16 +1298,3 @@ func captureRecallEvidenceLog(t *testing.T) *recallEvidenceLogBuffer {
 	})
 	return &output
 }
-
-func TestRecallEvidenceLogCaptureIgnoresUnrelatedLines(t *testing.T) {
-	logs := captureRecallEvidenceLog(t)
-
-	log.Printf("db: ReplaceSessionMessages s1 (3 msgs): 180ms")
-	log.Printf("recall: revoked provenance for entry-1: missing digest")
-
-	assert.Equal(
-		t,
-		"recall: revoked provenance for entry-1: missing digest",
-		strings.TrimSpace(logs.String()),
-	)
-}

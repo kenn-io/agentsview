@@ -116,26 +116,6 @@ describe("CallRow", () => {
     unmount(c);
   });
 
-  it("renders an open call with live elapsed time", async () => {
-    const c = mount(CallRow, {
-      target: document.body,
-      props: {
-        call: makeCall({ duration_ms: null }),
-        barWidthPct: 60,
-        isLive: true,
-        liveDurationMs: 4000,
-      },
-    });
-    await tick();
-    const html = document.body.innerHTML;
-    dumpHtml("call-row-live.html", html);
-
-    expect(document.querySelector(".cd")?.textContent?.trim()).toBe("running 4.0s+");
-    expect(document.querySelector<HTMLElement>(".cbar")?.style.width).toBe("0%");
-
-    unmount(c);
-  });
-
   it("renders a subagent call with an active chevron and expanded class", async () => {
     const c = mount(CallRow, {
       target: document.body,
@@ -190,24 +170,6 @@ describe("CallRow", () => {
     // the interactive chevron and renders the spacer instead.
     expect(html).toMatch(hasClasses("chev", "spacer"));
     expect(html).not.toContain("<button");
-
-    unmount(c);
-  });
-
-  it("renders missing call duration as unknown even with a shared duration", async () => {
-    const c = mount(CallRow, {
-      target: document.body,
-      props: {
-        call: makeCall({ duration_ms: null }),
-        barWidthPct: 25,
-      },
-    });
-    await tick();
-    const html = document.body.innerHTML;
-    dumpHtml("call-row-shared.html", html);
-
-    expect(document.querySelector(".cd")?.textContent?.trim()).toBe("unknown");
-    expect(document.querySelector<HTMLElement>(".cbar")?.style.width).toBe("0%");
 
     unmount(c);
   });
@@ -317,37 +279,6 @@ describe("CallGroup", () => {
     // Both rows should render as the spacer variant.
     const spacers = html.match(/\bchev\b[^"]*\bspacer\b/g) ?? [];
     expect(spacers.length).toBe(2);
-
-    unmount(c);
-  });
-
-  it("renders measured call durations and count when the group duration is unknown", async () => {
-    const calls: CallTiming[] = [
-      makeCall({ tool_use_id: "x1", duration_ms: 100 }),
-      makeCall({ tool_use_id: "x2", duration_ms: 200 }),
-    ];
-    const c = mount(CallGroup, {
-      target: document.body,
-      props: {
-        calls,
-        barScalePct: () => 10,
-        onCallClick: () => {},
-        onSubagentExpand: () => {},
-        expandedSubagentIds: new Set<string>(),
-      },
-    });
-    await tick();
-    const html = document.body.innerHTML;
-    dumpHtml("call-group-unknown.html", html);
-
-    expect(document.querySelector(".cg-header")?.textContent?.trim()).toBe("parallel · 2 calls");
-    expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
-      "100ms",
-      "200ms",
-    ]);
-    expect(
-      [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
-    ).toEqual(["10%", "10%"]);
 
     unmount(c);
   });

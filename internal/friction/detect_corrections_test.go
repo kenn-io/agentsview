@@ -55,11 +55,6 @@ func TestDetectCorrections(t *testing.T) {
 		{"corrections_empty_transcript/none", nil, []string{}},
 		{"corrections_empty_transcript/one", []Message{assistant("a")}, []string{}},
 		{"corrections_empty_transcript/two", []Message{assistant("a"), user("hi there friend")}, []string{}},
-		{
-			"corrections_real_user_string_still_detected",
-			[]Message{assistant("first"), user("no, you misunderstood the goal here"), assistant("second")},
-			[]string{"no, you misunderstood the goal here"},
-		},
 		// agentsview additions.
 		{"plain_instruction_skipped", []Message{assistant("a"), user("now run the tests"), assistant("b")}, []string{}},
 		{

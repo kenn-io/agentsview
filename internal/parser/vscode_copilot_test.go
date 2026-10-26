@@ -1149,10 +1149,6 @@ func TestVSCodeCopilotReplayLimitRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestVSCodeCopilotReplayDefaults(t *testing.T) {
-	assert.Equal(t, 128<<20, vscodeCopilotHardRecordLimit)
-}
-
 func TestDiscoverVSCodeCopilot_JSONLDedup(t *testing.T) {
 	root := t.TempDir()
 

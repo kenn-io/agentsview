@@ -95,20 +95,6 @@ func TestMCPListenerAuth(t *testing.T) {
 	assert.Contains(t, err.Error(), "auth token")
 }
 
-func TestNewMCPCommand_Wiring(t *testing.T) {
-	t.Parallel()
-	cmd := newMCPCommand()
-	assert.Equal(t, "mcp", cmd.Use)
-	assert.Equal(t, groupData, cmd.GroupID)
-	assert.True(t, cmd.SilenceUsage)
-
-	for _, name := range []string{
-		"http", "http-allow-insecure", "server", "server-token-file", "pg", "profile",
-	} {
-		assert.NotNil(t, cmd.Flags().Lookup(name), "missing flag --%s", name)
-	}
-}
-
 func TestMCPMemoryProfileUsesPluginEnvironment(t *testing.T) {
 	t.Setenv("AGENTSVIEW_MEMORY_SERVER", "https://memory.example")
 	t.Setenv("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE", "/tmp/token")

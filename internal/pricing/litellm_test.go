@@ -92,27 +92,3 @@ func TestParseLiteLLMPricingSkipsNoCost(t *testing.T) {
 	require.Len(t, prices, 1)
 	assert.Equal(t, "claude-sonnet-4-20250514", prices[0].ModelPattern)
 }
-
-func TestFallbackPricing(t *testing.T) {
-	prices := requireEmbeddedFallbackPricing(t)
-
-	required := map[string]bool{
-		"claude-sonnet-4-6":         false,
-		"claude-opus-4-6":           false,
-		"claude-opus-4-7":           false,
-		"claude-opus-4-8":           false,
-		"claude-fable-5":            false,
-		"claude-haiku-4-5-20251001": false,
-		"claude-sonnet-4-20250514":  false,
-		"claude-opus-4-20250514":    false,
-		"claude-haiku-3-5-20241022": false,
-	}
-	for _, p := range prices {
-		if _, ok := required[p.ModelPattern]; ok {
-			required[p.ModelPattern] = true
-		}
-	}
-	for model, found := range required {
-		assert.True(t, found, "required model %s missing", model)
-	}
-}

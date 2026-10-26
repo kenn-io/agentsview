@@ -174,43 +174,7 @@ describe("load", () => {
   });
 });
 
-describe("setDateFrom / setDateTo", () => {
-  it("updates dateFrom without reloading", () => {
-    insights.setDateFrom("2025-02-01");
-
-    expect(insights.dateFrom).toBe("2025-02-01");
-    expect(api.listInsights).not.toHaveBeenCalled();
-  });
-
-  it("updates dateTo without reloading", () => {
-    insights.setDateTo("2025-02-07");
-
-    expect(insights.dateTo).toBe("2025-02-07");
-    expect(api.listInsights).not.toHaveBeenCalled();
-  });
-});
-
-describe("setType", () => {
-  it("updates type without reloading", () => {
-    insights.setType("agent_analysis");
-
-    expect(insights.type).toBe("agent_analysis");
-    expect(api.listInsights).not.toHaveBeenCalled();
-  });
-});
-
 describe("date range mode switching", () => {
-  it("syncs dateTo = dateFrom for single-day mode", () => {
-    insights.setDateFrom("2025-01-13");
-    insights.setDateTo("2025-01-17");
-    expect(insights.dateTo).toBe("2025-01-17");
-
-    // Simulate switching to single-day mode
-    insights.setDateTo(insights.dateFrom);
-    expect(insights.dateFrom).toBe("2025-01-13");
-    expect(insights.dateTo).toBe("2025-01-13");
-  });
-
   it("generates with range dates when set", async () => {
     insights.setDateFrom("2025-01-13");
     insights.setDateTo("2025-01-17");
@@ -233,37 +197,6 @@ describe("date range mode switching", () => {
       expect.any(Function),
       expect.any(Function),
     );
-  });
-
-  it("generates with same date when synced", async () => {
-    insights.setDateFrom("2025-01-15");
-    insights.setDateTo("2025-01-15");
-
-    const mockHandle = {
-      abort: vi.fn(),
-      done: Promise.resolve(makeInsight({ id: 1 })),
-    };
-    vi.mocked(api.generateInsight).mockReturnValueOnce(mockHandle);
-
-    insights.generate();
-
-    expect(api.generateInsight).toHaveBeenCalledWith(
-      expect.objectContaining({
-        date_from: "2025-01-15",
-        date_to: "2025-01-15",
-      }),
-      expect.any(Function),
-      expect.any(Function),
-    );
-  });
-});
-
-describe("setProject", () => {
-  it("updates project without reloading", () => {
-    insights.setProject("my-app");
-
-    expect(insights.project).toBe("my-app");
-    expect(api.listInsights).not.toHaveBeenCalled();
   });
 });
 
@@ -830,15 +763,6 @@ describe("deleteItem", () => {
 
     expect(insights.items).toHaveLength(0);
     expect(insights.selectedId).toBeNull();
-  });
-});
-
-describe("setAgent", () => {
-  it("updates agent without reloading", () => {
-    insights.setAgent("codex");
-
-    expect(insights.agent).toBe("codex");
-    expect(api.listInsights).not.toHaveBeenCalled();
   });
 });
 

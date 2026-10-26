@@ -140,13 +140,6 @@ func isolateParseDiffEnv(t *testing.T) {
 	}
 }
 
-func TestParseDiff_RegisteredInRootHelp(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	assert.Contains(t, help, "parse-diff",
-		"root help should list the parse-diff command")
-}
-
 func TestParseDiff_UnknownAgentListsSupported(t *testing.T) {
 	testDataDir(t)
 

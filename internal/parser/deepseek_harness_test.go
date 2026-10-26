@@ -1942,6 +1942,40 @@ func deepSeekHarnessV3Fixture(id string) []any {
 	return records
 }
 
+func TestDeepSeekHarnessJobEventsAreLogOnly(t *testing.T) {
+	baseline := deepSeekHarnessV4Fixture("jobs")
+	baselinePath := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "jobs", deepSeekHarnessFixtureCwd, "plain", 4, baseline,
+	)
+	baselineResult, err := parseDeepSeekHarnessSession(t.Context(), baselinePath, "")
+	require.NoError(t, err)
+
+	label := "go test ./internal/parser"
+	withJobs := deepSeekHarnessV4Fixture("jobs")
+	withJobs = append(
+		withJobs,
+		deepSeekHarnessFixtureEvent(0, "job/registered", map[string]any{
+			"jobId": "pwsh-1", "owner": "jobs", "kind": "pwsh",
+			"label": label, "startedAt": 1700000000000,
+		}, nil),
+		deepSeekHarnessFixtureEvent(0, "job/settled", map[string]any{
+			"jobId": "pwsh-1", "owner": "jobs", "kind": "pwsh",
+			"label": label, "startedAt": 1700000000000, "finishedAt": 1700000000002,
+			"status": "completed", "cause": "producer", "producerReported": true,
+		}, nil),
+	)
+	for index, record := range withJobs[1:] {
+		record.(map[string]any)["seq"] = index
+		record.(map[string]any)["time"] = 1700000000001 + index
+	}
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "jobs", deepSeekHarnessFixtureCwd, "plain", 4, withJobs,
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.NoError(t, err)
+	require.Len(t, result.Messages, len(baselineResult.Messages))
+}
+
 func writeDeepSeekHarnessVersionedFixture(
 	t *testing.T, root, id, cwd, compression string, version int64, records []any,
 ) string {

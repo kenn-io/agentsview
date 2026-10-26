@@ -142,28 +142,6 @@ func TestRelabelCodexToolCallUpdatesAsAugureCode(t *testing.T) {
 	)
 }
 
-func TestAugureCodeRegistryEntry(t *testing.T) {
-	def, ok := AgentByType(AgentAugureCode)
-	require.True(t, ok)
-	assert.Equal(t, "augure-code:", def.IDPrefix)
-	assert.Equal(t, "AUGURE_CODE_SESSIONS_DIR", def.EnvVar)
-	assert.Equal(t, "augure_code_sessions_dirs", def.ConfigKey)
-	assert.True(t, def.FileBased)
-	assert.True(t, def.PostAnswerToolWork,
-		"Codex-format rollouts emit the answer before later tool calls")
-	assert.False(t, def.RemoteSyncExcluded,
-		"Augure Code rollouts are plaintext and stay eligible for remote sync")
-
-	// augure-code: must resolve through AgentByPrefix.
-	byPrefix, ok := AgentByPrefix("augure-code:019fbcca")
-	require.True(t, ok)
-	assert.Equal(t, AgentAugureCode, byPrefix.Type)
-
-	assert.Equal(t, []string{".augure/sessions"}, def.DefaultDirs)
-	assert.Nil(t, def.ShallowWatchRootsFunc,
-		"the shallow watch exists for Codex's session_index.jsonl only; Augure Code writes none")
-}
-
 // TestAugureCodeProviderParsesDeidentifiedRollout runs the full Discover ->
 // Parse path over a fixture captured from a real Augure CLI 1.0.6 rollout
 // (paths, prompts, and identifiers replaced), guarding the claim that

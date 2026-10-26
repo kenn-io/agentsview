@@ -1038,7 +1038,7 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	assertDuckDBCount(t, conn, "tool_result_events", 1)
 	assertDuckDBCount(t, conn, "usage_events", 1)
 	assertDuckDBCount(t, conn, "secret_findings", 1)
-	assertDuckDBCount(t, conn, "model_pricing", 1)
+	assertDuckDBCount(t, conn, "model_pricing", 2)
 	assertDuckDBCount(t, conn, "starred_sessions", 1)
 	assertDuckDBCount(t, conn, "pinned_messages", 1)
 
@@ -1209,86 +1209,6 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].SessionsDone)
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].SessionsTotal)
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].MessagesDone)
-}
-
-func TestDuckSessionFingerprintIncludesDeletionCause(t *testing.T) {
-	base := db.Session{ID: "session", Machine: "machine"}
-	withCause := base
-	cause := "source_missing"
-	withCause.DeletionCause = &cause
-
-	assert.NotEqual(t,
-		duckSessionFingerprintFields(base, base.Machine),
-		duckSessionFingerprintFields(withCause, withCause.Machine),
-	)
-}
-
-func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
-	base := db.Session{
-		ID:               "sess-001",
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     5,
-		UserMessageCount: 2,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}
-	encode := func(s db.Session) string {
-		data, err := json.Marshal(duckSessionFingerprintFields(s, "laptop"))
-		require.NoError(t, err)
-		return string(data)
-	}
-	fp1 := encode(base)
-
-	tests := []struct {
-		name   string
-		modify func(s db.Session) db.Session
-	}{
-		{
-			name: "agent label change",
-			modify: func(s db.Session) db.Session {
-				s.AgentLabel = "triage"
-				return s
-			},
-		},
-		{
-			name: "entrypoint change",
-			modify: func(s db.Session) db.Session {
-				s.Entrypoint = "sdk-cli"
-				return s
-			},
-		},
-		{
-			name: "display name change",
-			modify: func(s db.Session) db.Session {
-				name := "new name"
-				s.DisplayName = &name
-				return s
-			},
-		},
-		{
-			name: "session_name change",
-			modify: func(s db.Session) db.Session {
-				n := "agent-provided-title"
-				s.SessionName = &n
-				return s
-			},
-		},
-		{
-			name: "transcript revision change",
-			modify: func(s db.Session) db.Session {
-				revision := "1"
-				s.TranscriptRevision = &revision
-				return s
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.NotEqual(t, fp1, encode(tt.modify(base)))
-		})
-	}
 }
 
 // TestDuckSessionFingerprintCoversEveryMirroredColumn enforces the
@@ -1480,7 +1400,7 @@ func TestSessionFingerprintsWriteColumn(t *testing.T) {
 
 func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 	ctx := t.Context()
-	local := newLocalDB(t)
+	local := dbtest.OpenTestDB(t)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
@@ -2240,7 +2160,12 @@ type syncFixture struct {
 
 func newLocalDB(t *testing.T) *db.DB {
 	t.Helper()
-	return dbtest.OpenTestDB(t)
+	local := dbtest.OpenTestDB(t)
+	// Avoid copying the full fallback pricing table on every push.
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "duckdb-test-seed",
+	}}))
+	return local
 }
 
 func newTestSync(

@@ -53,10 +53,3 @@ func TestRoleAllowed(t *testing.T) {
 	assert.True(t, roleAllowed("tool", []string{"tool"}), "explicit allows tool")
 	assert.False(t, roleAllowed("user", []string{"tool"}), "explicit filter excludes others")
 }
-
-func TestStrval(t *testing.T) {
-	t.Parallel()
-	assert.Empty(t, strval(nil))
-	v := "x"
-	assert.Equal(t, "x", strval(&v))
-}

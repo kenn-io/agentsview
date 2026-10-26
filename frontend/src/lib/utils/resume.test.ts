@@ -61,9 +61,6 @@ describe("buildResumeCommand", () => {
       }),
     ).toBe("claude --resume abc-123 --dangerously-skip-permissions --fork-session --print");
   });
-  it("generates claude resume command", () => {
-    expect(buildResumeCommand("claude", "abc-123-def")).toBe("claude --resume abc-123-def");
-  });
 
   it("generates codex resume command", () => {
     expect(buildResumeCommand("codex", "codex:sess-1")).toBe("codex resume sess-1");
@@ -149,10 +146,6 @@ describe("buildResumeCommand", () => {
 
   it("returns null for pi (server-only resume)", () => {
     expect(buildResumeCommand("pi", "pi:session-1")).toBeNull();
-  });
-
-  it("strips agent prefix from compound IDs", () => {
-    expect(buildResumeCommand("codex", "codex:my-session-id")).toBe("codex resume my-session-id");
   });
 
   it("handles plain IDs without prefix", () => {

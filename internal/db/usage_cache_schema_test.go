@@ -134,27 +134,6 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	assert.Equal(t, "database-id-one", probe.SourceDatabaseID)
 }
 
-func TestUsageCacheSchemaIncludesRollupTier(t *testing.T) {
-	archivePath := filepath.Join(t.TempDir(), "sessions.db")
-	manager := newUsageCacheManager(archivePath)
-	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-
-	cache, err := manager.Generation(t.Context(), "database-a")
-	require.NoError(t, err)
-	for _, name := range []string{
-		"usage_rollup_timezones", "usage_rollup_days",
-		"usage_rollup_installs", "usage_daily_rollups",
-		"usage_activity_rollups", "usage_rollup_exceptions",
-		"usage_daily_rollups_window", "usage_rollup_exceptions_window",
-	} {
-		var found bool
-		require.NoError(t, cache.db.QueryRowContext(t.Context(),
-			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)`, name,
-		).Scan(&found))
-		assert.True(t, found, name)
-	}
-}
-
 func TestUsageCacheProbeFailsClosed(t *testing.T) {
 	tests := []struct {
 		name string

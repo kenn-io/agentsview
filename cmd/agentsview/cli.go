@@ -175,7 +175,8 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 		Long: "Start the web UI, API, and session sync in one server process.\n\n" +
 			"Runs in the foreground unless --background is set. `agentsview daemon\n" +
 			"start` starts this same server in the background using saved configuration.\n" +
-			"If a compatible server is already running, serve reports its URL and exits.\n" +
+			"If a compatible server is already running, serve reports its URL and exits\n" +
+			"with status 1 so a service manager retries; --background exits with status 0.\n" +
 			"Stopping the server also stops its background sync and file watchers.",
 		GroupID:      groupCore,
 		SilenceUsage: true,

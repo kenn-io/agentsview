@@ -505,9 +505,9 @@ func applyArchiveContentToCopiedSessionsTx(
 	var err error
 	switch policy {
 	case config.ArchiveContentFull:
-		// Sanitized content and its conversation projection were copied
-		// together. Neither needs to be read and rewritten when unchanged.
-		if sourceVersion >= sanitizedSourceDataVersion {
+		// Skip unchanged projections only when the source already carries
+		// visible metadata. Older indexes must derive it from copied dialogue.
+		if sourceVersion >= sanitizedSourceDataVersion && oldDBHasColumn(ctx, tx, "conversation_messages", "visible_digest") {
 			return nil
 		}
 	case config.ArchiveContentTranscripts:

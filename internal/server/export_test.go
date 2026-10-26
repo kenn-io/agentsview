@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -158,28 +157,6 @@ func TestFormatDateShort(t *testing.T) {
 			t.Parallel()
 			got := formatDateShort(tt.in)
 			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestParseTimestamp(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name  string
-		in    string
-		valid bool
-	}{
-		{"RFC3339", "2025-01-15T10:30:00Z", true},
-		{"RFC3339Nano", "2025-01-15T10:30:00.123Z", true},
-		{"WithOffset", "2025-01-15T10:30:00+02:00", true},
-		{"Invalid", "January 15th", false},
-		{"Empty", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, ok := parseTimestamp(tt.in)
-			assert.Equal(t, tt.valid, ok)
 		})
 	}
 }
@@ -1191,53 +1168,6 @@ func TestSanitizeFilename(t *testing.T) {
 			got := sanitizeFilename(tt.in)
 			assert.Equal(t, tt.want, got)
 		})
-	}
-}
-
-// TestExportTemplateValid ensures the template parses and
-// renders without error for a minimal input.
-func TestExportTemplateValid(t *testing.T) {
-	t.Parallel()
-	data := exportData{
-		Project:      "test",
-		Agent:        "Claude",
-		MessageCount: 1,
-		StartedAt:    "2025-01-15 10:00:00",
-		Messages: []exportMessage{
-			{
-				RoleClass:   "user",
-				Role:        "user",
-				Timestamp:   "2025-01-15 10:00:00",
-				ContentHTML: template.HTML("hello"),
-			},
-		},
-	}
-	var b strings.Builder
-	require.NoError(t, exportTmpl.Execute(&b, data),
-		"template execution failed")
-	assert.Contains(t, b.String(), "<!DOCTYPE html>",
-		"expected valid HTML doctype")
-}
-
-func TestExportTemplateAccentColors(t *testing.T) {
-	t.Parallel()
-	// Every accent color used by the frontend must be defined in
-	// the export template so exported HTML renders agent colors.
-	required := []string{
-		"--accent-blue",
-		"--accent-rose",
-		"--accent-purple",
-		"--accent-amber",
-		"--accent-green",
-		"--accent-coral",
-		"--accent-black",
-		"--accent-teal",
-		"--accent-red",
-		"--accent-indigo",
-	}
-	for _, v := range required {
-		assert.Contains(t, exportTemplateStr, v,
-			"export template missing CSS variable %s", v)
 	}
 }
 

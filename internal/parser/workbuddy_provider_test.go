@@ -11,36 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWorkBuddyProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentWorkBuddy)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.WatchSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
-	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.CompositeFingerprint)
-	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
-	assert.Equal(t, CapabilitySupported, caps.Content.Cwd)
-	assert.Equal(t, CapabilitySupported, caps.Content.Relationships)
-	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-	assert.Equal(t, CapabilitySupported, caps.Content.PerMessageTokenUsage)
-	assert.Equal(t, CapabilitySupported, caps.Content.Model)
-	assert.Equal(t, CapabilitySupported, caps.Content.MalformedLineCount)
-
-	provider, ok := NewProvider(AgentWorkBuddy, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "11111111-1111-4111-8111-111111111111"

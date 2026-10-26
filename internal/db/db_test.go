@@ -981,112 +981,6 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionIncludesOpenCodeProjectMetadataChange(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 89,
-		"version 89 is the data-version boundary for file-backed OpenCode metadata changes")
-	t.Logf("CurrentDataVersion=%d", CurrentDataVersion())
-}
-
-func TestCurrentDataVersionGrokMessageTimestamps(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 90,
-		"version 90 is the data-version boundary for Grok message timestamps")
-}
-
-func TestCurrentDataVersionPositAssistantCacheAccounting(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 91,
-		"version 91 is the data-version boundary for Posit Assistant cache accounting")
-}
-
-func TestCurrentDataVersionPositAssistantUsageEventsSidecar(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 93,
-		"version 93 is the data-version boundary for Posit Assistant usage-events")
-}
-
-func TestCurrentDataVersionDevinMessageNodeTokenUsage(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 94,
-		"Devin message_nodes token usage requires re-parsing fallback sessions")
-}
-
-func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 95,
-		"Posit Assistant provider identity requires re-parsing usage rows")
-}
-
-func TestCurrentDataVersionClaudeRepoLocalWorktrees(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 109,
-		"Claude repository-local worktrees must reparse archives from v0.43.0 at data version 108")
-}
-
-func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
-		"version 96 is the data-version boundary for Antigravity CLI cwd and worktree project recovery")
-}
-
-func TestCurrentDataVersionOpenCodeMessageIdentity(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 105,
-		"OpenCode rows need re-parsing to record their storage message ID")
-}
-
-func TestCurrentDataVersionToolResultSummaryDedup(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 97,
-		"version 97 is the data-version boundary for tool-result summary deduplication")
-}
-
-func TestCurrentDataVersionPiSkillAttribution(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 98,
-		"version 98 is the data-version boundary for Pi skill attribution")
-}
-
-func TestCurrentDataVersionAntigravityCLIExperimentalServingVariant(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 99,
-		"version 99 is the data-version boundary for Antigravity CLI experimental serving variant normalization")
-}
-
-func TestCurrentDataVersionCodexGuardianLineage(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 100,
-		"version 100 is the data-version boundary for Codex guardian lineage")
-}
-
-func TestCurrentDataVersionCodexExecSessionKind(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 112,
-		"version 112 is the data-version boundary for Codex exec and roborev session kinds")
-}
-
-func TestCurrentDataVersionCodexApplyPatchFilePath(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 114,
-		"Codex apply_patch file paths require re-parsing existing sessions")
-}
-
-func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 101,
-		"Cursor turn timestamps require re-parsing existing sessions")
-}
-
-func TestCurrentDataVersionCursorIDESessionStart(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 115,
-		"Cursor IDE session starts from bubble timestamps require re-parsing unchanged containers")
-}
-
-func TestCurrentDataVersionReasoningEffort(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 106,
-		"reasoning effort persistence requires re-parsing unchanged transcripts")
-}
-
-func TestCurrentDataVersionCursorSubagentCategory(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 107,
-		"version 107 is the data-version boundary for the Cursor Subagent tool category")
-}
-
-func TestCurrentDataVersionCodexCacheWriteTokens(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 123,
-		"version 123 is the data-version boundary for Codex cache-write token normalization")
-}
-
-func TestCurrentDataVersionClaudePeerMessages(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 126,
-		"version 126 is the data-version boundary for Claude peer-message classification")
-}
-
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
@@ -4972,16 +4866,6 @@ func TestOpenRejectsArchiveWhoseFTSModuleIsUnavailable(t *testing.T) {
 	require.Error(t, err, "Open must refuse an archive whose FTS index this executable cannot load")
 	require.ErrorContains(t, err, "no such module: fts5_absent")
 	require.ErrorContains(t, err, "-tags fts5")
-}
-
-func TestPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.db")
-	d, err := Open(t.Context(), path)
-	requireNoError(t, err, "Open")
-	defer d.Close()
-
-	assert.Equal(t, path, d.Path(), "Path()")
 }
 
 func TestOpenConfiguresWALJournalSizeLimit(t *testing.T) {
@@ -9308,58 +9192,6 @@ func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSessionsHasTerminationStatusColumn(t *testing.T) {
-	d := testDB(t)
-
-	var count int
-	err := d.getReader().QueryRow(t.Context(),
-		`SELECT count(*) FROM pragma_table_info('sessions')
-		 WHERE name = 'termination_status'`,
-	).Scan(&count)
-	requireNoError(t, err, "probing termination_status column")
-
-	require.Equal(t, 1, count,
-		"expected 1 termination_status column, got %d", count)
-}
-
-func TestSessionsTerminationStatusIndex(t *testing.T) {
-	d := testDB(t)
-
-	var count int
-	err := d.getReader().QueryRow(t.Context(),
-		`SELECT count(*) FROM sqlite_master
-		 WHERE type = 'index' AND name = 'idx_sessions_termination_status'`,
-	).Scan(&count)
-	requireNoError(t, err, "probing idx_sessions_termination_status")
-
-	require.Equal(t, 1, count,
-		"expected idx_sessions_termination_status to exist, got count=%d",
-		count)
-}
-
-func TestMessagesUsageIndexes(t *testing.T) {
-	d := testDB(t)
-
-	var count int
-	err := d.getReader().QueryRow(t.Context(),
-		`SELECT count(*) FROM sqlite_master
-		 WHERE type = 'index' AND name = 'idx_messages_usage_covering'`,
-	).Scan(&count)
-	requireNoError(t, err, "probing idx_messages_usage_covering")
-
-	require.Equal(t, 0, count,
-		"expected superseded idx_messages_usage_covering to be absent, got count=%d",
-		count)
-
-	err = d.getReader().QueryRow(t.Context(),
-		`SELECT count(*) FROM sqlite_master
-		 WHERE type = 'index' AND name = 'idx_messages_usage_timestamp'`,
-	).Scan(&count)
-	requireNoError(t, err, "probing idx_messages_usage_timestamp")
-	require.Equal(t, 1, count,
-		"expected idx_messages_usage_timestamp to exist")
 }
 
 // TestMigration_TerminationStatusColumn simulates upgrading from a

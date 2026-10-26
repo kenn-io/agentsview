@@ -89,9 +89,14 @@ func (m *systemdManager) install(
 		return fmt.Errorf("systemctl daemon-reload: %w: %s", err, out)
 	}
 	if out, err := m.run(
-		ctx, "systemctl", "--user", "enable", "--now", m.kind.UnitName,
+		ctx, "systemctl", "--user", "enable", m.kind.UnitName,
 	); err != nil {
 		return fmt.Errorf("systemctl enable: %w: %s", err, out)
+	}
+	if out, err := m.run(
+		ctx, "systemctl", "--user", "restart", m.kind.UnitName,
+	); err != nil {
+		return fmt.Errorf("systemctl restart: %w: %s", err, out)
 	}
 	return nil
 }

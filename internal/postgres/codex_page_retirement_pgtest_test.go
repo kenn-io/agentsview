@@ -172,7 +172,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = tx.Rollback() })
 				require.NoError(t, upgraded.pushSession(ctx, tx, *pageSession, marker, nil))
-				_, err = upgraded.pushMessages(ctx, tx, page, true, nil, nil)
+				_, _, err = upgraded.pushMessages(ctx, tx, page, true, nil, nil)
 				require.NoError(t, err)
 				require.NoError(t, tx.Commit())
 				require.NoError(t, store.RenameSession(ctx, page, new("newer page title")))

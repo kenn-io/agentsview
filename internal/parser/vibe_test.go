@@ -669,18 +669,6 @@ func TestParseVibeSessionCorruptMetaReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "meta.json")
 }
 
-func TestVibeAgentByType(t *testing.T) {
-	def, ok := AgentByType(AgentVibe)
-	require.True(t, ok, "Expected AgentVibe to be registered")
-
-	assert.Equal(t, AgentVibe, def.Type)
-	assert.Equal(t, "Mistral Vibe", def.DisplayName)
-	assert.Equal(t, "VIBE_SESSIONS_DIR", def.EnvVar)
-	assert.Equal(t, "vibe_session_dirs", def.ConfigKey)
-	assert.Equal(t, "vibe:", def.IDPrefix)
-	assert.True(t, def.FileBased)
-}
-
 func TestVibeAgentByPrefix(t *testing.T) {
 	// Test with vibe: prefix
 	def, ok := AgentByPrefix("vibe:session_123")

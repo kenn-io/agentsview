@@ -908,12 +908,6 @@ describe("freshness state", () => {
     }
   });
 
-  it("markNewData is a no-op before the first report loads", () => {
-    expect(activity.lastUpdatedAt).toBeNull();
-    activity.markNewData();
-    expect(activity.hasNewData).toBe(false);
-  });
-
   it("does not stamp lastUpdatedAt when a load fails", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

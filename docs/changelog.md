@@ -9,8 +9,28 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- PostgreSQL and ClickHouse push services can use a separately managed
+  collector with `service install --no-start-daemon`, avoiding competing daemons
+  and archive write locks during restarts. The push service exits if no writable
+  daemon is running, and the service manager restarts it until the collector
+  answers. Reinstalling restarts the service with the new arguments.
+
+- When Friction Log review is enabled, AgentsView stores daily digests and
+  catches up on completed days missed while offline, including sessions that
+  arrive late within the configured backfill window. Digests retain findings,
+  usage, and pattern recurrence, and survive full resyncs that retain transcript
+  text. PostgreSQL hubs build their own digests. Read APIs and CLI commands
+  remain planned.
+
 **Improvements**
 
+- `pg push` saves download traffic when a session grows by comparing short
+  hashes with PostgreSQL instead of downloading the session's old text.
+  Sessions with rows written before control-character cleanup are rewritten once.
+- `pg push` reduces writes when a session grows by rewriting only the messages
+  from the first changed message onward instead of the whole session.
 - Homebrew installs built with `make homebrew` no longer replace themselves.
   `agentsview update` stops and tells you to run `brew upgrade agentsview`;
   `agentsview update --check` still reports new releases with the same advice.
@@ -20,6 +40,11 @@ The latest release is
 
 **Bug fixes**
 
+- Usage notes keep a straight accent on the leading edge of the card. The
+  accent no longer bends around the card's rounded corners.
+- Foreground `agentsview serve` now exits with status 1 when a server is already
+  running so service managers retry. `serve --background` and `daemon start`
+  still exit with status 0.
 - Claude Code channel questions appear in transcripts, search, and user-message
   totals. Rewinding after a channel conversation keeps that conversation as a
   separate fork and preserves the retry's session ID and saved items. Existing

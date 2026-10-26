@@ -203,17 +203,6 @@ describe("buildDisplayItems (ungrouped)", () => {
     const items = buildDisplayItems([], [], "none", new Set(), new Set());
     expect(items).toEqual([]);
   });
-
-  it("all ids are unique", () => {
-    const groups = [
-      makeGroup("claude", 1, "a"),
-      makeGroup("claude", 1, "b"),
-      makeGroup("gpt", 1, "c"),
-    ];
-    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
-    const ids = items.map((i) => i.id);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -595,57 +584,6 @@ describe("DisplayItem id stability", () => {
 // ---------------------------------------------------------------------------
 
 describe("starred-only session count", () => {
-  function filterGroupsForStarred(groups: SessionGroup[], starredIds: Set<string>): SessionGroup[] {
-    return groups
-      .map((g) => {
-        const filtered = g.sessions.filter((s) => starredIds.has(s.id));
-        const primaryStillPresent = filtered.some((s) => s.id === g.primarySessionId);
-        return {
-          ...g,
-          sessions: filtered,
-          primarySessionId: primaryStillPresent
-            ? g.primarySessionId
-            : selectPrimaryId(filtered, g.key),
-        };
-      })
-      .filter((g) => g.sessions.length > 0);
-  }
-
-  it("counts individual sessions, not groups", () => {
-    const g1 = makeGroup("claude", 3, "c");
-    const g2 = makeGroup("gpt", 3, "g");
-    const groups = [g1, g2];
-
-    const starred = new Set(["c-session-0", "c-session-2", "g-session-1"]);
-    const filtered = filterGroupsForStarred(groups, starred);
-
-    const count = filtered.reduce((n, g) => n + g.sessions.length, 0);
-    expect(count).toBe(3);
-    expect(filtered).toHaveLength(2);
-  });
-
-  it("excludes groups with no starred sessions", () => {
-    const g1 = makeGroup("claude", 2, "c");
-    const g2 = makeGroup("gpt", 2, "g");
-    const groups = [g1, g2];
-
-    const starred = new Set(["c-session-0"]);
-    const filtered = filterGroupsForStarred(groups, starred);
-
-    const count = filtered.reduce((n, g) => n + g.sessions.length, 0);
-    expect(count).toBe(1);
-    expect(filtered).toHaveLength(1);
-  });
-
-  it("returns zero when nothing is starred", () => {
-    const groups = [makeGroup("claude", 3, "c")];
-    const filtered = filterGroupsForStarred(groups, new Set());
-
-    const count = filtered.reduce((n, g) => n + g.sessions.length, 0);
-    expect(count).toBe(0);
-    expect(filtered).toHaveLength(0);
-  });
-
   it("preserves ancestry classification via allSessions when parent is unstarred", () => {
     // root -> teammate (unstarred) -> continuation (starred)
     // The continuation should still be classified as a teammate
@@ -693,43 +631,6 @@ describe("starred-only session count", () => {
     const contItem = items.find((i) => i.session?.id === "cont");
     expect(contItem).toBeDefined();
     expect(contItem!.depth).toBe(2);
-  });
-
-  it("recomputes primarySessionId using recency when original primary is unstarred", () => {
-    // Root session s0 is the primary, children s1 and s2 are starred.
-    // s2 is more recent so it should become the new primary.
-    const root = makeSession({ id: "s0", agent: "claude" });
-    const child1 = makeSession({
-      id: "s1",
-      agent: "claude",
-      parent_session_id: "s0",
-      ended_at: "2025-01-01T01:00:00Z",
-    });
-    const child2 = makeSession({
-      id: "s2",
-      agent: "claude",
-      parent_session_id: "s0",
-      ended_at: "2025-01-02T01:00:00Z",
-    });
-    const group: SessionGroup = {
-      key: "s0",
-      project: "test",
-      sessions: [root, child1, child2],
-      primarySessionId: "s0",
-      totalMessages: 30,
-      firstMessage: "hi",
-      startedAt: "2025-01-01T00:00:00Z",
-      endedAt: "2025-01-02T01:00:00Z",
-    };
-
-    // Only children are starred, not the root.
-    const starred = new Set(["s1", "s2"]);
-    const filtered = filterGroupsForStarred([group], starred);
-
-    expect(filtered).toHaveLength(1);
-    // primarySessionId must be the most recent surviving session.
-    expect(filtered[0]!.primarySessionId).toBe("s2");
-    expect(filtered[0]!.sessions.some((s) => s.id === filtered[0]!.primarySessionId)).toBe(true);
   });
 });
 

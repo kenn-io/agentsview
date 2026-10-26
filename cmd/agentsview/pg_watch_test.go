@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestResolvePushProjects(t *testing.T) {
@@ -248,6 +249,78 @@ func TestArchiveWriteBackendPGPushWatchRetriesStartupOnResolvedDaemon(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, 1, launchPushes, "only the first push uses the launch address")
 	assert.GreaterOrEqual(t, resolvedPushes, 1, "the startup retry reaches the resolved daemon")
+}
+
+func TestArchiveWriteBackendPGPushWatchRetriesStartupRequiringDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	setTestVersion(t, "v1.1.0-2-g123456")
+	var starts int
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
+		cancel()
+		return nil, context.Canceled
+	})
+	var resolvedPushes int
+	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		resolvedPushes++
+		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
+	})
+	var launchPushes int
+	launch := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		launchPushes++
+		http.Error(w, "daemon restarting", http.StatusServiceUnavailable)
+	})
+
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db"), RequireDaemon: true}
+	backend := newDaemonArchiveWriteBackendForTest(cfg, launch.URL)
+	var retriedWithoutDaemon bool
+	var recovered bool
+	backend.watchHooks = &archivePushWatchHooks{
+		newLoop: func(
+			label string, debounce, interval time.Duration,
+			push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
+		) (*pushLoop, func()) {
+			loop, ticker := newPushLoopWithLabel(label, debounce, interval, func(ctx context.Context, reason pushReason, batch *syncpkg.WatchBatch) error {
+				err := push(ctx, reason, batch)
+				if errors.Is(err, errNoWritableDaemon) && !retriedWithoutDaemon {
+					retriedWithoutDaemon = true
+					host, port := splitTestServerURL(t, resolved.URL)
+					writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
+				}
+				if err == nil && retriedWithoutDaemon && resolvedPushes > 0 {
+					recovered = true
+					cancel()
+				}
+				return err
+			})
+			return loop, ticker.Stop
+		},
+	}
+	err := backend.ReplicaPushWatch(
+		ctx, pgReplica{},
+		storage.ConfiguredReplica{Target: storage.ReplicaTarget{
+			URL: "postgres://user:pass@host/db",
+		}},
+		ReplicaPushConfig{},
+		nil,
+		nil,
+		time.Millisecond,
+		time.Hour,
+	)
+	require.NoError(t, err)
+	require.ErrorIs(t, ctx.Err(), context.Canceled, "recovery must cancel the watch before its deadline")
+	assert.Equal(t, 1, launchPushes, "only the first push uses the launch address")
+	assert.GreaterOrEqual(t, resolvedPushes, 1, "the startup retry reaches the resolved daemon")
+	assert.True(t, retriedWithoutDaemon, "a retry observes the collector outage before its replacement is published")
+	assert.True(t, recovered, "a later retry completes through the replacement daemon")
 }
 
 // fakeTarget is a test double for storage.Pusher.

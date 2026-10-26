@@ -12,22 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestZedProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentZed)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilityUnsupported, caps.Content.Relationships)
-	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
-
-	provider, ok := NewProvider(AgentZed, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestZedProviderSourceMethods(t *testing.T) {
 	fixture := zedProviderReadFixture(t)
 	root := fixture.Root
@@ -492,22 +476,6 @@ func TestZedProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
-}
-
-func TestShelleyProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentShelley)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Content.Relationships)
-	assert.Equal(t, CapabilityUnsupported, caps.Content.AggregateUsageEvents)
-
-	provider, ok := NewProvider(AgentShelley, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
 }
 
 func TestShelleyProviderSourceMethods(t *testing.T) {

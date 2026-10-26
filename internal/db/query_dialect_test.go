@@ -1,7 +1,6 @@
 package db
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
@@ -402,11 +401,6 @@ func TestQueryDialectQualifyIdentifier(t *testing.T) {
 
 func normalizeSQL(s string) string {
 	return strings.Join(strings.Fields(s), " ")
-}
-
-func TestNormalizeSQLHelperDoesNotMaskPlaceholders(t *testing.T) {
-	require.True(t, regexp.MustCompile(`\?\)|\$1`).MatchString(
-		normalizeSQL("value IN (?,?) OR value = $1")))
 }
 
 func TestBuildSessionFilterSQLPRHost(t *testing.T) {

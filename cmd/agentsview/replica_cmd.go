@@ -54,11 +54,18 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 				return fmt.Errorf("%s push: %w", name,
 					errors.New("--embed cannot be combined with --all"))
 			}
+			if cfg.Embed && cfg.NoStartDaemon {
+				return fmt.Errorf("%s push: %w", name,
+					errors.New("--embed cannot be combined with --no-start-daemon"))
+			}
 			if cfg.AllTargets && cfg.Watch {
 				return fmt.Errorf(
 					"%s push --watch: %w", name,
 					errors.New("--all cannot be combined with --watch"),
 				)
+			}
+			if cfg.NoStartDaemon && !cfg.Watch {
+				return fmt.Errorf("%s push: --no-start-daemon requires --watch", name)
 			}
 			if cfg.Watch {
 				if err := runReplicaPushWatch(backend, cfg, targetName); err != nil {
@@ -83,6 +90,7 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
 	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
 	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Run continuously, pushing on change plus a periodic floor")
+	cmd.Flags().BoolVar(&cfg.NoStartDaemon, "no-start-daemon", false, "With --watch, require a running writable daemon and exit if unavailable")
 	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
 	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
 	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")

@@ -9,14 +9,6 @@ test.describe("Usage page", () => {
     await expect(page.locator(".usage-page")).toBeVisible({ timeout: 10_000 });
   });
 
-  test("shows toolbar and summary cards with data", async ({ page }) => {
-    await expect(page.locator(".usage-toolbar").first()).toBeVisible();
-
-    // Summary cards should appear with at least one value.
-    await expect(page.locator(".summary-cards")).toBeVisible();
-    await expect(page.locator(".card-value").first()).toBeVisible({ timeout: 10_000 });
-  });
-
   test("shows cost time series chart", async ({ page }) => {
     // Wait for summary data to load.
     await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({

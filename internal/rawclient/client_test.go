@@ -3,7 +3,6 @@ package rawclient
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,12 +110,6 @@ func TestDecodeAPIError(t *testing.T) {
 			assert.Equal(t, tt.want.CurrentGeneration, got.CurrentGeneration)
 		})
 	}
-}
-
-func TestAsAPIErrorRejectsForeignErrors(t *testing.T) {
-	t.Parallel()
-	var got APIError
-	assert.False(t, AsAPIError(errors.New("boom"), &got))
 }
 
 func TestClientRefusesCredentialRedirects(t *testing.T) {

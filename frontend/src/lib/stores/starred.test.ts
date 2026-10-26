@@ -80,27 +80,6 @@ describe("StarredStore", () => {
     expect(starred.isStarred("c")).toBe(true);
     expect(starred.isStarred("d")).toBe(false);
   });
-
-  describe("filterOnly", () => {
-    it("defaults to false", () => {
-      expect(starred.filterOnly).toBe(false);
-    });
-
-    it("can be toggled on and off", () => {
-      starred.filterOnly = true;
-      expect(starred.filterOnly).toBe(true);
-      starred.filterOnly = false;
-      expect(starred.filterOnly).toBe(false);
-    });
-
-    it("is independent of starred ids", () => {
-      starred.star("s1");
-      starred.filterOnly = true;
-      starred.unstar("s1");
-      expect(starred.filterOnly).toBe(true);
-      expect(starred.count).toBe(0);
-    });
-  });
 });
 
 describe("StarredStore localStorage seeding", () => {

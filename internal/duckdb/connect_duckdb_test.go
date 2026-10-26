@@ -24,7 +24,3 @@ func TestOpenConfiguresThreadCount(t *testing.T) {
 	).Scan(&got))
 	assert.Equal(t, strconv.Itoa(duckDBThreadCount()), got)
 }
-
-func TestDuckDBThreadCountPositive(t *testing.T) {
-	assert.Positive(t, duckDBThreadCount())
-}

@@ -880,15 +880,6 @@ func TestRemoteSyncTopLevelErrorReportsPendingCleanupBeforeWrappedCause(t *testi
 	assert.NotContains(t, got, "private")
 }
 
-func TestServerUsesInjectedHTTPRemoteCleanupRegistry(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	shared := new(remotesync.CleanupRegistry)
-	srv := New(f.srv.cfg, f.db, nil,
-		WithHTTPRemoteCleanupRegistry(shared))
-
-	assert.Same(t, shared, srv.httpRemoteCleanupRegistry)
-}
-
 func TestRunRemoteSyncRequestCanceledRebuildReportsCancellation(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	logs := captureServerLogOutput(t)
@@ -1471,7 +1462,7 @@ func TestArchiveMaintenanceNoSyncSharesBarrier(t *testing.T) {
 		run  func(*Server, context.Context, func() error) error
 	}{
 		{"foreground", (*Server).tryArchiveWrite},
-		{"background", (*Server).serializeArchiveWrite},
+		{"background", (*Server).SerializeArchiveWrite},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSyncRouteFixture(t)

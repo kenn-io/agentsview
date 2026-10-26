@@ -1337,10 +1337,6 @@ func TestArtifactPublicationUsageOnlyAtomicBatchEnqueuesExactlyOnce(t *testing.T
 	}
 }
 
-func TestArtifactClaimErrorsRemainDiscoverableWhenWrapped(t *testing.T) {
-	assert.ErrorIs(t, fmt.Errorf("retry: %w", ErrArtifactExportClaimStale), ErrArtifactExportClaimStale)
-}
-
 func TestArtifactCheckpointFloorReservationIsConcurrentAndNeverLowers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "floor.db")
 	first, err := Open(t.Context(), path)

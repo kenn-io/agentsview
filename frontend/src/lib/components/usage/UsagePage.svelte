@@ -671,6 +671,8 @@
   .usage-content :global(.usage-note) {
     padding: 12px 14px;
     border-left: 4px solid var(--accent-blue);
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
     color: var(--text-secondary);
   }
 

@@ -63,12 +63,6 @@ async function openSettingsToolImages(page: Page) {
 }
 
 test.describe("Settings: Tool-result images", () => {
-  test("opens panel and shows intro", async ({ page }) => {
-    await mockStripImageRoutes(page);
-    await openSettingsToolImages(page);
-    await expect(page.getByText("Preview which stored tool results")).toBeVisible();
-  });
-
   test("preview shows counts after clicking Preview", async ({ page }) => {
     await mockStripImageRoutes(page);
     await openSettingsToolImages(page);

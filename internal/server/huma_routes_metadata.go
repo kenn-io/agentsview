@@ -207,6 +207,7 @@ func (s *Server) humaGetVersion(
 		version.InsightGenerationAvailable = false
 		version.SessionStatsAvailable = false
 	}
+	version.FrictionAvailable = s.frictionRunner != nil
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 

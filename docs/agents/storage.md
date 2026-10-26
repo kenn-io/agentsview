@@ -121,6 +121,20 @@ bounded body reads resolve project evidence in their own SQLite snapshot; body
 reads also pin the database generation and message revision. This local contract
 does not widen raw artifacts or mirror schemas.
 
+Visible conversation exports use the existing `messages.dialogue_text` field.
+They do not use message search's fallback to rendered content: a NULL projection
+is an explicit coverage gap and an empty projection means no dialogue. Keep
+selected-text digests and lengths in the conversation index, and publish a new
+revision when dialogue alone changes. The writable-open upgrade initializes
+those fields from archived messages without reparsing or replacing message IDs.
+Copies preserve both projections and apply content policy to both.
+
+Keep a known dialogue projection even when it equals display content; NULL also
+represents unclassified messages and cannot carry both meanings. Data version
+146 reparses providers with dialogue classification in place, including the
+shared Codex parser. Retained sources that cannot be reparsed keep their content
+and classification gaps; export itself never reads the original source.
+
 ### Claude subagent sources
 
 Joined local subagent writes record contributing transcript paths with the
@@ -133,42 +147,39 @@ the archive; S3 materializations do not record temporary paths.
 ### Claude persisted tool results
 
 Claude Code (and iCodeMate CLI, which shares its transcript layout and parser)
-moves a large tool output to a side file in the session's `tool-results`
-folder and leaves a placeholder in the transcript. The parser inlines the side
-file while it exists, so the first sync archives the full output. Once Claude
-Code deletes the side file after its cleanup period, a later full parse sees
-only the placeholder. The parser marks exactly the tool_result block that
-genuinely tried and failed to resolve a `persistedOutputPath`
+moves a large tool output to a side file in the session's `tool-results` folder
+and leaves a placeholder in the transcript. The parser inlines the side file
+while it exists, so the first sync archives the full output. Once Claude Code
+deletes the side file after its cleanup period, a later full parse sees only the
+placeholder. The parser marks exactly the tool_result block that genuinely tried
+and failed to resolve a `persistedOutputPath`
 (`parser.ParsedToolResult.PersistedOutputUnresolved`; never derived from the
 placeholder text's own shape). `ingest.ReconcileProviderHistory`
-(`internal/ingest/history.go`) restores each flagged current event from the
-one archived event whose `tool_use_id`, source, and timestamp all match —
-never by array position, so a dedup collapse or a retry/branch reorder can
-never pair the wrong occurrence; no unique match leaves the event untouched,
-and a later, unflagged occurrence of the same `tool_use_id` is never
-overwritten. Restoration only happens when the archive held real text; that
-text, its length, and its raw digest are restored. When the archive held
-only a length without text (the `transcripts`/`usage` archive-content
-policies, or a blocked category), the event is left alone: "blank content,
-kept length" already means something else to every reader of
-`tool_result_events` (a deduped summary, re-derived from its one
-content-bearing event), and restoring a bare length would reproduce that
+(`internal/ingest/history.go`) restores each flagged current event from the one
+archived event whose `tool_use_id`, source, and timestamp all match — never by
+array position, so a dedup collapse or a retry/branch reorder can never pair the
+wrong occurrence; no unique match leaves the event untouched, and a later,
+unflagged occurrence of the same `tool_use_id` is never overwritten. Restoration
+only happens when the archive held real text; that text, its length, and its raw
+digest are restored. When the archive held only a length without text (the
+`transcripts`/`usage` archive-content policies, or a blocked category), the
+event is left alone: "blank content, kept length" already means something else
+to every reader of `tool_result_events` (a deduped summary, re-derived from its
+one content-bearing event), and restoring a bare length would reproduce that
 same shape for an unrelated reason with no way to tell the two apart later.
-Accepted limit: once such an event's side file ages out, its archived
-length cannot be recovered on a later reparse; the event keeps whatever
-length its current placeholder text itself resolves to, not the archived
-length.
+Accepted limit: once such an event's side file ages out, its archived length
+cannot be recovered on a later reparse; the event keeps whatever length its
+current placeholder text itself resolves to, not the archived length.
 
 This is the same provider-history dispatcher every other agent's archive
 preservation already goes through, gated by `ingest.IsClaudeFormatTranscript`
 (the agent and a `.jsonl` path, covering both Claude Code and iCodeMate CLI;
 `ingest.IsClaudeFormatAgent` alone would also match iCodeMate's unrelated
 VSCode-extension storage path), so hosted Postgres mirrors reach it with no
-separate wiring. `internal/sync/engine.go`'s
-`reconcileProviderHistoryContext` checks cheaply, over the parsed messages and
-before any store read, whether anything is flagged before loading the
-archived session. Rebuilds read the old archive, and S3 Claude sessions follow
-the same rule.
+separate wiring. `internal/sync/engine.go`'s `reconcileProviderHistoryContext`
+checks cheaply, over the parsed messages and before any store read, whether
+anything is flagged before loading the archived session. Rebuilds read the old
+archive, and S3 Claude sessions follow the same rule.
 
 ### Codex deletion scope
 
@@ -497,9 +508,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
 - All four backends share activity report assembly and session usage selection
   in `internal/activity`. Explicit inputs supply usage, candidate streams,
-  message counts and project maps; SQL, pricing, caches and read lifetimes stay
-  in each backend. Daily usage query strategies and aggregation loops remain
-  per backend.
+  message counts and project maps; SQL, pricing, caches and read lifetimes
+  stay in each backend. Daily usage query strategies and aggregation loops
+  remain per backend.
 
 ### Usage cache divergence
 
@@ -554,8 +565,8 @@ rollup installs of every other session holding a changed identity; rollup
 installation re-verifies inside its transaction that no finalized identity
 gained an outside member and, when one did, reclassifies against the newly
 committed facts rather than failing the caller. A finalized daily row must never
-survive gaining a sibling. The daemon requeues invalidated sessions after
-commit and rebuilds their rollups; CLI writes leave rebuilding to the request.
+survive gaining a sibling. The daemon requeues invalidated sessions after commit
+and rebuilds their rollups; CLI writes leave rebuilding to the request.
 
 Treat a usage-cache file as identifiable only after both its SQLite
 `application_id` and `usage_cache_metadata.cache_kind` match. Filename matching
@@ -609,15 +620,15 @@ SQLite keeps paired candidates in memory per session and range start, with
 separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Empty sessions
-use only the entry budget. A week report then a month report keep separate
-entries for their range starts. Entries run to `max(EffectiveEnd, RangeEnd)` and
-remain valid while the transcript revision and session creation time match.
-Reader swaps clear the entries and reject stores from earlier generations.
-Reports exceeding the entry limit reuse retained hits and store up to the cap.
-Reports exceeding the candidate budget skip storing new entries. Warm reads
-still load session revisions and merge the per-session candidates in SQLite's
-microsecond order.
+with 36-byte session IDs, 24-byte models, and append-grown slices. Empty
+sessions use only the entry budget. A week report then a month report keep
+separate entries for their range starts. Entries run to
+`max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
+session creation time match. Reader swaps clear the entries and reject stores
+from earlier generations. Reports exceeding the entry limit reuse retained hits
+and store up to the cap. Reports exceeding the candidate budget skip storing new
+entries. Warm reads still load session revisions and merge the per-session
+candidates in SQLite's microsecond order.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial
@@ -709,10 +720,11 @@ row IDs. The SQLite archive and the usage cache keep the original text and
 order.
 
 A metadata-only push therefore leaves unchanged messages, tool calls and usage
-events in place. A change to any accounting field still replaces the session's
-mirrored rows. A malformed local timestamp keeps its original text in the
-comparison, so it never matches PostgreSQL and the push reports the session as
-an error.
+events in place. When the transcript matches, accounting changes replace only
+usage events. A changed transcript replaces messages and their tool calls and
+results from the first changed message. A malformed local timestamp keeps its
+original text in the comparison, so it never matches PostgreSQL and the push
+reports the session as an error.
 
 ### Tool result summaries
 

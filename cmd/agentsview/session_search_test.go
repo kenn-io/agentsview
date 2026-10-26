@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json/v2"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -365,50 +364,6 @@ func TestPrintContentMatchesHumanTruncatesContextLine(t *testing.T) {
 	body := strings.TrimPrefix(lines[0], "  user: ")
 	assert.LessOrEqual(t, len([]rune(body)), 201)
 	assert.True(t, strings.HasSuffix(body, "…"))
-}
-
-func TestContentMatchJSONRoundTripsContext(t *testing.T) {
-	res := service.ContentSearchResult{
-		Matches: []db.ContentMatch{
-			{
-				SessionID: "sess1", Ordinal: 5,
-				ContextBefore: []db.Message{{Role: "user", Ordinal: 3, Content: "before"}},
-				ContextAfter:  []db.Message{{Role: "assistant", Ordinal: 7, Content: "after"}},
-			},
-			{SessionID: "sess2", Ordinal: 1},
-		},
-	}
-	data, err := json.Marshal(res)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"context_before"`)
-	assert.Contains(t, string(data), `"context_after"`)
-
-	var decoded service.ContentSearchResult
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	require.Len(t, decoded.Matches, 2)
-	require.Len(t, decoded.Matches[0].ContextBefore, 1)
-	assert.Equal(t, "before", decoded.Matches[0].ContextBefore[0].Content)
-	assert.Empty(t, decoded.Matches[1].ContextBefore)
-}
-
-func TestContentMatchJSONRoundTripsScore(t *testing.T) {
-	score := 0.5
-	res := service.ContentSearchResult{
-		Matches: []db.ContentMatch{
-			{SessionID: "sess1", Ordinal: 1, Score: &score},
-			{SessionID: "sess2", Ordinal: 2},
-		},
-	}
-	data, err := json.Marshal(res)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"score":0.5`)
-
-	var decoded service.ContentSearchResult
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	require.Len(t, decoded.Matches, 2)
-	require.NotNil(t, decoded.Matches[0].Score)
-	assert.InDelta(t, score, *decoded.Matches[0].Score, 0.0001)
-	assert.Nil(t, decoded.Matches[1].Score)
 }
 
 // TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker pins the human

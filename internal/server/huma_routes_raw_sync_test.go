@@ -793,23 +793,6 @@ func TestRawSyncBoundsTokenExchangeJSON(t *testing.T) {
 	assert.Zero(t, auth.issueCalls)
 }
 
-func TestRawSyncRoutesDeclareBodyLimits(t *testing.T) {
-	t.Parallel()
-
-	srv := newRawSyncHTTPTestServer(
-		t, new(rawSyncAuthStub), new(rawSyncCustodyStub),
-	)
-	paths := srv.api.OpenAPI().Paths
-
-	require.Equal(t, int64(4<<10), paths["/api/v1/raw-sync/tokens"].Post.MaxBodyBytes)
-	for _, path := range []string{
-		"/api/v1/raw-sync/objects/missing",
-		"/api/v1/raw-sync/manifests",
-	} {
-		require.Equal(t, int64(1<<20), paths[path].Post.MaxBodyBytes, path)
-	}
-}
-
 func TestRawSyncCanonicalOpenAPISpecIncludesRoutes(t *testing.T) {
 	t.Parallel()
 

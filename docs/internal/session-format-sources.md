@@ -274,8 +274,8 @@ fixtures retain this field; missing identities remain source-local.
   stays visible; non-channel `isMeta` user records remain dropped. Task
   notifications in the same release are `type:"user"` records with
   `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
-  which the existing `task_notification` rule already covers. Checked against
-  a local transcript corpus; the synthetic fixture
+  which the existing `task_notification` rule already covers. Checked against a
+  local transcript corpus; the synthetic fixture
   `internal/parser/testdata/claude/queued_peer_messages.jsonl` mirrors these
   shapes. Data version 126 reparses existing sessions once.
 
@@ -590,6 +590,17 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Dialogue classification (checked 2026-10-22):** The pinned
+  [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
+  distinguishes message text, reasoning and tool operations. The existing
+  parser extracts only text blocks from user and assistant messages. It now
+  records that result in the shared dialogue field, including intermediate
+  assistant updates; tool renderings carry an explicitly empty projection.
+  Literal tool and thinking markers in authored text remain unchanged. TraeX
+  and Augure Code share this parser. The scoped parser upgrade keeps session
+  identities and reparses available sources; retained messages whose source is
+  missing keep their prior classification, which may be unknown.
 
 - **Repeated session metadata (checked 2026-10-17 at rust-v0.47.0,
   `c71297b9a9b3f7995445eff8d768837814ac06f8`):** The
@@ -2912,7 +2923,13 @@ schemas keep their existing ordering behavior.
   replacement coordinates as `startSeq`/`endSeq`. Generation 4 promotes tool
   results to `role: tool` messages with direct content, `toolCallId`, and
   optional `isError`, and adds `developer/message` for incremental
-  instructions and named tool additions/removals. Session IDs are arbitrary
+  instructions and named tool additions/removals. Harness builds from
+  `0.2.1-rc.2` onward also append one `job/registered` and one `job/settled`
+  pair for every `pwsh` tool execution. Both are log-only bookkeeping for live
+  job control: they carry no transcript content, they are not surface events,
+  and the upstream type notes state that collecting model output from them is
+  not required. They are in the known-event inventory and are ignored when a
+  session is rebuilt. Session IDs are arbitrary
   non-empty strings and are injectively encoded before use as a directory
   name. A sessions root belongs to one physical encoding; the upstream backend
   rejects an opposite-suffix artifact rather than providing mixed-root
@@ -3249,8 +3266,8 @@ schemas keep their existing ordering behavior.
   detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`,
   `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and
   `TestSyncClaudeAIBranchSwitch`. Usage-only message and user-turn counts
-  follow the selected branch, including shorter branches. Verified
-  2026-10-22 with the reconstructed fixture in
+  follow the selected branch, including shorter branches. Verified 2026-10-22
+  with the reconstructed fixture in
   `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`, rather than a live
   observation of count behavior. Shorter zip exports remain refused. See
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
@@ -3528,14 +3545,14 @@ schemas keep their existing ordering behavior.
   ledger rows plus each token bucket's uncovered summary remainder, so calls
   count once and keep their recorded model. Missing ledgers retain summary
   accounting; ledgers without `task` describe main usage. Member fingerprints
-  include ordered ledger keys and accounting fields for both Hermes and
-  Augure Desktop. Reverified the producer's delta transaction: main ledger
-  costs use the summary's cost basis, leaving only positive uncovered cost
-  on its model. Unknown summary cost preserves known ledger costs and lets
-  catalog pricing fill unknown costs. Sourced actual and included zeros remain
-  known; default zero estimates remain unknown. Malformed numeric rows warn and
-  are omitted, preserving valid rows and leaving uncovered main usage in the
-  session summary. Nullable ledger token counters count as zero.
+  include ordered ledger keys and accounting fields for both Hermes and Augure
+  Desktop. Reverified the producer's delta transaction: main ledger costs use
+  the summary's cost basis, leaving only positive uncovered cost on its model.
+  Unknown summary cost preserves known ledger costs and lets catalog pricing
+  fill unknown costs. Sourced actual and included zeros remain known; default
+  zero estimates remain unknown. Malformed numeric rows warn and are omitted,
+  preserving valid rows and leaving uncovered main usage in the session
+  summary. Nullable ledger token counters count as zero.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

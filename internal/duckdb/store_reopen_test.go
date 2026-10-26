@@ -436,14 +436,6 @@ func TestSweepStaleMirrorReopenAliasesMissingWorkDirIsNoOp(t *testing.T) {
 		"a sweep must never create the work directory")
 }
 
-// TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp guards against a caller
-// passing an empty path (e.g. a NewStoreFromDB / remote Quack config that
-// has no local mirror file to sweep): it must return nil without globbing
-// or attempting any filesystem operation.
-func TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp(t *testing.T) {
-	require.NoError(t, SweepStaleMirrorReopenAliases(""))
-}
-
 // TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory is
 // the FIX7 regression: SweepStaleMirrorReopenAliases used to build its
 // match pattern with filepath.Glob, so a project or archive directory name

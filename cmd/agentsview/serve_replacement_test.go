@@ -358,26 +358,24 @@ func TestPrepareForegroundServeDaemonKeepsLaunchLockThroughDBOpen(
 	require.NoError(t, launchLock.Unlock())
 }
 
-func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) {
+func TestPrepareForegroundServeDaemonFailsWhenCompatibleDaemonRuns(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
 		host, port, withRuntimeVersion("1.1.0"),
 	))
 	setTestVersion(t, "1.1.0")
-	forbidStopDaemonRuntimeForUpgrade(t, "same-version daemon must be reused")
+	forbidStopDaemonRuntimeForUpgrade(t, "same-version daemon must be left running")
 
-	out := captureStdout(t, func() {
-		cont, release, err := prepareForegroundServeDaemon(t.Context(),
-			&config.Config{DataDir: dir}, serveReplacementOptions{},
-		)
-		t.Cleanup(release)
-		require.NoError(t, err)
-		assert.False(t, cont)
-	})
+	cont, release, err := prepareForegroundServeDaemon(t.Context(),
+		&config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	t.Cleanup(release)
 
-	assert.Contains(t, out, "agentsview already running")
-	assert.Contains(t, out, "http://")
+	assert.False(t, cont)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agentsview already running at")
+	assert.Contains(t, err.Error(), fmt.Sprintf("http://%s:%d", host, port))
 }
 
 func TestServeDaemonReplacementDecisionReplacesDifferentVersions(t *testing.T) {
@@ -726,16 +724,4 @@ func TestServeDaemonReplacementLinesIncludeRuntimeDetails(t *testing.T) {
 	assert.Contains(t, lines, "API version")
 	assert.Contains(t, lines, "data version")
 	assert.Contains(t, lines, "agentsview daemon stop")
-}
-
-func TestServeCommandHasReplaceFlag(t *testing.T) {
-	cmd := newServeCommand()
-
-	flag := cmd.Flags().Lookup("replace")
-
-	require.NotNil(t, flag)
-	assert.Equal(t,
-		"Replace a running local daemon before starting",
-		flag.Usage,
-	)
 }

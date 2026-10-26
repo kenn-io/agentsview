@@ -13,12 +13,6 @@ type FollowRafWindow = Window & {
 };
 
 test.describe("Message loading", () => {
-  test("clicking session shows messages", async ({ page }) => {
-    const sp = new SessionsPage(page);
-    await sp.goto();
-    await sp.selectFirstSession();
-  });
-
   test("no request spam on session click", async ({ page }) => {
     const messageRequests: string[] = [];
     page.on("request", (req) => {

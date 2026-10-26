@@ -116,18 +116,19 @@ Sync sessions from the local SQLite database to PostgreSQL.
 agentsview pg push [target] [flags]
 ```
 
-| Flag                 | Default | Description                                                               |
-| -------------------- | ------- | ------------------------------------------------------------------------- |
-| `--all`              | `false` | Push every configured PG target sequentially                              |
-| `--full`             | `false` | Force full local resync and re-push, bypassing change detection           |
-| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                        |
+| Flag                 | Default | Description                                                                                                                    |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--all`              | `false` | Push every configured PG target sequentially                                                                                   |
+| `--full`             | `false` | Force full local resync and re-push, bypassing change detection                                                                |
+| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                                                                             |
 | `--embed`            | `false` | Push sessions, then build and push vectors; watch builds after syncs in the background and pushes vectors on the next interval |
-| `--projects`         |         | Comma-separated projects to push (inclusive)                              |
-| `--exclude-projects` |         | Comma-separated projects to exclude                                       |
-| `--all-projects`     | `false` | Ignore configured project filters for this run                            |
-| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                 |
-| `--debounce`         | `30s`   | Coalesce window after a filesystem change before pushing (`--watch` only) |
-| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                             |
+| `--projects`         |         | Comma-separated projects to push (inclusive)                                                                                   |
+| `--exclude-projects` |         | Comma-separated projects to exclude                                                                                            |
+| `--all-projects`     | `false` | Ignore configured project filters for this run                                                                                 |
+| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                                                                      |
+| `--no-start-daemon`  | `false` | With `--watch`, require a writable daemon; exit if none is running; incompatible with `--embed`                                |
+| `--debounce`         | `30s`   | Coalesce window after a filesystem change before pushing (`--watch` only)                                                      |
+| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                                                                                  |
 
 Without `--watch`, push is on-demand — run it whenever you want to sync. With
 `--watch`, the command stays in the foreground and keeps pushing until
@@ -147,11 +148,21 @@ across every configured target. `--all --watch` is rejected.
 1. Advances the watermark timestamp on success
 
 Incremental pushes use a two-layer fingerprint to skip unchanged sessions:
-first, session metadata fields (project, agent, timestamps, message counts) are
-compared; then, per- session message statistics (count, content length
-sum/max/min, system message ordinals, tool call counts) are checked against
-PostgreSQL. Use `--full` to bypass both layers and re-push everything — for
-example, after a schema reset or when message content was rewritten in place.
+first, session metadata and local dependency fingerprints identify candidates.
+Then, for candidates that already have messages in PostgreSQL, PostgreSQL
+computes SHA-256 hashes of message text, dialogue text, thinking text, tool
+inputs, results, file paths, and tool-result-event content.
+Only large text values are replaced by hashes; IDs, timestamps, token JSON, and
+other message, tool, and event metadata still cross the connection. Same-length
+text changes still trigger publication.
+A changed session is rewritten from its first changed message onward. Earlier
+messages, their tool calls and results, and their pins stay in place. Usage
+events are replaced whole when they change. The pushed-message count includes
+only the rewritten messages.
+Rows written before control-character cleanup may be rewritten once; unchanged
+text then compares normally.
+Use `--full` to bypass both layers and re-push everything, for example, after a
+schema reset or when message content was rewritten in place.
 
 Every push sends the most recently active sessions first, so recent activity
 reaches PostgreSQL before older history. A full push that stops partway, for
@@ -418,6 +429,14 @@ Supported service managers:
 The generated unit runs `agentsview pg push --watch`, pins `AGENTSVIEW_DATA_DIR`
 to the data directory used at install time, and writes logs to
 `~/.agentsview/pg-watch.log` unless you changed the data directory.
+
+If you run your own collector service, use
+`agentsview pg service install --no-start-daemon`. The push service exits if no
+writable daemon is running, and the service manager restarts it until the
+collector answers. It retries pushes while the collector restarts, without
+starting a daemon or opening the archive directly. Reinstalling restarts the
+service with the new flag. The default installation still starts a missing
+daemon for hosts that run only the push service.
 
 `install` requires a literal PostgreSQL URL in the effective default target of
 `~/.agentsview/config.toml`, either the legacy `[pg].url` or the target selected

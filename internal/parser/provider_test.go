@@ -215,33 +215,6 @@ func TestStoredSourceHintScopesDistinguishContainersFromExactMembers(t *testing.
 		visualStudioScopes.StoredSourceHintScopes(ChangedPathRequest{Path: member}))
 }
 
-func TestVerifiedLocalStatCapabilitiesMatchConsumers(t *testing.T) {
-	assert.Equal(t, CapabilityUnsupported,
-		(SourceCapabilities{}).VerifiedLocalStat,
-		"new providers must opt in explicitly")
-
-	wantSupported := map[AgentType]bool{
-		AgentClaude: true,
-		AgentCodex:  true,
-		// TraeX and Augure Code share the Codex provider; the gate stats the
-		// transcript and only looks for a session_index.jsonl sidecar under
-		// Codex itself.
-		AgentTraeX:      true,
-		AgentAugureCode: true,
-	}
-	for _, factory := range ProviderFactories() {
-		agent := factory.Definition().Type
-		got := factory.Capabilities().Source.VerifiedLocalStat
-		if wantSupported[agent] {
-			assert.Equalf(t, CapabilitySupported, got,
-				"%s supports verified local stat trust", agent)
-		} else {
-			assert.Equalf(t, CapabilityUnsupported, got,
-				"%s must not schedule verified local stat trust", agent)
-		}
-	}
-}
-
 func TestProviderFactoryLookupRejectsMissingAgent(t *testing.T) {
 	require.NotEmpty(t, Registry)
 	agent := Registry[0].Type
@@ -261,19 +234,6 @@ func TestProviderFactoryLookupRejectsMissingAgent(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = NewProvider("missing", ProviderConfig{})
 	assert.False(t, ok)
-}
-
-func TestProviderFactoryByTypeDevin(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentDevin)
-	require.True(t, ok)
-	assert.Equal(t, AgentDevin, factory.Definition().Type)
-
-	provider := factory.NewProvider(ProviderConfig{
-		Roots:   []string{"/tmp/devin"},
-		Machine: "devbox",
-	})
-	require.NotNil(t, provider)
-	assert.Equal(t, AgentDevin, provider.Definition().Type)
 }
 
 func TestProviderMigrationModesCoverRegistry(t *testing.T) {

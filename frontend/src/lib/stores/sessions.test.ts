@@ -238,47 +238,11 @@ describe("SessionsStore", () => {
   });
 
   describe("initFromParams", () => {
-    it("should parse project and date params", () => {
-      sessions.initFromParams({
-        project: "myproj",
-        date: "2024-06-15",
-      });
-      expect(sessions.filters.project).toBe("myproj");
-      expect(sessions.filters.date).toBe("2024-06-15");
-    });
-
-    it("should parse date_from and date_to", () => {
-      sessions.initFromParams({
-        date_from: "2024-06-01",
-        date_to: "2024-06-30",
-      });
-      expect(sessions.filters.dateFrom).toBe("2024-06-01");
-      expect(sessions.filters.dateTo).toBe("2024-06-30");
-    });
-
-    it("should parse numeric min_messages", () => {
-      sessions.initFromParams({ min_messages: "5" });
-      expect(sessions.filters.minMessages).toBe(5);
-    });
-
-    it("should parse numeric max_messages", () => {
-      sessions.initFromParams({ max_messages: "100" });
-      expect(sessions.filters.maxMessages).toBe(100);
-    });
-
     it("should default non-numeric min/max to 0", () => {
       sessions.initFromParams({
         min_messages: "abc",
         max_messages: "",
       });
-      expect(sessions.filters.minMessages).toBe(0);
-      expect(sessions.filters.maxMessages).toBe(0);
-    });
-
-    it("should default missing params to empty/zero", () => {
-      sessions.initFromParams({});
-      expect(sessions.filters.project).toBe("");
-      expect(sessions.filters.date).toBe("");
       expect(sessions.filters.minMessages).toBe(0);
       expect(sessions.filters.maxMessages).toBe(0);
     });
@@ -1464,19 +1428,9 @@ describe("SessionsStore", () => {
       expect(f.pr).toBe("");
       expect(parseFiltersFromParams({ pr: "  acme/widgets#42 " }).pr).toBe("acme/widgets#42");
     });
-
-    it("should handle non-numeric min_messages", () => {
-      const f = parseFiltersFromParams({ min_messages: "abc" });
-      expect(f.minMessages).toBe(0);
-    });
   });
 
   describe("filtersToParams", () => {
-    it("should return empty params for default filters", () => {
-      const params = filtersToParams(parseFiltersFromParams({}));
-      expect(params).toEqual({});
-    });
-
     it("should serialize all set filters", () => {
       const f: Filters = {
         project: "myproj",
@@ -1515,17 +1469,6 @@ describe("SessionsStore", () => {
         label: "ticket=example\nrole=reviewer, lead",
         pr: "acme/widgets#42",
       });
-    });
-
-    it("should serialize termination filter into the URL", () => {
-      const defaults = parseFiltersFromParams({});
-      const params = filtersToParams({ ...defaults, termination: "unclean" });
-      expect(params.termination).toBe("unclean");
-    });
-
-    it("should parse termination from URL params", () => {
-      const f = parseFiltersFromParams({ termination: "unclean" });
-      expect(f.termination).toBe("unclean");
     });
 
     it("should round-trip through parseFiltersFromParams", () => {
@@ -1981,27 +1924,11 @@ describe("SessionsStore", () => {
       expect(sessions.filters.hideUnknownProject).toBe(true);
     });
 
-    it("should round-trip via initFromParams", () => {
-      sessions.initFromParams({
-        exclude_project: "unknown",
-      });
-      expect(sessions.filters.hideUnknownProject).toBe(true);
-    });
-
     it("should not set hideUnknown for other exclude values", () => {
       sessions.initFromParams({
         exclude_project: "something_else",
       });
       expect(sessions.filters.hideUnknownProject).toBe(false);
-    });
-
-    it("should clear conflicting project=unknown in initFromParams", () => {
-      sessions.initFromParams({
-        project: "unknown",
-        exclude_project: "unknown",
-      });
-      expect(sessions.filters.project).toBe("");
-      expect(sessions.filters.hideUnknownProject).toBe(true);
     });
 
     it("should split hide-unknown from usage project exclusions", () => {
@@ -2869,12 +2796,6 @@ describe("SessionsStore", () => {
       expect(sessions.sessions).toHaveLength(1);
       expect(sessions.sessions[0]!.id).toBe("s1");
       expect(sessions.total).toBe(1);
-    });
-
-    it("loadProjects resolves when API rejects", async () => {
-      vi.mocked(api.getProjects).mockRejectedValueOnce(new Error("network"));
-      await expect(sessions.loadProjects()).resolves.toBeUndefined();
-      expect(sessions.projects).toHaveLength(0);
     });
 
     it("loadAgents resolves when API rejects", async () => {

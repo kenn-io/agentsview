@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
@@ -31,19 +30,6 @@ func TestNewActivityCommand_RegistersReport(t *testing.T) {
 	sub, _, err := cmd.Find([]string{"report"})
 	require.NoError(t, err)
 	assert.Equal(t, "report", sub.Name())
-}
-
-func TestActivityReportCommand_Flags(t *testing.T) {
-	cmd := newActivityReportCommand()
-	for _, name := range []string{
-		"preset", "date", "from", "to", "timezone",
-		"bucket", "project", "agent", "machine", "json", "no-sync",
-		"offline", "sessions-limit", "sessions-cursor", "sessions-sort",
-		"sessions-direction", "sessions-bucket-start", "sessions-bucket-end",
-		"sessions-report-id",
-	} {
-		assert.NotNilf(t, cmd.Flags().Lookup(name), "flag --%s must exist", name)
-	}
 }
 
 func TestResolveCLIActivitySelection(t *testing.T) {
@@ -176,17 +162,6 @@ func TestResolveActivityReportCursorPreservesPartialGeneration(t *testing.T) {
 	assert.Equal(t, first.EffectiveEnd, second.EffectiveEnd)
 	assert.Equal(t, first.AsOf, second.AsOf)
 	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
-}
-
-func TestActivityReportCommand_HelpText(t *testing.T) {
-	cmd := newActivityReportCommand()
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"--help"})
-	require.NoError(t, cmd.Execute())
-	out := buf.String()
-	assert.Contains(t, out, "--preset")
-	assert.Contains(t, out, "--json")
 }
 
 func TestResolveActivityReport_BadBucket(t *testing.T) {

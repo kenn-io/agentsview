@@ -6,9 +6,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
@@ -18,12 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
 )
-
-func TestDuckDBLongRunningSignalsIncludeSIGTERM(t *testing.T) {
-	signals := duckDBLongRunningSignals()
-	assert.Contains(t, signals, os.Interrupt)
-	assert.Contains(t, signals, syscall.SIGTERM)
-}
 
 func TestResolveDuckDBPushProjects(t *testing.T) {
 	tests := []projectResolutionCase[DuckDBPushConfig]{

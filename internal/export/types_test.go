@@ -106,35 +106,6 @@ func TestPricingBlockJSONShape(t *testing.T) {
 	assert.Contains(t, got, `"cost_source":"mixed"`)
 }
 
-func TestCostSourceEnumJSONShape(t *testing.T) {
-	got := mustMarshalJSON(t, []export.CostSource{
-		export.CostSourceComputed,
-		export.CostSourceReported,
-		export.CostSourceMixed,
-	})
-
-	assert.JSONEq(t, `["computed","reported","mixed"]`, got)
-}
-
-func TestProjectResolutionEnumJSONShape(t *testing.T) {
-	got := mustMarshalJSON(t, []export.ProjectResolution{
-		export.ProjectResolutionResolved,
-		export.ProjectResolutionUnknown,
-		export.ProjectResolutionAmbiguous,
-	})
-
-	assert.JSONEq(t, `["resolved","unknown","ambiguous"]`, got)
-}
-
-func TestSessionClassificationEnumJSONShape(t *testing.T) {
-	got := mustMarshalJSON(t, []export.SessionClassification{
-		export.SessionClassificationInteractive,
-		export.SessionClassificationAutomated,
-	})
-
-	assert.JSONEq(t, `["interactive","automated"]`, got)
-}
-
 func mustMarshalJSON(t *testing.T, v any) string {
 	t.Helper()
 

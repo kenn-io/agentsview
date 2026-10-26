@@ -9,30 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGptmeProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentGptme)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.WatchSources)
-	assert.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
-	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.CompositeFingerprint)
-	assert.Equal(t, CapabilityNotApplicable, caps.Source.MultiSessionSource)
-	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(t, CapabilitySupported, caps.Content.Model)
-	assert.Equal(t, CapabilitySupported, caps.Content.PerMessageTokenUsage)
-
-	provider, ok := NewProvider(AgentGptme, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestGptmeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "2026-06-13-write-hello-world"

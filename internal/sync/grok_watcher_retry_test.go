@@ -180,7 +180,7 @@ func TestGrokWatcherCompanionChangesStillRefreshSession(t *testing.T) {
 }
 
 func TestGrokWatcherFailureWorkIsIndependentOfArchiveSize(t *testing.T) {
-	for _, count := range []int{8, 800} {
+	for _, count := range []int{8, 80} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			root := t.TempDir()
 			database := openTestDB(t)

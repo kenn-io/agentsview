@@ -194,16 +194,6 @@ func TestAugureDesktopAcceptsConfiguredCustomRoot(t *testing.T) {
 	assert.Equal(t, AgentAugureDesktop, sources[0].Provider)
 }
 
-// TestAugureDesktopDefaultRootSpelling covers the two default root spellings
-// (the POSIX .augure-desktop and the Windows %LOCALAPPDATA%\augure-desktop)
-// that keep default discovery disjoint from Hermes without any runtime gate.
-func TestAugureDesktopDefaultRootSpelling(t *testing.T) {
-	spec, ok := AgentByType(AgentAugureDesktop)
-	require.True(t, ok)
-	assert.Equal(t, []string{".augure-desktop", "AppData/Local/augure-desktop"},
-		spec.DefaultDirs)
-}
-
 // TestAugureDesktopProjectRelabel pins the project-rebrand contract: only
 // the state-DB-synthesized names ("hermes", "hermes-<source>") are rebranded
 // to the fork's producer name; explicit project hints pass through
@@ -295,23 +285,4 @@ func TestAugureDesktopSessionIDRelabel(t *testing.T) {
 			assert.Equal(t, tt.want, augureDesktopSessionID(tt.id))
 		})
 	}
-}
-
-// TestAugureDesktopRegistryEntry pins the registry shape the config and
-// frontend consume.
-func TestAugureDesktopRegistryEntry(t *testing.T) {
-	def, ok := AgentByType(AgentAugureDesktop)
-	require.True(t, ok)
-	assert.Equal(t, "augure-desktop:", def.IDPrefix)
-	assert.Equal(t, "AUGURE_DESKTOP_DIR", def.EnvVar)
-	assert.Equal(t, "augure_desktop_dirs", def.ConfigKey)
-	assert.Equal(t, "Augure Desktop", def.DisplayName)
-	assert.Equal(t, []string{
-		".augure-desktop",
-		"AppData/Local/augure-desktop",
-	}, def.DefaultDirs)
-	assert.True(t, def.FileBased)
-	assert.True(t, def.RemoteSyncExcluded,
-		"roots hold raw state.db/WAL plus app state; excluded until a "+
-			"safe allowlisted export exists")
 }

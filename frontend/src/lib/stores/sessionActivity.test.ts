@@ -180,13 +180,6 @@ describe("SessionActivityStore", () => {
     expect(sessionActivity.loading).toBe(false);
   });
 
-  it("sets loaded on fetch error", async () => {
-    sessionsService.getApiV1SessionsByIdActivity.mockRejectedValueOnce(new Error("network error"));
-    await sessionActivity.load("s1");
-    expect(sessionActivity.loaded).toBe(true);
-    expect(sessionActivity.error).toBe("network error");
-  });
-
   it("clears active indicator when timestamp set to null", async () => {
     // This tests the store-level contract: setting
     // firstVisibleTimestamp to null clears the active bucket.

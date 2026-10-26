@@ -44,15 +44,18 @@ func newServiceCommands(kind serviceKind) *cobra.Command {
 }
 
 func newServiceInstallCommand(kind serviceKind) *cobra.Command {
-	return &cobra.Command{
+	var noStartDaemon bool
+	cmd := &cobra.Command{
 		Use:          "install",
 		Short:        "Install and start the auto-push service",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceInstall(kind)
+			runServiceInstall(kind, noStartDaemon)
 		},
 	}
+	cmd.Flags().BoolVar(&noStartDaemon, "no-start-daemon", false, "Require a running writable daemon; the service manager retries if unavailable")
+	return cmd
 }
 
 func newServiceUninstallCommand(kind serviceKind) *cobra.Command {
@@ -130,8 +133,16 @@ func loadServiceConfig(kind serviceKind) config.Config {
 	return appCfg
 }
 
-func runServiceInstall(kind serviceKind) {
+func withNoStartDaemon(kind serviceKind) serviceKind {
+	kind.Args = append(kind.Args, "--no-start-daemon")
+	return kind
+}
+
+func runServiceInstall(kind serviceKind, noStartDaemon bool) {
 	appCfg := loadServiceConfig(kind)
+	if noStartDaemon {
+		kind = withNoStartDaemon(kind)
+	}
 	spec, err := buildServiceSpec(appCfg, kind)
 	if err != nil {
 		fatal("%s service install: %v", kind.Name, err)

@@ -152,13 +152,6 @@ func TestFallbackPricing_HermesModels(t *testing.T) {
 	assert.Zero(t, owl.OutputPerMTok)
 }
 
-func TestFallbackPricing_Deterministic(t *testing.T) {
-	first := requireEmbeddedFallbackPricing(t)
-	second := FallbackPricing()
-
-	assert.Equal(t, first, second, "FallbackPricing should be deterministic")
-}
-
 func TestFallbackPricing_DeepClonesPricingBands(t *testing.T) {
 	original := fallbackPricing
 	fallbackPricing = []ModelPricing{{

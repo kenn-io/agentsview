@@ -18,13 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// TestStoreHasSemanticFalse pins that the PostgreSQL store reports no
-// semantic search capability until it gets its own VectorSearcher seam.
-func TestStoreHasSemanticFalse(t *testing.T) {
-	s := &Store{}
-	assert.False(t, s.HasSemantic(), "PostgreSQL HasSemantic")
-}
-
 // TestStoreSearchContentSemanticModesUnavailable pins that "semantic" and
 // "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
 // -- a zero-value Store (no live *sql.DB) is enough to prove that.
@@ -70,28 +63,6 @@ func TestStoreSearchContentSemanticInvalidInputReturns400Before501(t *testing.T)
 					"invalid input must not be masked as ErrSemanticUnavailable")
 			})
 		}
-	}
-}
-
-// TestStripFTSQuotes pins the de-quoting behavior the PostgreSQL Search path
-// relies on. The canonical implementation lives in the db package and is
-// shared with the SQLite and HTTP paths so the backends stay in parity.
-func TestStripFTSQuotes(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{`"hello world"`, "hello world"},
-		{`hello`, "hello"},
-		{`"error" "401"`, "error 401"},
-		{`"error-401"`, "error-401"},
-		{`""`, ""},
-		{`"a"`, "a"},
-		{`already unquoted`, "already unquoted"},
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, db.StripFTSQuotes(tt.input),
-			"input=%q", tt.input)
 	}
 }
 

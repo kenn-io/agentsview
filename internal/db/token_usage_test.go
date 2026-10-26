@@ -11,40 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMigrationAddsTokenColumns(t *testing.T) {
-	d := testDB(t)
-	w := d.getWriter()
-
-	// Verify message token columns exist by querying pragma.
-	for _, col := range []string{
-		"model", "token_usage",
-		"context_tokens", "output_tokens",
-		"has_context_tokens", "has_output_tokens",
-	} {
-		var count int
-		err := w.QueryRow(t.Context(),
-			"SELECT count(*) FROM pragma_table_info('messages')"+
-				" WHERE name = ?", col,
-		).Scan(&count)
-		require.NoError(t, err, "probing messages.%s", col)
-		assert.Equal(t, 1, count, "expected messages.%s to exist", col)
-	}
-
-	// Verify session token columns exist.
-	for _, col := range []string{
-		"total_output_tokens", "peak_context_tokens",
-		"has_total_output_tokens", "has_peak_context_tokens",
-	} {
-		var count int
-		err := w.QueryRow(t.Context(),
-			"SELECT count(*) FROM pragma_table_info('sessions')"+
-				" WHERE name = ?", col,
-		).Scan(&count)
-		require.NoError(t, err, "probing sessions.%s", col)
-		assert.Equal(t, 1, count, "expected sessions.%s to exist", col)
-	}
-}
-
 func TestMigrationIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

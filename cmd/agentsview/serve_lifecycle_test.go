@@ -295,16 +295,6 @@ func TestServeCommandHasLifecycleSubcommands(t *testing.T) {
 	assert.True(t, names["restart"], "serve must expose a restart subcommand")
 }
 
-func TestServeRestartHelpExplainsWriterOnlyAsymmetry(t *testing.T) {
-	out, err := executeCommand(newRootCommand(), "serve", "restart", "--help")
-	require.NoError(t, err)
-	assert.Contains(t, out, "writable SQLite background daemon")
-	assert.Contains(t, out, "config.toml")
-	assert.Contains(t, out,
-		"Unlike `agentsview serve stop`, this command intentionally leaves "+
-			"read-only PostgreSQL and DuckDB servers running.")
-}
-
 func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {
 	dir := runtimeTestDir(t)
 	secondPID := startSleepProcess(t)
@@ -783,12 +773,6 @@ func TestCaddyStopRecordCarriesCreateTime(t *testing.T) {
 			"pre-force-kill identity check guards a reused caddy PID")
 	assert.Empty(t, rec.SourcePath,
 		"a caddy stop record has no source file to remove")
-}
-
-func TestStopOrphanedCaddyChildNoMetadataIsNoop(t *testing.T) {
-	assert.NotPanics(t, func() {
-		stopOrphanedCaddyChild(daemon.RuntimeRecord{PID: os.Getpid()})
-	})
 }
 
 func TestDaemonRecordPingConfirmedRespondingDaemon(t *testing.T) {

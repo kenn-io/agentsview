@@ -2135,30 +2135,6 @@ func TestHermesToolTaxonomy(t *testing.T) {
 
 // --- Registry ---
 
-func TestHermesRegistryEntry(t *testing.T) {
-	var found *AgentDef
-	for i := range Registry {
-		if Registry[i].Type == AgentHermes {
-			found = &Registry[i]
-			break
-		}
-	}
-	require.NotNil(t, found, "AgentHermes not in Registry")
-
-	assert.Equal(t, "Hermes Agent", found.DisplayName)
-	assert.Equal(t, "HERMES_SESSIONS_DIR", found.EnvVar)
-	assert.Equal(t, "hermes_sessions_dirs", found.ConfigKey)
-	assert.Equal(t, "hermes:", found.IDPrefix)
-	assert.True(t, found.FileBased)
-	assert.Equal(t, []string{
-		".hermes/sessions",
-		"AppData/Local/hermes/sessions",
-	}, found.DefaultDirs)
-	// The watch-root resolvers are provider-owned and consumed by watcher setup.
-	assert.NotNil(t, found.WatchRootsFunc)
-	assert.NotNil(t, found.ShallowWatchRootsFunc)
-}
-
 // --- File info ---
 
 func TestParseHermesSession_FileInfo(t *testing.T) {

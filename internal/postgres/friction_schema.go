@@ -31,6 +31,9 @@ CREATE INDEX IF NOT EXISTS idx_friction_findings_session
 
 var hostedFrictionTables = []HostedTable{
 	{Name: "friction_findings", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+	{Name: "friction_digests", Key: []string{"date"}},
+	{Name: "friction_digest_sessions", Key: []string{"subject_id"}},
+	{Name: "friction_patterns", Key: []string{"fingerprint"}},
 }
 
 // installHostedFrictionUpgrade adds missing derived tables and repairs their
@@ -47,6 +50,9 @@ func installHostedFrictionUpgrade(ctx context.Context, tx *sql.Tx, schema, tenan
 		}
 	}
 	if _, err := tx.ExecContext(ctx, frictionDDL); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, frictionReviewDDL); err != nil {
 		return err
 	}
 	if len(missing) > 0 {

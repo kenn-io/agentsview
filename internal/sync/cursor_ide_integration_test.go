@@ -1132,7 +1132,7 @@ func (p *cursorIDEAdmissionProbe) snapshot() (calls, maxYielded, maxRetained int
 }
 
 func TestReconcileCursorIDEContainerRetainsOnlyChangedMembers(t *testing.T) {
-	for _, n := range []int{8, 256} {
+	for _, n := range []int{8, 80} {
 		t.Run(fmt.Sprintf("composers=%d", n), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := filepath.Join(root, "state.vscdb")

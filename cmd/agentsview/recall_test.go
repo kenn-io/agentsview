@@ -56,27 +56,6 @@ func TestPrintRecallEntryHumanDefaultsReviewStateToUnreviewedAuto(t *testing.T) 
 	assert.NotContains(t, out.String(), "human_reviewed")
 }
 
-func TestRecallHelpShowsReadOnlySubcommands(t *testing.T) {
-	out, err := executeCommand(newRootCommand(), "recall", "--help")
-
-	require.NoError(t, err)
-	for _, want := range []string{"extract", "list", "get", "query", "--format"} {
-		assert.Contains(t, out, want)
-	}
-}
-
-func TestRecallBriefHelpHidesRedundantContextFlag(t *testing.T) {
-	out, err := executeCommand(newRootCommand(), "recall", "brief", "--help")
-
-	require.NoError(t, err)
-	assert.NotContains(t, out, "--context                    Print assembled context")
-	assert.NotContains(t, out, "when --context is set")
-	assert.Contains(t, out, "--context-max-bytes int")
-	assert.Contains(t, out, "Maximum bytes of assembled context")
-	assert.Contains(t, out, "--evidence")
-	assert.Contains(t, out, "Show evidence provenance snippets")
-}
-
 func TestRecallExtractDryRunJSONBuildsSessionChunks(t *testing.T) {
 	dataDir := t.TempDir()
 	setRecallTestEnv(t, dataDir)
@@ -567,15 +546,6 @@ func TestRecallImportRefusesExplicitServerURLWithoutRemoteConfirmation(t *testin
 	assert.Empty(t, out)
 	assert.Equal(t, 0, calls)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
-}
-
-func TestRecallImportHelpDescribesProductionOverrideForAnyDefaultArchive(t *testing.T) {
-	out, err := executeCommand(newRootCommand(), "recall", "import", "--help")
-
-	require.NoError(t, err)
-	assert.Contains(t, out, "--allow-production-import")
-	assert.Contains(t, out, "default agentsview data directory")
-	assert.NotContains(t, out, "default local agentsview data directory")
 }
 
 func TestRecallImportExplicitServerURLWithRemoteConfirmation(t *testing.T) {

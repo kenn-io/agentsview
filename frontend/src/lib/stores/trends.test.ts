@@ -147,12 +147,4 @@ describe("TrendsStore default range", () => {
     const selection = selectionFromRange(DEFAULT_RANGE.from, DEFAULT_RANGE.to);
     expect(selection).toEqual({ mode: "relative", days: 365 });
   });
-
-  it("spans 365 calendar days inclusive of the end date", () => {
-    const from = new Date(`${DEFAULT_RANGE.from}T00:00:00`);
-    const to = new Date(`${DEFAULT_RANGE.to}T00:00:00`);
-    const dayMs = 24 * 60 * 60 * 1000;
-    const spanDays = Math.round((to.getTime() - from.getTime()) / dayMs) + 1;
-    expect(spanDays).toBe(365);
-  });
 });

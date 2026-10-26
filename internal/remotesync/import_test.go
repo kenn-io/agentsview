@@ -47,8 +47,8 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	}
 	mtime := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	manifest := Manifest{Files: []ManifestEntry{
-		{Path: remoteFile, Size: int64(len(sessionBody)), MtimeNS: mtime.UnixNano()},
 		{Path: skippedFile, Size: int64(len(usageBody)), MtimeNS: mtime.UnixNano()},
+		{Path: remoteFile, Size: int64(len(sessionBody)), MtimeNS: mtime.UnixNano()},
 	}}
 	archive := func(t *testing.T) []byte {
 		t.Helper()

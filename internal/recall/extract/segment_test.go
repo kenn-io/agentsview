@@ -96,13 +96,6 @@ func TestTurnsV1Identity(t *testing.T) {
 	assert.Equal(t, params, segmenter.Params())
 }
 
-func TestTurnsV1PromptRoles(t *testing.T) {
-	roles := TurnsV1{MaxWindowChars: 50000}.PromptRoles()
-	if len(roles) != 2 || roles[0] != RoleIntent || roles[1] != RoleAction {
-		assert.Failf(t, "test failed", "PromptRoles() = %v, want [intent action]", roles)
-	}
-}
-
 func TestTurnsV1EmptySession(t *testing.T) {
 	units := TurnsV1{MaxWindowChars: 50000}.Units(nil)
 	if len(units) != 0 {

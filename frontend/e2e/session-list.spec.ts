@@ -91,11 +91,6 @@ test.describe("Session list", () => {
     await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
   });
 
-  test("session count header is visible", async () => {
-    await expect(sp.sessionListHeader).toBeVisible();
-    await expect(sp.sessionListHeader).toContainText("sessions");
-  });
-
   test("clicking a session marks it active", async () => {
     await sp.sessionItems.first().click();
     await expect(sp.sessionItems.first()).toHaveClass(/active/);

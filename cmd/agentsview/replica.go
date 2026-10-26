@@ -29,6 +29,7 @@ type ReplicaPushConfig struct {
 	ExcludeProjects string
 	AllProjects     bool
 	Watch           bool
+	NoStartDaemon   bool
 	Debounce        time.Duration
 	Interval        time.Duration
 	NoVectors       bool

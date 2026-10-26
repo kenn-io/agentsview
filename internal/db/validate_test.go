@@ -137,17 +137,15 @@ func TestSelfParentNeverPersists(t *testing.T) {
 	}
 }
 
-// TestSanitizeMessageDropsDuplicateDialogue pins the dialogue storage
-// contract: search falls back to Content when DialogueText is NULL, so a
-// dialogue copy whose sanitized bytes equal sanitized Content is not stored
-// unless ThinkingText marks the row as reasoning-classified.
-func TestSanitizeMessageDropsDuplicateDialogue(t *testing.T) {
+// Dialogue classification survives sanitization and persistence, including
+// ordinary prose whose dialogue and display text happen to be identical.
+func TestSanitizeMessagePreservesDialogueClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name, content, thinking string
 		dialogue, want          *string
 	}{
-		{name: "duplicate after content sanitization dropped", content: "ans\x00wer", dialogue: Ptr("answer")},
-		{name: "duplicate after dialogue sanitization dropped", content: "answer", dialogue: Ptr("ans\x00wer\xff")},
+		{name: "equal after content sanitization", content: "ans\x00wer", dialogue: Ptr("answer"), want: Ptr("answer")},
+		{name: "equal after dialogue sanitization", content: "answer", dialogue: Ptr("ans\x00wer\xff"), want: Ptr("answer")},
 		{name: "distinct dialogue kept", content: "answer [Read: file.txt]", dialogue: Ptr("answer"), want: Ptr("answer")},
 		{name: "empty dialogue for tool-only message kept", content: "[Read: file.txt]", dialogue: Ptr(""), want: Ptr("")},
 		{name: "duplicate with thinking kept", content: "answer", thinking: "reasoning", dialogue: Ptr("answer"), want: Ptr("answer")},
@@ -175,5 +173,6 @@ func TestSanitizeMessageDropsDuplicateDialogue(t *testing.T) {
 	stored, err := d.GetMessageByOrdinal(t.Context(), "s1", 0)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Nil(t, stored.DialogueText)
+	require.NotNil(t, stored.DialogueText)
+	assert.Equal(t, "answer", *stored.DialogueText)
 }

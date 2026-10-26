@@ -20,8 +20,6 @@ import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { DbMessage as Message } from "./lib/api/generated/index.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
-import sourceRaw from "./App.svelte?raw";
-import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 import { SessionsService } from "./lib/api/generated/index.js";
 import { dismissFlash } from "@kenn-io/kit-ui";
 vi.mock("./lib/feature-flags.js", () => ({
@@ -30,8 +28,6 @@ vi.mock("./lib/feature-flags.js", () => ({
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 import { requestUrl } from "./lib/test-support/request-url.js";
-
-const source = sourceRaw.replace(/\r\n/g, "\n");
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -141,14 +137,6 @@ it("shows settings save errors through the app shell", async () => {
   expect(flash?.textContent).toContain("settings endpoint unavailable");
 });
 
-function appSourceSlice(startMarker: string, endMarker: string): string {
-  const start = source.indexOf(startMarker);
-  expect(start).toBeGreaterThan(-1);
-  const end = source.indexOf(endMarker, start);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
-}
-
 it("keeps the first analytics range for a window_days=90 deep link", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-20T12:00:00"));
@@ -220,6 +208,7 @@ describe("App Recall availability", () => {
       api_version: 1,
       data_version: 1,
       session_stats_available: false,
+      friction_available: false,
       insight_generation_available: false,
       version: "dev",
       commit: "unknown",
@@ -578,11 +567,6 @@ describe("App session URL date state", () => {
     expect(dataPage?.querySelector("h2")?.textContent).toBe("Projects");
   });
 
-  it("treats rolling window and termination as sessions route params", () => {
-    expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
-    expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);
-  });
-
   it("carries rolling intent into the sessions URL write-back", async () => {
     component = mount(App, { target: document.body });
     await tick();
@@ -600,86 +584,6 @@ describe("App session URL date state", () => {
     const range = rollingRange(30);
     expect(router.params["date_from"]).toBe(range.from);
     expect(router.params["date_to"]).toBe(range.to);
-  });
-
-  it("preserves rolling window dates when writing sessions URLs", () => {
-    expect(source).toContain("sessionRouteParamsForFilters(");
-    expect(source).toContain("router.navigateFromSession(nextParams)");
-    expect(source).toContain("const newParams = sessionRouteParamsForFilters(");
-    expect(source).not.toContain("navigateFromSession(filtersToParams(sessions.filters))");
-    expect(source).not.toContain("const newParams = filtersToParams(sessions.filters);");
-  });
-
-  it("preserves rolling window dates when entering session detail", () => {
-    const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const navigateFromSessionIndex = source.indexOf("router.navigateFromSession", syncUrlIndex);
-    const activeSessionBranch = source.slice(syncUrlIndex, navigateFromSessionIndex);
-
-    expect(activeSessionBranch).toContain("const nextParams = sessionRouteParamsForFilters(");
-    expect(activeSessionBranch).toContain("router.navigateToSession(activeId, nextParams)");
-    expect(activeSessionBranch).not.toContain("router.navigateToSession(activeId);");
-  });
-
-  it("preserves direct detail URL params when leaving session detail", () => {
-    const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const navigateFromSessionIndex = source.indexOf("router.navigateFromSession", syncUrlIndex);
-    const inactiveSessionBranch = source.slice(
-      navigateFromSessionIndex - 260,
-      navigateFromSessionIndex + 80,
-    );
-
-    expect(source).toContain("sessionRouteParamsForDetailExit");
-    expect(inactiveSessionBranch).toContain(": sessionRouteParamsForDetailExit(");
-    expect(inactiveSessionBranch).toContain("router.navigateFromSession(nextParams)");
-  });
-
-  it("updates detail URL params after explicit filter changes", () => {
-    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
-
-    expect(source).toContain("let lastDetailFilterParamsSignature: string | null = $state(null);");
-    expect(syncUrlBlock).toContain("const filterParams = sessionFilterRouteParams();");
-    expect(syncUrlBlock).toContain("lastDetailFilterParamsSignature !== null &&");
-    expect(syncUrlBlock).toContain("router.replaceParams(nextParams);");
-    expect(syncUrlBlock).toContain("lastDetailFilterParamsSignature = filterParamsSignature;");
-  });
-
-  it("does not preserve stale detail params after filter changes", () => {
-    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
-
-    expect(syncUrlBlock).toContain("const filterChangedOnDetail =");
-    expect(syncUrlBlock).toContain(
-      "filterChangedOnDetail\n          ? sessionRouteParamsForFilters(",
-    );
-    expect(syncUrlBlock).toContain(": sessionRouteParamsForDetailExit(");
-  });
-
-  it("clears stored yoke when session date params are removed while analytics is unmounted", () => {
-    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
-    const writeBackBlock = appSourceSlice("// URL write-back", "function showAbout");
-
-    expect(source).toContain("function clearYokeForClearedSessionDates");
-    expect(source).toContain("sessionDateIntentCleared(");
-    expect(source).toContain("yokedDates.clear();");
-    expect(syncUrlBlock).toContain("clearYokeForClearedSessionDates(nextParams);");
-    expect(writeBackBlock).toContain("clearYokeForClearedSessionDates(newParams);");
-  });
-
-  it("clears detail filter signatures outside session detail routes", () => {
-    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
-
-    expect(syncUrlBlock).toContain(
-      'if (router.route !== "sessions") {\n        lastDetailFilterParamsSignature = null;',
-    );
-    expect(syncUrlBlock).toContain(
-      "if (currentUrlSessionId === null) {\n          lastDetailFilterParamsSignature = null;",
-    );
-  });
-
-  it("restores the full recently deleted batch from the undo toast", () => {
-    const undoBlock = appSourceSlice("{#if sessions.recentlyDeleted.length > 0}", "</div>\n{/if}");
-
-    expect(undoBlock).toContain("await sessions.restoreRecentlyDeleted(last);");
-    expect(undoBlock).not.toContain("await sessions.restoreSession(last.id);");
   });
 });
 

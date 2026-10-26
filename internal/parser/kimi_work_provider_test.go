@@ -314,18 +314,6 @@ func TestKimiWorkProviderAgentByPrefix(t *testing.T) {
 	assert.Equal(t, AgentKimi, def.Type)
 }
 
-func TestKimiWorkRegistryEntry(t *testing.T) {
-	def, ok := AgentByType(AgentKimiWork)
-	require.True(t, ok, "AgentKimiWork missing from Registry")
-	assert.Equal(t, "Kimi Work", def.DisplayName)
-	assert.Equal(t, "KIMI_WORK_DIR", def.EnvVar)
-	assert.Equal(t, "kimi_work_dirs", def.ConfigKey)
-	assert.Equal(t, "kimi-work:", def.IDPrefix)
-	assert.True(t, def.FileBased)
-	assert.Contains(t, def.DefaultDirs,
-		"Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions")
-}
-
 func TestKimiWorkProviderDiscoversSymlinkedWorkspaceDirectory(t *testing.T) {
 	root := t.TempDir()
 	targetRoot := t.TempDir()

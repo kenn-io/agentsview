@@ -87,7 +87,8 @@ jobs:
           New-Item -ItemType Directory -Path $testTemp | Out-Null
           icacls $testTemp /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "SystemTemp=$testTemp" >> $env:GITHUB_ENV
+          "TMP=$testTemp" >> $env:GITHUB_ENV
+          "TEMP=$testTemp" >> $env:GITHUB_ENV
           "AGENTSVIEW_CI_TEMP=$testTemp" >> $env:GITHUB_ENV
 
       - name: Run ${{ matrix.name }} tests

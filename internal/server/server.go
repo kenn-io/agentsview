@@ -27,6 +27,7 @@ import (
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
@@ -49,6 +50,7 @@ type VersionInfo struct {
 	ArchiveOnly                bool   `json:"archive_only,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
+	FrictionAvailable          bool   `json:"friction_available"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
 }
@@ -211,6 +213,7 @@ type Server struct {
 
 	artifactExchangeRunner ArtifactExchangeRunner
 	rawSyncTenant          string
+	frictionRunner         *review.Runner
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
 	rawSyncStatus          RawSyncStatusReader
@@ -554,6 +557,14 @@ func WithGenerateStreamFunc(f insight.GenerateStreamFunc) Option {
 		if f != nil {
 			s.generateStreamFunc = f
 		}
+	}
+}
+
+// WithFriction attaches the Friction Log review runner. A nil runner leaves
+// the feature unavailable.
+func WithFriction(runner *review.Runner) Option {
+	return func(s *Server) {
+		s.frictionRunner = runner
 	}
 }
 

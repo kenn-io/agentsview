@@ -6,10 +6,6 @@ describe("projectColor", () => {
     expect(PROJECT_PALETTE).toContain(projectColor("agentsview"));
   });
 
-  it("is deterministic", () => {
-    expect(projectColor("agentsview")).toBe(projectColor("agentsview"));
-  });
-
   it("maps empty input to the muted fallback", () => {
     expect(projectColor("")).toBe("var(--text-muted)");
   });

@@ -13,16 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIcodemateCLIDefaultDirs asserts the terminal CLI projects root is a
-// default alongside the VSCode-extension OpenCode storage root, so both
-// families are collected out of the box.
-func TestIcodemateCLIDefaultDirs(t *testing.T) {
-	def, ok := AgentByType(AgentIcodemate)
-	require.True(t, ok, "AgentIcodemate missing from Registry")
-	assert.Contains(t, def.DefaultDirs, ".local/share/icodemate")
-	assert.Contains(t, def.DefaultDirs, ".icodemate/cli/projects")
-}
-
 func TestIcodemateCLITitlePriority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := strings.Join([]string{

@@ -22,7 +22,8 @@ type ManifestEntry struct {
 	MtimeNS int64  `json:"mtime_ns"`
 }
 
-// Manifest lists every syncable regular file under a TargetSet.
+// Manifest lists every syncable regular file under a TargetSet, sorted by
+// the path each file takes in the collector's mirror.
 type Manifest struct {
 	Files []ManifestEntry `json:"files"`
 }
@@ -126,10 +127,27 @@ func BuildManifest(ctx context.Context, targets TargetSet) (Manifest, error) {
 			})
 		}
 	}
-	sort.Slice(m.Files, func(i, j int) bool {
-		return m.Files[i].Path < m.Files[j].Path
-	})
+	sortManifestByMirrorPath(m.Files)
 	return m, nil
+}
+
+// sortManifestByMirrorPath orders entries by the path each one takes in the
+// collector's mirror, the order the collector's diff walks the mirror in.
+// Raw path order differs from it for Windows paths, whose separator is a
+// backslash. A path with no mirror form sorts by its raw text; the
+// collector rejects it.
+func sortManifestByMirrorPath(entries []ManifestEntry) {
+	keys := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, err := safeRemotePathArchiveName(entry.Path)
+		if err != nil {
+			key = entry.Path
+		}
+		keys[entry.Path] = key
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return keys[entries[i].Path] < keys[entries[j].Path]
+	})
 }
 
 func manifestWalk(

@@ -307,8 +307,10 @@ func (s *progressingSource) Targets(context.Context) (TargetSet, error) {
 	return TargetSet{}, offlineHostError{}
 }
 
-func (s *progressingSource) Manifest(context.Context, TargetSet) (Manifest, bool, error) {
-	return Manifest{}, false, errors.New("not reached")
+func (s *progressingSource) Manifest(
+	context.Context, TargetSet, func(ManifestEntry) error,
+) (bool, error) {
+	return false, errors.New("not reached")
 }
 
 func (s *progressingSource) Archive(context.Context, ArchiveRequest) (*ArchiveStream, error) {

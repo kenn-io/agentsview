@@ -91,15 +91,55 @@ fetching bodies they already hold when reconciling a rebuilt archive.
 
 ## What text means
 
-Text is the `content` stored on user and assistant message records. All agents
-use the same database fields and export path. Messages marked as system content
-or tool results are omitted. The export does not include separate thinking text,
-tool arguments, or tool-result fields.
+The default `--text-mode stored` exports the `content` archived on user and
+assistant records. Separate thinking and tool fields are omitted, but inline
+renderings already present in that content remain. System messages and tool
+result messages are omitted in both modes.
 
-The database is the source of truth. Text, code, logs, and any inline formatting
-already present in `content` are preserved. The export does not reinterpret
-provider formats or apply a second classification of message text. Storage
-policies still control which content is retained and available for export.
+### Export classified dialogue
+
+Use `--text-mode visible` on both the changes listing and each body read to
+export the archive's classified `dialogue_text`:
+
+```bash
+agentsview export conversations changes --text-mode visible
+agentsview export conversations message SESSION_ID MESSAGE_ID \
+  --text-mode visible --database-id DATABASE_ID --revision REVISION
+```
+
+This uses the same stored dialogue that local message search uses, when its
+parser has classified the source text. It keeps user and assistant text without
+rendered tool calls or reasoning. Authored text that quotes tool markers, code
+or logs remains text; this is not a secret-redaction feature.
+
+The export requires stored classification. Unlike message search, it does not
+fall back to rendered `content` when `dialogue_text` is absent. Such records
+return `gap: "visible_text_unavailable"`, including older records and formats
+that do not yet populate dialogue. An explicitly empty dialogue projection
+returns `gap: "no_visible_text"`. Both have `text: null`, zero text bytes and no
+digest. Neither case means a message was deleted. Consumers decide how a new gap
+affects a previously retained body.
+
+Responses remain schema 1 and add `text_mode: "visible"` when selected. Digests,
+byte lengths and UTF-8 chunks describe the selected text. Message identities are
+shared across modes; changes to either text projection advance the message
+revision. Cursors and checkpoints are mode-specific, so keep separate progress
+and body caches for the two selections. Passing a stored-mode checkpoint to
+visible mode, or the reverse, fails.
+
+The next writable archive open upgrades the derived export metadata from already
+stored dialogue. It preserves message identities and does not require source
+files or a parser resync. Export cannot reconstruct classification that is
+absent from the archive. Normal parser upgrades may supply it when the original
+sources remain available; source-less archives retain their stored content and
+report visible-mode gaps.
+
+This release's scoped parser upgrade preserves dialogue classification for
+plain-text messages too and adds it to the shared Codex parser. Normal sync
+reparses affected sources in place. Older versions discarded dialogue when it
+equalled displayed content, so those records cannot be classified retroactively
+without their sources. Keeping the classification also means storing the
+dialogue field when its text equals displayed content.
 
 With `archive_content=usage`, fetching message text fails with an error and
 leaves stdout empty, even before the daemon restarts. Text-free change listings
@@ -110,6 +150,20 @@ Existing session summaries remain content-free. Their usage and cost are session
 facts, not measured per-message costs or human working time. Join records
 through archive and session identity; do not spread session cost evenly over
 messages.
+
+### Session context in visible exports
+
+Each live change and text chunk in visible mode includes a `session` object with
+`agent` and `automation`. Automation uses the same disjoint categories as
+Activity: `interactive`, `automated`, or `subagent`. Delegation takes precedence
+over automation, including a worker without a known parent. Consumers do not
+need a session-summary export to interpret a prompt's context.
+
+Changes to these session fields publish a session change even when message text
+stays unchanged. Session context is read in the same SQLite snapshot as project
+evidence and text. Consumers should compare it across chunked reads, as they do
+project evidence. Deletions omit it; absence is not evidence that a retained
+message came from an interactive session.
 
 ## Identity, gaps and rebuilding
 

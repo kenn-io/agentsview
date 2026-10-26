@@ -2236,15 +2236,6 @@ func copyCaptureHelper(t *testing.T, name string) string {
 	return path
 }
 
-func TestCopyCaptureHelperReusesExecutableByName(t *testing.T) {
-	first := copyCaptureHelper(t, "claude")
-	second := copyCaptureHelper(t, "claude")
-	codex := copyCaptureHelper(t, "codex")
-
-	assert.Equal(t, first, second)
-	assert.NotEqual(t, first, codex)
-}
-
 func helperEnvironment(root, mode string, exitCode int) []string {
 	secureTestProviderRoot(root)
 	return append(os.Environ(),

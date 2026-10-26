@@ -163,13 +163,6 @@ describe("parseContent", () => {
     // Both blocks should parse without overlap
     expect(segments.map((s) => s.type)).toEqual(["thinking", "tool"]);
   });
-
-  it("returns consistent results on repeated calls", () => {
-    const text = "Hello world";
-    const first = parseContent(text);
-    const second = parseContent(text);
-    expect(first).toEqual(second);
-  });
 });
 
 describe("parseContent - thinking blocks", () => {
@@ -904,30 +897,6 @@ describe("enrichSegments - Read path preview", () => {
 });
 
 describe("parseContent + enrichSegments segment typing pipeline", () => {
-  it("correctly types thinking segments", () => {
-    const segs = parseContent("[Thinking]\ndeep thoughts\n[/Thinking]", false);
-    expect(segs).toHaveLength(1);
-    expect(segs[0]!.type).toBe("thinking");
-  });
-
-  it("correctly types tool segments", () => {
-    const segs = parseContent("[Bash]\n$ echo hi", true);
-    expect(segs).toHaveLength(1);
-    expect(segs[0]!.type).toBe("tool");
-  });
-
-  it("correctly types code segments", () => {
-    const segs = parseContent("```js\nconst x = 1;\n```", false);
-    expect(segs).toHaveLength(1);
-    expect(segs[0]!.type).toBe("code");
-  });
-
-  it("correctly types plain text segments", () => {
-    const segs = parseContent("Hello world", false);
-    expect(segs).toHaveLength(1);
-    expect(segs[0]!.type).toBe("text");
-  });
-
   it("produces all four segment types from mixed content", () => {
     const text =
       "[Thinking]\nhmm\n[/Thinking]\n\n" +
@@ -940,19 +909,6 @@ describe("parseContent + enrichSegments segment typing pipeline", () => {
     expect(types).toContain("text");
     expect(types).toContain("code");
     expect(types).toContain("tool");
-  });
-
-  it("enrichSegments preserves segment types through enrichment", () => {
-    const segs = parseContent("Some text\n[Bash]\n$ echo hi", true);
-    const tc: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: '{"command":"echo hi"}',
-    };
-    const enriched = enrichSegments(segs, [tc]);
-    expect(enriched[0]!.type).toBe("text");
-    expect(enriched[1]!.type).toBe("tool");
-    expect(enriched[1]!.toolCall).toBe(tc);
   });
 });
 

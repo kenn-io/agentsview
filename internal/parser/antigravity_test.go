@@ -1179,18 +1179,6 @@ func TestMergeAntigravityDBHistoryMessagesIgnoresBlankHistoryRows(t *testing.T) 
 	assert.Equal(t, ts, got[0].Timestamp)
 }
 
-// ---- crypto: key loading --------------------------------------
-
-func TestAntigravityKeyMissing(t *testing.T) {
-	// loadAntigravityKey memoizes via sync.Once, so we test the
-	// observable behavior via hasAntigravityKey on a process
-	// without the env var. Set+unset to be explicit.
-	t.Setenv("ANTIGRAVITY_KEY", "")
-	// Cannot reset sync.Once without restructuring the source.
-	// At minimum verify hasAntigravityKey doesn't panic.
-	_ = hasAntigravityKey()
-}
-
 // ---- crypto: cipher round-trips -------------------------------
 
 // TestDecryptAesGCMRoundTrip encrypts a payload with stdlib AES-GCM

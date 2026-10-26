@@ -317,19 +317,6 @@ func TestCodexProviderForceParseReloadsSameStatSessionIndex(t *testing.T) {
 	assert.Equal(t, "Bravo title", forced.Results[0].Result.Session.SessionName)
 }
 
-func TestCodexProviderAdvertisesIncrementalAppend(t *testing.T) {
-	root := t.TempDir()
-	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e2"
-	writeCodexProviderSession(t, root, uuid, "hello")
-
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	assert.Equal(t,
-		CapabilitySupported,
-		provider.Capabilities().Source.IncrementalAppend,
-	)
-}
-
 func TestCodexProviderFactoryScopesCursorCache(t *testing.T) {
 	def, ok := AgentByType(AgentCodex)
 	require.True(t, ok)

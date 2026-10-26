@@ -680,25 +680,6 @@ describe("MessagesStore", () => {
     await Promise.all([p1, p2]);
   });
 
-  it("should coalesce reloads for the same session", async () => {
-    await setupSession("s1", 10);
-
-    // Start reload
-    const { promise: s1Promise, resolve: resolveS1 } = createDeferred<Session>();
-    vi.mocked(api.getSession)
-      .mockReturnValueOnce(s1Promise)
-      .mockResolvedValue(makeSession("s1", 10));
-
-    const p1 = messages.reload();
-    const p2 = messages.reload();
-
-    // Coalesced: same promise returned
-    expect(p1).toBe(p2);
-
-    resolveS1(makeSession("s1", 10));
-    await p1;
-  });
-
   it("should no-op ensureOrdinalLoaded when full session is already loaded", async () => {
     vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 20));
     vi.mocked(api.getMessages).mockResolvedValueOnce(

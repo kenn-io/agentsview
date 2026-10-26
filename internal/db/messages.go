@@ -521,7 +521,8 @@ type Message struct {
 	Role      string `json:"role"`
 	Content   string `json:"content"`
 	// DialogueText is content without inline thinking and tool renderings,
-	// nil falls back to Content for unclassified rows and v4 imports.
+	// nil means unclassified, including v4 imports. Search falls back to
+	// Content; dialogue-only exports report a coverage gap instead.
 	DialogueText *string `json:"-"`
 	// ThinkingText holds the concatenated text of all thinking
 	// blocks for this message; "" if none.
@@ -4046,16 +4047,16 @@ func toolCallFingerprintWithQuerier(ctx context.Context, q messageRowsQuerier, s
 	var b strings.Builder
 	var indexer toolCallIndexer
 	for rows.Next() {
-		var r toolCallFingerprintRow
+		var r ToolCallFingerprintFields
 		if err := rows.Scan(
-			&r.messageOrdinal, &r.toolName, &r.category,
-			&r.toolUseID, &r.inputJSON, &r.skillName,
-			&r.subagentSessionID, &r.resultContentLength,
-			&r.resultContent, &r.filePath, &r.observedOutcome, &r.observedRepeat, &r.sequenceEnding,
+			&r.MessageOrdinal, &r.ToolName, &r.Category,
+			&r.ToolUseID, &r.InputValue, &r.SkillName,
+			&r.SubagentSessionID, &r.ResultContentLength,
+			&r.ResultValue, &r.FilePathValue, &r.ObservedOutcome, &r.ObservedRepeat, &r.SequenceEnding,
 		); err != nil {
 			return "", err
 		}
-		r.callIndex = indexer.next(sessionID, r.messageOrdinal)
+		r.CallIndex = indexer.next(sessionID, r.MessageOrdinal)
 		r.appendTo(&b)
 	}
 	return b.String(), rows.Err()

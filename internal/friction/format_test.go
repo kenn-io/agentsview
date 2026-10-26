@@ -7,25 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTruncateRunes(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		n    int
-		want string
-	}{
-		{"unicode/no truncation", "日本語", 3, "日本語"},
-		{"unicode/two", "日本語", 2, "日本"},
-		{"empty", "", 5, ""},
-		{"zero", "abc", 0, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, TruncateRunes(tt.in, tt.n))
-		})
-	}
-}
-
 func TestTruncateWithMarker(t *testing.T) {
 	tests := []struct {
 		name string

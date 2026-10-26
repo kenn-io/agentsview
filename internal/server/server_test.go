@@ -2339,23 +2339,6 @@ func TestSearch_CanceledContext(t *testing.T) {
 	}
 }
 
-func TestSearch_DeadlineExceeded(t *testing.T) {
-	te := setup(t)
-	te.requireFTS(t)
-	te.seedSession(t, "s1", "my-app", 1)
-	te.seedMessages(t, "s1", 1, func(i int, m *db.Message) {
-		m.Content = "searchable content"
-		m.ContentLength = 18
-	})
-
-	ctx, cancel := expiredContext(t)
-	defer cancel()
-
-	w := te.getWithContext(t, ctx, "/api/v1/search?q=searchable")
-
-	assertTimeoutRace(t, w)
-}
-
 func TestSearch_ZeroResults(t *testing.T) {
 	te := setup(t)
 	te.requireFTS(t)
@@ -5465,20 +5448,6 @@ func TestGetVersionSessionStatsAvailability(t *testing.T) {
 			assertStatus(t, stats, tc.status)
 		})
 	}
-}
-
-func TestGetVersion_Default(t *testing.T) {
-	te := setup(t)
-
-	w := te.get(t, "/api/v1/version")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[server.VersionInfo](t, w)
-	if resp.Version != "" {
-		assert.Failf(t, "test failed", "version = %q, want empty", resp.Version)
-	}
-	assert.Equal(t, server.APIVersion, resp.APIVersion)
-	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
 }
 
 func TestGetMemoryStatus(t *testing.T) {

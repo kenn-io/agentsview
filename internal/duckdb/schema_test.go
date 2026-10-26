@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,19 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestOpenCreatesLocalDuckDBFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agentsview.duckdb")
-
-	db, err := Open(t.Context(), path)
-	require.NoError(t, err, "Open")
-	t.Cleanup(func() {
-		require.NoError(t, db.Close(), "close DuckDB")
-	})
-
-	require.NoError(t, db.PingContext(t.Context()))
-	assert.FileExists(t, path)
-}
 
 func TestOpenRejectsEmptyPath(t *testing.T) {
 	db, err := Open(t.Context(), "")

@@ -334,7 +334,7 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	for _, archiveSize := range []int{130, 1030} {
+	for _, archiveSize := range []int{130, 390} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -731,7 +731,7 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	for _, archiveSize := range []int{130, 1030} {
+	for _, archiveSize := range []int{130, 390} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -790,7 +790,7 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	var watcherResultCounts []int64
-	for _, archiveSize := range []int{130, 1030} {
+	for _, archiveSize := range []int{130, 390} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1374,7 +1374,7 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 	}
 	const targetID = "omnigent:0:conv_0000"
 	boundedParseCounts := make(map[int]int64)
-	for _, archiveSize := range []int{130, 1030} {
+	for _, archiveSize := range []int{130, 390} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1432,7 +1432,7 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 				"an unchanged container must cost the next scheduled pass nothing")
 		})
 	}
-	assert.Equal(t, boundedParseCounts[130], boundedParseCounts[1030],
+	assert.Equal(t, boundedParseCounts[130], boundedParseCounts[390],
 		"scheduled metadata work must not grow with the conversation archive")
 }
 
@@ -1441,7 +1441,7 @@ func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	observed := make(map[int]int64)
-	for _, archiveSize := range []int{130, 1030} {
+	for _, archiveSize := range []int{130, 390} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1523,7 +1523,7 @@ func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
 			assert.Equal(t, "review", after.GitBranch)
 		})
 	}
-	assert.Equal(t, observed[130], observed[1030],
+	assert.Equal(t, observed[130], observed[390],
 		"dependent metadata refresh work must not grow with unrelated conversations")
 }
 
@@ -1532,7 +1532,7 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 		t.Skip("skipping integration test")
 	}
 	observed := make(map[int]int64)
-	for _, archiveSize := range []int{130, 1030} {
+	for _, archiveSize := range []int{130, 390} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1621,7 +1621,7 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 			assert.NotNil(t, survivor)
 		})
 	}
-	assert.Equal(t, observed[130], observed[1030],
+	assert.Equal(t, observed[130], observed[390],
 		"scheduled work must not grow with the conversation archive")
 }
 

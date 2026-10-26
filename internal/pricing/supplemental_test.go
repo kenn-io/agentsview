@@ -142,14 +142,6 @@ func TestPricingMuseModels(t *testing.T) {
 	}
 }
 
-func TestDateAliasedModels(t *testing.T) {
-	assert.Equal(t, []string{
-		"daimon-kimi-code",
-		"daimon-kimi-messages",
-		"kimi-for-coding",
-	}, DateAliasedModels())
-}
-
 func TestKimiK26Aliases(t *testing.T) {
 	assert.Equal(t, []string{"k2d6-agent"}, KimiK26Aliases())
 }

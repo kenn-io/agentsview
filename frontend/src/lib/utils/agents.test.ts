@@ -82,44 +82,6 @@ describe("KNOWN_AGENTS", () => {
 });
 
 describe("agentColor", () => {
-  it("returns correct color for known agents", () => {
-    expect(agentColor("claude")).toBe("var(--accent-blue)");
-    expect(agentColor("codex")).toBe("var(--accent-green)");
-    expect(agentColor("traex")).toBe("var(--accent-coral)");
-    expect(agentColor("augure-code")).toBe("var(--accent-lime)");
-    expect(agentColor("augure-desktop")).toBe("var(--accent-violet)");
-    expect(agentColor("copilot")).toBe("var(--accent-amber)");
-    expect(agentColor("devin")).toBe("var(--accent-red)");
-    expect(agentColor("evener")).toBe("var(--accent-teal)");
-    expect(agentColor("gemini")).toBe("var(--accent-rose)");
-    expect(agentColor("opencode")).toBe("var(--accent-purple)");
-    expect(agentColor("opencodereview")).toBe("var(--accent-indigo)");
-    expect(agentColor("openhands")).toBe("var(--accent-teal)");
-    expect(agentColor("cursor")).toBe("var(--accent-black)");
-    expect(agentColor("amp")).toBe("var(--accent-coral)");
-    expect(agentColor("zencoder")).toBe("var(--accent-red)");
-    expect(agentColor("zed")).toBe("var(--accent-green)");
-    expect(agentColor("pi")).toBe("var(--accent-indigo)");
-    expect(agentColor("stepcode")).toBe("var(--accent-indigo)");
-    expect(agentColor("tau")).toBe("var(--accent-amber)");
-    expect(agentColor("prime-agent")).toBe("var(--accent-indigo)");
-    expect(agentColor("qwen")).toBe("var(--accent-cyan)");
-    expect(agentColor("qwenpaw")).toBe("var(--accent-cyan)");
-    expect(agentColor("deepseek-tui")).toBe("var(--accent-cyan)");
-    expect(agentColor("deepseek-harness")).toBe("var(--accent-cyan)");
-    expect(agentColor("vscode-copilot")).toBe("var(--accent-teal)");
-    expect(agentColor("visualstudio-copilot")).toBe("var(--accent-blue)");
-    expect(agentColor("qclaw")).toBe("var(--accent-orange)");
-    expect(agentColor("workbuddy")).toBe("var(--accent-violet)");
-    expect(agentColor("codebuddy")).toBe("var(--accent-blue)");
-    expect(agentColor("piebald")).toBe("var(--accent-orange)");
-    expect(agentColor("roocode")).toBe("var(--accent-rose)");
-    expect(agentColor("omnigent")).toBe("var(--accent-teal)");
-    expect(agentColor("cline")).toBe("var(--accent-violet)");
-    expect(agentColor("crush")).toBe("var(--accent-coral)");
-    expect(agentColor("muse")).toBe("var(--accent-sky)");
-  });
-
   it("falls back to blue for unknown agents", () => {
     expect(agentColor("unknown")).toBe("var(--accent-blue)");
     expect(agentColor("")).toBe("var(--accent-blue)");

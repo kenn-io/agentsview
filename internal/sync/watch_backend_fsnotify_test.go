@@ -534,16 +534,6 @@ func TestFSNotifyBackendRuntimeRetryTimerReleasesPolling(t *testing.T) {
 	})
 }
 
-func TestBufferedFSNotifyWatchOpsPreservesErrors(t *testing.T) {
-	watcher, err := fsnotify.NewWatcher()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = watcher.Close() })
-	ops := bufferedFSNotifyWatchOps{Watcher: watcher}
-	require.ErrorIs(t, ops.Add(filepath.Join(t.TempDir(), "absent")), os.ErrNotExist)
-	require.NoError(t, watcher.Close())
-	require.ErrorIs(t, ops.Add(t.TempDir()), fsnotify.ErrClosed)
-}
-
 func TestFSNotifyBackendOverflowRequestsLostEventRecovery(t *testing.T) {
 	backend := testFSNotifyBackend(t)
 	errorInput := make(chan error, 1)
