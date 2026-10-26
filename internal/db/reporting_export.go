@@ -108,7 +108,7 @@ func (db *DB) ExportReportingDay(
 		opts.afterSourceLoad(source.observerStats())
 	}
 	if opts.ByMachine {
-		if err := source.loadMachineIdentity(ctx, tx, schemaVersion); err != nil {
+		if err := loadReportingMachineIdentity(ctx, tx, schemaVersion, &source); err != nil {
 			return export.ReportingDay{}, err
 		}
 	}
@@ -224,7 +224,7 @@ func (db *DB) ExportReportingDigest(
 		opts.afterSourceLoad(source.observerStats())
 	}
 	if opts.ByMachine {
-		if err := source.loadMachineIdentity(ctx, tx, schemaVersion); err != nil {
+		if err := loadReportingMachineIdentity(ctx, tx, schemaVersion, &source); err != nil {
 			return nil, err
 		}
 	}

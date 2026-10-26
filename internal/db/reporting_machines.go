@@ -9,7 +9,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-func (s *reportingExportSource) loadMachineIdentity(ctx context.Context, tx *sql.Tx, schema int) error {
+func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s *reportingExportSource) error {
 	if schema != export.ReportingJointSchemaVersion {
 		return errors.New("machine snapshots require reporting schema 5")
 	}
