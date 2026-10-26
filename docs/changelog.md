@@ -27,7 +27,8 @@ The latest release is
   **Settings > Appearance > Chart colors**, or set `chart_palette =
   "colorblind"`. The skill trend, Trends, and Usage charts then use Petroff's
   color sequences, which stay distinguishable with common forms of color
-  blindness. Charts with more than 10 series repeat colors.
+  blindness. Past the tenth series, colors repeat with a pattern: hatched
+  Usage bars, areas, and treemap tiles, and dashed Trends lines.
 
 - PostgreSQL and ClickHouse push services can use a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons

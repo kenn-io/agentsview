@@ -1435,8 +1435,10 @@ dashboard skill trend, Trends, and Usage charts:
 - **Agentsview**: the project palette.
 - **Matplotlib**: matplotlib's categorical families without their grays.
 - **Color-blind safe**: Petroff's color sequences, chosen so series stay
-  distinguishable with common forms of color blindness. Charts with more than
-  10 series repeat colors.
+  distinguishable with common forms of color blindness. Past the tenth series,
+  colors repeat with a pattern: Usage bars, areas, and treemap tiles are
+  hatched, then cross-hatched, then dotted, and Trends lines are dashed.
+  Legends and lists show the same pattern.
 
 This setting is server-wide rather than browser-local, so all clients connected to
 the same server use the same palette. You can change it even when the server

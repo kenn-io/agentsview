@@ -28,7 +28,8 @@ import AttributionPanel from "./AttributionPanel.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
-import { usageChartColorMaps } from "../../utils/usageChartColors.js";
+import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
+import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
 
 function summaryWithAgents(agents: string[]): UsageSummaryResponse {
   return {
@@ -114,13 +115,17 @@ function summaryWithModels(): UsageSummaryResponse {
   return summary;
 }
 
-function mountPanel(colorMap?: ReadonlyMap<string, string>) {
+function solid(color: string): SeriesStyle {
+  return { color, fill: "solid", dash: "solid", marker: "circle" };
+}
+
+function mountPanel(styleMap?: ReadonlyMap<string, SeriesStyle>) {
   const groupBy = usage.toggles.attribution.groupBy;
   usage.mergeKnownProjects((usage.attributionSummary ?? usage.summary)?.projectTotals ?? [], {});
   return mount(AttributionPanel, {
     target: document.body,
     props: {
-      colorMap: colorMap ?? usageChartColorMaps(usage.summary, settings.chartPalette)[groupBy],
+      styleMap: styleMap ?? usageChartStyleMaps(usage.summary, settings.chartPalette)[groupBy],
     },
   });
 }
@@ -432,8 +437,8 @@ describe("AttributionPanel colors", () => {
     usage.toggles.attribution.groupBy = "model";
     usage.toggles.attribution.view = "list";
     const supplied = new Map([
-      ["gpt-5.6-sol", "#123456"],
-      ["claude-opus-5", "#abcdef"],
+      ["gpt-5.6-sol", solid("#123456")],
+      ["claude-opus-5", solid("#abcdef")],
     ]);
 
     const component = mountPanel(supplied);
@@ -454,6 +459,34 @@ describe("AttributionPanel colors", () => {
     );
     expect(tileColors).toEqual(["#123456", "#abcdef"]);
     expect(railColors).toEqual(["rgb(18, 52, 86)", "rgb(171, 205, 239)"]);
+    unmount(component);
+  });
+
+  it("fills a patterned series with its pattern and shows it in the swatches", async () => {
+    usage.summary = summaryWithModels();
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "treemap";
+    const supplied = new Map<string, SeriesStyle>([
+      ["gpt-5.6-sol", solid("#123456")],
+      ["claude-opus-5", { ...solid("#abcdef"), fill: "hatch" }],
+    ]);
+
+    const component = mountPanel(supplied);
+    await tick();
+
+    const tiles = Array.from(document.querySelectorAll<SVGRectElement>(".tile rect"));
+    expect(tiles[0]!.getAttribute("fill")).toBe("#123456");
+    const patternRef = tiles[1]!.getAttribute("fill")!.match(/^url\(#(.+)\)$/)?.[1];
+    const pattern = patternRef ? document.getElementById(patternRef) : null;
+    expect(pattern?.tagName.toLowerCase()).toBe("pattern");
+    expect(pattern?.querySelector("rect")?.getAttribute("fill")).toBe("#abcdef");
+
+    const railStyles = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
+      (dot) => dot.getAttribute("style") ?? "",
+    );
+    expect(railStyles[0]).not.toContain("gradient");
+    expect(railStyles[1]).toContain("repeating-linear-gradient");
+    expect(railStyles[1]).toContain("#abcdef");
     unmount(component);
   });
 

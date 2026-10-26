@@ -2787,7 +2787,7 @@ describe("UsageStore attribution focus", () => {
     "keeps every %s colored through brush and grouping changes",
     async (by) => {
       const { usage } = await loadStore();
-      const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
+      const { usageChartStyleMaps } = await import("../utils/usageChartStyles.js");
       const { sessions } = await import("./sessions.svelte.js");
       const full = usageSummary(12);
       full.projectTotals[0]!.cost = testMoney(8);
@@ -2830,8 +2830,8 @@ describe("UsageStore attribution focus", () => {
       });
       await usage.fetchAll();
       const colors = {
-        agentsview: usageChartColorMaps(usage.colorSummary, "agentsview")[by],
-        matplotlib: usageChartColorMaps(usage.colorSummary, "matplotlib")[by],
+        agentsview: usageChartStyleMaps(usage.colorSummary, "agentsview")[by],
+        matplotlib: usageChartStyleMaps(usage.colorSummary, "matplotlib")[by],
       };
       usage.setTimeRange("2024-01-08", "2024-01-14");
       await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
@@ -2850,10 +2850,10 @@ describe("UsageStore attribution focus", () => {
           : usage.attributionSummary?.agentTotals.length,
       ).toBe(2);
       for (const palette of ["agentsview", "matplotlib"] as const) {
-        const result = usageChartColorMaps(usage.colorSummary, palette)[by];
-        for (const [id, color] of colors[palette]) expect(result.get(id)).toBe(color);
+        const result = usageChartStyleMaps(usage.colorSummary, palette)[by];
+        for (const [id, style] of colors[palette]) expect(result.get(id)).toEqual(style);
         expect(result.size).toBe(2);
-        expect(new Set(result.values()).size).toBe(2);
+        expect(new Set([...result.values()].map((style) => style.color)).size).toBe(2);
       }
       usage.cancelInFlightReads();
     },

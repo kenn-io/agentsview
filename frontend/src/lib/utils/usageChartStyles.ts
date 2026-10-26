@@ -1,10 +1,11 @@
 import type { UsageSummaryResponse } from "../api/generated/index";
-import { orderedChartSeriesColorMap, type ChartPalette } from "./chartPalette.js";
+import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
+import { orderedChartSeriesStyleMap, type ChartPalette } from "./chartPalette.js";
 
-export interface UsageChartColorMaps {
-  project: ReadonlyMap<string, string>;
-  model: ReadonlyMap<string, string>;
-  agent: ReadonlyMap<string, string>;
+export interface UsageChartStyleMaps {
+  project: ReadonlyMap<string, SeriesStyle>;
+  model: ReadonlyMap<string, SeriesStyle>;
+  agent: ReadonlyMap<string, SeriesStyle>;
 }
 
 function rankedIds(costs: ReadonlyMap<string, number>): string[] {
@@ -20,10 +21,10 @@ function addCost(costs: Map<string, number>, id: string, microdollars: number) {
   costs.set(id, (costs.get(id) ?? 0) + microdollars);
 }
 
-export function usageChartColorMaps(
+export function usageChartStyleMaps(
   summary: UsageSummaryResponse | null,
   palette: ChartPalette,
-): UsageChartColorMaps {
+): UsageChartStyleMaps {
   const projects = new Map<string, number>();
   const models = new Map<string, number>();
   const agents = new Map<string, number>();
@@ -58,8 +59,8 @@ export function usageChartColorMaps(
   for (const [id, cost] of dailyAgents) agents.set(id, cost);
 
   return {
-    project: orderedChartSeriesColorMap(rankedIds(projects), palette),
-    model: orderedChartSeriesColorMap(rankedIds(models), palette),
-    agent: orderedChartSeriesColorMap(rankedIds(agents), palette),
+    project: orderedChartSeriesStyleMap(rankedIds(projects), palette),
+    model: orderedChartSeriesStyleMap(rankedIds(models), palette),
+    agent: orderedChartSeriesStyleMap(rankedIds(agents), palette),
   };
 }
