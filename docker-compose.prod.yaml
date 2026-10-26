@@ -9,11 +9,12 @@ services:
       CODEX_SESSIONS_DIR: /agents/codex
       FORGE_DIR: /agents/forge
       OPENCODE_DIR: /agents/opencode
-      # Read the bearer token from a mounted secret instead of /data/config.toml.
-      # AGENTSVIEW_AUTH_TOKEN_FILE: /run/secrets/agentsview_token
-    # Uncomment this block to serve from PostgreSQL and ingest mounted sessions.
+      # Set both of these to serve from PostgreSQL instead of the local archive.
       # AGENTSVIEW_MODE: pg-serve
       # AGENTSVIEW_PG_URL: postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require
+      # Read the bearer token from a mounted secret instead of /data/config.toml.
+      # AGENTSVIEW_AUTH_TOKEN_FILE: /run/secrets/agentsview_token
+    # With PostgreSQL mode set above, this block also ingests and publishes mounted sessions.
     # command: ["--push-watch"]
     # The final push has a 30s limit; Docker's default stop timeout is 10s.
     # stop_grace_period: 40s
