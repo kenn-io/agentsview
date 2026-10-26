@@ -74,6 +74,11 @@ func (db *DB) assembleDailyUsageFacts(
 			machine: group.Machine, model: group.Model,
 			providerID: group.ProviderID,
 		}
+		// Cursor groups carry no session, so they have no branch to attribute.
+		if filter.BranchBreakdowns && group.SessionID != "" {
+			key.gitBranch = group.GitBranch
+			key.branchAttributed = true
+		}
 		bucket := accum[key]
 		if bucket == nil {
 			bucket = &usageDailyFactsBucket{}
@@ -141,7 +146,8 @@ func (db *DB) assembleDailyUsageFacts(
 		}
 	}
 
-	daily, totals, err := buildDailyUsageFactsEntries(accum, filter.Breakdowns)
+	daily, totals, err := buildDailyUsageFactsEntries(
+		accum, filter.Breakdowns, filter.BranchBreakdowns)
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -214,20 +220,23 @@ func recordUsageFactsPricing(
 
 func buildDailyUsageFactsEntries(
 	accum map[usageCostAllocationKey]*usageDailyFactsBucket,
-	breakdowns bool,
+	breakdowns, branchBreakdowns bool,
 ) ([]DailyUsageEntry, UsageTotals, error) {
 	type dayFacts struct {
 		models, projects, agents, machines map[string]usageDailyFactsBucket
+		branches                           map[usageDailyBranchKey]usageDailyFactsBucket
 	}
+	anyBreakdowns := breakdowns || branchBreakdowns
 	days := make(map[string]*dayFacts)
 	for key, bucket := range accum {
 		day := days[key.date]
 		if day == nil {
 			day = &dayFacts{models: make(map[string]usageDailyFactsBucket)}
-			if breakdowns {
+			if anyBreakdowns {
 				day.projects = make(map[string]usageDailyFactsBucket)
 				day.agents = make(map[string]usageDailyFactsBucket)
 				day.machines = make(map[string]usageDailyFactsBucket)
+				day.branches = make(map[usageDailyBranchKey]usageDailyFactsBucket)
 			}
 			days[key.date] = day
 		}
@@ -247,6 +256,14 @@ func buildDailyUsageFactsEntries(
 				day.machines[key.machine], err = addUsageDailyFactsBucket(
 					day.machines[key.machine], *bucket)
 			}
+			if err != nil {
+				return nil, UsageTotals{}, err
+			}
+		}
+		if branchBreakdowns && key.branchAttributed {
+			branch := usageDailyBranchKey{project: key.project, branch: key.gitBranch}
+			day.branches[branch], err = addUsageDailyFactsBucket(
+				day.branches[branch], *bucket)
 			if err != nil {
 				return nil, UsageTotals{}, err
 			}
@@ -280,10 +297,11 @@ func buildDailyUsageFactsEntries(
 				CacheReadTokens: bucket.cacheRead, Cost: bucket.cost,
 			})
 		}
-		if breakdowns {
+		if anyBreakdowns {
 			entry.ProjectBreakdowns = usageDailyProjectBreakdowns(day.projects)
 			entry.AgentBreakdowns = usageDailyAgentBreakdowns(day.agents)
 			entry.MachineBreakdowns = usageDailyMachineBreakdowns(day.machines)
+			entry.BranchBreakdowns = usageDailyBranchBreakdowns(day.branches)
 		}
 		var err error
 		totals.TotalCost, err = money.Add(totals.TotalCost, entry.TotalCost)
@@ -403,5 +421,23 @@ func usageDailyMachineBreakdowns(
 		}
 		return result[i].MachineName < result[j].MachineName
 	})
+	return result
+}
+
+type usageDailyBranchKey struct{ project, branch string }
+
+func usageDailyBranchBreakdowns(
+	buckets map[usageDailyBranchKey]usageDailyFactsBucket,
+) []BranchBreakdown {
+	result := make([]BranchBreakdown, 0, len(buckets))
+	for key, bucket := range buckets {
+		result = append(result, BranchBreakdown{
+			Project: key.project, Branch: key.branch,
+			InputTokens: bucket.input, OutputTokens: bucket.output,
+			CacheCreationTokens: bucket.cacheWrite,
+			CacheReadTokens:     bucket.cacheRead, Cost: bucket.cost,
+		})
+	}
+	SortBranchBreakdowns(result)
 	return result
 }

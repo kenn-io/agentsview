@@ -3,4 +3,5 @@ export type {
   ActivityBucket as Bucket,
   ActivitySessionRow as SessionRow,
   ActivityKeyMinutes as KeyMinutes,
+  ActivityBranchKeyMinutes as BranchKeyMinutes,
 } from "../generated/index";

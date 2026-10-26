@@ -58,6 +58,14 @@ func sessionActivity(s db.Session) string {
 	return s.CreatedAt
 }
 
+func mcpBranchToken(project, branch string) (string, error) {
+	tok, err := db.BranchFilterToken(project, branch)
+	if errors.Is(err, db.ErrBranchWithoutProject) {
+		return "", errors.New("git_branch requires project")
+	}
+	return tok, err
+}
+
 // isSystemMessage reports whether a message is system content that
 // get_messages and the overview tail must never surface: the persisted
 // is_system flag, or a legacy system prefix on a user message (the prefix
@@ -259,6 +267,7 @@ type listSessionsIn struct {
 	Project          string   `json:"project,omitempty" jsonschema:"Filter by project name."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
 	Machine          string   `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
+	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Filter by git branch name. Requires project; the branch is scoped to that project."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	ActiveSince      string   `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
@@ -299,10 +308,15 @@ type listSessionsOut struct {
 func (t *toolset) listSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in listSessionsIn,
 ) (*mcp.CallToolResult, listSessionsOut, error) {
+	gitBranch, err := mcpBranchToken(in.Project, in.GitBranch)
+	if err != nil {
+		return nil, listSessionsOut{}, err
+	}
 	res, err := t.svc.List(ctx, service.ListFilter{
 		Project:            in.Project,
 		Agent:              in.Agent,
 		Machine:            in.Machine,
+		GitBranch:          gitBranch,
 		DateFrom:           in.DateFrom,
 		DateTo:             in.DateTo,
 		ActiveSince:        in.ActiveSince,
@@ -946,22 +960,35 @@ func (t *toolset) searchContent(
 // --- get_usage_summary ---
 
 type usageSummaryIn struct {
-	From    string `json:"from,omitempty" jsonschema:"Range start date (YYYY-MM-DD)."`
-	To      string `json:"to,omitempty" jsonschema:"Range end date (YYYY-MM-DD)."`
-	Project string `json:"project,omitempty" jsonschema:"Filter by project."`
-	Agent   string `json:"agent,omitempty" jsonschema:"Filter by agent."`
-	Machine string `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
+	From      string `json:"from,omitempty" jsonschema:"Range start date (YYYY-MM-DD)."`
+	To        string `json:"to,omitempty" jsonschema:"Range end date (YYYY-MM-DD)."`
+	Project   string `json:"project,omitempty" jsonschema:"Filter by project."`
+	Agent     string `json:"agent,omitempty" jsonschema:"Filter by agent."`
+	Machine   string `json:"machine,omitempty" jsonschema:"Exact ID or alias, comma-separated IDs or aliases, or one unique whole display name. IDs and aliases take precedence; unknown or ambiguous selectors return an error."`
+	GitBranch string `json:"git_branch,omitempty" jsonschema:"Filter by git branch name. Requires project; the branch is scoped to that project."`
 }
 
 func (t *toolset) usageSummary(
 	ctx context.Context, _ *mcp.CallToolRequest, in usageSummaryIn,
 ) (*mcp.CallToolResult, *service.UsageSummaryResult, error) {
+	// The usage filter accepts a comma-separated project list, but a branch
+	// token binds to exactly one project; encoding a CSV project into the
+	// token would AND contradictory predicates and silently return zeros.
+	if in.GitBranch != "" && strings.Contains(in.Project, ",") {
+		return nil, nil, errors.New(
+			"git_branch requires a single project, not a comma-separated list")
+	}
+	gitBranch, err := mcpBranchToken(in.Project, in.GitBranch)
+	if err != nil {
+		return nil, nil, err
+	}
 	res, err := t.svc.UsageSummary(ctx, service.UsageRequest{
-		From:    in.From,
-		To:      in.To,
-		Project: in.Project,
-		Agent:   in.Agent,
-		Machine: in.Machine,
+		From:      in.From,
+		To:        in.To,
+		Project:   in.Project,
+		Agent:     in.Agent,
+		Machine:   in.Machine,
+		GitBranch: gitBranch,
 		// The usage summary surface counts one-shot sessions by default
 		// (matching the REST endpoint), since cost analysis wants every
 		// session, not just multi-turn ones.

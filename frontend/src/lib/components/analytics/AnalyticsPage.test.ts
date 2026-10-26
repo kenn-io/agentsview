@@ -11,6 +11,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
+import { branchFilterToken } from "../../branchFilters.js";
 import sourceRaw from "./AnalyticsPage.svelte?raw";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
@@ -81,6 +82,8 @@ afterEach(() => {
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
   sessions.filters.machine = "";
+  sessions.filters.branch = "";
+  analytics.branch = "";
   yokedDates.setEnabled(false);
   analyticsPageDates.clear();
   ui.sidebarOpen = true;
@@ -355,6 +358,7 @@ describe("AnalyticsPage outcome window", () => {
   });
 
   it.each([
+    ["branch", branchFilterToken("pl1:sha256:alpha", "main"), ""],
     ["machine", "demo-machine", ""],
     ["model", "demo-model", ""],
     ["termination", "completed", ""],
@@ -370,7 +374,7 @@ describe("AnalyticsPage outcome window", () => {
       Object.assign(analytics, { [key]: value });
       await flushEffects();
       expect(document.querySelector(".outcome-empty")?.textContent).toContain(
-        "Clear machine, model",
+        "Clear branch, machine, model",
       );
       expect(load).not.toHaveBeenCalled();
 
@@ -815,6 +819,31 @@ describe("AnalyticsPage refresh behavior", () => {
     await flushEffects();
 
     expect(analytics.windowDays).toBe(7);
+  });
+
+  it("mirrors the sidebar branch filter into the analytics store", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    sessions.filters.branch = "proj-amain";
+    await flushEffects();
+
+    expect(analytics.branch).toBe("proj-amain");
+
+    sessions.filters.branch = "";
+    await flushEffects();
+
+    expect(analytics.branch).toBe("");
   });
 
   it("does not refresh analytical scans from SSE updates", () => {

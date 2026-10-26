@@ -39,11 +39,13 @@ function summary(): UsageSummaryResponse {
         projectBreakdowns: [],
         agentBreakdowns: [],
         machineBreakdowns: [],
+        branchBreakdowns: [],
       },
     ],
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 1,
       byProject: { demo: 1 },

@@ -14,6 +14,7 @@ import (
 
 type usageFactsGroup struct {
 	SessionID, Date, Project, Agent, Machine     string
+	GitBranch                                    string
 	ProviderID                                   string
 	Model, PricedModel, MatchedPattern           string
 	PricingTimestamp                             string
@@ -240,8 +241,8 @@ func readUsageDailyRollups(
 		if !ok || !session.PassesFilter || !usageRollupModelPasses(filter, group.Model) {
 			continue
 		}
-		group.Project, group.Agent, group.Machine =
-			session.Project, session.Agent, session.Machine
+		group.Project, group.Agent, group.Machine, group.GitBranch =
+			session.Project, session.Agent, session.Machine, session.GitBranch
 		group.RateOK = rateOK != 0
 		if authoritative.Valid {
 			value := authoritative.Int64
@@ -464,6 +465,7 @@ func aggregateUsageRollupExceptions(
 			group = &usageFactsGroup{
 				SessionID: fact.AttributionSessionID, Date: fact.LocalDate,
 				Project: session.Project, Agent: session.Agent, Machine: session.Machine,
+				GitBranch:  session.GitBranch,
 				ProviderID: fact.Fact.ProviderID,
 				Model:      fact.Model, PricedModel: priced.PricedModel,
 				MatchedPattern: priced.MatchedPattern, RateOK: priced.RateOK,
@@ -799,6 +801,7 @@ func compareUsageFactsGroup(left, right usageFactsGroup) int {
 	for _, pair := range [][2]string{
 		{left.Date, right.Date},
 		{left.SessionID, right.SessionID},
+		{left.GitBranch, right.GitBranch},
 		{left.Model, right.Model},
 		{left.ProviderID, right.ProviderID},
 	} {

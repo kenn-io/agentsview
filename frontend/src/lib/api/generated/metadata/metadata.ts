@@ -4,9 +4,11 @@
 import type {
   AgentsResponse,
   BranchesResponse,
+  DbBranchResult,
   DbSessionStats,
   DbStats,
   GetApiV1AgentsParams,
+  GetApiV1BranchNamesParams,
   GetApiV1BranchesParams,
   GetApiV1MachinesParams,
   GetApiV1ProjectsParams,
@@ -43,6 +45,44 @@ export const getApiV1Agents = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<AgentsResponse> => {
   return orvalFetch<AgentsResponse>(getGetApiV1AgentsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1BranchNamesUrl = (params?: GetApiV1BranchNamesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    const explodeParameters = ["projects"];
+
+    if (Array.isArray(value) && explodeParameters.includes(key)) {
+      value.forEach((v) => {
+        normalizedParams.append(key, v === null ? "null" : String(v));
+      });
+      return;
+    }
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/branch-names?${stringifiedParams}`
+    : `/api/v1/branch-names`;
+};
+
+/**
+ * @summary Search branch names
+ */
+export const getApiV1BranchNames = async (
+  params?: GetApiV1BranchNamesParams,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbBranchResult> => {
+  return orvalFetch<DbBranchResult>(getGetApiV1BranchNamesUrl(params), {
     ...options,
     method: "GET",
   });

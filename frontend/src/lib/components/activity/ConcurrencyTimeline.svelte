@@ -2,9 +2,8 @@
   import { Chart, Layer, Line, Rect, Spline, Text } from "layerchart";
   import { scaleLinear } from "d3-scale";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
-  import type { Report } from "../../api/types.js";
+  import type { Bucket, Report } from "../../api/types.js";
   import { Button, SegmentedControl, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
-  import type { ActivityBucket } from "../../api/generated/index";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
   let {
@@ -43,7 +42,7 @@
     return buckets.reduce((total, bucket) => total + bucket[key], 0);
   });
 
-  let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);
+  let tooltip = $state<{ x: number; y: number; bucket: Bucket } | null>(null);
   let tooltipEl = $state<HTMLDivElement>();
   let tooltipPos = $state<{ left: number; top: number } | null>(null);
   let keyboardAnchorIndex = $state<number | null>(null);
@@ -113,7 +112,7 @@
     return `${dateLabel(startMs)}–${dateLabel(endMs - 1)}`;
   }
 
-  function fmtBucketRange(b: ActivityBucket): string {
+  function fmtBucketRange(b: Bucket): string {
     const startMs = Date.parse(b.start);
     const endMs = Date.parse(b.end);
     if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "";
@@ -123,7 +122,7 @@
     return fmtMinuteRange(startMs, endMs);
   }
 
-  function showSlotTip(e: MouseEvent, b: ActivityBucket) {
+  function showSlotTip(e: MouseEvent, b: Bucket) {
     const rect = (e.currentTarget as Element).getBoundingClientRect();
     tooltip = {
       x: rect.left + rect.width / 2,
@@ -268,7 +267,7 @@
     { name: "cost", label: m.activity_cost(), displayLabel: m.activity_cost() },
   ]);
 
-  function bucketOverlayValue(b: ActivityBucket): number {
+  function bucketOverlayValue(b: Bucket): number {
     return overlayMetric === "cost" ? b.cost.microdollars : b.output_tokens;
   }
 

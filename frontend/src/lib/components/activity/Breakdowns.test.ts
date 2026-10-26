@@ -8,6 +8,7 @@ import Breakdowns from "./Breakdowns.svelte";
 import { router } from "../../stores/router.svelte.js";
 import type { Report } from "../../api/types.js";
 import { testMoney } from "../../test/money.js";
+import { BRANCH_TOKEN_SEP } from "../../branchFilters.js";
 
 function makeReport(): Report {
   return {
@@ -74,6 +75,7 @@ function makeReport(): Report {
     ],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     sessions_total: 0,
     projects: {},
@@ -365,5 +367,138 @@ describe("Breakdowns", () => {
     expect(navigate).not.toHaveBeenCalled();
     unmount(component);
     navigate.mockRestore();
+  });
+
+  it("renders branch rows as project/branch labels, never raw tokens", async () => {
+    const report = makeReport();
+    report.by_branch = [
+      {
+        project_key: "pl1:sha256:alpha",
+        project: "alpha",
+        branch: "main",
+        agent_minutes: 12,
+        cost: testMoney(0),
+        interactive_agent_minutes: 12,
+        subagent_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        subagent_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+      {
+        project_key: "pl1:sha256:alpha",
+        project: "alpha",
+        branch: "",
+        agent_minutes: 3,
+        cost: testMoney(0),
+        interactive_agent_minutes: 3,
+        subagent_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        subagent_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(Breakdowns, { target, props: { report } });
+    await tick();
+    const labels = [...target.querySelectorAll(".bar-label")].map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(labels).toContain("alpha/main");
+    expect(labels).toContain("alpha/(no branch)");
+    expect(labels.some((l) => l.includes(BRANCH_TOKEN_SEP))).toBe(false);
+    unmount(c);
+    target.remove();
+  });
+
+  it("keeps branch rows with colliding display labels distinct", async () => {
+    const report = makeReport();
+    report.by_branch = [
+      {
+        project_key: "pl1:sha256:first",
+        project: "",
+        branch: "main",
+        agent_minutes: 12,
+        cost: testMoney(0),
+        interactive_agent_minutes: 12,
+        subagent_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        subagent_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+      {
+        project_key: "pl1:sha256:second",
+        project: "",
+        branch: "main",
+        agent_minutes: 3,
+        cost: testMoney(0),
+        interactive_agent_minutes: 3,
+        subagent_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        subagent_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const branchPanel = Array.from(target.querySelectorAll<HTMLElement>(".breakdown-panel")).find(
+      (panel) => panel.querySelector(".panel-title")?.textContent === "Branch",
+    );
+    expect(branchPanel?.querySelectorAll(".bar-row")).toHaveLength(2);
+    expect(target.textContent).not.toContain("pl1:sha256:");
+    unmount(component);
+    target.remove();
+  });
+
+  it("caps large branch panels with an aggregated Other row", async () => {
+    const report = makeReport();
+    report.by_branch = Array.from({ length: 41 }, (_, index) => {
+      const value = index < 39 ? 2 : 1;
+      return {
+        project_key: `pl1:sha256:${index}`,
+        project: `project-${index}`,
+        branch: `branch-${index}`,
+        agent_minutes: value,
+        cost: testMoney(value),
+        interactive_agent_minutes: value,
+        subagent_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(value),
+        subagent_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      };
+    });
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const branchPanel = Array.from(target.querySelectorAll<HTMLElement>(".breakdown-panel")).find(
+      (panel) => panel.querySelector(".panel-title")?.textContent === "Branch",
+    );
+    expect(branchPanel?.querySelectorAll(".bar-row")).toHaveLength(40);
+    const otherRow = Array.from(branchPanel?.querySelectorAll<HTMLElement>(".bar-row") ?? []).find(
+      (row) => row.querySelector(".bar-label")?.textContent === "Other",
+    );
+    expect(otherRow?.querySelector(".bar-value")?.textContent?.trim()).toBe("2");
+    expect(branchPanel?.textContent).not.toContain("project-39/branch-39");
+    expect(branchPanel?.textContent).not.toContain("project-40/branch-40");
+
+    const costButton = Array.from(target.querySelectorAll<HTMLButtonElement>(".metric-btn")).find(
+      (button) => button.textContent?.trim() === "Cost",
+    );
+    costButton?.click();
+    await tick();
+    expect(otherRow?.querySelector(".bar-value")?.textContent?.trim()).toBe("$2.00");
+
+    await unmount(component);
+    target.remove();
   });
 });

@@ -12,6 +12,7 @@
     type GroupBy,
     type TimeSeriesView,
   } from "../../stores/usage.svelte.js";
+  import { branchLabel, branchFilterToken } from "../../branchFilters.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
@@ -68,10 +69,58 @@
     return sumSelectedTokens(b, usage.selectedTokenTypes);
   }
 
+  const noBranchLabel = $derived(m.shared_no_branch());
+
+  // key is the stable series identity (opaque project key or branch
+  // token); label is the human-readable name shown in the legend.
+  function breakdownItems(
+    day: DbDailyUsageEntry,
+    groupBy: GroupBy,
+  ): Array<{ key: string; label: string; value: number }> {
+    switch (groupBy) {
+      case "project":
+        return (day.projectBreakdowns ?? []).map((b) => ({
+          key: b.project_key,
+          label: b.project,
+          value: isTokenMode
+            ? breakdownTokens(b)
+            : b.cost.microdollars,
+        }));
+      case "model":
+        return (day.modelBreakdowns ?? []).map((b) => ({
+          key: b.modelName,
+          label: b.modelName,
+          value: isTokenMode
+            ? breakdownTokens(b)
+            : b.cost.microdollars,
+        }));
+      case "agent":
+        return (day.agentBreakdowns ?? []).map((b) => ({
+          key: b.agent,
+          label: b.agent,
+          value: isTokenMode
+            ? breakdownTokens(b)
+            : b.cost.microdollars,
+        }));
+      case "branch":
+        return (day.branchBreakdowns ?? []).map((b) => {
+          const token = branchFilterToken(b.project_key, b.branch);
+          return {
+            key: token,
+            label: branchLabel(b.project, b.branch, noBranchLabel),
+            value: isTokenMode
+              ? breakdownTokens(b)
+              : b.cost.microdollars,
+          };
+        });
+    }
+  }
+
   function isSeriesVisible(key: string): boolean {
     if (groupBy === "project") return !usage.isProjectKeyExcluded(key);
     if (groupBy === "agent") return !usage.isAgentExcluded(key);
-    return !usage.isModelExcluded(key);
+    if (groupBy === "model") return !usage.isModelExcluded(key);
+    return true;
   }
 
   function fillMissingDailyEntries(
@@ -94,6 +143,7 @@
         modelBreakdowns: [],
         agentBreakdowns: [],
         machineBreakdowns: [],
+        branchBreakdowns: [],
       });
       const nextDate = addDays(date, 1);
       if (!nextDate) break;
@@ -120,49 +170,34 @@
     const labels: Record<string, string> = Object.create(null);
     let hasBreakdownData = false;
     for (const day of daily) {
-      if (groupBy === "project" && day.projectBreakdowns) {
-        hasBreakdownData ||= day.projectBreakdowns.length > 0;
-        for (const b of day.projectBreakdowns) {
-          if (!isSeriesVisible(b.project_key)) continue;
-          labels[b.project_key] = b.project;
-          const value = isTokenMode
-            ? breakdownTokens(b)
-            : b.cost.microdollars;
-          totals.set(
-            b.project_key,
-            (totals.get(b.project_key) ?? 0) + value,
-          );
-        }
-      } else if (groupBy === "model" && day.modelBreakdowns) {
-        hasBreakdownData ||= day.modelBreakdowns.length > 0;
-        for (const b of day.modelBreakdowns) {
-          if (!isSeriesVisible(b.modelName)) continue;
-          const value = isTokenMode
-            ? breakdownTokens(b)
-            : b.cost.microdollars;
-          totals.set(
-            b.modelName,
-            (totals.get(b.modelName) ?? 0) + value,
-          );
-          labels[b.modelName] = b.modelName;
-        }
-      } else if (groupBy === "agent" && day.agentBreakdowns) {
-        hasBreakdownData ||= day.agentBreakdowns.length > 0;
-        for (const b of day.agentBreakdowns) {
-          if (!isSeriesVisible(b.agent)) continue;
-          const value = isTokenMode
-            ? breakdownTokens(b)
-            : b.cost.microdollars;
-          totals.set(
-            b.agent,
-            (totals.get(b.agent) ?? 0) + value,
-          );
-          labels[b.agent] = b.agent;
-        }
+      const items = breakdownItems(day, groupBy);
+      hasBreakdownData ||= items.length > 0;
+      for (const { key, label, value } of items) {
+        if (!isSeriesVisible(key)) continue;
+        labels[key] = label;
+        totals.set(key, (totals.get(key) ?? 0) + value);
       }
     }
 
-    // If only one key or few keys, no need for "Other".
+    if (groupBy === "branch") {
+      // Branch breakdowns contain only session-attributable usage. Keep the
+      // chart honest by making the remainder explicit instead of silently
+      // plotting partial totals as if they were complete.
+      let unattributedTotal = 0;
+      for (const day of daily) {
+        const attributed = breakdownItems(day, groupBy)
+          .reduce((sum, item) => sum + item.value, 0);
+        const total = isTokenMode
+          ? breakdownTokens(day)
+          : day.totalCost.microdollars;
+        unattributedTotal += Math.max(0, total - attributed);
+      }
+      if (unattributedTotal > 0) {
+        totals.set("__unattributed__", unattributedTotal);
+        labels["__unattributed__"] = m.usage_unattributed();
+      }
+    }
+
     if (totals.size === 0) {
       if (hasBreakdownData) {
         return { points: [], keys: [], maxY: 0, labels };
@@ -194,30 +229,9 @@
     const points: Point[] = [];
     for (const day of daily) {
       const values: Record<string, number> = Object.create(null);
-      let items: Array<{ key: string; value: number }> = [];
-
-      if (groupBy === "project" && day.projectBreakdowns) {
-        items = day.projectBreakdowns
-          .filter((b) => isSeriesVisible(b.project_key))
-          .map((b) => ({
-            key: b.project_key,
-            value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
-          }));
-      } else if (groupBy === "model" && day.modelBreakdowns) {
-        items = day.modelBreakdowns
-          .filter((b) => isSeriesVisible(b.modelName))
-          .map((b) => ({
-            key: b.modelName,
-            value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
-          }));
-      } else if (groupBy === "agent" && day.agentBreakdowns) {
-        items = day.agentBreakdowns
-          .filter((b) => isSeriesVisible(b.agent))
-          .map((b) => ({
-            key: b.agent,
-            value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
-          }));
-      }
+      const items = breakdownItems(day, groupBy).filter(({ key }) =>
+        isSeriesVisible(key)
+      );
 
       for (const { key, value } of items) {
         if (topKeys.has(key)) {
@@ -225,6 +239,20 @@
         } else {
           values["__other__"] =
             (values["__other__"] ?? 0) + value;
+        }
+      }
+      if (groupBy === "branch") {
+        const attributed = breakdownItems(day, groupBy)
+          .reduce((sum, item) => sum + item.value, 0);
+        const total = isTokenMode
+          ? breakdownTokens(day)
+          : day.totalCost.microdollars;
+        const remainder = Math.max(0, total - attributed);
+        if (remainder > 0) {
+          const key = topKeys.has("__unattributed__")
+            ? "__unattributed__"
+            : "__other__";
+          values[key] = (values[key] ?? 0) + remainder;
         }
       }
       points.push({ date: day.date, time: dateTime(day.date), values });
@@ -270,6 +298,7 @@
     { value: "project", label: m.analytics_col_project() },
     { value: "model", label: m.usage_model() },
     { value: "agent", label: m.analytics_col_agent() },
+    { value: "branch", label: m.usage_branch() },
   ]);
   // A single day has no neighbor to draw an area toward.
   const drawBars = $derived(
@@ -351,7 +380,7 @@
   }
 
   function seriesColor(key: string): string {
-    return key === "__other__"
+    return key === "__other__" || key === "__unattributed__"
       ? "var(--text-muted)"
       : colorMap.get(key) ?? "var(--text-muted)";
   }
@@ -676,7 +705,7 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    {#if legendKeys.length > 1}
+    {#if legendKeys.length > 1 || legendKeys.includes("__unattributed__")}
       <div class="legend">
         {#each legendKeys as key (key)}
           <span
@@ -754,6 +783,7 @@
                 y1="y1"
                 fill={layer.color}
                 curve={areaCurve}
+                opacity={groupBy === "branch" ? 0.7 : 1}
               />
             {/each}
           {/if}
