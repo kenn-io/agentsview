@@ -210,12 +210,16 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 	for _, tc := range []struct {
 		name, provider, model, input, pattern, adjustment string
 		custom                                            bool
+		requestInput                                      int
+		bandInput, bandOutput, cost                       string
 	}{
-		{"priority", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false},
-		{"ultrafast", "openai-ultrafast", "gpt-6.1-sol", "12", "gpt-6.1-sol@ultrafast", "openai-ultrafast", false},
-		{"missing tier", "openai-ultrafast", "gpt-5.5", "5", "gpt-5.5", "", false},
-		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true},
-		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false},
+		{"priority", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 0, "", "", ""},
+		{"ultrafast", "openai-ultrafast", "gpt-6.1-sol", "12", "gpt-6.1-sol@ultrafast", "openai-ultrafast", false, 0, "", "", ""},
+		{"missing tier", "openai-ultrafast", "gpt-5.5", "5", "gpt-5.5", "", false, 0, "", "", ""},
+		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", "", ""},
+		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", "", ""},
+		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33", "3.03"},
+		{"missing tier band uses standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45", "3.45"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -223,7 +227,21 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 				if tc.custom && pattern == tc.model {
 					source = PricingRowSourceCustom
 				}
-				return EffectivePricingRow{ModelPattern: pattern, Rates: ModelRates{InputPerMTok: money.MustParseDollars(input), Source: source}}
+				rates := ModelRates{InputPerMTok: money.MustParseDollars(input), Source: source}
+				switch pattern {
+				case "gpt-6.1-sol":
+					rates.OutputPerMTok = money.MustParseDollars("10")
+					rates.Bands = []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("4"), OutputPerMTok: money.MustParseDollars("15")}}
+				case "gpt-6.1-sol@priority":
+					rates.OutputPerMTok = money.MustParseDollars("20")
+					rates.Bands = []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("9"), OutputPerMTok: money.MustParseDollars("33")}}
+				case "gpt-5.5":
+					rates.OutputPerMTok = money.MustParseDollars("30")
+					rates.Bands = []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("10"), OutputPerMTok: money.MustParseDollars("45")}}
+				case "gpt-5.5@priority":
+					rates.OutputPerMTok = money.MustParseDollars("150")
+				}
+				return EffectivePricingRow{ModelPattern: pattern, Rates: rates}
 			}
 			resolver := NewPricingResolver([]EffectivePricingRow{
 				row("gpt-6.1-sol", "2"), row("gpt-6.1-sol@priority", "4"), row("gpt-6.1-sol@ultrafast", "12"),
@@ -235,6 +253,14 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
 			assert.Equal(t, tc.pattern, lookup.Pattern)
 			assert.Equal(t, tc.adjustment, lookup.Adjustment)
+			if tc.requestInput > 0 {
+				selected := lookup.Rates.RatesForTokens(tc.requestInput, 0, 0)
+				assert.Equal(t, money.MustParseDollars(tc.bandInput), selected.InputPerMTok, "request band input rate")
+				assert.Equal(t, money.MustParseDollars(tc.bandOutput), selected.OutputPerMTok, "request band output rate")
+				cost, err := lookup.Rates.CostForTokens(tc.requestInput, 10_000, 0, 0, 0, 0)
+				require.NoError(t, err)
+				assert.Equal(t, money.MustParseDollars(tc.cost), cost, "request cost")
+			}
 		})
 	}
 }
