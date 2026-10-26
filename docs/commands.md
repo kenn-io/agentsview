@@ -2057,6 +2057,37 @@ those files.
 
 ______________________________________________________________________
 
+### `agentsview friction`
+
+Build and read the [Friction Log](/docs/configuration/#friction-log). Review
+must be enabled with `[friction] enabled = true`.
+
+```bash
+agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format human|json | --json]
+agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
+agentsview friction findings [--date D] [--kind K] [--session ID] [--limit N] [--cursor C] [--format table|json | --json]
+agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--format table|json | --json]
+```
+
+- `friction run` without flags builds every complete local day that has no
+  digest yet. `--date` builds one day, `--rebuild` rebuilds an existing day
+  while keeping the sessions it already covered, and `--dry-run` computes
+  without writing. It prints one summary line per day, or the summary JSON
+  with `--json`.
+- `friction digest` prints the latest digest as Markdown unless `--date` or a
+  range is given. `--format json` prints the stored summary JSON.
+- `friction findings` lists stored findings. `friction patterns` ranks
+  recurring patterns by occurrences. `--kind` accepts `correction`, `error`,
+  `workaround`, `deferral`, `pattern`, `frustration`, and `interruption`.
+
+Read commands use the running daemon (starting one when needed), an explicit
+`--server <url>`, or `--pg` for the configured PostgreSQL hub. Provide a
+`--server` token with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`.
+`friction run` uses the daemon when one is running and otherwise writes the
+local archive directly.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can

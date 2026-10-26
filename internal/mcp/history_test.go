@@ -235,7 +235,7 @@ func TestServer_NegotiatesProtocolPerTransport(t *testing.T) {
 		t.Cleanup(func() { _ = cs.Close() })
 		tools, err := cs.ListTools(t.Context(), nil)
 		require.NoError(t, err)
-		assert.Len(t, tools.Tools, 17)
+		assert.Len(t, tools.Tools, 19)
 		res, err := cs.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "mcp", "limit": 1}))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)

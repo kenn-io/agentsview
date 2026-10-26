@@ -71,25 +71,33 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                                  |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                                |
-| `list_sessions`        | List recent or filtered sessions                                         |
-| `get_session_overview` | Fetch metadata and a compact message preview                             |
-| `get_messages`         | Read paginated message bodies from one session                           |
-| `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
-| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`    | Aggregate token and cost usage                                           |
-| `get_session_usage`    | Show one session's tokens and cost by model and by request               |
-| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
-| `get_tool_calls`       | List the tool calls one session made, with inputs and result sizes       |
-| `get_recent_edits`     | Find which sessions edited a file, newest edit first                     |
-| `get_child_sessions`   | List the sub-agent and fork sessions started from one session            |
-| `compare_usage`        | Compare token usage and cost between two models or two projects          |
-| `get_activity_report`  | Report agent time, sessions, and cost for a day, week, month, or range   |
-| `get_tool_usage`       | Count tool calls by category, agent, and tool name                       |
-| `get_quality_signals`  | Show health grades, outcomes, failures, and example sessions             |
-| `search_docs`          | Search the AgentsView guides bundled with this version                   |
+| Tool                     | Purpose                                                                  |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `search_sessions`        | Full-text search across recorded sessions                                |
+| `list_sessions`          | List recent or filtered sessions                                         |
+| `get_session_overview`   | Fetch metadata and a compact message preview                             |
+| `get_messages`           | Read paginated message bodies from one session                           |
+| `get_memory_status`      | Report archive, lexical, semantic, and source readiness                  |
+| `search_content`         | Substring, regex, terms, semantic, or hybrid search over session text    |
+| `get_usage_summary`      | Aggregate token and cost usage                                           |
+| `get_session_usage`      | Show one session's tokens and cost by model and by request               |
+| `query_recall`           | Search extracted Recall entries when the backend supports Recall queries |
+| `get_tool_calls`         | List the tool calls one session made, with inputs and result sizes       |
+| `get_recent_edits`       | Find which sessions edited a file, newest edit first                     |
+| `get_child_sessions`     | List the sub-agent and fork sessions started from one session            |
+| `compare_usage`          | Compare token usage and cost between two models or two projects          |
+| `get_activity_report`    | Report agent time, sessions, and cost for a day, week, month, or range   |
+| `get_tool_usage`         | Count tool calls by category, agent, and tool name                       |
+| `get_quality_signals`    | Show health grades, outcomes, failures, and example sessions             |
+| `search_docs`            | Search the AgentsView guides bundled with this version                   |
+| `get_friction_digest`    | Read a dated Friction Log digest as Markdown or the summary object       |
+| `list_friction_patterns` | List recurring friction patterns ranked by occurrences                   |
+
+The two Friction Log tools appear when the backend stores the Friction Log.
+`get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
+and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
+`since`, and `limit` (default 20, max 100). Both report
+[Friction Log](/docs/configuration/#friction-log) heuristics, not ground truth.
 
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
 (`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows
@@ -270,15 +278,15 @@ cost, tokens, and session count plus the differences. Like `get_usage_summary`,
 it counts one-shot sessions.
 
 `get_session_usage` reports one session's tokens and cost, the same figures as
-[`agentsview session usage`](/docs/session-api/#agentsview-session-usage). Use it
-after `get_activity_report` with `sessions_sort: "cost"` finds an expensive
+[`agentsview session usage`](/docs/session-api/#agentsview-session-usage). Use
+it after `get_activity_report` with `sessions_sort: "cost"` finds an expensive
 session. Pass a full stored ID or a raw UUID as `session_id`. The result has:
 
 - The CLI's JSON fields: `total_output_tokens`, `peak_context_tokens`, `cost`,
   `has_cost`, `cost_source`, `models`, `unpriced_models`, `subagent_count`,
   `plan_usage`, and `capture_coverage`.
-- `by_model`: input, output, cache write, and cache read tokens and cost for each
-  model, most expensive first.
+- `by_model`: input, output, cache write, and cache read tokens and cost for
+  each model, most expensive first.
 - `breakdown`: one row per request, 20 at a time (maximum 200). Set
   `breakdown_sort: "cost"` to see the most expensive requests first, and pass
   `breakdown_next_cursor` back as `breakdown_cursor` for the next page. Pass a
@@ -341,9 +349,9 @@ read-only, could not write its runtime record, or runs as a process whose
 identity cannot be checked. This lets a writable daemon take over as soon as one
 is available.
 
-When no daemon is visible and another process holds the write lock, the MCP
-call fails with the lock error instead of starting a daemon that could not open
-the archive. The next call checks again.
+When no daemon is visible and another process holds the write lock, the MCP call
+fails with the lock error instead of starting a daemon that could not open the
+archive. The next call checks again.
 
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP

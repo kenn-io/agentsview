@@ -2076,9 +2076,14 @@ Digests keep Markdown, schema 1 summary JSON, frozen findings and usage,
 session membership, and pattern recurrence. SQLite keeps this state through a
 full resync when the archive retains transcript text. Usage-only SQLite archives
 do not build or update digests. PostgreSQL builds its own digests from pushed
-findings when its serving role can write the review tables. Read APIs and CLI
-commands arrive in a later slice; this change stores the digests but does not
-expose a digest page.
+findings when its serving role can write the review tables.
+
+Read digests, findings, and recurring patterns with
+[`agentsview friction`](/docs/commands/#agentsview-friction), the
+`/api/v1/friction` routes, or the `get_friction_digest` and
+`list_friction_patterns` [MCP tools](/docs/mcp/). `agentsview friction run`
+builds missing days on demand. Findings are heuristics: check the session
+before acting on one.
 
 Local days wait until their sessions have current findings; the wait does not
 expire. Other completed days can build while review catches up. PostgreSQL uses

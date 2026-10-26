@@ -43,7 +43,8 @@ recorded agent sessions: search_sessions, list_sessions,
 get_session_overview, get_messages, get_memory_status, search_content,
 get_usage_summary, get_tool_calls, get_recent_edits, get_child_sessions,
 compare_usage, get_activity_report, get_tool_usage, get_quality_signals, and
-search_docs, plus query_recall for distilled session knowledge.
+search_docs, plus query_recall for distilled session knowledge and
+get_friction_digest/list_friction_patterns for the Friction Log.
 Use --profile memory to advertise only get_memory_status, search_content, and
 get_messages for focused conversation-memory clients. The default full profile
 is unchanged.
@@ -277,6 +278,57 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 
 	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
 	return runtime == nil || !runtime.ReadOnly
+}
+
+// SupportsFriction is true: the daemon (started on demand) serves the
+// friction read routes; an older daemon is upgraded by the transport.
+func (s *mcpDaemonService) SupportsFriction() bool { return true }
+
+func (s *mcpDaemonService) FrictionDigest(
+	ctx context.Context, date string,
+) (*service.FrictionDigestView, error) {
+	return mcpFrictionCall(ctx, s, func(fs service.FrictionService) (*service.FrictionDigestView, error) {
+		return fs.FrictionDigest(ctx, date)
+	})
+}
+
+func (s *mcpDaemonService) FrictionDigests(
+	ctx context.Context, from, to string,
+) ([]service.FrictionDigestListItem, error) {
+	return mcpFrictionCall(ctx, s, func(fs service.FrictionService) ([]service.FrictionDigestListItem, error) {
+		return fs.FrictionDigests(ctx, from, to)
+	})
+}
+
+func (s *mcpDaemonService) FrictionFindings(
+	ctx context.Context, f service.FrictionFindingFilter,
+) (*service.FrictionFindingPage, error) {
+	return mcpFrictionCall(ctx, s, func(fs service.FrictionService) (*service.FrictionFindingPage, error) {
+		return fs.FrictionFindings(ctx, f)
+	})
+}
+
+func (s *mcpDaemonService) FrictionPatterns(
+	ctx context.Context, f service.FrictionPatternFilter,
+) (*service.FrictionPatternPage, error) {
+	return mcpFrictionCall(ctx, s, func(fs service.FrictionService) (*service.FrictionPatternPage, error) {
+		return fs.FrictionPatterns(ctx, f)
+	})
+}
+
+// mcpFrictionCall runs a Friction Log read on the selected daemon.
+func mcpFrictionCall[T any](
+	ctx context.Context, s *mcpDaemonService,
+	call func(service.FrictionService) (T, error),
+) (T, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (T, error) {
+		fs, ok := svc.(service.FrictionService)
+		if !ok {
+			var zero T
+			return zero, errors.New("daemon backend does not serve the Friction Log")
+		}
+		return call(fs)
+	})
 }
 
 func (s *mcpDaemonService) daemonSelection(

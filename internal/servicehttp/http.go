@@ -87,6 +87,7 @@ type httpBackend struct {
 	recallQueries     bool
 	// apiVersion is the probed server API version, or 0 when unknown.
 	apiVersion int
+	friction   bool
 	token      string
 }
 
@@ -109,6 +110,7 @@ type HTTPServerCapabilities struct {
 // an empty value uses baseURL.
 func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
 	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
+	b.friction = true
 	if browserURL != "" {
 		b.browserURL = browserURL
 	}
@@ -128,6 +130,7 @@ func NewHTTPBackendForServer(
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
 	b.apiVersion = capabilities.APIVersion
+	b.friction = capabilities.APIVersion >= frictionAPIVersion
 	return b
 }
 
