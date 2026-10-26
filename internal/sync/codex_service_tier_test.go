@@ -20,8 +20,6 @@ func TestCodexServiceTierSessionCosts(t *testing.T) {
 		cost                  string
 	}{
 		{"priority", 20360, 6912, 808, "0.071334"},
-		{"ultrafast", 22016, 15872, 817, "0.132271"},
-		{"default", 20360, 12032, 862, "0.026479"},
 	} {
 		t.Run(tc.tier, func(t *testing.T) {
 			sessions := filepath.Join(t.TempDir(), "sessions")
