@@ -7,8 +7,9 @@ BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Public PostHog ingest key. Builds without it send no telemetry.
 POSTHOG_PROJECT_KEY ?= phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf
 
-# Package manager that owns the binary, such as "homebrew". Builds with a
-# distribution refuse to self-update and point users at the package manager.
+# Who ships the binary: a package manager such as "homebrew", or "kenn" for
+# official direct downloads. Package-manager builds refuse to self-update and
+# point users at the package manager. Telemetry reports the value too.
 DISTRIBUTION ?=
 BINDIR ?= .
 
@@ -17,6 +18,7 @@ LDFLAGS = -X main.version=$(VERSION) \
           -X main.commit=$(COMMIT) \
           -X main.buildDate=$(BUILD_DATE) \
           -X main.distribution=$(DISTRIBUTION) \
+          -X go.kenn.io/kit/telemetry/posthog.distribution=$(DISTRIBUTION) \
           -X go.kenn.io/kit/telemetry/posthog.projectKey=$(POSTHOG_PROJECT_KEY)
 
 LDFLAGS_RELEASE = $(LDFLAGS) -s -w

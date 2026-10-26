@@ -485,7 +485,7 @@ func newUpdateCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if distribution != "" && !cfg.Check {
+			if packageManaged(distribution) && !cfg.Check {
 				return managedUpdateError(distribution)
 			}
 			runUpdate(cmd.Context(), cfg, cmd.OutOrStdout())

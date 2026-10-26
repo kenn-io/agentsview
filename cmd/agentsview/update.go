@@ -128,6 +128,16 @@ func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 	}
 }
 
+// directDownloadDistribution marks official direct-download release builds.
+// They own their own updates, like builds with no distribution.
+const directDownloadDistribution = "kenn"
+
+// packageManaged reports whether a package manager owns this binary, in
+// which case the package manager, not agentsview, installs updates.
+func packageManaged(distribution string) bool {
+	return distribution != "" && distribution != directDownloadDistribution
+}
+
 // packageUpgradeHint tells the user of a package-managed binary how to
 // upgrade it through the package manager that owns it.
 func packageUpgradeHint(distribution string) string {
@@ -145,7 +155,7 @@ func managedUpdateError(distribution string) error {
 }
 
 func printPackageUpdateGuidance(out io.Writer, distribution string) {
-	if distribution != "" {
+	if packageManaged(distribution) {
 		fmt.Fprintln(out, packageUpgradeHint(distribution))
 	}
 }

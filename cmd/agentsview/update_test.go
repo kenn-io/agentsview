@@ -349,6 +349,39 @@ func TestUpdateRefusesInstallForPackageManagedBuild(t *testing.T) {
 	}
 }
 
+func TestUpdateInstallRunsForSelfUpdatingBuilds(t *testing.T) {
+	tests := []struct {
+		name         string
+		distribution string
+	}{
+		{name: "source build", distribution: ""},
+		{name: "official direct download", distribution: "kenn"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubDistribution(t, tt.distribution)
+			origVersion := version
+			version = "1.0.0"
+			t.Cleanup(func() { version = origVersion })
+			dataDir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			// A fresh cached check for the running version lets the install
+			// path finish without the network once it is past the refusal.
+			cache := `{"checked_at":"` + time.Now().UTC().Format(time.RFC3339) +
+				`","version":"v1.0.0"}`
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dataDir, "update_check.json"), []byte(cache), 0o600,
+			))
+
+			out, err := executeCommand(newRootCommand(), "update", "--yes")
+
+			require.NoError(t, err)
+			assert.Contains(t, out, "agentsview 1.0.0 is up to date.")
+			assert.NotContains(t, out, "manages this installation")
+		})
+	}
+}
+
 func TestUpdateCheckGivesPackageManagerGuidance(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -356,7 +389,8 @@ func TestUpdateCheckGivesPackageManagerGuidance(t *testing.T) {
 		wantGuidance bool
 	}{
 		{name: "homebrew", distribution: "homebrew", wantGuidance: true},
-		{name: "direct install", distribution: "", wantGuidance: false},
+		{name: "source build", distribution: "", wantGuidance: false},
+		{name: "official direct download", distribution: "kenn", wantGuidance: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -377,11 +411,10 @@ func TestUpdateCheckGivesPackageManagerGuidance(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Contains(t, out, "Latest release: v9.9.9")
-			guidance := "run `brew upgrade agentsview` instead"
 			if tt.wantGuidance {
-				assert.Contains(t, out, guidance)
+				assert.Contains(t, out, "run `brew upgrade agentsview` instead")
 			} else {
-				assert.NotContains(t, out, guidance)
+				assert.NotContains(t, out, "manages this installation")
 			}
 		})
 	}

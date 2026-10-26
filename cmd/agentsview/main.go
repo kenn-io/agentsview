@@ -43,8 +43,9 @@ var (
 	version   = "dev"
 	commit    = "unknown"
 	buildDate = ""
-	// distribution names the package manager that owns this binary, set
-	// at link time (for example "homebrew"). Empty for direct installs.
+	// distribution names who ships this binary, set at link time: a package
+	// manager such as "homebrew", or "kenn" for official direct downloads.
+	// Empty for source builds.
 	distribution = ""
 )
 
