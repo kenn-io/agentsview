@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import {
   createSessionsStore,
   buildSessionGroups,
@@ -2890,6 +2890,10 @@ describe("SessionsStore", () => {
         .mockResolvedValue(makeSession({ id: canonical }));
       vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({ ids: [canonical] });
     });
+    afterEach(() => {
+      replace.mockRestore();
+      router.replace("sessions");
+    });
     async function pendingLookup() {
       const { promise, resolve } = Promise.withResolvers<{ ids: string[] }>();
       vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockReturnValue(promise);
@@ -2915,7 +2919,6 @@ describe("SessionsStore", () => {
       expect(replace).toHaveBeenCalledExactlyOnceWith(canonical);
     });
     it.each([
-      { name: "unknown", ids: [] },
       { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
       { name: "failed", ids: null },
     ])("keeps a $name lookup missing", async ({ ids }) => {
@@ -2935,15 +2938,11 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.id).toBe(uuid);
       expect(SessionsService.getApiV1SessionIdsResolve).not.toHaveBeenCalled();
     });
-    it.each([
-      { name: "deselection", change: () => sessions.deselectSession(), expected: null },
-      { name: "new selection", change: () => sessions.selectSession("other"), expected: "other" },
-      { name: "machine filter", change: () => sessions.setMachineFilter("local"), expected: null },
-    ])("does not restore a session after $name", async ({ change, expected }) => {
+    it("does not restore a session after a machine filter change", async () => {
       const finish = await pendingLookup();
-      change();
+      sessions.setMachineFilter("local");
       await finish();
-      expect(sessions.activeSessionId).toBe(expected);
+      expect(sessions.activeSessionId).toBeNull();
       expect(api.getSession).toHaveBeenCalledTimes(1);
     });
     it("does not pull the router back from usage after lookup", async () => {

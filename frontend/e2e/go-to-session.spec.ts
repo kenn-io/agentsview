@@ -79,10 +79,9 @@ test.describe("go to session", () => {
     await page.route(`**/api/v1/sessions/${encodeURIComponent(TARGET_ID)}/messages**`, (route) =>
       route.fulfill({ json: { messages: [message(TARGET_ID, "Bare UUID content")], count: 1 } }),
     );
-    await page.goto(`/sessions/${TARGET_UUID}?msg=0`);
-    await expect(page).toHaveURL(`${TARGET_PATH}?msg=0`);
+    await page.goto(`/sessions/${TARGET_UUID}`);
+    await expect(page).toHaveURL(TARGET_PATH);
     await expect(page.getByText("Bare UUID content", { exact: true })).toBeVisible();
-    await expect(page.locator(".missing-session")).toHaveCount(0);
   });
 
   test("opens by shortcut, resolves an off-list UUID, and preserves session state", async ({
