@@ -69,6 +69,22 @@ test.describe("go to session", () => {
     await page.unrouteAll({ behavior: "wait" });
   });
 
+  test("opens a bare UUID link at its canonical session URL", async ({ page }) => {
+    await page.route("**/api/v1/session-ids/resolve**", (route) =>
+      route.fulfill({ json: { ids: [TARGET_ID] } }),
+    );
+    await page.route(`**/api/v1/sessions/${encodeURIComponent(TARGET_ID)}`, (route) =>
+      route.fulfill({ json: session(TARGET_ID, "Bare UUID target") }),
+    );
+    await page.route(`**/api/v1/sessions/${encodeURIComponent(TARGET_ID)}/messages**`, (route) =>
+      route.fulfill({ json: { messages: [message(TARGET_ID, "Bare UUID content")], count: 1 } }),
+    );
+    await page.goto(`/sessions/${TARGET_UUID}?msg=0`);
+    await expect(page).toHaveURL(`${TARGET_PATH}?msg=0`);
+    await expect(page.getByText("Bare UUID content", { exact: true })).toBeVisible();
+    await expect(page.locator(".missing-session")).toHaveCount(0);
+  });
+
   test("opens by shortcut, resolves an off-list UUID, and preserves session state", async ({
     page,
   }, testInfo) => {

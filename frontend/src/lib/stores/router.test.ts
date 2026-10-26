@@ -493,6 +493,18 @@ describe("RouterStore", () => {
     expect(window.location.search).toBe("");
   });
 
+  it("replaceSession preserves history length and query params", () => {
+    setURL("/sessions/bare?project=myproj&msg=42&desktop=1");
+    const store = new RouterStore();
+    const length = window.history.length;
+    store.replaceSession("pi:123e4567-e89b-12d3-a456-426614174000");
+    expect(window.history.length).toBe(length);
+    expect(window.location.pathname).toBe("/sessions/pi/123e4567-e89b-12d3-a456-426614174000");
+    expect(store.params).toEqual({ project: "myproj", msg: "42", desktop: "1" });
+    expect(window.location.search).toBe("?desktop=1&project=myproj&msg=42");
+    expect(store.sessionId).toBe("pi:123e4567-e89b-12d3-a456-426614174000");
+  });
+
   it("navigateFromSession returns to /sessions", () => {
     setURL("/sessions/abc-123");
     store = new RouterStore();
