@@ -23028,11 +23028,13 @@ func (c ConfigDuckDBConfig) Validate() error {
 }
 
 type ConfigRemoteHost struct {
-	Destination *string `json:"destination,omitempty"`
-	Host        string  `json:"host" validate:"required"`
-	Interval    *int64  `json:"interval,omitempty"`
-	Transport   *string `json:"transport,omitempty"`
-	URL         *string `json:"url,omitempty"`
+	Destination     *string `json:"destination,omitempty"`
+	FullSyncTimeout *int64  `json:"full_sync_timeout,omitempty"`
+	Host            string  `json:"host" validate:"required"`
+	Interval        *int64  `json:"interval,omitempty"`
+	SyncTimeout     *int64  `json:"sync_timeout,omitempty"`
+	Transport       *string `json:"transport,omitempty"`
+	URL             *string `json:"url,omitempty"`
 }
 
 func (c ConfigRemoteHost) Validate() error {

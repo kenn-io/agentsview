@@ -649,6 +649,10 @@ transport = "ssh"
 destination = "user@devbox.example.com" # optional; defaults to host
 ```
 
+Scheduled daemon pulls and `pg push --watch` use configurable per-attempt
+deadlines on unreleased `main`; see
+[Remote Hosts](/docs/configuration/#remote-hosts) for defaults and opt-outs.
+
 With hosts configured, `agentsview sync` (no `--host`) includes local sources
 and configured hosts, HTTP and SSH, in one coordinated sync. During a full or
 automatic data-version rebuild, AgentsView prepares every remote mirror,
