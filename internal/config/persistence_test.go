@@ -94,7 +94,7 @@ func TestSaveSettingsRejectsInvalidChartPaletteWithoutChangingSelection(t *testi
 		"chart_palette": ChartPalette("neon"),
 	})
 	require.EqualError(t, err,
-		`chart_palette must be "agentsview" or "matplotlib" (got "neon")`)
+		`chart_palette must be "agentsview", "matplotlib", or "colorblind" (got "neon")`)
 	assert.Equal(t, ChartPaletteMatplotlib, cfg.ChartPalette)
 	fileCfg := readConfigFile(t, dir)
 	assert.Equal(t, ChartPaletteMatplotlib, fileCfg.ChartPalette)

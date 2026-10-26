@@ -1430,9 +1430,15 @@ Settings > Appearance also offers a **high-contrast** mode for greater
 legibility. The theme and high-contrast preferences persist across sessions.
 
 The **Chart colors** control selects the categorical palette used by the
-dashboard skill trend, Trends, and Usage charts. Choose **Agentsview** for the
-project palette or **Matplotlib** for its gray-free categorical families. This
-setting is server-wide rather than browser-local, so all clients connected to
+dashboard skill trend, Trends, and Usage charts:
+
+- **Agentsview**: the project palette.
+- **Matplotlib**: matplotlib's categorical families without their grays.
+- **Color-blind safe**: Petroff's color sequences, chosen so series stay
+  distinguishable with common forms of color blindness. Charts with more than
+  10 series repeat colors.
+
+This setting is server-wide rather than browser-local, so all clients connected to
 the same server use the same palette. You can change it even when the server
 reads from a read-only store such as PostgreSQL, ClickHouse, or DuckDB.
 

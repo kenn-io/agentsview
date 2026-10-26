@@ -2050,6 +2050,7 @@
   "appearance_chart_palette": "Chart colors",
   "appearance_chart_palette_agentsview": "Agentsview",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "Color-blind safe",
   "appearance_message_layout": "Message layout",
   "appearance_block_visibility": "Block visibility",
   "settings_github_token_saved": "GitHub token saved.",

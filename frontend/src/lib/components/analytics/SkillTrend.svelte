@@ -13,6 +13,10 @@
   // Soft cap from the series-count ladder: past six skills the tail folds
   // into "Other" instead of generating more hues.
   const MAX_SERIES = 6;
+  const CHART_SERIES_COLORS = Array.from(
+    { length: MAX_SERIES },
+    (_, index) => `var(--chart-series-${index + 1})`,
+  );
   const OTHER_KEY = "__other__";
   const PLOT_HEIGHT = 120;
   const PLOT_TOP = 8;
@@ -105,7 +109,7 @@
   const colorMap = $derived(chartSeriesColorMap(
     allSeries.map((series) => series.key),
     settings.chartPalette,
-    (_key, index) => `var(--chart-series-${index + 1})`,
+    CHART_SERIES_COLORS,
     "var(--chart-series-other)",
   ));
 

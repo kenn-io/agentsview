@@ -2052,6 +2052,7 @@
   "appearance_chart_palette": "Diaqram rəngləri",
   "appearance_chart_palette_agentsview": "AgentsView",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "Rəng korluğu üçün təhlükəsiz",
   "appearance_message_layout": "Mesaj düzülüşü",
   "appearance_block_visibility": "Blokların görünməsi",
   "settings_github_token_saved": "GitHub tokeni yadda saxlanıldı.",

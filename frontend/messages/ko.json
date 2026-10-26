@@ -1970,6 +1970,7 @@
   "appearance_chart_palette": "차트 색상",
   "appearance_chart_palette_agentsview": "Agentsview",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "색각 이상 친화",
   "appearance_message_layout": "메시지 레이아웃",
   "appearance_block_visibility": "블록 표시 여부",
   "settings_github_token_saved": "GitHub 토큰이 저장되었습니다.",

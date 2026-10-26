@@ -1968,6 +1968,7 @@
   "appearance_chart_palette": "图表配色",
   "appearance_chart_palette_agentsview": "Agentsview",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "色盲友好",
   "appearance_message_layout": "消息布局",
   "appearance_block_visibility": "块可见性",
   "settings_github_token_saved": "GitHub 令牌已保存。",

@@ -103,6 +103,7 @@ func TestChartPaletteDefaultsAndLoads(t *testing.T) {
 		{name: "omitted", want: ChartPaletteAgentsview},
 		{name: "agentsview", toml: `chart_palette = "agentsview"`, want: ChartPaletteAgentsview},
 		{name: "matplotlib", toml: `chart_palette = "matplotlib"`, want: ChartPaletteMatplotlib},
+		{name: "colorblind", toml: `chart_palette = "colorblind"`, want: ChartPaletteColorblind},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -123,12 +124,12 @@ func TestChartPaletteRejectsInvalidValue(t *testing.T) {
 		{
 			name: "unknown",
 			toml: `chart_palette = "neon"`,
-			want: `chart_palette must be "agentsview" or "matplotlib" (got "neon")`,
+			want: `chart_palette must be "agentsview", "matplotlib", or "colorblind" (got "neon")`,
 		},
 		{
 			name: "explicit empty",
 			toml: `chart_palette = ""`,
-			want: `chart_palette must be "agentsview" or "matplotlib" (got "")`,
+			want: `chart_palette must be "agentsview", "matplotlib", or "colorblind" (got "")`,
 		},
 	}
 	for _, tt := range tests {

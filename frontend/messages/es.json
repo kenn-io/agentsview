@@ -2052,6 +2052,7 @@
   "appearance_chart_palette": "Colores de gráficos",
   "appearance_chart_palette_agentsview": "Agentsview",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "Apto para daltonismo",
   "appearance_message_layout": "Diseño de mensajes",
   "appearance_block_visibility": "Visibilidad de bloques",
   "settings_github_token_saved": "Token de GitHub guardado.",

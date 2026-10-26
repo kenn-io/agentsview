@@ -44,6 +44,10 @@
         value: "matplotlib",
         label: m.appearance_chart_palette_matplotlib(),
       },
+      {
+        value: "colorblind",
+        label: m.appearance_chart_palette_colorblind(),
+      },
     ]);
 
   const LAYOUT_OPTIONS: { value: MessageLayout; label: string }[] = $derived([

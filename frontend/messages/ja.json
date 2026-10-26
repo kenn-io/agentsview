@@ -2038,6 +2038,7 @@
   "appearance_chart_palette": "グラフの色",
   "appearance_chart_palette_agentsview": "エージェントビュー",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "色覚サポート",
   "appearance_message_layout": "メッセージのレイアウト",
   "appearance_block_visibility": "ブロックの表示",
   "settings_github_token_saved": "GitHub トークンが保存されました。",

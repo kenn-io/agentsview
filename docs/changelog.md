@@ -23,6 +23,12 @@ The latest release is
   tell apart without relying on hue. The setting warns when a chosen color
   would make text hard to read in light, dark, or high-contrast mode.
 
+- Charts can use color-blind safe colors. Choose **Color-blind safe** under
+  **Settings > Appearance > Chart colors**, or set `chart_palette =
+  "colorblind"`. The skill trend, Trends, and Usage charts then use Petroff's
+  color sequences, which stay distinguishable with common forms of color
+  blindness. Charts with more than 10 series repeat colors.
+
 - PostgreSQL and ClickHouse push services can use a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons
   and archive write locks during restarts. The push service exits if no writable

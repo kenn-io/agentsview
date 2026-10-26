@@ -72,7 +72,7 @@
   const termColorMap = $derived(chartSeriesColorMap(
     (trends.response?.series ?? []).map((item) => item.term),
     settings.chartPalette,
-    (_term, index) => TREND_PALETTE[index % TREND_PALETTE.length]!,
+    TREND_PALETTE,
   ));
 
   function colorFor(term: string, index: number): string {
