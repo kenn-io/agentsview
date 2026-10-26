@@ -7,6 +7,80 @@ import {
   entrypointBadge,
 } from "./agents.js";
 
+describe("KNOWN_AGENTS", () => {
+  it("contains all expected agents", () => {
+    const names = KNOWN_AGENTS.map((a) => a.name);
+    expect(names).toEqual([
+      "claude",
+      "cowork",
+      "codex",
+      "codex-cloud",
+      "traex",
+      "augure-code",
+      "augure-desktop",
+      "copilot",
+      "devin",
+      "evener",
+      "gemini",
+      "gemini-apps",
+      "opencode",
+      "opencodereview",
+      "kilo",
+      "kilo-legacy",
+      "cline",
+      "openhands",
+      "cursor",
+      "cursor-ide",
+      "amp",
+      "zencoder",
+      "zed",
+      "vscode-copilot",
+      "visualstudio-copilot",
+      "pi",
+      "stepcode",
+      "fx",
+      "tau",
+      "prime-agent",
+      "qwen",
+      "qwenpaw",
+      "deepseek-tui",
+      "deepseek-harness",
+      "openclaw",
+      "qclaw",
+      "iflow",
+      "junie",
+      "kimi",
+      "kimi-work",
+      "claude-ai",
+      "chatgpt",
+      "kiro",
+      "kiro-ide",
+      "cortex",
+      "workbuddy",
+      "codebuddy",
+      "qoder",
+      "piebald",
+      "antigravity",
+      "antigravity-cli",
+      "vibe",
+      "posit-assistant",
+      "roocode",
+      "poolside",
+      "omnigent",
+      "codebuff",
+      "freebuff",
+      "crush",
+      "muse",
+    ]);
+  });
+
+  it("has a color for every agent", () => {
+    for (const agent of KNOWN_AGENTS) {
+      expect(agent.color).toMatch(/^var\(--accent-/);
+    }
+  });
+});
+
 describe("agentColor", () => {
   it("falls back to blue for unknown agents", () => {
     expect(agentColor("unknown")).toBe("var(--accent-blue)");

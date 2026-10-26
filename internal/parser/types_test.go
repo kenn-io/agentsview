@@ -464,6 +464,118 @@ func TestAgentByPrefix(t *testing.T) {
 	}
 }
 
+func TestRegistryCompleteness(t *testing.T) {
+	// allTypes is the canonical list of every supported agent. It must match
+	// Registry exactly in both directions: the assertions below fail if an
+	// agent is registered without being listed here (or vice versa), so a new
+	// AgentDef cannot silently bypass this check the way several agents
+	// previously did.
+	allTypes := []AgentType{
+		AgentClaude,
+		AgentOpenClaude,
+		AgentCowork,
+		AgentCodex,
+		AgentTraeX,
+		AgentAugureCode,
+		AgentCopilot,
+		AgentGemini,
+		AgentGeminiApps,
+		AgentMiMoCode,
+		AgentOpenCode,
+		AgentOpenCodeReview,
+		AgentKilo,
+		AgentKiloLegacy,
+		AgentOpenHands,
+		AgentCursor,
+		AgentCursorIDE,
+		AgentAmp,
+		AgentJunie,
+		AgentVSCodeCopilot,
+		AgentWindsurf,
+		AgentTrae,
+		AgentVSCopilot,
+		AgentPi,
+		AgentTau,
+		AgentFx,
+		AgentPrimeAgent,
+		AgentOMP,
+		AgentOMO,
+		AgentStepCode,
+		AgentQwen,
+		AgentCommandCode,
+		AgentDeepSeekTUI,
+		AgentDeepSeekHarness,
+		AgentCodexCloud,
+		AgentOpenClaw,
+		AgentQClaw,
+		AgentKimi,
+		AgentKimiWork,
+		AgentClaudeAI,
+		AgentChatGPT,
+		AgentKiro,
+		AgentKiroIDE,
+		AgentCortex,
+		AgentHermes,
+		AgentAugureDesktop,
+		AgentGrok,
+		AgentGoose,
+		AgentForge,
+		AgentDevin,
+		AgentPiebald,
+		AgentWarp,
+		AgentPositron,
+		AgentPositAssistant,
+		AgentZCode,
+		AgentZed,
+		AgentAntigravity,
+		AgentAntigravityCLI,
+		AgentIflow,
+		AgentIcodemate,
+		AgentWorkBuddy,
+		AgentCodeBuddy,
+		AgentZencoder,
+		AgentGptme,
+		AgentQoder,
+		AgentQwenPaw,
+		AgentShelley,
+		AgentVibe,
+		AgentAider,
+		AgentEvener,
+		AgentReasonix,
+		AgentRooCode,
+		AgentCline,
+		AgentPoolside,
+		AgentOmnigent,
+		AgentCodebuff,
+		AgentCrush,
+		AgentMuse,
+	}
+
+	expected := make(map[AgentType]bool, len(allTypes))
+	for _, at := range allTypes {
+		assert.Falsef(t, expected[at], "AgentType %q listed more than once in allTypes", at)
+		expected[at] = true
+	}
+
+	registered := make(map[AgentType]bool, len(Registry))
+	for _, def := range Registry {
+		assert.Falsef(t, registered[def.Type],
+			"AgentType %q registered more than once in Registry", def.Type)
+		registered[def.Type] = true
+	}
+
+	// Every listed agent must be registered.
+	for at := range expected {
+		assert.Truef(t, registered[at], "AgentType %q missing from Registry", at)
+	}
+	// Every registered agent must be listed, so additions to Registry cannot
+	// silently skip this completeness check.
+	for at := range registered {
+		assert.Truef(t, expected[at],
+			"AgentType %q registered but not listed in allTypes (add it to TestRegistryCompleteness)", at)
+	}
+}
+
 func TestInferRelationshipTypes(t *testing.T) {
 	tests := []struct {
 		name   string
