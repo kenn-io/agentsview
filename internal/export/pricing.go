@@ -283,6 +283,9 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 }
 
 func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLookup, tier string) PricingLookup {
+	if r == nil {
+		return lookup
+	}
 	base := r.Lookup(pricedModel)
 	pattern := catalog.TierPattern(base.Pattern, tier)
 	if rates, ok := r.byModel[pattern]; ok {
