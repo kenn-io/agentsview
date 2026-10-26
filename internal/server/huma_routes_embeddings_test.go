@@ -151,22 +151,20 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 }
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
-	fake := &fakeEmbeddingsManager{}
-	s := newEmbeddingsTestServer(t, fake)
-
-	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
-		vector.BuildRequest{FullRebuild: true})
-	assertRecorderStatus(t, w, http.StatusAccepted)
-
-	var body struct {
-		Started bool `json:"started"`
+	for _, req := range []vector.BuildRequest{{FullRebuild: true}, {LocalProducer: true}} {
+		t.Run(fmt.Sprintf("local_producer=%t", req.LocalProducer), func(t *testing.T) {
+			fake := &fakeEmbeddingsManager{}
+			s := newEmbeddingsTestServer(t, fake)
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build", req)
+			assertRecorderStatus(t, w, http.StatusAccepted)
+			var body struct {
+				Started bool `json:"started"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			assert.True(t, body.Started)
+			require.Equal(t, []vector.BuildRequest{req}, fake.startBuildCalls)
+		})
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.True(t, body.Started)
-
-	require.Len(t, fake.startBuildCalls, 1)
-	assert.True(t, fake.startBuildCalls[0].FullRebuild)
-	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
 }
 
 func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {

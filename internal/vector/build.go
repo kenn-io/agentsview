@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/embedclient"
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
@@ -127,86 +128,53 @@ func (ix *Index) Build(
 	if o.RepairInvalid && o.Backstop {
 		return BuildResult{}, errors.New("repair-invalid and backstop are mutually exclusive")
 	}
+	// Keep this operation's recipe separate from concurrent searches.
+	ix = ix.forGeneration(gen)
+	stage, err := ix.pendingPullStage(ctx, gen.Fingerprint())
+	if err != nil {
+		return BuildResult{}, err
+	}
 	if o.RepairInvalid {
-		return ix.buildInvalidRepair(ctx, enc, gen, o)
+		return stage.forGeneration(gen).buildInvalidRepair(ctx, enc, gen, o)
+	}
+	if stage != ix {
+		reserved, ok := src.(snapshotSource)
+		if !ok {
+			return BuildResult{}, errors.New("completing hub import requires an archive writer reservation")
+		}
+		result, err := stage.Build(ctx, src, enc, gen, o)
+		result.Activated = false
+		if err != nil {
+			return result, err
+		}
+		err = reserved.WithEmbeddableSnapshot(ctx, func(snapshot db.EmbeddableSnapshot) error {
+			if _, err := stage.Refresh(ctx, snapshot, true, o.IncludeAutomated); err != nil {
+				return err
+			}
+			missing, err := stage.MissingEmbeddedDocs(ctx, gen.Fingerprint(), nil)
+			if err != nil || missing != 0 {
+				return err
+			}
+			if err := ix.publishPullStage(ctx, stage, gen.Fingerprint()); err != nil {
+				return err
+			}
+			result.Activated = true
+			return nil
+		})
+		return result, err
 	}
 
-	firstEver, err := ix.noWatermarkYet(ctx)
-	if err != nil {
-		return BuildResult{}, err
-	}
-	storedScope, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
-	if err != nil {
-		return BuildResult{}, err
-	}
-	// A mirror refreshed before the scope key existed (a refresh watermark
-	// is stamped, but scope_include_automated is not) predates this scope
-	// feature entirely. Treat that the same as a genuine scope change: force
-	// one full reconciliation now so any automated rows that were never
-	// meant to be in scope (or, if the config default is true, newly
-	// in-scope automated sessions older than the watermark) get resolved,
-	// then setIncludeAutomatedScope below stamps the key so every later
-	// build compares against a real stored scope again.
-	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
-	corpusFingerprint := gen.Params[CorpusFingerprintParam]
-	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
-		ctx, corpusFingerprintMetaKey,
-	)
-	if err != nil {
-		return BuildResult{}, fmt.Errorf("reading corpus fingerprint: %w", err)
-	}
-	corpusChanged := corpusFingerprint != "" &&
-		(!hasCorpusFingerprint || storedCorpusFingerprint != corpusFingerprint)
-	var runCap string
-	var capChanged bool
-	if ix.spec.Name == "messages" {
-		runCap = strconv.Itoa(RunMaxRunes(ix.split.MaxRunes))
-		storedCap, hasCap, err := ix.metaGet(ctx, runMaxRunesMetaKey)
-		if err != nil {
-			return BuildResult{}, fmt.Errorf("reading run cap: %w", err)
-		}
-		capChanged = !hasCap || storedCap != runCap
-	}
-	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
-	if capChanged {
-		// A partial reshape must still reconcile fully if the old cap is restored.
-		if err := ix.metaDelete(ctx, runMaxRunesMetaKey); err != nil {
-			return BuildResult{}, fmt.Errorf("clearing run cap: %w", err)
-		}
-	}
 	fp := gen.Fingerprint()
-	if full {
-		if err := ix.clearCompletedCorpusRevision(ctx, fp); err != nil {
-			return BuildResult{}, err
-		}
-	}
-	// Report the scanning phase before the mirror refresh: on a large archive
-	// the refresh (and the pending count below) can run for a while with no
-	// chunk totals yet, and without a phase report a progress consumer can
-	// only render a misleading "0/0 chunks".
-	if o.Progress != nil {
-		o.Progress(BuildProgress{Phase: "scanning"})
-	}
-	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
+	refreshStats, err := ix.refreshBuildMirror(ctx, src, gen, o)
 	if err != nil {
 		return BuildResult{}, err
-	}
-	if ix.spec.Name == "messages" {
-		if err := ix.metaSet(ctx, runMaxRunesMetaKey, runCap); err != nil {
-			return BuildResult{}, fmt.Errorf("storing run cap: %w", err)
-		}
-	}
-	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
-		return BuildResult{}, err
-	}
-	if corpusFingerprint != "" {
-		if err := ix.metaSet(ctx, corpusFingerprintMetaKey, corpusFingerprint); err != nil {
-			return BuildResult{}, fmt.Errorf("storing corpus fingerprint: %w", err)
-		}
 	}
 
 	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, fp, o.Space, o.FullRebuild)
 	if err != nil {
+		return BuildResult{}, err
+	}
+	if err := ix.recordGenerationSplit(ctx, target); err != nil {
 		return BuildResult{}, err
 	}
 	result := BuildResult{Fingerprint: target, Refresh: refreshStats}
@@ -243,13 +211,13 @@ func (ix *Index) Build(
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)
+	result.Activated = activated
 	if err != nil {
 		return result, err
 	}
 	if err := ix.clearActiveFullRebuildPending(ctx, target); err != nil {
 		return result, err
 	}
-	result.Activated = activated
 	if o.CorpusRevision != "" {
 		if err := ix.metaSet(
 			ctx, completedCorpusRevisionMetaKey+target, o.CorpusRevision,
@@ -678,7 +646,7 @@ func (ix *Index) maybeActivate(ctx context.Context, target string, wasBuilding b
 		return false, err
 	}
 	if err := ix.metaDeleteUnless(ctx, activeFullRebuildKey, target); err != nil {
-		return false, err
+		return true, err
 	}
 	return true, nil
 }
@@ -815,4 +783,110 @@ func (ix *Index) wrapProgress(
 		return vectors, nil
 	}
 	return wrapped, func() { report(true) }
+}
+
+// refreshBuildMirror shares Build and Pull's interruption-safe reconciliation
+// decisions. Refresh itself checks archive identity and journal recovery.
+func (ix *Index) refreshBuildMirror(ctx context.Context, src UnitSource, gen kitvec.Generation, o BuildOptions) (RefreshStats, error) {
+	firstEver, err := ix.noWatermarkYet(ctx)
+	if err != nil {
+		return RefreshStats{}, err
+	}
+	storedScope, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
+	if err != nil {
+		return RefreshStats{}, err
+	}
+	// A mirror refreshed before the scope key existed (a refresh watermark
+	// is stamped, but scope_include_automated is not) predates this scope
+	// feature entirely. Treat that the same as a genuine scope change: force
+	// one full reconciliation now so any automated rows that were never
+	// meant to be in scope (or, if the config default is true, newly
+	// in-scope automated sessions older than the watermark) get resolved,
+	// then setIncludeAutomatedScope below stamps the key so every later
+	// build compares against a real stored scope again.
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
+	corpusFingerprint := gen.Params[CorpusFingerprintParam]
+	// Explicit generation corpus identity (Recall) takes priority. Archives can
+	// instead identify the ownership view without changing the vector space.
+	if corpusFingerprint == "" {
+		if source, ok := src.(interface {
+			EmbeddingCorpusFingerprint(context.Context) (string, error)
+		}); ok {
+			corpusFingerprint, err = source.EmbeddingCorpusFingerprint(ctx)
+			if err != nil {
+				return RefreshStats{}, fmt.Errorf("reading source corpus fingerprint: %w", err)
+			}
+		}
+	}
+	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
+		ctx, corpusFingerprintMetaKey,
+	)
+	if err != nil {
+		return RefreshStats{}, fmt.Errorf("reading corpus fingerprint: %w", err)
+	}
+	corpusChanged := corpusFingerprint != "" &&
+		(!hasCorpusFingerprint || storedCorpusFingerprint != corpusFingerprint)
+	var runCap string
+	var capChanged bool
+	if ix.spec.Name == "messages" {
+		runCap = strconv.Itoa(RunMaxRunes(ix.split.MaxRunes))
+		storedCap, hasCap, err := ix.metaGet(ctx, runMaxRunesMetaKey)
+		if err != nil {
+			return RefreshStats{}, fmt.Errorf("reading run cap: %w", err)
+		}
+		capChanged = !hasCap || storedCap != runCap
+	}
+	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
+	if capChanged {
+		// A partial reshape must still reconcile fully if the old cap is restored.
+		if err := ix.metaDelete(ctx, runMaxRunesMetaKey); err != nil {
+			return RefreshStats{}, fmt.Errorf("clearing run cap: %w", err)
+		}
+	}
+	fp := gen.Fingerprint()
+	if full {
+		if err := ix.clearCompletedCorpusRevision(ctx, fp); err != nil {
+			return RefreshStats{}, err
+		}
+	}
+	// Report the scanning phase before the mirror refresh: on a large archive
+	// the refresh (and the pending count below) can run for a while with no
+	// chunk totals yet, and without a phase report a progress consumer can
+	// only render a misleading "0/0 chunks".
+	if o.Progress != nil {
+		o.Progress(BuildProgress{Phase: "scanning"})
+	}
+	if corpusChanged {
+		// Refresh commits in batches. Invalidate before mutating membership so an
+		// interrupted switch back cannot certify a partially reconciled old view.
+		if err := ix.metaDelete(ctx, corpusFingerprintMetaKey); err != nil {
+			return RefreshStats{}, fmt.Errorf("clearing changed corpus fingerprint: %w", err)
+		}
+	}
+	if scopeChanged {
+		// Refresh commits incrementally. An interrupted scope change must not
+		// leave the previous scope certifying a partially pruned corpus.
+		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {
+			return RefreshStats{}, fmt.Errorf("clearing changed embedding scope: %w", err)
+		}
+	}
+	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
+	if err != nil {
+		return RefreshStats{}, err
+	}
+	if ix.spec.Name == "messages" {
+		if err := ix.metaSet(ctx, runMaxRunesMetaKey, runCap); err != nil {
+			return RefreshStats{}, fmt.Errorf("storing run cap: %w", err)
+		}
+	}
+	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
+		return RefreshStats{}, err
+	}
+	if corpusFingerprint != "" {
+		if err := ix.metaSet(ctx, corpusFingerprintMetaKey, corpusFingerprint); err != nil {
+			return RefreshStats{}, fmt.Errorf("storing corpus fingerprint: %w", err)
+		}
+	}
+
+	return refreshStats, nil
 }

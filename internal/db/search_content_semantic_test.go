@@ -23,12 +23,20 @@ type fakeVectorSearcher struct {
 	units      []UnitRef
 	err        error
 	resolveErr error
+	prepareErr error
+	recordCtx  func(context.Context)
 	calls      int
 }
 
 func (f *fakeVectorSearcher) PrepareSemanticSearch(
-	context.Context, string,
+	ctx context.Context, _ string,
 ) (VectorSearchPage, int, error) {
+	if f.recordCtx != nil {
+		f.recordCtx(ctx)
+	}
+	if f.prepareErr != nil {
+		return nil, 0, f.prepareErr
+	}
 	return func(_ context.Context, limit int) ([]VectorHit, bool, error) {
 		hits, err := f.page(limit)
 		return hits, len(f.hits) < limit, err

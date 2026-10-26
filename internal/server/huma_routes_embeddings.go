@@ -94,6 +94,7 @@ type embeddingsBuildRequest struct {
 	FullRebuild      bool   `json:"full_rebuild,omitempty"`
 	Backstop         bool   `json:"backstop,omitempty"`
 	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
+	LocalProducer    bool   `json:"local_producer,omitempty"`
 	IncludeAutomated *bool  `json:"include_automated,omitempty"`
 	Using            string `json:"using,omitempty"`
 }
@@ -156,6 +157,7 @@ func (s *Server) humaEmbeddingsBuild(
 		FullRebuild:      in.Body.FullRebuild,
 		Backstop:         in.Body.Backstop,
 		RepairInvalid:    in.Body.RepairInvalid,
+		LocalProducer:    in.Body.LocalProducer,
 		IncludeAutomated: includeAutomated,
 		Using:            in.Body.Using,
 	}

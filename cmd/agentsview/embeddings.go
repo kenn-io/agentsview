@@ -76,6 +76,7 @@ type EmbeddingsBuildOptions struct {
 	FullRebuild   bool
 	Backstop      bool
 	RepairInvalid bool
+	LocalProducer bool
 	Yes           bool
 	// IncludeAutomated is the --include-automated flag's parsed value; only
 	// meaningful when IncludeAutomatedSet is true (see that field).
@@ -110,6 +111,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 		"Force a full mirror reconciliation scan without forcing a re-embed")
 	cmd.Flags().BoolVar(&opts.RepairInvalid, "repair-invalid", false,
 		"Regenerate only documents with malformed, non-finite, or zero-norm stored vectors")
+	cmd.Flags().BoolVar(&opts.LocalProducer, "local-producer", false,
+		"Encode unmatched hub documents locally using the pinned hub recipe")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
 		"Skip the full-rebuild confirmation prompt")
 	cmd.Flags().StringVar(&opts.Using, "using", "",
@@ -125,6 +128,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 			"a full mirror reconciliation each time.")
 	cmd.Flags().StringVar(&opts.Store, "store", "",
 		"Embedding store to build (default: messages)")
+	cmd.MarkFlagsMutuallyExclusive("local-producer", "full-rebuild")
+	cmd.MarkFlagsMutuallyExclusive("local-producer", "backstop")
 	cmd.MarkFlagsMutuallyExclusive("full-rebuild", "repair-invalid")
 	cmd.MarkFlagsMutuallyExclusive("backstop", "repair-invalid")
 	return cmd
@@ -324,6 +329,13 @@ func newVectorEncoder(
 	if err != nil {
 		return nil, err
 	}
+	return newVectorEncoderForServer(c, name, server, role, retryRateLimits)
+}
+
+func newVectorEncoderForServer(
+	c config.VectorEmbeddingsConfig, name string, server config.VectorEmbeddingsServerConfig,
+	role embedconfig.Role, retryRateLimits bool,
+) (kitvec.EncodeFunc, error) {
 	transport, err := server.EmbedTransport()
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)
@@ -438,6 +450,7 @@ func runEmbeddingsBuild(
 		FullRebuild:      opts.FullRebuild,
 		Backstop:         opts.Backstop,
 		RepairInvalid:    opts.RepairInvalid,
+		LocalProducer:    opts.LocalProducer,
 		IncludeAutomated: includeAutomated,
 		Using:            opts.Using,
 	}
@@ -489,8 +502,8 @@ func countEmbeddingStoreUnits(
 }
 
 // runEmbeddingsBuildDirect acquires the vectors write lock, opens the
-// archive read-only (so it never competes with a daemon for the SQLite
-// write lock) and vectors.db read-write, and runs one build synchronously.
+// archive and vectors.db, and runs one build synchronously. Hub pulls and
+// local completion of retained imports reserve the archive writer.
 func runEmbeddingsBuildDirect(
 	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
 ) error {
@@ -499,12 +512,6 @@ func runEmbeddingsBuildDirect(
 		return err
 	}
 	defer lock.Close()
-
-	archiveDB, err := openReadOnlyDB(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("opening archive database: %w", err)
-	}
-	defer archiveDB.Close()
 
 	spec, err := vectorStoreSpec(req.Store)
 	if err != nil {
@@ -519,9 +526,38 @@ func runEmbeddingsBuildDirect(
 	}
 	defer ix.Close()
 
-	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
+	openArchive := openReadOnlyDB
+	if spec.Name == vector.MessageIndexSpec().Name {
+		needsReservation := cfg.Vector.Producer == "remote"
+		if !needsReservation && !req.RepairInvalid {
+			needsReservation, err = ix.HasPendingPull(ctx, vectorGeneration(cfg.Vector.Embeddings).Fingerprint())
+			if err != nil {
+				return err
+			}
+		}
+		if needsReservation {
+			stale, _, err := db.ArchiveResyncState(ctx, cfg.DBPath)
+			if err != nil {
+				return err
+			}
+			if stale {
+				return errors.New("archive data needs resync; restart the daemon before building vectors")
+			}
+			openArchive = openDB
+		}
+	}
+	archiveDB, err := openArchive(ctx, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening archive database: %w", err)
+	}
+	defer archiveDB.Close()
+
+	var encoders vector.EncoderSet
+	if cfg.Vector.Producer != "remote" || spec.Name == vector.RecallIndexSpec().Name {
+		encoders, err = vectorDocumentEncoderSet(cfg.Vector.Embeddings)
+		if err != nil {
+			return err
+		}
 	}
 
 	m := embeddingManager(ix, archiveDB, encoders, cfg, spec.Name)
@@ -579,15 +615,30 @@ func embeddingManager(
 	cfg config.Config, store string,
 ) *vector.Manager {
 	if store != vector.RecallIndexSpec().Name {
+		if cfg.Vector.Producer == "remote" {
+			// Names remain valid --using inputs even though pulls do not construct
+			// document encoders or require a query endpoint.
+			encoders.ByName = maps.Clone(encoders.ByName)
+			if encoders.ByName == nil {
+				encoders.ByName = map[string]vector.ManagedEncoder{}
+			}
+			for name := range cfg.Vector.Embeddings.Servers {
+				encoders.ByName[name] = vector.ManagedEncoder{}
+			}
+		}
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
 			Source: database, Generation: gen,
 			Space: vectorSpace(cfg.Vector.Embeddings, gen),
 		}
-		return vector.NewResolvingManager(
+		m := vector.NewResolvingManager(
 			ix, encoders, gen,
 			func(context.Context) (vector.BuildTarget, error) { return target, nil },
 		)
+		if cfg.Vector.Producer == "remote" {
+			m.SetDocumentBuildPolicy(hubProducerBuild(ix, database, cfg))
+		}
+		return m
 	}
 	return vector.NewResolvingManager(
 		ix,
@@ -817,16 +868,25 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, stor
 		gens[i].Store = spec.Name
 	}
 
+	var hubStatus *vector.HubPullStatus
+	if spec.Name == vector.MessageIndexSpec().Name {
+		hubStatus, err = readHubPullStatus(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
 	if jsonOutput {
 		if gens == nil {
 			gens = []vector.GenerationInfo{}
 		}
 		return json.MarshalEncode(jsontext.NewEncoder(out), struct {
 			Generations []vector.GenerationInfo `json:"generations"`
-		}{gens})
+			HubPull     *vector.HubPullStatus   `json:"hub_pull,omitempty"`
+		}{gens, hubStatus})
 
 	}
 	printGenerationsTable(out, gens)
+	printHubPullStatus(out, hubStatus)
 	return nil
 }
 
@@ -991,7 +1051,7 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
 		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
 		// Always send the resolved scope, including an explicit false override.
-		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using), LocalProducer: new(req.LocalProducer),
 	}})
 	if response == nil {
 		return err

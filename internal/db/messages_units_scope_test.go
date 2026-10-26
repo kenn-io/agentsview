@@ -233,6 +233,7 @@ func TestEmbeddableUnitsQueryPlanDrivesFromSessionsWhenSinceIsSet(t *testing.T) 
 	tests := []struct {
 		name             string
 		since            string
+		sessionID        string
 		includeAutomated bool
 		wantScanMessages bool
 	}{
@@ -242,15 +243,19 @@ func TestEmbeddableUnitsQueryPlanDrivesFromSessionsWhenSinceIsSet(t *testing.T) 
 			includeAutomated: true, wantScanMessages: false,
 		},
 		{name: "EmptySinceKeepsFullScan", since: "", wantScanMessages: true},
+		{name: "SingleSessionUsesIndex", sessionID: "a-new"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var args []any
+			if tt.sessionID != "" {
+				args = append(args, tt.sessionID)
+			}
 			if tt.since != "" {
 				args = append(args, tt.since)
 			}
 			plan := explainQueryPlan(t, d,
-				embeddableUnitsQuery(tt.since, "", tt.includeAutomated), args...)
+				embeddableUnitsQuery(tt.since, tt.sessionID, tt.includeAutomated), args...)
 			joined := strings.Join(plan, "\n")
 
 			scansMessages := false
@@ -268,11 +273,9 @@ func TestEmbeddableUnitsQueryPlanDrivesFromSessionsWhenSinceIsSet(t *testing.T) 
 				"unexpected messages scan in plan:\n%s", joined)
 			assert.Equal(t, !tt.wantScanMessages, searchesMessages,
 				"expected a per-session index search in plan:\n%s", joined)
-			if tt.since != "" {
-				assert.NotContains(t, joined, "USE TEMP B-TREE FOR ORDER BY",
-					"the (session_id, ordinal) order must come from the index, not a sort:\n%s",
-					joined)
-			}
+			assert.NotContains(t, joined, "USE TEMP B-TREE FOR ORDER BY",
+				"the (session_id, ordinal) order must come from the index, not a sort:\n%s",
+				joined)
 		})
 	}
 }

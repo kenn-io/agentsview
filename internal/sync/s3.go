@@ -15,14 +15,20 @@ import (
 
 var findCodexS3ParentSessionURIs = parser.FindCodexS3ParentSessionURIs
 
-func s3SessionIDPrefix(machine string) string {
+func s3SessionIDPrefix(machine string) string { return SessionIDPrefix(machine) }
+
+// SessionIDPrefix is the shared source-machine namespace for imported sessions.
+func SessionIDPrefix(machine string) string {
 	if machine == "" {
 		return ""
 	}
 	return machine + "~"
 }
 
-func applyIDPrefixToID(prefix, id string) string {
+func applyIDPrefixToID(prefix, id string) string { return PrefixSessionID(prefix, id) }
+
+// PrefixSessionID preserves empty and already-prefixed archive identities.
+func PrefixSessionID(prefix, id string) string {
 	if prefix == "" || id == "" || strings.HasPrefix(id, prefix) {
 		return id
 	}

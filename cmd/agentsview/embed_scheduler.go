@@ -372,9 +372,10 @@ func (t teeEmitter) Emit(scope string) {
 // translating its error taxonomy into db.ErrSemanticUnavailable-wrapped
 // errors and enforcing the config-drift staleness gate before every query.
 type searcherAdapter struct {
-	ix    *vector.Index
-	enc   kitvec.EncodeFunc
-	space embedmodel.Descriptor
+	ix          *vector.Index
+	enc         kitvec.EncodeFunc
+	space       embedmodel.Descriptor
+	fingerprint string
 }
 
 type recallSearcherAdapter struct {
@@ -553,7 +554,12 @@ func (a searcherAdapter) PrepareSemanticSearch(
 			db.ErrSemanticUnavailable)
 	}
 
-	search, err := a.ix.PrepareSearch(ctx, a.enc, query)
+	var search func(context.Context, int) ([]vector.Hit, bool, error)
+	if a.fingerprint != "" {
+		search, err = a.ix.PrepareSearchForGeneration(ctx, a.enc, query, a.fingerprint)
+	} else {
+		search, err = a.ix.PrepareSearch(ctx, a.enc, query)
+	}
 	if err != nil {
 		return nil, 0, translateSearchError(err)
 	}
@@ -726,21 +732,28 @@ func setupVectorServing(
 		return vectorServing{}, fmt.Errorf("opening recall vectors: %w", err)
 	}
 
-	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
-	if err != nil {
-		recallIX.Close()
-		ix.Close()
-		_ = lock.Close()
-		return vectorServing{}, err
+	var encoders vector.EncoderSet
+	var queryEnc kitvec.EncodeFunc
+	if cfg.Vector.Producer != "remote" || (cfg.Vector.Embeddings.Model != "" && cfg.Vector.Embeddings.Dimension > 0) {
+		encoders, err = vectorDocumentEncoderSet(cfg.Vector.Embeddings)
+		if err != nil {
+			recallIX.Close()
+			ix.Close()
+			_ = lock.Close()
+			return vectorServing{}, err
+		}
+		// Search-time query encoding always uses the default server; builds may
+		// pick any named entry via BuildRequest.Using.
+		queryEnc, err = newVectorQueryEncoder(cfg.Vector.Embeddings, "")
+		if err != nil {
+			recallIX.Close()
+			ix.Close()
+			_ = lock.Close()
+			return vectorServing{}, err
+		}
 	}
-	// Search-time query encoding always uses the default server; builds may
-	// pick any named entry via BuildRequest.Using.
-	queryEnc, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
-	if err != nil {
-		recallIX.Close()
-		ix.Close()
-		_ = lock.Close()
-		return vectorServing{}, err
+	if queryEnc == nil {
+		cfg.Vector.Embed.Recall = false
 	}
 
 	backstop, err := time.ParseDuration(cfg.Vector.Embed.BackstopInterval)
@@ -758,12 +771,18 @@ func setupVectorServing(
 	recallMgr := embeddingManager(
 		recallIX, database, encoders, cfg, vector.RecallIndexSpec().Name,
 	)
-	database.SetVectorSearcher(newSearcherAdapter(
-		ix, queryEnc, vectorSpace(cfg.Vector.Embeddings, gen),
-	))
-	database.SetRecallVectorSearcher(recallSearcherAdapter{
-		ix: recallIX, enc: queryEnc, database: database, cfg: cfg,
-	})
+	if cfg.Vector.Producer == "remote" {
+		database.SetVectorSearcher(hubSearcherAdapter{ix: ix, local: cfg.Vector.Embeddings})
+	} else {
+		database.SetVectorSearcher(newSearcherAdapter(
+			ix, queryEnc, vectorSpace(cfg.Vector.Embeddings, gen),
+		))
+	}
+	if queryEnc != nil {
+		database.SetRecallVectorSearcher(recallSearcherAdapter{
+			ix: recallIX, enc: queryEnc, database: database, cfg: cfg,
+		})
+	}
 	scheduler := newEmbedScheduler(
 		mgr, embedDebounceInterval, backstop, cfg.Vector.IncludeAutomated, idle,
 	)
@@ -857,6 +876,9 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	if cfg.ArchiveContent.UsageOnly() || d.ArchiveContent().UsageOnly() || !cfg.Vector.Enabled {
 		return nil
 	}
+	if cfg.Vector.Producer == "remote" {
+		d.SetVectorSearcher(hubSearcherAdapter{local: cfg.Vector.Embeddings})
+	}
 	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)
 	if _, err := os.Stat(path); err != nil {
 		return nil
@@ -879,7 +901,7 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	}
 	// Query encoding uses the default server.
 	enc, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
-	if err != nil {
+	if err != nil && cfg.Vector.Producer != "remote" {
 		if ix != nil {
 			ix.Close()
 		}
@@ -894,9 +916,13 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	}
 	if ix != nil {
 		gen := vectorGeneration(cfg.Vector.Embeddings)
-		d.SetVectorSearcher(newSearcherAdapter(ix, enc, vectorSpace(cfg.Vector.Embeddings, gen)))
+		if cfg.Vector.Producer == "remote" {
+			d.SetVectorSearcher(hubSearcherAdapter{ix: ix, local: cfg.Vector.Embeddings})
+		} else {
+			d.SetVectorSearcher(newSearcherAdapter(ix, enc, vectorSpace(cfg.Vector.Embeddings, gen)))
+		}
 	}
-	if recallIX != nil {
+	if recallIX != nil && enc != nil {
 		d.SetRecallVectorSearcher(recallSearcherAdapter{
 			ix: recallIX, enc: enc, database: d, cfg: cfg,
 		})

@@ -71,8 +71,10 @@ func newDoctorCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
+	cmd.AddCommand(newDoctorRemoteCommand())
 	cmd.AddCommand(newDoctorSyncCommand())
 	cmd.AddCommand(newDoctorMemoryCommand())
+	cmd.AddCommand(newDoctorEmbeddingsCommand())
 	return cmd
 }
 

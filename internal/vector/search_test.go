@@ -986,3 +986,46 @@ func TestSearchReducedDimensionsEndToEnd(t *testing.T) {
 			"request %d must ask for the reduced dimension", i)
 	}
 }
+
+func TestHubPreparedSearchPinsRecipeAndHydration(t *testing.T) {
+	for _, mode := range []string{"generation", "user", "run"} {
+		t.Run(mode, func(t *testing.T) {
+			ix := openTestIndex(t)
+			ix.split = kitvec.SplitOptions{MaxRunes: 100, Overlap: ChunkOverlap(100)}
+			content := strings.Repeat("x", 120) + "\n\nbeta " + strings.Repeat("y", 95)
+			unit := userDoc("s", "u", 1, content)
+			if mode == "run" {
+				unit = runDoc("s", "r", 1, 2, content, []db.UnitOffset{{Ordinal: 1}, {Ordinal: 2, RuneStart: 122, ByteStart: 122}})
+			}
+			src := &fakeUnitSource{rows: []fakeUnit{{unit: unit, endedAt: "2024-01-01T00:00:00Z"}}}
+			gen := fakeGeneration("first")
+			_, err := ix.Build(t.Context(), src, fakeSearchEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			if mode == "generation" {
+				_, err = ix.Build(t.Context(), src, fakeSearchEncoder(), fakeGeneration("second"), BuildOptions{})
+				require.NoError(t, err)
+			}
+			ix.split = kitvec.SplitOptions{MaxRunes: 8192, Overlap: ChunkOverlap(8192)}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			search, err := ix.PrepareSearchForGeneration(ctx, fakeSearchEncoder(), "beta", gen.Fingerprint())
+			if mode == "generation" {
+				require.ErrorIs(t, err, ErrNoActiveGeneration, "a query recipe must never search another active generation")
+				return
+			}
+			require.NoError(t, err)
+			hits, _, err := search(t.Context(), 1)
+			require.NoError(t, err)
+			require.Len(t, hits, 1)
+			expected := strings.Repeat("x", 35) + "\n\nbeta " + strings.Repeat("y", 58)
+			if mode == "run" {
+				expected = "beta " + strings.Repeat("y", 58)
+			}
+			require.Equal(t, expected, hits[0].Snippet)
+			if mode == "run" {
+				require.Equal(t, 2, hits[0].Ordinal)
+			}
+			require.Equal(t, 8192, ix.split.MaxRunes, "query preparation must not mutate shared chunk settings")
+		})
+	}
+}

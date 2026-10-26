@@ -20,6 +20,47 @@ concurrency, and the search path — see
     [DuckDB mirror](/docs/duckdb/) has no vector backend, so `--semantic`/`--hybrid`
     against a DuckDB-backed server return the "not available" error described below.
 
+## Reusing a remote hub's message vectors
+
+On newer `main`, a spoke can pull its own message embeddings from a PostgreSQL
+hub instead of encoding documents again. Use the hub's SSH importer label as
+`spoke_host` and configure a local query endpoint:
+
+```toml
+[remote]
+url = "https://hub.example"
+token_file = "/path/to/hub-token"
+spoke_host = "node"
+
+[vector]
+enabled = true
+producer = "remote"
+
+[vector.embeddings.servers.query]
+endpoint = "http://127.0.0.1:11434/v1"
+# api_key_env = "QUERY_EMBEDDINGS_API_KEY"
+```
+
+The hub supplies the model, dimension and prompt recipe. Any recipe fields you
+set explicitly must match it. Parser versions and automated-session scope must
+also match. Pulls cover locally owned sessions and run through every message
+build path, including scheduled work, full rebuilds and repairs. Recall stays
+local; configure model and dimension to use Recall embeddings.
+
+Run `agentsview embeddings build` to pull. A new generation becomes active only
+when every current document has coverage. `agentsview embeddings list` and
+`agentsview doctor embeddings` show the last pull's persistent reason and
+unmatched count. To encode unmatched documents with the pinned recipe, run
+`agentsview embeddings build --local-producer`. It refuses `--full-rebuild`,
+`--backstop` and Recall builds.
+
+`agentsview session search "connection pooling" --semantic --local` uses the
+saved active recipe and the local query endpoint. It reads no hub credential.
+An incomplete next generation does not displace the active one. Without an
+active generation or query encoder, semantic search reports "semantic search
+unavailable locally"; lexical search remains available. Default remote reads
+continue to use the hub.
+
 ## Enabling `[vector]`
 
 Semantic search is disabled by default. Add a `[vector]` section to
@@ -69,8 +110,9 @@ input beyond the window. Changing this cap on an existing index
 [creates a new generation and re-embeds the archive](#building-the-index) on the
 next build.
 
-`model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
-entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
+For local production, `model`, `dimension`, and at least one
+`[vector.embeddings.servers.<name>]` entry with an `endpoint` are required once
+`enabled = true`; `agentsview` fails
 fast with an actionable message if any is missing or a duration field doesn't
 parse. Restart the daemon (or run a CLI command) after editing the file.
 
@@ -86,6 +128,47 @@ vector and hybrid queries fail closed as unavailable once the served Recall
 corpus is more than `recall_max_revision_lag` revisions newer than the last
 completed build; lexical queries remain available while an automatic or manual
 refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
+
+### Reusing a remote hub's vectors
+
+A spoke can pull message vectors from a configured hub instead of sending
+its documents to an embeddings endpoint. It imports only locally owned
+sessions. Configure a query server for local semantic searches:
+
+```toml
+[remote]
+url = "https://hub.example"
+spoke_host = "workstation"
+token_file = "/path/to/private/hub-token"
+
+[vector]
+enabled = true
+producer = "remote"
+
+[vector.embeddings.servers.query]
+endpoint = "http://localhost:11434/v1"
+```
+
+The spoke adopts the hub's model, dimensions, prefixes and chunk recipe.
+Omit these fields to adopt them; explicitly configured recipe fields must
+match the hub. Query-server transport settings are still validated locally.
+Message builds, full rebuilds, backstops and invalid-vector repairs all use
+the hub. Invalid-vector repair requires an existing generation and repairs
+only its queued targets; it does not discover documents or activate a generation.
+Recall continues to use the local encoder and needs a complete local recipe.
+
+After-sync pulls reuse the local refresh watermark and session deletion journal.
+They load identities only for sessions with pending documents. First imports,
+replacement recipes, full rebuilds, backstops, changed scope or chunk caps, and
+archive recovery still reconcile the full source when needed. If a replacement
+pull stops, a later pull or local message build with the same recipe can finish
+it while the previous generation remains available.
+
+With vector search disabled, a retained `producer = "remote"` setting does not
+require a hub URL or spoke host.
+Requests to a restricted signing listener use the existing `AGENTSVIEW_SIGNING_*`
+configuration (`AGENTSVIEW_SIGNING_URL`, `AGENTSVIEW_SIGNING_KEY_ID` and
+`AGENTSVIEW_SIGNING_KEY_FILE`).
 
 ### Named embeddings servers
 
@@ -872,6 +955,81 @@ push_vectors = false
 `push_vectors` defaults to true, so a machine with `[vector]` enabled pushes its
 embeddings automatically. A machine without `[vector]` enabled has no generation
 to push and skips the phase regardless.
+
+On newer `main`, vector pushes also publish the mirror's stored parser data
+version and automated-session scope per generation and pushing machine. Only a
+successful full mirror refresh of a ready archive with uniform parser versions
+establishes parser proof. An incremental refresh retains existing proof only
+while the source version stays the same. Opening a mirror never certifies it,
+and a push without `--embed` reports its stored version after a parser upgrade.
+A legacy mirror without parser proof or a stored scope keeps publishing vectors,
+but hub discovery remains unavailable until a full refresh establishes both.
+Run `agentsview embeddings build --backstop` to reconcile the full mirror without
+forcing unchanged documents to be embedded again.
+New or changed publishers stay unverified until a complete push succeeds. First
+certification rewrites coverage even when old aggregate hashes or interrupted
+full-push checkpoints match. Interrupted scope changes also remain unknown, and
+a completed push retires the same publisher's old machine names. Updating a
+session invalidates coverage in other generations when document keys or content
+differ and removes those generations' session chunks in the same transaction.
+Those generations must re-push the session before serving it again. An unchanged
+set remains covered in both. Ordinal and offset corrections still update the
+shared document metadata without discarding compatible vectors. Removing the
+last embeddable document clears retained coverage even when the replacement
+generation has never pushed that session. Project and automated-session
+exclusions preserve retained history. A writer that cannot add the optional
+compatibility or chunk-provenance columns keeps publishing vectors and updates
+the metadata its schema supports. Hub compatibility remains unavailable until an
+owner adds the missing columns and a complete push certifies them.
+
+The hub backend pins the selected generation's fingerprint, dimension and
+creation time when the serving process starts. If that generation is removed or
+recreated, or its chunk table disappears, discovery reports unavailable and
+lookup reports `generation_changed`. Restart the serving process to select the
+replacement generation.
+
+### Reading vectors from a hub
+
+On newer `main`, `pg serve` exposes its selected generation at
+`GET /api/v1/vectors/generation`. It includes the model, dimension, recipe,
+parser data version and automated-session scope. Older pushes or publishers
+with conflicting compatibility metadata report `unavailable`; run
+`agentsview pg push --full` to publish current metadata. Legacy plain-machine
+metadata covers all projects. A filtered push keeps that metadata unavailable
+until an unfiltered full push reconciles the publisher's entire corpus. Recorded
+machine aliases let that full push retire metadata from earlier machine names.
+That reconciliation also replaces the same archive's older filtered witnesses
+in this PostgreSQL schema, preserving other archives' compatibility records.
+SQLite servers do not serve these endpoints.
+
+`POST /api/v1/vectors/lookup` accepts that fingerprint and up to 256 structured
+document identities with content hashes. Matches require the selected
+generation's chunks and a completed session push. Each stored chunk must also
+carry its original source hash, matching the request and the shared document.
+Tables that predate the source-hash or chunk-hash-version columns report the
+generation unavailable until a writer adds the missing columns. Legacy chunks
+without proof are then returned as absent until their owner republishes them;
+another publisher cannot certify that coverage. A document with any unproven
+chunk is absent as a whole.
+
+An explicitly recorded chunk-hash version other than version 1 makes the
+generation unavailable. Legacy null versions remain valid when compatibility
+metadata and chunk provenance satisfy the checks above.
+
+Every lookup page rechecks publisher compatibility in the same read snapshot
+as its chunks. Unavailable
+compatibility returns `generation_changed`, even without prior discovery.
+Responses use `vectors.v1`:
+request indices, chunk indices and counts, and base64 little-endian float32
+vectors rounded to PostgreSQL's half precision. Non-finite values are rejected.
+
+Clients can request zstd with `Accept-Encoding: zstd`. Each decoded response
+stays below 32 MiB. Continue with `next_cursor` and the same fingerprint and
+identities, assembling complete chunk sets before installation. Cursors use the
+actual stored chunk indices, which can have gaps. A cursor beyond the stored
+range returns HTTP 400. A different selected fingerprint returns
+`409 generation_changed`. Existing bearer and machine-signing authentication
+apply; lookups remain reads during a rebuild.
 
 ### Serving semantic search
 

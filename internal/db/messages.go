@@ -968,6 +968,13 @@ func (db *DB) scanEmbeddableUnits(
 	ctx context.Context, since, sessionID string, includeAutomated bool, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
+	return scanEmbeddableUnits(ctx, db.getReader(), since, sessionID, includeAutomated, maxRunRunes, false, fn)
+}
+
+func scanEmbeddableUnits(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, since, sessionID string, includeAutomated bool, maxRunRunes int, localOnly bool, fn func(EmbeddableUnit) error,
+) (string, error) {
 	args := make([]any, 0, 2)
 	if sessionID != "" {
 		args = append(args, sessionID)
@@ -976,15 +983,15 @@ func (db *DB) scanEmbeddableUnits(
 		args = append(args, since)
 	}
 
-	rows, err := db.getReader().QueryContext(
-		ctx, embeddableUnitsQuery(since, sessionID, includeAutomated), args...)
+	rows, err := q.QueryContext(
+		ctx, embeddableUnitsQueryScoped(since, sessionID, includeAutomated, localOnly), args...)
 	if err != nil {
 		return "", fmt.Errorf("scanning embeddable units: %w", err)
 	}
 	defer rows.Close()
 
 	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
-	maxEnded, err = reduceUnitRows(rows, red)
+	maxEnded, err := reduceUnitRows(rows, red)
 	if err != nil {
 		return "", err
 	}
@@ -1183,11 +1190,20 @@ func runUnit(members []unitRow) EmbeddableUnit {
 // query always emits rows in (session_id, ordinal) order, which unitReducer
 // depends on.
 func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string {
+	return embeddableUnitsQueryScoped(since, sessionID, includeAutomated, false)
+}
+
+func embeddableUnitsQueryScoped(since, sessionID string, includeAutomated, localOnly bool) string {
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
 		"m.is_system = 0",
 		"s.deleted_at IS NULL",
 		SystemPrefixSQL("m.content", "m.role"),
+	}
+	if localOnly {
+		preds = append(preds, "instr(s.id, '~') = 0", `(s.machine = 'local' OR s.machine IN (
+   SELECT value FROM pg_sync_state WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
+  ))`)
 	}
 	if !includeAutomated {
 		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "s.is_automated"))
@@ -1195,19 +1211,15 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 	if sessionID != "" {
 		preds = append(preds, "m.session_id = ?")
 	}
-	sessionJoin := "JOIN"
-	if since != "" {
-		// Keep the candidate message lookup outermost and in index order.
-		// Additional metadata indexes can otherwise reorder this join and
-		// introduce a sort of the selected message bodies.
-		sessionJoin = "CROSS JOIN"
-	}
+	// Keep the candidate message lookup outermost and in index order for
+	// full, incremental, and single-session scans. Metadata indexes must not
+	// reorder the join and introduce a sort of the selected message bodies.
 	return `
 		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
 		       m.is_sidechain, s.relationship_type, s.parent_session_id,
 		       s.ended_at
 		FROM messages m
-		` + sessionJoin + ` sessions s ON s.id = m.session_id
+		CROSS JOIN sessions s ON s.id = m.session_id
 		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
 		` + sinceSessionScopeClause(since, includeAutomated) + `
 		ORDER BY m.session_id, m.ordinal`

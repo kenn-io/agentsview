@@ -230,6 +230,22 @@ Two operations stay local because kit treats a retired generation as permanent:
 Both rely on agentsview never calling kit's `Reclaim`, so a retired generation
 keeps its vectors until `vectors.db` is reset.
 
+### Hub replacement staging
+
+`Index.Pull` installs a different hub recipe in a separate mirror and vector
+store inside `vectors.db`. Hub failures, missing coverage, and cancellation
+leave the active documents, boundaries, anchors, and vectors available. A retry
+requests only unfinished documents. Generation diagnostics count the staged
+projection for the target fingerprint. An ordinary local build can finish that
+projection, including a requested full rebuild.
+
+The final archive writer reservation reconciles the staged documents and checks
+complete coverage before publication. One SQLite transaction installs the
+mirror, vectors, recipe, and active state and removes the staging tables.
+Manual activation, including forced activation, refuses a staged target; pull
+or build must finish its archive validation first. A same-fingerprint pull
+continues to use the existing top-up and interrupted-rebuild behavior.
+
 ## Chunking and anchoring
 
 Unit content is chunked by kit's `Split` with `MaxRunes = max_input_chars`
@@ -357,7 +373,12 @@ a backstop tick lands while a build is already running, it's remembered so the
 *next* build, not the next 24h tick, carries the full-reconciliation flag.
 
 Generation activation always happens under the single writer. Search opens
-`vectors.db` read-only from any process, with no locking.
+`vectors.db` read-only from any process. `PrepareSearch` pins the generation,
+chunk recipe, vector candidates, and hydration reads in one SQLite read
+transaction across candidate expansion. Its caller cancels the preparation
+context when the request ends to release the snapshot. `SearchPage` manages
+that lifetime for individual searches. A replacement can commit while an older
+prepared search or export continues reading its original snapshot.
 
 ## Search path
 
