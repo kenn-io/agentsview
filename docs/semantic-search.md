@@ -873,6 +873,36 @@ push_vectors = false
 embeddings automatically. A machine without `[vector]` enabled has no generation
 to push and skips the phase regardless.
 
+On newer `main`, vector pushes also publish the mirror's stored parser data
+version and automated-session scope per generation and pushing machine. Only a
+successful full mirror refresh of a ready archive with uniform parser versions
+establishes parser proof. An incremental refresh retains existing proof only
+while the source version stays the same. Opening a mirror never certifies it,
+and a push without `--embed` reports its stored version after a parser upgrade.
+A legacy mirror without parser proof or a stored scope keeps publishing vectors,
+but hub discovery remains unavailable until a full refresh establishes both.
+Run `agentsview embeddings build --backstop` to reconcile the full mirror without
+forcing unchanged documents to be embedded again.
+New or changed publishers stay unverified until a complete push
+succeeds. Interrupted scope changes also remain unknown, and a completed push
+retires the same publisher's old machine names. Updating a session invalidates
+coverage in other generations when document keys or content differ and removes
+those generations' session chunks in the same transaction. Those generations must
+re-push the session before serving it again. An unchanged set remains covered in
+both. Ordinal and offset corrections still update the shared document metadata
+without discarding compatible vectors. Removing the last embeddable document
+clears retained coverage even when the replacement generation has never pushed
+that session. Project and automated-session exclusions preserve retained history.
+A writer that cannot add the optional
+compatibility columns keeps publishing vectors. Hub compatibility remains
+unavailable until an owner adds those columns and a complete push certifies them.
+
+The hub backend pins the selected generation's fingerprint, dimension and
+creation time when the serving process starts. If that generation is removed or
+recreated, or its chunk table disappears, discovery reports unavailable and
+lookup reports `generation_changed`. Restart the serving process to select the
+replacement generation.
+
 ### Serving semantic search
 
 `pg serve` — and every `--pg` direct-read command — wires PG-backed semantic

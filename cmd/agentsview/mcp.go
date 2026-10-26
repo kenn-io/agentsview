@@ -72,7 +72,11 @@ Add to your MCP client config (e.g. Claude Desktop):
 			if err != nil {
 				return err
 			}
-			svc, cleanup, err := resolveMCPService(cmd)
+			target, err := resolveReadTarget(cmd, readTargetDefault)
+			if err != nil {
+				return err
+			}
+			svc, cleanup, err := resolveMCPServiceForTarget(cmd, target)
 			if err != nil {
 				return err
 			}
@@ -122,8 +126,8 @@ Add to your MCP client config (e.g. Claude Desktop):
 				}
 				opts.Token = token
 				opts.DiscoveryDirectory = filepath.Join(cfg.DataDir, "mcp")
-				opts.BackendURL, _ = cmd.Flags().GetString("server")
-				if opts.BackendURL == "" && !pgReadRequested(cmd) {
+				opts.BackendURL = target.URL
+				if target.Kind == readTargetLocal {
 					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
 						opts.BackendURL = urlFromDaemonRuntime(runtime)
 					}
@@ -168,7 +172,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 }
 
 func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
-	if strings.TrimSpace(profileName) != string(mcpserver.ProfileMemory) {
+	if localReadRequested(cmd) || strings.TrimSpace(profileName) != string(mcpserver.ProfileMemory) {
 		return nil
 	}
 	explicit := false
@@ -214,25 +218,20 @@ func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
 func resolveMCPService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, nil, errors.New(
-				"--server and --pg are mutually exclusive",
-			)
-		}
-		token, err := explicitServerToken(cmd)
+	target, err := resolveReadTarget(cmd, readTargetDefault)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resolveMCPServiceForTarget(cmd, target)
+}
+
+func resolveMCPServiceForTarget(cmd *cobra.Command, target readTarget) (service.SessionService, func(), error) {
+	if target.isHTTP() {
+		caps, err := target.probe(cmd.Context())
 		if err != nil {
 			return nil, nil, err
 		}
-		capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
-			cmd.Context(), remote, token,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
-			func() {}, nil
+		return target.backend(&caps), func() {}, nil
 	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeVector)
 	if err != nil {

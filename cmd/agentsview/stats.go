@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -89,6 +90,7 @@ func newStatsCommand() *cobra.Command {
 		&includeProjects, &excludeProjects,
 		&includeGitOutcomes, &includeGHOutcomes,
 	)
+	registerRemoteReadFlags(cmd.Flags())
 	return cmd
 }
 
@@ -152,6 +154,23 @@ func registerStatsFlags(
 func openStatsService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
+	target, err := resolveReadTarget(cmd, readTargetDefault)
+	if err != nil {
+		return nil, nil, err
+	}
+	if target.isHTTP() {
+		caps, err := target.probe(cmd.Context())
+		if err != nil {
+			return nil, nil, err
+		}
+		if !caps.SessionStatsAvailable {
+			return nil, nil, errors.New("stats not available from this server; try --local")
+		}
+		return target.backend(&caps), func() {}, nil
+	}
+	if target.Kind == readTargetPG {
+		return nil, nil, errors.New("stats not available from PostgreSQL; try --local")
+	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)

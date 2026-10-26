@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 // fakeVectorSource is an in-memory storage.VectorPushSource whose generation, aggregate
@@ -152,6 +153,7 @@ func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 		Content:       id,
 		ContentLength: len(id),
 	}}), "InsertMessages "+id)
+	require.NoError(t, localDB.SetSessionDataVersion(t.Context(), id, db.CurrentDataVersion()))
 }
 
 // seedVectorSessionProject inserts a minimal session under the given project so
@@ -174,6 +176,7 @@ func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) 
 		Content:       id,
 		ContentLength: len(id),
 	}}), "InsertMessages "+id)
+	require.NoError(t, localDB.SetSessionDataVersion(t.Context(), id, db.CurrentDataVersion()))
 }
 
 // vdoc builds a storage.VectorPushDoc with the supplied embeddings as consecutive
@@ -776,7 +779,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4, DataVersion: db.CurrentDataVersion()},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
 		docs: map[string][]storage.VectorPushDoc{
@@ -790,8 +793,13 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 	genID := res.Vectors.GenerationID
 	require.NotZero(t, genID)
+	assert.Equal(t, 2, res.Vectors.SessionsPushed, "baseline publishes both sessions")
 	witnessKey, err := sync.vectorGenerationWitnessKey(t.Context())
 	require.NoError(t, err, "vectorGenerationWitnessKey")
+	assert.Equal(t, 1, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_generation_machines
+ WHERE generation_id = $1 AND machine = $2 AND data_version = $3`, genID, witnessKey, db.CurrentDataVersion()),
+		"baseline records the proved producer parser version")
 	_, err = pg.Exec(
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
 	)
@@ -810,8 +818,8 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	assert.Equal(t, 1, vres.SessionsPushed)
 	assert.Equal(t, 0, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_generation_machines
- WHERE generation_id = $1 AND machine = $2`, genID, witnessKey),
-		"deferred generation-wide work must not witness the generation")
+ WHERE generation_id = $1 AND machine = $2 AND data_version IS NOT NULL`, genID, witnessKey),
+		"deferred generation-wide work must not certify the generation")
 
 	src.genScopes = nil
 	src.hashScopes = nil
@@ -1560,11 +1568,15 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 		  ON d.doc_key = c.doc_key AND d.ordinal >= 0
 		WHERE d.doc_key IS NULL`),
 		"gen A has no chunks that cannot hydrate")
-	// kShared stays live at its positive ordinal in both generations.
+	// The shared row remains live for gen B. Gen A lost session coverage when
+	// the corpus changed, so it must re-push before serving any of its chunks.
 	assert.Equal(t, 0, docOrdinal(t, pg, "kShared"))
-	assert.Equal(t, 1, countRows(t, pg,
+	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM `+vectorChunkTable(genA)+` WHERE doc_key = $1`,
-		"kShared"), "gen A keeps its chunks for the still-present doc")
+		"kShared"), "gen A's invalidated chunks are removed")
+	assert.Equal(t, 1, countRows(t, pg,
+		`SELECT COUNT(*) FROM `+vectorChunkTable(genB)+` WHERE doc_key = $1`,
+		"kShared"), "gen B retains current chunks for the still-present doc")
 }
 
 // TestVectorPushConflictSkipped pins finding 3: a session whose PG owner marker
@@ -2537,4 +2549,73 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVectorPushInvalidatesCrossGenerationRevision(t *testing.T) {
+	sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_vector_hub_revision_test")
+	seedVectorSession(t, local, "A")
+	identities := []vector.HubIdentity{
+		{SessionID: "A", UnitKind: "user", Ordinal: 0, ContentHash: "new-hash"},
+		{SessionID: "A", UnitKind: "user", SourceUUID: "uuid", Occurrence: 2, Ordinal: 1, ContentHash: "new-hash"},
+		{SessionID: "A", UnitKind: "run", SourceUUID: "run", Occurrence: 1, Ordinal: 2, ContentHash: "new-hash"},
+	}
+	first := hubRecipeSource("old", map[string]string{"max_input_chars": "8192"})
+	first.docs["A"] = nil
+	for i, key := range []string{"o:A:0", "u:A:uuid#2", "r:A:run"} {
+		doc := vdoc("A", key, i, "old-content", "old-hash", []float32{1, 0, 0, 0})
+		doc.SourceUUID = identities[i].SourceUUID
+		first.docs["A"] = append(first.docs["A"], doc)
+	}
+	sync.vectorSource = first
+	_, err := sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	id, _, _, err := LookupVectorGeneration(t.Context(), pg, "old")
+	require.NoError(t, err)
+	store := &Store{pg: pg}
+	setHubTestSearcher(t, store, id)
+	second := hubRecipeSource("new", map[string]string{"max_input_chars": "8192"})
+	second.docs = first.docs
+	sync.vectorSource = second
+	_, err = sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	identity := identities[0]
+	identity.ContentHash = "old-hash"
+	reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
+	require.NoError(t, err)
+	require.Len(t, reply.Chunks, 1, "equal corpus remains covered in both generations")
+	var oldChunks int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&oldChunks))
+	assert.Equal(t, len(identities), oldChunks, "unchanged coverage preserves old generation chunks")
+	second.hashes["A"] = "changed-corpus"
+	for i := range second.docs["A"] {
+		second.docs["A"][i].ContentHash = "new-hash"
+		second.docs["A"][i].Chunks[0].Embedding = []float32{0, 1, 0, 0}
+	}
+	_, err = sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+
+	for _, identity := range identities {
+		for _, hash := range []string{"old-hash", "new-hash"} {
+			identity.ContentHash = hash
+			reply, err := store.LookupHubVectors(t.Context(), vector.HubLookupRequest{Fingerprint: "old", Identities: []vector.HubIdentity{identity}})
+			require.NoError(t, err)
+			assert.Empty(t, reply.Chunks)
+			assert.Equal(t, []int{0}, reply.Absent)
+		}
+	}
+
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&oldChunks))
+	assert.Zero(t, oldChunks, "invalidated coverage must not leave searchable old chunks")
+	newID, _, _, err := LookupVectorGeneration(t.Context(), pg, "new")
+	require.NoError(t, err)
+	var newChunks int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(newID)).Scan(&newChunks))
+	assert.Equal(t, len(identities), newChunks, "current generation chunks remain intact")
+	delete(second.hashes, "A")
+	delete(second.docs, "A")
+	_, err = sync.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	var documents int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id='A'`).Scan(&documents))
+	assert.Zero(t, documents, "scope eviction removes shared documents once all chunks are gone")
 }
