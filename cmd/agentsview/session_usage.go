@@ -87,6 +87,18 @@ func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
 func sessionUsageDataForCommand(
 	cmd *cobra.Command, sessionID string,
 ) (*sessionUsageOutput, int, error) {
+	read, cleanup, err := resolveSessionUsageReader(cmd)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	defer closeArchiveQueryBackend(cleanup)
+	return read(sessionID)
+}
+
+// resolveSessionUsageReader selects and opens one backend for all requested IDs.
+func resolveSessionUsageReader(cmd *cobra.Command) (
+	func(string) (*sessionUsageOutput, int, error), func(), error,
+) {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -95,37 +107,48 @@ func sessionUsageDataForCommand(
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
 	noSync, _ := cmd.Flags().GetBool("no-sync")
 	query := sessionUsageQuery{
-		SessionID: sessionID, OwnOnly: ownOnly, NoSync: noSync,
+		OwnOnly: ownOnly, NoSync: noSync,
 	}
 
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
-			return nil, tokenUseExitErr, errors.New("--server and --pg are mutually exclusive")
+			return nil, nil, errors.New("--server and --pg are mutually exclusive")
 		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
-			return nil, tokenUseExitErr, err
+			return nil, nil, err
 		}
 		if !query.OwnOnly {
 			if err := requireRemoteSubagentUsageSupport(
 				ctx, remote, token, !query.NoSync,
 			); err != nil {
-				return nil, tokenUseExitErr, err
+				return nil, nil, err
 			}
 		}
-		return httpSessionUsageData(ctx, remote, token, query)
+		return func(id string) (*sessionUsageOutput, int, error) {
+			query.SessionID = id
+			return httpSessionUsageData(ctx, remote, token, query)
+		}, nil, nil
 	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
-		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
+		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 	if pgReadRequested(cmd) {
 		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
 		if err != nil {
-			return nil, tokenUseExitErr, err
+			return nil, nil, err
 		}
-		return pgSessionUsageData(cfg, pgCfg, query)
+		store, cleanup, err := openPGReadStore(cfg, pgCfg)
+		if err != nil {
+			closeArchiveQueryBackend(cleanup)
+			return nil, nil, fmt.Errorf("opening pg store: %w", err)
+		}
+		return func(id string) (*sessionUsageOutput, int, error) {
+			query.SessionID = id
+			return storeSessionUsageData("pg", cfg, store, query)
+		}, cleanup, nil
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -139,10 +162,12 @@ func sessionUsageDataForCommand(
 		},
 	)
 	if err != nil {
-		return nil, tokenUseExitErr, err
+		return nil, nil, err
 	}
-	defer closeArchiveQueryBackend(cleanup)
-	return backend.SessionUsage(ctx, query)
+	return func(id string) (*sessionUsageOutput, int, error) {
+		query.SessionID = id
+		return backend.SessionUsage(ctx, query)
+	}, cleanup, nil
 }
 
 func requireRemoteSubagentUsageSupport(
@@ -284,22 +309,6 @@ func httpSessionSyncStatus(
 		)
 	}
 	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, nil
-}
-
-func pgSessionUsageData(
-	cfg config.Config, pgCfg config.PGConfig, query sessionUsageQuery,
-) (*sessionUsageOutput, int, error) {
-	store, cleanup, err := openPGReadStore(cfg, pgCfg)
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, tokenUseExitErr, fmt.Errorf("opening pg store: %w", err)
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-	return storeSessionUsageData("pg", cfg, store, query)
 }
 
 func storeSessionUsageData(

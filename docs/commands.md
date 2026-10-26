@@ -1833,6 +1833,7 @@ agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
+agentsview session usage-batch <id>...   # ordered usage results for several sessions
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```

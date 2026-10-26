@@ -922,6 +922,44 @@ origin — `reveal=true` is only honored on a localhost-bound daemon.
 
 ______________________________________________________________________
 
+### `agentsview session usage-batch`
+
+Read usage for several sessions with one backend selection and archive or
+PostgreSQL connection. IDs resolve as they do for `session usage`, including
+short IDs. Repeated IDs produce repeated results in input order.
+
+```bash
+agentsview session usage-batch <id>... [--format json] [--own-only] [--no-sync]
+```
+
+The command accepts the same `--server`, `--server-token-file`, and `--pg`
+options as `session usage`. Descendant usage and source refresh follow the
+single-session command's rules below.
+
+JSON always contains a `results` array, even for one ID. Each entry has
+`requested_id`, `exit_code`, and `usage` when available. `usage` has the same
+shape as `session usage --json`. Per-session failures include `error` text;
+missing sessions have code 2, and sessions without token data or cost have code
+3\. Code 0 means token data or cost is available. Other lookup errors have code
+1\. The command continues after a per-session failure.
+
+```json
+{
+  "results": [
+    {
+      "requested_id": "missing-session",
+      "exit_code": 2,
+      "error": "session not found: missing-session"
+    }
+  ]
+}
+```
+
+Human output labels each requested ID and its exit code before its usage or
+error. The process exits 0 after completing the results, including per-session
+failures. Backend setup or output failures exit 1. The existing
+`session usage <id>` output and process exit codes remain unchanged.
+
 ### `agentsview session usage`
 
 Per-session token usage and cost estimate. Output shape is stable for the fields

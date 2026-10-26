@@ -41,6 +41,10 @@ The latest release is
   blindness. Past the tenth series, colors repeat with a pattern: hatched
   Usage bars, areas, and treemap tiles, and dashed Trends lines.
 
+- Read usage for several sessions in one process with
+  `session usage-batch <id>...`. JSON returns one ordered result per requested
+  ID, including individual errors.
+
 - PostgreSQL and ClickHouse push services can use a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons
   and archive write locks during restarts. The push service exits if no writable
