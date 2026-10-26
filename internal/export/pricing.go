@@ -289,42 +289,41 @@ func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLook
 	}
 	base := r.Lookup(pricedModel)
 	pattern := catalog.TierPattern(base.Pattern, tier)
-	if rates, ok := r.byModel[pattern]; ok {
-		baseRates := r.byModel[base.Pattern]
-		lookup = clonePricingLookup(lookup)
-		for _, field := range []struct {
-			base, tier money.Money
-			resolved   *money.Money
-			band       func(*PricingBand) *money.Money
-		}{
-			{baseRates.InputPerMTok, rates.InputPerMTok, &lookup.Rates.InputPerMTok, func(b *PricingBand) *money.Money { return &b.InputPerMTok }},
-			{baseRates.OutputPerMTok, rates.OutputPerMTok, &lookup.Rates.OutputPerMTok, func(b *PricingBand) *money.Money { return &b.OutputPerMTok }},
-			{baseRates.CacheWritePerMTok, rates.CacheWritePerMTok, &lookup.Rates.CacheWritePerMTok, func(b *PricingBand) *money.Money { return &b.CacheWritePerMTok }},
-			{baseRates.CacheWrite1hPerMTok, rates.CacheWrite1hPerMTok, &lookup.Rates.CacheWrite1hPerMTok, func(b *PricingBand) *money.Money { return &b.CacheWrite1hPerMTok }},
-			{baseRates.CacheReadPerMTok, rates.CacheReadPerMTok, &lookup.Rates.CacheReadPerMTok, func(b *PricingBand) *money.Money { return &b.CacheReadPerMTok }},
-		} {
-			if field.base.Microdollars == 0 {
-				continue
-			}
-			values := []*money.Money{field.resolved}
-			for i := range lookup.Rates.Bands {
-				values = append(values, field.band(&lookup.Rates.Bands[i]))
-			}
-			for _, value := range values {
-				scaled, err := money.ScaleRatio(*value, field.tier.Microdollars, field.base.Microdollars)
-				if err != nil {
-					return PricingLookup{}, err
-				}
-				*value = scaled
-			}
+	rates, ok := r.byModel[pattern]
+	if !ok {
+		return lookup, nil
+	}
+	baseRates := r.byModel[base.Pattern]
+	lookup = clonePricingLookup(lookup)
+	for _, field := range []struct {
+		base, tier money.Money
+		resolved   *money.Money
+	}{
+		{baseRates.InputPerMTok, rates.InputPerMTok, &lookup.Rates.InputPerMTok},
+		{baseRates.OutputPerMTok, rates.OutputPerMTok, &lookup.Rates.OutputPerMTok},
+		{baseRates.CacheWritePerMTok, rates.CacheWritePerMTok, &lookup.Rates.CacheWritePerMTok},
+		{baseRates.CacheWrite1hPerMTok, rates.CacheWrite1hPerMTok, &lookup.Rates.CacheWrite1hPerMTok},
+		{baseRates.CacheReadPerMTok, rates.CacheReadPerMTok, &lookup.Rates.CacheReadPerMTok},
+	} {
+		if field.base.Microdollars == 0 {
+			continue
 		}
-		lookup.Pattern = pattern
-		switch tier {
-		case "priority":
-			lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
-		case "ultrafast":
-			lookup.Adjustment = pricingpkg.OpenAIUltrafastProviderID
+		scaled, err := money.ScaleRatio(*field.resolved, field.tier.Microdollars, field.base.Microdollars)
+		if err != nil {
+			return PricingLookup{}, err
 		}
+		*field.resolved = scaled
+	}
+	// A tier's published bands apply as is; without them, LiteLLM falls back to the standard bands.
+	if len(rates.Bands) > 0 {
+		lookup.Rates.Bands = append([]PricingBand(nil), rates.Bands...)
+	}
+	lookup.Pattern = pattern
+	switch tier {
+	case "priority":
+		lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
+	case "ultrafast":
+		lookup.Adjustment = pricingpkg.OpenAIUltrafastProviderID
 	}
 	return lookup, nil
 }

@@ -109,7 +109,7 @@ func TestResolveBilledCodexServiceTierHistoricalRates(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.InputPerMTok)
 }
 
-func TestResolveBilledCodexServiceTierScalesFieldsAndBands(t *testing.T) {
+func TestResolveBilledCodexServiceTierScalesFieldsKeepsStandardBands(t *testing.T) {
 	rows := []EffectivePricingRow{
 		{ModelPattern: "model", Rates: ModelRates{
 			InputPerMTok: money.Money{Microdollars: 10}, OutputPerMTok: money.Money{Microdollars: 20},
@@ -127,10 +127,10 @@ func TestResolveBilledCodexServiceTierScalesFieldsAndBands(t *testing.T) {
 		}},
 	}
 	for _, tc := range []struct {
-		base1h, want1h, wantBand1h int64
+		base1h, want1h int64
 	}{
-		{0, 0, 350},
-		{50, 500, 3500},
+		{0, 0},
+		{50, 500},
 	} {
 		rows[0].Rates.CacheWrite1hPerMTok = money.Money{Microdollars: tc.base1h}
 		resolver := NewPricingResolver(rows)
@@ -141,11 +141,7 @@ func TestResolveBilledCodexServiceTierScalesFieldsAndBands(t *testing.T) {
 				InputPerMTok: money.Money{Microdollars: 20}, OutputPerMTok: money.Money{Microdollars: 60},
 				CacheWritePerMTok: money.Money{Microdollars: 120}, CacheReadPerMTok: money.Money{Microdollars: 200},
 				CacheWrite1hPerMTok: money.Money{Microdollars: tc.want1h},
-				Bands: []PricingBand{{AboveInputTokens: 100,
-					InputPerMTok: money.Money{Microdollars: 200}, OutputPerMTok: money.Money{Microdollars: 600},
-					CacheWritePerMTok: money.Money{Microdollars: 1200}, CacheWrite1hPerMTok: money.Money{Microdollars: tc.wantBand1h},
-					CacheReadPerMTok: money.Money{Microdollars: 2000},
-				}},
+				Bands:               rows[0].Rates.Bands,
 			}, lookup.Rates)
 		}
 	}
