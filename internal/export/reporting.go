@@ -30,14 +30,16 @@ func IsSupportedReportingSchemaVersion(version int) bool {
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
 // canonical document body with the derived Digest field omitted.
 type ReportingHour struct {
-	SchemaVersion int               `json:"schema_version"`
-	BucketSeconds int               `json:"bucket_seconds,omitzero"`
-	Period        string            `json:"period"`
-	Digest        string            `json:"digest"`
-	HasData       bool              `json:"has_data"`
-	Activity      ReportingActivity `json:"activity"`
-	Usage         ReportingUsage    `json:"usage"`
-	Joint         *ReportingJoint   `json:"joint,omitempty"`
+	SchemaVersion  int                      `json:"schema_version"`
+	BucketSeconds  int                      `json:"bucket_seconds,omitzero"`
+	Period         string                   `json:"period"`
+	Digest         string                   `json:"digest"`
+	HasData        bool                     `json:"has_data"`
+	Activity       ReportingActivity        `json:"activity"`
+	Usage          ReportingUsage           `json:"usage"`
+	Joint          *ReportingJoint          `json:"joint,omitempty"`
+	LocalMachineID string                   `json:"local_machine_id,omitempty"`
+	Machines       map[string]ReportingHour `json:"machines,omitempty"`
 }
 
 // ReportingDay is one UTC date exported from a single read snapshot. A
@@ -232,13 +234,15 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 	}
 
 	digest, err := DigestCanonical(reportingHourDigestInput{
-		SchemaVersion: hour.SchemaVersion,
-		BucketSeconds: hour.BucketSeconds,
-		Period:        hour.Period,
-		HasData:       hour.HasData,
-		Activity:      hour.Activity,
-		Usage:         hour.Usage,
-		Joint:         hour.Joint,
+		SchemaVersion:  hour.SchemaVersion,
+		BucketSeconds:  hour.BucketSeconds,
+		Period:         hour.Period,
+		HasData:        hour.HasData,
+		Activity:       hour.Activity,
+		Usage:          hour.Usage,
+		Joint:          hour.Joint,
+		LocalMachineID: hour.LocalMachineID,
+		Machines:       hour.Machines,
 	})
 	if err != nil {
 		return ReportingHour{}, nil, fmt.Errorf("digest reporting hour: %w", err)
@@ -323,13 +327,15 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 }
 
 type reportingHourDigestInput struct {
-	SchemaVersion int               `json:"schema_version"`
-	BucketSeconds int               `json:"bucket_seconds,omitzero"`
-	Period        string            `json:"period"`
-	HasData       bool              `json:"has_data"`
-	Activity      ReportingActivity `json:"activity"`
-	Usage         ReportingUsage    `json:"usage"`
-	Joint         *ReportingJoint   `json:"joint,omitempty"`
+	SchemaVersion  int                      `json:"schema_version"`
+	BucketSeconds  int                      `json:"bucket_seconds,omitzero"`
+	Period         string                   `json:"period"`
+	HasData        bool                     `json:"has_data"`
+	Activity       ReportingActivity        `json:"activity"`
+	Usage          ReportingUsage           `json:"usage"`
+	Joint          *ReportingJoint          `json:"joint,omitempty"`
+	LocalMachineID string                   `json:"local_machine_id,omitempty"`
+	Machines       map[string]ReportingHour `json:"machines,omitempty"`
 }
 
 func parseReportingHour(value string) (time.Time, error) {

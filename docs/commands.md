@@ -1736,6 +1736,7 @@ agentsview export range
 agentsview export hour 2026-07-28-13
 agentsview export day 2026-07-28
 agentsview export day --schema-version 5 --bucket 1m 2026-07-28
+agentsview export day --schema-version 5 --by-machine 2026-07-28
 agentsview export digest --from 2026-06-28 --to 2026-07-27
 ```
 

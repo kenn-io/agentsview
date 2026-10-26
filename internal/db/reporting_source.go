@@ -18,6 +18,8 @@ type reportingSourceLoadStats struct {
 }
 
 type reportingExportSource struct {
+	localMachineID      string
+	machineAliases      map[string]string
 	activitySessions    []reportingSourceSession
 	activityEvents      []activity.ActivityEvent
 	usageSessions       []activity.SessionMeta
@@ -40,6 +42,9 @@ type reportingSourceSession struct {
 }
 
 type reportingDaySource struct {
+	localMachineID   string
+	machineAliases   map[string]string
+	archiveID        string
 	activitySessions []activity.SessionMeta
 	activityIDs      []string
 	activityEvents   []activity.ActivityEvent
@@ -287,6 +292,9 @@ func (src reportingExportSource) forDate(
 		}
 	}
 	return reportingDaySource{
+		localMachineID:   src.localMachineID,
+		machineAliases:   src.machineAliases,
+		archiveID:        src.archiveScope.ArchiveID,
 		activitySessions: selectedSessions,
 		activityIDs:      activityIDs,
 		activityEvents:   activityEvents,

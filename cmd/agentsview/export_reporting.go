@@ -31,6 +31,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 	var schemaVersion *int
 	var projectKeys *[]string
 	var bucket *string
+	var byMachine *bool
 	command := &cobra.Command{
 		Use:          "hour YYYY-MM-DD-HH",
 		Short:        "Export one closed UTC reporting hour",
@@ -65,6 +66,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 					SchemaVersion: *schemaVersion,
 					ProjectKeys:   *projectKeys,
 					Bucket:        *bucket,
+					ByMachine:     *byMachine,
 				},
 			)
 			if err != nil {
@@ -84,6 +86,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schema 5)")
 	return command
 }
 
@@ -92,6 +95,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 	var schemaVersion *int
 	var projectKeys *[]string
 	var bucket *string
+	var byMachine *bool
 	command := &cobra.Command{
 		Use:          "day YYYY-MM-DD",
 		Short:        "Export all closed UTC reporting hours for a date",
@@ -121,7 +125,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 				cmd.Context(),
 				db.ReportingExportOptions{
 					Date: date, Now: deps.now(), SchemaVersion: *schemaVersion,
-					ProjectKeys: *projectKeys, Bucket: *bucket,
+					ProjectKeys: *projectKeys, Bucket: *bucket, ByMachine: *byMachine,
 				},
 			)
 			if err != nil {
@@ -134,6 +138,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schema 5)")
 	return command
 }
 
@@ -144,6 +149,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 	var schemaVersion *int
 	var projectKeys *[]string
 	var bucket *string
+	var byMachine *bool
 	command := &cobra.Command{
 		Use:          "digest --from YYYY-MM-DD --to YYYY-MM-DD",
 		Short:        "Export reporting digests for a UTC date range",
@@ -194,7 +200,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 				cmd.Context(),
 				db.ReportingDigestExportOptions{
 					From: from, To: to, Now: now, SchemaVersion: *schemaVersion,
-					ProjectKeys: *projectKeys, Bucket: *bucket,
+					ProjectKeys: *projectKeys, Bucket: *bucket, ByMachine: *byMachine,
 				},
 			)
 			if err != nil {
@@ -216,6 +222,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schema 5)")
 	command.Flags().StringVar(
 		&fromValue, "from", "", "First UTC date (YYYY-MM-DD)",
 	)

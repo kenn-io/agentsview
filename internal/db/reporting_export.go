@@ -19,6 +19,7 @@ import (
 // ReportingExportOptions selects one UTC calendar date and fixes the current
 // time used to decide which hours have closed.
 type ReportingExportOptions struct {
+	ByMachine     bool
 	Date          time.Time
 	Now           time.Time
 	SchemaVersion int
@@ -34,6 +35,7 @@ type ReportingExportOptions struct {
 // ReportingDigestExportOptions selects an inclusive UTC date range and fixes
 // the current time used to decide which hours have closed.
 type ReportingDigestExportOptions struct {
+	ByMachine     bool
 	From          time.Time
 	To            time.Time
 	Now           time.Time
@@ -104,6 +106,11 @@ func (db *DB) ExportReportingDay(
 	}
 	if opts.afterSourceLoad != nil {
 		opts.afterSourceLoad(source.observerStats())
+	}
+	if opts.ByMachine {
+		if err := source.loadMachineIdentity(ctx, tx, schemaVersion); err != nil {
+			return export.ReportingDay{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return export.ReportingDay{}, fmt.Errorf("commit reporting snapshot: %w", err)
@@ -216,6 +223,11 @@ func (db *DB) ExportReportingDigest(
 	if opts.afterSourceLoad != nil {
 		opts.afterSourceLoad(source.observerStats())
 	}
+	if opts.ByMachine {
+		if err := source.loadMachineIdentity(ctx, tx, schemaVersion); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit reporting snapshot: %w", err)
 	}
@@ -286,6 +298,47 @@ func reportingHoursFromSource(
 	projectKeys []string,
 	bucket time.Duration,
 ) ([]export.ReportingHour, error) {
+	hours, err := reportingHoursFromMachineSource(ctx, source, date, hourCount, schemaVersion, projectKeys, bucket, "")
+	if err != nil || source.localMachineID == "" {
+		return hours, err
+	}
+	machines := map[string]bool{source.localMachineID: true}
+	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
+		machines[source.machineID(session.Machine)] = true
+	}
+	if len(source.standaloneUsage) > 0 {
+		machines[source.machineID("")] = true
+	}
+	for i := range hours {
+		hours[i].LocalMachineID = source.localMachineID
+		hours[i].Machines = make(map[string]export.ReportingHour, len(machines))
+	}
+	for machine := range machines {
+		parts, err := reportingHoursFromMachineSource(ctx, source, date, hourCount, schemaVersion, projectKeys, bucket, machine)
+		if err != nil {
+			return nil, err
+		}
+		for i, part := range parts {
+			part, _, err = export.FinalizeReportingHour(part)
+			if err != nil {
+				return nil, err
+			}
+			hours[i].Machines[machine] = part
+		}
+	}
+	for i := range hours {
+		hours[i], _, err = export.FinalizeReportingHour(hours[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return hours, nil
+}
+
+func reportingHoursFromMachineSource(
+	ctx context.Context, source reportingDaySource, date time.Time,
+	hourCount, schemaVersion int, projectKeys []string, bucket time.Duration, machine string,
+) ([]export.ReportingHour, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -335,6 +388,17 @@ func reportingHoursFromSource(
 		return nil, err
 	}
 	projects := source.projects
+	if machine != "" {
+		sessions = slices.DeleteFunc(slices.Clone(sessions), func(s activity.SessionMeta) bool { return source.machineID(s.Machine) != machine })
+		ids = make([]string, 0, len(sessions))
+		for _, session := range sessions {
+			ids = append(ids, session.SessionID)
+		}
+		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
+			return source.machineID(sessionByID[e.SessionID].Machine) != machine
+		})
+		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool { return source.machineID(sessionByID[u.SessionID].Machine) != machine })
+	}
 	var references map[string]export.ProjectReference
 	var groupLabels map[string]string
 	if schemaVersion == export.ReportingJointSchemaVersion {

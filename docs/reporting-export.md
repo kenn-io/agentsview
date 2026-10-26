@@ -34,6 +34,39 @@ one newline. Diagnostics go to stderr. A malformed or future period, an open
 hour, a reversed or oversized digest range, or an unavailable archive produces a
 non-zero exit.
 
+## Report an archive that contains several machines
+
+Use `--schema-version 5 --by-machine` on hour, day, and digest exports when
+several archives may contain copies of the same sessions:
+
+```bash
+agentsview export day --schema-version 5 --by-machine 2026-07-28
+```
+
+Each hour adds `local_machine_id` and a `machines` object. Its keys are the
+originating machine identities, and each value is a complete schema 5 hour
+without nested machine metadata. The local identity comes from the archive's
+recorded installation, not its display label. Recorded machine aliases resolve
+to their canonical identities. Run `agentsview sync` first if the archive has
+not recorded its installation identity.
+
+All machine snapshots use the same read transaction, bucket resolution, project
+selection, pricing, and usage-survivor selection as the combined hour. The local
+machine remains present even in quiet hours, so a downstream report can replace
+an earlier nonempty copy. Machine membership and each machine's content
+participate in the hour digest. Day and digest commands therefore discover
+machine-only changes too.
+
+Usage without a session machine, including standalone Cursor billing, uses
+`archive:<archive_id>`. This identifies the archive that supplied the data; it
+does not prove that two different archives' account-wide billing is distinct. Do
+not treat it as a machine identity or merge it with a named machine.
+
+Downstream integrations can select one snapshot per originating machine and UTC
+hour before adding totals. Removing a whole overlapping archive would also
+remove activity from machines that have no other reporter. Existing exports
+without `--by-machine` keep their output unchanged.
+
 ## Discover the reporting range
 
 Run `agentsview export range` before choosing dates for a historical import. It
