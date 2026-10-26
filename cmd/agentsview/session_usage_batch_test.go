@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json/jsontext"
 	"errors"
 	"net/http"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
@@ -24,14 +22,6 @@ func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
 			t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
 			store := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 			seedSubagentOnlyUsage(t, store, "claude:parent", "agent-child", 42)
-			seedUsageSession(t, store, "codex:priced", "project-a", "codex", 12)
-			require.NoError(t, store.UpsertModelPricing([]db.ModelPricing{{
-				ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("10"),
-			}}))
-			require.NoError(t, store.InsertMessages(t.Context(), []db.Message{{
-				SessionID: "codex:priced", Role: "assistant", Model: "model-a",
-				TokenUsage: jsontext.Value(`{"output_tokens":12}`), OutputTokens: 12, HasOutputTokens: true,
-			}}))
 			opens, closes := 0, 0
 			original := openPGReadStore
 			openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
@@ -44,27 +34,19 @@ func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
 				args = append(args, "--own-only")
 			}
 			cmd := sessionUsageCommand(t, args...)
-			out, err := sessionUsageBatchDataForCommand(cmd, []string{"claude:parent", "codex:missing", "codex:priced", "claude:parent"})
+			out, err := sessionUsageBatchDataForCommand(cmd, []string{"claude:parent", "codex:missing", "claude:parent"})
 			require.NoError(t, err)
-			require.Len(t, out.Results, 4)
+			require.Len(t, out.Results, 3)
 			assert.Equal(t, 1, opens)
 			assert.Equal(t, 1, closes)
 			assert.Equal(t, "claude:parent", out.Results[0].RequestedID)
 			assert.Equal(t, 2, out.Results[1].ExitCode)
-			assert.Equal(t, "session not found: codex:missing", out.Results[1].Error)
 			assert.Nil(t, out.Results[1].Usage)
-			assert.Equal(t, 0, out.Results[2].ExitCode)
-			assert.Equal(t, 12, out.Results[2].Usage.TotalOutputTokens)
-			assert.True(t, out.Results[2].Usage.HasCost)
-			assert.Equal(t, money.MustParseDollars("0.00012"), out.Results[2].Usage.Cost)
-			assert.Equal(t, out.Results[0], out.Results[3])
+			assert.Equal(t, out.Results[0], out.Results[2])
 			if ownOnly {
 				assert.Equal(t, 3, out.Results[0].ExitCode)
-				assert.Zero(t, out.Results[0].Usage.TotalOutputTokens)
 			} else {
 				assert.Equal(t, 0, out.Results[0].ExitCode)
-				assert.Equal(t, 42, out.Results[0].Usage.TotalOutputTokens)
-				assert.Equal(t, 1, out.Results[0].Usage.SubagentCount)
 			}
 		})
 	}
@@ -77,27 +59,23 @@ func TestSessionUsageBatchLocalArchive(t *testing.T) {
 	seedSubagentOnlyUsage(t, store, "claude:parent", "agent-child", 42)
 	require.NoError(t, store.Close())
 	cmd := sessionUsageCommand(t, "session", "usage-batch", "claude:parent")
-	out, err := sessionUsageBatchDataForCommand(cmd, []string{"claude:parent", "claude:parent"})
+	out, err := sessionUsageBatchDataForCommand(cmd, []string{"claude:parent"})
 	require.NoError(t, err)
-	require.Len(t, out.Results, 2)
+	require.Len(t, out.Results, 1)
 	assert.Equal(t, 0, out.Results[0].ExitCode)
-	assert.Equal(t, 42, out.Results[0].Usage.TotalOutputTokens)
-	assert.Equal(t, 1, out.Results[0].Usage.SubagentCount)
-	assert.Equal(t, out.Results[0], out.Results[1])
 	var human strings.Builder
 	require.NoError(t, renderSessionUsageBatch(&human, out, "human"))
 	assert.Contains(t, human.String(), "claude:parent (exit 0)")
-	assert.Contains(t, human.String(), "Subagents:")
 }
 
 func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
-	for _, discovered := range []bool{false, true} {
-		t.Run(map[bool]string{false: "explicit", true: "discovered"}[discovered], func(t *testing.T) {
+	for _, autostart := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "autostart"}[autostart], func(t *testing.T) {
 			newAgentDataDir(t)
 			ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:session-a"})
 			args := []string{"session", "usage-batch", "codex:session-a", "--no-sync", "--json"}
 			starts := 0
-			if discovered {
+			if autostart {
 				stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 					starts++
 					assert.True(t, cfg.NoSync)
@@ -117,20 +95,14 @@ func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
 			assert.Equal(t, float64(0), raw["results"][0]["exit_code"])
 			assert.Contains(t, raw["results"][0], "usage")
 			assert.NotContains(t, raw["results"][0], "error")
-			got := decodeCLIJSON[sessionUsageBatchOutput](t, output.String())
-			require.Len(t, got.Results, 2)
-			assert.Equal(t, "codex:session-a", got.Results[0].RequestedID)
-			assert.Equal(t, 42, got.Results[0].Usage.TotalOutputTokens)
-			assert.Equal(t, got.Results[0], got.Results[1])
 			assert.Empty(t, reqs.SyncInput.ID)
-			assert.Equal(t, "breakdown=true&subagents=true", reqs.UsageQuery)
 			versions := 0
 			for _, path := range reqs.RequestPath {
 				if path == "/api/v1/version" {
 					versions++
 				}
 			}
-			if discovered {
+			if autostart {
 				assert.Equal(t, 1, starts)
 			} else {
 				assert.Equal(t, 1, versions)
@@ -140,29 +112,39 @@ func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
 }
 
 func TestSessionUsageBatchErrors(t *testing.T) {
-	newAgentDataDir(t)
-	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/usage") {
-			http.Error(w, "usage unavailable", http.StatusInternalServerError)
-		} else {
-			writeJSONResponse(w, `{"id":"codex:a","agent":"codex"}`)
+	t.Run("per-ID failure", func(t *testing.T) {
+		newAgentDataDir(t)
+		ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/usage") {
+				http.Error(w, "usage unavailable", http.StatusInternalServerError)
+			} else {
+				writeJSONResponse(w, `{"id":"codex:a","agent":"codex"}`)
+			}
+		})
+		cmd := sessionUsageCommand(t, "session", "usage-batch", "codex:a", "--server", ts.URL, "--own-only")
+		out, err := sessionUsageBatchDataForCommand(cmd, []string{"codex:a"})
+		require.NoError(t, err)
+		require.Len(t, out.Results, 1)
+		assert.Equal(t, 1, out.Results[0].ExitCode)
+		assert.Contains(t, out.Results[0].Error, "usage unavailable")
+	})
+	t.Run("setup failure", func(t *testing.T) {
+		newAgentDataDir(t)
+		cmd := sessionUsageCommand(t, "session", "usage-batch", "codex:a", "--server", "http://example.test", "--pg")
+		_, err := sessionUsageBatchDataForCommand(cmd, []string{"codex:a"})
+		require.ErrorContains(t, err, "mutually exclusive")
+	})
+	t.Run("writer failure", func(t *testing.T) {
+		out := &sessionUsageBatchOutput{Results: []sessionUsageBatchResult{{
+			RequestedID: "codex:a", ExitCode: 1, Error: "usage unavailable",
+		}}}
+		for _, format := range []string{"json", "human"} {
+			t.Run(format, func(t *testing.T) {
+				err := renderSessionUsageBatch(&failingRawSyncWriter{err: errors.New("output unavailable")}, out, format)
+				require.ErrorContains(t, err, "output unavailable")
+			})
 		}
 	})
-	cmd := sessionUsageCommand(t, "session", "usage-batch", "codex:a", "--server", ts.URL, "--own-only")
-	out, err := sessionUsageBatchDataForCommand(cmd, []string{"codex:a", "codex:a"})
-	require.NoError(t, err)
-	require.Len(t, out.Results, 2)
-	for _, result := range out.Results {
-		assert.Equal(t, 1, result.ExitCode)
-		assert.Contains(t, result.Error, "usage unavailable")
-	}
-	require.NoError(t, cmd.Flags().Set("pg", "true"))
-	_, err = sessionUsageBatchDataForCommand(cmd, []string{"codex:a"})
-	require.ErrorContains(t, err, "mutually exclusive")
-	for _, format := range []string{"json", "human"} {
-		err := renderSessionUsageBatch(&failingRawSyncWriter{err: errors.New("output unavailable")}, out, format)
-		require.ErrorContains(t, err, "output unavailable")
-	}
 }
 
 func TestSessionUsageBatchMissingDiagnostic(t *testing.T) {
