@@ -142,7 +142,7 @@ func lastDashToken(s string) (tok, rest string, ok bool) {
 // resolveCanonicalMatch matches the canonicalized model name exactly against
 // canonicalized keys, retrying with a trailing bracketed or parenthesized
 // decoration removed ("claude-fable-5[1m]", "Gemini 3.5 Flash (Medium)") and
-// then a trailing -YYYYMMDD release date removed. Earlier (less-stripped)
+// then a trailing -YYYYMMDD or -YYYY-MM-DD release date removed. Earlier (less-stripped)
 // candidates win. Arbitrary substring matching is deliberately avoided: a
 // shorter pricing key inside a longer model name (gpt-5.5 inside
 // gpt-5.5-codex) would silently misprice a distinct model that should stay
@@ -214,7 +214,7 @@ func keyRank(modelProvider, keyProvider string) int {
 // canonicalCandidates returns the canonical forms of model to try, in
 // decreasing specificity: as reported, with one trailing bracketed or
 // parenthesized decoration removed, and additionally with a trailing
-// -YYYYMMDD release date removed.
+// -YYYYMMDD or -YYYY-MM-DD release date removed.
 func canonicalCandidates(model string) []string {
 	var candidates []string
 	add := func(s string) {
@@ -267,9 +267,19 @@ func stripTrailingGroup(s string) string {
 	return strings.TrimRight(t[:i], " ")
 }
 
-// stripTrailingDate removes a trailing -YYYYMMDD release-date suffix:
+// stripTrailingDate removes a trailing -YYYYMMDD or -YYYY-MM-DD release-date suffix:
 // "claude-opus-4-7-20260101" -> "claude-opus-4-7".
 func stripTrailingDate(s string) string {
+	// ISO dates have separators; compact dates use the existing path below.
+	if len(s) > 11 && s[len(s)-11] == '-' {
+		date := s[len(s)-10:]
+		if date[4] == '-' && date[7] == '-' {
+			compact := strings.ReplaceAll(date, "-", "")
+			if len(compact) == 8 && strings.Trim(compact, "0123456789") == "" {
+				return s[:len(s)-11]
+			}
+		}
+	}
 	i := strings.LastIndex(s, "-")
 	if i <= 0 || len(s)-i-1 != 8 {
 		return s

@@ -475,7 +475,8 @@ off.
 LiteLLM's standard whole-request 200K and 272K token rates are preserved in both
 fetched and embedded catalogs. Processing variants such as Batch, Flex,
 Priority, regional, and one-hour cache pricing are not inferred when the stored
-usage does not identify that service tier.
+usage does not identify that service tier. Codex Fast and Ultrafast billing use
+the thread setting recorded in the rollout, as described below.
 
 ### Anthropic Web Search Fee
 
@@ -590,11 +591,35 @@ names and raw `pricing.models` entries.
 For usage rows whose stored provider ID is exactly `positai`, AgentsView
 estimates computed token costs and cache savings at 110% of the selected catalog
 rates. Model, timestamp, and request-band selection happen before the
-adjustment. Rows with empty or other provider IDs — including observed
+adjustment. Positron rows with empty or other provider IDs — including observed
 `anthropic` bring-your-own-provider rows in the same session — use base rates.
 
 Custom pricing overrides are not adjusted. Explicit reported costs remain
 authoritative, and fixed web-search fees remain at their published face value.
+
+### Codex Fast and Ultrafast Billing
+
+Codex Fast usage rows use provider ID `openai-priority`. The multiplier is 2x
+for gpt-6-sol, gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-6.1-terra, gpt-5.6,
+gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-mini, gpt-5.2,
+gpt-5.1, gpt-5, and gpt-5.3-codex; 2.5x for gpt-5.5; and 1.8x for gpt-5-mini.
+Ultrafast rows use `openai-ultrafast` and cost 6x for gpt-6-astra and gpt-6.1-sol.
+Other models keep standard rates. Dated and provider-qualified names use the
+same multiplier as their base model.
+
+These adjustments include cache rates and request bands. Custom model prices
+represent standard rates, so the tier multiplier applies to them too. A
+missing or unrecognized tier uses standard rates.
+
+AgentsView reads the thread setting from `thread_settings_applied` in the
+rollout, including snapshots written after a fork's replayed history. Each
+assistant or tool-call message uses the most recently recorded setting. The
+rollout records no request boundary, so a request that starts before a settings
+change and finishes afterward is priced at the new tier. Turn-only overrides
+do not appear in rollouts, so those turns use the recorded thread setting.
+
+The ratios come from the
+[OpenAI price list](https://developers.openai.com/api/docs/pricing).
 
 ### Copilot CLI Token Metrics
 

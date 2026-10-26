@@ -263,10 +263,18 @@ func (r *PricingResolver) ResolveBilled(providerID, reportedModel, canonicalMode
 func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalModel string, timestamp time.Time) (string, PricingLookup, error) {
 	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, timestamp)
 	policy, ok := pricingpkg.BillingPolicyFor(providerID)
-	if !ok || !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+	if !ok || !lookup.OK || (policy.SkipsCustomRates && lookup.Rates.Source == PricingRowSourceCustom) {
 		return pricedModel, lookup, nil
 	}
-	rates, err := scaleModelRates(lookup.Rates, policy.Numerator, policy.Denominator)
+	numerator, denominator := policy.Numerator, policy.Denominator
+	if policy.ModelRatios != nil {
+		ratio, ok := pricingpkg.Resolve(policy.ModelRatios, pricedModel)
+		if !ok {
+			return pricedModel, lookup, nil
+		}
+		numerator, denominator = ratio.Numerator, ratio.Denominator
+	}
+	rates, err := scaleModelRates(lookup.Rates, numerator, denominator)
 	if err != nil {
 		return "", PricingLookup{}, err
 	}

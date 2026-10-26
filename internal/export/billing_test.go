@@ -148,6 +148,44 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 	}
 }
 
+func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	for _, tc := range []struct {
+		provider, model                                          string
+		source                                                   PricingRowSource
+		input, cached, output, wantInput, wantCached, wantOutput string
+	}{
+		{"openai-priority", "gpt-6.1-sol", "", "2", "0.1", "10", "4", "0.2", "20"},
+		{"openai-priority", "gpt-5.5", "", "5", "0.5", "30", "12.5", "1.25", "75"},
+		{"openai-priority", "gpt-5.5-2026-04-23", "", "5", "0.5", "30", "12.5", "1.25", "75"},
+		{"openai-priority", "openai/gpt-5.5", "", "5", "0.5", "30", "12.5", "1.25", "75"},
+		{"openai-priority", "gpt-5-mini", "", "0.25", "0.025", "2", "0.45", "0.045", "3.6"},
+		{"openai-priority", "openai/gpt-5-mini-2026-04-23", "", "0.25", "0.025", "2", "0.45", "0.045", "3.6"},
+		{"openai-ultrafast", "gpt-6.1-sol", "", "2", "0.1", "10", "12", "0.6", "60"},
+		{"openai-ultrafast", "gpt-6-luna", "", "0.25", "0.025", "2", "0.25", "0.025", "2"},
+		{"openai-priority", "unsupported-model", "", "2", "0.1", "10", "2", "0.1", "10"},
+		{"openai-priority", "gpt-6.1-sol", PricingRowSourceCustom, "2", "0.1", "10", "4", "0.2", "20"},
+		{"openai-ultrafast", "gpt-6.1-sol", PricingRowSourceCustom, "2", "0.1", "10", "12", "0.6", "60"},
+	} {
+		t.Run(tc.provider+"/"+tc.model+"/"+string(tc.source), func(t *testing.T) {
+			resolver := NewPricingResolver([]EffectivePricingRow{{
+				ModelPattern: tc.model,
+				Rates: ModelRates{
+					InputPerMTok:     money.MustParseDollars(tc.input),
+					CacheReadPerMTok: money.MustParseDollars(tc.cached),
+					OutputPerMTok:    money.MustParseDollars(tc.output),
+					Source:           tc.source,
+				},
+			}})
+			_, lookup, err := resolver.ResolveBilledAt(tc.provider, "reported-alias", tc.model, time.Time{})
+			require.NoError(t, err)
+			require.True(t, lookup.OK)
+			assert.Equal(t, money.MustParseDollars(tc.wantInput), lookup.Rates.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.wantCached), lookup.Rates.CacheReadPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.wantOutput), lookup.Rates.OutputPerMTok)
+		})
+	}
+}
+
 func TestResolveBilledSortsEqualRateRecordsByAdjustment(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "zero-model",

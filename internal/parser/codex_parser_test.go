@@ -4017,3 +4017,66 @@ func TestParseCodexSession_ArrayOutputKeepsRawJSON(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, output, msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
+
+func TestCodexServiceTierMessages(t *testing.T) {
+	settings := func(tier string) string {
+		return `{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"` + tier + `"}}}`
+	}
+	turn := func(id string) string {
+		return `{"type":"turn_context","payload":{"turn_id":"` + id + `"}}`
+	}
+	inFlight := func(output string) []string {
+		return []string{
+			testjsonl.CodexSessionMetaJSON("in-flight", "/workspace", "user", tsEarly),
+			turn("first"), settings("priority"), output, settings("default"),
+			testjsonl.CodexMsgJSON("assistant", "finished", tsEarlyS5),
+			turn("second"), testjsonl.CodexMsgJSON("assistant", "next answer", tsLate),
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  []string
+	}{
+		{"tier changes", []string{
+			testjsonl.CodexSessionMetaJSON("tier-1", "/tmp", "user", tsEarly),
+			settings("priority"),
+			testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "answer", tsEarlyS5),
+			testjsonl.CodexFunctionCallJSON("shell", "run command", tsLate),
+			turn("second"), settings("ultrafast"),
+			testjsonl.CodexMsgJSON("assistant", "after tier change", tsLate),
+			turn("third"), settings("unknown"),
+			testjsonl.CodexMsgJSON("assistant", "after reset", tsLateS5),
+			settings("priority"), settings(""),
+			testjsonl.CodexMsgJSON("assistant", "missing tier", tsLateS5),
+		}, []string{"", "openai-priority", "openai-priority", "openai-ultrafast", "", ""}},
+		{"fork replay", []string{
+			`{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent","cwd":"/workspace"}}`,
+			testjsonl.CodexSessionMetaJSON("parent", "/workspace", "user", tsEarly),
+			turn("parent-turn"), settings("priority"), turn("child-turn"),
+			testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
+		}, []string{"openai-priority"}},
+		{"in-flight after message", inFlight(testjsonl.CodexMsgJSON("assistant", "working", tsEarlyS1)),
+			[]string{"openai-priority", "", ""}},
+		{"in-flight after tool call", inFlight(testjsonl.CodexFunctionCallJSON("shell", "run command", tsEarlyS1)),
+			[]string{"openai-priority", "", ""}},
+		{"in-flight after reasoning", inFlight(`{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`),
+			[]string{"", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newCodexSessionBuilder(t.Context(), AgentCodex, false, func(string) (map[string]struct{}, bool) {
+				return map[string]struct{}{"parent-turn": {}}, true
+			}, NewCodexCollectingSink(0))
+			for _, line := range tc.lines {
+				_, err := b.processLine(t.Context(), line)
+				require.NoError(t, err)
+			}
+			var got []string
+			for _, message := range b.sink.Messages() {
+				got = append(got, message.ProviderID)
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
