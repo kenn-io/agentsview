@@ -1291,10 +1291,8 @@ ______________________________________________________________________
 
 ### `agentsview pg serve`
 
-Start a PostgreSQL-backed session web UI. The HTTP session API is read-only by
-default; `--push-watch` enables local ingestion and
-publishing in the same process. On a writable PostgreSQL schema, the same
-server also registers the
+Start a read-only session web UI backed by PostgreSQL. On a writable PostgreSQL
+schema, the same server also registers the
 [hosted raw-sync control plane](/docs/hosted-raw-sync/#http-control-plane). See
 [PostgreSQL Sync](/docs/pg-sync/) for full server documentation.
 
@@ -1302,13 +1300,14 @@ server also registers the
 agentsview pg serve [flags]
 ```
 
-For a mounted-session deployment, add `--push-watch` to ingest mounted roots
-into a persistent local SQLite archive and continuously publish to the default
-PG target in the same process. Optional `--embed` builds embeddings.
-`--debounce` (`30s`) and `--interval` (`15m`) control publication timing.
-These flags require `--push-watch`, which rejects `--no-sync` and hosted raw
-processing. Use the existing archive directory as `AGENTSVIEW_DATA_DIR`. See
-[single-process ownership and shutdown](/docs/pg-sync/#agentsview-pg-serve).
+```bash
+agentsview pg serve --push-watch
+```
+
+Use `--push-watch` to ingest mounted sessions and publish them in the same
+process; see
+[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for setup
+and shutdown.
 
 Accepts the same serve flags (`--host`, `--port`, `--proxy`, etc.) plus
 PostgreSQL configuration from `config.toml`. When the host's `[vector]` config

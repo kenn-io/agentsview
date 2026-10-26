@@ -202,6 +202,10 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
+Add `--push-watch` to ingest and publish the mounted session roots from the same
+container. Give the container a 40-second stop timeout so the final push can
+finish.
+
 ## Run
 
 The desktop app handles startup automatically: it attaches to an existing local

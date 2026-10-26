@@ -638,18 +638,14 @@ agentsview pg status --all     # show status for every configured PG target
 agentsview pg serve            # serve web UI from the default PG target (read-only)
 ```
 
-For a mounted-session deployment, ingest roots, continuously push to
-PostgreSQL, and serve its UI in one process:
-
 ```bash
 AGENTSVIEW_DATA_DIR=/data agentsview pg serve --push-watch
 ```
 
-Persist the existing archive directory, including `config.toml` and installation
-identity. Add `--embed` to build embeddings in the watcher;
-`--debounce` and `--interval` control publication timing. The archive needs
-exclusive local writer ownership. See [ownership, shutdown, and semantic-search
-startup](docs/pg-sync.md#agentsview-pg-serve).
+Use `--push-watch` to ingest mounted sessions and serve them from PostgreSQL in
+one process; see
+[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for setup
+and shutdown.
 
 Opt-in [hosted raw processing](docs/hosted-raw-sync.md) lets `pg serve` parse
 uploaded sources directly into PostgreSQL. It requires explicit tenant/schema

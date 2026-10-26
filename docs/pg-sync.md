@@ -480,40 +480,20 @@ The session HTTP API is read-only. Local sync and file watching run only when
 view. The same deployment also serves the analytics dashboard and the Usage page
 from PostgreSQL-backed queries.
 
-With mounted session roots, a server can ingest and publish them in the same
-process:
-
 ```bash
 AGENTSVIEW_DATA_DIR=/data agentsview pg serve --push-watch
 # Add --embed to build and publish embeddings.
 ```
 
-Persist `/data`, including `config.toml`, installation identity, `sessions.db`,
-and `vectors.db` when present. To replace an existing `pg push --watch`, stop
-that collector and select its existing directory as `AGENTSVIEW_DATA_DIR`.
-The normal configuration loader preserves its identity, roots, provider metadata,
-and explicit machine overrides. Network and PG settings use the usual serve
-flags and environment; persisted ordinary serve/proxy settings remain ignored.
-Use the real archive directory path; runtime publication rejects a symlink
-at the data directory itself. Symlinked session roots remain supported.
-Deploy this mode only after upgrading to an upstream release containing it.
+`--push-watch` ingests mounted roots and publishes to the default PG target in
+the same process. The data directory is the persistent archive; stop any other
+writer using it before starting.
 
-The watcher uses the mounted roots, provider metadata, effective default PG
-target, environment overrides, and project filters from the serve configuration.
-It requires exclusive local archive ownership and never launches a daemon.
-Stop any other writer or `pg push --watch` using that archive first. Shutdown
-cancels and joins ingestion and embedding work before releasing ownership,
-including the existing final push with a 30-second limit.
-
-`--debounce` defaults to `30s`; `--interval` defaults to `15m`. Both
-controls and `--embed` require `--push-watch`.
-`--push-watch` rejects `--no-sync` and hosted
-`raw_tenant`/`raw_derivation` configurations. Standalone
-`pg push --watch` remains available.
-
-When `--embed` publishes the first vector generation, the combined process
-refreshes semantic search automatically. Restart `pg serve` only when changing
-the embedding configuration itself.
+`--embed`, `--debounce` (default `30s`), and `--interval` (default `15m`) require
+`--push-watch`. It rejects `--no-sync` and hosted `raw_tenant`/`raw_derivation`
+configurations. The first published vector generation enables semantic search
+without a restart when vector search is configured. Shutdown waits for ingestion
+and embedding work, including a final push limited to 30 seconds.
 
 When the PostgreSQL role can write the raw-sync tables and ingest-job sequence,
 `pg serve` also registers the
