@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -19,27 +20,60 @@ import (
 
 var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-func runProjects(ctx context.Context, jsonOutput bool) {
+func runProjects(cmd *cobra.Command, jsonOutput bool) {
+	projects, err := readProjects(cmd)
+	if err != nil {
+		fatal("listing projects: %v", err)
+	}
+	writeProjects(projects, jsonOutput)
+}
+
+func readProjects(cmd *cobra.Command) ([]db.ProjectInfo, error) {
+	ctx := cmd.Context()
+	target, err := resolveReadTarget(cmd, readTargetDefault)
+	if err != nil {
+		return nil, err
+	}
+	if target.isHTTP() {
+		projects, err := fetchHTTPProjects(ctx, transport{URL: target.URL, httpClient: target.client}, target.Cred, false, false)
+		return projects, target.remoteError(err)
+	}
+	if target.Kind == readTargetPG {
+		cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
+		if err != nil {
+			return nil, err
+		}
+		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
+		if err != nil {
+			return nil, err
+		}
+		store, cleanup, err := openPGReadStore(cfg, pgCfg)
+		defer closeArchiveQueryBackend(cleanup)
+		if err != nil {
+			return nil, err
+		}
+		return store.GetProjects(ctx, false, false)
+	}
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
 	tr, err := ensureTransport(&appCfg, transportIntentRead, 0)
 	if err != nil {
-		fatal("resolving transport: %v", err)
+		return nil, err
 	}
 	if tr.Mode != transportHTTP {
-		fatal("resolving transport: expected daemon transport")
+		return nil, errors.New("resolving transport: expected daemon transport")
 	}
 	projects, err := fetchHTTPProjects(
 		ctx, tr, appCfg.AuthToken, false, false,
 	)
 	if err != nil {
-		fatal("listing projects: %v", err)
+		return nil, err
 	}
 
-	writeProjects(projects, jsonOutput)
+	return projects, nil
 }
 
 func fetchHTTPProjects(
@@ -49,7 +83,7 @@ func fetchHTTPProjects(
 	excludeOneShot bool,
 	excludeAutomated bool,
 ) ([]db.ProjectInfo, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, projectsHTTPClient)
+	api, err := transportAPIClient(tr, authToken, projectsHTTPClient)
 	if err != nil {
 		return nil, err
 	}

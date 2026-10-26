@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -309,7 +310,19 @@ func (Backend) OpenVectorSearcher(
 			"PG generation %d matches fingerprint %s but its chunk table is "+
 				"missing (interrupted push?)", genID, gen.Fingerprint), nil
 	}
-	return NewVectorSearcher(pgStore.DB(), genID, dim, maxInputChars, encode), "", nil
+	var createdAt time.Time
+	err = pgStore.DB().QueryRowContext(ctx, `
+SELECT created_at FROM vector_generations
+ WHERE id=$1 AND fingerprint=$2 AND dimension=$3`, genID, gen.Fingerprint, dim).Scan(&createdAt)
+	if errors.Is(err, sql.ErrNoRows) || isUndefinedTable(err) {
+		return nil, "PostgreSQL embedding generation changed during selection", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("pinning PG vector generation: %w", err)
+	}
+	searcher := NewVectorSearcher(pgStore.DB(), genID, dim, maxInputChars, encode).(*vectorSearcher)
+	searcher.fingerprint, searcher.createdAt = gen.Fingerprint, createdAt
+	return searcher, "", nil
 }
 
 // asStore unwraps the concrete PostgreSQL store a replica-neutral caller

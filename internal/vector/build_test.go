@@ -213,6 +213,14 @@ func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
 		"a successful full refresh and fill restore the completed revision")
 }
 
+// A source view may identify membership independently of Recall's explicit
+// extraction corpus. The generation's corpus fingerprint must take priority.
+type corpusViewSource struct{ UnitSource }
+
+func (corpusViewSource) EmbeddingCorpusFingerprint(context.Context) (string, error) {
+	return "unchanged-source-view", nil
+}
+
 func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 	ctx := t.Context()
 	ix, err := OpenSpec(
@@ -233,7 +241,7 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 		Model: "fake-model", Dimensions: 3,
 		Params: map[string]string{CorpusFingerprintParam: "extract-old"},
 	}
-	_, err = ix.Build(ctx, oldSource, fakeBuildEncoder(), oldGeneration, BuildOptions{})
+	_, err = ix.Build(ctx, corpusViewSource{oldSource}, fakeBuildEncoder(), oldGeneration, BuildOptions{})
 	require.NoError(t, err)
 
 	newSource := &fakeUnitSource{rows: []fakeUnit{{
@@ -245,7 +253,7 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 		Params: map[string]string{CorpusFingerprintParam: "extract-new"},
 	}
 	result, err := ix.Build(
-		ctx, newSource, fakeBuildEncoder(), newGeneration, BuildOptions{},
+		ctx, corpusViewSource{newSource}, fakeBuildEncoder(), newGeneration, BuildOptions{},
 	)
 
 	require.NoError(t, err)

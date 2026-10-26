@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // ValidationScope selects the sections consumed by a command. Zero validates
@@ -50,7 +52,7 @@ func (c *Config) validateSections() error {
 			}
 			return nil
 		}},
-		{ScopeVector, "[vector]", c.Vector.Validate},
+		{ScopeVector, "[vector]", c.validateVector},
 		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
 		{ScopeInsights, "[insights]", c.Insights.Validate},
 		{ScopeServer, "[friction]", c.Friction.Validate},
@@ -90,4 +92,16 @@ type targetValidationError struct{ error }
 
 func invalidTargetLayout(format string, args ...any) error {
 	return &targetValidationError{fmt.Errorf(format, args...)}
+}
+
+func (c *Config) validateVector() error {
+	if c.Vector.Enabled && c.Vector.Producer == "remote" {
+		if strings.TrimSpace(c.Remote.URL) == "" {
+			return errors.New("[remote].url is required for vector producer=remote")
+		}
+		if strings.TrimSpace(c.Remote.SpokeHost) == "" {
+			return errors.New("[remote].spoke_host is required for vector producer=remote")
+		}
+	}
+	return c.Vector.Validate()
 }

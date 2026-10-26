@@ -489,8 +489,8 @@ func countEmbeddingStoreUnits(
 }
 
 // runEmbeddingsBuildDirect acquires the vectors write lock, opens the
-// archive read-only (so it never competes with a daemon for the SQLite
-// write lock) and vectors.db read-write, and runs one build synchronously.
+// archive and vectors.db, and runs one build synchronously. Hub pulls and
+// local completion of retained imports reserve the archive writer.
 func runEmbeddingsBuildDirect(
 	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
 ) error {
@@ -499,12 +499,6 @@ func runEmbeddingsBuildDirect(
 		return err
 	}
 	defer lock.Close()
-
-	archiveDB, err := openReadOnlyDB(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("opening archive database: %w", err)
-	}
-	defer archiveDB.Close()
 
 	spec, err := vectorStoreSpec(req.Store)
 	if err != nil {
@@ -519,9 +513,38 @@ func runEmbeddingsBuildDirect(
 	}
 	defer ix.Close()
 
-	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
+	openArchive := openReadOnlyDB
+	if spec.Name == vector.MessageIndexSpec().Name {
+		needsReservation := cfg.Vector.Producer == "remote"
+		if !needsReservation && !req.RepairInvalid {
+			needsReservation, err = ix.HasPendingPull(ctx, vectorGeneration(cfg.Vector.Embeddings).Fingerprint())
+			if err != nil {
+				return err
+			}
+		}
+		if needsReservation {
+			stale, _, err := db.ArchiveResyncState(ctx, cfg.DBPath)
+			if err != nil {
+				return err
+			}
+			if stale {
+				return errors.New("archive data needs resync; restart the daemon before building vectors")
+			}
+			openArchive = openDB
+		}
+	}
+	archiveDB, err := openArchive(ctx, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening archive database: %w", err)
+	}
+	defer archiveDB.Close()
+
+	var encoders vector.EncoderSet
+	if cfg.Vector.Producer != "remote" || spec.Name == vector.RecallIndexSpec().Name {
+		encoders, err = vectorDocumentEncoderSet(cfg.Vector.Embeddings)
+		if err != nil {
+			return err
+		}
 	}
 
 	m := embeddingManager(ix, archiveDB, encoders, cfg, spec.Name)
@@ -579,15 +602,30 @@ func embeddingManager(
 	cfg config.Config, store string,
 ) *vector.Manager {
 	if store != vector.RecallIndexSpec().Name {
+		if cfg.Vector.Producer == "remote" {
+			// Names remain valid --using inputs even though pulls do not construct
+			// document encoders or require a query endpoint.
+			encoders.ByName = maps.Clone(encoders.ByName)
+			if encoders.ByName == nil {
+				encoders.ByName = map[string]vector.ManagedEncoder{}
+			}
+			for name := range cfg.Vector.Embeddings.Servers {
+				encoders.ByName[name] = vector.ManagedEncoder{}
+			}
+		}
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
 			Source: database, Generation: gen,
 			Space: vectorSpace(cfg.Vector.Embeddings, gen),
 		}
-		return vector.NewResolvingManager(
+		m := vector.NewResolvingManager(
 			ix, encoders, gen,
 			func(context.Context) (vector.BuildTarget, error) { return target, nil },
 		)
+		if cfg.Vector.Producer == "remote" {
+			m.SetDocumentBuildPolicy(hubProducerBuild(ix, database, cfg))
+		}
+		return m
 	}
 	return vector.NewResolvingManager(
 		ix,

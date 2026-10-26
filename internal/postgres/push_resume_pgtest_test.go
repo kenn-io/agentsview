@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -209,55 +210,75 @@ func (e interruptingVectorExport) SessionDocs(
 	return e.VectorExport.SessionDocs(ctx, sessionID)
 }
 
-// A full push killed during its vector phase resumes there: the sessions and
-// the vectors it already pushed are not sent again.
+// A resumed full push trusts vector checkpoints only for a certified publisher.
+// Session checkpoints remain reusable before vector certification.
 func TestFullPushResumesVectorPhase(t *testing.T) {
-	s, local, _ := newVectorPushTestSync(t, testPGURL(t), "agentsview_push_resume_vector_test")
-	seedVectorSession(t, local, "A")
-	seedVectorSession(t, local, "B")
-	ctx, kill := context.WithCancel(t.Context())
-	defer kill()
-	var exported []string
-	source := interruptingVectorSource{
-		fakeVectorSource: &fakeVectorSource{
-			gen:    storage.VectorGenerationInfo{Fingerprint: "fp-resume", Model: "m", Dimension: 4},
-			hasGen: true,
-			hashes: map[string]string{"A": "ha", "B": "hb"},
-			docs: map[string][]storage.VectorPushDoc{
-				"A": {vdoc("A", "A#0", 0, "a", "h1", []float32{1, 0, 0, 0})},
-				"B": {vdoc("B", "B#0", 0, "b", "h2", []float32{0, 1, 0, 0})},
-			},
-		},
-		onDocs: func(id string) error {
-			if len(exported) == 1 {
-				kill()
-				return ctx.Err()
+	for _, certified := range []bool{false, true} {
+		t.Run(fmt.Sprintf("certified=%t", certified), func(t *testing.T) {
+			s, local, _ := newVectorPushTestSync(t, testPGURL(t), "agentsview_push_resume_vector_test")
+			seedVectorSession(t, local, "A")
+			seedVectorSession(t, local, "B")
+			ctx, kill := context.WithCancel(t.Context())
+			defer kill()
+			var exported []string
+			source := interruptingVectorSource{
+				fakeVectorSource: &fakeVectorSource{
+					gen:    storage.VectorGenerationInfo{Fingerprint: "fp-resume", Model: "m", Dimension: 4},
+					hasGen: true,
+					hashes: map[string]string{"A": "ha", "B": "hb"},
+					docs: map[string][]storage.VectorPushDoc{
+						"A": {vdoc("A", "A#0", 0, "a", "h1", []float32{1, 0, 0, 0})},
+						"B": {vdoc("B", "B#0", 0, "b", "h2", []float32{0, 1, 0, 0})},
+					},
+				},
+				onDocs: func(id string) error {
+					if len(exported) == 1 {
+						kill()
+						return ctx.Err()
+					}
+					exported = append(exported, id)
+					return nil
+				},
 			}
-			exported = append(exported, id)
-			return nil
-		},
-	}
-	s.vectorSource = source
-	_, err := s.Push(ctx, false, nil)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Len(t, exported, 1)
-	interrupted := exported[0]
+			if certified {
+				s.vectorSource = source.fakeVectorSource
+				_, err := s.Push(t.Context(), false, nil)
+				require.NoError(t, err)
+			}
+			s.vectorSource = source
+			_, err := s.Push(ctx, certified, nil)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Len(t, exported, 1)
+			interrupted := exported[0]
 
-	exported = nil
-	source.onDocs = func(id string) error {
-		exported = append(exported, id)
-		return nil
+			exported = nil
+			source.onDocs = func(id string) error {
+				exported = append(exported, id)
+				return nil
+			}
+			s.vectorSource = source
+			res, err := s.Push(t.Context(), false, nil)
+			require.NoError(t, err)
+			reason := "backfilling session aliases"
+			if certified {
+				reason = "requested"
+			}
+			assert.Equal(t, "resuming an unfinished full push, started because: "+reason, res.FullReason)
+			assert.Zero(t, res.SessionsPushed)
+			assert.Equal(t, 2, res.SkippedResumed)
+			if certified {
+				assert.Equal(t, 1, res.Vectors.SessionsPushed)
+				assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
+				assert.Len(t, exported, 1)
+				assert.NotContains(t, exported, interrupted)
+			} else {
+				assert.Equal(t, 2, res.Vectors.SessionsPushed)
+				assert.Zero(t, res.Vectors.SessionsUnchanged)
+				assert.ElementsMatch(t, []string{"A", "B"}, exported,
+					"an uncertified publisher must rewrite checkpointed coverage before certifying it")
+			}
+		})
 	}
-	s.vectorSource = source
-	res, err := s.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, "resuming an unfinished full push, started because: backfilling session aliases", res.FullReason)
-	assert.Zero(t, res.SessionsPushed)
-	assert.Equal(t, 2, res.SkippedResumed)
-	assert.Equal(t, 1, res.Vectors.SessionsPushed)
-	assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
-	assert.Len(t, exported, 1)
-	assert.NotContains(t, exported, interrupted)
 }
 
 // An explicit full push starts over instead of resuming an unfinished one,

@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 func recipeColumnExists(t *testing.T, pg *sql.DB) bool {
@@ -123,10 +124,17 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 		// dropColumn simulates tables created before recipe publication.
 		dropColumn bool
 		// revokeUpdate denies UPDATE on vector_generations.
-		revokeUpdate bool
+		revokeUpdate      bool
+		dropCompatibility bool
+		dropHashVersion   bool
+		dropSourceHash    bool
 	}{
 		{name: "cannot add the column", dropColumn: true},
 		{name: "cannot update the row", revokeUpdate: true},
+		{name: "cannot add compatibility columns", dropCompatibility: true},
+		{name: "cannot add chunk hash witness", dropHashVersion: true},
+		{name: "cannot add chunk source hash", dropSourceHash: true},
+		{name: "cannot add either provenance column", dropHashVersion: true, dropSourceHash: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			admin, err := Open(pgURL, schema, true)
@@ -140,9 +148,30 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			if unavailable != "" {
 				t.Skip(unavailable)
 			}
-			genID, err := ensureVectorGeneration(ctx, admin, "fp-role", "m", 4)
+			localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = localDB.Close() })
+			seedVectorSession(t, localDB, "A")
+			require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), "A", []db.Message{{SessionID: "A", Ordinal: 0, Role: "user", SourceUUID: "uuid", Content: "content", ContentLength: 7}}))
+			ix, err := vector.Open(t.Context(), filepath.Join(t.TempDir(), "vectors.db"), false, 8192)
+			require.NoError(t, err)
+			defer ix.Close()
+			source := builtVectorSource(t, ix, localDB, "m")
+			genID, err := ensureVectorGeneration(ctx, admin, source.gen.Fingerprint, source.gen.Model, 4)
 			require.NoError(t, err)
 			require.NoError(t, ensureVectorChunkTable(ctx, admin, genID, 4))
+			if tc.dropCompatibility {
+				_, err = admin.ExecContext(t.Context(), `ALTER TABLE vector_generation_machines DROP COLUMN data_version, DROP COLUMN include_automated`)
+				require.NoError(t, err)
+			}
+			if tc.dropHashVersion {
+				_, err = admin.ExecContext(ctx, `ALTER TABLE vector_generation_machines DROP COLUMN chunk_hash_version`)
+				require.NoError(t, err)
+			}
+			if tc.dropSourceHash {
+				_, err = admin.ExecContext(ctx, `ALTER TABLE `+vectorChunkTable(genID)+` DROP COLUMN source_hash`)
+				require.NoError(t, err)
+			}
 			if tc.dropColumn {
 				_, err = admin.Exec(`ALTER TABLE vector_generations DROP COLUMN params`)
 				require.NoError(t, err)
@@ -162,15 +191,16 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 				`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
 				`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + schema + ` TO ` + role,
 			}
-			// The writer owns the tables whose indexes every vector push
-			// re-declares (CREATE INDEX IF NOT EXISTS needs ownership), as a
-			// writer that pushes vectors on main must; vector_generations
-			// stays with the admin, so the writer cannot alter it.
+			// Provisioned tables and indexes remain usable by the writer.
+			// Keep the optional-migration targets admin-owned so their ALTERs
+			// fail with the same privileges a legacy publisher already had.
 			for _, table := range []string{
 				"vector_documents", "vector_push_state",
 				"vector_generation_machines", vectorChunkTable(genID),
 			} {
-				grants = append(grants, `ALTER TABLE `+table+` OWNER TO `+role)
+				if (table != "vector_generation_machines" || !tc.dropCompatibility && !tc.dropHashVersion) && (table != vectorChunkTable(genID) || !tc.dropSourceHash) {
+					grants = append(grants, `ALTER TABLE `+table+` OWNER TO `+role)
+				}
 			}
 			// pgvector's types and operator classes live wherever the
 			// extension was first installed in this database.
@@ -192,19 +222,16 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = restricted.Close() })
 
-			localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = localDB.Close() })
-			seedVectorSession(t, localDB, "A")
 			sync := &Sync{
 				pg: restricted, local: localDB, machine: "test-machine",
 				schema: schema, schemaDone: true,
 			}
-			sync.vectorSource = recipeSource("fp-role", map[string]string{"query_prefix": "query: "})
+			sync.vectorSource = source
 
 			pushed, err := sync.Push(ctx, false, nil)
 			require.NoError(t, err)
 			res := pushed.Vectors
+
 			assert.False(t, res.Skipped, res.SkippedReason)
 			assert.Equal(t, 1, res.SessionsPushed)
 			assert.Equal(t, 1, countRows(t, admin,
@@ -212,8 +239,48 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			gens, err := ListVectorGenerationInfo(ctx, admin)
 			require.NoError(t, err)
 			require.Len(t, gens, 1)
-			assert.Nil(t, gens[0].Params, "params stay NULL for a writer that cannot publish")
+			if tc.dropCompatibility || tc.dropHashVersion || tc.dropSourceHash {
+				assert.NotNil(t, gens[0].Params, "recipe publication retains its original privilege")
+				store := &Store{pg: admin}
+				setHubTestSearcher(t, store, genID)
+				metadata, err := store.HubVectorGeneration(ctx)
+				require.NoError(t, err)
+				assert.NotEmpty(t, metadata.Unavailable, "legacy writes cannot certify missing compatibility")
+			} else {
+				assert.Nil(t, gens[0].Params, "params stay NULL for a writer that cannot publish")
+			}
 			assert.Equal(t, !tc.dropColumn, recipeColumnExists(t, admin))
+			if tc.dropCompatibility || tc.dropHashVersion || tc.dropSourceHash {
+				store := &Store{pg: admin}
+				setHubTestSearcher(t, store, genID)
+				_, err = store.LookupHubVectors(ctx, vector.HubLookupRequest{Fingerprint: source.gen.Fingerprint, Identities: []vector.HubIdentity{{SessionID: "A", UnitKind: "user", ContentHash: source.docs["A"][0].ContentHash}}})
+				require.ErrorIs(t, err, vector.ErrHubGenerationChanged)
+				// Legacy witnesses still support scoped writes and full retries.
+				_, err = sync.pushVectors(ctx, false, []string{"A"}, genID, nil, nil)
+				require.NoError(t, err)
+				_, err = sync.Push(ctx, true, nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, countRows(t, admin, `SELECT count(*) FROM `+vectorChunkTable(genID)))
+				if !tc.dropCompatibility {
+					include := !*source.gen.IncludeAutomated
+					source.gen.IncludeAutomated = &include
+					changed, err := sync.pushVectors(ctx, false, []string{"A"}, genID, nil, nil)
+					require.NoError(t, err)
+					require.Equal(t, 1, changed.SessionsPushed, "changed scope must reconcile even without hash proof")
+					var stored bool
+					require.NoError(t, admin.QueryRowContext(ctx, `SELECT include_automated FROM vector_generation_machines WHERE generation_id=$1`, genID).Scan(&stored))
+					require.Equal(t, include, stored, "supported metadata must not freeze on the legacy path")
+				}
+				// An owner upgrade certifies only after a complete publication.
+				upgraded := &Sync{pg: admin, local: localDB, machine: "test-machine", schema: schema, schemaDone: true, vectorSource: source}
+				_, err = upgraded.Push(ctx, true, nil)
+				require.NoError(t, err)
+				store = &Store{pg: admin}
+				setHubTestSearcher(t, store, genID)
+				metadata, err := store.HubVectorGeneration(ctx)
+				require.NoError(t, err)
+				require.Empty(t, metadata.Unavailable)
+			}
 		})
 	}
 }

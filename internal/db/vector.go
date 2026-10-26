@@ -2,8 +2,58 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 )
+
+// EmbeddingDataVersion reports the persisted parser version of a ready,
+// uniform source corpus. Zero means pending, mixed, or unknown provenance.
+// It does not certify the running binary's version or change archive state.
+func (db *DB) EmbeddingDataVersion(ctx context.Context, includeAutomated bool) (int, error) {
+	if db.NeedsResync() {
+		return 0, nil
+	}
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	return embeddingDataVersion(ctx, tx, includeAutomated)
+}
+
+// Both columns are NOT NULL in the original schema and their legacy migrations.
+// Separate ranges let SQLite seek each automation partition without scanning
+// current rows or stale automated rows excluded from this embedding corpus.
+const embeddingReadinessQuery = `SELECT
+ EXISTS (SELECT 1 FROM stats WHERE key='scoped_upgrade_pending') OR
+ EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+   AND is_automated=0 AND data_version<?2) OR
+ EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+   AND is_automated=0 AND data_version>?2) OR
+ (?1 AND (
+   EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+     AND is_automated=1 AND data_version<?2) OR
+   EXISTS (SELECT 1 FROM sessions WHERE deleted_at IS NULL
+     AND is_automated=1 AND data_version>?2)))`
+
+func embeddingDataVersion(ctx context.Context, source interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, includeAutomated bool,
+) (int, error) {
+	version, _, err := readUserVersion(ctx, source)
+	if err != nil {
+		return 0, err
+	}
+	if version > dataVersion {
+		return 0, &DataVersionTooNewError{DatabaseVersion: version, BinaryVersion: dataVersion}
+	}
+	var pending bool
+	err = source.QueryRowContext(ctx, embeddingReadinessQuery, includeAutomated, version).Scan(&pending)
+	if err != nil || pending || version <= 0 {
+		return 0, err
+	}
+	return version, nil
+}
 
 // ErrSemanticUnavailable is returned by SearchContent for modes "semantic"
 // and "hybrid" when no VectorSearcher has been wired in (SetVectorSearcher

@@ -413,11 +413,18 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 }
 
 func (db *DB) GetDatabaseID(ctx context.Context) (string, error) {
+	return getDatabaseID(ctx, db.getReader())
+}
+
+func getDatabaseID(ctx context.Context, source interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+},
+) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	var id string
-	err := db.getReader().QueryRowContext(ctx,
+	err := source.QueryRowContext(ctx,
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
 	).Scan(&id)
