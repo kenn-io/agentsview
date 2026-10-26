@@ -2378,6 +2378,8 @@ text, paths, and identifiers stay out of outcome properties.
 Every event contains only:
 
 - app version and git commit
+- the distribution that built the binary, such as `homebrew` for Homebrew or
+  `kenn` for official downloads; empty for source builds
 - operating system and CPU architecture
 - the application-owned installation ID stored in
   `~/.agentsview/telemetry-install-id`

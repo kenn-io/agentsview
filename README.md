@@ -831,7 +831,8 @@ name), each with one value from a fixed list in the server that drops anything
 else. All events use a stable random install ID as the event `DistinctId`.
 [Feature outcomes](docs/configuration.md#anonymous-daemon-telemetry) also count
 empty searches, visible errors, and failed sync attempts. The events include
-`application=agentsview`, app version, commit, OS, and CPU architecture, with
+`application=agentsview`, app version, commit, distribution (such as `homebrew`;
+empty for source builds), OS, and CPU architecture, with
 `$process_person_profile=false` and `$geoip_disable=true`. It does not include
 session, project, prompt, file path, account, or machine identity. Disable
 telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
