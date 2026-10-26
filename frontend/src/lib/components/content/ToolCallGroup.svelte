@@ -152,14 +152,14 @@
 
 <style>
   .tool-group {
-    border-left: 3px solid var(--accent-amber);
+    border-left: calc(var(--role-tool-bar-width) + 1px) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
     padding: 8px 12px;
   }
   .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .gear-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--accent-amber); }
-  .group-label { font-size: 12px; font-weight: 600; color: var(--accent-amber); }
+  .gear-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-accent); }
+  .group-label { font-size: 12px; font-weight: 600; color: var(--role-tool-ink); }
   .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; }
   .tool-group:hover :global(.kit-copy-btn) { opacity: 1; }
   .tool-group-body { display: flex; flex-direction: column; gap: 2px; }

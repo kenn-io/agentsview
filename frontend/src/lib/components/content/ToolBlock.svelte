@@ -361,7 +361,7 @@
 <style>
   .search-output-hint { color: var(--text-muted); font-size: 10px; margin-inline-start: auto; }
   .tool-block {
-    border-left: 2px solid var(--accent-amber);
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     margin: 0;
@@ -378,7 +378,7 @@
   .tool-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
-  .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--accent-amber); white-space: nowrap; flex-shrink: 0; }
+  .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
   .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
     font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); padding: 2px 7px;

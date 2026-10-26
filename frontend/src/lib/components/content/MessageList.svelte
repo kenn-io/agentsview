@@ -1029,6 +1029,11 @@
 
   .layout-compact :global(.message) {
     padding: 6px 12px;
+    border-radius: 0;
+  }
+
+  /* Pattern mode keeps the full bar width, which the line patterns need. */
+  :global(:root:not([data-message-role-patterns])) .layout-compact :global(.message) {
     border-left-width: 2px;
     border-radius: 0;
   }
@@ -1075,15 +1080,20 @@
   }
 
   .layout-stream :global(.message) {
-    border-left: none;
     border-radius: 0;
     padding: 16px 24px;
+  }
+
+  /* Stream hides the role header, so pattern mode keeps the patterned bar
+     as the role marker. */
+  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message) {
+    border-left: none;
   }
 
   .layout-stream :global(.message.is-user) {
     background: color-mix(
       in srgb,
-      var(--accent-blue) 5%,
+      var(--role-user-accent) 5%,
       transparent
     ) !important;
   }

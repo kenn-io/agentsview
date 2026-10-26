@@ -1351,7 +1351,7 @@ organized into sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
-| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
@@ -1372,8 +1372,8 @@ load; a saved language preference takes precedence.
 
 ![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
-Language, theme, high contrast, message layout, zoom, block visibility, and
-Date ranges preferences use local storage in the current browser or desktop
+Language, theme, high contrast, message colors, message layout, zoom, block
+visibility, and Date ranges preferences use local storage in the current browser or desktop
 webview profile. Each profile keeps its own choices. The optional `zoom_level`
 setting supplies a default when no local zoom or text-size preference exists.
 
@@ -1435,6 +1435,31 @@ project palette or **Matplotlib** for its gray-free categorical families. This
 setting is server-wide rather than browser-local, so all clients connected to
 the same server use the same palette. You can change it even when the server
 reads from a read-only store such as PostgreSQL, ClickHouse, or DuckDB.
+
+### Message Colors
+
+**Message colors** in Settings > Appearance sets the color of each message
+type: user messages, assistant text, thinking blocks, tool calls, and code
+blocks. It helps readers who cannot easily tell the default blue and purple
+apart.
+
+- **Color-blind safe** applies hues that stay distinct with the common forms
+  of color blindness: blue for user messages and vermillion for assistant
+  text. It also turns on line patterns.
+- **Mark message types with line patterns** gives each type its own bar:
+  solid for user messages, double for assistant text, dotted for thinking,
+  and dashed for tool calls. Code blocks get a dashed frame when they have a
+  custom color. Types then differ by shape, not only by color. The patterns
+  also stay visible in the Stream layout, which hides the role header.
+- Each type has a color picker, a hex field, and quick-pick swatches. One
+  color applies to light, dark, and high-contrast modes. The message
+  background is a light tint of the color, and the label text is the color
+  mixed toward the theme's text color.
+- When a color would make label text hard to read (below 4.5:1) or the color
+  bar hard to see (below 3:1) in any mode, the setting names the modes and
+  the measured ratio. The color still applies, so you can decide.
+- **Reset** restores one type's theme color. **Reset to defaults** restores
+  every type and turns off patterns.
 
 ### Iframe Embedding
 

@@ -17,6 +17,12 @@ The latest release is
   expensive requests first on request. It reads the archive as stored and does
   not refresh source files first.
 
+- You can now set the color of each message type in Settings > Appearance:
+  user messages, assistant text, thinking blocks, tool calls, and code blocks.
+  A color-blind safe preset and optional line patterns make the types easy to
+  tell apart without relying on hue. The setting warns when a chosen color
+  would make text hard to read in light, dark, or high-contrast mode.
+
 - PostgreSQL and ClickHouse push services can use a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons
   and archive write locks during restarts. The push service exits if no writable

@@ -364,7 +364,7 @@ describe("MessageContent", () => {
     await render(message({ role: "user", content: "Do not translate this prompt." }));
     expect(text(".role-label")).toBe("用户");
     expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
-      "var(--accent-blue-foreground)",
+      "var(--role-user-accent-foreground)",
     );
     expect(document.querySelector('button[aria-label="复制消息"]')?.getAttribute("title")).toBe(
       "复制消息",
@@ -398,7 +398,7 @@ describe("MessageContent", () => {
   it("uses the assistant accent foreground", async () => {
     await render();
     expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
-      "var(--accent-purple-foreground)",
+      "var(--role-assistant-accent-foreground)",
     );
   });
   it("shows the missing context placeholder", async () => {

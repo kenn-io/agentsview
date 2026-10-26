@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import { SettingsService } from "../../api/generated/index";
+import { messageColors } from "../../stores/messageColors.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -47,6 +48,7 @@ describe("AppearanceSettings", () => {
   });
 
   afterEach(() => {
+    messageColors.applyPreset("default");
     ui.setZoomLevel(100);
     ui.renderUnknownXmlBlocksAsPreformatted = false;
     if (ui.highContrast) ui.toggleHighContrast();
@@ -218,5 +220,64 @@ describe("AppearanceSettings", () => {
     await waitFor(() =>
       expect(getByRole("radio", { name: "Matplotlib" }).getAttribute("aria-checked")).toBe("true"),
     );
+  });
+
+  describe("message colors", () => {
+    it("applies the color-blind preset to every role and turns on patterns", async () => {
+      const { getByRole, getAllByRole } = render(AppearanceSettings);
+      const reset = getByRole("button", { name: "Reset to defaults" }) as HTMLButtonElement;
+      expect(reset.disabled).toBe(true);
+
+      await fireEvent.click(getByRole("radio", { name: "Color-blind safe" }));
+
+      const userField = within(getByRole("group", { name: "Color for User messages" }));
+      expect(userField.getByRole("textbox", { name: "Hex color" })).toHaveProperty(
+        "value",
+        "#0072b2",
+      );
+      expect(
+        getByRole("checkbox", { name: "Mark message types with line patterns as well as color" }),
+      ).toHaveProperty("checked", true);
+      expect(getByRole("radio", { name: "Color-blind safe" }).getAttribute("aria-checked")).toBe(
+        "true",
+      );
+      expect(getAllByRole("button", { name: /^Reset color for / })).toHaveLength(5);
+      expect(reset.disabled).toBe(false);
+    });
+
+    it("warns which modes a hard-to-read color fails in", async () => {
+      const { getByRole, queryByText } = render(AppearanceSettings);
+      const group = within(getByRole("group", { name: "Color for User messages" }));
+      const hex = group.getByRole("textbox", { name: "Hex color" });
+
+      await fireEvent.input(hex, { target: { value: "#f0e442" } });
+      await fireEvent.change(hex, { target: { value: "#f0e442" } });
+
+      const warning = await waitFor(() => {
+        const node = queryByText(/color marker may be hard to see/);
+        expect(node).not.toBeNull();
+        return node!;
+      });
+      expect(warning.textContent).toContain("light mode and high-contrast light mode");
+      expect(warning.textContent).toContain("needs 3:1");
+      expect(hex.getAttribute("aria-invalid")).toBe("true");
+      expect(document.getElementById(hex.getAttribute("aria-describedby")!)?.textContent).toContain(
+        "hard to see",
+      );
+      expect(getByRole("radio", { name: "Custom" }).getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("resets one role back to the theme color", async () => {
+      messageColors.setColor("tool", "#f0e442");
+      const { getByRole, queryByText } = render(AppearanceSettings);
+
+      await fireEvent.click(getByRole("button", { name: "Reset color for Tool calls" }));
+
+      const group = within(getByRole("group", { name: "Color for Tool calls" }));
+      // --accent-amber in the light theme.
+      expect(group.getByRole("textbox", { name: "Hex color" })).toHaveProperty("value", "#d97706");
+      expect(queryByText(/hard to see|hard to read/)).toBeNull();
+      expect(messageColors.isDefault).toBe(true);
+    });
   });
 });

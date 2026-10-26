@@ -113,8 +113,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 
   let showText = $derived(ui.isBlockVisible(isUser ? "user" : "assistant"));
-  let accentColor = $derived(isUser ? "var(--accent-blue)" : "var(--accent-purple)");
-  let accentForeground = $derived(isUser ? "var(--accent-blue-foreground)" : "var(--accent-purple-foreground)");
+  let accentColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
+  let accentForeground = $derived(isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
+  let roleInk = $derived(isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
   let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
@@ -222,7 +223,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 <div class="message" class:is-user={isUser} class:compact style:border-left-color={accentColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
-    <span class="role-label" style:color={accentColor}>{roleLabel}</span>
+    <span class="role-label" style:color={roleInk}>{roleLabel}</span>
     <CopyButton revealOnHover {copied} ariaLabel={m.message_content_copy_message()}
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />
@@ -337,7 +338,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 </div>
 
 <style>
-  .message { border-left: 4px solid; padding: 14px 20px; border-radius: 0 var(--radius-md) var(--radius-md) 0; }
+  .message {
+    border-left: var(--role-assistant-bar-width) var(--role-assistant-bar-style);
+    padding: 14px 20px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  }
+  .message.is-user { border-left: var(--role-user-bar-width) var(--role-user-bar-style); }
   .message-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .role-icon {
     width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
@@ -402,7 +407,10 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-inset);
     border: 1px solid var(--border-muted); border-radius: 4px; padding: 0.15em 0.4em;
   }
-  .markdown :global(pre:not(.unknown-xml-block)) { background: var(--code-bg); color: var(--code-text); border-radius: var(--radius-md); padding: 12px 16px; overflow-x: auto; margin: 0.5em 0; }
+  .markdown :global(pre:not(.unknown-xml-block)) {
+    background: var(--code-bg); color: var(--code-text); border-radius: var(--radius-md); padding: 12px 16px; overflow-x: auto; margin: 0.5em 0;
+    border: var(--role-code-frame-width) var(--role-code-frame-style) var(--role-code-accent);
+  }
   .markdown :global(pre code) { background: none; border: none; padding: 0; font-size: 13px; color: inherit; }
   .markdown :global(blockquote) { border-left: 3px solid var(--border-default); margin: 0.5em 0; padding: 0.3em 1em; color: var(--text-secondary); }
   .markdown :global(ul), .markdown :global(ol) { padding-left: 1.6em; margin: 0.5em 0; }

@@ -66,6 +66,23 @@ function expectReadableContrast(colors: { background: string; foreground: string
   ).toBeGreaterThanOrEqual(4.5);
 }
 
+/** Resolves an element's computed color through a canvas, so color-mix()
+ * results compare as plain sRGB bytes on every engine. */
+async function resolvedColor(
+  locator: Locator,
+  property: string,
+): Promise<[number, number, number]> {
+  return locator.evaluate((element, name) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = getComputedStyle(element).getPropertyValue(name);
+    context.fillRect(0, 0, 1, 1);
+    const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+    return [r!, g!, b!] as [number, number, number];
+  }, property);
+}
+
 test.describe("Appearance accessibility", () => {
   test("keeps Quality semantic wrappers as rendered layout boxes", async ({ page }) => {
     let failSignals = false;
@@ -300,6 +317,50 @@ test.describe("Appearance accessibility", () => {
     const assistantRoleIcon = page.locator(".role-icon", { hasText: "A" }).first();
     await expect(assistantRoleIcon).toBeVisible();
     expectReadableContrast(await elementColors(assistantRoleIcon));
+  });
+
+  test("custom message colors render readably in every theme mode", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("theme", "light");
+      localStorage.setItem(
+        "agentsview-message-colors",
+        JSON.stringify({
+          colors: { user: "#0072b2", assistant: "#d55e00", tool: "#009e73" },
+          patterns: true,
+        }),
+      );
+    });
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+    const user = page.locator(".message.is-user").first();
+    const assistant = page.locator(".message:not(.is-user)").first();
+    await expect(user).toBeVisible();
+    await expect(assistant).toBeVisible();
+
+    for (const mode of [
+      { dark: false, highContrast: false },
+      { dark: true, highContrast: false },
+      { dark: false, highContrast: true },
+      { dark: true, highContrast: true },
+    ]) {
+      await page.evaluate(({ dark, highContrast }) => {
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.classList.toggle("high-contrast", highContrast);
+      }, mode);
+      const label = JSON.stringify(mode);
+      expect(await resolvedColor(user, "border-left-color"), label).toEqual([0, 114, 178]);
+      expect(await resolvedColor(assistant, "border-left-color"), label).toEqual([213, 94, 0]);
+      await expect(user).toHaveCSS("border-left-style", "solid");
+      await expect(assistant).toHaveCSS("border-left-style", "double");
+      for (const message of [user, assistant]) {
+        const ratio = contrastRatio(
+          await resolvedColor(message.locator(".role-label"), "color"),
+          await resolvedColor(message, "background-color"),
+        );
+        expect(ratio, label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });
 
