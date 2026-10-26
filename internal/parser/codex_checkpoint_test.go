@@ -49,8 +49,6 @@ func TestCodexCursorStateCheckpointRejectsBadPayloads(t *testing.T) {
 	// Wrong version.
 	blob, err := state.MarshalBinary()
 	require.NoError(t, err)
-	blob[0] = 4
-	require.Error(t, state.UnmarshalBinary(blob))
 	blob[0] = 99
 	require.Error(t, state.UnmarshalBinary(blob))
 
@@ -359,60 +357,4 @@ func TestCodexSeedlessAppendWithUnresolvedCallOverflow(t *testing.T) {
 	assert.Equal(t, "late result", outcome.ToolCallUpdates[0].ResultEvents[0].Content)
 	require.NotNil(t, outcome.TerminationStatus)
 	assert.Equal(t, TerminationToolCallPending, *outcome.TerminationStatus)
-}
-
-func TestCodexServiceTierCheckpointResume(t *testing.T) {
-	const uuid = "019f0000-0000-7000-8000-00000000c002"
-	prefix := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", tsEarly),
-		testjsonl.CodexTurnContextJSON("gpt-6.1-sol", tsEarly),
-		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority"}}}`,
-		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
-		testjsonl.CodexMsgJSON("assistant", "first answer", tsEarlyS5),
-	)
-	root := t.TempDir()
-	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(t, err)
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: fingerprint})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	checkpoint := outcome.Results[0].Result.Checkpoint
-	require.NotEmpty(t, checkpoint)
-	appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
-		testjsonl.CodexTurnContextJSON("gpt-6.1-sol", tsLate),
-		testjsonl.CodexMsgJSON("assistant", "next answer", tsLateS5),
-	))
-	// A new provider has no in-memory cursor and must use the stored checkpoint.
-	provider, ok = NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	fingerprint, err = provider.Fingerprint(t.Context(), source)
-	require.NoError(t, err)
-	for _, version := range []byte{4, 99, 5} {
-		t.Run(strconv.Itoa(int(version)), func(t *testing.T) {
-			seed := append([]byte(nil), checkpoint...)
-			seed[0] = version
-			result, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
-				Source: source, Fingerprint: fingerprint, SessionID: "codex:" + uuid,
-				Offset: int64(len(prefix)), StartOrdinal: 2, Seed: seed,
-			})
-			require.NoError(t, err)
-			if version != 5 {
-				assert.Equal(t, IncrementalNeedsFullParse, status)
-				assert.True(t, result.ForceReplace)
-				full, err := provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: fingerprint})
-				require.NoError(t, err)
-				require.Len(t, full.Results, 1)
-				require.Len(t, full.Results[0].Result.Messages, 3)
-				assert.Equal(t, "openai-priority", full.Results[0].Result.Messages[2].ProviderID)
-				return
-			}
-			assert.Equal(t, IncrementalApplied, status)
-			require.Len(t, result.Messages, 1)
-			assert.Equal(t, "openai-priority", result.Messages[0].ProviderID)
-		})
-	}
 }

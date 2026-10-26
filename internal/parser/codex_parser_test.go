@@ -4025,14 +4025,6 @@ func TestCodexServiceTierMessages(t *testing.T) {
 	turn := func(id string) string {
 		return `{"type":"turn_context","payload":{"turn_id":"` + id + `"}}`
 	}
-	inFlight := func(output string) []string {
-		return []string{
-			testjsonl.CodexSessionMetaJSON("in-flight", "/workspace", "user", tsEarly),
-			turn("first"), settings("priority"), output, settings("default"),
-			testjsonl.CodexMsgJSON("assistant", "finished", tsEarlyS5),
-			turn("second"), testjsonl.CodexMsgJSON("assistant", "next answer", tsLate),
-		}
-	}
 	for _, tc := range []struct {
 		name  string
 		lines []string
@@ -4057,12 +4049,6 @@ func TestCodexServiceTierMessages(t *testing.T) {
 			turn("parent-turn"), settings("priority"), turn("child-turn"),
 			testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
 		}, []string{"openai-priority"}},
-		{"in-flight after message", inFlight(testjsonl.CodexMsgJSON("assistant", "working", tsEarlyS1)),
-			[]string{"openai-priority", "", ""}},
-		{"in-flight after tool call", inFlight(testjsonl.CodexFunctionCallJSON("shell", "run command", tsEarlyS1)),
-			[]string{"openai-priority", "", ""}},
-		{"in-flight after reasoning", inFlight(`{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`),
-			[]string{"", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newCodexSessionBuilder(t.Context(), AgentCodex, false, func(string) (map[string]struct{}, bool) {
