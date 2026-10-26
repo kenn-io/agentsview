@@ -1445,7 +1445,10 @@ apart.
 
 - **Color-blind safe** applies hues that stay distinct with the common forms
   of color blindness: blue for user messages and vermillion for assistant
-  text. It also turns on line patterns.
+  text. The hues are the Okabe-Ito colors behind matplotlib's
+  `seaborn-v0_8-colorblind` style. Thinking and code use darker versions of
+  its pink and yellow, because the originals are too faint on light themes.
+  The preset also turns on line patterns.
 - **Mark message types with line patterns** gives each type its own bar:
   solid for user messages, double for assistant text, dotted for thinking,
   and dashed for tool calls. Code blocks get a dashed frame when they have a

@@ -24,10 +24,12 @@ export type MessageColors = Partial<Record<MessageRole, string>>;
 export type MessageColorPreset = "default" | "colorblind";
 
 /**
- * Okabe-Ito hues, darkened where needed so each one clears every contrast
- * check below on both the light and the dark surface. Blue against
- * vermillion is the pair that stays apart under all common forms of color
- * blindness, so it marks the user and the assistant.
+ * Okabe-Ito hues, the colors behind matplotlib's seaborn-v0_8-colorblind
+ * style. User, assistant, and tool use them unchanged. Thinking and code
+ * darken its pink (#cc79a7) and yellow (#f0e442), which fail the contrast
+ * checks below on light surfaces. Blue against vermillion is the pair that
+ * stays apart under all common forms of color blindness, so it marks the
+ * user and the assistant.
  */
 export const COLORBLIND_COLORS: Readonly<Record<MessageRole, string>> = {
   user: "#0072b2",
