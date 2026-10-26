@@ -34,6 +34,8 @@ The latest release is
 
 **Bug fixes**
 
+- Usage notes keep a straight accent on the leading edge of the card. The
+  accent no longer bends around the card's rounded corners.
 - Foreground `agentsview serve` now exits with status 1 when a server is already
   running so service managers retry. `serve --background` and `daemon start`
   still exit with status 0.

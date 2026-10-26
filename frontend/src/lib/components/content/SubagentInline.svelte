@@ -285,6 +285,8 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
 
   .subagent-messages {
     border-left: 3px solid var(--accent-green);
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
     margin: 0 0 4px 10px;
     display: flex;
     flex-direction: column;
