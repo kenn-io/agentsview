@@ -27,4 +27,5 @@ export * as StartupService from "./startup/startup.ts";
 export * as SyncService from "./sync/sync.ts";
 export * as TrendsService from "./trends/trends.ts";
 export * as UsageService from "./usage/usage.ts";
+export * as VectorsService from "./vectors/vectors.ts";
 export * from "./models/index.ts";

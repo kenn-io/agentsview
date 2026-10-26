@@ -3373,6 +3373,10 @@ type remoteSyncExclusiveRunner interface {
 	RunExclusive(func() error) error
 }
 
+type remoteSyncAttemptRunner interface {
+	RunExclusiveCtx(context.Context, func() error) error
+}
+
 type remoteSyncRunner func(
 	context.Context,
 	config.Config,
@@ -3382,13 +3386,12 @@ type remoteSyncRunner func(
 ) (remotesync.SyncStats, error)
 
 // remoteHostSyncFunc owns the HTTP cleanup registry around the engine lock.
-// Its injected transport must therefore run HTTP without acquiring that
-// registry recursively.
+// The transport must not reacquire the registry.
 func remoteHostSyncFunc(
 	ctx context.Context,
 	cfg config.Config,
 	database *db.DB,
-	runner remoteSyncExclusiveRunner,
+	runner remoteSyncAttemptRunner,
 	rh config.RemoteHost,
 	runRemote remoteSyncRunner,
 ) func() (int, error) {
@@ -3396,20 +3399,44 @@ func remoteHostSyncFunc(
 		if runner == nil {
 			return 0, errors.New("scheduled remote sync missing exclusive runner")
 		}
+		attemptCtx, cancel := remoteHostAttemptContext(ctx, cfg, database, rh)
+		defer cancel()
 		runExclusive := func() (remotesync.SyncStats, error) {
 			var stats remotesync.SyncStats
-			err := runner.RunExclusive(func() error {
+			err := runner.RunExclusiveCtx(attemptCtx, func() error {
 				var err error
 				stats, err = runRemote(
-					ctx, cfg, database, rh, database.NeedsResync(),
+					attemptCtx, cfg, database, rh, database.NeedsResync(),
 				)
 				return err
 			})
 			return stats, err
 		}
-		stats, err := httpRemoteCleanupRegistry.Run(runExclusive)
+		stats, err := httpRemoteCleanupRegistry.RunCtx(attemptCtx, runExclusive)
 		return stats.SessionsSynced, err
 	}
+}
+
+// remoteHostAttemptContext keeps first pulls and data rebuilds off the short
+// incremental deadline. Inspect at most one mirror entry, never the archive.
+func remoteHostAttemptContext(ctx context.Context, cfg config.Config, database *db.DB, rh config.RemoteHost) (context.Context, context.CancelFunc) {
+	timeout := rh.SyncTimeout
+	mirror, err := os.Open(remotesync.MirrorDir(cfg.DataDir, rh.Host))
+	empty := errors.Is(err, os.ErrNotExist)
+	if err == nil {
+		_, readErr := mirror.Readdirnames(1)
+		empty = errors.Is(readErr, io.EOF)
+		_ = mirror.Close()
+	}
+	pendingFull, journalErr := remotesync.PendingFullImport(cfg.DataDir, rh.Host)
+	importedVersion, versionErr := database.RemoteImportDataVersion(ctx, rh.Host)
+	if database.NeedsResync() || empty || pendingFull || journalErr != nil || versionErr != nil || importedVersion != db.CurrentDataVersion() {
+		timeout = rh.FullSyncTimeout
+	}
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
 }
 
 // runRemoteHostSyncLoop drives the per-host sync ticker. syncFn returns
@@ -3448,7 +3475,6 @@ func runRemoteHostSyncLoop(
 		}()
 		if err != nil {
 			log.Printf("scheduled remote sync %s: %v", host, err)
-			continue
 		}
 		if synced > 0 && emitter != nil {
 			emitter.Emit("sessions")

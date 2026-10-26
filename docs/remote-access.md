@@ -11,6 +11,19 @@ it. To make the UI available from other devices, you need to do two things:
 
 In current releases, bearer-token auth is controlled by `require_auth`.
 
+## Collect sessions on a hub
+
+A hub can pull configured SSH or HTTP hosts and publish their sessions with
+`agentsview pg push --watch --embed`. It does not need local session roots.
+The watcher imports hosts with a positive `interval` at startup and on that
+cadence. A zero or omitted `interval` means manual sync only. It owns the
+archive while running, so stop it before running a separate `agentsview sync`
+against that archive.
+
+See [PostgreSQL watch mode](/docs/pg-sync/#automatic-push-watcher) for the host
+configuration, per-attempt deadlines and one-shot import workflow. Embeddings
+run in the background and reach PostgreSQL on a later push floor.
+
 ## Quick Setup
 
 For a one-off background server, enable auth in `~/.agentsview/config.toml`:
@@ -85,6 +98,60 @@ load the HTML shell, but API requests fail with `401` until the correct token is
 supplied.
 
 When `require_auth` is disabled, normal local loopback use remains ungated.
+
+## Query a Hub From the CLI
+
+On unreleased `main`, configure a [default remote read target](/docs/configuration/#default-remote-reads)
+to query a hub without repeating `--server` and its token:
+
+```bash
+agentsview session list
+agentsview session get <id>
+agentsview session usage <id>
+agentsview doctor remote
+agentsview --local session list
+```
+
+The default applies to these read commands:
+
+| Command | Configured remote behavior |
+| --- | --- |
+| `session list/get/messages/tool-calls/search/usage` | Read the selected hub |
+| `usage daily/statusline` | Read archived hub usage |
+| `activity report` | Read hub activity, including session pages |
+| `projects`, `health` | Read the selected hub |
+| `stats` | Require the server's session-stats capability; otherwise return an error with a `--local` hint |
+| Recall reads, insight reads, MCP | Read the selected hub |
+| `export`, `token-use` | Read the local archive and print a notice on stderr |
+| `usage cursor`, other local-only commands | Keep their local behavior |
+
+`usage cursor` rejects `--server`, `--pg`, and `--server-token-file` before
+opening the local archive. Root `--local` remains accepted for local-only
+commands.
+
+`--server` and `--pg` select an explicit target ahead of `[remote]`. `--local`
+bypasses the default remote; it cannot be combined with either target flag.
+`doctor remote` reports the effective target, configuration origin, redacted
+URL, credential source and probe result. It never prints the credential.
+
+Usage and activity reads accept `--offline` and `--no-sync` for compatibility
+but ignore them for an HTTP target. They do not start a local daemon or sync
+source transcripts on the hub. An unavailable remote returns an error without
+falling back to local data. `export` and `token-use` keep their machine-readable
+stdout unchanged and never load the configured remote credential.
+
+For `mcp --profile memory` and `memory session-start --mode hosted-reader`,
+existing memory target variables take precedence over `[remote]`. Explicit
+target flags keep their existing priority, including `--pg=false` suppressing
+memory environment injection. `--local` suppresses that injection too. Local
+and hosted-contributor memory lifecycle modes ignore `[remote]`.
+
+Writes such as session sync, label and parent, insight generate and recall
+import require their existing explicit target selection. Local-only commands
+and `doctor memory` ignore `[remote]`. A remote read uses the remote credential
+rather than the local daemon's `auth_token`. Configured-remote session usage
+reads archived values without asking the hub to sync source transcripts;
+`--no-sync` is accepted and ignored for this target.
 
 ## HTTP Remote Sync
 
