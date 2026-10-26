@@ -242,6 +242,38 @@ func TestRefreshRescansRestoredSessionBehindWatermark(t *testing.T) {
 	assert.Equal(t, "restored content", content)
 }
 
+// A journaled session already visited by the watermark scan must not be
+// rescanned, which would mint #3 keys for duplicate source UUIDs.
+func TestRefreshJournalSkipsSessionVisitedByWatermarkScan(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	seedEndedSession(t, archive, "restored", "original content", "2024-01-01T00:00:00Z")
+	seedEndedSession(t, archive, "retained", "retained content", "2024-01-03T00:00:00Z")
+	ix := openTestIndex(t)
+	_, err := ix.Refresh(ctx, archive, true, false)
+	require.NoError(t, err)
+
+	removed, err := archive.DeleteParserExcludedSessions(ctx, []string{"restored"})
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+
+	// Restore after capturing the journal change, ahead of the watermark so
+	// both scan paths see the session with duplicate source UUIDs.
+	source := &restoredSessionSource{DB: archive, restore: func() {
+		first := dbtest.UserMsg("restored", 0, "first")
+		second := dbtest.UserMsg("restored", 1, "second")
+		first.SourceUUID, second.SourceUUID = "dup", "dup"
+		dbtest.SeedSessionWithMessages(t, archive, "restored", "project", []db.Message{first, second}, func(s *db.Session) {
+			s.EndedAt = new("2024-01-04T00:00:00Z")
+		})
+	}}
+	stats, err := ix.Refresh(ctx, source, false, false)
+	require.NoError(t, err)
+	assert.Nil(t, source.restore, "the journal must list the restored session")
+	assert.Equal(t, 2, stats.Upserted)
+	assert.Equal(t, []string{"o:retained:0", "u:restored:dup", "u:restored:dup#2"}, mirrorDocKeys(t, ix))
+}
+
 func TestRefreshReconcilesRestoredSessionBeforeDeletionIsConsumed(t *testing.T) {
 	archive := dbtest.OpenTestDB(t)
 	seed := func(id string, messages []db.Message, ended string) {
