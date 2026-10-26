@@ -601,8 +601,8 @@ authoritative, and fixed web-search fees remain at their published face value.
 Codex messages sent on the Fast or Ultrafast tier use LiteLLM's `_priority` or
 `_ultrafast` prices, including any request bands LiteLLM publishes for that
 tier. AgentsView reads the tier from the rollout's latest
-`thread_settings_applied` event. Tier prices arrive with the next pricing
-refresh. A model without a price for its tier, and any custom override, keeps
+`thread_settings_applied` event. The embedded catalog includes tier prices for
+offline use. A model without a price for its tier, and any custom override, keeps
 its standard rates.
 
 ### Copilot CLI Token Metrics

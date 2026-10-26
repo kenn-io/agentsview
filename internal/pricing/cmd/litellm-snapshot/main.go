@@ -40,12 +40,12 @@ func mustRate(dollars string) money.Money {
 }
 
 const (
-	defaultSnapshotRef      = "9c1bada7739dfe3dc07d282bc921147b4e5950ef"
-	defaultSnapshotSHA256   = "a9b59c9780c31c299a7049d5cc15d6dec6b4418cf6f5363f85c35e85c965d3ac"
+	defaultSnapshotRef      = "9f727dceb22e94d741faed106b50b5818eca2853"
+	defaultSnapshotSHA256   = "58c73f7bd2840f7cfbe26a434c30563f3e9856cd982f661f3881204e7486fdb5"
 	defaultSnapshotBranch   = "litellm-pricing-snapshot"
 	defaultSnapshotFile     = "litellm_snapshot.json.gz"
 	defaultSnapshotBaseURL  = "https://raw.githubusercontent.com/kenn-io/agentsview"
-	defaultLiteLLMSourceRef = "7d50a31eb5b080c29438f97be7701e117938ce88"
+	defaultLiteLLMSourceRef = "2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa"
 	// Retain retired catalog keys so older archived usage stays priceable.
 	retainedLiteLLMSourceRef = "418c7c6012d7c39a9d4a28c72cabe1995595ad2b"
 )

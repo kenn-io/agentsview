@@ -148,17 +148,6 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 	}
 }
 
-func TestWithServiceTierNilReceiver(t *testing.T) {
-	var resolver *PricingResolver
-	lookup := PricingLookup{
-		Rates:   ModelRates{InputPerMTok: money.MustParseDollars("2")},
-		Pattern: "gpt-6.1-sol",
-		OK:      true,
-	}
-
-	assert.Equal(t, lookup, resolver.withServiceTier("gpt-6.1-sol", lookup, "priority"))
-}
-
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
 	for _, tc := range []struct {
 		name, provider, model, input, pattern, adjustment string

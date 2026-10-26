@@ -48,14 +48,18 @@ both GPT-5.6 Luna price periods but not Grok 4.6, so the flat fallback remains
 necessary.
 
 Agentsview's flat fallback prices come from LiteLLM's
-[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/model_prices_and_context_window.json)
-at pinned commit `7d50a31eb5b080c29438f97be7701e117938ce88`. Models retired from
+[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa/model_prices_and_context_window.json)
+at pinned commit `2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa`. Models retired from
 that catalog retain their last embedded rates from
 [`418c7c6012d7c39a9d4a28c72cabe1995595ad2b`](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/model_prices_and_context_window.json).
 Current rows always win; the previous source fills only missing model keys. The
 generated bundle records both immutable refs as `source_ref` and
 `retained_source_ref`. This keeps older archived usage priceable without
 replacing current rates with stale ones.
+
+The embedded catalog includes LiteLLM's service-tier rows. For `gpt-6.1-sol`,
+priority costs $4 input, $0.20 cache read, and $20 output per million tokens;
+ultrafast costs $12, $0.60, and $60, respectively.
 
 The current catalog prices plain `gpt-6-astra` at $10 input, $50 output,
 $12.50 cache write, and $1 cache read per million tokens. Above 272k request
