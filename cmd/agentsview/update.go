@@ -134,10 +134,8 @@ func packageUpgradeHint(distribution string) string {
 	if distribution == "homebrew" {
 		return "Homebrew manages this installation; run `brew upgrade agentsview` instead"
 	}
-	return fmt.Sprintf(
-		"%s manages this installation; upgrade agentsview through it instead",
-		distribution,
-	)
+	return distribution +
+		" manages this installation; upgrade agentsview through it instead"
 }
 
 // managedUpdateError refuses a self-update of a package-managed binary so
