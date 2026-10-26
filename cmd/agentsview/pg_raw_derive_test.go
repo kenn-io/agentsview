@@ -131,7 +131,7 @@ func TestPGRawRuntimeReadinessFailureCleansBeforeReturn(t *testing.T) {
 			defer cancel()
 			startup := replicaServeStartup{cfg: cfg, ctx: ctx, srv: server.New(cfg, nil, nil), rtOpts: serveRuntimeOptions{Mode: "pg-serve", RequestedPort: cfg.Port}, cleanup: func() { cleaned.Store(true) }}
 			if watch {
-				require.NoError(t, attachReplicaServeWatch(&startup, cancel, pgReplica{}, nil, &replicaServeWatch{}))
+				require.NoError(t, attachReplicaServeWatch(&startup, cancel, pgReplica{}, nil, &ReplicaPushConfig{}))
 			}
 			startup.startWorker = func() { started.Store(true) }
 			require.Error(t, runPreparedReplicaServe("pg", startup))

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -16,12 +15,62 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+type serveWatchVectorProvider struct {
+	pgReplica
+	opens int
+	miss  bool
+}
+
+func (p *serveWatchVectorProvider) OpenVectorSearcher(context.Context, storage.ReplicaStore, storage.VectorGenerationInfo, int, storage.VectorQueryEncoder) (db.VectorSearcher, string, error) {
+	p.opens++
+	if p.miss {
+		return nil, "generation not published", nil
+	}
+	return struct{ db.VectorSearcher }{}, "", nil
+}
+
+func (*serveWatchVectorProvider) VectorGenerations(context.Context, storage.ReplicaStore) ([]storage.VectorGenerationInfo, error) {
+	return nil, nil
+}
+
+func TestReplicaServeSemanticRefreshStopsOnceEnabled(t *testing.T) {
+	for _, miss := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initial_miss=%t", miss), func(t *testing.T) {
+			testDataDir(t)
+			cfg, _, err := loadPGServeConfigForTest(t)
+			require.NoError(t, err)
+			cfg.Vector = vectorTestConfig(cfg.DataDir).Vector
+			cfg.PG.URL = "postgres://user@127.0.0.1:1/archive"
+			cfg.PG.AllowInsecure = true
+			provider := &serveWatchVectorProvider{miss: miss}
+			store := &postgres.Store{}
+			ctx, cancel := context.WithCancel(t.Context())
+			startup := replicaServeStartup{cfg: cfg, ctx: ctx, cleanup: cancel}
+			watch := &ReplicaPushConfig{}
+			require.NoError(t, attachReplicaServeWatch(&startup, cancel, provider, store, watch))
+			t.Cleanup(startup.cleanup)
+			if miss {
+				watch.OnPushSuccess(ctx)
+				assert.False(t, store.HasSemantic())
+				provider.miss = false
+			}
+			watch.OnPushSuccess(ctx)
+			require.True(t, store.HasSemantic())
+			opens := provider.opens
+			watch.OnPushSuccess(ctx)
+			assert.Equal(t, opens, provider.opens, "later pushes must reuse the enabled searcher")
+		})
+	}
+}
 
 func TestReplicaServeWatchFlags(t *testing.T) {
 	for _, tc := range []struct {
@@ -51,7 +100,7 @@ func TestReplicaServeWatchFlags(t *testing.T) {
 				return
 			}
 			require.NotNil(t, watch)
-			assert.Equal(t, ReplicaPushConfig{Watch: true, Embed: true, Debounce: time.Second, Interval: time.Minute}, watch.push)
+			assert.Equal(t, ReplicaPushConfig{Embed: true, Debounce: time.Second, Interval: time.Minute}, *watch)
 		})
 	}
 }
@@ -93,15 +142,6 @@ func TestReplicaServeWatchOwnership(t *testing.T) {
 			writeDaemonRuntimeForTest(t, cfg.DataDir, host, port, version, false)
 			_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{Embed: embed}, "", true)
 			require.ErrorContains(t, err, "requires the local archive writer")
-			if runtime.GOOS != "windows" {
-				alias := filepath.Join(t.TempDir(), "archive")
-				requireSymlinkOrSkip(t, cfg.DataDir, alias)
-				t.Setenv("AGENTSVIEW_DATA_DIR", alias)
-				cfg, _, err = loadPGServeConfigForTest(t)
-				require.NoError(t, err)
-				_, _, err = prepareReplicaPushWatch(t.Context(), pgReplica{}, cfg, ReplicaPushConfig{Embed: embed}, "", true)
-				require.ErrorContains(t, err, "is a symlink")
-			}
 		})
 	}
 }

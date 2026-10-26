@@ -540,13 +540,7 @@ var prepareReplicaServe = prepareReplicaServeImpl
 
 func prepareReplicaServeImpl(
 	backend storage.Replica, appCfg config.Config, basePath string,
-) (replicaServeStartup, error) {
-	return prepareReplicaServeWithWatch(backend, appCfg, basePath, nil)
-}
-
-func prepareReplicaServeWithWatch(
-	backend storage.Replica, appCfg config.Config, basePath string,
-	watch *replicaServeWatch,
+	watch *ReplicaPushConfig,
 ) (replicaServeStartup, error) {
 	name := backend.Name()
 	if err := validateServeConfig(appCfg); err != nil {
@@ -667,11 +661,7 @@ func supportsInsightGeneration(store storage.ReplicaStore) bool {
 	return ok && capable.InsightGenerationAvailable()
 }
 
-func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath string) {
-	runReplicaServeWithWatch(backend, appCfg, basePath, nil)
-}
-
-func runReplicaServeWithWatch(backend storage.Replica, appCfg config.Config, basePath string, watch *replicaServeWatch) {
+func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath string, watch *ReplicaPushConfig) {
 	name := backend.Name()
 	setupLogFile(appCfg.DataDir)
 	if appCfg.RequireAuth {
@@ -680,13 +670,7 @@ func runReplicaServeWithWatch(backend storage.Replica, appCfg config.Config, bas
 		}
 	}
 
-	var startup replicaServeStartup
-	var err error
-	if watch == nil {
-		startup, err = prepareReplicaServe(backend, appCfg, basePath)
-	} else {
-		startup, err = prepareReplicaServeWithWatch(backend, appCfg, basePath, watch)
-	}
+	startup, err := prepareReplicaServe(backend, appCfg, basePath, watch)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -730,16 +714,20 @@ func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 	if rt.Cfg.RequireAuth && rt.Cfg.AuthToken != "" {
 		fmt.Println("Auth enabled. Token is configured.")
 	}
+	mode := name + " read-only"
+	if startup.startWorker != nil {
+		mode = name + " read-only API, push-watch on"
+	}
 	if rt.PublicURL == rt.LocalURL {
 		fmt.Printf(
-			"agentsview %s (%s read-only) at %s\n",
-			version, name,
+			"agentsview %s (%s) at %s\n",
+			version, mode,
 			rt.LocalURL,
 		)
 	} else {
 		fmt.Printf(
-			"agentsview %s (%s read-only) listening at %s, browser URL: %s\n",
-			version, name,
+			"agentsview %s (%s) listening at %s, browser URL: %s\n",
+			version, mode,
 			rt.LocalURL,
 			rt.PublicURL,
 		)

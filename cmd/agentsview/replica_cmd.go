@@ -147,7 +147,7 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runReplicaServeWithWatch(backend, appCfg, basePath, watch)
+			runReplicaServe(backend, appCfg, basePath, watch)
 		},
 	}
 	cmd.Flags().String(
@@ -156,6 +156,7 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
 	)
 	if backend.Name() == "pg" {
+		cmd.Short = "Serve from PostgreSQL (read-only API; --push-watch also ingests)"
 		cmd.Flags().Bool("push-watch", false, "Ingest and continuously push a local archive in this process")
 		cmd.Flags().Bool("embed", false, "Build embeddings in the local push watcher")
 		cmd.Flags().Duration("debounce", defaultWatchDebounce, "Coalesce window before pushing (--push-watch only)")

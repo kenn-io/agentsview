@@ -63,7 +63,7 @@ func TestHostedRuntimePreparationOffRetainsPublicReads(t *testing.T) {
 	cfg, _ := hostedRuntimeConfig(t)
 	// An occupied custody path makes any eager repository open fail decisively.
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, pgRawSyncDataDirectory), []byte("occupied"), 0600))
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	require.Nil(t, startup.startWorker)
 	startup.cleanup()
@@ -74,7 +74,7 @@ func TestHostedRuntimePreparationOffRetainsPublicReads(t *testing.T) {
 	_, ok := store.(*postgres.HostedStore)
 	require.True(t, ok)
 	cfg.PG.RawTenant = ""
-	_, err = prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	_, err = prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 	require.ErrorContains(t, err, "raw_tenant")
 }
 
@@ -90,7 +90,7 @@ func TestHostedRuntimeHealthRequiresStatusToken(t *testing.T) {
 	require.NoError(t, err)
 	uploadToken, err := auth.IssueToken(t.Context(), device.Identity.DeviceID, device.Credential, rawsync.ScopeUpload)
 	require.NoError(t, err)
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	t.Cleanup(startup.cleanup)
 
@@ -135,7 +135,7 @@ func TestHostedRuntimePreparationSandboxAndIdle(t *testing.T) {
 		t.Fatal("mandatory sandbox unavailable")
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, pgRawSyncDataDirectory), []byte("occupied"), 0600))
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 	if !supported {
 		require.ErrorIs(t, err, rawderive.ErrSandboxUnavailable)
 		return
@@ -163,7 +163,7 @@ func TestHostedRuntimeDerivesAcceptedSource(t *testing.T) {
 	cfg, _ := hostedRuntimeConfig(t)
 	cfg.PG.RawDerivation = true
 	cfg.PG.RawPollSeconds = 1
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	defer startup.cleanup()
 	database, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
@@ -246,7 +246,7 @@ func TestHostedRuntimeRejectsMissingPublicationPrivilegesBeforeReadiness(t *test
 	endpoint, err := url.Parse(cfg.PG.URL)
 	require.NoError(t, err)
 	role := endpoint.User.Username()
-	control, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	control, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	control.cleanup()
 	cfg.PG.RawDerivation = true
@@ -261,7 +261,7 @@ func TestHostedRuntimeRejectsMissingPublicationPrivilegesBeforeReadiness(t *test
 				_, err := admin.Exec(`GRANT ` + tc.privilege + ` ON ` + tc.kind + ` "` + tc.object + `" TO "` + role + `"`)
 				require.NoError(t, err)
 			}()
-			startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+			startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
 			if err == nil {
 				startup.cleanup()
 			}

@@ -11,10 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-type replicaServeWatch struct {
-	push ReplicaPushConfig
-}
-
 func validateReplicaServeWatchFlags(cmd *cobra.Command) error {
 	if cmd.Flags().Lookup("push-watch") == nil {
 		return nil
@@ -35,7 +31,7 @@ func validateReplicaServeWatchFlags(cmd *cobra.Command) error {
 	return nil
 }
 
-func loadReplicaServeWatch(cmd *cobra.Command, cfg config.Config) (*replicaServeWatch, error) {
+func loadReplicaServeWatch(cmd *cobra.Command, cfg config.Config) (*ReplicaPushConfig, error) {
 	watch, _ := cmd.Flags().GetBool("push-watch")
 	if !watch {
 		return nil, nil
@@ -50,22 +46,23 @@ func loadReplicaServeWatch(cmd *cobra.Command, cfg config.Config) (*replicaServe
 	embed, _ := cmd.Flags().GetBool("embed")
 	debounce, _ := cmd.Flags().GetDuration("debounce")
 	interval, _ := cmd.Flags().GetDuration("interval")
-	return &replicaServeWatch{push: ReplicaPushConfig{Watch: true, Embed: embed, Debounce: debounce, Interval: interval}}, nil
+	return &ReplicaPushConfig{Embed: embed, Debounce: debounce, Interval: interval}, nil
 }
 
 // attachReplicaServeWatch prepares ownership now, starts ingestion after
 // readiness, and joins its final flush before any serve resources are closed.
 func attachReplicaServeWatch(startup *replicaServeStartup, stop context.CancelFunc,
-	backend storage.Replica, store storage.ReplicaStore, watch *replicaServeWatch,
+	backend storage.Replica, store storage.ReplicaStore, watch *ReplicaPushConfig,
 ) error {
-	if store != nil {
-		watch.push.OnPushSuccess = func(ctx context.Context) {
-			if err := wireReplicaVectorSearch(ctx, startup.cfg, backend, store, "pg serve"); err != nil {
-				log.Printf("pg serve: refreshing semantic search after push: %v", err)
-			}
+	watch.OnPushSuccess = func(ctx context.Context) {
+		if store.HasSemantic() {
+			return
+		}
+		if err := wireReplicaVectorSearch(ctx, startup.cfg, backend, store, "pg serve"); err != nil {
+			log.Printf("pg serve: refreshing semantic search after push: %v", err)
 		}
 	}
-	run, cleanup, err := prepareReplicaPushWatch(startup.ctx, backend, startup.cfg, watch.push, "", true)
+	run, cleanup, err := prepareReplicaPushWatch(startup.ctx, backend, startup.cfg, *watch, "", true)
 	if err != nil {
 		return err
 	}
