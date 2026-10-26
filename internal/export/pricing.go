@@ -293,30 +293,9 @@ func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLook
 	if !ok {
 		return lookup, nil
 	}
-	baseRates := r.byModel[base.Pattern]
 	lookup = clonePricingLookup(lookup)
-	for _, field := range []struct {
-		base, tier money.Money
-		resolved   *money.Money
-	}{
-		{baseRates.InputPerMTok, rates.InputPerMTok, &lookup.Rates.InputPerMTok},
-		{baseRates.OutputPerMTok, rates.OutputPerMTok, &lookup.Rates.OutputPerMTok},
-		{baseRates.CacheWritePerMTok, rates.CacheWritePerMTok, &lookup.Rates.CacheWritePerMTok},
-		{baseRates.CacheWrite1hPerMTok, rates.CacheWrite1hPerMTok, &lookup.Rates.CacheWrite1hPerMTok},
-		{baseRates.CacheReadPerMTok, rates.CacheReadPerMTok, &lookup.Rates.CacheReadPerMTok},
-	} {
-		if field.base.Microdollars == 0 {
-			continue
-		}
-		scaled, err := money.ScaleRatio(*field.resolved, field.tier.Microdollars, field.base.Microdollars)
-		if err != nil {
-			return PricingLookup{}, err
-		}
-		*field.resolved = scaled
-	}
-	// A tier's published bands apply as is; without them, LiteLLM falls back to the standard bands.
-	if len(rates.Bands) > 0 {
-		lookup.Rates.Bands = append([]PricingBand(nil), rates.Bands...)
+	if err := scaleServiceTierRates(r.byModel[base.Pattern], rates, &lookup.Rates); err != nil {
+		return PricingLookup{}, err
 	}
 	lookup.Pattern = pattern
 	switch tier {
@@ -326,6 +305,47 @@ func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLook
 		lookup.Adjustment = pricingpkg.OpenAIUltrafastProviderID
 	}
 	return lookup, nil
+}
+
+func scaleServiceTierRates(baseRates, rates ModelRates, resolved *ModelRates) error {
+	type rateField struct {
+		base, tier money.Money
+		resolved   *money.Money
+	}
+	fields := []rateField{
+		{baseRates.InputPerMTok, rates.InputPerMTok, &resolved.InputPerMTok},
+		{baseRates.OutputPerMTok, rates.OutputPerMTok, &resolved.OutputPerMTok},
+		{baseRates.CacheWritePerMTok, rates.CacheWritePerMTok, &resolved.CacheWritePerMTok},
+		{baseRates.CacheWrite1hPerMTok, rates.CacheWrite1hPerMTok, &resolved.CacheWrite1hPerMTok},
+		{baseRates.CacheReadPerMTok, rates.CacheReadPerMTok, &resolved.CacheReadPerMTok},
+	}
+	for _, band := range rates.Bands {
+		matches := func(b PricingBand) bool { return b.AboveInputTokens == band.AboveInputTokens }
+		baseIndex := slices.IndexFunc(baseRates.Bands, matches)
+		resolvedIndex := slices.IndexFunc(resolved.Bands, matches)
+		if baseIndex < 0 || resolvedIndex < 0 {
+			continue
+		}
+		base, target := baseRates.Bands[baseIndex], &resolved.Bands[resolvedIndex]
+		fields = append(fields,
+			rateField{base.InputPerMTok, band.InputPerMTok, &target.InputPerMTok},
+			rateField{base.OutputPerMTok, band.OutputPerMTok, &target.OutputPerMTok},
+			rateField{base.CacheWritePerMTok, band.CacheWritePerMTok, &target.CacheWritePerMTok},
+			rateField{base.CacheWrite1hPerMTok, band.CacheWrite1hPerMTok, &target.CacheWrite1hPerMTok},
+			rateField{base.CacheReadPerMTok, band.CacheReadPerMTok, &target.CacheReadPerMTok},
+		)
+	}
+	for _, field := range fields {
+		if field.base.Microdollars == 0 {
+			continue
+		}
+		scaled, err := money.ScaleRatio(*field.resolved, field.tier.Microdollars, field.base.Microdollars)
+		if err != nil {
+			return err
+		}
+		*field.resolved = scaled
+	}
+	return nil
 }
 
 func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {

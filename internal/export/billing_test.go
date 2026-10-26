@@ -203,6 +203,26 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	t.Run("historical published tier band", func(t *testing.T) {
+		embedded := pricingpkg.EmbeddedGenAIDocument()
+		resolver := NewPricingResolver([]EffectivePricingRow{
+			{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
+			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("0.2"), OutputPerMTok: money.MustParseDollars("1.2"),
+				Bands: []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("0.4"), OutputPerMTok: money.MustParseDollars("1.8")}},
+			}},
+			{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("0.4"), OutputPerMTok: money.MustParseDollars("2.4"),
+				Bands: []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("0.8"), OutputPerMTok: money.MustParseDollars("3.6")}},
+			}},
+		})
+		_, lookup, err := resolver.ResolveBilledAt("openai-priority", "gpt-5.6-luna", "gpt-5.6-luna", time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		require.True(t, lookup.OK)
+		cost, err := lookup.Rates.CostForTokens(300_000, 10_000, 0, 0, 0, 0)
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars("1.38"), cost)
+	})
 	for _, tc := range []struct {
 		name, provider, model, input, pattern, adjustment string
 		custom                                            bool

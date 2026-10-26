@@ -61,6 +61,11 @@ The embedded catalog includes LiteLLM's service-tier rows. For `gpt-6.1-sol`,
 priority costs $4 input, $0.20 cache read, and $20 output per million tokens;
 ultrafast costs $12, $0.60, and $60, respectively.
 
+Service-tier ratios apply to the timestamp-selected standard rates, including
+matching long-context bands. A missing tier band leaves the standard band
+unchanged. Reverified 2026-10-26 against the embedded catalogs and resolver
+regression tests, including Luna usage before its 2026-07-30 price change.
+
 The current catalog prices plain `gpt-6-astra` at $10 input, $50 output,
 $12.50 cache write, and $1 cache read per million tokens. Above 272k request
 input tokens those rates become $20, $75, $25, and $2. `gpt-6-sol` uses $2, $10,
