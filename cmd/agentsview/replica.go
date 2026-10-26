@@ -527,13 +527,13 @@ func loadReplicaServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 }
 
 type replicaServeStartup struct {
-	cfg          config.Config
-	ctx          context.Context
-	rtOpts       serveRuntimeOptions
-	srv          *server.Server
-	cleanup      func()
-	startWorker  func()
-	workerResult <-chan error
+	cfg         config.Config
+	ctx         context.Context
+	rtOpts      serveRuntimeOptions
+	srv         *server.Server
+	cleanup     func()
+	startWorker func()
+	joinWorker  func() error
 }
 
 var prepareReplicaServe = prepareReplicaServeImpl
@@ -715,7 +715,7 @@ func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 		fmt.Println("Auth enabled. Token is configured.")
 	}
 	mode := name + " read-only"
-	if startup.workerResult != nil {
+	if startup.joinWorker != nil {
 		mode = name + " read-only API, push-watch on"
 	}
 	if rt.PublicURL == rt.LocalURL {
@@ -736,13 +736,8 @@ func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		return fmt.Errorf("%s serve: %w", name, err)
 	}
-	if startup.workerResult != nil {
-		// The worker sends before cancelling the serve context.
-		select {
-		case err := <-startup.workerResult:
-			return err
-		default:
-		}
+	if startup.joinWorker != nil {
+		return startup.joinWorker()
 	}
 	return nil
 }

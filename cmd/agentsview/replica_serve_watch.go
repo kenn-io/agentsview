@@ -71,26 +71,28 @@ func attachReplicaServeWatch(startup *replicaServeStartup, stop context.CancelFu
 }
 
 func joinReplicaServeWorker(startup *replicaServeStartup, stop context.CancelFunc, run func() error, cleanup func()) {
-	done := make(chan error, 1)
 	joined := make(chan struct{})
+	var workerErr error
 	started := false
 	startup.startWorker = func() {
 		started = true
 		go func() {
-			err := run()
-			done <- err
+			workerErr = run()
 			close(joined)
 			stop()
 		}()
 	}
-	previousCleanup := startup.cleanup
-	startup.cleanup = func() {
+	startup.joinWorker = func() error {
 		stop()
 		if started {
 			<-joined
 		}
+		return workerErr
+	}
+	previousCleanup := startup.cleanup
+	startup.cleanup = func() {
+		startup.joinWorker()
 		cleanup()
 		previousCleanup()
 	}
-	startup.workerResult = done
 }
