@@ -4,9 +4,13 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Public PostHog ingest key. Builds without it send no telemetry.
+POSTHOG_PROJECT_KEY ?= phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf
+
 LDFLAGS := -X main.version=$(VERSION) \
            -X main.commit=$(COMMIT) \
-           -X main.buildDate=$(BUILD_DATE)
+           -X main.buildDate=$(BUILD_DATE) \
+           -X go.kenn.io/kit/telemetry/posthog.projectKey=$(POSTHOG_PROJECT_KEY)
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop

@@ -2391,9 +2391,10 @@ information, or hostname, and the events are sent with person-profile processing
 and GeoIP lookup disabled. The ping runs in the background and never blocks
 startup or operation.
 
-Only release builds send telemetry, because release builds set the PostHog
-project key at link time. Source builds and Go test binaries have no key and
-send nothing. Telemetry also stays off in CI. Disable it with an environment
+A build sends telemetry only when it has the PostHog project key and a release
+version such as `0.33.0`. Release builds and the `make` build targets set the key
+at link time. Plain `go build` and `go test` binaries have no key and send
+nothing. Telemetry also stays off in CI. Disable it with an environment
 variable, then restart the server:
 
 ```bash

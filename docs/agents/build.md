@@ -34,6 +34,9 @@ ancestor permissions satisfy their checks.
 
 - Build with `CGO_ENABLED=1`; the SQLite driver requires CGO.
 - Use the `fts5` build tag for full-text search.
+- The Makefile's `LDFLAGS` set the PostHog project key with
+  `-X go.kenn.io/kit/telemetry/posthog.projectKey`. Builds without it send no
+  telemetry, so keep it out of test and e2e builds.
 
 ## Frontend
 
