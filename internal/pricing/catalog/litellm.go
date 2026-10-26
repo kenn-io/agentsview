@@ -56,6 +56,11 @@ var inputThresholdRatePattern = regexp.MustCompile(
 	`^input_cost_per_token_above_([0-9]+)(k?)_tokens$`,
 )
 
+var tierInputThresholdRatePatterns = map[string]*regexp.Regexp{
+	"priority":  regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens_priority$`),
+	"ultrafast": regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens_ultrafast$`),
+}
+
 // FetchLiteLLMPricingContext downloads the LiteLLM pricing JSON and binds the
 // request lifetime to ctx.
 func FetchLiteLLMPricingContext(
@@ -167,11 +172,18 @@ func ParseLiteLLMPricing(
 			if !present {
 				continue
 			}
+			output, present, err := parseOptionalRate(fields, "output_cost_per_token_"+tier)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s %s output price: %w", model, tier, err)
+			}
+			if !present {
+				continue
+			}
 			tp := p
 			tp.ModelPattern = TierPattern(model, tier)
 			tp.InputPerMTok = input
+			tp.OutputPerMTok = output
 			for field, dest := range map[string]*money.Money{
-				"output_cost_per_token":           &tp.OutputPerMTok,
 				"cache_read_input_token_cost":     &tp.CacheReadPerMTok,
 				"cache_creation_input_token_cost": &tp.CacheCreationPerMTok,
 			} {
@@ -184,7 +196,7 @@ func ParseLiteLLMPricing(
 				}
 			}
 			tp.Bands, err = parsePricingBands(model, fields, tp,
-				regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens_`+tier+`$`))
+				tierInputThresholdRatePatterns[tier])
 			if err != nil {
 				return nil, err
 			}
