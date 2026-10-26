@@ -114,8 +114,9 @@ func TestResolveBilledCodexServiceTierScalesFieldsKeepsStandardBands(t *testing.
 		{ModelPattern: "model", Rates: ModelRates{
 			InputPerMTok: money.Money{Microdollars: 10}, OutputPerMTok: money.Money{Microdollars: 20},
 			CacheWritePerMTok: money.Money{Microdollars: 30}, CacheReadPerMTok: money.Money{Microdollars: 40},
-			Bands: []PricingBand{{AboveInputTokens: 100,
-				InputPerMTok: money.Money{Microdollars: 100}, OutputPerMTok: money.Money{Microdollars: 200},
+			Bands: []PricingBand{{
+				AboveInputTokens: 100,
+				InputPerMTok:     money.Money{Microdollars: 100}, OutputPerMTok: money.Money{Microdollars: 200},
 				CacheWritePerMTok: money.Money{Microdollars: 300}, CacheWrite1hPerMTok: money.Money{Microdollars: 350},
 				CacheReadPerMTok: money.Money{Microdollars: 400},
 			}},
