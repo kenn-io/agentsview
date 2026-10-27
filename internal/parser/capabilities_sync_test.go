@@ -12,6 +12,16 @@ import (
 // carry the zero-value ProviderSyncSemantics.
 func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 	wantSync := map[AgentType]ProviderSyncSemantics{
+		// The summary store's workspace and parent are in the fingerprint and
+		// change without touching a conversation's own files.
+		AgentAntigravity: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+		},
+		AgentAntigravityCLI: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+		},
 		AgentClaude: {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
