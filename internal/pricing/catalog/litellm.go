@@ -176,6 +176,11 @@ func ParseLiteLLMPricing(
 }
 
 func parsePriorityPricing(model string, fields map[string]jsontext.Value, p ModelPricing) (ModelPricing, bool, error) {
+	var provider string
+	openAI := json.Unmarshal(fields["litellm_provider"], &provider) == nil && provider == "openai"
+	if !openAI {
+		return ModelPricing{}, false, nil
+	}
 	input, present, err := parseOptionalRate(fields, "input_cost_per_token_"+priorityTier)
 	if err != nil {
 		return ModelPricing{}, false, fmt.Errorf("parsing %s %s input price: %w", model, priorityTier, err)

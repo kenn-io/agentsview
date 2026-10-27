@@ -203,6 +203,7 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 	}{
 		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
 		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "", "", "", ""},
+		{"gpt-5-nano@priority", "2.5", "0.005", "0.4", "0", "", "", "", ""},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			price, ok := byModel[tc.model]
@@ -223,29 +224,16 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.bandCreation), price.Bands[0].CacheCreationPerMTok)
 		})
 	}
-	// LiteLLM publishes a priority input price for gpt-5-nano without an output price.
-	assert.Contains(t, byModel, "gpt-5-nano@priority")
-}
-
-func TestParseLiteLLMPricingPartialTierKeepsPublishedInput(t *testing.T) {
-	data, err := os.ReadFile("testdata/litellm_service_tiers.json")
-	require.NoError(t, err)
-	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
-	byModel := make(map[string]ModelPricing)
-	for _, price := range prices {
-		byModel[price.ModelPattern] = price
+	for _, model := range []string{"azure/gpt-5.5", "bedrock/gpt-5.5", "gpt-5.5-priority"} {
+		assert.Contains(t, byModel, model)
+		assert.NotContains(t, byModel, model+"@priority")
 	}
-	require.Contains(t, byModel, "gpt-5-nano@priority")
-	price := byModel["gpt-5-nano@priority"]
-	assert.Equal(t, money.MustParseDollars("2.5"), price.InputPerMTok)
-	assert.Equal(t, money.MustParseDollars("0.4"), price.OutputPerMTok)
-	assert.Equal(t, money.MustParseDollars("0.005"), price.CacheReadPerMTok)
 }
 
 func TestParseLiteLLMPricingTierBandStandardCompanion(t *testing.T) {
 	data := []byte(`{
 		"banded-model": {
+			"litellm_provider": "openai",
 			"input_cost_per_token": 0.000001,
 			"output_cost_per_token": 0.000002,
 			"input_cost_per_token_priority": 0.000003,

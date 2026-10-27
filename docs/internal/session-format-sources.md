@@ -48,8 +48,8 @@ both GPT-5.6 Luna price periods but not Grok 4.6, so the flat fallback remains
 necessary.
 
 Agentsview's flat fallback prices come from LiteLLM's
-[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa/model_prices_and_context_window.json)
-at pinned commit `2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa`. Models retired from
+[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/model_prices_and_context_window.json)
+at pinned commit `7d50a31eb5b080c29438f97be7701e117938ce88`. Models retired from
 that catalog retain their last embedded rates from
 [`418c7c6012d7c39a9d4a28c72cabe1995595ad2b`](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/model_prices_and_context_window.json).
 Current rows always win; the previous source fills only missing model keys. The
@@ -59,8 +59,8 @@ replacing current rates with stale ones.
 
 The embedded catalog includes LiteLLM's service-tier rows. For `gpt-6.1-sol`,
 priority costs $4 input, $0.20 cache read, and $20 output per million tokens.
-Reverified 2026-10-26 against the pinned
-[`get_cost_per_unit` calculator](https://github.com/BerriAI/litellm/blob/2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa/litellm/litellm_core_utils/llm_cost_calc/utils.py#L913-L951):
+Reverified 2026-10-27 against the pinned
+[`get_cost_per_unit` calculator](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/litellm/litellm_core_utils/llm_cost_calc/utils.py#L804-L842):
 each missing tier field uses its standard counterpart; band companions try
 the standard rate at the same threshold before the base rate.
 
@@ -93,9 +93,10 @@ and `cache_creation_input_token_cost_above_1hr` 2e-05 per token.
 A band applies only when whole-request input is strictly greater than its
 threshold; when several bands exist, the highest eligible threshold wins.
 Batch, Flex, and regional suffixes are excluded because stored usage does not
-identify those variants. The `_priority` fields, including their
-`_above_272k_tokens` bands, are imported as `<model>@priority` rows for Codex
-Fast billing.
+identify those variants. For entries whose `litellm_provider` is `openai`,
+Agentsview imports `_priority` fields and their `_above_272k_tokens` bands as
+`<model>@priority` rows for Codex Fast billing. Data version 149 reparses
+Codex, TraeX, and Augure Code sources in place to add the billing identity.
 
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this
