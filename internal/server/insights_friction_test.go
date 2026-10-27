@@ -236,7 +236,7 @@ func TestGenerateFrictionReviewInsight_SavesAndCaches(t *testing.T) {
 	} {
 		assert.Contains(t, prompt, want)
 	}
-	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`} {
+	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`, `"fr-3"`} {
 		assert.NotContains(t, prompt, notWant)
 	}
 

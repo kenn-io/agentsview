@@ -74,6 +74,10 @@ func (s *Server) buildFrictionReviewPayload(
 		return insight.CannedAggregatePayload{}, "", "",
 			fmt.Errorf("decoding friction summary %s: %w", date, err)
 	}
+	// P0Alerts carries per-tool counts; the session IDs behind them add
+	// nothing for the model and can push a CLI generator past its argument
+	// limit.
+	delete(summary, "p0_alerts")
 	var p0 struct {
 		P0Alerts map[string][]string `json:"p0_alerts"`
 	}
