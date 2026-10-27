@@ -267,7 +267,7 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 		return pricedModel, lookup, nil
 	}
 	if tier, ok := pricingpkg.ServiceTierFor(providerID); ok {
-		return pricedModel, r.withServiceTier(pricedModel, lookup, tier), nil
+		return pricedModel, r.withServiceTier(lookup, tier), nil
 	}
 	policy, ok := pricingpkg.BillingPolicyFor(providerID)
 	if !ok {
@@ -282,11 +282,11 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 	return pricedModel, lookup, nil
 }
 
-func (r *PricingResolver) withServiceTier(pricedModel string, lookup PricingLookup, tier string) PricingLookup {
+func (r *PricingResolver) withServiceTier(lookup PricingLookup, tier string) PricingLookup {
 	if r == nil {
 		return lookup
 	}
-	base := r.Lookup(pricedModel)
+	base := r.Lookup(lookup.Pattern)
 	pattern := catalog.TierPattern(base.Pattern, tier)
 	rates, ok := r.byModel[pattern]
 	if !ok {
@@ -405,14 +405,13 @@ func (r *PricingResolver) DependencyFingerprint(
 	providerID, reportedModel, canonicalModel string,
 ) (string, error) {
 	digest := sha256.New()
-	writeField := func(value string) {
-		_, _ = fmt.Fprintf(digest, "%d:%s", len(value), value)
+	writeField := func(values ...string) {
+		for _, value := range values {
+			_, _ = fmt.Fprintf(digest, "%d:%s", len(value), value)
+		}
 	}
 	writeLookup := func(pricedModel string, lookup PricingLookup) {
-		writeField(pricedModel)
-		writeField(lookup.Pattern)
-		writeField(strconv.FormatBool(lookup.OK))
-		writeField(lookup.Adjustment)
+		writeField(pricedModel, lookup.Pattern, strconv.FormatBool(lookup.OK), lookup.Adjustment)
 		writePricingRatesFingerprint(digest, lookup.Rates)
 	}
 	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, time.Time{})
@@ -444,10 +443,11 @@ func (r *PricingResolver) DependencyFingerprint(
 		for _, candidate := range candidates.items[:candidates.count] {
 			fingerprint := r.genAI.ModelFingerprint(candidate.provider, candidate.model)
 			matched = matched || fingerprint != "none"
-			writeField(candidate.provider)
-			writeField(candidate.model)
-			writeField(candidate.priced)
-			writeField(fingerprint)
+			writeField(candidate.provider, candidate.model, candidate.priced, fingerprint)
+			if tier, ok := pricingpkg.ServiceTierFor(providerID); ok && fingerprint != "none" {
+				genAI := PricingLookup{Pattern: r.genAI.ModelPattern(candidate.provider, candidate.model)}
+				writeLookup("", r.withServiceTier(genAI, tier))
+			}
 		}
 		return flat, custom, matched
 	}
