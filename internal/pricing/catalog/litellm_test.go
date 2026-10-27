@@ -226,5 +226,45 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 	}
 	assert.NotContains(t, byModel, "gpt-5.5@ultrafast")
 	// LiteLLM publishes a priority input price for gpt-5-nano without an output price.
-	assert.NotContains(t, byModel, "gpt-5-nano@priority")
+	assert.Contains(t, byModel, "gpt-5-nano@priority")
+}
+
+func TestParseLiteLLMPricingPartialTierKeepsPublishedInput(t *testing.T) {
+	data, err := os.ReadFile("testdata/litellm_service_tiers.json")
+	require.NoError(t, err)
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	byModel := make(map[string]ModelPricing)
+	for _, price := range prices {
+		byModel[price.ModelPattern] = price
+	}
+	require.Contains(t, byModel, "gpt-5-nano@priority")
+	price := byModel["gpt-5-nano@priority"]
+	assert.Equal(t, money.MustParseDollars("2.5"), price.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.4"), price.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.005"), price.CacheReadPerMTok)
+}
+
+func TestParseLiteLLMPricingTierBandStandardCompanion(t *testing.T) {
+	data := []byte(`{
+		"banded-model": {
+			"input_cost_per_token": 0.000001,
+			"output_cost_per_token": 0.000002,
+			"input_cost_per_token_priority": 0.000003,
+			"output_cost_per_token_priority": 0.000004,
+			"input_cost_per_token_above_200k_tokens": 0.000002,
+			"input_cost_per_token_above_200k_tokens_priority": 0.000006,
+			"cache_creation_input_token_cost_above_200k_tokens": 0.00000025
+		}
+	}`)
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	byModel := make(map[string]ModelPricing)
+	for _, price := range prices {
+		byModel[price.ModelPattern] = price
+	}
+	require.Contains(t, byModel, "banded-model@priority")
+	price := byModel["banded-model@priority"]
+	require.Len(t, price.Bands, 1)
+	assert.Equal(t, money.MustParseDollars("0.25"), price.Bands[0].CacheCreationPerMTok)
 }

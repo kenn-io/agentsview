@@ -40,8 +40,8 @@ func mustRate(dollars string) money.Money {
 }
 
 const (
-	defaultSnapshotRef      = "9f727dceb22e94d741faed106b50b5818eca2853"
-	defaultSnapshotSHA256   = "58c73f7bd2840f7cfbe26a434c30563f3e9856cd982f661f3881204e7486fdb5"
+	defaultSnapshotRef      = "b7e0146cdaf8740db07de2f4ecef09c6e5c0054a"
+	defaultSnapshotSHA256   = "295411d64b9031a6d0407011800d3d7a60df886a08aa6fe55d16c20b85d5091f"
 	defaultSnapshotBranch   = "litellm-pricing-snapshot"
 	defaultSnapshotFile     = "litellm_snapshot.json.gz"
 	defaultSnapshotBaseURL  = "https://raw.githubusercontent.com/kenn-io/agentsview"

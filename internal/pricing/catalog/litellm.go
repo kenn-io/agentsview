@@ -176,13 +176,12 @@ func ParseLiteLLMPricing(
 			if err != nil {
 				return nil, fmt.Errorf("parsing %s %s output price: %w", model, tier, err)
 			}
-			if !present {
-				continue
-			}
 			tp := p
 			tp.ModelPattern = TierPattern(model, tier)
 			tp.InputPerMTok = input
-			tp.OutputPerMTok = output
+			if present {
+				tp.OutputPerMTok = output
+			}
 			for field, dest := range map[string]*money.Money{
 				"cache_read_input_token_cost":     &tp.CacheReadPerMTok,
 				"cache_creation_input_token_cost": &tp.CacheCreationPerMTok,
@@ -260,12 +259,18 @@ func parsePricingBands(
 			{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
 		}
 		for _, companion := range companions {
-			rate, exists, err := parseOptionalRate(fields, companion.prefix+suffix)
+			key := companion.prefix + suffix
+			rate, exists, err := parseOptionalRate(fields, key)
+			standardSuffix := strings.TrimSuffix(strings.TrimSuffix(suffix, "_priority"), "_ultrafast")
+			if err == nil && !exists && standardSuffix != suffix {
+				key = companion.prefix + standardSuffix
+				rate, exists, err = parseOptionalRate(fields, key)
+			}
 			if err != nil {
 				return nil, fmt.Errorf(
 					"parsing %s %s: %w",
 					model,
-					companion.prefix+suffix,
+					key,
 					err,
 				)
 			}
