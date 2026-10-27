@@ -25608,7 +25608,7 @@ type SyncWatchRecoveryScope struct {
 
 type SyncWatchRename struct {
 	Agent    *string `json:"agent,omitempty"`
-	ItemType *int32  `json:"item_type,omitempty" validate:"omitempty,gte=0"`
+	ItemType *int32  `json:"item_type,omitempty" validate:"omitempty,gte=0,lte=255"`
 	Path     string  `json:"path" validate:"required"`
 	Root     *string `json:"root,omitempty"`
 }
