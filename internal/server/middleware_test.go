@@ -1,10 +1,15 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -191,7 +196,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			wantCSP: true,
 			wantDirectives: map[string]string{
 				"default-src":     "'self' http://127.0.0.1:8081",
-				"script-src":      "'self' http://127.0.0.1:8081",
+				"script-src":      "'self' http://127.0.0.1:8081 " + holdFirstPaintScriptHash,
 				"connect-src":     "'self' http: https: ws: wss:",
 				"img-src":         "'self' http://127.0.0.1:8081 data: blob:",
 				"style-src":       "'self' http://127.0.0.1:8081 'unsafe-inline' https://fonts.googleapis.com",
@@ -208,7 +213,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			port:    9090,
 			wantCSP: true,
 			wantDirectives: map[string]string{
-				"script-src":  "'self' http://[::1]:9090",
+				"script-src":  "'self' http://[::1]:9090 " + holdFirstPaintScriptHash,
 				"connect-src": "'self' http: https: ws: wss:",
 			},
 		},
@@ -309,7 +314,7 @@ func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
 	assert.Equal(t, "'self' https://agentsview.example.com",
 		directives["default-src"],
 	)
-	assert.Equal(t, "'self' https://agentsview.example.com",
+	assert.Equal(t, "'self' https://agentsview.example.com "+holdFirstPaintScriptHash,
 		directives["script-src"],
 	)
 	assert.Equal(t, "'self' https://agentsview.example.com data: blob:",
@@ -332,8 +337,39 @@ func TestBuildCSPPolicyKeepsLocalOriginWithPublicURL(t *testing.T) {
 		directives["default-src"],
 	)
 	assert.Equal(t,
-		"'self' https://agentsview.example.com http://127.0.0.1:8080",
+		"'self' https://agentsview.example.com http://127.0.0.1:8080 "+holdFirstPaintScriptHash,
 		directives["script-src"],
+	)
+}
+
+// The SPA's index.html inlines frontend/src/hold-first-paint.js verbatim,
+// and script-src allows it by hash in both the server's CSP and the desktop
+// webview's. Editing the script without updating the hash would leave the
+// inline script blocked and the page flashing unstyled.
+func TestHoldFirstPaintScriptHashMatchesSource(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "hold-first-paint.js"))
+	require.NoError(t, err)
+	digest := sha256.Sum256(source)
+	assert.Equal(t,
+		"'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'",
+		holdFirstPaintScriptHash,
+	)
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "desktop", "src-tauri", "tauri.conf.json"))
+	require.NoError(t, err)
+	var tauri struct {
+		App struct {
+			Security struct {
+				CSP string `json:"csp"`
+			} `json:"security"`
+		} `json:"app"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &tauri))
+	assert.Contains(t,
+		strings.Fields(parseCSP(tauri.App.Security.CSP)["script-src"]),
+		holdFirstPaintScriptHash,
 	)
 }
 

@@ -1054,6 +1054,12 @@ func cspMiddleware(
 	})
 }
 
+// holdFirstPaintScriptHash allows the one inline script in the SPA's
+// index.html: frontend/src/hold-first-paint.js, which the Vite build inlines
+// verbatim so the page stays hidden until its stylesheets and fonts load.
+// It is the base64 SHA-256 of that file's bytes.
+const holdFirstPaintScriptHash = "'sha256-AB+9Y1XDgh1T5GmwIkHw5/1wg/kPmZ13gKOY9FmLsaA='"
+
 // buildCSPPolicy constructs the Content-Security-Policy string.
 //
 // The server's own origin (host:port) is pinned in the resource
@@ -1094,7 +1100,7 @@ func buildCSPPolicy(
 
 	return fmt.Sprintf(
 		"default-src %[1]s; "+
-			"script-src %[1]s; "+
+			"script-src %[1]s %[3]s; "+
 			"connect-src 'self' http: https: ws: wss:; "+
 			"img-src %[1]s data: blob:; "+
 			"style-src %[1]s 'unsafe-inline' https://fonts.googleapis.com; "+
@@ -1102,7 +1108,7 @@ func buildCSPPolicy(
 			"object-src 'none'; "+
 			"base-uri %[2]s; "+
 			"frame-ancestors 'none'",
-		resourceSrc, baseURI,
+		resourceSrc, baseURI, holdFirstPaintScriptHash,
 	)
 }
 
