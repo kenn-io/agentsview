@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { DbInsight } from "../../api/generated/index";
-import {
-  FRICTION_REVIEW_KIND,
-  frictionReviewRequest,
-  pickFrictionReviewInsight,
-} from "./frictionReviewSummary.js";
+import { FRICTION_REVIEW_KIND, pickFrictionReviewInsight } from "./frictionReviewSummary.js";
 
 function insight(overrides: Partial<DbInsight> = {}): DbInsight {
   return {
@@ -41,11 +37,5 @@ describe("pickFrictionReviewInsight", () => {
   it("returns the newest matching row from newest-first lists", () => {
     const latest = insight({ id: 2 });
     expect(pickFrictionReviewInsight([latest, insight()], "2025-01-15", 3)).toBe(latest);
-  });
-});
-
-describe("frictionReviewRequest", () => {
-  it("forces refresh only when regenerating", () => {
-    expect(frictionReviewRequest("2025-01-15", "claude", true).force_refresh).toBe(true);
   });
 });

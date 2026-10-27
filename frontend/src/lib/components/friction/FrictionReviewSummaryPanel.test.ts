@@ -36,11 +36,6 @@ vi.mock("../../stores/insights.svelte.js", () => ({
 
 import FrictionReviewSummaryPanel from "./FrictionReviewSummaryPanel.svelte";
 
-class ResizeObserverMock {
-  observe = vi.fn();
-  disconnect = vi.fn();
-}
-
 function saved(date: string, content: string, revision = 1) {
   return {
     provenance_json: JSON.stringify({
@@ -65,11 +60,6 @@ function settle() {
 }
 
 beforeEach(() => {
-  Object.defineProperty(globalThis, "ResizeObserver", {
-    configurable: true,
-    writable: true,
-    value: ResizeObserverMock,
-  });
   for (const fn of [mocks.generateInsight, mocks.getInsights, mocks.setAgent]) fn.mockReset();
   mocks.serverVersion = { read_only: false };
   mocks.agent = "claude";
@@ -114,6 +104,22 @@ describe("FrictionReviewSummaryPanel", () => {
     await settle();
     expect(screen.queryByText("Old summary.")).toBeNull();
     expect(screen.getByRole("button", { name: /generate summary/i })).toBeTruthy();
+  });
+
+  it.each([
+    ["shows a summary of the digest on screen", 1, true],
+    ["hides a summary of a digest rebuilt during generation", 2, false],
+  ])("%s", async (_name, generatedRevision, shown) => {
+    mocks.generateInsight.mockReturnValue({
+      abort: vi.fn(),
+      done: Promise.resolve(saved("2025-01-15", "Fresh summary.", generatedRevision)),
+    });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
+    await settle();
+    await fireEvent.click(screen.getByRole("button", { name: /generate summary/i }));
+    await settle();
+    await settle();
+    expect(screen.queryByText("Fresh summary.") !== null).toBe(shown);
   });
 
   it("retries a failed regeneration as a regeneration", async () => {

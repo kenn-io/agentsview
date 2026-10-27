@@ -97,7 +97,9 @@
       .then((result) => {
         if (version !== genVersion) return;
         handle = null;
-        summary = result;
+        // A digest rebuilt during generation yields a summary of the newer
+        // revision; it does not describe the digest on screen.
+        summary = pickFrictionReviewInsight([result], date, revision);
         generating = false;
       })
       .catch((cause) => {

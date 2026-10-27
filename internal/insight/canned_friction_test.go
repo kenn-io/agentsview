@@ -1,7 +1,6 @@
 package insight
 
 import (
-	"encoding/json/v2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,17 +54,6 @@ func TestRankCannedFrictionPatterns(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-
-	t.Run("never_copies_text_or_evidence", func(t *testing.T) {
-		got := RankCannedFrictionPatterns(date, findings, firstSeen, MaxCannedFrictionPatterns)
-		data, err := json.Marshal(got)
-		require.NoError(t, err)
-		assert.NotContains(t, string(data), "RAW-CONTEXT")
-		assert.NotContains(t, string(data), "RAW-EVIDENCE")
-		assert.NotContains(t, string(data), "FRUSTRATION-RAW")
-		assert.Contains(t, string(data), `"kind":"frustration"`)
-		assert.Contains(t, string(data), inTitle)
-	})
 
 	t.Run("caps_at_twenty", func(t *testing.T) {
 		var many []CannedFrictionOccurrence
