@@ -679,7 +679,8 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 		pctx context.Context, reason pushReason, full bool,
 		batch *syncpkg.WatchBatch,
 	) error {
-		return vectors.push(
+		cfg.Health.start()
+		err := vectors.push(
 			label, backend.DisplayName(), reason, full,
 			func(opts storage.PushOptions) (storage.PushResult, error) {
 				pushCfg := cfg
@@ -701,6 +702,8 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 				)
 			},
 		)
+		cfg.Health.finish(err)
+		return err
 	}
 	return archivePushWatch{
 		hooks:    b.watchHooks,
@@ -1091,7 +1094,9 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 			// runs every push, so it starts the scheduler there.
 			embedder.ensureScheduler(ctx)
 		}
+		cfg.Health.start()
 		err := pusher.push(c, r, full)
+		cfg.Health.finish(err)
 		if err == nil && cfg.OnPushSuccess != nil {
 			cfg.OnPushSuccess(c)
 		}

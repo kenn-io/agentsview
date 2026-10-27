@@ -36,6 +36,10 @@ type ReplicaPushConfig struct {
 	// Embed builds pending embeddings in this process before each push
 	// (pg push --embed). It requires the local archive writer.
 	Embed bool
+	// Health records each watch push's outcome for `<backend> status
+	// --max-stale`. It is set internally for the watcher holding the watch
+	// lock; it has no CLI flag.
+	Health *replicaWatchHealth
 	// OnPushSuccess refreshes serve-side capabilities after a watch push. It
 	// is set only by the combined PG serve/watch owner.
 	OnPushSuccess func(context.Context)
@@ -60,9 +64,9 @@ type ReplicaStatusConfig struct {
 	ProjectsFlag    string
 	ExcludeProjects string
 	AllProjects     bool
-	// MaxPending fails the status when archive changes have waited longer
-	// than this for a push. Zero disables the check.
-	MaxPending time.Duration
+	// MaxStale fails the status when the push watcher has stalled for
+	// longer than this. Zero disables the check.
+	MaxStale time.Duration
 }
 
 // replicaServeExtras is implemented by a replica registered in
@@ -498,72 +502,43 @@ func runReplicaStatusTarget(
 	if err != nil {
 		return err
 	}
-	if database == nil || !status.HasPushCursor {
-		writeReplicaStatus(os.Stdout, status)
-		if cfg.MaxPending > 0 {
-			return errors.New(
-				"--max-pending needs the local archive and the target's push cursor",
-			)
-		}
+	now := time.Now()
+	path := replicaWatchHealthPath(appCfg.DataDir, backend.Name())
+	rec, recErr := loadReplicaWatchRecord(path)
+	if recErr == nil && rec.Target != target.Name {
+		recErr = fmt.Errorf("%s records target %q", path, rec.Target)
+	}
+	if recErr == nil {
+		status.Rows = append(status.Rows, replicaWatchRows(rec, now)...)
+	}
+	writeReplicaStatus(os.Stdout, status)
+	if cfg.MaxStale <= 0 {
 		return nil
 	}
-	pending, err := database.CountSessionsForMirrorWindow(
-		ctx, status.PushCursor, projects, excludeProjects,
+	if recErr != nil {
+		return fmt.Errorf(
+			"--max-stale needs a record from `agentsview %s push --watch` for this target: %w",
+			backend.Name(), recErr,
+		)
+	}
+	stall, err := replicaWatchStall(rec, now, cfg.MaxStale,
+		func(since time.Time) (int, error) {
+			if database == nil {
+				return 0, errors.New("--max-stale needs the local archive to count changed sessions")
+			}
+			return database.CountSessionsChangedBetween(ctx, since, now)
+		},
 	)
 	if err != nil {
 		return err
 	}
-	row, pendingErr := replicaPendingPush(
-		backend.Name(), status.PushCursor, pending, time.Now(), cfg.MaxPending,
-	)
-	status.Rows = append(status.Rows, row)
-	writeReplicaStatus(os.Stdout, status)
-	return pendingErr
-}
-
-// replicaPendingPush describes the archive sessions changed since the push
-// cursor. The cursor is when the last successful push started, so with
-// changes pending its age bounds how long they have waited. It returns an
-// error when changes are pending and that wait exceeds maxPending; a zero
-// maxPending only reports. A cursor that is never written means every
-// session is pending. name is the backend whose service logs the error
-// points to.
-func replicaPendingPush(
-	name, cursor string, pending int, now time.Time, maxPending time.Duration,
-) (storage.StatusRow, error) {
-	row := storage.StatusRow{Label: "Pending push:"}
-	if pending == 0 {
-		row.Value = "none"
-		return row, nil
-	}
-	if cursor == "" {
-		row.Value = fmt.Sprintf("%d session(s), never pushed", pending)
-		if maxPending > 0 {
-			return row, fmt.Errorf(
-				"%d archive session(s) have never been pushed; "+
-					"run `agentsview %s service logs` to see why pushes fail",
-				pending, name,
-			)
-		}
-		return row, nil
-	}
-	since, err := time.Parse(time.RFC3339Nano, cursor)
-	if err != nil {
-		return row, fmt.Errorf("parsing push cursor %q: %w", cursor, err)
-	}
-	waited := max(now.Sub(since), 0).Round(time.Second)
-	row.Value = fmt.Sprintf(
-		"%d session(s) changed since the push that started %s ago",
-		pending, waited,
-	)
-	if maxPending > 0 && waited > maxPending {
-		return row, fmt.Errorf(
-			"%d archive session(s) have waited %s to push, more than --max-pending %s; "+
-				"run `agentsview %s service logs` to see why pushes fail",
-			pending, waited, maxPending, name,
+	if stall != "" {
+		return fmt.Errorf(
+			"push watcher stalled for more than --max-stale %s: %s; run `agentsview %s service logs` for details",
+			cfg.MaxStale, stall, backend.Name(),
 		)
 	}
-	return row, nil
+	return nil
 }
 
 // writeReplicaStatus prints one label/value row per line with the values

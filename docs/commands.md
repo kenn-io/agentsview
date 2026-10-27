@@ -1326,13 +1326,13 @@ Show PostgreSQL sync status.
 agentsview pg status [target] [flags]
 ```
 
-| Flag                 | Default | Description                                                     |
-| -------------------- | ------- | --------------------------------------------------------------- |
-| `--all`              | `false` | Show status for every configured PostgreSQL target              |
-| `--projects`         |         | Comma-separated projects whose push status to show              |
-| `--exclude-projects` |         | Comma-separated excluded projects whose push status to show     |
-| `--all-projects`     | `false` | Ignore configured project filters for this status               |
-| `--max-pending`      |         | Exit non-zero when changes have waited longer than this to push |
+| Flag                 | Default | Description                                                      |
+| -------------------- | ------- | ---------------------------------------------------------------- |
+| `--all`              | `false` | Show status for every configured PostgreSQL target               |
+| `--projects`         |         | Comma-separated projects whose push status to show               |
+| `--exclude-projects` |         | Comma-separated excluded projects whose push status to show      |
+| `--all-projects`     | `false` | Ignore configured project filters for this status                |
+| `--max-stale`        |         | Exit non-zero when the push watcher has stalled longer than this |
 
 ______________________________________________________________________
 

@@ -371,22 +371,32 @@ print every configured target sequentially.
 Use the same `--projects`, `--exclude-projects`, or `--all-projects` filter
 flags as `clickhouse push`.
 
-The `Pending push:` row counts the archive sessions that changed since the last
-successful push started, and how long ago that push started. A healthy
-[watcher](#automatic-push-watcher) keeps that under a minute. When changes keep
-waiting, pushes are failing; `agentsview clickhouse service logs` shows why.
+When the [push watcher](#automatic-push-watcher) runs on this machine, status
+also shows what it last did. The watcher records each push it runs in
+`clickhouse-watch-health.json` in the data directory. `Watcher last success:`
+is the end of the last push that worked. `Watcher failing since:` and
+`Watcher last error:` appear while pushes fail.
 
-To alert on a stalled push, run status from a timer or monitor with
-`--max-pending`. It exits non-zero when sessions are pending and the last
-successful push started longer ago than the limit:
+To alert on a stalled watcher, run status from a timer or monitor with
+`--max-stale`:
 
 ```bash
-agentsview clickhouse status --max-pending 15m
+agentsview clickhouse status --max-stale 10m
 ```
 
-Pick a limit well above the watcher's `--interval`. A machine with no new
-sessions never fails the check, however old its last push. A machine that never
-pushed fails it as soon as it has sessions.
+The command exits non-zero, and names the cause, when one of these has lasted
+longer than the limit:
+
+- Every push has failed, for any reason.
+- A push started and has not finished.
+- Sessions changed after the last successful push, and no push has run since.
+  This catches a watcher that stopped or is waiting for a local sync.
+
+An idle machine or a laptop that slept does not fail the check: with no new
+sessions there is nothing to push. Set the limit above the watcher's
+`--debounce` plus the time one push takes. It does not need to exceed the
+`--interval` floor. Without a watcher record for the target, `--max-stale`
+fails, because nothing reports what pushes did.
 
 ### `agentsview clickhouse service`
 

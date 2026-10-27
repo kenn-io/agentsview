@@ -73,11 +73,8 @@ type pushHooks struct {
 
 // SyncStatus summarizes a mirror from its own metadata.
 type SyncStatus struct {
-	Machine    string `json:"machine"`
-	LastPushAt string `json:"last_push_at"`
-	// LastPushCutoff is the archive sync_marker bound the next incremental
-	// push reads from.
-	LastPushCutoff  string `json:"last_push_cutoff"`
+	Machine         string `json:"machine"`
+	LastPushAt      string `json:"last_push_at"`
 	LastPushMachine string `json:"last_push_machine"`
 	Scope           string `json:"scope"`
 	SchemaVersion   int    `json:"schema_version"`
@@ -194,7 +191,6 @@ func ReadStatus(
 	meta, err := readMetadata(ctx, conn,
 		schemaVersionKey, sourceDataVersionKey,
 		archiveMetadataKey(lastPushAtKeyBase, archiveID),
-		archiveMetadataKey(lastPushCutoffKeyBase, archiveID),
 		archiveMetadataKey(lastPushMachineKeyBase, archiveID),
 		archiveMetadataKey(pushScopeKeyBase, archiveID),
 	)
@@ -208,7 +204,6 @@ func ReadStatus(
 	status.SchemaVersion, _ = strconv.Atoi(meta[schemaVersionKey])
 	status.DataVersion, _ = strconv.Atoi(meta[sourceDataVersionKey])
 	status.LastPushAt = meta[archiveMetadataKey(lastPushAtKeyBase, archiveID)]
-	status.LastPushCutoff = meta[archiveMetadataKey(lastPushCutoffKeyBase, archiveID)]
 	status.LastPushMachine = meta[archiveMetadataKey(lastPushMachineKeyBase, archiveID)]
 	status.Scope = meta[archiveMetadataKey(pushScopeKeyBase, archiveID)]
 	sessionSQL := `SELECT COUNT(*) FROM sessions`

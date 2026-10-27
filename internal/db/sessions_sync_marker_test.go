@@ -434,25 +434,6 @@ func TestListSessionsForMirrorWindowInclusiveLowerBoundUnboundedAbove(t *testing
 	none, err := database.ListSessionsForMirrorWindow(ctx, "", []string{"other"}, nil)
 	require.NoError(t, err)
 	assert.Empty(t, none)
-
-	// The count covers the same window and filters as the list.
-	counts := []struct {
-		since            string
-		projects, except []string
-		want             int
-	}{
-		{since: "2026-07-01T10:00:00.000Z", want: 3},
-		{since: "2026-07-01T10:00:00.001Z", want: 2},
-		{since: "", want: 4},
-		{since: "", projects: []string{"other"}, want: 0},
-		{since: "2026-07-01T10:00:00.000Z", projects: []string{"p"}, want: 3},
-		{since: "2026-07-01T10:00:00.000Z", except: []string{"p"}, want: 0},
-	}
-	for _, c := range counts {
-		n, err := database.CountSessionsForMirrorWindow(ctx, c.since, c.projects, c.except)
-		require.NoError(t, err)
-		assert.Equal(t, c.want, n, "since=%q projects=%v exclude=%v", c.since, c.projects, c.except)
-	}
 }
 
 // TestSyncMarkerMalformedCreatedAtIsDropped pins the no-raw-fallback
@@ -780,6 +761,51 @@ func TestPushStateWritesStopWaitingBehindALongWrite(t *testing.T) {
 			endWrite()
 			require.NoError(t, <-writeDone)
 			require.NoError(t, write(t.Context(), database))
+		})
+	}
+}
+
+func TestCountSessionsChangedBetween(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	markers := map[string]string{
+		"c-before":   "2026-10-26T16:00:00.000Z",
+		"c-boundary": "2026-10-26T16:15:00.000Z",
+		"c-after":    "2026-10-26T17:00:00.000Z",
+		"c-future":   "2099-01-01T00:00:00.000Z",
+		"c-none":     "",
+	}
+	for id, marker := range markers {
+		require.NoError(t, database.UpsertSession(ctx, Session{
+			ID: id, Project: "p", Machine: "m", Agent: "a",
+		}))
+		_, err := database.getWriter().ExecContext(ctx,
+			`UPDATE sessions SET sync_marker = ? WHERE id = ?`, marker, id)
+		require.NoError(t, err)
+	}
+	ts := func(s string) time.Time {
+		t.Helper()
+		v, err := time.Parse(time.RFC3339, s)
+		require.NoError(t, err)
+		return v
+	}
+	now := ts("2026-10-26T21:30:00Z")
+	tests := []struct {
+		name  string
+		since time.Time
+		want  int
+	}{
+		// The lower bound is exclusive, and a future-dated marker is not a
+		// change that has happened yet.
+		{name: "after a push", since: ts("2026-10-26T16:15:00Z"), want: 1},
+		{name: "from the beginning skips unmarked sessions", want: 3},
+		{name: "nothing after the last change", since: ts("2026-10-26T17:00:00Z"), want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := database.CountSessionsChangedBetween(ctx, tt.since, now)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

@@ -6677,12 +6677,39 @@ func (db *DB) ListSessionsForMirrorWindow(
 	ctx context.Context, since string,
 	projects, excludeProjects []string,
 ) ([]Session, error) {
-	where, args, err := mirrorWindowWhere(since, projects, excludeProjects)
-	if err != nil {
-		return nil, err
+	query := "SELECT " + sessionFullCols + " FROM sessions"
+	var (
+		args  []any
+		where []string
+	)
+	if since != "" {
+		normalized, err := normalizeMirrorWindowBound(since)
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, "sync_marker >= ?")
+		args = append(args, normalized)
 	}
-	query := "SELECT " + sessionFullCols + " FROM sessions" + where +
-		" ORDER BY created_at"
+	if len(projects) > 0 {
+		placeholders := make([]string, len(projects))
+		for i, p := range projects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(excludeProjects) > 0 {
+		placeholders := make([]string, len(excludeProjects))
+		for i, p := range excludeProjects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY created_at"
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -6861,69 +6888,31 @@ const writerHandoffPollInterval = 50 * time.Millisecond
 // it is waiting, so a short handoff stays quiet.
 const writerHandoffNoticeAfter = 5 * time.Second
 
-// normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
-// as ms-precision UTC text matching the sync_marker column format, so the
-// bound compares correctly against trigger-maintained markers.
-// CountSessionsForMirrorWindow counts the sessions ListSessionsForMirrorWindow
-// would return for the same window and project filters.
-func (db *DB) CountSessionsForMirrorWindow(
-	ctx context.Context, since string,
-	projects, excludeProjects []string,
+// CountSessionsChangedBetween counts sessions whose sync_marker is after since
+// and not after until. A zero since counts from the beginning. The upper bound
+// keeps a future-dated marker from reading as a pending change.
+func (db *DB) CountSessionsChangedBetween(
+	ctx context.Context, since, until time.Time,
 ) (int, error) {
-	where, args, err := mirrorWindowWhere(since, projects, excludeProjects)
-	if err != nil {
-		return 0, err
+	// An empty lower bound still skips sessions with no marker, which no
+	// incremental push selects either.
+	lower := ""
+	if !since.IsZero() {
+		lower = since.UTC().Format(mirrorWindowBoundLayout)
 	}
 	var n int
 	if err := db.getReader().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sessions"+where, args...,
+		"SELECT COUNT(*) FROM sessions WHERE sync_marker > ? AND sync_marker <= ?",
+		lower, until.UTC().Format(mirrorWindowBoundLayout),
 	).Scan(&n); err != nil {
-		return 0, fmt.Errorf(
-			"counting sessions for mirror window since %s: %w", since, err,
-		)
+		return 0, fmt.Errorf("counting sessions changed since %s: %w", since, err)
 	}
 	return n, nil
 }
 
-// mirrorWindowWhere builds the WHERE clause, with its leading space, shared by
-// the mirror window queries. It is empty when nothing filters the window.
-func mirrorWindowWhere(
-	since string, projects, excludeProjects []string,
-) (string, []any, error) {
-	var (
-		args  []any
-		where []string
-	)
-	if since != "" {
-		normalized, err := normalizeMirrorWindowBound(since)
-		if err != nil {
-			return "", nil, err
-		}
-		where = append(where, "sync_marker >= ?")
-		args = append(args, normalized)
-	}
-	if len(projects) > 0 {
-		placeholders := make([]string, len(projects))
-		for i, p := range projects {
-			placeholders[i] = "?"
-			args = append(args, p)
-		}
-		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
-	}
-	if len(excludeProjects) > 0 {
-		placeholders := make([]string, len(excludeProjects))
-		for i, p := range excludeProjects {
-			placeholders[i] = "?"
-			args = append(args, p)
-		}
-		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
-	}
-	if len(where) == 0 {
-		return "", nil, nil
-	}
-	return " WHERE " + strings.Join(where, " AND "), args, nil
-}
-
+// normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
+// as ms-precision UTC text matching the sync_marker column format, so the
+// bound compares correctly against trigger-maintained markers.
 func normalizeMirrorWindowBound(bound string) (string, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, bound)
 	if err != nil {
