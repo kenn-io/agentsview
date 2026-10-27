@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -70,6 +71,25 @@ func BenchmarkMirrorPush(b *testing.B) {
 		require.Zero(b, result.Errors)
 		require.Equal(b, sessionCount, result.SessionsPushed)
 		require.Equal(b, sessionCount*messagesPerSession, result.MessagesPushed)
+		func() {
+			mirror, err := OpenReadOnly(ctx, path)
+			require.NoError(b, err)
+			defer func() { require.NoError(b, mirror.Close()) }()
+			for _, table := range []struct {
+				name string
+				want int
+			}{
+				{"sessions", 100},
+				{"messages", 4000},
+				{"tool_calls", 4000},
+				{"tool_result_events", 4000},
+				{"usage_events", 100},
+			} {
+				var count int
+				require.NoError(b, mirror.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table.name).Scan(&count))
+				assert.Equal(b, table.want, count, table.name)
+			}
+		}()
 		b.StartTimer()
 	}
 }

@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,6 +36,12 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	_, err = syncer.pushSingleSession(ctx, *sess, "initial")
 	require.NoError(t, err)
 	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
+	var summary string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT result_content FROM tool_calls WHERE session_id = ? AND tool_use_id = ?`,
+		sess.ID, "row-102-call-0",
+	).Scan(&summary))
+	assert.Equal(t, strings.Repeat("summary\u03bb", 160000)+"row-102 summary", summary)
 
 	// A shorter replacement must remove every old chunk, including all tools
 	// and usage when the new transcript no longer contains either.
@@ -53,6 +60,122 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events"} {
 		assertDuckDBCount(t, syncer.DB(), table, 0)
 	}
+}
+
+func TestDuckInsertBatchStatementBounds(t *testing.T) {
+	const byteLimit = 1 << 20
+	first, second := strings.Repeat("a", 614400), strings.Repeat("b", 614400)
+	exactPrefix := strings.Repeat("e", byteLimit-4)
+	oversized := strings.Repeat("o", byteLimit+1)
+	empty := ""
+	var null *string
+	smallRows := make([]any, 101)
+	wantSmallRows := make([]sql.NullString, 101)
+	for i := range smallRows {
+		smallRows[i] = "s\u03bb"
+		wantSmallRows[i] = sql.NullString{String: "s\u03bb", Valid: true}
+	}
+	for _, tc := range []struct {
+		name         string
+		values       []any
+		wantValues   []sql.NullString
+		wantRows     []int
+		wantPayloads []int
+	}{
+		{name: "empty"},
+		{
+			name: "100-small-rows", values: smallRows[:100], wantValues: wantSmallRows[:100],
+			wantRows: []int{100}, wantPayloads: []int{300},
+		},
+		{
+			name: "101-small-rows", values: smallRows, wantValues: wantSmallRows,
+			wantRows: []int{100, 1}, wantPayloads: []int{300, 3},
+		},
+		{
+			name: "combined-byte-overflow", values: []any{first, second},
+			wantValues: []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}},
+			wantRows:   []int{1, 1}, wantPayloads: []int{614400, 614400},
+		},
+		{
+			name: "exact-byte-limit-and-tail", values: []any{exactPrefix, "edge", "tail"},
+			wantValues: []sql.NullString{{String: exactPrefix, Valid: true}, {String: "edge", Valid: true}, {String: "tail", Valid: true}},
+			wantRows:   []int{2, 1}, wantPayloads: []int{byteLimit, 4},
+		},
+		{
+			name: "small-oversized-small", values: []any{"a", oversized, "b"},
+			wantValues: []sql.NullString{{String: "a", Valid: true}, {String: oversized, Valid: true}, {String: "b", Valid: true}},
+			wantRows:   []int{1, 1, 1}, wantPayloads: []int{1, byteLimit + 1, 1},
+		},
+		{
+			name: "nullable-pointer-payload", values: []any{&first, &second, null, &empty, nil, ""},
+			wantValues: []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}, {}, {Valid: true}, {}, {Valid: true}},
+			wantRows:   []int{1, 5}, wantPayloads: []int{614400, 614400},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			conn, err := Open(ctx, ":memory:")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			_, err = conn.ExecContext(ctx, `CREATE TABLE batch_bounds (id INTEGER PRIMARY KEY, payload VARCHAR)`)
+			require.NoError(t, err)
+			exec := &duckBatchRecordingExecutor{db: conn}
+			batch := newDuckInsertBatch(ctx, exec, "INSERT INTO batch_bounds (id, payload) VALUES ", 2)
+			for i, value := range tc.values {
+				require.NoError(t, batch.add(i, value))
+			}
+			require.NoError(t, batch.flush())
+
+			var statementRows, statementPayloads []int
+			for _, args := range exec.calls {
+				require.Zero(t, len(args)%2)
+				rows, payload := len(args)/2, 0
+				for i := 1; i < len(args); i += 2 {
+					value, err := driver.DefaultParameterConverter.ConvertValue(args[i])
+					require.NoError(t, err)
+					if value != nil {
+						text, ok := value.(string)
+						require.True(t, ok, "payload must bind as text, got %T", value)
+						payload += len(text)
+					}
+				}
+				assert.Positive(t, rows)
+				assert.LessOrEqual(t, rows, 100)
+				if payload > byteLimit {
+					assert.Equal(t, 1, rows, "an oversized row must be written alone")
+				}
+				statementRows = append(statementRows, rows)
+				statementPayloads = append(statementPayloads, payload)
+			}
+			assert.Equal(t, tc.wantRows, statementRows)
+			assert.Equal(t, tc.wantPayloads, statementPayloads)
+
+			rows, err := conn.QueryContext(ctx, `SELECT id, payload FROM batch_bounds ORDER BY id`)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, rows.Close()) }()
+			var stored []sql.NullString
+			for rows.Next() {
+				var id int
+				var value sql.NullString
+				require.NoError(t, rows.Scan(&id, &value))
+				assert.Equal(t, len(stored), id)
+				stored = append(stored, value)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, tc.wantValues, stored)
+		})
+	}
+}
+
+type duckBatchRecordingExecutor struct {
+	db    *sql.DB
+	calls [][]any
+}
+
+func (e *duckBatchRecordingExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	// The batch clears and reuses its argument slice after each execution.
+	e.calls = append(e.calls, append([]any(nil), args...))
+	return e.db.ExecContext(ctx, query, args...)
 }
 
 func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
@@ -179,6 +302,10 @@ func duckBatchFixture(id string, count int) db.SessionBatchWrite {
 				InputJSON: `{"path":"fixture.go"}`, SkillName: key + " skill",
 				FilePath: key + ".go", SubagentSessionID: key + " child",
 				ResultContent: result, ResultContentLength: len(result),
+			}
+			if i == 102 && j == 0 {
+				tc.ResultContent = strings.Repeat("summary\u03bb", 160000) + "row-102 summary"
+				tc.ResultContentLength = len(tc.ResultContent)
 			}
 			if j == 0 {
 				tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding = &outcome, &repeat, &ending

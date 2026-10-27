@@ -1017,6 +1017,84 @@ func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
 	assertMirrorSessionAbsent(t, path, badID)
 }
 
+func TestPushSkipsInvalidBatchedSessionAfterReopen(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	old := duckBatchFixture("invalid-batched", 1)
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{old})
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	initial, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, initial.Errors)
+	before, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	mirror, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	oldRows := duckBatchSnapshot(t, mirror, old.Session.ID)
+	var oldFingerprint string
+	require.NoError(t, mirror.QueryRowContext(ctx,
+		`SELECT agentsview_push_fingerprint FROM sessions WHERE id = ?`, old.Session.ID,
+	).Scan(&oldFingerprint))
+	require.NoError(t, mirror.Close())
+
+	replacement := duckBatchFixture(old.Session.ID, 203)
+	for i := range replacement.Messages {
+		replacement.Messages[i].Content = fmt.Sprintf("replacement %d", i)
+		replacement.Messages[i].ContentLength = len(replacement.Messages[i].Content)
+	}
+	// The native timestamp failure follows the first complete message chunk.
+	replacement.Messages[150].Timestamp = "not-a-timestamp"
+	healthy := duckBatchFixture("valid-new", 1)
+	healthy.Messages[0].Content = "healthy session survives the failed batch"
+	healthy.Messages[0].ContentLength = len(healthy.Messages[0].Content)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{replacement, healthy})
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	oldLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldLog) })
+
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	require.False(t, result.Diagnostics.Full)
+	assert.Equal(t, 1, result.Errors)
+	assert.Equal(t, 1, result.SessionsPushed)
+	assert.Contains(t, logs.String(), "skipping session "+old.Session.ID)
+	assert.Contains(t, logs.String(), "timestamp")
+	after, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, before.LastPushCutoff, after.LastPushCutoff)
+	assert.Equal(t, before.LastPushAt, after.LastPushAt)
+	mirror, err = OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, oldRows, duckBatchSnapshot(t, mirror, old.Session.ID))
+	var fingerprint, content string
+	require.NoError(t, mirror.QueryRowContext(ctx,
+		`SELECT agentsview_push_fingerprint FROM sessions WHERE id = ?`, old.Session.ID,
+	).Scan(&fingerprint))
+	assert.Equal(t, oldFingerprint, fingerprint)
+	require.NoError(t, mirror.QueryRowContext(ctx,
+		`SELECT content FROM messages WHERE session_id = ? AND ordinal = 0`, healthy.Session.ID,
+	).Scan(&content))
+	assert.Equal(t, "healthy session survives the failed batch", content)
+	assertDuckBatchParity(t, local, mirror, healthy.Session.ID)
+	require.NoError(t, mirror.Close())
+
+	replacement.Messages[150].Timestamp = "2026-01-02T03:04:05.123Z"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{replacement})
+	require.NoError(t, err)
+	retry, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, retry.Errors)
+	assert.Equal(t, 1, retry.SessionsPushed)
+	mirror, err = OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mirror.Close()) }()
+	assertDuckBatchParity(t, local, mirror, old.Session.ID)
+	assertDuckBatchParity(t, local, mirror, healthy.Session.ID)
+}
+
 func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)

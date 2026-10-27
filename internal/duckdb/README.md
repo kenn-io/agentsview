@@ -32,7 +32,8 @@ do not bound the existing whole-session source load.
 Errors and cancellation still roll back the transaction; chunks do not commit
 independently. No schema change or DuckDB extension is required.
 
-Run the generated full-mirror benchmark with:
+The generated full-mirror benchmark checks stored row counts outside its timed
+`Push` calls. Run it with:
 
 ```bash
 go test -tags fts5 ./internal/duckdb -run '^$' -bench '^BenchmarkMirrorPush$' -benchtime=1x -count=3
