@@ -280,6 +280,13 @@ func TestFrictionRunRouteDisabled(t *testing.T) {
 	assertBodyContains(t, w, "friction review is not enabled")
 }
 
+func TestVersionReportsFrictionReadsOnArchive(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/v1/version")
+	assertStatus(t, w, http.StatusOK)
+	assert.True(t, decode[server.VersionInfo](t, w).FrictionReadable)
+}
+
 func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
 	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
 		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
@@ -293,6 +300,9 @@ func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	cfg := config.Config{Host: "127.0.0.1"}
 	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+	w := te.get(t, "/api/v1/version")
+	assertStatus(t, w, http.StatusOK)
+	assert.False(t, decode[server.VersionInfo](t, w).FrictionReadable)
 	for _, path := range []string{
 		"/api/v1/friction/digests",
 		"/api/v1/friction/digests/2026-09-14",

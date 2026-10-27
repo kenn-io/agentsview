@@ -156,18 +156,14 @@ func runFrictionReview(cmd *cobra.Command, req review.RunRequest) ([]frictionRun
 	if runner == nil {
 		return nil, errors.New("friction review is disabled; set [friction] enabled = true in config.toml")
 	}
-	reports, err := runner.Run(cmd.Context(), req)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]frictionRunReport, 0, len(reports))
-	for _, r := range reports {
+	var out []frictionRunReport
+	err = runner.Run(cmd.Context(), req, nil, func(r review.Report) {
 		out = append(out, frictionRunReport{
 			Date: r.Date, Written: r.Written,
 			Summary: friction.RenderSummaryJSON(r.Snapshot.DigestSnapshot),
 		})
-	}
-	return out, nil
+	})
+	return out, err
 }
 
 func runFrictionReviewHTTP(

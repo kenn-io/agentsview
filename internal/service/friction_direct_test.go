@@ -56,7 +56,6 @@ func TestDirectFrictionService(t *testing.T) {
 			assert.Equal(t, 1, view.Revision)
 			assert.Equal(t, "# Friction Log — "+tt.wantDate+"\n", view.Markdown)
 			assert.JSONEq(t, `{"schema_version":1}`, string(view.Summary))
-			assert.Empty(t, view.WebURL, "direct reads have no browser address")
 		})
 	}
 	t.Run("invalid_date", func(t *testing.T) {

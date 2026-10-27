@@ -208,6 +208,7 @@ func (s *Server) humaGetVersion(
 		version.SessionStatsAvailable = false
 	}
 	version.FrictionAvailable = s.frictionRunner != nil
+	_, version.FrictionReadable = s.db.(db.FrictionReader)
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 

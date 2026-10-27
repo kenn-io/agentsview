@@ -8538,6 +8538,8 @@ components:
           type: integer
         friction_available:
           type: boolean
+        friction_readable:
+          type: boolean
         insight_generation_available:
           type: boolean
         read_only:

@@ -31,7 +31,6 @@ type frictionDigestOut struct {
 	Format   string         `json:"format"`
 	Markdown string         `json:"markdown,omitempty"`
 	Summary  map[string]any `json:"summary,omitempty"`
-	WebURL   string         `json:"web_url,omitempty" jsonschema:"Browser URL for this digest; use this URL when linking to it."`
 }
 
 func (t *toolset) frictionDigest(
@@ -57,7 +56,7 @@ func (t *toolset) frictionDigest(
 	}
 	out := frictionDigestOut{
 		Date: view.Date, Timezone: view.Timezone, Revision: view.Revision,
-		Format: format, WebURL: view.WebURL,
+		Format: format,
 	}
 	if format == "markdown" {
 		out.Markdown = view.Markdown

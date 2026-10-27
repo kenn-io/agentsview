@@ -46,7 +46,6 @@ type FrictionDigestView struct {
 	Revision int            `json:"revision"`
 	Markdown string         `json:"markdown"`
 	Summary  jsontext.Value `json:"summary"`
-	WebURL   string         `json:"web_url,omitempty"`
 }
 
 // FrictionDigestListItem is one digest in a date range, newest first.

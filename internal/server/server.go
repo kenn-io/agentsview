@@ -51,8 +51,11 @@ type VersionInfo struct {
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	FrictionAvailable          bool   `json:"friction_available"`
-	APIVersion                 int    `json:"api_version"`
-	DataVersion                int    `json:"data_version"`
+	// FrictionReadable reports that this store serves the Friction Log
+	// read routes; mirrors without friction tables omit it.
+	FrictionReadable bool `json:"friction_readable,omitempty"`
+	APIVersion       int  `json:"api_version"`
+	DataVersion      int  `json:"data_version"`
 }
 
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
