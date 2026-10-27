@@ -263,20 +263,13 @@ func (ix *Index) Refresh(
 	var stats RefreshStats
 	seen := make(map[string]struct{})
 	visited := make(map[string]struct{})
-	occurrences := make(map[string]int)
 	evicted := make(map[string]struct{})
 	sentinel, err := ix.parkingFloor(ctx)
 	if err != nil {
 		return RefreshStats{}, err
 	}
-	visitUnit := func(u db.EmbeddableUnit) error {
-		occurrence := 1
-		if u.SourceUUID != "" {
-			occKey := u.SessionID + "\x00" + u.SourceUUID
-			occurrences[occKey]++
-			occurrence = occurrences[occKey]
-		}
-		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
+	visitDocument := func(u UnitDocument) error {
+		key := u.DocKey
 		if u.Deleted {
 			deleted, err := ix.deleteMirrorDocument(ctx, key)
 			if err != nil {
@@ -287,7 +280,7 @@ func (ix *Index) Refresh(
 			}
 			return nil
 		}
-		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel)
+		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, u, &sentinel)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
 		}
@@ -304,21 +297,39 @@ func (ix *Index) Refresh(
 		return nil
 	}
 	runCap := RunMaxRunes(ix.split.MaxRunes)
-	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
-	if err != nil {
-		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
+	var nextWatermark string
+	var scanErr error
+	stop := errors.New("stop unit scan")
+	units := func(yield func(db.EmbeddableUnit) bool) {
+		visitUnit := func(u db.EmbeddableUnit) error {
+			if !yield(u) {
+				return stop
+			}
+			return nil
+		}
+		nextWatermark, scanErr = src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
+		if scanErr != nil {
+			return
+		}
+		// Rescan only sessions the watermark scan skipped so occurrence
+		// counters never count the same units twice.
+		for _, id := range changed {
+			if _, ok := visited[id]; ok {
+				continue
+			}
+			if scanErr = journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, runCap, visitUnit); scanErr != nil {
+				scanErr = fmt.Errorf("rescanning journaled session %s: %w", id, scanErr)
+				return
+			}
+		}
 	}
-
-	// Rescan journaled sessions the watermark scan skipped. A session it
-	// already visited is never rescanned: the occurrence counters would mint
-	// "#2" keys for its units.
-	for _, id := range changed {
-		if _, ok := visited[id]; ok {
-			continue
+	for document := range UnitDocuments(units) {
+		if err := visitDocument(document); err != nil {
+			return RefreshStats{}, err
 		}
-		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, runCap, visitUnit); err != nil {
-			return RefreshStats{}, fmt.Errorf("rescanning journaled session %s: %w", id, err)
-		}
+	}
+	if scanErr != nil {
+		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", scanErr)
 	}
 
 	// finalizeEvictions must run before full-mode reconcileDeletions: an
@@ -414,8 +425,9 @@ func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, er
 // is a per-Refresh-call counter evictSlotOccupant uses to park a displaced
 // row at a unique negative ordinal; see evictSlotOccupant.
 func (ix *Index) upsertMirrorRow(
-	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int,
+	ctx context.Context, u UnitDocument, sentinel *int,
 ) (unchanged bool, evicted []string, err error) {
+	key := u.DocKey
 	evicted, err = ix.evictSlotOccupant(ctx, key, u.SessionID, u.Ordinal, sentinel)
 	if err != nil {
 		return false, nil, err
@@ -429,7 +441,7 @@ func (ix *Index) upsertMirrorRow(
 		return false, evicted, fmt.Errorf("reading existing content hash: %w", err)
 	}
 
-	hash := contentHash(u.Content)
+	hash := u.ContentHash
 	unchanged = existingHash.Valid && existingHash.String == hash
 
 	offsets, err := marshalOffsets(u.Offsets)

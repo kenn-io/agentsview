@@ -68,6 +68,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installHostedFrictionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = installHostedVectorUpgrade(ctx, tx, schema, tenant); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL); err != nil {
 			return err
 		}
@@ -117,19 +120,28 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, vectorBaseDDL); err != nil {
 		return err
 	}
+	if err = ensureVectorRecipeColumn(ctx, tx); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `CREATE TABLE hosted_tenant_binding(singleton SMALLINT PRIMARY KEY,tenant_id TEXT NOT NULL)`); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO hosted_tenant_binding(singleton,tenant_id) VALUES (1,$1)`, tenant); err != nil {
 		return err
 	}
-	if err = checkHostedInventory(ctx, tx, schema); err != nil {
+	if _, err = tx.ExecContext(ctx, hostedVectorDDL); err != nil {
+		return err
+	}
+	if _, err = checkHostedInventory(ctx, tx, schema); err != nil {
 		return err
 	}
 	if err = InstallHostedTables(ctx, tx, schema, tenant, hostedTables); err != nil {
 		return fmt.Errorf("installing hosted tenant constraints: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, rawProjectionIndexesDDL); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, hostedVectorIndexesDDL); err != nil {
 		return err
 	}
 	// Statement trigger also fences DELETE/TRUNCATE, which a literal CHECK cannot.
@@ -204,43 +216,48 @@ func checkHostedBinding(ctx context.Context, q hostedQuerier, schema, tenant str
 	return nil
 }
 
-func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) error {
-	expected := make(map[string]bool, len(hostedTables))
-	for _, t := range hostedTables {
+func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) ([]HostedTable, error) {
+	tables, err := hostedCatalogTables(ctx, q, schema)
+	if err != nil {
+		return nil, err
+	}
+	expected := make(map[string]bool, len(tables))
+	for _, t := range tables {
 		expected[t.Name] = true
 	}
 	rows, err := q.QueryContext(ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')`, schema)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var name string
 		if err = rows.Scan(&name); err != nil {
-			return err
+			return nil, err
 		}
 		if !expected[name] && strings.HasPrefix(name, "vector_") {
-			return errors.New("hosted vector schema is unsupported")
+			return nil, errors.New("hosted vector schema is unsupported")
 		}
 		if !expected[name] {
-			return fmt.Errorf("hosted schema contains uninventoried relation %s", name)
+			return nil, fmt.Errorf("hosted schema contains uninventoried relation %s", name)
 		}
 		delete(expected, name)
 	}
 	if err = rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if len(expected) > 0 {
-		return errors.New("hosted schema is missing required tables")
+		return nil, errors.New("hosted schema is missing required tables")
 	}
-	return nil
+	return tables, nil
 }
 
 func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant string) error {
-	if err := checkHostedInventory(ctx, q, schema); err != nil {
+	tables, err := checkHostedInventory(ctx, q, schema)
+	if err != nil {
 		return err
 	}
-	for _, table := range hostedTables {
+	for _, table := range tables {
 		var good bool
 		err := q.QueryRowContext(ctx, `SELECT c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity
    AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnotnull AND a.atttypid='text'::regtype)

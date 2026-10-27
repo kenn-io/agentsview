@@ -231,3 +231,22 @@ func TestHostedRuntimeClaudeFixtureHasTwoPreparedMessages(t *testing.T) {
 	assert.Equal(t, "assistant", prepared.Messages[1].Role)
 	assert.Equal(t, "hello viewer", prepared.Messages[1].Content)
 }
+
+func TestHostedRawEmbeddingsRejectMissingTransportBeforeOpeningDatabase(t *testing.T) {
+	_, err := prepareHostedPGServe(config.Config{RequireAuth: true}, config.PGConfig{RawTenant: "tenant", Schema: "hosted", RawDerivation: true, RawEmbeddings: true, URL: "://invalid"}, "")
+	require.ErrorContains(t, err, "server")
+}
+
+func TestHostedProvisionRequiresRecipeBeforeOpeningDatabase(t *testing.T) {
+	dataDir := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`require_auth = true
+[pg]
+url = "://invalid"
+schema = "hosted"
+raw_tenant = "tenant"
+raw_derivation = true
+raw_embeddings = true
+`), 0o600))
+	cmd := newPGHostedProvisionCommand()
+	require.ErrorContains(t, cmd.Execute(), "[vector.embeddings]")
+}

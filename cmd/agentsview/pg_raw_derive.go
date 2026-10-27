@@ -86,6 +86,9 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return replicaServeStartup{}, err
 	}
+	if err := app.ValidatePGRawEmbeddings(pg, false); err != nil {
+		return replicaServeStartup{}, err
+	}
 	if pg.RawDerivation && app.ToolResultImages == config.ToolResultImagesOffload {
 		return replicaServeStartup{}, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
@@ -218,6 +221,14 @@ func newPGHostedProvisionCommand() *cobra.Command {
 		if pg.RawTenant == "" {
 			return errors.New("hosted-provision requires raw_tenant in the selected PG target")
 		}
+		if pg.RawEmbeddings {
+			if err = cfg.ValidatePGRawDerivation(pg); err != nil {
+				return err
+			}
+			if err = cfg.ValidatePGRawEmbeddings(pg, true); err != nil {
+				return err
+			}
+		}
 		applyClassifierConfig(cfg)
 		database, err := postgres.Open(pg.URL, pg.Schema, pg.AllowInsecure)
 		if err != nil {
@@ -226,6 +237,11 @@ func newPGHostedProvisionCommand() *cobra.Command {
 		defer database.Close()
 		if err = postgres.EnsureHostedTenant(cmd.Context(), database, pg.Schema, pg.RawTenant); err != nil {
 			return fmt.Errorf("hosted provisioning failed: %w", err)
+		}
+		if pg.RawEmbeddings {
+			if _, err = postgres.EnsureHostedVectorGeneration(cmd.Context(), database, pg.Schema, pg.RawTenant, vectorGeneration(cfg.Vector.Embeddings)); err != nil {
+				return fmt.Errorf("hosted vector provisioning failed: %w", err)
+			}
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Hosted tenant schema provisioned. Use a restricted tenant runtime connection to serve.")
 		return nil

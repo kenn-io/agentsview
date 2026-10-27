@@ -76,7 +76,7 @@ var hostedTables = append([]HostedTable{
 		{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
 	}},
 	{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
-}, append(append([]HostedTable(nil), hostedFrictionTables...), rawProjectionTables...)...)
+}, append(append(append([]HostedTable(nil), hostedFrictionTables...), rawProjectionTables...), hostedVectorTables...)...)
 
 // hostedCoreUpgradeTables are inventoried core tables added after hosted
 // schemas were first provisioned, with the DDL that creates each one.
