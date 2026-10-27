@@ -213,7 +213,7 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 5)
+	require.Len(t, plan.Roots, 6)
 	assert.Equal(t, filepath.Join(root, "brain"), plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, 1, plan.Roots[0].MaxDepth)
@@ -233,8 +233,11 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "cache"), plan.Roots[3].Path)
 	assert.False(t, plan.Roots[3].Recursive)
 	assert.Equal(t, []string{"last_conversations.json"}, plan.Roots[3].IncludeGlobs)
-	assert.Equal(t, filepath.Join(root, "implicit"), plan.Roots[4].Path)
+	assert.Equal(t, filepath.Clean(root), filepath.Clean(plan.Roots[4].Path))
 	assert.False(t, plan.Roots[4].Recursive)
+	assert.Equal(t, []string{"conversation_summaries.db", "conversation_summaries.db-wal"}, plan.Roots[4].IncludeGlobs)
+	assert.Equal(t, filepath.Join(root, "implicit"), plan.Roots[5].Path)
+	assert.False(t, plan.Roots[5].Recursive)
 
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)

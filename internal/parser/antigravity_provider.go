@@ -34,7 +34,7 @@ func (f antigravityProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		Def:     cloneAgentDef(f.def),
 		Caps:    antigravityProviderCapabilities(),
 		Config:  cfg,
-		sources: newAntigravitySourceSet(cfg.Roots),
+		sources: newAntigravitySourceSet(cfg),
 	}
 }
 
@@ -129,9 +129,21 @@ func (p *antigravityProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
+	project := req.Source.ProjectHint
+	if project != "" {
+		// A remote workspace names a folder on another machine, so its
+		// project comes from the path text alone, as for the CLI provider.
+		projectCtx := ctx
+		if req.Source.CwdResolution.State == SourceCwdRemote || p.Config.PathRewriter != nil {
+			projectCtx = WithoutFilesystemProjectDiscovery(projectCtx)
+		}
+		if normalized := ExtractProjectFromCwdWithBranchContext(projectCtx, project, ""); normalized != "" {
+			project = normalized
+		}
+	}
 	sess, msgs, usageEvents, err := p.parseSession(ctx,
 		src.Path,
-		req.Source.ProjectHint,
+		project,
 		machine,
 	)
 	if err != nil {
@@ -143,6 +155,13 @@ func (p *antigravityProvider) Parse(
 			ForceReplace:      true,
 			SkipReason:        SkipNoSession,
 		}, nil
+	}
+	if req.Source.CwdResolution.State == SourceCwdResolved {
+		sess.Cwd = req.Source.CwdResolution.Path
+	}
+	if parent := loadAntigravitySummaries(ctx, src.Root).parent(src.ID); parent != "" {
+		sess.ParentSessionID = antigravityIDPrefix + parent
+		sess.RelationshipType = RelSubagent
 	}
 	applyAntigravityTitle(ctx, sess, src)
 	if req.Fingerprint.Hash != "" {
@@ -169,11 +188,17 @@ type antigravitySource struct {
 }
 
 type antigravitySourceSet struct {
-	roots []string
+	roots       []string
+	remote      bool
+	remoteRoots map[string]bool
 }
 
-func newAntigravitySourceSet(roots []string) antigravitySourceSet {
-	return antigravitySourceSet{roots: cleanJSONLRoots(roots)}
+func newAntigravitySourceSet(cfg ProviderConfig) antigravitySourceSet {
+	return antigravitySourceSet{
+		roots:       cleanJSONLRoots(cfg.Roots),
+		remote:      cfg.PathRewriter != nil,
+		remoteRoots: antigravityRemoteRoots(cfg),
+	}
 }
 
 func (s antigravitySourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -183,8 +208,9 @@ func (s antigravitySourceSet) Discover(ctx context.Context) ([]SourceRef, error)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		seedAntigravitySummaryRoutes(root, loadAntigravitySummaries(ctx, root))
 		for _, path := range s.discoverSessionPaths(root) {
-			source, ok := s.sourceRef(root, path, false)
+			source, ok := s.sourceRef(ctx, root, path, false)
 			if ok {
 				addJSONLSource(source, &sources, seen)
 			}
@@ -199,6 +225,7 @@ func (s antigravitySourceSet) DiscoverEach(ctx context.Context, yield func(Sourc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		seedAntigravitySummaryRoutes(root, loadAntigravitySummaries(ctx, root))
 		dir := filepath.Join(root, "conversations")
 		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 			name := entry.Name()
@@ -206,7 +233,7 @@ func (s antigravitySourceSet) DiscoverEach(ctx context.Context, yield func(Sourc
 				!IsValidSessionID(strings.TrimSuffix(name, ".db")) {
 				return nil
 			}
-			if source, ok := s.sourceRef(root, filepath.Join(dir, name), false); ok {
+			if source, ok := s.sourceRef(ctx, root, filepath.Join(dir, name), false); ok {
 				if err := yield(source); err != nil {
 					return err
 				}
@@ -222,7 +249,7 @@ func (s antigravitySourceSet) DiscoverEach(ctx context.Context, yield func(Sourc
 				IsRegularFile(filepath.Join(root, "conversations", id+".db")) {
 				return nil
 			}
-			if source, ok := s.sourceRef(root, antigravityBrainTranscriptPath(root, id), false); ok {
+			if source, ok := s.sourceRef(ctx, root, antigravityBrainTranscriptPath(root, id), false); ok {
 				return yield(source)
 			}
 			return nil
@@ -342,7 +369,20 @@ func (s antigravitySourceSet) SourcesForChangedPath(
 		if req.WatchRoot != "" && !antigravityWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		source, ok := s.sourceForChangedPath(root, req.Path)
+		if antigravitySummariesPath(root, req.Path) {
+			// Only conversations whose workspace or parent changed reparse;
+			// titles reconcile separately.
+			var sources []SourceRef
+			for _, id := range changedAntigravitySummaryIDs(ctx, root) {
+				if path := s.findSourceFile(root, id); path != "" {
+					if source, ok := s.sourceRef(ctx, root, path, false); ok {
+						sources = append(sources, source)
+					}
+				}
+			}
+			return sources, nil
+		}
+		source, ok := s.sourceForChangedPath(ctx, root, req.Path)
 		if ok {
 			return []SourceRef{source}, nil
 		}
@@ -364,7 +404,7 @@ func (s antigravitySourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			if source, ok := s.sourceRef(root, path, true); ok {
+			if source, ok := s.sourceRef(ctx, root, path, true); ok {
 				src := source.Opaque.(antigravitySource)
 				if req.RawSessionID != "" && src.ID != req.RawSessionID {
 					continue
@@ -387,7 +427,7 @@ func (s antigravitySourceSet) FindSource(
 		if path == "" {
 			continue
 		}
-		if source, ok := s.sourceRef(root, path, false); ok {
+		if source, ok := s.sourceRef(ctx, root, path, false); ok {
 			return source, true, nil
 		}
 	}
@@ -413,9 +453,13 @@ func (s antigravitySourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := antigravityCompositeHash(
+	summaries := loadAntigravitySummaries(ctx, src.Root)
+	hash, err := antigravityCompositeHashWithExtra(
 		src.Path,
-		antigravityIDECompanionPaths(src.Path)...,
+		antigravityIDECompanionPaths(src.Path),
+		func(h interface{ Write([]byte) (int, error) }) error {
+			return summaries.writeFingerprint(h, src.ID)
+		},
 	)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -439,8 +483,7 @@ func (s antigravitySourceSet) sourceFromRef(source SourceRef) (antigravitySource
 	}
 	for _, candidate := range []string{source.DisplayPath, source.FingerprintKey, source.Key} {
 		for _, root := range s.roots {
-			if ref, ok := s.sourceRef(root, candidate, true); ok {
-				src := ref.Opaque.(antigravitySource)
+			if src, ok := s.resolveSource(root, candidate, true); ok {
 				return src, true
 			}
 		}
@@ -448,41 +491,50 @@ func (s antigravitySourceSet) sourceFromRef(source SourceRef) (antigravitySource
 	return antigravitySource{}, false
 }
 
-func (s antigravitySourceSet) sourceForChangedPath(root, path string) (SourceRef, bool) {
+func (s antigravitySourceSet) sourceForChangedPath(
+	ctx context.Context, root, path string,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if dbPath, _, ok := antigravityConversationDBForPath(root, path); ok {
-		return s.sourceRef(root, dbPath, true)
-	}
-	if id, ok := antigravityIDETrajectoryID(root, path); ok {
-		dbPath := filepath.Join(root, "conversations", id+".db")
-		if IsRegularFile(dbPath) {
-			return s.newSourceRef(root, dbPath, id), true
-		}
-	}
-	if id, ok := antigravityAnnotationID(root, path); ok {
-		dbPath := filepath.Join(root, "conversations", id+".db")
-		if IsRegularFile(dbPath) {
-			return s.newSourceRef(root, dbPath, id), true
-		}
+		return s.sourceRef(ctx, root, dbPath, true)
 	}
 	if transcriptRoot, _, ok := antigravityBrainTranscriptConversation(path); ok &&
 		samePath(transcriptRoot, root) {
-		return s.sourceRef(root, path, true)
+		return s.sourceRef(ctx, root, path, true)
 	}
-	if id, ok := antigravityBrainID(root, path); ok {
-		dbPath := filepath.Join(root, "conversations", id+".db")
-		if IsRegularFile(dbPath) {
-			return s.newSourceRef(root, dbPath, id), true
+	for _, sidecarID := range []func(string, string) (string, bool){
+		antigravityIDETrajectoryID, antigravityAnnotationID, antigravityBrainID,
+	} {
+		if id, ok := sidecarID(root, path); ok {
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			if !IsRegularFile(dbPath) {
+				return SourceRef{}, false
+			}
+			return s.newSourceRef(ctx, antigravitySource{Root: root, Path: dbPath, ID: id}), true
 		}
 	}
 	return SourceRef{}, false
 }
 
 func (s antigravitySourceSet) sourceRef(
+	ctx context.Context,
 	root, path string,
 	allowMissing bool,
 ) (SourceRef, bool) {
+	src, ok := s.resolveSource(root, path, allowMissing)
+	if !ok {
+		return SourceRef{}, false
+	}
+	return s.newSourceRef(ctx, src), true
+}
+
+// resolveSource finds the conversation a session path belongs to and the
+// file that currently holds it.
+func (s antigravitySourceSet) resolveSource(
+	root, path string,
+	allowMissing bool,
+) (antigravitySource, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if transcriptRoot, id, ok := antigravityBrainTranscriptConversation(path); ok &&
@@ -491,41 +543,50 @@ func (s antigravitySourceSet) sourceRef(
 		// the transcript joins it as a companion instead of standing alone.
 		dbPath := filepath.Join(root, "conversations", id+".db")
 		if IsRegularFile(dbPath) {
-			return s.newSourceRef(root, dbPath, id), true
+			return antigravitySource{Root: root, Path: dbPath, ID: id}, true
 		}
 		if !allowMissing && !IsRegularFile(path) {
-			return SourceRef{}, false
+			return antigravitySource{}, false
 		}
-		return s.newSourceRef(root, path, id), true
+		return antigravitySource{Root: root, Path: path, ID: id}, true
 	}
 	dbPath, id, ok := antigravityConversationDBForPath(root, path)
 	if !ok || dbPath != path {
-		return SourceRef{}, false
+		return antigravitySource{}, false
 	}
 	// A removed database hands the same conversation back to its transcript.
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		transcript := antigravityBrainTranscriptPath(root, id)
 		if IsRegularFile(transcript) {
-			return s.newSourceRef(root, transcript, id), true
+			return antigravitySource{Root: root, Path: transcript, ID: id}, true
 		}
 	}
 	if !allowMissing && !IsRegularFile(path) {
-		return SourceRef{}, false
+		return antigravitySource{}, false
 	}
-	return s.newSourceRef(root, path, id), true
+	return antigravitySource{Root: root, Path: path, ID: id}, true
 }
 
-func (s antigravitySourceSet) newSourceRef(root, path, id string) SourceRef {
+// newSourceRef builds the source for one conversation. Its working directory
+// comes from the workspace the summary store records. A remote root keeps
+// that workspace only as a project hint, because it names a folder on
+// another machine.
+func (s antigravitySourceSet) newSourceRef(ctx context.Context, src antigravitySource) SourceRef {
+	summaries := loadAntigravitySummaries(ctx, src.Root)
+	resolution := summaries.cwdResolution(src.ID)
+	project := resolution.Path
+	if s.remote || antigravityRemoteRoot(s.remoteRoots, src.Root) {
+		project = summaries.byID[src.ID].workspace
+		resolution = SourceCwdResolution{State: SourceCwdRemote}
+	}
 	return SourceRef{
 		Provider:       AgentAntigravity,
-		Key:            path,
-		DisplayPath:    path,
-		FingerprintKey: path,
-		Opaque: antigravitySource{
-			Root: root,
-			Path: path,
-			ID:   id,
-		},
+		Key:            src.Path,
+		DisplayPath:    src.Path,
+		FingerprintKey: src.Path,
+		ProjectHint:    project,
+		CwdResolution:  resolution,
+		Opaque:         src,
 	}
 }
 
@@ -617,12 +678,20 @@ func antigravityProviderCapabilities() Capabilities {
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,
+			Cwd:                  CapabilitySupported,
+			Relationships:        CapabilitySupported,
 			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
+		},
+		// The fingerprint covers the summary store's workspace and parent,
+		// which change without touching the conversation's own files.
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

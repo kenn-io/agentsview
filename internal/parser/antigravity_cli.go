@@ -399,6 +399,11 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			Mtime: mtime,
 		},
 	}
+	if parentCascadeID == "" {
+		// Without the reader sidecar, the summary store still names the
+		// conversation that started a sub-agent conversation.
+		parentCascadeID = loadAntigravitySummaries(ctx, root).parent(id)
+	}
 	if parentCascadeID != "" && !strings.EqualFold(parentCascadeID, id) {
 		sess.ParentSessionID = antigravityCLIIDPrefix + parentCascadeID
 		sess.RelationshipType = RelSubagent
@@ -712,6 +717,14 @@ func buildAntigravityCLIProjectMap(root string) map[string]string {
 	maps.Copy(out, antigravityProjectMapFromLastConversations(
 		filepath.Join(root, "cache", "last_conversations.json"),
 	))
+	// The cache keeps only each folder's latest conversation and current
+	// history rows carry no conversation ID, so the summary store fills the
+	// conversations they leave unmapped.
+	for id, summary := range loadAntigravitySummaries(context.Background(), root).byID {
+		if _, ok := out[id]; !ok && summary.workspace != "" {
+			out[id] = summary.workspace
+		}
+	}
 	return out
 }
 
@@ -1163,6 +1176,10 @@ func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
 				filepath.Join(filepath.Dir(filepath.Dir(path)), "history.jsonl"),
 				strings.TrimPrefix(id, antigravityImplicitTag),
 			); err != nil {
+				return err
+			}
+			if err := loadAntigravitySummaries(context.Background(), filepath.Dir(filepath.Dir(path))).
+				writeFingerprint(h, strings.TrimPrefix(id, antigravityImplicitTag)); err != nil {
 				return err
 			}
 			if workspace == "" {
