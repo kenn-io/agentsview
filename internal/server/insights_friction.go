@@ -7,17 +7,13 @@ import (
 	"fmt"
 	"net/http"
 
-	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 )
 
 // errFrictionDigestNotFound reports a friction_review request for a date
 // without a stored digest.
 var errFrictionDigestNotFound = errors.New("friction digest not found")
-
-// frictionReviewPageSize is the page size used to read a digest's findings
-// and the recent pattern rows.
-const frictionReviewPageSize = 1000
 
 // validateFrictionReviewRequest applies friction_review's scope before any
 // stream opens: exactly one digest date, no project or session filters, and
@@ -85,27 +81,38 @@ func (s *Server) buildFrictionReviewPayload(
 		return insight.CannedAggregatePayload{}, "", "",
 			fmt.Errorf("decoding friction p0 alerts %s: %w", date, err)
 	}
-	findings, err := frictionDigestFindings(ctx, fr, date)
+	// Rank from the digest's frozen snapshot so the payload, and its cache
+	// key, describe that digest even after later sessions add findings.
+	snap, err := review.DecodeSnapshot(digest.SnapshotJSON)
 	if err != nil {
-		return insight.CannedAggregatePayload{}, "", "", err
+		return insight.CannedAggregatePayload{}, "", "",
+			fmt.Errorf("decoding friction snapshot %s: %w", date, err)
 	}
-	fingerprints := make(map[string]bool, len(findings))
-	for _, f := range findings {
-		fingerprints[f.Fingerprint] = true
+	occurrences := make([]insight.CannedFrictionOccurrence, 0, len(snap.Signals))
+	for _, sig := range snap.Signals {
+		occurrences = append(occurrences, insight.CannedFrictionOccurrence{
+			SubjectID: sig.SubjectID, Kind: string(sig.Kind),
+			Title: sig.Title(), Fingerprint: sig.Fingerprint(),
+		})
 	}
-	firstSeen, err := frictionFirstSeen(ctx, fr, date, fingerprints)
+	patterns, err := frictionDigestPatterns(ctx, fr, snap.Signals)
 	if err != nil {
-		return insight.CannedAggregatePayload{}, "", "", err
+		return insight.CannedAggregatePayload{}, "", "",
+			fmt.Errorf("loading friction patterns for %s: %w", date, err)
+	}
+	firstSeen := make(map[string]string, len(patterns))
+	for _, p := range patterns {
+		firstSeen[p.Fingerprint] = p.FirstSeenDate
 	}
 
-	review := insight.CannedFrictionReviewInput{
+	input := insight.CannedFrictionReviewInput{
 		Date:         date,
 		Timezone:     digest.Timezone,
 		RulesVersion: digest.RulesVersion,
 		Revision:     digest.Revision,
 		Summary:      summary,
 		TopPatterns: insight.RankCannedFrictionPatterns(
-			date, findings, firstSeen, insight.MaxCannedFrictionPatterns,
+			date, occurrences, firstSeen, insight.MaxCannedFrictionPatterns,
 		),
 		P0Alerts: insight.CannedFrictionP0Alerts(p0.P0Alerts),
 	}
@@ -121,9 +128,9 @@ func (s *Server) buildFrictionReviewPayload(
 		AutomatedScope: filters.AutomatedScope,
 		Filters:        filters,
 		Focus:          req.Prompt,
-		Friction:       &review,
+		Friction:       &input,
 	}
-	payload.EvidenceRefs = insight.CannedFrictionEvidenceRefs(review)
+	payload.EvidenceRefs = insight.CannedFrictionEvidenceRefs(input)
 
 	aggregateHash, err := insight.CannedAggregateHash(payload)
 	if err != nil {
@@ -137,53 +144,4 @@ func (s *Server) buildFrictionReviewPayload(
 		return insight.CannedAggregatePayload{}, "", "", err
 	}
 	return payload, aggregateHash, cacheKey, nil
-}
-
-func frictionDigestFindings(
-	ctx context.Context, fr db.FrictionReader, date string,
-) ([]db.FrictionFinding, error) {
-	var out []db.FrictionFinding
-	cursor := ""
-	for {
-		page, next, err := fr.ListFrictionFindings(ctx, db.FrictionFindingFilter{
-			Date: date, Limit: frictionReviewPageSize, Cursor: cursor,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("listing friction findings for %s: %w", date, err)
-		}
-		out = append(out, page...)
-		if next == "" {
-			return out, nil
-		}
-		cursor = next
-	}
-}
-
-// frictionFirstSeen returns first_seen_date for the given fingerprints. Every
-// fingerprint in digest D has last_seen_date >= D, so Since: date covers them.
-func frictionFirstSeen(
-	ctx context.Context, fr db.FrictionReader, date string, fingerprints map[string]bool,
-) (map[string]string, error) {
-	out := make(map[string]string, len(fingerprints))
-	if len(fingerprints) == 0 {
-		return out, nil
-	}
-	cursor := ""
-	for {
-		page, next, err := fr.ListFrictionPatterns(ctx, db.FrictionPatternFilter{
-			Since: date, Limit: frictionReviewPageSize, Cursor: cursor,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("listing friction patterns since %s: %w", date, err)
-		}
-		for _, p := range page {
-			if fingerprints[p.Fingerprint] {
-				out[p.Fingerprint] = p.FirstSeenDate
-			}
-		}
-		if next == "" || len(out) == len(fingerprints) {
-			return out, nil
-		}
-		cursor = next
-	}
 }

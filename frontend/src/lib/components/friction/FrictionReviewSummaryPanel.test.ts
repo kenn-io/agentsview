@@ -41,8 +41,11 @@ class ResizeObserverMock {
   disconnect = vi.fn();
 }
 
-function saved(date: string, content: string) {
+function saved(date: string, content: string, revision = 1) {
   return {
+    provenance_json: JSON.stringify({
+      source_versions: { friction_digest_revision: String(revision) },
+    }),
     id: 7,
     type: "llm_canned",
     kind: "friction_review",
@@ -75,14 +78,14 @@ beforeEach(() => {
 
 describe("FrictionReviewSummaryPanel", () => {
   it("labels model output and describes its inputs and side effects", async () => {
-    render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     expect(screen.getByText(/model-written summary/i)).toBeTruthy();
     expect(screen.getByText(/does not change findings, digests, or issues/i)).toBeTruthy();
   });
 
   it("lists saved insights for exactly the digest date", async () => {
-    render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     expect(mocks.getInsights.mock.lastCall?.[0]).toEqual({
       type: "llm_canned",
@@ -95,17 +98,45 @@ describe("FrictionReviewSummaryPanel", () => {
     mocks.getInsights.mockResolvedValue({
       insights: [saved("2025-01-15", "Bash failures dominate.")],
     });
-    render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     await settle();
     expect(screen.getByText("Bash failures dominate.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /regenerate/i })).toBeTruthy();
   });
 
+  it("hides a summary saved for an older revision of the digest", async () => {
+    mocks.getInsights.mockResolvedValue({
+      insights: [saved("2025-01-15", "Old summary.", 1)],
+    });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 2 });
+    await settle();
+    await settle();
+    expect(screen.queryByText("Old summary.")).toBeNull();
+    expect(screen.getByRole("button", { name: /generate summary/i })).toBeTruthy();
+  });
+
+  it("retries a failed regeneration as a regeneration", async () => {
+    mocks.getInsights.mockResolvedValue({
+      insights: [saved("2025-01-15", "Bash failures dominate.")],
+    });
+    mocks.generateInsight
+      .mockReturnValueOnce({ abort: vi.fn(), done: Promise.reject(new Error("model unavailable")) })
+      .mockReturnValueOnce({ abort: vi.fn(), done: new Promise(() => {}) });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
+    await settle();
+    await settle();
+    await fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
+    await settle();
+    await fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(mocks.generateInsight).toHaveBeenCalledTimes(2);
+    expect(mocks.generateInsight.mock.calls[1]?.[0]).toMatchObject({ force_refresh: true });
+  });
+
   it("explicitly opts in with the selected agent", async () => {
     mocks.agent = "codex";
     mocks.generateInsight.mockReturnValue({ abort: vi.fn(), done: new Promise(() => {}) });
-    render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: /generate summary/i }));
     expect(mocks.generateInsight).toHaveBeenCalledWith(
@@ -123,7 +154,7 @@ describe("FrictionReviewSummaryPanel", () => {
 
   it("disables generation when the archive cannot generate insights", async () => {
     mocks.serverVersion = { read_only: true, insight_generation_available: false };
-    render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     const button = screen.getByRole("button", { name: /generate summary/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
@@ -139,10 +170,10 @@ describe("FrictionReviewSummaryPanel", () => {
         resolveStale = resolve;
       }),
     });
-    const { rerender } = render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    const { rerender } = render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: /generate summary/i }));
-    await rerender({ date: "2025-01-14" });
+    await rerender({ date: "2025-01-14", revision: 1 });
     await settle();
     expect(abortStale).toHaveBeenCalled();
     resolveStale(saved("2025-01-15", "STALE SUMMARY"));
@@ -154,12 +185,12 @@ describe("FrictionReviewSummaryPanel", () => {
     mocks.getInsights
       .mockResolvedValueOnce({ insights: [saved("2025-01-15", "OLD SUMMARY")] })
       .mockImplementationOnce(() => new Promise(() => {}));
-    const { rerender } = render(FrictionReviewSummaryPanel, { date: "2025-01-15" });
+    const { rerender } = render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
     await settle();
     expect(screen.getByText("OLD SUMMARY")).toBeTruthy();
 
-    await rerender({ date: "2025-01-14" });
+    await rerender({ date: "2025-01-14", revision: 1 });
     await settle();
     expect(screen.queryByText("OLD SUMMARY")).toBeNull();
     expect(screen.queryByText("test-model")).toBeNull();

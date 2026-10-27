@@ -6,20 +6,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"go.kenn.io/agentsview/internal/db"
 )
 
-func testFrictionFinding(session, kind, title, fingerprint string) db.FrictionFinding {
-	return db.FrictionFinding{
-		SessionID:   session,
-		Kind:        kind,
-		Detector:    kind,
-		Title:       title,
-		Fingerprint: fingerprint,
-		Text:        "RAW-CONTEXT " + session,
-		Evidence:    "RAW-EVIDENCE " + session,
-	}
+func testFrictionFinding(session, kind, title, fingerprint string) CannedFrictionOccurrence {
+	return CannedFrictionOccurrence{SubjectID: session, Kind: kind, Title: title, Fingerprint: fingerprint}
 }
 
 func TestRankCannedFrictionPatterns(t *testing.T) {
@@ -29,7 +19,7 @@ func TestRankCannedFrictionPatterns(t *testing.T) {
 	dfTitle := "[friction/deferral] s3: defer"
 	inTitle := "[friction/interruption] s4"
 	frTitle := "[friction/frustration] s4: FRUSTRATION-RAW this is still broken"
-	findings := []db.FrictionFinding{
+	findings := []CannedFrictionOccurrence{
 		testFrictionFinding("s1", "error", errTitle, "fl1:bb"),
 		testFrictionFinding("s2", "error", errTitle, "fl1:bb"),
 		testFrictionFinding("s1", "workaround", wkTitle, "fl1:cc"),
@@ -45,12 +35,12 @@ func TestRankCannedFrictionPatterns(t *testing.T) {
 		{Ref: "friction:pattern:02", Fingerprint: "fl1:cc", Kind: "workaround", Title: wkTitle, DigestOccurrences: 2, DigestSessions: 1, FirstSeenDate: date, Recurring: false},
 		{Ref: "friction:pattern:03", Fingerprint: "fl1:dd", Kind: "interruption", Title: inTitle, DigestOccurrences: 2, DigestSessions: 1, FirstSeenDate: date, Recurring: false},
 		{Ref: "friction:pattern:04", Fingerprint: "fl1:aa", Kind: "deferral", Title: dfTitle, DigestOccurrences: 1, DigestSessions: 1, FirstSeenDate: date, Recurring: false},
-		// Frustration titles quote the user (spec §6.7), so the title is withheld.
+		// Frustration titles quote the user, so the title is withheld.
 		{Ref: "friction:pattern:05", Fingerprint: "fl1:ee", Kind: "frustration", Title: "", DigestOccurrences: 1, DigestSessions: 1, FirstSeenDate: date, Recurring: false},
 	}
 	tests := []struct {
 		name     string
-		findings []db.FrictionFinding
+		findings []CannedFrictionOccurrence
 		limit    int
 		want     []CannedFrictionPattern
 	}{
@@ -78,7 +68,7 @@ func TestRankCannedFrictionPatterns(t *testing.T) {
 	})
 
 	t.Run("caps_at_twenty", func(t *testing.T) {
-		var many []db.FrictionFinding
+		var many []CannedFrictionOccurrence
 		for i := range 25 {
 			fp := "fl1:" + string(rune('a'+i))
 			many = append(many, testFrictionFinding("s1", "error", "t"+fp, fp))

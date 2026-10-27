@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -58,29 +59,51 @@ func replaceTestSessionFriction(ctx context.Context, d *db.DB, id string, findin
 	}})
 }
 
-func frictionTestFingerprint(title string) string {
-	sum := sha256.Sum256([]byte(title))
-	return "fl1:" + hex.EncodeToString(sum[:])
-}
-
-func frictionTestFinding(session, kind, detector, title string, seq int) db.FrictionFinding {
-	ordinal := seq + 1
-	return db.FrictionFinding{
-		SessionID:      session,
-		Kind:           kind,
-		Detector:       detector,
-		MessageOrdinal: &ordinal,
-		ToolName:       "Bash",
-		Text:           frictionReviewTextMark + " " + session,
-		Evidence:       frictionReviewEvidMark,
-		Title:          title,
-		Fingerprint:    frictionTestFingerprint(title),
-		Seq:            seq,
-		RulesVersion:   friction.RulesVersion,
+// frictionTestSignals are the 2025-01-15 digest's frozen findings. Each
+// title matches its constant; the raw-text and evidence markers sit in fields
+// that never reach a title, so the payload must not carry them.
+func frictionTestSignals() []friction.Signal {
+	sig := func(subject string, kind friction.Kind, tool, label, text string, seq int) friction.Signal {
+		ordinal := seq + 1
+		return friction.Signal{
+			Kind: kind, SubjectID: subject, SubjectKind: friction.SubjectSession,
+			Detector: string(kind), ToolName: tool, Label: label, Text: text,
+			Evidence: frictionReviewEvidMark, Ordinal: &ordinal, Seq: seq,
+		}
+	}
+	return []friction.Signal{
+		sig("fr-1", friction.KindError, "Bash", frictionReviewTextMark, "exit status 1", 0),
+		sig("fr-1", friction.KindWorkaround, "", "for now", "hardcode the port", 1),
+		sig("fr-1", friction.KindFrustration, "", "", "FRUSTRATION-RAW this is still broken", 2),
+		sig("fr-2", friction.KindError, "Bash", frictionReviewTextMark, "exit status 1", 0),
+		sig("fr-2", friction.KindPattern, "", "", "retry loop: `Bash` called 4 times with identical arguments", 1),
+		sig("fr-2", friction.KindInterruption, "", "", "", 2),
+		sig("fr-2", friction.KindInterruption, "", "", "", 3),
 	}
 }
 
-func frictionTestDigest(date, summary string, revision int) db.FrictionDigest {
+func frictionTestFindings(session string, sigs []friction.Signal) []db.FrictionFinding {
+	var out []db.FrictionFinding
+	for _, sig := range sigs {
+		if sig.SubjectID != session {
+			continue
+		}
+		out = append(out, db.FrictionFinding{
+			SessionID: session, Kind: string(sig.Kind), Detector: sig.Detector,
+			MessageOrdinal: sig.Ordinal, ToolName: sig.ToolName, Label: sig.Label,
+			Text: sig.Text, Evidence: sig.Evidence, Title: sig.Title(),
+			Fingerprint: sig.Fingerprint(), Seq: sig.Seq, RulesVersion: friction.RulesVersion,
+		})
+	}
+	return out
+}
+
+func frictionTestDigest(t *testing.T, date, summary string, revision int, sigs []friction.Signal) db.FrictionDigest {
+	t.Helper()
+	snapshot, err := review.EncodeSnapshot(review.Snapshot{
+		Timezone: "UTC", RulesVersion: friction.RulesVersion, Date: date, Signals: sigs,
+	})
+	require.NoError(t, err)
 	markdown := []byte("# Friction Log — " + date + "\n")
 	sum := sha256.Sum256(markdown)
 	return db.FrictionDigest{
@@ -90,7 +113,7 @@ func frictionTestDigest(date, summary string, revision int) db.FrictionDigest {
 		BuiltAt:         time.Date(2025, 1, 16, 1, 0, 0, 0, time.UTC),
 		Revision:        revision,
 		SessionsScanned: 2,
-		SnapshotJSON:    []byte(`{}`),
+		SnapshotJSON:    snapshot,
 		SummaryJSON:     []byte(summary),
 		Markdown:        markdown,
 		MarkdownSHA256:  hex.EncodeToString(sum[:]),
@@ -106,35 +129,27 @@ func seedFrictionReviewDigest(t *testing.T, te *testEnv) {
 	ctx := t.Context()
 	te.seedSession(t, "fr-1", "my-app", 4)
 	te.seedSession(t, "fr-2", "my-app", 4)
-	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-1", []db.FrictionFinding{
-		frictionTestFinding("fr-1", "error", "error", frictionErrTitle, 0),
-		frictionTestFinding("fr-1", "workaround", "workaround", frictionWkTitle, 1),
-		frictionTestFinding("fr-1", "frustration", "frustration", frictionFrustTitle, 2),
-	}, "hash-fr-1"))
-	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-2", []db.FrictionFinding{
-		frictionTestFinding("fr-2", "error", "error", frictionErrTitle, 0),
-		frictionTestFinding("fr-2", "pattern", "pattern.retry_loop", frictionPatTitle, 1),
-		frictionTestFinding("fr-2", "interruption", "interruption", frictionIntTitle, 2),
-		frictionTestFinding("fr-2", "interruption", "interruption", frictionIntTitle, 3),
-	}, "hash-fr-2"))
+	sigs := frictionTestSignals()
+	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-1", frictionTestFindings("fr-1", sigs), "hash-fr-1"))
+	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-2", frictionTestFindings("fr-2", sigs), "hash-fr-2"))
 
 	require.NoError(t, te.db.SaveFrictionDigest(ctx,
-		frictionTestDigest(frictionReviewEarlier, frictionReviewSummary, 1),
+		frictionTestDigest(t, frictionReviewEarlier, frictionReviewSummary, 1, sigs[:1]),
 		nil,
 		[]db.FrictionPatternUpdate{{
-			Fingerprint: frictionTestFingerprint(frictionErrTitle), Kind: "error",
+			Fingerprint: friction.FingerprintTitle(frictionErrTitle), Kind: "error",
 			Title: frictionErrTitle, Date: frictionReviewEarlier, SubjectID: "fr-old", Occurrences: 1,
 		}},
 	))
 	updates := []db.FrictionPatternUpdate{
-		{Fingerprint: frictionTestFingerprint(frictionErrTitle), Kind: "error", Title: frictionErrTitle, Date: frictionReviewDate, SubjectID: "fr-2", Occurrences: 2},
-		{Fingerprint: frictionTestFingerprint(frictionWkTitle), Kind: "workaround", Title: frictionWkTitle, Date: frictionReviewDate, SubjectID: "fr-1", Occurrences: 1},
-		{Fingerprint: frictionTestFingerprint(frictionPatTitle), Kind: "pattern", Title: frictionPatTitle, Date: frictionReviewDate, SubjectID: "fr-2", Occurrences: 1},
-		{Fingerprint: frictionTestFingerprint(frictionFrustTitle), Kind: "frustration", Title: frictionFrustTitle, Date: frictionReviewDate, SubjectID: "fr-1", Occurrences: 1},
-		{Fingerprint: frictionTestFingerprint(frictionIntTitle), Kind: "interruption", Title: frictionIntTitle, Date: frictionReviewDate, SubjectID: "fr-2", Occurrences: 2},
+		{Fingerprint: friction.FingerprintTitle(frictionErrTitle), Kind: "error", Title: frictionErrTitle, Date: frictionReviewDate, SubjectID: "fr-2", Occurrences: 2},
+		{Fingerprint: friction.FingerprintTitle(frictionWkTitle), Kind: "workaround", Title: frictionWkTitle, Date: frictionReviewDate, SubjectID: "fr-1", Occurrences: 1},
+		{Fingerprint: friction.FingerprintTitle(frictionPatTitle), Kind: "pattern", Title: frictionPatTitle, Date: frictionReviewDate, SubjectID: "fr-2", Occurrences: 1},
+		{Fingerprint: friction.FingerprintTitle(frictionFrustTitle), Kind: "frustration", Title: frictionFrustTitle, Date: frictionReviewDate, SubjectID: "fr-1", Occurrences: 1},
+		{Fingerprint: friction.FingerprintTitle(frictionIntTitle), Kind: "interruption", Title: frictionIntTitle, Date: frictionReviewDate, SubjectID: "fr-2", Occurrences: 2},
 	}
 	require.NoError(t, te.db.SaveFrictionDigest(ctx,
-		frictionTestDigest(frictionReviewDate, frictionReviewSummary, 1),
+		frictionTestDigest(t, frictionReviewDate, frictionReviewSummary, 1, sigs),
 		[]db.FrictionDigestSubject{
 			{SubjectID: "fr-1", Date: frictionReviewDate, SubjectKind: "session"},
 			{SubjectID: "fr-2", Date: frictionReviewDate, SubjectKind: "session"},
@@ -224,6 +239,12 @@ func TestGenerateFrictionReviewInsight_SavesAndCaches(t *testing.T) {
 	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`} {
 		assert.NotContains(t, prompt, notWant)
 	}
+
+	// A finding stored after the digest was built is not part of that digest.
+	late := frictionTestSignals()[:1]
+	late[0].Text = "a later failure"
+	require.NoError(t, replaceTestSessionFriction(t.Context(), te.db, "fr-1",
+		frictionTestFindings("fr-1", late), "hash-fr-1-late"))
 
 	w = te.post(t, "/api/v1/insights/generate", frictionReviewRequest)
 	assertStatus(t, w, http.StatusOK)

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 )
 
@@ -51,6 +50,11 @@ func CannedFrictionPatternRef(rank int) string {
 	return fmt.Sprintf("friction:pattern:%02d", rank)
 }
 
+// CannedFrictionOccurrence is one finding frozen in a digest snapshot.
+type CannedFrictionOccurrence struct {
+	SubjectID, Kind, Title, Fingerprint string
+}
+
 // RankCannedFrictionPatterns folds a digest's findings by fingerprint and
 // returns the top patterns by in-digest occurrences, then distinct sessions,
 // then fingerprint. firstSeen maps fingerprint to friction_patterns
@@ -59,7 +63,7 @@ func CannedFrictionPatternRef(rank int) string {
 // user; every other kind keeps its title.
 func RankCannedFrictionPatterns(
 	date string,
-	findings []db.FrictionFinding,
+	findings []CannedFrictionOccurrence,
 	firstSeen map[string]string,
 	limit int,
 ) []CannedFrictionPattern {
@@ -80,7 +84,7 @@ func RankCannedFrictionPatterns(
 			byFingerprint[f.Fingerprint] = a
 		}
 		a.occurrences++
-		a.sessions[f.SessionID] = struct{}{}
+		a.sessions[f.SubjectID] = struct{}{}
 	}
 	out := make([]CannedFrictionPattern, 0, len(byFingerprint))
 	for fingerprint, a := range byFingerprint {

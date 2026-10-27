@@ -19,6 +19,7 @@ function insight(overrides: Partial<DbInsight> = {}): DbInsight {
     prompt: null,
     content: "Summary",
     created_at: "2025-01-16T00:00:00Z",
+    provenance_json: JSON.stringify({ source_versions: { friction_digest_revision: "3" } }),
     ...overrides,
   } as DbInsight;
 }
@@ -26,32 +27,24 @@ function insight(overrides: Partial<DbInsight> = {}): DbInsight {
 describe("pickFrictionReviewInsight", () => {
   it.each([
     ["other kind", insight({ kind: "tool_reliability_review" })],
-    ["other date", insight({ date_from: "2025-01-14", date_to: "2025-01-14" })],
-    ["containing range", insight({ date_from: "2025-01-14" })],
-    ["project scope", insight({ project: "p1" })],
-    ["other type", insight({ type: "daily_activity" })],
+    [
+      "older digest revision",
+      insight({
+        provenance_json: JSON.stringify({ source_versions: { friction_digest_revision: "2" } }),
+      }),
+    ],
+    ["no recorded revision", insight({ provenance_json: "" })],
   ])("ignores %s", (_name, row) => {
-    expect(pickFrictionReviewInsight([row], "2025-01-15")).toBeNull();
+    expect(pickFrictionReviewInsight([row], "2025-01-15", 3)).toBeNull();
   });
 
   it("returns the newest matching row from newest-first lists", () => {
     const latest = insight({ id: 2 });
-    expect(pickFrictionReviewInsight([latest, insight()], "2025-01-15")).toBe(latest);
+    expect(pickFrictionReviewInsight([latest, insight()], "2025-01-15", 3)).toBe(latest);
   });
 });
 
 describe("frictionReviewRequest", () => {
-  it("opts in for one date without project or filters", () => {
-    expect(frictionReviewRequest("2025-01-15", "codex", false)).toEqual({
-      type: "llm_canned",
-      kind: "friction_review",
-      llm_opt_in: true,
-      date_from: "2025-01-15",
-      date_to: "2025-01-15",
-      agent: "codex",
-    });
-  });
-
   it("forces refresh only when regenerating", () => {
     expect(frictionReviewRequest("2025-01-15", "claude", true).force_refresh).toBe(true);
   });

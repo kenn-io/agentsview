@@ -2,9 +2,27 @@ import type { DbInsight, GenerateInsightRequest } from "../../api/generated/inde
 
 export const FRICTION_REVIEW_KIND = "friction_review" as const;
 
+// digestRevision reads the digest revision a saved summary was written from.
+function digestRevision(row: DbInsight): number | null {
+  try {
+    const provenance = JSON.parse(row.provenance_json ?? "") as {
+      source_versions?: Record<string, string>;
+    };
+    const value = Number(provenance.source_versions?.friction_digest_revision);
+    return Number.isInteger(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 // The list endpoint treats dates as range bounds, so match both bounds.
-// Results are newest first.
-export function pickFrictionReviewInsight(list: DbInsight[], date: string): DbInsight | null {
+// Results are newest first. A summary of an older revision of the digest is
+// out of date and not shown.
+export function pickFrictionReviewInsight(
+  list: DbInsight[],
+  date: string,
+  revision: number,
+): DbInsight | null {
   return (
     list.find(
       (row) =>
@@ -12,7 +30,8 @@ export function pickFrictionReviewInsight(list: DbInsight[], date: string): DbIn
         row.kind === FRICTION_REVIEW_KIND &&
         !row.project &&
         row.date_from === date &&
-        row.date_to === date,
+        row.date_to === date &&
+        digestRevision(row) === revision,
     ) ?? null
   );
 }

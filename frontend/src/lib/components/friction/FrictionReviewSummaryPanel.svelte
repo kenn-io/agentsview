@@ -12,13 +12,15 @@
   import { LatestRead } from "../../utils/latest-read.js";
   import { frictionReviewRequest, pickFrictionReviewInsight } from "./frictionReviewSummary.js";
 
-  let { date }: { date: string } = $props();
+  let { date, revision }: { date: string; revision: number } = $props();
 
   let summary: DbInsight | null = $state(null);
   let loading = $state(false);
   let generating = $state(false);
   let phase = $state("");
   let error: string | null = $state(null);
+  // Retry repeats the failed request, including a forced regeneration.
+  let lastForceRefresh = $state(false);
 
   let fetchVersion = 0;
   let genVersion = 0;
@@ -48,6 +50,7 @@
 
   $effect(() => {
     const requestedDate = date;
+    const requestedRevision = revision;
     const version = ++fetchVersion;
     const signal = listRead.begin();
     abortGeneration();
@@ -61,7 +64,7 @@
     )
       .then((response) => {
         if (version !== fetchVersion || !listRead.isCurrent(signal)) return;
-        summary = pickFrictionReviewInsight(response.insights, requestedDate);
+        summary = pickFrictionReviewInsight(response.insights, requestedDate, requestedRevision);
         loading = false;
       })
       .catch((cause) => {
@@ -83,6 +86,7 @@
     generating = true;
     phase = "starting";
     error = null;
+    lastForceRefresh = forceRefresh;
 
     const version = ++genVersion;
     const current = generateInsight(frictionReviewRequest(date, insights.agent, forceRefresh), (next) => {
@@ -150,7 +154,7 @@
   {:else if error}
     <div class="state error">
       <span>{error}</span>
-      {@render controls(m.activity_insight_retry(), false)}
+      {@render controls(m.activity_insight_retry(), lastForceRefresh)}
     </div>
   {:else if summary}
     <article class="markdown-body">

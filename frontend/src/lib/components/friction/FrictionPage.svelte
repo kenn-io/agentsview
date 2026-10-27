@@ -208,7 +208,7 @@
           sessions={digest.sessions}
         />
 
-        <FrictionReviewSummaryPanel date={digest.date} />
+        <FrictionReviewSummaryPanel date={digest.date} revision={digest.revision} />
 
         {#each sections as section (section.kind)}
           {#if section.signals.length > 0}

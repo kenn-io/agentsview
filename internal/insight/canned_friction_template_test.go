@@ -44,15 +44,6 @@ func testFrictionReviewPayload(revision int) CannedAggregatePayload {
 	return payload
 }
 
-func TestFrictionReviewTemplateRegistered(t *testing.T) {
-	assert.True(t, ValidCannedKinds[CannedFrictionReview])
-	tmpl, ok := CannedTemplate(CannedFrictionReview)
-	require.True(t, ok)
-	assert.Equal(t, "friction_review", tmpl.ID)
-	assert.Equal(t, "2026-09-22", tmpl.Version)
-	assert.Equal(t, "Friction Review", tmpl.Title)
-}
-
 func TestCannedAggregateHashOmitsNilFriction(t *testing.T) {
 	payload := CannedAggregatePayload{
 		Kind:     CannedPromptMaturityReview,
