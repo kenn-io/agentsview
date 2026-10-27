@@ -600,13 +600,9 @@ func (b *codexSessionBuilder) handleAgentMessage(
 }
 
 func (b *codexSessionBuilder) applyThreadSettings(payload gjson.Result) {
-	switch payload.Get("thread_settings.service_tier").Str {
-	case "priority":
+	b.serviceTierProviderID = ""
+	if payload.Get("thread_settings.model_provider_id").Str == "openai" && payload.Get("thread_settings.service_tier").Str == "priority" {
 		b.serviceTierProviderID = pricing.OpenAIPriorityProviderID
-	case "ultrafast":
-		b.serviceTierProviderID = pricing.OpenAIUltrafastProviderID
-	default:
-		b.serviceTierProviderID = ""
 	}
 }
 

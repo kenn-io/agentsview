@@ -202,7 +202,6 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 		model, input, cached, output, creation, bandInput, bandCached, bandOutput, bandCreation string
 	}{
 		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
-		{"gpt-6.1-sol@ultrafast", "12", "0.6", "60", "15", "24", "1.2", "90", "30"},
 		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "", "", "", ""},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
@@ -224,7 +223,6 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.bandCreation), price.Bands[0].CacheCreationPerMTok)
 		})
 	}
-	assert.NotContains(t, byModel, "gpt-5.5@ultrafast")
 	// LiteLLM publishes a priority input price for gpt-5-nano without an output price.
 	assert.Contains(t, byModel, "gpt-5-nano@priority")
 }

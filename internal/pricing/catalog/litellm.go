@@ -24,10 +24,11 @@ const (
 	litellmBaseURL     = "https://raw.githubusercontent.com/BerriAI/litellm/"
 	litellmPricingFile = "model_prices_and_context_window.json"
 	litellmURL         = litellmBaseURL + "main/" + litellmPricingFile
+	priorityTier       = "priority"
 )
 
-// TierPattern identifies a model's service-tier pricing row.
-func TierPattern(pattern, tier string) string { return pattern + "@" + tier }
+// PriorityPattern identifies a model's Fast pricing row.
+func PriorityPattern(pattern string) string { return pattern + "@" + priorityTier }
 
 // ModelPricing holds per-model token pricing in cost per million tokens.
 // CacheCreation1hPerMTok prices 1-hour-TTL cache writes; zero means the
@@ -56,10 +57,9 @@ var inputThresholdRatePattern = regexp.MustCompile(
 	`^input_cost_per_token_above_([0-9]+)(k?)_tokens$`,
 )
 
-var tierInputThresholdRatePatterns = map[string]*regexp.Regexp{
-	"priority":  regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens_priority$`),
-	"ultrafast": regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens_ultrafast$`),
-}
+var priorityInputThresholdRatePattern = regexp.MustCompile(
+	`^input_cost_per_token_above_([0-9]+)(k?)_tokens_` + priorityTier + `$`,
+)
 
 // FetchLiteLLMPricingContext downloads the LiteLLM pricing JSON and binds the
 // request lifetime to ctx.
@@ -164,45 +164,53 @@ func ParseLiteLLMPricing(
 			return nil, err
 		}
 		prices = append(prices, p)
-		for _, tier := range []string{"priority", "ultrafast"} {
-			input, present, err := parseOptionalRate(fields, "input_cost_per_token_"+tier)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s %s input price: %w", model, tier, err)
-			}
-			if !present {
-				continue
-			}
-			output, present, err := parseOptionalRate(fields, "output_cost_per_token_"+tier)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s %s output price: %w", model, tier, err)
-			}
-			tp := p
-			tp.ModelPattern = TierPattern(model, tier)
-			tp.InputPerMTok = input
-			if present {
-				tp.OutputPerMTok = output
-			}
-			for field, dest := range map[string]*money.Money{
-				"cache_read_input_token_cost":     &tp.CacheReadPerMTok,
-				"cache_creation_input_token_cost": &tp.CacheCreationPerMTok,
-			} {
-				rate, present, err := parseOptionalRate(fields, field+"_"+tier)
-				if err != nil {
-					return nil, fmt.Errorf("parsing %s %s: %w", tp.ModelPattern, field, err)
-				}
-				if present {
-					*dest = rate
-				}
-			}
-			tp.Bands, err = parsePricingBands(model, fields, tp,
-				tierInputThresholdRatePatterns[tier])
-			if err != nil {
-				return nil, err
-			}
-			prices = append(prices, tp)
+		priority, present, err := parsePriorityPricing(model, fields, p)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			prices = append(prices, priority)
 		}
 	}
 	return prices, nil
+}
+
+func parsePriorityPricing(model string, fields map[string]jsontext.Value, p ModelPricing) (ModelPricing, bool, error) {
+	input, present, err := parseOptionalRate(fields, "input_cost_per_token_"+priorityTier)
+	if err != nil {
+		return ModelPricing{}, false, fmt.Errorf("parsing %s %s input price: %w", model, priorityTier, err)
+	}
+	if !present {
+		return ModelPricing{}, false, nil
+	}
+	output, present, err := parseOptionalRate(fields, "output_cost_per_token_"+priorityTier)
+	if err != nil {
+		return ModelPricing{}, false, fmt.Errorf("parsing %s %s output price: %w", model, priorityTier, err)
+	}
+	tp := p
+	tp.ModelPattern = PriorityPattern(model)
+	tp.InputPerMTok = input
+	if present {
+		tp.OutputPerMTok = output
+	}
+	for field, dest := range map[string]*money.Money{
+		"cache_read_input_token_cost":     &tp.CacheReadPerMTok,
+		"cache_creation_input_token_cost": &tp.CacheCreationPerMTok,
+	} {
+		rate, present, err := parseOptionalRate(fields, field+"_"+priorityTier)
+		if err != nil {
+			return ModelPricing{}, false, fmt.Errorf("parsing %s %s: %w", tp.ModelPattern, field, err)
+		}
+		if present {
+			*dest = rate
+		}
+	}
+	tp.Bands, err = parsePricingBands(model, fields, tp,
+		priorityInputThresholdRatePattern)
+	if err != nil {
+		return ModelPricing{}, false, err
+	}
+	return tp, true, nil
 }
 
 func parsePricingBands(
@@ -261,7 +269,7 @@ func parsePricingBands(
 		for _, companion := range companions {
 			key := companion.prefix + suffix
 			rate, exists, err := parseOptionalRate(fields, key)
-			standardSuffix := strings.TrimSuffix(strings.TrimSuffix(suffix, "_priority"), "_ultrafast")
+			standardSuffix := strings.TrimSuffix(suffix, "_"+priorityTier)
 			if err == nil && !exists && standardSuffix != suffix {
 				key = companion.prefix + standardSuffix
 				rate, exists, err = parseOptionalRate(fields, key)

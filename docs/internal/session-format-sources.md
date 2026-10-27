@@ -58,8 +58,7 @@ generated bundle records both immutable refs as `source_ref` and
 replacing current rates with stale ones.
 
 The embedded catalog includes LiteLLM's service-tier rows. For `gpt-6.1-sol`,
-priority costs $4 input, $0.20 cache read, and $20 output per million tokens;
-ultrafast costs $12, $0.60, and $60, respectively.
+priority costs $4 input, $0.20 cache read, and $20 output per million tokens.
 Reverified 2026-10-26 against the pinned
 [`get_cost_per_unit` calculator](https://github.com/BerriAI/litellm/blob/2e27a02a9fce9bdc6ece13ba3cb8222dc5b6ecfa/litellm/litellm_core_utils/llm_cost_calc/utils.py#L913-L951):
 each missing tier field uses its standard counterpart; band companions try
@@ -94,9 +93,9 @@ and `cache_creation_input_token_cost_above_1hr` 2e-05 per token.
 A band applies only when whole-request input is strictly greater than its
 threshold; when several bands exist, the highest eligible threshold wins.
 Batch, Flex, and regional suffixes are excluded because stored usage does not
-identify those variants. The `_priority` and `_ultrafast` fields, including
-their `_above_272k_tokens` bands, are imported as `<model>@priority` and
-`<model>@ultrafast` rows for Codex Fast and Ultrafast billing.
+identify those variants. The `_priority` fields, including their
+`_above_272k_tokens` bands, are imported as `<model>@priority` rows for Codex
+Fast billing.
 
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this
@@ -639,13 +638,16 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexGeneratedImageStoredAsImageResult` and
   `TestCodexGeneratedImageUpgradeReparsesUnchangedSource`.
 
-- **Service-tier billing (checked 2026-10-26):** Rollouts record the tier in
+- **Service-tier billing (checked 2026-10-27):** Rollouts record the tier in
   `event_msg` / `thread_settings_applied` / `thread_settings.service_tier`
   (observed `default`, `priority`, `ultrafast`), per the pinned
   [snapshot schema](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/protocol.rs#L2418-L2433).
   Forks append the child's snapshot after replayed history
   ([fork persistence](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/core/src/session/mod.rs#L1783-L1810)).
-  `turn_context` carries no tier.
+  `turn_context` carries no tier. Codex
+  [filters unsupported tiers before sending a request](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/openai_models.rs#L1040-L1044).
+  Agentsview bills Fast only when the settings record `model_provider_id` as
+  `openai` and `service_tier` as `priority`; all other settings clear that identity.
 
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)

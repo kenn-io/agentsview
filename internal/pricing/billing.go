@@ -33,19 +33,4 @@ func BillingPolicyFor(providerID string) (BillingPolicy, bool) {
 // BillingPolicyVersion identifies the policy in internal cache identities.
 func BillingPolicyVersion() string { return positAssistantPolicy.Version }
 
-const (
-	OpenAIPriorityProviderID  = "openai-priority"
-	OpenAIUltrafastProviderID = "openai-ultrafast"
-)
-
-// ServiceTierFor returns the catalog tier for an exact billing identity.
-func ServiceTierFor(providerID string) (string, bool) {
-	switch providerID {
-	case OpenAIPriorityProviderID:
-		return "priority", true
-	case OpenAIUltrafastProviderID:
-		return "ultrafast", true
-	default:
-		return "", false
-	}
-}
+const OpenAIPriorityProviderID = "openai-priority"

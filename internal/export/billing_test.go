@@ -185,8 +185,7 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		bandInput, bandOutput, cost                       string
 	}{
 		{"priority", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 0, "", "", ""},
-		{"ultrafast", "openai-ultrafast", "gpt-6.1-sol", "12", "gpt-6.1-sol@ultrafast", "openai-ultrafast", false, 0, "", "", ""},
-		{"missing tier", "openai-ultrafast", "gpt-5.5", "5", "gpt-5.5", "", false, 0, "", "", ""},
+		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", "", ""},
 		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", "", ""},
 		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", "", ""},
 		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33", "3.03"},
@@ -215,8 +214,8 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 				return EffectivePricingRow{ModelPattern: pattern, Rates: rates}
 			}
 			resolver := NewPricingResolver([]EffectivePricingRow{
-				row("gpt-6.1-sol", "2"), row("gpt-6.1-sol@priority", "4"), row("gpt-6.1-sol@ultrafast", "12"),
-				row("gpt-5.5", "5"), row("gpt-5.5@priority", "12.5"),
+				row("gpt-6.1-sol", "2"), row("gpt-6.1-sol@priority", "4"),
+				row("gpt-5.5", "5"), row("gpt-5.5@priority", "12.5"), row("standard-only", "5"),
 			})
 			_, lookup, err := resolver.ResolveBilledAt(tc.provider, tc.model, tc.model, time.Time{})
 			require.NoError(t, err)

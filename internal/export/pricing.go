@@ -266,8 +266,8 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 	if !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
 		return pricedModel, lookup, nil
 	}
-	if tier, ok := pricingpkg.ServiceTierFor(providerID); ok {
-		return pricedModel, r.withServiceTier(lookup, tier), nil
+	if providerID == pricingpkg.OpenAIPriorityProviderID {
+		return pricedModel, r.withPriorityTier(lookup), nil
 	}
 	policy, ok := pricingpkg.BillingPolicyFor(providerID)
 	if !ok {
@@ -282,29 +282,23 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 	return pricedModel, lookup, nil
 }
 
-func (r *PricingResolver) withServiceTier(lookup PricingLookup, tier string) PricingLookup {
+func (r *PricingResolver) withPriorityTier(lookup PricingLookup) PricingLookup {
 	if r == nil {
 		return lookup
 	}
 	base := r.Lookup(lookup.Pattern)
-	pattern := catalog.TierPattern(base.Pattern, tier)
+	pattern := catalog.PriorityPattern(base.Pattern)
 	rates, ok := r.byModel[pattern]
 	if !ok {
 		return lookup
 	}
-	lookup = clonePricingLookup(lookup)
 	if len(rates.Bands) == 0 {
 		rates.Bands = lookup.Rates.Bands
 	}
 	lookup.Rates = rates
 	lookup.Rates.Bands = slices.Clone(rates.Bands)
 	lookup.Pattern = pattern
-	switch tier {
-	case "priority":
-		lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
-	case "ultrafast":
-		lookup.Adjustment = pricingpkg.OpenAIUltrafastProviderID
-	}
+	lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
 	return lookup
 }
 
@@ -405,13 +399,14 @@ func (r *PricingResolver) DependencyFingerprint(
 	providerID, reportedModel, canonicalModel string,
 ) (string, error) {
 	digest := sha256.New()
-	writeField := func(values ...string) {
-		for _, value := range values {
-			_, _ = fmt.Fprintf(digest, "%d:%s", len(value), value)
-		}
+	writeField := func(value string) {
+		_, _ = fmt.Fprintf(digest, "%d:%s", len(value), value)
 	}
 	writeLookup := func(pricedModel string, lookup PricingLookup) {
-		writeField(pricedModel, lookup.Pattern, strconv.FormatBool(lookup.OK), lookup.Adjustment)
+		writeField(pricedModel)
+		writeField(lookup.Pattern)
+		writeField(strconv.FormatBool(lookup.OK))
+		writeField(lookup.Adjustment)
 		writePricingRatesFingerprint(digest, lookup.Rates)
 	}
 	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, time.Time{})
@@ -443,10 +438,13 @@ func (r *PricingResolver) DependencyFingerprint(
 		for _, candidate := range candidates.items[:candidates.count] {
 			fingerprint := r.genAI.ModelFingerprint(candidate.provider, candidate.model)
 			matched = matched || fingerprint != "none"
-			writeField(candidate.provider, candidate.model, candidate.priced, fingerprint)
-			if tier, ok := pricingpkg.ServiceTierFor(providerID); ok && fingerprint != "none" {
+			writeField(candidate.provider)
+			writeField(candidate.model)
+			writeField(candidate.priced)
+			writeField(fingerprint)
+			if providerID == pricingpkg.OpenAIPriorityProviderID && fingerprint != "none" {
 				genAI := PricingLookup{Pattern: r.genAI.ModelPattern(candidate.provider, candidate.model)}
-				writeLookup("", r.withServiceTier(genAI, tier))
+				writeLookup("", r.withPriorityTier(genAI))
 			}
 		}
 		return flat, custom, matched

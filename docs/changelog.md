@@ -101,7 +101,7 @@ The latest release is
   upgrade to recover it.
 - Links with bare session UUIDs from Pi, OMP, Codex and other tools now open
   matching sessions. Ambiguous IDs still require the full session ID.
-- Codex Fast and Ultrafast sessions now use their service-tier prices.
+- Codex Fast sessions now use the Fast price.
   Existing Codex sessions whose rollout files are still on disk are repriced
   on upgrade, including offline use.
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**

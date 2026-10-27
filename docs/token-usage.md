@@ -474,8 +474,8 @@ off.
 
 LiteLLM's standard whole-request 200K and 272K token rates are preserved in both
 fetched and embedded catalogs. Processing variants such as Batch, Flex,
-regional, and one-hour cache pricing are not inferred when the stored
-usage does not identify that service tier. Codex records its tier; see below.
+regional, Ultrafast, and one-hour cache pricing are not inferred when the stored
+usage does not identify that service tier. Codex Fast is the exception; see below.
 
 ### Anthropic Web Search Fee
 
@@ -596,12 +596,12 @@ adjustment. Rows with empty or other provider IDs — including observed
 Custom pricing overrides are not adjusted. Explicit reported costs remain
 authoritative, and fixed web-search fees remain at their published face value.
 
-### Codex Fast and Ultrafast Billing
+### Codex Fast Billing
 
-Codex messages sent on the Fast or Ultrafast tier use LiteLLM's `_priority` or
-`_ultrafast` prices, including any request bands LiteLLM publishes for that
-tier. AgentsView reads the tier from the rollout's latest
-`thread_settings_applied` event. The embedded catalog includes tier prices for
+Codex messages whose latest `thread_settings_applied` event records provider
+`openai` and service tier `priority` use LiteLLM's `_priority` prices, including
+any request bands LiteLLM publishes for Fast. Ultrafast and any tier Codex omits
+bill at standard rates. The embedded catalog includes tier prices for
 offline use. A model without a price for its tier, and any custom override, keeps
 its standard rates.
 

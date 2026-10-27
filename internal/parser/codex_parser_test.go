@@ -4019,8 +4019,8 @@ func TestParseCodexSession_ArrayOutputKeepsRawJSON(t *testing.T) {
 }
 
 func TestCodexServiceTierMessages(t *testing.T) {
-	settings := func(tier string) string {
-		return `{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"` + tier + `"}}}`
+	settings := func(provider, tier string) string {
+		return `{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"` + provider + `","service_tier":"` + tier + `"}}}`
 	}
 	turn := func(id string) string {
 		return `{"type":"turn_context","payload":{"turn_id":"` + id + `","model":"gpt-6.1-sol"}}`
@@ -4032,19 +4032,31 @@ func TestCodexServiceTierMessages(t *testing.T) {
 	}{
 		{"tier changes", []string{
 			testjsonl.CodexSessionMetaJSON("tier-1", "/tmp", "user", tsEarly),
-			settings("priority"),
+			settings("openai", "priority"),
 			testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
 			testjsonl.CodexMsgJSON("assistant", "answer", tsEarlyS5),
 			testjsonl.CodexFunctionCallJSON("shell", "run command", tsLate),
-			turn("second"), settings("ultrafast"),
+			turn("second"), settings("openai", "ultrafast"),
 			testjsonl.CodexMsgJSON("assistant", "after tier change", tsLate),
-			turn("third"), settings("default"),
+			turn("third"), settings("openai", "default"),
 			testjsonl.CodexMsgJSON("assistant", "after reset", tsLateS5),
-		}, []string{"", "openai-priority", "openai-priority", "openai-ultrafast", ""}},
+			turn("fourth"), settings("openai", "priority"),
+			testjsonl.CodexMsgJSON("assistant", "Fast again", tsLateS5),
+			turn("fifth"), settings("azure", "priority"),
+			testjsonl.CodexMsgJSON("assistant", "other provider", tsLateS5),
+			turn("sixth"), settings("openai", "priority"),
+			testjsonl.CodexMsgJSON("assistant", "Fast again", tsLateS5),
+			turn("seventh"), settings("", "priority"),
+			testjsonl.CodexMsgJSON("assistant", "missing provider", tsLateS5),
+			turn("eighth"), settings("openai", "priority"),
+			testjsonl.CodexMsgJSON("assistant", "Fast again", tsLateS5),
+			turn("ninth"), `{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai"}}}`,
+			testjsonl.CodexMsgJSON("assistant", "missing tier", tsLateS5),
+		}, []string{"", "openai-priority", "openai-priority", "", "", "openai-priority", "", "openai-priority", "", "openai-priority", ""}},
 		{"fork replay", []string{
 			`{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent","cwd":"/workspace"}}`,
 			testjsonl.CodexSessionMetaJSON("parent", "/workspace", "user", tsEarly),
-			turn("parent-turn"), settings("priority"), turn("child-turn"),
+			turn("parent-turn"), settings("openai", "priority"), turn("child-turn"),
 			testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
 		}, []string{"openai-priority"}},
 	} {

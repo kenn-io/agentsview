@@ -20,6 +20,7 @@ func TestCodexServiceTierSessionCosts(t *testing.T) {
 		cost                  string
 	}{
 		{"priority", 20360, 6912, 808, "0.071334"},
+		{"ultrafast", 20360, 6912, 808, "0.035667"},
 	} {
 		t.Run(tc.tier, func(t *testing.T) {
 			sessions := filepath.Join(t.TempDir(), "sessions")
@@ -36,17 +37,12 @@ func TestCodexServiceTierSessionCosts(t *testing.T) {
 				InputPerMTok:     money.MustParseDollars("4"),
 				CacheReadPerMTok: money.MustParseDollars("0.2"),
 				OutputPerMTok:    money.MustParseDollars("20"),
-			}, {
-				ModelPattern:     "gpt-6.1-sol@ultrafast",
-				InputPerMTok:     money.MustParseDollars("12"),
-				CacheReadPerMTok: money.MustParseDollars("0.6"),
-				OutputPerMTok:    money.MustParseDollars("60"),
 			}}))
 			const uuid = "019f0000-0000-7000-8000-00000000c001"
 			path := env.writeCodexSession(t, filepath.Join("2026", "10", "26"), "rollout-2026-10-26T10-00-00-"+uuid+".jsonl", testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", "2026-10-26T10:00:00Z"),
 				testjsonl.CodexTurnContextJSON("gpt-6.1-sol", "2026-10-26T10:00:01Z"),
-				`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"`+tc.tier+`"}}}`,
+				`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"`+tc.tier+`"}}}`,
 				testjsonl.CodexMsgJSON("user", "hello", "2026-10-26T10:00:01Z"),
 				testjsonl.CodexMsgJSON("assistant", "answer", "2026-10-26T10:00:05Z"),
 				testjsonl.CodexTokenCountJSON("2026-10-26T10:00:05Z", tc.input, tc.output, tc.cached),

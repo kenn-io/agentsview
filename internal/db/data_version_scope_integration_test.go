@@ -335,7 +335,7 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
-		db.ScopedDataVersionProviders(146, 147))
+		db.ScopedDataVersionProviders(147, 148))
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
@@ -344,7 +344,7 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	source := filepath.Join(root, "rollout-"+id+".jsonl")
 	body := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-10-08T12:00:00Z"),
-		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority"}}}`,
+		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
 		testjsonl.CodexMsgJSON("assistant", "answer", "2026-10-08T12:00:01Z"),
 	)
 	dbtest.WriteTestFile(t, source, []byte(body))
@@ -361,9 +361,9 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 
-	// Version 146 archived the same rollout without its billing tier.
+	// Version 147 archived the same rollout without its billing tier.
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "UPDATE messages SET provider_id=''; UPDATE sessions SET data_version=146; PRAGMA user_version=146")
+		_, err := tx.ExecContext(ctx, "UPDATE messages SET provider_id=''; UPDATE sessions SET data_version=147; PRAGMA user_version=147")
 		return err
 	}))
 	path := database.Path()
@@ -375,7 +375,7 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, needsSync)
 	assert.False(t, fullRebuild)
-	assert.Equal(t, 146, database.GetSessionDataVersion(ctx, sessionID))
+	assert.Equal(t, 147, database.GetSessionDataVersion(ctx, sessionID))
 	engine = sync.NewEngine(ctx, database, cfg)
 	t.Cleanup(engine.Close)
 	assert.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
@@ -384,7 +384,7 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NotNil(t, after)
 	assert.Equal(t, before.ID, after.ID)
 	assert.Equal(t, before.FilePath, after.FilePath)
-	assert.Equal(t, 147, after.DataVersion)
+	assert.Equal(t, 148, after.DataVersion)
 	messages, err := database.GetAllMessages(ctx, sessionID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
