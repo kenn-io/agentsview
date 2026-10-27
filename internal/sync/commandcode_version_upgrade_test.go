@@ -53,7 +53,7 @@ func TestCommandCodeVersionUpgradeReparsesUnchangedSourceAndClearsSkip(t *testin
 	})
 	t.Cleanup(engine.Close)
 	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, 149, reopened.GetSessionDataVersion(t.Context(), sessionID))
+	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), sessionID))
 }
 
 func TestCommandCodeV2RewriteReplacesMessages(t *testing.T) {

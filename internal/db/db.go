@@ -609,7 +609,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (148: link ordinary Codex forks to the thread named by forked_from_id. Re-parse
 // Codex-format sources in place; source and session identities are unchanged.)
 // (149: reparse Command Code v3 transcripts, token usage, and fork links in place.)
-const dataVersion = 149
+// (150: keep token usage on Claude assistant records that render no text, such
+// as blank thinking. Re-parse Claude-format sources in place; source and
+// session identities are unchanged.)
+const dataVersion = 150
 
 const archiveOnlyVersionBase = 1 << 20
 

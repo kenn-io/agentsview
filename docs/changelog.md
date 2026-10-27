@@ -52,6 +52,10 @@ The latest release is
 
 **Bug fixes**
 
+- Claude Code token and cost totals now include responses that contain only an
+  empty thinking block. These responses still show nothing in the transcript,
+  but their usage was dropped. Existing Claude-format sources are reprocessed on
+  upgrade to recover it.
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**
   button now runs that rebuild on every server, and the status bar shows when a
   sync fails instead of staying silent. A rebuild that does not finish is

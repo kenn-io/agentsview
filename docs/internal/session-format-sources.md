@@ -140,6 +140,16 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Blank thinking usage (2026-10-27):** Reverified against the synthetic
+  transcript in [#2469](https://github.com/kenn-io/agentsview/issues/2469),
+  kept in `internal/parser/testdata/claude/blank_thinking_usage.jsonl`. An
+  assistant record can carry only
+  `{"type":"thinking","thinking":"","signature":"..."}` under its own
+  `message.id` with nonzero `message.usage`. Same-`message.id` chunks merge
+  before extraction, so a record that still renders no text is its own
+  response. It is stored as a hidden system row that keeps its usage; a blank
+  record with all-zero usage is still skipped. Data version 150 reparses
+  Claude-format sources in place.
 - **Channel messages (2026-10-23):** Reverified against the synthetic Claude
   Code 2.1.305 Telegram transcript in
   [#2400](https://github.com/kenn-io/agentsview/issues/2400), kept in
