@@ -1091,8 +1091,6 @@ const (
 	duckInsertBatchBytes = 1 << 20
 )
 
-// duckInsertBatch bounds both row count and variable-sized payloads. A single
-// oversized row is written alone rather than truncated or split.
 type duckInsertBatch struct {
 	ctx    context.Context
 	exec   duckMutationExecutor

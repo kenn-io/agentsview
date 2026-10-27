@@ -20,8 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// Cross both row and payload boundaries, including a row larger than the payload
-// budget. Compare stored columns, not just hydrated messages or row counts.
 func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
@@ -43,8 +41,6 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	).Scan(&summary))
 	assert.Equal(t, strings.Repeat("summary\u03bb", 160000)+"row-102 summary", summary)
 
-	// A shorter replacement must remove every old chunk, including all tools
-	// and usage when the new transcript no longer contains either.
 	replacement := duckBatchFixture(sess.ID, 1)
 	replacement.Messages[0].ToolCalls = nil
 	replacement.Messages[0].HasToolUse = false
@@ -173,8 +169,8 @@ type duckBatchRecordingExecutor struct {
 }
 
 func (e *duckBatchRecordingExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	// The batch clears and reuses its argument slice after each execution.
-	e.calls = append(e.calls, append([]any(nil), args...))
+	argsSnapshot := append([]any(nil), args...)
+	e.calls = append(e.calls, argsSnapshot)
 	return e.db.ExecContext(ctx, query, args...)
 }
 
@@ -238,8 +234,6 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 	}
 }
 
-// Fail the second chunk, after the first has reached the real database. For
-// cancellation, let the real executor reject the canceled context instead.
 type duckBatchInterruptExecutor struct {
 	tx          *sql.Tx
 	table       string

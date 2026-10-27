@@ -1043,7 +1043,6 @@ func TestPushSkipsInvalidBatchedSessionAfterReopen(t *testing.T) {
 		replacement.Messages[i].Content = fmt.Sprintf("replacement %d", i)
 		replacement.Messages[i].ContentLength = len(replacement.Messages[i].Content)
 	}
-	// The native timestamp failure follows the first complete message chunk.
 	replacement.Messages[150].Timestamp = "not-a-timestamp"
 	healthy := duckBatchFixture("valid-new", 1)
 	healthy.Messages[0].Content = "healthy session survives the failed batch"

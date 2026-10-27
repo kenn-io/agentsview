@@ -60,7 +60,6 @@ func BenchmarkMirrorPush(b *testing.B) {
 	}
 	_, err = local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(b, err)
-	b.ResetTimer()
 	for b.Loop() {
 		b.StopTimer()
 		path := filepath.Join(b.TempDir(), "mirror.duckdb")
