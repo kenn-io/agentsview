@@ -40,6 +40,12 @@ const (
 type ProviderSyncSemantics struct {
 	FingerprintHashInCacheKey           bool
 	FingerprintHashRequiredForFreshness bool
+	// UnavailableCwdKeepsArchivedSession means a source whose working
+	// directory authority is SourceCwdUnavailable, while the archive holds a
+	// working directory for its session, leaves that session untouched and
+	// retries it on the next pass. The provider's other session metadata
+	// comes from the same unavailable place, so a reparse would clear it.
+	UnavailableCwdKeepsArchivedSession bool
 	// BatchFingerprintCache shares member fingerprint reads within a sync pass.
 	BatchFingerprintCache bool
 	// PartialDiscovery means discovery and changed-path resolution can

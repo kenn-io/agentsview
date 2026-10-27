@@ -123,12 +123,10 @@ func (e *Engine) planOneChangedPath(
 		if (agent == parser.AgentAntigravity || agent == parser.AgentAntigravityCLI) &&
 			parser.IsAntigravitySummariesStore(path) {
 			// The summary store holds titles, which reconcile after the plan
-			// runs, and each conversation's workspace and parent. The provider
-			// routes only conversations whose workspace or parent changed, so
-			// a title-only write reparses nothing.
-			sources, err := provider.SourcesForChangedPath(ctx, parser.ChangedPathRequest{
-				Path: path, EventKind: providerChangedPathEventKind(path),
-			})
+			// runs, and each conversation's workspace and parent. Only sessions
+			// whose archived values differ from the store reparse, so a
+			// title-only write reparses nothing.
+			sources, err := e.summaryStoreChangedSources(ctx, provider, path)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return changedPathAttribution{}, false, err

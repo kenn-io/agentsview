@@ -131,7 +131,10 @@ func TestAntigravitySummaryStoreFillsArchivedSessions(t *testing.T) {
 }
 
 // A store write that changes a conversation's workspace or parent reaches
-// incremental sync without waiting for a full sync.
+// incremental sync without waiting for a full sync. Each step uses a fresh
+// engine, as after a restart or in a remote import that plans without
+// discovery: routing compares the store with the archive, not with anything
+// an engine remembers.
 func TestAntigravitySummaryStoreWriteReachesIncrementalSync(t *testing.T) {
 	for name, tc := range antigravitySummaryCases() {
 		t.Run(name, func(t *testing.T) {
@@ -149,7 +152,7 @@ func TestAntigravitySummaryStoreWriteReachesIncrementalSync(t *testing.T) {
 			testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
 				tc.id: {WorkspaceURIs: `["file:///tmp/moved-proj"]`},
 			})
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			require.NoError(t, antigravityEngineOn(t, tc.agent, root, archive).SyncPathsContext(t.Context(), []string{store}))
 			moved := antigravityStoredSession(t, archive, id)
 			assert.Equal(t, "/tmp/moved-proj", moved.Cwd)
 			assert.Equal(t, "moved_proj", moved.Project)
@@ -158,9 +161,10 @@ func TestAntigravitySummaryStoreWriteReachesIncrementalSync(t *testing.T) {
 			testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
 				tc.id: {WorkspaceURIs: `["file:///tmp/moved-proj"]`, ParentID: antigravitySummaryParent},
 			})
-			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+			planner := antigravityEngineOn(t, tc.agent, root, archive)
+			plan, err := planner.PlanChangedPathsContext(t.Context(), []string{store})
 			require.NoError(t, err)
-			_, err = engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+			_, err = planner.SyncChangedPathPlanContext(t.Context(), plan, nil)
 			require.NoError(t, err)
 			assert.Equal(t, new(string(tc.agent)+":"+antigravitySummaryParent),
 				antigravityStoredSession(t, archive, id).ParentSessionID)
@@ -194,6 +198,99 @@ func TestAntigravityUnreadableSummaryStoreKeepsArchivedMetadata(t *testing.T) {
 			assert.Equal(t, new(string(tc.agent)+":"+antigravitySummaryParent), changed.ParentSessionID)
 		})
 	}
+}
+
+// A store change whose first processing fails is routed again on retry,
+// because the archive still disagrees with the store. A parent shows this: it
+// reaches the archive only through a successful reparse.
+func TestAntigravitySummaryStoreChangeSurvivesFailedProcessing(t *testing.T) {
+	root := t.TempDir()
+	tc := antigravitySummaryCases()["app and IDE"]
+	tc.write(t, root)
+	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`},
+	})
+	engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+	id := string(tc.agent) + ":" + tc.id
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: antigravitySummaryParent},
+	})
+	dbPath := filepath.Join(root, "conversations", tc.id+".db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a database"), 0o644))
+	require.Error(t, engine.SyncPathsContext(t.Context(), []string{store}))
+	require.Nil(t, antigravityStoredSession(t, archive, id).ParentSessionID)
+
+	require.NoError(t, os.Remove(dbPath))
+	copyAntigravityCLITestSchemaTemplate(t, dbPath)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+	assert.Equal(t, new(string(tc.agent)+":"+antigravitySummaryParent),
+		antigravityStoredSession(t, archive, id).ParentSessionID)
+}
+
+// After a restart, an app or IDE root whose store is gone leaves sessions the
+// store filled as they are, since a reparse would clear their workspace,
+// project, and parent. A session the store never filled still syncs.
+func TestAntigravityMissingSummaryStoreKeepsArchivedSessions(t *testing.T) {
+	root := t.TempDir()
+	tc := antigravitySummaryCases()["app and IDE"]
+	tc.write(t, root)
+	engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+	id := string(tc.agent) + ":" + tc.id
+
+	// A row as an earlier run stored it from a store this process never read.
+	dbPath := filepath.Join(root, "conversations", tc.id+".db")
+	parent := string(tc.agent) + ":" + antigravitySummaryParent
+	require.NoError(t, archive.UpsertSession(t.Context(), db.Session{
+		ID: id, Agent: string(tc.agent), Machine: "host-a", FilePath: &dbPath,
+		Cwd: "/tmp/ws-proj", Project: "ws_proj", ParentSessionID: &parent,
+	}))
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, 1, stats.Failed, "the session is retried, not reparsed")
+	kept := antigravityStoredSession(t, archive, id)
+	assert.Equal(t, "/tmp/ws-proj", kept.Cwd)
+	assert.Equal(t, "ws_proj", kept.Project)
+	assert.Equal(t, &parent, kept.ParentSessionID)
+
+	testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: antigravitySummaryParent},
+	})
+	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced, "the session syncs once the store is back")
+	assert.Equal(t, "/tmp/ws-proj", antigravityStoredSession(t, archive, id).Cwd)
+}
+
+// A CLI conversation that exists only as implicit/<id>.pb is routed too.
+func TestAntigravitySummaryStoreRoutesCLIImplicitSessions(t *testing.T) {
+	const uuid = "34343434-5656-7878-9090-121212121212"
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "implicit"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "implicit", uuid+".pb"), []byte("encrypted"), 0o644))
+	testjsonl.WriteAntigravityBrainTranscript(t, root, uuid,
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"Read calc.py"}`+"\n")
+	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		uuid: {WorkspaceURIs: `["file:///tmp/ws-proj"]`},
+	})
+	engine, archive := newAntigravitySummaryEngine(t, parser.AgentAntigravityCLI, root, config.ArchiveContentFull)
+	id := "antigravity-cli:implicit-" + uuid
+	engine.SyncAll(t.Context(), nil)
+	require.Equal(t, "/tmp/ws-proj", antigravityStoredSession(t, archive, id).Cwd)
+
+	testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		uuid: {WorkspaceURIs: `["file:///tmp/moved-proj"]`},
+	})
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+	assert.Equal(t, "/tmp/moved-proj", antigravityStoredSession(t, archive, id).Cwd)
+}
+
+func antigravityEngineOn(t *testing.T, agent parser.AgentType, root string, archive *db.DB) *sync.Engine {
+	t.Helper()
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		Machine:   "host-a",
+	})
+	t.Cleanup(engine.Close)
+	return engine
 }
 
 func antigravityStoredSession(t *testing.T, archive *db.DB, id string) *db.Session {
