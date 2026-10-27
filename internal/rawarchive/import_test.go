@@ -12,7 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/testjsonl"
-	"go.kenn.io/docbank"
+	"go.kenn.io/docbank/docbank"
 )
 
 func newImportCapture(t *testing.T, device, machine string, roots ...RootSpec) CaptureOptions {

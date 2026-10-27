@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"go.kenn.io/docbank"
+	"go.kenn.io/docbank/docbank"
 	docsqlite "go.kenn.io/docbank/sqlite"
 )
 
