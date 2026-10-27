@@ -175,8 +175,6 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    border-left: 2px dashed var(--border-muted);
-    padding-left: 12px;
   }
   .panel-title {
     font-size: 11px;
