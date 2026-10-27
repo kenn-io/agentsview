@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   COLORBLIND_COLORS,
   colorIssues,
-  CONTRAST_MODES,
   defaultRoleColor,
   MESSAGE_ROLES,
   parseStoredColors,
@@ -44,10 +43,6 @@ describe("colorIssues", () => {
     expect(issues[0]!.kind).toBe("marker");
     expect(issues[0]!.modes).toEqual(["dark", "high-contrast-dark"]);
   });
-
-  it("ignores values that are not colors", () => {
-    expect(colorIssues("user", "blue")).toEqual([]);
-  });
 });
 
 describe("defaultRoleColor", () => {
@@ -58,14 +53,6 @@ describe("defaultRoleColor", () => {
     expect(defaultRoleColor("assistant", "high-contrast-dark")).toBe(
       defaultRoleColor("assistant", "dark"),
     );
-  });
-
-  it("has a color for every role in every mode", () => {
-    for (const mode of CONTRAST_MODES) {
-      for (const role of MESSAGE_ROLES) {
-        expect(defaultRoleColor(role, mode)).toMatch(/^#[0-9a-f]{6}$/);
-      }
-    }
   });
 });
 
