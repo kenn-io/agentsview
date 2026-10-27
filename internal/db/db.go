@@ -606,7 +606,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (146: retain explicit dialogue classification for visible conversation exports.)
 // (147: keep one tool call per VS Code toolCallId so transcripts render. Re-parse
 // VS Code-format sources in place; source and session identities are unchanged.)
-const dataVersion = 147
+// (148: link ordinary Codex forks to the thread named by forked_from_id. Re-parse
+// Codex-format sources in place; source and session identities are unchanged.)
+const dataVersion = 148
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-26
+last_edited: 2026-10-27
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -76,6 +76,10 @@ The latest release is
   instead of a blank page. VS Code saves each web fetch as two tool calls with
   the same ID, and AgentsView now keeps only the visible one. Existing VS Code
   Copilot, Positron, and Windsurf sessions are reprocessed on upgrade.
+- A forked Codex session now appears as a fork of the session it came from, the
+  way forks from other agents already do. Before, it showed up as an unrelated
+  top-level session. Existing Codex, TraeX, and Augure Code sessions are
+  reprocessed on upgrade.
 
 ## 0.46.1
 

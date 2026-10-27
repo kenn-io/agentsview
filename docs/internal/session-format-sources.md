@@ -621,6 +621,23 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexMisfiledPageUpgradeRetainsTranscriptMetadata` verifies that a
   proven page correction preserves transcript metadata during upgrade.
 
+- **Ordinary fork lineage (checked 2026-10-27 at
+  `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`):** Current Codex
+  [session metadata](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/protocol.rs#L3040-L3051)
+  carries an optional `forked_from_id` beside the subagent
+  `parent_thread_id`. When a thread is forked, the
+  [thread manager](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/thread_manager.rs#L1413-L1419)
+  takes the source thread from the history being forked, and
+  [thread creation](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/create_thread.rs#L28-L50)
+  records it in the new rollout's metadata. AgentsView links a rollout with
+  `forked_from_id` to `codex:<forked_from_id>` as a `fork`. A subagent parent
+  takes precedence, and revert pages keep their continuation parent. Data
+  version 148 reparses Codex, TraeX, and Augure Code sources in place.
+  `TestParseCodexSessionForkLineage` and
+  `TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade` cover the link and the
+  upgrade, using the shape reported in
+  [issue #2468](https://github.com/kenn-io/agentsview/issues/2468).
+
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
   by the Codex app compresses rollouts whose modification time is at least
