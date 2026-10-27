@@ -39,9 +39,10 @@ describe("projectColor", () => {
   });
 
   it("is stable across permutations and duplicates", () => {
-    const ids = ["claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-5"];
+    const ids = ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5", "claude-sonnet-5"];
+    const shuffled = ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-4-8"];
     expect([...chartSeriesColorMap(ids, "agentsview")]).toEqual([
-      ...chartSeriesColorMap([...ids].reverse(), "agentsview"),
+      ...chartSeriesColorMap(shuffled, "agentsview"),
     ]);
   });
 
