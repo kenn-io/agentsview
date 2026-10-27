@@ -122,7 +122,8 @@
     } else if (groupBy === "project") {
       items = s!.projectTotals.map((p) => ({
         id: p.project_key,
-        label: p.project,
+        // Sessions with no resolved project still need a visible label.
+        label: p.project || m.insights_page_unassigned_project(),
         value: isTokenMode
           ? sumSelectedTokens(p, usage.selectedTokenTypes)
           : p.cost.microdollars,
