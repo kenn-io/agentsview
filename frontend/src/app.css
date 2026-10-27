@@ -187,6 +187,9 @@
   --role-thinking-bar-width: 2px;
   --role-tool-bar-style: solid;
   --role-tool-bar-width: 2px;
+  /* Parallel tool calls share one rail. It stays neutral until the reader
+     picks a tool color or turns on patterns. */
+  --role-tool-group-rail: var(--cat-mixed);
   --role-code-frame-style: solid;
 }
 
@@ -197,6 +200,7 @@
   --role-thinking-bar-width: 3px;
   --role-tool-bar-style: dashed;
   --role-tool-bar-width: 3px;
+  --role-tool-group-rail: var(--role-tool-accent);
   --role-code-frame-style: dashed;
 }
 

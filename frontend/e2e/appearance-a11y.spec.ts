@@ -362,6 +362,47 @@ test.describe("Appearance accessibility", () => {
       }
     }
   });
+
+  test("parallel tool calls carry the tool marker in pattern mode", async ({ page }) => {
+    // The fixture has no tool calls, so give its first assistant message two.
+    await page.route("**/api/v1/sessions/*/messages*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const assistant = body.messages?.find(
+        (message: { role: string }) => message.role === "assistant",
+      );
+      if (assistant) {
+        assistant.has_tool_use = true;
+        assistant.tool_calls = ["a", "b"].map((id) => ({
+          tool_use_id: `parallel-${id}`,
+          tool_name: "Read",
+          category: "Read",
+          input_json: "{}",
+          result_content: "",
+        }));
+      }
+      await route.fulfill({ response, json: body });
+    });
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+    const rail = page.locator(".parallel-group").first();
+    await expect(rail).toBeVisible();
+    await expect(rail).toHaveCSS("border-left-style", "solid");
+    await expect(rail).toHaveCSS("border-left-width", "2px");
+
+    await page.evaluate(() =>
+      localStorage.setItem(
+        "agentsview-message-colors",
+        JSON.stringify({ colors: { tool: "#009e73" }, patterns: true }),
+      ),
+    );
+    await page.reload();
+    await expect(rail).toBeVisible();
+    await expect(rail).toHaveCSS("border-left-style", "dashed");
+    await expect(rail).toHaveCSS("border-left-width", "3px");
+    expect(await resolvedColor(rail, "border-left-color")).toEqual([0, 158, 115]);
+  });
 });
 
 async function openAppearance(page: Page, url: string) {

@@ -170,6 +170,7 @@ export function roleColorProperties(role: MessageRole, color: string): Record<st
     return { "--role-code-accent": hex, "--role-code-frame-width": "2px" };
   }
   return {
+    ...(role === "tool" ? { "--role-tool-group-rail": hex } : {}),
     [`--role-${role}-accent`]: hex,
     [`--role-${role}-accent-foreground`]: readableInk(hex, ["#000000", "#ffffff"]),
     [`--role-${role}-ink`]: `color-mix(in srgb, ${hex} ${INK_WEIGHT * 100}%, var(--text-primary))`,
