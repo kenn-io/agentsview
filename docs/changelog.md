@@ -336,6 +336,18 @@ The latest release is
   using offline reports. Older rollouts without a tier record keep standard
   rates. Ultrafast and other non-Fast tiers keep standard rates. Codex can omit
   priority for unsupported models, so those estimates can exceed billed costs.
+- Antigravity app and IDE sessions now show their project and working directory
+  instead of all landing in one unlabeled project. AgentsView reads each
+  conversation's workspace folder from Antigravity's
+  `conversation_summaries.db`. Antigravity CLI sessions use it too, so an older
+  conversation in a folder keeps its project after a newer one starts there.
+- Antigravity sub-agent conversations, such as a research agent the main
+  conversation starts, now nest under that conversation. Existing Antigravity
+  sessions pick up both changes on the next sync, without a resync.
+- A full resync no longer drops the project identity of a session that gained a
+  working directory since the previous archive was written.
+- Usage → Projects labels sessions without a project as "Unassigned project"
+  instead of drawing an unnamed slice.
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**
   button now runs that rebuild on every server, and the status bar shows when a
   sync fails instead of staying silent. A rebuild that does not finish is
