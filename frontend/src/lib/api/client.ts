@@ -390,11 +390,13 @@ async function readImportResponse(
   );
 }
 
-// The browser window is shared, so Sign in and a new Sync wait for the previous run's close.
-let claudeAIClosing: Promise<void> = Promise.resolve();
+// The browser window is shared, so Sign in and a new Sync wait until the
+// previous run has closed it. A run takes its turn before awaiting anything,
+// so a stopped run still finishes closing before a retry starts.
+let claudeAIOwner: Promise<void> = Promise.resolve();
 
 export async function connectClaudeAI(host: BrowserHost): Promise<void> {
-  await claudeAIClosing;
+  await claudeAIOwner;
   await host.connect();
 }
 
@@ -411,12 +413,17 @@ export async function syncClaudeAI(
     baseUrl: getGeneratedBase(),
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   };
+  const previous = claudeAIOwner;
+  let release!: () => void;
+  claudeAIOwner = new Promise((resolve) => {
+    release = resolve;
+  });
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   try {
-    await claudeAIClosing;
+    await previous;
     const response = await ImportService.postApiV1ImportClaudeAiSync(
       host ? undefined : { browser: "chrome" },
       { ...server, signal: controller.signal },
@@ -458,7 +465,13 @@ export async function syncClaudeAI(
   } finally {
     signal?.removeEventListener("abort", abort);
     abort();
-    if (host) claudeAIClosing = host.close().catch(() => {}); // Cleanup failure must preserve the sync outcome.
+    // Cleanup failure must preserve the sync outcome.
+    if (host)
+      void host
+        .close()
+        .catch(() => {})
+        .finally(release);
+    else release();
   }
 }
 
