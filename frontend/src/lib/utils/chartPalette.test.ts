@@ -191,8 +191,8 @@ describe("orderedChartSeriesColorMap", () => {
     expect([...orderedChartSeriesColorMap(ranked, "colorblind").entries()]).toEqual([
       ["zeta", PETROFF6[0]],
       ["alpha", PETROFF6[1]],
-      ["mid", PETROFF6[2]],
       ["", "var(--text-muted)"],
+      ["mid", PETROFF6[2]],
     ]);
     expect(orderedChartSeriesColorMap(ranked, "matplotlib").get("zeta")).toBe("#1f77b4");
     expect(orderedChartSeriesColorMap(ranked, "agentsview").get("zeta")).toBe("var(--accent-blue)");
