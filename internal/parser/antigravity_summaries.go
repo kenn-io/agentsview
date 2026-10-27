@@ -286,6 +286,8 @@ func summaryExpectation(source SourceRef, sessionID, parentID string) SummarySto
 		expectation.Cwd, expectation.CwdKnown = source.CwdResolution.Path, true
 	case SourceCwdAmbiguous, SourceCwdRemote:
 		expectation.CwdKnown = true
+	case SourceCwdUnspecified, SourceCwdNone, SourceCwdUnavailable:
+		// The store does not decide this session's working directory.
 	}
 	return expectation
 }

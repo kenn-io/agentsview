@@ -366,8 +366,10 @@ func TestAntigravitySummaryStoreExpectations(t *testing.T) {
 		got, err := provider.(SummaryStoreExpectationLister).SummaryStoreExpectations(t.Context(), store)
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []summaryExpectationView{
-			{Path: filepath.Join(root, "conversations", summaryTestID+".db"), SessionID: "antigravity:" + summaryTestID,
-				Cwd: "/tmp/ws-proj", CwdKnown: true, Parent: "antigravity:" + summaryTestParent},
+			{
+				Path: filepath.Join(root, "conversations", summaryTestID+".db"), SessionID: "antigravity:" + summaryTestID,
+				Cwd: "/tmp/ws-proj", CwdKnown: true, Parent: "antigravity:" + summaryTestParent,
+			},
 			{Path: filepath.Join(root, "conversations", other+".db"), SessionID: "antigravity:" + other},
 		}, viewSummaryExpectations(got))
 	})
@@ -386,12 +388,18 @@ func TestAntigravitySummaryStoreExpectations(t *testing.T) {
 		got, err := provider.(SummaryStoreExpectationLister).SummaryStoreExpectations(t.Context(), store)
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []summaryExpectationView{
-			{Path: filepath.Join(root, "conversations", summaryTestCLIID+".db"), SessionID: "antigravity-cli:" + summaryTestCLIID,
-				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent},
-			{Path: filepath.Join(root, "implicit", summaryTestCLIID+".pb"), SessionID: "antigravity-cli:implicit-" + summaryTestCLIID,
-				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent},
-			{Path: filepath.Join(root, "implicit", other+".pb"), SessionID: "antigravity-cli:implicit-" + other,
-				Cwd: "/tmp/store-proj", CwdKnown: true},
+			{
+				Path: filepath.Join(root, "conversations", summaryTestCLIID+".db"), SessionID: "antigravity-cli:" + summaryTestCLIID,
+				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent,
+			},
+			{
+				Path: filepath.Join(root, "implicit", summaryTestCLIID+".pb"), SessionID: "antigravity-cli:implicit-" + summaryTestCLIID,
+				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent,
+			},
+			{
+				Path: filepath.Join(root, "implicit", other+".pb"), SessionID: "antigravity-cli:implicit-" + other,
+				Cwd: "/tmp/store-proj", CwdKnown: true,
+			},
 		}, viewSummaryExpectations(got))
 	})
 }
