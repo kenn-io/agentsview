@@ -14,7 +14,13 @@ import {
   type DbSessionTiming as SessionTiming,
   type ImporterImportStats as ImportStats,
 } from "./generated/index.js";
-import { ApiError, getAuthToken, getGeneratedBase, isRemoteConnection } from "./runtime.js";
+import {
+  ApiError,
+  type ApiRequestOptions,
+  getAuthToken,
+  getGeneratedBase,
+  isRemoteConnection,
+} from "./runtime.js";
 import { reportTelemetry } from "../utils/telemetry.js";
 import type { BrowserHost } from "./browserHost.js";
 
@@ -397,6 +403,14 @@ export async function syncClaudeAI(
   cb?: ImportCallbacks,
   signal?: AbortSignal,
 ): Promise<ImportStats> {
+  // Sync outlives the import dialog, so the selected server can change
+  // mid-run. Pin every request to the server the run started on, so a late
+  // browser response never relays chat contents to the new server.
+  const token = getAuthToken();
+  const server: ApiRequestOptions = {
+    baseUrl: getGeneratedBase(),
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  };
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
@@ -405,7 +419,7 @@ export async function syncClaudeAI(
     await claudeAIClosing;
     const response = await ImportService.postApiV1ImportClaudeAiSync(
       host ? undefined : { browser: "chrome" },
-      { signal: controller.signal },
+      { ...server, signal: controller.signal },
     );
     let fail: (error: unknown) => void = () => {};
     const failed = new Promise<never>((_, reject) => {
@@ -431,7 +445,7 @@ export async function syncClaudeAI(
                   retry_after: fetched.retryAfter,
                   error: fetched.error,
                 },
-                { signal: controller.signal },
+                { ...server, signal: controller.signal },
               );
             })().catch((error) => {
               fail(error);

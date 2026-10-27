@@ -10,7 +10,7 @@ import {
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
-import { ApiError } from "./runtime.js";
+import { ApiError, setAuthToken, setServerUrl } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
 import * as telemetry from "../utils/telemetry.js";
 import type { BrowserHost } from "./browserHost.js";
@@ -277,6 +277,56 @@ describe("syncClaudeAI browser relay", () => {
     await expect(syncClaudeAI(host)).rejects.toThrow(expected);
     expect(host.fetch).toHaveBeenCalledWith("/api/organizations/org/chat_conversations_v2");
     expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it("relays a late browser response to the server Sync started on", async () => {
+    localStorage.setItem("agentsview-auth-token", "local-token");
+    let respond!: (value: { status: number; body: string }) => void;
+    const host = {
+      close: vi.fn().mockResolvedValue(undefined),
+      fetch: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            respond = resolve;
+          }),
+      ),
+    } as unknown as BrowserHost;
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const fetch = vi.fn(async (url: string, _options: RequestInit) => {
+      if (url === "/api/v1/import/claude-ai/sync") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller;
+              stream.enqueue(
+                encoder.encode('event: fetch\ndata: {"id":"late","path":"/chat"}\n\n'),
+              );
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      stream.enqueue(
+        encoder.encode('event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n'),
+      );
+      stream.close();
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const run = syncClaudeAI(host);
+      await vi.waitFor(() => expect(host.fetch).toHaveBeenCalledWith("/chat"));
+      setServerUrl("https://remote.example");
+      setAuthToken("remote-token");
+      respond({ status: 200, body: "chat contents" });
+      await expect(run).resolves.toMatchObject({ imported: 1 });
+      const [url, options] = fetch.mock.calls[1]!;
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/late");
+      expect(new Headers(options.headers).get("Authorization")).toBe("Bearer local-token");
+    } finally {
+      localStorage.clear();
+    }
   });
 
   it("ends the stream when posting a result fails", async () => {
