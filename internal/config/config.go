@@ -900,8 +900,10 @@ type RemoteHost struct {
 	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
 	Token     string          `toml:"token,omitempty" json:"-"`
 	// Destination is the ssh destination for ssh entries. Empty means Host.
-	Destination string        `toml:"destination,omitempty" json:"destination,omitempty"`
-	Interval    time.Duration `toml:"interval,omitempty" json:"interval,omitzero"`
+	Destination     string        `toml:"destination,omitempty" json:"destination,omitempty"`
+	Interval        time.Duration `toml:"interval,omitempty" json:"interval,omitzero"`
+	SyncTimeout     time.Duration `toml:"sync_timeout,omitempty" json:"sync_timeout,omitzero"`
+	FullSyncTimeout time.Duration `toml:"full_sync_timeout,omitempty" json:"full_sync_timeout,omitzero"`
 }
 
 // SSHDestination returns the argument passed to ssh for this entry.
@@ -945,6 +947,7 @@ type sessionSourceConfig struct {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
+	Remote RemoteConfig `json:"remote,omitempty" toml:"remote"`
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
 	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
@@ -1201,6 +1204,14 @@ func (c Config) ValidateRemoteHosts() error {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%q): invalid interval %s",
 					i+1, h.Host, h.Interval))
+		}
+		for _, bound := range []struct {
+			key     string
+			timeout time.Duration
+		}{{"sync_timeout", h.SyncTimeout}, {"full_sync_timeout", h.FullSyncTimeout}} {
+			if bound.timeout < 0 {
+				problems = append(problems, fmt.Sprintf("entry %d (%q): invalid %s %s", i+1, h.Host, bound.key, bound.timeout))
+			}
 		}
 		problems = append(problems, validateRemoteTransport(i+1, h)...)
 		// Remote sync namespaces sessions and cached state by host.
@@ -1667,6 +1678,7 @@ func (c *Config) loadFileReadOnly() error {
 }
 
 func (c *Config) loadFileWithMigration(migrate bool) error {
+	defer c.applyRemoteEnv()
 	if migrate {
 		if err := c.migrateJSONToTOML(); err != nil {
 			return err
@@ -1778,6 +1790,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		return err
 	}
 	var file struct {
+		Remote                         RemoteConfig           `toml:"remote"`
 		LocalMachineName               *string                `toml:"local_machine_name"`
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
@@ -1816,14 +1829,19 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
-		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
-		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
-		ModelAliases                   map[string]string      `toml:"model_aliases"`
+		RemoteHosts                    []struct {
+			RemoteHost
+			SyncTimeout *time.Duration `toml:"sync_timeout"`
+		} `toml:"remote_hosts"`
+		SessionSources []sessionSourceConfig `toml:"session_sources"`
+		ModelAliases   map[string]string     `toml:"model_aliases"`
 	}
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	c.Remote = file.Remote
+	c.Remote.TokenFile = remoteTokenPath(c.Remote.TokenFile, filepath.Dir(c.configPath()))
 	if meta.IsDefined("vector") {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
@@ -2168,13 +2186,19 @@ func (c *Config) applyConfigTOML(data string) error {
 	if len(file.RemoteHosts) > 0 {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))
 		for i, h := range file.RemoteHosts {
+			timeout := 10 * time.Minute
+			if h.SyncTimeout != nil {
+				timeout = *h.SyncTimeout
+			}
 			hosts[i] = RemoteHost{
-				Host:        strings.TrimSpace(h.Host),
-				Transport:   RemoteTransport(strings.TrimSpace(string(h.Transport))),
-				URL:         strings.TrimSpace(h.URL),
-				Token:       strings.TrimSpace(h.Token),
-				Destination: strings.TrimSpace(h.Destination),
-				Interval:    h.Interval,
+				Host:            strings.TrimSpace(h.Host),
+				Transport:       RemoteTransport(strings.TrimSpace(string(h.Transport))),
+				URL:             strings.TrimSpace(h.URL),
+				Token:           strings.TrimSpace(h.Token),
+				Destination:     strings.TrimSpace(h.Destination),
+				Interval:        h.Interval,
+				SyncTimeout:     timeout,
+				FullSyncTimeout: h.FullSyncTimeout,
 			}
 		}
 		c.RemoteHosts = hosts

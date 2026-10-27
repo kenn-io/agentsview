@@ -1053,7 +1053,7 @@ type scheduledLockOrderRunner struct {
 	held bool
 }
 
-func (r *scheduledLockOrderRunner) RunExclusive(work func() error) error {
+func (r *scheduledLockOrderRunner) RunExclusiveCtx(_ context.Context, work func() error) error {
 	if r.held {
 		return errors.New("engine lock acquired recursively")
 	}
@@ -1063,7 +1063,7 @@ func (r *scheduledLockOrderRunner) RunExclusive(work func() error) error {
 }
 
 type scheduledLockOrderCleanupError struct {
-	runner  remoteSyncExclusiveRunner
+	runner  remoteSyncAttemptRunner
 	retries int
 }
 
@@ -1074,7 +1074,7 @@ func (c *scheduledLockOrderCleanupError) RetryCleanup() error {
 	if c.retries == 1 {
 		return errors.New("retain pending cleanup")
 	}
-	return c.runner.RunExclusive(func() error { return nil })
+	return c.runner.RunExclusiveCtx(context.Background(), func() error { return nil })
 }
 
 func TestRemoteHostSyncFuncAcquiresHTTPCleanupBeforeEngine(t *testing.T) {

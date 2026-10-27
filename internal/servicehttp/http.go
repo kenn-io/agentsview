@@ -17,6 +17,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotecred"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -85,8 +86,9 @@ type httpBackend struct {
 	readOnly          bool
 	recallQueries     bool
 	// apiVersion is the probed server API version, or 0 when unknown.
-	apiVersion int
-	token      string
+	apiVersion   int
+	token        string
+	remotePolicy bool
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -94,9 +96,10 @@ const recallNonRecordingAPIVersion = 4
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
 type HTTPServerCapabilities struct {
-	ReadOnly           bool `json:"read_only"`
-	APIVersion         int  `json:"api_version"`
-	NonRecordingRecall bool
+	ReadOnly              bool `json:"read_only"`
+	SessionStatsAvailable bool `json:"session_stats_available"`
+	APIVersion            int  `json:"api_version"`
+	NonRecordingRecall    bool
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -130,6 +133,30 @@ func NewHTTPBackendForServer(
 	return b
 }
 
+// NewHTTPBackendWithClient uses a caller-supplied transport policy when non-nil.
+func NewHTTPBackendWithClient(baseURL, token string, readOnly bool, browserURL string, client *http.Client) service.SessionService {
+	b := NewHTTPBackend(baseURL, token, readOnly, browserURL).(*httpBackend)
+	b.setClient(client)
+	return b
+}
+
+// NewHTTPBackendForServerWithClient applies server capabilities and transport policy.
+func NewHTTPBackendForServerWithClient(baseURL, token string, caps HTTPServerCapabilities, client *http.Client) service.SessionService {
+	b := NewHTTPBackendForServer(baseURL, token, caps).(*httpBackend)
+	b.setClient(client)
+	return b
+}
+
+func (b *httpBackend) setClient(client *http.Client) {
+	if client != nil {
+		b.remotePolicy = true
+		b.client = client
+		long := *client
+		long.Timeout = 0
+		b.longRunningClient = &long
+	}
+}
+
 func newHTTPBackend(
 	baseURL, token string, readOnly, recallQueries bool,
 ) *httpBackend {
@@ -154,25 +181,51 @@ func newHTTPBackend(
 func ProbeHTTPServerCapabilities(
 	ctx context.Context, baseURL, token string,
 ) (HTTPServerCapabilities, error) {
+	return ProbeHTTPServerCapabilitiesWithClient(ctx, baseURL, token, nil)
+}
+
+// ProbeHTTPServerCapabilitiesWithClient probes with the selected transport policy.
+func ProbeHTTPServerCapabilitiesWithClient(ctx context.Context, baseURL, token string, client *http.Client) (HTTPServerCapabilities, error) {
 	b := newHTTPBackend(baseURL, token, false, false)
+	b.setClient(client)
 	api, err := b.apiClient(b.client)
 	if err != nil {
-		return HTTPServerCapabilities{}, err
+		return HTTPServerCapabilities{}, b.responseError(nil, nil, err)
 	}
-	return probeHTTPServerCapabilities(ctx, api)
+	return probeHTTPServerCapabilitiesWithBackend(ctx, api, b)
 }
 
 func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HTTPServerCapabilities, error) {
+	return probeHTTPServerCapabilitiesWithBackend(ctx, api, nil)
+}
+
+func probeHTTPServerCapabilitiesWithBackend(
+	ctx context.Context, api *apiclient.Client, backend *httpBackend,
+) (HTTPServerCapabilities, error) {
 	response, err := api.GetAPIV1VersionWithResponse(ctx)
 	if response == nil {
+		if backend != nil {
+			err = backend.responseError(nil, nil, err)
+		}
 		return HTTPServerCapabilities{}, err
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	if backend != nil {
+		err = backend.responseError(response.HTTPResponse, response.Body, err)
+	} else {
+		err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	}
 	if err != nil {
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
+	if response.JSON200 == nil || response.JSON200.APIVersion <= 0 {
+		err := errors.New("probing server capabilities: invalid version response")
+		if backend != nil {
+			err = backend.remoteError(err)
+		}
+		return HTTPServerCapabilities{}, err
+	}
+	return HTTPServerCapabilities{SessionStatsAvailable: response.JSON200.SessionStatsAvailable, ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording"}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
@@ -184,9 +237,9 @@ func (b *httpBackend) MemoryStatus(ctx context.Context) (service.MemoryStatus, e
 	}
 	response, err := api.GetAPIV1MemoryStatusWithResponse(ctx)
 	if response == nil {
-		return service.MemoryStatus{}, err
+		return service.MemoryStatus{}, b.responseError(nil, nil, err)
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotFound) || errors.Is(err, errHTTPNotImplemented) {
 		return service.UnsupportedMemoryStatus(time.Now()), nil
 	}
@@ -194,7 +247,7 @@ func (b *httpBackend) MemoryStatus(ctx context.Context) (service.MemoryStatus, e
 		return service.MemoryStatus{}, err
 	}
 	if response.JSON200 == nil {
-		return service.MemoryStatus{}, errors.New("memory status: empty response")
+		return service.MemoryStatus{}, b.remoteError(errors.New("memory status: empty response"))
 	}
 	return *response.JSON200, nil
 }
@@ -208,9 +261,9 @@ func (b *httpBackend) MachineLabels(
 	}
 	response, err := api.GetAPIV1MachinesWithResponse(ctx, &apiclient.GetAPIV1MachinesRequestOptions{})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	return service.MachineLabelCatalog(response.JSON200.MachineLabels), nil
@@ -225,10 +278,10 @@ func (b *httpBackend) Get(
 	}
 	response, err := api.GetAPIV1SessionsIDWithResponse(ctx, &apiclient.GetAPIV1SessionsIDRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDPath{ID: url.PathEscape(id)}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotFound) {
 		// Match directBackend.Get: absent session returns (nil, nil)
 		// so transport swaps stay neutral.
@@ -255,9 +308,9 @@ func (b *httpBackend) FindSessionIDsByPartial(
 	}
 	response, err := api.GetAPIV1SessionIdsResolveWithResponse(ctx, &apiclient.GetAPIV1SessionIdsResolveRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
@@ -277,15 +330,15 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	}
 	response, err := api.GetAPIV1SessionIdsResolveWithResponse(ctx, &apiclient.GetAPIV1SessionIdsResolveRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	if response.JSON200.RawSuffix == nil || !*response.JSON200.RawSuffix {
-		return nil, errors.New(
+		return nil, b.remoteError(errors.New(
 			"server does not acknowledge raw session ID lookup",
-		)
+		))
 	}
 	return response.JSON200.Ids, nil
 }
@@ -294,18 +347,22 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	version := b.apiVersion
 	if version == 0 {
-		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		api, err := b.apiClient(b.client)
+		if err != nil {
+			return err
+		}
+		capabilities, err := probeHTTPServerCapabilitiesWithBackend(ctx, api, b)
 		if err != nil {
 			return err
 		}
 		version = capabilities.APIVersion
 	}
 	if version < service.SessionAnnotationsAPIVersion {
-		return fmt.Errorf(
+		return b.remoteError(fmt.Errorf(
 			"server API version %d does not support session labels, parent links, or their filters; "+
 				"restart or upgrade the server",
 			version,
-		)
+		))
 	}
 	return nil
 }
@@ -333,10 +390,10 @@ func (b *httpBackend) List(
 	}
 	response, err := api.GetAPIV1SessionsWithResponse(ctx, &apiclient.GetAPIV1SessionsRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
@@ -522,17 +579,17 @@ func (b *httpBackend) Messages(
 	}
 	response, err := api.GetAPIV1SessionsIDMessagesWithResponse(ctx, &apiclient.GetAPIV1SessionsIDMessagesRequestOptions{Query: q, PathParams: &apiclient.GetAPIV1SessionsIDMessagesPath{ID: url.PathEscape(id)}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if response.HTTPResponse != nil && response.StatusCode == http.StatusConflict &&
 			strings.Contains(string(response.Body), "source_changed") {
-			return nil, service.ErrSourceChanged
+			return nil, b.remoteError(service.ErrSourceChanged)
 		}
 		if response.HTTPResponse != nil && response.StatusCode == http.StatusNotImplemented {
-			return nil, service.ErrRevisionBoundReadUnavailable
+			return nil, b.remoteError(service.ErrRevisionBoundReadUnavailable)
 		}
 		return nil, err
 	}
@@ -548,10 +605,10 @@ func (b *httpBackend) ToolCalls(
 	}
 	response, err := api.GetAPIV1SessionsIDToolCallsWithResponse(ctx, &apiclient.GetAPIV1SessionsIDToolCallsRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDToolCallsPath{ID: url.PathEscape(id)}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
@@ -567,9 +624,9 @@ func (b *httpBackend) ChildSessions(
 	}
 	response, err := api.GetAPIV1SessionsIDChildrenWithResponse(ctx, &apiclient.GetAPIV1SessionsIDChildrenRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDChildrenPath{ID: url.PathEscape(id)}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	children := []db.Session{}
@@ -605,9 +662,9 @@ func (b *httpBackend) RecentEdits(
 	}
 	response, err := api.GetAPIV1RecentEditsWithResponse(ctx, &apiclient.GetAPIV1RecentEditsRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	return response.JSON200, nil
@@ -622,7 +679,7 @@ func (b *httpBackend) Sync(
 		// transport.
 		return nil, fmt.Errorf(
 			"sync: daemon at %s is read-only: %w",
-			b.baseURL, db.ErrReadOnly,
+			b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 		)
 	}
 	api, err := b.apiClient(b.longRunningClient)
@@ -637,13 +694,13 @@ func (b *httpBackend) Sync(
 			},
 		})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	detail := response.JSON200
 	if response.StatusCode == http.StatusNotImplemented {
-		return nil, fmt.Errorf("sync: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
+		return nil, fmt.Errorf("sync: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly))
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 
@@ -656,7 +713,7 @@ func (b *httpBackend) Watch(
 ) (<-chan service.Event, error) {
 	client, err := b.apiClient(b.longRunningClient)
 	if err != nil {
-		return nil, err
+		return nil, b.remoteError(err)
 	}
 	response, err := client.GetAPIV1SessionsIDWatchStreamWithResponse(ctx,
 		&apiclient.GetAPIV1SessionsIDWatchRequestOptions{
@@ -665,11 +722,11 @@ func (b *httpBackend) Watch(
 	if err != nil {
 		if apiErr, ok := errors.AsType[*runtime.ClientAPIError](err); ok {
 			if apiErr.StatusCode() == http.StatusNotFound {
-				return nil, fmt.Errorf("watch: session not found: %s", id)
+				return nil, b.remoteError(fmt.Errorf("watch: session not found: %s", id))
 			}
-			return nil, fmt.Errorf("watch: HTTP %d", apiErr.StatusCode())
+			return nil, b.remoteError(fmt.Errorf("watch: HTTP %d", apiErr.StatusCode()))
 		}
-		return nil, err
+		return nil, b.remoteError(err)
 	}
 
 	stream := response.Stream200
@@ -734,13 +791,13 @@ func (b *httpBackend) Stats(
 	}
 	response, err := api.GetAPIV1SessionStatsWithResponse(ctx, &apiclient.GetAPIV1SessionStatsRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
-			"stats: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			"stats: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 		)
 	}
 	if err != nil {
@@ -786,12 +843,12 @@ func (b *httpBackend) Search(
 	}
 	response, err := api.GetAPIV1SearchWithResponse(ctx, &apiclient.GetAPIV1SearchRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
-			return nil, service.ErrSearchUnavailable
+			return nil, b.remoteError(service.ErrSearchUnavailable)
 		}
 		return nil, err
 	}
@@ -922,13 +979,13 @@ func (b *httpBackend) SearchContent(
 	}
 	response, err := api.GetAPIV1SearchContentWithResponse(ctx, &apiclient.GetAPIV1SearchContentRequestOptions{Query: q}, editors...)
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if notImpl, ok := errors.AsType[*notImplementedBodyError](err); ok {
-			return nil, wrapSemanticUnavailable(notImpl.message)
+			return nil, b.remoteError(wrapSemanticUnavailable(notImpl.message))
 		}
 		return nil, err
 	}
@@ -1066,14 +1123,14 @@ func (b *httpBackend) UsageSummary(
 	}
 	response, err := api.GetAPIV1UsageSummaryWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		// A read-only daemon (pg serve) returns 501 for usage; surface
 		// the shared sentinel so callers can errors.Is it.
 		return nil, fmt.Errorf(
-			"usage summary: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			"usage summary: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 		)
 	}
 	if err != nil {
@@ -1195,13 +1252,13 @@ func (b *httpBackend) UsagePairwiseComparison(
 	}
 	response, err := api.GetAPIV1UsagePairwiseComparisonWithResponse(ctx, &apiclient.GetAPIV1UsagePairwiseComparisonRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
-			"usage pairwise comparison: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			"usage pairwise comparison: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 		)
 	}
 	if err != nil {
@@ -1223,13 +1280,13 @@ func (b *httpBackend) ListRecallEntries(
 	}
 	response, err := api.GetAPIV1RecallEntriesWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			return nil, fmt.Errorf(
-				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+				"recall list: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 			)
 		}
 		return nil, err
@@ -1253,16 +1310,16 @@ func (b *httpBackend) GetRecallEntry(
 	}
 	response, err := api.GetAPIV1RecallEntriesIDWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesIDRequestOptions{PathParams: &apiclient.GetAPIV1RecallEntriesIDPath{ID: url.PathEscape(id)}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotFound) {
 		return nil, nil
 	}
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
-			"recall get: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			"recall get: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 		)
 	}
 	if err != nil {
@@ -1299,20 +1356,20 @@ func (b *httpBackend) QueryRecallEntries(
 	}
 	response, err := api.PostAPIV1RecallQueryWithResponse(ctx, &apiclient.PostAPIV1RecallQueryRequestOptions{Body: &apiclient.PostAPIV1RecallQueryBody{Agent: new(req.Agent), ContextMaxBytes: new(int64(req.ContextMaxBytes)), Cwd: new(req.CWD), ExtractorMethod: new(req.ExtractorMethod), GitBranch: new(req.GitBranch), IncludeContext: new(req.IncludeContext), Limit: new(int64(req.Limit)), Mode: new(req.Mode), Project: new(req.Project), Query: req.Query, Scope: new(req.Scope), SkipRecording: new(req.SkipRecording), SourceEpisodeID: new(req.SourceEpisodeID), SourceRunID: new(req.SourceRunID), SourceSessionID: new(req.SourceSessionID), Status: new(req.Status), SupersededByEntryID: new(req.SupersededByEntryID), SupersedesEntryID: new(req.SupersedesEntryID), Surface: new(req.Surface), TrustedOnly: new(req.TrustedOnly), Type: new(req.Type)}})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			notImpl, hasNotImpl := errors.AsType[*notImplementedBodyError](err)
 			if (mode == db.RecallQueryModeVector ||
 				mode == db.RecallQueryModeHybrid) &&
 				hasNotImpl &&
 				notImpl.message != "not available in remote mode" {
-				return nil, wrapSemanticUnavailable(notImpl.message)
+				return nil, b.remoteError(wrapSemanticUnavailable(notImpl.message))
 			}
 			return nil, fmt.Errorf(
-				"recall query: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+				"recall query: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 			)
 		}
 		statusErr, hasStatusErr := errors.AsType[*httpStatusError](err)
@@ -1320,7 +1377,7 @@ func (b *httpBackend) QueryRecallEntries(
 			mode == db.RecallQueryModeHybrid) &&
 			hasStatusErr &&
 			statusErr.statusCode == http.StatusServiceUnavailable {
-			return nil, wrapSemanticTransient(statusErr.message())
+			return nil, b.remoteError(wrapSemanticTransient(statusErr.message()))
 		}
 		return nil, err
 	}
@@ -1330,10 +1387,10 @@ func (b *httpBackend) QueryRecallEntries(
 	requestedMode := mode
 	returnedMode := db.NormalizeRecallQuery(db.RecallQuery{Mode: out.Mode}).Mode
 	if returnedMode != requestedMode {
-		return nil, fmt.Errorf(
+		return nil, b.remoteError(fmt.Errorf(
 			"recall query: requested recall mode %s but daemon returned %s",
 			requestedMode, returnedMode,
-		)
+		))
 	}
 	out.Mode = returnedMode
 	if req.TrustedOnly {
@@ -1350,7 +1407,7 @@ func (b *httpBackend) QueryRecallEntries(
 	if err := service.ValidateRecallContextEntries(
 		out.ContextEntries, out.ContextMeta,
 	); err != nil {
-		return nil, err
+		return nil, b.remoteError(err)
 	}
 	if out.ContextSummary == nil && out.ContextMeta != nil {
 		out.ContextSummary = service.BuildRecallContextSummary(
@@ -1369,7 +1426,7 @@ func (b *httpBackend) ImportRecallEntries(
 		// daemon and returning a bare endpoint error.
 		return nil, fmt.Errorf(
 			"import: daemon at %s is read-only: %w",
-			b.baseURL, db.ErrReadOnly,
+			b.diagnosticURL(), b.remoteError(db.ErrReadOnly),
 		)
 	}
 	q := &apiclient.PostAPIV1RecallImportQuery{}
@@ -1395,13 +1452,13 @@ func (b *httpBackend) ImportRecallEntries(
 		return nil
 	})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
 	if response.StatusCode == http.StatusNotImplemented {
-		return nil, fmt.Errorf("daemon at %s is read-only: %w", b.baseURL, db.ErrReadOnly)
+		return nil, fmt.Errorf("daemon at %s is read-only: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly))
 	}
-	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+	if err := b.responseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 
@@ -1506,10 +1563,10 @@ func (b *httpBackend) ListSecrets(
 	}
 	response, err := api.GetAPIV1SecretsWithResponse(ctx, &apiclient.GetAPIV1SecretsRequestOptions{Query: q})
 	if response == nil {
-		return nil, err
+		return nil, b.responseError(nil, nil, err)
 	}
 	out := response.JSON200
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
@@ -1522,7 +1579,7 @@ func (b *httpBackend) ScanSecrets(
 ) (*service.SecretScanSummary, error) {
 	if b.readOnly {
 		return nil, fmt.Errorf("scan: daemon at %s is read-only: %w",
-			b.baseURL, db.ErrReadOnly)
+			b.diagnosticURL(), b.remoteError(db.ErrReadOnly))
 	}
 	q := &apiclient.PostAPIV1SecretsScanQuery{}
 	if in.Backfill {
@@ -1554,7 +1611,7 @@ func (b *httpBackend) ScanSecrets(
 	}
 	response, err := api.PostAPIV1SecretsScanStreamWithResponse(ctx, &apiclient.PostAPIV1SecretsScanRequestOptions{Query: q})
 	if response != nil && response.StatusCode == http.StatusNotImplemented {
-		return nil, fmt.Errorf("scan: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
+		return nil, fmt.Errorf("scan: daemon at %s: %w", b.diagnosticURL(), b.remoteError(db.ErrReadOnly))
 	}
 	if err != nil {
 		return nil, err
@@ -1612,7 +1669,44 @@ func parseScanStream(
 }
 
 func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) {
+	if b.remotePolicy {
+		api, err := apiclient.NewHTTPClientWithResponsePolicy(b.baseURL, b.token, client, remotecred.ResponsePolicy(b.baseURL)) //nolint:bodyclose // The policy callback transfers response ownership to the generated client.
+		return api, b.remoteError(err)
+	}
 	return apiclient.NewHTTPClient(b.baseURL, b.token, client)
+}
+
+func (b *httpBackend) diagnosticURL() string {
+	if b.remotePolicy {
+		return remotecred.Redact(b.baseURL)
+	}
+	return b.baseURL
+}
+
+// remoteError preserves typed causes while keeping configured targets and response
+// details behind the same safe diagnostic boundary as transport failures.
+func (b *httpBackend) remoteError(err error) error {
+	if b.remotePolicy {
+		return remotecred.WrapError(b.baseURL, err)
+	}
+	return err
+}
+
+func (b *httpBackend) responseError(response *http.Response, body []byte, err error) error {
+	if response == nil {
+		return b.remoteError(err)
+	}
+	responseErr := serviceResponseError(response, body, err)
+	if b.remotePolicy {
+		if statusErr, ok := errors.AsType[*httpStatusError](responseErr); ok {
+			statusErr.path = b.diagnosticURL()
+			statusErr.body = []byte("remote request failed")
+		}
+	}
+	if b.remotePolicy && responseErr != nil {
+		return fmt.Errorf("HTTP %d: %w", response.StatusCode, b.remoteError(responseErr))
+	}
+	return responseErr
 }
 
 // IsRequestRejected reports whether err is a daemon's 4xx answer to a request.

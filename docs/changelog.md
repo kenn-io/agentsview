@@ -44,6 +44,18 @@ The latest release is
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
+- Hub containers can pull workstation transcripts over SSH. The image now
+  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
+  for dedicated-key mounts and connection checks.
+
+- PostgreSQL push watchers can collect remote hosts with positive sync
+  intervals, including hubs with no local session roots. Hosts with zero or
+  omitted intervals stay manual-only. Incremental pulls have a configurable
+  timeout, and committed sessions still reach the push and embedding queues
+  after a partial import fails.
+- Scheduled daemon pulls also use the ten-minute incremental timeout. Set
+  `sync_timeout = "0s"` in a remote-host entry to keep those pulls unbounded.
+
 **Bug fixes**
 
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**
