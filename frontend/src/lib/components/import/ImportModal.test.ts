@@ -196,11 +196,14 @@ it("reuses results and returns to Ready with Import more", async () => {
   expect(syncButton().disabled).toBe(false);
 });
 
-it("starts another Sync while cancellation settles and ignores the old run's progress and cleanup", async () => {
+it("queues a new Sync behind a stopped run and ignores the old run's progress and cleanup", async () => {
   let rejectOld!: (error: Error) => void;
-  let resolveNew!: (result: typeof stats) => void;
-  let retrySignal!: AbortSignal;
+  let rejectQueued!: (error: Error) => void;
+  let resolveRetry!: (result: typeof stats) => void;
+  let queuedSignal!: AbortSignal;
   const progress: ((value: typeof stats) => void)[] = [];
+  // The client starts a new run only after the stopped run settles, so the
+  // queued call stays pending while the old run finishes.
   syncClaudeAI
     .mockImplementationOnce((_host, callbacks) => {
       progress.push(callbacks.onProgress);
@@ -208,12 +211,16 @@ it("starts another Sync while cancellation settles and ignores the old run's pro
         rejectOld = reject;
       });
     })
-    .mockRejectedValueOnce(new ApiError(409, "Server conflict text", "claude_ai_sync_running"))
-    .mockImplementationOnce((_host, callbacks, signal) => {
-      retrySignal = signal;
+    .mockImplementationOnce((_host, _callbacks, signal) => {
+      queuedSignal = signal;
+      return new Promise((_, reject) => {
+        rejectQueued = reject;
+      });
+    })
+    .mockImplementationOnce((_host, callbacks) => {
       progress.push(callbacks.onProgress);
       return new Promise<typeof stats>((resolve) => {
-        resolveNew = resolve;
+        resolveRetry = resolve;
       });
     });
   const p = props();
@@ -222,10 +229,18 @@ it("starts another Sync while cancellation settles and ignores the old run's pro
   await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await clickSync();
   expect(syncClaudeAI).toHaveBeenCalledTimes(2);
+  progress[0]!({ imported: 128, updated: 0, skipped: 0, errors: 0 });
+  rejectOld(new Error("Stopped old run"));
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+  expect(screen.queryByText("128 conversations processed...")).toBeNull();
+  expect(screen.getByText("Syncing...")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  expect(queuedSignal.aborted).toBe(false);
+  rejectQueued(new ApiError(409, "Server conflict text", "claude_ai_sync_running"));
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
   );
-  expect(p.onimported).not.toHaveBeenCalled();
+  expect(p.onimported).toHaveBeenCalledOnce();
   expect(screen.queryByText("Server conflict text")).toBeNull();
   expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ code: "claude_ai_sync_running" }),
@@ -235,15 +250,9 @@ it("starts another Sync while cancellation settles and ignores the old run's pro
   progress[1]!({ imported: 7, updated: 0, skipped: 0, errors: 0 });
   await tick();
   expect(screen.getByText("7 conversations processed...")).toBeTruthy();
-  progress[0]!({ imported: 128, updated: 0, skipped: 0, errors: 0 });
-  rejectOld(new Error("Stopped old run"));
-  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-  expect(screen.getByText("7 conversations processed...")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-  expect(retrySignal.aborted).toBe(false);
-  resolveNew(stats);
+  resolveRetry(stats);
   await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
-  await waitFor(() => expect(p.onimported).toHaveBeenCalledTimes(2));
+  expect(p.onimported).toHaveBeenCalledTimes(2);
 });
 
 it("offers browser sign-in after auth failure", async () => {
