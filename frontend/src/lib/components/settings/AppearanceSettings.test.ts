@@ -227,8 +227,10 @@ describe("AppearanceSettings", () => {
       const { getByRole, getAllByRole } = render(AppearanceSettings);
       const reset = getByRole("button", { name: "Reset to defaults" }) as HTMLButtonElement;
       expect(reset.disabled).toBe(true);
+      // Chart colors has a "Color-blind safe" option too.
+      const preset = within(getByRole("radiogroup", { name: "Message color preset" }));
 
-      await fireEvent.click(getByRole("radio", { name: "Color-blind safe" }));
+      await fireEvent.click(preset.getByRole("radio", { name: "Color-blind safe" }));
 
       const userField = within(getByRole("group", { name: "Color for User messages" }));
       expect(userField.getByRole("textbox", { name: "Hex color" })).toHaveProperty(
@@ -238,9 +240,9 @@ describe("AppearanceSettings", () => {
       expect(
         getByRole("checkbox", { name: "Mark message types with line patterns as well as color" }),
       ).toHaveProperty("checked", true);
-      expect(getByRole("radio", { name: "Color-blind safe" }).getAttribute("aria-checked")).toBe(
-        "true",
-      );
+      expect(
+        preset.getByRole("radio", { name: "Color-blind safe" }).getAttribute("aria-checked"),
+      ).toBe("true");
       expect(getAllByRole("button", { name: /^Reset color for / })).toHaveLength(5);
       expect(reset.disabled).toBe(false);
     });
