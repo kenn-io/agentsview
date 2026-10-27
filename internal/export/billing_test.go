@@ -149,6 +149,35 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	t.Run("GenAI dated alias", func(t *testing.T) {
+		embedded := pricingpkg.EmbeddedGenAIDocument()
+		resolver := NewPricingResolver([]EffectivePricingRow{
+			{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
+			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.2"), Source: PricingRowSourceFetched}},
+			{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4"), Source: PricingRowSourceFetched}},
+		})
+		timestamp := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-luna-2026-07-13"} {
+			t.Run(model, func(t *testing.T) {
+				_, standard := resolver.ResolveAt(model, model, timestamp)
+				require.True(t, standard.OK)
+				require.Equal(t, "openai/gpt-5.6-luna", standard.Pattern)
+				require.Equal(t, PricingRowSourceEmbedded, standard.Rates.Source)
+				require.Equal(t, money.MustParseDollars("0.2"), standard.Rates.InputPerMTok)
+
+				_, lookup, err := resolver.ResolveBilledAt(pricingpkg.OpenAIPriorityProviderID, model, model, timestamp)
+				require.NoError(t, err)
+				require.True(t, lookup.OK)
+				assert.Equal(t, money.MustParseDollars("0.4"), lookup.Rates.InputPerMTok, "priority input rate")
+				assert.Equal(t, "gpt-5.6-luna@priority", lookup.Pattern)
+				assert.Equal(t, pricingpkg.OpenAIPriorityProviderID, lookup.Adjustment)
+				cost, err := lookup.Rates.CostForTokens(100_000, 0, 0, 0, 0, 0)
+				require.NoError(t, err)
+				assert.Equal(t, money.MustParseDollars("0.04"), cost, "priority cost for 100,000 input tokens")
+			})
+		}
+	})
+
 	for _, tc := range []struct {
 		name, provider, model, input, pattern, adjustment string
 		custom                                            bool
