@@ -292,9 +292,6 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup) PricingLookup {
 	if !ok {
 		return lookup
 	}
-	if len(rates.Bands) == 0 {
-		rates.Bands = lookup.Rates.Bands
-	}
 	lookup.Rates = rates
 	lookup.Rates.Bands = slices.Clone(rates.Bands)
 	lookup.Pattern = pattern

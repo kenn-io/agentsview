@@ -186,7 +186,7 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
 		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
 		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
-		{"missing tier band uses standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45"},
+		{"missing tier band uses flat Fast rate", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "12.5", "150"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -221,6 +221,9 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			assert.Equal(t, tc.pattern, lookup.Pattern)
 			assert.Equal(t, tc.adjustment, lookup.Adjustment)
 			if tc.requestInput > 0 {
+				if tc.model == "gpt-5.5" {
+					assert.Empty(t, lookup.Rates.Bands, "Fast row without published bands keeps flat rates")
+				}
 				selected := lookup.Rates.RatesForTokens(tc.requestInput, 0, 0)
 				assert.Equal(t, money.MustParseDollars(tc.bandInput), selected.InputPerMTok, "request band input rate")
 				assert.Equal(t, money.MustParseDollars(tc.bandOutput), selected.OutputPerMTok, "request band output rate")

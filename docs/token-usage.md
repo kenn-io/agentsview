@@ -600,7 +600,8 @@ authoritative, and fixed web-search fees remain at their published face value.
 
 Codex messages whose latest `thread_settings_applied` event records provider
 `openai` and service tier `priority` use LiteLLM's `_priority` prices, including
-any request bands LiteLLM publishes for Fast. Ultrafast and any tier Codex omits
+any request bands LiteLLM publishes for Fast. A Fast row without published bands
+uses its Fast base rates at every request size. Ultrafast and any tier Codex omits
 bill at standard rates. The embedded catalog includes tier prices for
 offline use. A model without a price for its tier, and any custom override, keeps
 its standard rates.

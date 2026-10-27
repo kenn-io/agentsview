@@ -61,8 +61,10 @@ The embedded catalog includes LiteLLM's service-tier rows. For `gpt-6.1-sol`,
 priority costs $4 input, $0.20 cache read, and $20 output per million tokens.
 Reverified 2026-10-27 against the pinned
 [`get_cost_per_unit` calculator](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/litellm/litellm_core_utils/llm_cost_calc/utils.py#L804-L842):
-each missing tier field uses its standard counterpart; band companions try
-the standard rate at the same threshold before the base rate.
+each missing tier field uses its standard counterpart; within a published tier
+band, missing fields try the standard rate at the same threshold before the
+base rate. A Fast row without published bands uses its Fast base rates at every
+request size.
 
 The current catalog prices plain `gpt-6-astra` at $10 input, $50 output,
 $12.50 cache write, and $1 cache read per million tokens. Above 272k request
