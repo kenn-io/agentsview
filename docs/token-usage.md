@@ -605,6 +605,8 @@ tier. AgentsView reads the tier from the rollout's latest
 offline use. A model without a price for its tier, and any custom override, keeps
 its standard rates.
 
+Tier prices are LiteLLM's current ones and apply at every date.
+
 ### Copilot CLI Token Metrics
 
 As of 0.32.0, Copilot CLI sessions contribute to usage and cost reports.
