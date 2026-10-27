@@ -24,13 +24,13 @@ is not an in-place production migration path.
 ## Mirror writes
 
 Full and incremental pushes replace complete sessions in the existing
-session-batch transactions. Messages, tool calls, result events, and usage events
-use multi-row inserts capped at 100 rows or 1 MiB of variable-sized payload per
-statement. An oversized row is inserted alone, without truncation. These limits
-do not bound the existing whole-session source load.
+session-batch transactions. Messages, tool calls, result events, and usage
+events use multi-row inserts capped at 100 rows or 1 MiB of variable-sized
+payload per statement. An oversized row is inserted alone, without truncation.
+These limits do not bound the existing whole-session source load.
 
-Errors and cancellation still roll back the transaction; chunks do not commit
-independently. No schema change or DuckDB extension is required.
+Errors and cancellation roll back the whole transaction; chunks never commit
+independently.
 
 The generated full-mirror benchmark checks stored row counts outside its timed
 `Push` calls. Run it with:
