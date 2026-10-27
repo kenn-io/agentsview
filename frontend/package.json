@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#beb8e7bc1795f933dbc4f4b47a0a58de1f025c09",
-    "@lucide/svelte": "1.59.0",
+    "@lucide/svelte": "1.60.0",
     "@tanstack/virtual-core": "3.19.6",
     "d3-hierarchy": "3.1.2",
     "d3-scale": "4.0.2",
