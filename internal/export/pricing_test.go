@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -1311,33 +1312,13 @@ func TestPricingResolverPricesKimiK27CodeOllamaCloudFromEmbeddedCatalog(t *testi
 	assert.Equal(t, money.MustParseDollars("0.19"), lookup.Rates.CacheReadPerMTok)
 }
 
-func TestPricingResolverDependencyFingerprintDatedAliasPriority(t *testing.T) {
-	embedded := pricingpkg.EmbeddedGenAIDocument()
-	rows := []EffectivePricingRow{
-		{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
-		{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.2"), Source: PricingRowSourceFetched}},
-		{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4"), Source: PricingRowSourceFetched}},
-	}
-	before := NewPricingResolver(rows)
-	rows[2].Rates.InputPerMTok = money.MustParseDollars("0.6")
-	after := NewPricingResolver(rows)
-	for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-luna-2026-07-13"} {
-		t.Run(model, func(t *testing.T) {
-			original, err := before.DependencyFingerprint(pricingpkg.OpenAIPriorityProviderID, model, model)
-			require.NoError(t, err)
-			changed, err := after.DependencyFingerprint(pricingpkg.OpenAIPriorityProviderID, model, model)
-			require.NoError(t, err)
-			assert.NotEqual(t, original, changed, "priority price change must invalidate cached dated-alias usage")
-		})
-	}
-}
-
 // TestPricingResolverDependencyFingerprint checks the fingerprint against the
 // resolver itself: it must change exactly when some reachable lookup result
 // changes, so a resolver rule the fingerprint misses fails here.
 func TestPricingResolverDependencyFingerprint(t *testing.T) {
 	observed := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	later := observed.Add(24 * time.Hour)
+	embedded := strings.TrimSpace(string(pricingpkg.EmbeddedGenAIDocument().RawJSON()))
 	genAIDocument := func(alphaLater, betaLater, gammaLater string) *pricingpkg.GenAIPrices {
 		model := func(id, laterPrice string) string {
 			return `{"id": "` + id + `", "match": {"equals": "` + id + `"},
@@ -1352,7 +1333,7 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			"model_match": {"starts_with": "genai-"},
 			"models": [` + model("genai-alpha", alphaLater) + `,` +
 			model("genai-beta", betaLater) + `,` + model("genai-gamma", gammaLater) + `]
-		}]`))
+		},` + embedded[1:]))
 		require.NoError(t, err)
 		return prices
 	}
@@ -1383,6 +1364,8 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			fetched("kimi-x", "3"),
 			fetched("kimi-y:cloud", "6"),
 			fetched("kimi-y", "3"),
+			fetched("gpt-5.6-luna", "0.2"),
+			fetched("gpt-5.6-luna@priority", "0.4"),
 			custom("genai-gamma", "7"),
 		}
 	}
@@ -1398,6 +1381,8 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 		"genai-alpha":       {reported: "genai-alpha", canonical: "genai-alpha"},
 		"genai-alpha:cloud": {reported: "genai-alpha:cloud", canonical: "genai-alpha:cloud"},
 		"genai-gamma":       {reported: "genai-gamma", canonical: "genai-gamma"},
+		"priority":          {provider: pricingpkg.OpenAIPriorityProviderID, reported: "gpt-5.6-luna", canonical: "gpt-5.6-luna"},
+		"priority alias":    {provider: pricingpkg.OpenAIPriorityProviderID, reported: "gpt-5.6-luna-2026-07-13", canonical: "gpt-5.6-luna-2026-07-13"},
 	}
 	usesModelA := []string{"model-a", "alias-a", "billed", "tier"}
 
@@ -1490,6 +1475,10 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			rows[genAIIndex].GenAI = genAIDocument("2", "2", "3")
 			return rows
 		}, nil},
+		{"priority rate", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[7].Rates.InputPerMTok = money.MustParseDollars("0.6")
+			return rows
+		}, []string{"priority", "priority alias"}},
 		{"custom rate removed exposes genai", func(rows []EffectivePricingRow) []EffectivePricingRow {
 			return rows[:len(rows)-1]
 		}, []string{"genai-gamma"}},

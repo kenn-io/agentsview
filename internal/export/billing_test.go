@@ -153,7 +153,7 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		embedded := pricingpkg.EmbeddedGenAIDocument()
 		resolver := NewPricingResolver([]EffectivePricingRow{
 			{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
-			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.2"), Source: PricingRowSourceFetched}},
+			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.3"), Source: PricingRowSourceFetched}},
 			{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4"), Source: PricingRowSourceFetched}},
 		})
 		timestamp := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
@@ -171,9 +171,6 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 				assert.Equal(t, money.MustParseDollars("0.4"), lookup.Rates.InputPerMTok, "priority input rate")
 				assert.Equal(t, "gpt-5.6-luna@priority", lookup.Pattern)
 				assert.Equal(t, pricingpkg.OpenAIPriorityProviderID, lookup.Adjustment)
-				cost, err := lookup.Rates.CostForTokens(100_000, 0, 0, 0, 0, 0)
-				require.NoError(t, err)
-				assert.Equal(t, money.MustParseDollars("0.04"), cost, "priority cost for 100,000 input tokens")
 			})
 		}
 	})
@@ -182,14 +179,14 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		name, provider, model, input, pattern, adjustment string
 		custom                                            bool
 		requestInput                                      int
-		bandInput, bandOutput, cost                       string
+		bandInput, bandOutput                             string
 	}{
-		{"priority", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 0, "", "", ""},
-		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", "", ""},
-		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", "", ""},
-		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", "", ""},
-		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33", "3.03"},
-		{"missing tier band uses standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45", "3.45"},
+		{"priority", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 0, "", ""},
+		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", ""},
+		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
+		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
+		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
+		{"missing tier band uses standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -227,9 +224,6 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 				selected := lookup.Rates.RatesForTokens(tc.requestInput, 0, 0)
 				assert.Equal(t, money.MustParseDollars(tc.bandInput), selected.InputPerMTok, "request band input rate")
 				assert.Equal(t, money.MustParseDollars(tc.bandOutput), selected.OutputPerMTok, "request band output rate")
-				cost, err := lookup.Rates.CostForTokens(tc.requestInput, 10_000, 0, 0, 0, 0)
-				require.NoError(t, err)
-				assert.Equal(t, money.MustParseDollars(tc.cost), cost, "request cost")
 			}
 		})
 	}

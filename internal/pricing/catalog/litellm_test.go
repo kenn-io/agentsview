@@ -190,6 +190,7 @@ func TestFetchLiteLLMPricingHonorsCanceledContext(t *testing.T) {
 
 func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 	// Trimmed from LiteLLM's model_prices_and_context_window.json on 2026-10-26.
+	// bedrock/gpt-5.5, gpt-5.5-priority, and banded-model are synthetic rows.
 	data, err := os.ReadFile("testdata/litellm_service_tiers.json")
 	require.NoError(t, err)
 	prices, err := ParseLiteLLMPricing(data)
@@ -227,27 +228,6 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 	for _, model := range []string{"azure/gpt-5.5", "bedrock/gpt-5.5", "gpt-5.5-priority"} {
 		assert.Contains(t, byModel, model)
 		assert.NotContains(t, byModel, model+"@priority")
-	}
-}
-
-func TestParseLiteLLMPricingTierBandStandardCompanion(t *testing.T) {
-	data := []byte(`{
-		"banded-model": {
-			"litellm_provider": "openai",
-			"input_cost_per_token": 0.000001,
-			"output_cost_per_token": 0.000002,
-			"input_cost_per_token_priority": 0.000003,
-			"output_cost_per_token_priority": 0.000004,
-			"input_cost_per_token_above_200k_tokens": 0.000002,
-			"input_cost_per_token_above_200k_tokens_priority": 0.000006,
-			"cache_creation_input_token_cost_above_200k_tokens": 0.00000025
-		}
-	}`)
-	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
-	byModel := make(map[string]ModelPricing)
-	for _, price := range prices {
-		byModel[price.ModelPattern] = price
 	}
 	require.Contains(t, byModel, "banded-model@priority")
 	price := byModel["banded-model@priority"]
