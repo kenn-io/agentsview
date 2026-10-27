@@ -2244,6 +2244,17 @@ func (e *Engine) classifyProviderChangedPath(
 		if watermarkContainer != "" {
 			watermarkPreState, watermarkPreStateOK = statSQLiteContainerState(watermarkContainer)
 		}
+		// An Antigravity summary store write reparses only the sessions whose
+		// archived workspace or parent differs from the store; titles
+		// reconcile separately. The comparison does not depend on the watch
+		// root, so it runs once.
+		summaryStore := (agentType == parser.AgentAntigravity || agentType == parser.AgentAntigravityCLI) &&
+			parser.IsAntigravitySummariesStore(path)
+		var summarySources []parser.SourceRef
+		var summaryErr error
+		if summaryStore {
+			summarySources, summaryErr = e.summaryStoreChangedSources(ctx, provider, path)
+		}
 		for _, watchRoot := range watchRoots {
 			request := parser.ChangedPathRequest{
 				Path:      path,
@@ -2282,10 +2293,12 @@ func (e *Engine) classifyProviderChangedPath(
 					}
 				}
 			}
-			sources, err := provider.SourcesForChangedPath(
-				ctx,
-				request,
-			)
+			var sources []parser.SourceRef
+			if summaryStore {
+				sources, err = summarySources, summaryErr
+			} else {
+				sources, err = provider.SourcesForChangedPath(ctx, request)
+			}
 			if e.changedPathListedHook != nil {
 				e.changedPathListedHook(path)
 			}
@@ -12362,6 +12375,13 @@ func (e *Engine) processProviderFile(
 	cwdAgent = source.Provider
 	if cwdAgent == "" {
 		cwdAgent = file.Agent
+	}
+	if providerSemantics.UnavailableCwdKeepsArchivedSession &&
+		cwdDecision.resolution.State == parser.SourceCwdUnavailable &&
+		cwdDecision.storedOK && cwdDecision.storedCwd != "" {
+		return markSourceFailure(file, processResult{err: fmt.Errorf(
+			"%s: session metadata unavailable; keeping the archived session", cwdPath,
+		)}, failurecache.Identity{}, false), true
 	}
 	explicitForce := e.forceParseBypassesCache(file) || file.ForceFullParse
 	forceSourceCwdParse := cwdDecision.forceParse

@@ -82,6 +82,12 @@ func (p *antigravityCLIProvider) ChangedPathRelevance(
 	return ChangedPathUnclassified, nil
 }
 
+func (p *antigravityCLIProvider) SummaryStoreExpectations(
+	ctx context.Context, storePath string,
+) ([]SummaryStoreExpectation, error) {
+	return p.sources.summaryStoreExpectations(ctx, storePath)
+}
+
 func (p *antigravityCLIProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
@@ -219,7 +225,6 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		seedAntigravitySummaryRoutes(root, loadAntigravitySummaries(ctx, root))
 		files, projects := s.discoverSessionsAndProjects(root)
 		for _, file := range files {
 			// Thread the prebuilt project map so per-source resolution does not
@@ -259,9 +264,7 @@ func (s antigravityCLISourceSet) DiscoverEach(ctx context.Context, yield func(So
 		}
 		// Matches buildAntigravityCLIProjectMap: the summary store only
 		// fills conversations the history and cache leave unmapped.
-		summaries := loadAntigravitySummaries(ctx, root)
-		seedAntigravitySummaryRoutes(root, summaries)
-		for id, summary := range summaries.byID {
+		for id, summary := range loadAntigravitySummaries(ctx, root).byID {
 			if summary.workspace == "" {
 				continue
 			}
@@ -523,6 +526,11 @@ func (s antigravityCLISourceSet) Fingerprint(
 		return SourceFingerprint{}, errors.New("antigravity cli source path unavailable")
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path)
+	if summaries := loadAntigravitySummaries(ctx, src.Root); summaries.err != nil {
+		// Without a good read the stored workspace and parent cannot be
+		// checked, so the session stays as archived and is retried.
+		return SourceFingerprint{}, fmt.Errorf("read %s: %w", AntigravitySummariesDBName, summaries.err)
+	}
 	info, err := AntigravityCLIFileInfo(src.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -540,6 +548,45 @@ func (s antigravityCLISourceSet) Fingerprint(
 		MTimeNS: info.ModTime().UnixNano(),
 		Hash:    hash,
 	}, nil
+}
+
+// summaryStoreExpectations lists the sessions of every conversation the store
+// at storePath names, with the values a parse would store. A conversation can
+// feed two sessions: its conversations/ source and its implicit/ source.
+func (s antigravityCLISourceSet) summaryStoreExpectations(
+	ctx context.Context, storePath string,
+) ([]SummaryStoreExpectation, error) {
+	var expectations []SummaryStoreExpectation
+	for _, root := range s.roots {
+		if !antigravitySummariesPath(root, storePath) {
+			continue
+		}
+		summaries := loadAntigravitySummaries(ctx, root)
+		if summaries.err != nil {
+			return nil, summaries.err
+		}
+		projects := buildAntigravityCLIProjectMap(root)
+		for id := range summaries.byID {
+			parent := ""
+			if p := summaries.parent(id); p != "" {
+				parent = antigravityCLIIDPrefix + p
+			}
+			for _, rawID := range []string{id, antigravityImplicitTag + id} {
+				path := s.findSourceFile(root, rawID)
+				if path == "" {
+					continue
+				}
+				source, ok := s.sourceRefWithProjects(root, path, "", projects, false)
+				if !ok {
+					continue
+				}
+				expectations = append(expectations, summaryExpectation(
+					source, antigravityCLIIDPrefix+rawID, parent,
+				))
+			}
+		}
+	}
+	return expectations, ctx.Err()
 }
 
 func (s antigravityCLISourceSet) sourceFromRef(
@@ -577,16 +624,8 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 		return s.sourcesForHistoryChange(root, req)
 	}
 	if antigravitySummariesPath(root, path) {
-		// Only conversations whose workspace or parent changed reparse.
-		var sources []SourceRef
-		for _, id := range changedAntigravitySummaryIDs(context.Background(), root) {
-			if path := s.findSourceFile(root, id); path != "" {
-				if source, ok := s.sourceRef(root, path, s.projectForID(root, id), false); ok {
-					sources = append(sources, source)
-				}
-			}
-		}
-		return sources
+		// The engine routes store writes through SummaryStoreExpectations.
+		return nil
 	}
 	if sourcePath, id, ok := antigravityCLISourcePathForEvent(root, path); ok {
 		if source, ok := s.sourceRef(root, sourcePath, s.projectForID(root, id), true); ok {

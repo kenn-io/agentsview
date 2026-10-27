@@ -4164,15 +4164,27 @@ schemas keep their existing ordering behavior.
   URI, such as a remote development folder, leaves CWD empty; a remote root
   keeps the folder only as a project hint, as for the CLI. A parent that is a
   conversation UUID other than the conversation itself links the session as a
-  sub-agent. A missing store, row, or column changes nothing. Both values are
-  part of each source's fingerprint, and both providers require the
-  fingerprint hash for freshness, so a full sync reparses exactly the
-  conversations whose store values changed. A store write routes only the
-  conversations whose workspace or parent changed since routing last saw the
-  store; a title-only write routes none. While a store that was read before
-  cannot be read, its last good read stands in, so the outage neither changes
-  fingerprints nor clears stored values. A store that was never read keeps the
-  stored CWD.
+  sub-agent. A missing row or column changes nothing.
+
+- **Keeping archived sessions current:** Both values are part of each source's
+  fingerprint, and both providers require the fingerprint hash for freshness,
+  so a full sync reparses exactly the conversations whose store values
+  changed. A store write routes only the sessions whose archived working
+  directory or parent differs from what the store says, including CLI
+  `implicit/` sessions; a title-only write routes none. The comparison uses
+  the archive, so it holds after a restart, on a retry after failed
+  processing, and for remote imports that plan without discovery.
+
+- **Unavailable store:** While a store that was read before cannot be read or
+  has disappeared, its last good read stands in, so the outage neither changes
+  fingerprints nor clears stored values. Without a good read in this process,
+  an unreadable store fails each source's fingerprint, so the root's archived
+  sessions stay as they are and are retried. A missing app or IDE store
+  likewise leaves alone any archived session that has a working directory,
+  since only the store supplies one. A CLI root without a store is normal for
+  older builds, so CLI sessions do not wait for one; a CLI conversation whose
+  working directory came only from a removed store loses it on its next
+  reparse.
 
 - **Change detection (checked 2026-10-20):** Parsing opens conversation
   databases and the title store read-only, which rewrites their `-shm` WAL

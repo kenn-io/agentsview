@@ -68,9 +68,10 @@ func TestAntigravityProviderSummaryResolutionStates(t *testing.T) {
 		store func(t *testing.T, root string)
 		want  SourceCwdState
 	}{
+		// A missing store may have been removed, so the stored cwd stays.
 		"no summary store": {
 			store: func(*testing.T, string) {},
-			want:  SourceCwdUnspecified,
+			want:  SourceCwdUnavailable,
 		},
 		"conversation not listed": {
 			store: func(t *testing.T, root string) {
@@ -345,49 +346,105 @@ func TestAntigravitySummaryFingerprint(t *testing.T) {
 	}
 }
 
-// A store write reparses only the conversations whose workspace or parent
-// changed, never every conversation in the root.
-func TestAntigravitySummaryWriteRoutesOnlyChangedConversations(t *testing.T) {
+// A store write is routed by comparing each session the store feeds with the
+// archive, so the provider lists every such session with the values a parse
+// would store, including CLI implicit/ sessions.
+func TestAntigravitySummaryStoreExpectations(t *testing.T) {
 	const other = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	t.Run("app and IDE", func(t *testing.T) {
+		root := t.TempDir()
+		writeAntigravityIDEProviderFixture(t, root, summaryTestID)
+		writeAntigravityIDEProviderFixture(t, root, other)
+		store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+			summaryTestID: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: summaryTestParent},
+			other:         {},
+			// Listed, but with no conversation files to parse.
+			"dddddddd-eeee-ffff-0000-111111111111": {WorkspaceURIs: `["file:///tmp/gone"]`},
+		})
+		provider, ok := NewProvider(AgentAntigravity, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
+		require.True(t, ok)
+		got, err := provider.(SummaryStoreExpectationLister).SummaryStoreExpectations(t.Context(), store)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []summaryExpectationView{
+			{Path: filepath.Join(root, "conversations", summaryTestID+".db"), SessionID: "antigravity:" + summaryTestID,
+				Cwd: "/tmp/ws-proj", CwdKnown: true, Parent: "antigravity:" + summaryTestParent},
+			{Path: filepath.Join(root, "conversations", other+".db"), SessionID: "antigravity:" + other},
+		}, viewSummaryExpectations(got))
+	})
+	t.Run("CLI", func(t *testing.T) {
+		root := t.TempDir()
+		// summaryTestCLIID has conversations/ and implicit/ sources, and
+		// history maps its workspace; other has only an implicit/ source.
+		writeAntigravityCLIProviderFixture(t, root, summaryTestCLIID)
+		mustWrite(t, filepath.Join(root, "implicit", other+".pb"), []byte("implicit"))
+		store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+			summaryTestCLIID: {WorkspaceURIs: `["file:///tmp/store-proj"]`, ParentID: summaryTestParent},
+			other:            {WorkspaceURIs: `["file:///tmp/store-proj"]`},
+		})
+		provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
+		require.True(t, ok)
+		got, err := provider.(SummaryStoreExpectationLister).SummaryStoreExpectations(t.Context(), store)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []summaryExpectationView{
+			{Path: filepath.Join(root, "conversations", summaryTestCLIID+".db"), SessionID: "antigravity-cli:" + summaryTestCLIID,
+				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent},
+			{Path: filepath.Join(root, "implicit", summaryTestCLIID+".pb"), SessionID: "antigravity-cli:implicit-" + summaryTestCLIID,
+				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent},
+			{Path: filepath.Join(root, "implicit", other+".pb"), SessionID: "antigravity-cli:implicit-" + other,
+				Cwd: "/tmp/store-proj", CwdKnown: true},
+		}, viewSummaryExpectations(got))
+	})
+}
+
+// Without any good read, an unreadable store fails the fingerprint, so the
+// engine leaves the session as archived and retries it.
+func TestAntigravitySummaryFingerprintFailsClosedOnUnreadableStore(t *testing.T) {
 	for name, tc := range antigravitySummaryProviderCases() {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			tc.fixture(t, root, tc.id)
-			tc.fixture(t, root, other)
-			store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
-				tc.id: {Title: "Child", WorkspaceURIs: `["file:///tmp/a"]`},
-				other: {Title: "Other", WorkspaceURIs: `["file:///tmp/a"]`},
-			})
+			mustWrite(t, filepath.Join(root, AntigravitySummariesDBName),
+				[]byte("not a sqlite database, long enough to fill a header page"))
 			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
 			require.True(t, ok)
-			_, err := provider.Discover(t.Context())
+			discovered, err := provider.Discover(t.Context())
 			require.NoError(t, err)
-			routed := func() []string {
-				t.Helper()
-				sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: store, EventKind: "write"})
-				require.NoError(t, err)
-				var paths []string
-				for _, source := range sources {
-					paths = append(paths, source.DisplayPath)
-				}
-				return paths
-			}
-
-			testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
-				tc.id: {Title: "Child", WorkspaceURIs: `["file:///tmp/a"]`, ParentID: summaryTestParent},
-			})
-			assert.Equal(t, []string{tc.path(root)}, routed(), "the write discovery has not seen routes its change")
-			testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
-				other: {Title: "Renamed", WorkspaceURIs: `["file:///tmp/a"]`},
-			})
-			assert.Empty(t, routed(), "a title-only write routes nothing")
+			_, err = provider.Fingerprint(t.Context(), antigravitySourceAt(t, discovered, tc.path(root)))
+			assert.ErrorContains(t, err, AntigravitySummariesDBName)
 		})
 	}
 }
 
-// While a store that was read before cannot be read, its last good read
-// stands in, so the outage neither changes fingerprints nor clears a parent.
+type summaryExpectationView struct {
+	Path, SessionID, Cwd, Parent string
+	CwdKnown                     bool
+}
+
+func viewSummaryExpectations(expectations []SummaryStoreExpectation) []summaryExpectationView {
+	views := make([]summaryExpectationView, len(expectations))
+	for i, e := range expectations {
+		views[i] = summaryExpectationView{
+			Path: e.Source.DisplayPath, SessionID: e.SessionID, Cwd: e.Cwd,
+			CwdKnown: e.CwdKnown, Parent: e.ParentSessionID,
+		}
+	}
+	return views
+}
+
+// While a store that was read before cannot be read or has disappeared, its
+// last good read stands in, so the outage neither changes fingerprints nor
+// clears a parent.
 func TestAntigravitySummariesKeepLastGoodReadThroughOutage(t *testing.T) {
+	for name, outage := range map[string]func(store string) error{
+		"damaged": func(store string) error { return os.WriteFile(store, []byte("not a database"), 0o644) },
+		"removed": os.Remove,
+	} {
+		t.Run(name, func(t *testing.T) { testAntigravitySummariesOutage(t, outage) })
+	}
+}
+
+func testAntigravitySummariesOutage(t *testing.T, outage func(store string) error) {
+	t.Helper()
 	root := t.TempDir()
 	writeAntigravityIDEProviderFixture(t, root, summaryTestID)
 	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
@@ -400,7 +457,7 @@ func TestAntigravitySummariesKeepLastGoodReadThroughOutage(t *testing.T) {
 	before, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
 
-	require.NoError(t, os.WriteFile(store, []byte("not a database"), 0o644))
+	require.NoError(t, outage(store))
 	discovered, err = provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, SourceCwdResolution{State: SourceCwdResolved, Path: "/tmp/ws-proj"}, discovered[0].CwdResolution)

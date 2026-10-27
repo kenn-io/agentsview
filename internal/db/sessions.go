@@ -4391,6 +4391,9 @@ type SessionWriteIdentity struct {
 	FilePath    string
 	FileHash    string
 	SessionName *string
+	// ParserParentSessionID is the parent the parser recorded, before any
+	// launcher link applies.
+	ParserParentSessionID string
 }
 
 // ListSessionWriteIdentitiesByID returns stored source attribution and parser
@@ -4429,7 +4432,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 			rows, err := db.getReader().QueryContext(ctx, `
 			SELECT id, machine, agent, COALESCE(cwd, ''),
 			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
-			       session_name
+			       session_name, COALESCE(parser_parent_session_id, '')
 			FROM sessions
 			WHERE id IN (`+placeholders+`)
 			ORDER BY id`, args...)
@@ -4443,6 +4446,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 				if err := rows.Scan(
 					&id, &identity.Machine, &identity.Agent, &identity.Cwd,
 					&identity.FilePath, &identity.FileHash, &identity.SessionName,
+					&identity.ParserParentSessionID,
 				); err != nil {
 					_ = rows.Close()
 					return fmt.Errorf(
