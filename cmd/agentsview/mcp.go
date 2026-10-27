@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -280,9 +281,22 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	return runtime == nil || !runtime.ReadOnly
 }
 
-// SupportsFriction is true: the daemon (started on demand) serves the
-// friction read routes; an older daemon is upgraded by the transport.
-func (s *mcpDaemonService) SupportsFriction() bool { return true }
+// SupportsFriction asks a running read-only daemon, which may be a DuckDB or
+// ClickHouse mirror without friction tables. A writable archive daemon, or
+// the one started on demand, serves the friction reads.
+func (s *mcpDaemonService) SupportsFriction() bool {
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	if runtime == nil || !runtime.ReadOnly {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(ctx, urlFromDaemonRuntime(runtime), cfg.AuthToken)
+	return err == nil && capabilities.FrictionReadable
+}
 
 func (s *mcpDaemonService) FrictionDigest(
 	ctx context.Context, date string,

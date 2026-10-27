@@ -111,6 +111,8 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 			assert.Equal(t, tc.status, resp.StatusCode, string(body))
 			if tc.path == "/api/v1/version" && tc.status == 200 {
 				assert.Contains(t, string(body), `"read_only":true`)
+				assert.NotContains(t, string(body), `"friction_readable":true`,
+					"the restricted allowlist serves no friction routes")
 				assert.Empty(t, resp.Header.Get("X-Agentsview-Archive-Stale"))
 			}
 			if tc.path == "/api/v1/sessions" && tc.status == 200 {

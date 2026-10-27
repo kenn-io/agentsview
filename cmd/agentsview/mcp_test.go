@@ -20,6 +20,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/kit/daemon"
 )
@@ -689,4 +690,38 @@ func splitTestServerURL(t *testing.T, raw string) (string, int) {
 	_, err = fmt.Sscanf(portText, "%d", &port)
 	require.NoError(t, err)
 	return host, port
+}
+
+func TestMCPDaemonServiceFrictionCapabilityFollowsReadOnlyDaemon(t *testing.T) {
+	tests := []struct {
+		name     string
+		readable bool
+	}{
+		{name: "archive or PostgreSQL daemon", readable: true},
+		{name: "mirror without friction tables", readable: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/ping" {
+					ping.ServeHTTP(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"api_version":%d,"data_version":1,"read_only":true,"friction_readable":%t}`,
+					server.APIVersion, tt.readable)
+			}))
+			t.Cleanup(ts.Close)
+			dir := daemonRuntimeDir(t)
+			host, port := splitTestServerURL(t, ts.URL)
+			writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
+			svc := newMCPDaemonService(config.Config{DataDir: dir})
+			assert.Equal(t, tt.readable, service.SupportsFriction(svc))
+		})
+	}
+	t.Run("no daemon yet", func(t *testing.T) {
+		svc := newMCPDaemonService(config.Config{DataDir: daemonRuntimeDir(t)})
+		assert.True(t, service.SupportsFriction(svc), "the daemon started on demand is an archive daemon")
+	})
 }

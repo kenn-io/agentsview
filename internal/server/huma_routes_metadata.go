@@ -202,13 +202,16 @@ func (s *Server) humaGetVersion(
 	}
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	_, version.SessionStatsAvailable = s.db.(*db.DB)
+	version.FrictionAvailable = s.frictionRunner != nil
+	_, version.FrictionReadable = s.db.(db.FrictionReader)
 	if restrictedIngress(ctx) {
+		// The restricted allowlist has no friction routes.
 		version.ReadOnly = true
 		version.InsightGenerationAvailable = false
 		version.SessionStatsAvailable = false
+		version.FrictionAvailable = false
+		version.FrictionReadable = false
 	}
-	version.FrictionAvailable = s.frictionRunner != nil
-	_, version.FrictionReadable = s.db.(db.FrictionReader)
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 
