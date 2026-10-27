@@ -308,8 +308,10 @@ func duckBatchFixture(id string, count int) db.SessionBatchWrite {
 			}
 			tc.ResultEvents = []db.ToolResultEvent{
 				{ToolUseID: tc.ToolUseID, Source: "tool_execution", Status: "started", Timestamp: ts, EventIndex: 0},
-				{ToolUseID: tc.ToolUseID, AgentID: key + " agent", SubagentSessionID: tc.SubagentSessionID,
-					Source: "tool_result", Status: "completed", Content: result, ContentLength: len(result), Timestamp: ts, EventIndex: 1},
+				{
+					ToolUseID: tc.ToolUseID, AgentID: key + " agent", SubagentSessionID: tc.SubagentSessionID,
+					Source: "tool_result", Status: "completed", Content: result, ContentLength: len(result), Timestamp: ts, EventIndex: 1,
+				},
 			}
 			msg.ToolCalls = append(msg.ToolCalls, tc)
 		}
