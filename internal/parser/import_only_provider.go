@@ -35,6 +35,8 @@ func importOnlyContentCapabilities(agent AgentType) ContentCapabilities {
 		caps.Model = CapabilitySupported
 	case AgentClaudeAI:
 		caps.Thinking = CapabilitySupported
+	default:
+		// Gemini Apps activity records hold only the prompt.
 	}
 	return caps
 }
