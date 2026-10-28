@@ -505,8 +505,8 @@ func runReplicaStatusTarget(
 	now := time.Now()
 	path := replicaWatchHealthPath(appCfg.DataDir, backend.Name())
 	rec, recErr := loadReplicaWatchRecord(path)
-	if recErr == nil && rec.Target != target.Name {
-		recErr = fmt.Errorf("%s records target %q", path, rec.Target)
+	if recErr == nil && !rec.matches(target) {
+		recErr = fmt.Errorf("%s was written for another target or destination", path)
 	}
 	if recErr == nil {
 		status.Rows = append(status.Rows, replicaWatchRows(rec, now)...)
@@ -522,11 +522,11 @@ func runReplicaStatusTarget(
 		)
 	}
 	stall, err := replicaWatchStall(rec, now, cfg.MaxStale,
-		func(since time.Time) (int, error) {
+		func(from, until time.Time) (int, error) {
 			if database == nil {
 				return 0, errors.New("--max-stale needs the local archive to count changed sessions")
 			}
-			return database.CountSessionsChangedBetween(ctx, since, now)
+			return database.CountSessionsChangedBetween(ctx, from, until)
 		},
 	)
 	if err != nil {

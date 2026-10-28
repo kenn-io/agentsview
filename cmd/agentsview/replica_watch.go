@@ -346,7 +346,7 @@ func prepareReplicaPushWatch(
 	}
 
 	cfg.LifecycleWake = wake
-	cfg.Health = newReplicaWatchHealth(appCfg.DataDir, name, target.Name, time.Now)
+	cfg.Health = newReplicaWatchHealth(appCfg.DataDir, name, target, time.Now)
 
 	log.Printf(
 		"%s watch: starting (machine=%q debounce=%s interval=%s)",

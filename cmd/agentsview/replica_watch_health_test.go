@@ -29,10 +29,15 @@ func TestReplicaWatchHealthRecordsPushOutcomes(t *testing.T) {
 		require.NoError(t, err)
 		return rec
 	}
+	target := storage.ConfiguredReplica{
+		Target: storage.ReplicaTarget{URL: "clickhouse://db.example:9000", Schema: "agentsview"},
+	}
+	dest := replicaWatchDestination(target.Target)
 
-	h := newReplicaWatchHealth(dir, "clickhouse", "", now)
+	h := newReplicaWatchHealth(dir, "clickhouse", target, now)
 	h.start()
 	assert.Equal(t, at("16:00"), load().PushStartedAt)
+	clock = at("16:01")
 	h.finish(nil)
 
 	clock = at("16:16")
@@ -42,54 +47,82 @@ func TestReplicaWatchHealthRecordsPushOutcomes(t *testing.T) {
 	h.start()
 	h.finish(errors.New("schema: still not enough privileges"))
 	assert.Equal(t, replicaWatchRecord{
-		LastSuccessAt: at("16:00"),
-		FailingSince:  at("16:16"),
-		LastFailureAt: at("16:17"),
-		LastError:     "schema: still not enough privileges",
+		Destination:          dest,
+		LastSuccessAt:        at("16:01"),
+		LastSuccessStartedAt: at("16:00"),
+		FailingSince:         at("16:16"),
+		LastFailureAt:        at("16:17"),
+		LastError:            "schema: still not enough privileges",
 	}, load(), "a failure streak keeps its first failure")
 
-	// A watcher that exits mid-push leaves the push marked running. A
-	// restart for the same target keeps the history and clears that mark.
-	clock = at("16:18")
+	clock = at("16:30")
 	h.start()
-	restarted := newReplicaWatchHealth(dir, "clickhouse", "", now)
-	clock = at("21:30")
-	restarted.finish(nil)
+	h.finish(nil)
+	clock = at("16:45")
+	h.start()
+	// A watcher that exits mid-push leaves the push marked running. A
+	// restart counts it as a failure, so a crash loop builds a streak.
+	restarted := newReplicaWatchHealth(dir, "clickhouse", target, now)
 	assert.Equal(t, replicaWatchRecord{
-		LastSuccessAt: at("21:30"),
-		LastFailureAt: at("16:17"),
-	}, load(), "a success ends the failure streak")
+		Destination:          dest,
+		LastSuccessAt:        at("16:30"),
+		LastSuccessStartedAt: at("16:30"),
+		FailingSince:         at("16:45"),
+		LastFailureAt:        at("16:45"),
+		LastError:            "the watcher exited during a push",
+	}, load(), "a restart turns an abandoned push into a failure")
+	clock = at("17:00")
+	restarted.start()
+	newReplicaWatchHealth(dir, "clickhouse", target, now)
+	rec := load()
+	assert.Equal(t, at("16:45"), rec.FailingSince, "repeated crashes keep the first failure")
+	assert.Equal(t, at("17:00"), rec.LastFailureAt)
 
-	other := newReplicaWatchHealth(dir, "clickhouse", "archive", now)
+	clock = at("21:30")
+	other := newReplicaWatchHealth(dir, "clickhouse", storage.ConfiguredReplica{
+		Name:   "archive",
+		Target: target.Target,
+	}, now)
 	other.start()
 	assert.Equal(t, replicaWatchRecord{
-		Target: "archive", PushStartedAt: at("21:30"),
+		Target: "archive", Destination: dest, PushStartedAt: at("21:30"),
 	}, load(), "another target starts its own history")
+
+	moved := target
+	moved.Target.Schema = "agentsview_v2"
+	assert.False(t, load().matches(moved))
+	newReplicaWatchHealth(dir, "clickhouse", moved, now).start()
+	assert.Equal(t, replicaWatchRecord{
+		Destination: replicaWatchDestination(moved.Target), PushStartedAt: at("21:30"),
+	}, load(), "a new URL or schema starts its own history")
 }
 
 func TestReplicaWatchStall(t *testing.T) {
 	now := time.Date(2026, 10, 26, 21, 30, 0, 0, time.UTC)
 	ago := func(d time.Duration) time.Time { return now.Add(-d) }
 	tests := []struct {
-		name    string
-		rec     replicaWatchRecord
-		changed int
-		// wantSince is the lower bound passed to the change count; nil
-		// means the count must not run.
-		wantSince *time.Time
-		want      string
+		name string
+		rec  replicaWatchRecord
+		// changes are the archive's session change times.
+		changes []time.Time
+		want    string
 	}{
 		{
 			name: "recent success",
-			rec:  replicaWatchRecord{LastSuccessAt: ago(2 * time.Minute)},
+			rec: replicaWatchRecord{
+				LastSuccessAt: ago(2 * time.Minute), LastSuccessStartedAt: ago(3 * time.Minute),
+			},
+			changes: []time.Time{ago(time.Minute)},
 		},
 		{
 			name: "short failure streak",
 			rec: replicaWatchRecord{
-				LastSuccessAt: ago(3 * time.Minute),
-				FailingSince:  ago(2 * time.Minute),
-				LastError:     "connection reset",
+				LastSuccessAt:        ago(3 * time.Hour),
+				LastSuccessStartedAt: ago(3 * time.Hour),
+				FailingSince:         ago(2 * time.Minute),
+				LastError:            "connection reset",
 			},
+			changes: []time.Time{ago(time.Hour)},
 		},
 		{
 			name: "long failure streak",
@@ -101,52 +134,70 @@ func TestReplicaWatchStall(t *testing.T) {
 			want: "pushes have failed since 2026-10-26T16:16:00Z (5h14m0s ago): not enough privileges",
 		},
 		{
-			name:      "idle watcher with nothing new",
-			rec:       replicaWatchRecord{LastSuccessAt: ago(8 * time.Hour)},
-			wantSince: new(ago(8 * time.Hour)),
+			name: "retry running during a long failure streak",
+			rec: replicaWatchRecord{
+				PushStartedAt: ago(time.Second),
+				FailingSince:  ago(time.Hour),
+				LastError:     "not enough privileges",
+			},
+			want: "pushes have failed since 2026-10-26T20:30:00Z (1h0m0s ago): not enough privileges",
 		},
 		{
-			name:      "changes waiting with no push",
-			rec:       replicaWatchRecord{LastSuccessAt: ago(time.Hour)},
-			changed:   3,
-			wantSince: new(ago(time.Hour)),
-			want:      "3 session(s) changed after the last successful push 2026-10-26T20:30:00Z (1h0m0s ago) and nothing has pushed them; check that the watcher is running",
+			name:    "idle watcher with nothing new",
+			rec:     replicaWatchRecord{LastSuccessStartedAt: ago(8 * time.Hour)},
+			changes: []time.Time{ago(9 * time.Hour)},
 		},
 		{
-			name:      "never succeeded with sessions waiting",
-			rec:       replicaWatchRecord{},
-			changed:   4,
-			wantSince: new(time.Time{}),
-			want:      "4 session(s) are waiting and no push has succeeded; check that the watcher is running",
+			name:    "change after a long idle still within the debounce",
+			rec:     replicaWatchRecord{LastSuccessStartedAt: ago(8 * time.Hour)},
+			changes: []time.Time{ago(20 * time.Second)},
+		},
+		{
+			name: "changes waiting with no push",
+			rec: replicaWatchRecord{
+				LastSuccessAt: ago(time.Hour), LastSuccessStartedAt: ago(time.Hour + time.Minute),
+			},
+			changes: []time.Time{ago(time.Hour + time.Minute), ago(30 * time.Minute), ago(20 * time.Minute), ago(time.Minute)},
+			want:    "3 session(s) changed after the last successful push started 2026-10-26T20:29:00Z (1h1m0s ago) and nothing has pushed them; check that the watcher is running",
+		},
+		{
+			name:    "never succeeded with sessions waiting",
+			rec:     replicaWatchRecord{},
+			changes: []time.Time{ago(48 * time.Hour), ago(time.Hour)},
+			want:    "2 session(s) are waiting and no push has succeeded; check that the watcher is running",
 		},
 		{
 			name: "push running within the limit",
 			rec: replicaWatchRecord{
-				LastSuccessAt: ago(time.Hour),
-				PushStartedAt: ago(5 * time.Minute),
+				LastSuccessStartedAt: ago(time.Hour),
+				PushStartedAt:        ago(5 * time.Minute),
 			},
+			changes: []time.Time{ago(30 * time.Minute)},
 		},
 		{
 			name: "push running past the limit",
 			rec: replicaWatchRecord{
-				LastSuccessAt: ago(time.Hour),
-				PushStartedAt: ago(40 * time.Minute),
+				LastSuccessStartedAt: ago(time.Hour),
+				PushStartedAt:        ago(40 * time.Minute),
 			},
 			want: "the push that started 2026-10-26T20:50:00Z (40m0s ago) has not finished; it is stuck or the watcher stopped mid-push",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var gotSince *time.Time
 			got, err := replicaWatchStall(tt.rec, now, 15*time.Minute,
-				func(since time.Time) (int, error) {
-					gotSince = &since
-					return tt.changed, nil
+				func(from, until time.Time) (int, error) {
+					n := 0
+					for _, c := range tt.changes {
+						if !c.Before(from) && !c.After(until) {
+							n++
+						}
+					}
+					return n, nil
 				},
 			)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
-			assert.Equal(t, tt.wantSince, gotSince)
 		})
 	}
 }
@@ -185,7 +236,7 @@ func TestReplicaPushWatchOwnersRecordHealth(t *testing.T) {
 			path := replicaWatchHealthPath(dir, "pg")
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(1)
-				health := newReplicaWatchHealth(dir, "pg", "", time.Now)
+				health := newReplicaWatchHealth(dir, "pg", storage.ConfiguredReplica{}, time.Now)
 				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
@@ -197,7 +248,9 @@ func TestReplicaPushWatchOwnersRecordHealth(t *testing.T) {
 				synctest.Wait()
 				failed, err := loadReplicaWatchRecord(path)
 				require.NoError(t, err)
+				dest := replicaWatchDestination(storage.ReplicaTarget{})
 				assert.Equal(t, replicaWatchRecord{
+					Destination:   dest,
 					FailingSince:  time.Now().UTC(),
 					LastFailureAt: time.Now().UTC(),
 					LastError:     "1 session(s) failed to push",
@@ -210,8 +263,10 @@ func TestReplicaPushWatchOwnersRecordHealth(t *testing.T) {
 				succeeded, err := loadReplicaWatchRecord(path)
 				require.NoError(t, err)
 				assert.Equal(t, replicaWatchRecord{
-					LastSuccessAt: time.Now().UTC(),
-					LastFailureAt: failed.LastFailureAt,
+					Destination:          dest,
+					LastSuccessAt:        time.Now().UTC(),
+					LastSuccessStartedAt: time.Now().UTC(),
+					LastFailureAt:        failed.LastFailureAt,
 				}, succeeded)
 
 				cancel()

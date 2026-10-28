@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/stringutil"
+	"go.kenn.io/kit/atomicfile"
 )
 
 // replicaWatchErrorLimit bounds the push error kept in the health record.
@@ -24,9 +27,15 @@ const replicaWatchErrorLimit = 500
 type replicaWatchRecord struct {
 	// Target is the configured target name; empty for an unnamed default.
 	Target string `json:"target"`
+	// Destination fingerprints the target's URL and schema, so a record
+	// written for an earlier destination of the same target is not reused.
+	Destination string `json:"destination"`
 	// PushStartedAt is set while a push runs and cleared when it finishes.
 	PushStartedAt time.Time `json:"push_started_at,omitzero"`
 	LastSuccessAt time.Time `json:"last_success_at,omitzero"`
+	// LastSuccessStartedAt is when the last successful push started.
+	// Sessions changed from then on may not have reached the replica.
+	LastSuccessStartedAt time.Time `json:"last_success_started_at,omitzero"`
 	// FailingSince is the first failure after the last success. It is zero
 	// while pushes succeed.
 	FailingSince  time.Time `json:"failing_since,omitzero"`
@@ -47,23 +56,49 @@ func replicaWatchHealthPath(dataDir, backend string) string {
 	return filepath.Join(dataDir, backend+"-watch-health.json")
 }
 
+// replicaWatchDestination fingerprints where a target pushes. It hashes the
+// URL so credentials in it are not written to the record.
+func replicaWatchDestination(target storage.ReplicaTarget) string {
+	sum := sha256.Sum256([]byte(target.URL + "\x00" + target.Schema))
+	return hex.EncodeToString(sum[:8])
+}
+
+// matches reports whether rec was written for target.
+func (rec replicaWatchRecord) matches(target storage.ConfiguredReplica) bool {
+	return rec.Target == target.Name &&
+		rec.Destination == replicaWatchDestination(target.Target)
+}
+
 // newReplicaWatchHealth keeps the last success and failure streak of an
-// earlier watcher for the same target, so a restart does not hide a stall. A
-// push still marked as running belonged to a watcher that exited mid-push,
-// and is cleared.
+// earlier watcher for the same target and destination, so a restart does not
+// hide a stall. A push still marked as running belonged to a watcher that
+// exited mid-push; it becomes a failure so a crash loop builds a failure
+// streak instead of looking like a fresh push after every restart.
 func newReplicaWatchHealth(
-	dataDir, backend, target string, now func() time.Time,
+	dataDir, backend string, target storage.ConfiguredReplica,
+	now func() time.Time,
 ) *replicaWatchHealth {
 	h := &replicaWatchHealth{
 		path: replicaWatchHealthPath(dataDir, backend),
 		now:  now,
-		rec:  replicaWatchRecord{Target: target},
+		rec: replicaWatchRecord{
+			Target:      target.Name,
+			Destination: replicaWatchDestination(target.Target),
+		},
 	}
 	prev, err := loadReplicaWatchRecord(h.path)
 	switch {
-	case err == nil && prev.Target == target:
+	case err == nil && prev.matches(target):
 		h.rec = prev
-		h.rec.PushStartedAt = time.Time{}
+		if started := prev.PushStartedAt; !started.IsZero() {
+			h.rec.PushStartedAt = time.Time{}
+			if h.rec.FailingSince.IsZero() {
+				h.rec.FailingSince = started
+			}
+			h.rec.LastFailureAt = started
+			h.rec.LastError = "the watcher exited during a push"
+			h.writeLocked()
+		}
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		log.Printf("warning: reading %s: %v", h.path, err)
 	}
@@ -87,9 +122,11 @@ func (h *replicaWatchHealth) finish(err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now().UTC()
+	started := h.rec.PushStartedAt
 	h.rec.PushStartedAt = time.Time{}
 	if err == nil {
 		h.rec.LastSuccessAt = now
+		h.rec.LastSuccessStartedAt = started
 		h.rec.FailingSince = time.Time{}
 		h.rec.LastError = ""
 	} else {
@@ -107,29 +144,11 @@ func (h *replicaWatchHealth) finish(err error) {
 func (h *replicaWatchHealth) writeLocked() {
 	data, err := json.Marshal(h.rec)
 	if err == nil {
-		err = writeFileAtomic(h.path, data)
+		err = atomicfile.WriteFile(h.path, data)
 	}
 	if err != nil {
 		log.Printf("warning: writing %s: %v", h.path, err)
 	}
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
-	if err != nil {
-		return err
-	}
-	_, err = tmp.Write(data)
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
-	if err != nil {
-		_ = os.Remove(tmp.Name())
-	}
-	return err
 }
 
 func loadReplicaWatchRecord(path string) (replicaWatchRecord, error) {
@@ -146,22 +165,21 @@ func loadReplicaWatchRecord(path string) (replicaWatchRecord, error) {
 
 // replicaWatchStall explains why the watcher has stalled, or returns "" when
 // it is healthy or idle. A watcher stalls when a push has run for longer than
-// limit, when pushes have failed for longer than limit, or when sessions
-// changed after the last success and nothing has pushed them for longer than
-// limit. changedSince counts archive sessions changed after a time and not
-// after now; a zero time counts every session.
+// limit, when pushes have failed for longer than limit, or when a session
+// changed after the last successful push started and has waited longer than
+// limit without a push. A running push or a failure streak younger than limit
+// is given that time to finish or recover. changedBetween counts archive
+// sessions changed from one time through another; a zero start counts from
+// the beginning.
 func replicaWatchStall(
 	rec replicaWatchRecord, now time.Time, limit time.Duration,
-	changedSince func(time.Time) (int, error),
+	changedBetween func(from, until time.Time) (int, error),
 ) (string, error) {
-	if !rec.PushStartedAt.IsZero() {
-		if age := now.Sub(rec.PushStartedAt); age > limit {
-			return fmt.Sprintf(
-				"the push that started %s has not finished; it is stuck or the watcher stopped mid-push",
-				agoText(rec.PushStartedAt, now),
-			), nil
-		}
-		return "", nil
+	if !rec.PushStartedAt.IsZero() && now.Sub(rec.PushStartedAt) > limit {
+		return fmt.Sprintf(
+			"the push that started %s has not finished; it is stuck or the watcher stopped mid-push",
+			agoText(rec.PushStartedAt, now),
+		), nil
 	}
 	if !rec.FailingSince.IsZero() && now.Sub(rec.FailingSince) > limit {
 		return fmt.Sprintf(
@@ -169,25 +187,30 @@ func replicaWatchStall(
 			agoText(rec.FailingSince, now), rec.LastError,
 		), nil
 	}
-	if !rec.LastSuccessAt.IsZero() && now.Sub(rec.LastSuccessAt) <= limit {
+	if !rec.PushStartedAt.IsZero() || !rec.FailingSince.IsZero() {
 		return "", nil
 	}
-	changed, err := changedSince(rec.LastSuccessAt)
+	waitedUntil := now.Add(-limit)
+	from := rec.LastSuccessStartedAt
+	if !from.IsZero() && from.After(waitedUntil) {
+		return "", nil
+	}
+	changed, err := changedBetween(from, waitedUntil)
 	if err != nil {
 		return "", err
 	}
 	if changed == 0 {
 		return "", nil
 	}
-	if rec.LastSuccessAt.IsZero() {
+	if from.IsZero() {
 		return fmt.Sprintf(
 			"%d session(s) are waiting and no push has succeeded; check that the watcher is running",
 			changed,
 		), nil
 	}
 	return fmt.Sprintf(
-		"%d session(s) changed after the last successful push %s and nothing has pushed them; check that the watcher is running",
-		changed, agoText(rec.LastSuccessAt, now),
+		"%d session(s) changed after the last successful push started %s and nothing has pushed them; check that the watcher is running",
+		changed, agoText(from, now),
 	), nil
 }
 

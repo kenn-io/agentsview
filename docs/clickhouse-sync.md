@@ -387,16 +387,22 @@ agentsview clickhouse status --max-stale 10m
 The command exits non-zero, and names the cause, when one of these has lasted
 longer than the limit:
 
-- Every push has failed, for any reason.
+- Every push has failed, for any reason. A watcher that exits during a push
+  counts as a failed push, so a crash loop fails the check too.
 - A push started and has not finished.
-- Sessions changed after the last successful push, and no push has run since.
-  This catches a watcher that stopped or is waiting for a local sync.
+- A session changed after the last successful push started, and no push has
+  picked it up within the limit. This catches a watcher that stopped or is
+  waiting for a local sync.
 
 An idle machine or a laptop that slept does not fail the check: with no new
-sessions there is nothing to push. Set the limit above the watcher's
-`--debounce` plus the time one push takes. It does not need to exceed the
-`--interval` floor. Without a watcher record for the target, `--max-stale`
-fails, because nothing reports what pushes did.
+sessions there is nothing to push. A failure or a push that is still running
+gets the full limit to recover before the check fails. Set the limit above the
+watcher's `--debounce` plus the time one push takes. It does not need to exceed
+the `--interval` floor.
+
+`--max-stale` fails without a watcher record for the target, because nothing
+reports what pushes did. It also fails when the record was written before the
+target's URL or schema changed, until a watcher using the new settings starts.
 
 ### `agentsview clickhouse service`
 

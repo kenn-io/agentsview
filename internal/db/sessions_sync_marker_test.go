@@ -792,18 +792,20 @@ func TestCountSessionsChangedBetween(t *testing.T) {
 	now := ts("2026-10-26T21:30:00Z")
 	tests := []struct {
 		name  string
-		since time.Time
+		from  time.Time
+		until time.Time
 		want  int
 	}{
-		// The lower bound is exclusive, and a future-dated marker is not a
-		// change that has happened yet.
-		{name: "after a push", since: ts("2026-10-26T16:15:00Z"), want: 1},
-		{name: "from the beginning skips unmarked sessions", want: 3},
-		{name: "nothing after the last change", since: ts("2026-10-26T17:00:00Z"), want: 0},
+		// The lower bound is inclusive like a push window, and a
+		// future-dated marker is not a change that has happened yet.
+		{name: "from a push start", from: ts("2026-10-26T16:15:00Z"), until: now, want: 2},
+		{name: "from the beginning skips unmarked sessions", until: now, want: 3},
+		{name: "upper bound is inclusive", from: ts("2026-10-26T16:00:00Z"), until: ts("2026-10-26T16:15:00Z"), want: 2},
+		{name: "nothing after the last change", from: ts("2026-10-26T17:00:01Z"), until: now, want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := database.CountSessionsChangedBetween(ctx, tt.since, now)
+			got, err := database.CountSessionsChangedBetween(ctx, tt.from, tt.until)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
