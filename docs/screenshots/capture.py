@@ -2,10 +2,12 @@
 """Run a pinned screenshot runtime against explicit, verified inputs."""
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -14,6 +16,14 @@ from container import run as run_container
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def copy_corpus(source, target, reference_now):
+    shutil.copytree(source, target, copy_function=shutil.copyfile)
+    timestamp = int(datetime.fromisoformat(reference_now).timestamp() * 1_000_000_000)
+    # Source selection uses mtime when duplicate transcripts have equal sizes.
+    for path in [*target.rglob("*"), target]:
+        os.utime(path, ns=(timestamp, timestamp))
 
 
 def image_hashes(root, expected):
@@ -54,13 +64,15 @@ def run(args):
     if output.exists():
         raise ValueError("CAPTURE_OUTPUT must be a new directory")
     output.mkdir(parents=True)
+    corpus_copy = output / "corpus"
+    copy_corpus(manifest_path.parent, corpus_copy, manifest["reference_now"])
     assets = output / "assets"
     (assets / "screenshots").mkdir(parents=True)
     cidfile = output / "container.id"
     command = ["docker", "run", "--rm", "--network=none", "--platform=linux/amd64",
                "--hostname=docs-capture", "--shm-size=1g"]
     for source, target, readonly in [
-        (manifest_path.parent, "/corpus", True), (application, "/application", True),
+        (corpus_copy, "/corpus", True), (application, "/application", True),
         (ROOT, "/capture", True), (assets / "screenshots", "/output", False),
         (output, "/result", False),
     ]:

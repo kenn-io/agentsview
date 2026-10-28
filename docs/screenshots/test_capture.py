@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sqlite3
@@ -10,6 +11,28 @@ import corpus
 
 
 class CaptureTest(unittest.TestCase):
+    def test_corpus_copy_ignores_restored_modification_times(self):
+        import capture
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            paths = [source / "a" / "session.jsonl", source / "b" / "session.jsonl"]
+            for path, text in zip(paths, ["first", "other"]):
+                path.parent.mkdir()
+                path.write_text(text)
+            for attempt, times in enumerate([(10, 20), (20, 10)]):
+                for path, timestamp in zip(paths, times):
+                    os.utime(path, ns=(timestamp * 1_000_000_000,) * 2)
+                target = root / str(attempt)
+                capture.copy_corpus(source, target, "2024-01-01T00:00:00Z")
+                for path, timestamp, text in zip(paths, times, ["first", "other"]):
+                    copied = target / path.relative_to(source)
+                    self.assertEqual(copied.read_text(), text)
+                    self.assertEqual(copied.stat().st_mtime_ns, 1704067200000000000)
+                    self.assertEqual(path.stat().st_mtime_ns, timestamp * 1_000_000_000)
+
     def test_missing_explicit_inputs_fail_without_running_docker(self):
         result = subprocess.run(
             ["bash", str(Path(__file__).with_name("run.sh"))],

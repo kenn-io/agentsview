@@ -60,6 +60,7 @@ func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 	require.NoError(t, err)
 	scriptPath := filepath.Join(docsAssetsDir, "hydrate-assets.sh")
 	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
+	installScript(t, localRepo, filepath.Join("docs", "screenshots", "expected-assets.txt"))
 
 	output, err := runBash(t, localRepo, nil, scriptPath)
 	require.NoError(t, err, string(output))
@@ -111,6 +112,7 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(sourceDir, ".env.local"), []byte("TOKEN=secret\n"), 0o600))
 
 			scriptPath := installScript(t, repo, tc.scriptRel)
+			installScript(t, repo, filepath.Join("docs", "screenshots", "expected-assets.txt"))
 			output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
 
 			require.Error(t, err, string(output))
@@ -132,6 +134,7 @@ func TestGeneratedAssetPublisherAcceptsSemanticSetupScreenshot(t *testing.T) {
 		t, repo,
 		filepath.Join("docs", "screenshots", "update-generated-assets-branch.sh"),
 	)
+	installScript(t, repo, filepath.Join("docs", "screenshots", "expected-assets.txt"))
 	output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
 	require.NoError(t, err, string(output))
 

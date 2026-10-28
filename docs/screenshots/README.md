@@ -88,9 +88,12 @@ Each of the two runs:
 
 1. Builds the frontend and Go binary from retained dependencies with networking
    disabled and fixed build metadata.
-1. Creates an empty home and fresh data directories. It queries the selected
-   application's provider registry, configures only the corpus roots, and runs
-   normal sync. Other configurable provider roots are empty.
+1. Copies the corpus into the attempt and fixes file and directory modification
+   times to its reference date, so restoring files cannot change duplicate
+   transcript selection. Creates an empty home and fresh data directories. It
+   queries the selected application's provider registry, configures only the
+   corpus roots, and runs normal sync. Other configurable provider roots are
+   empty.
 1. Checks the required sessions and content, then applies the corpus's reviewed
    stars and insight examples. PostgreSQL shows two example machines, with a
    stable timestamp-and-session-ID split.

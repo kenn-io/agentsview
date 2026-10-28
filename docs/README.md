@@ -156,7 +156,7 @@ vercel link
 Deploy committed docs changes with:
 
 ```bash
-scripts/update-docs.sh
+scripts/update-docs.sh --source /managed/attempts/request-1-attempt-1/run-1/capture/assets
 ```
 
 Create a Vercel preview/staging deployment before production with:
