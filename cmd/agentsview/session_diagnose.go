@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -71,8 +72,17 @@ type diagnosisCoverage struct {
 }
 
 func newSessionDiagnoseCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "diagnose <id>", Short: "Diagnose archived session usage and tool activity", Args: cobra.ExactArgs(1), SilenceUsage: true,
+	cmd := &cobra.Command{
+		Use: "diagnose <id>", Short: "Diagnose archived session usage and tool activity", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if noSync, _ := cmd.Flags().GetBool("no-sync"); !noSync {
+				return errors.New("diagnose only reads archived usage")
+			}
+			// Config only applies explicitly set flags, including defaults that
+			// must reach transport resolution before it can start a daemon.
+			if err := cmd.Flags().Set("no-sync", "true"); err != nil {
+				return err
+			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
@@ -81,9 +91,6 @@ func newSessionDiagnoseCommand() *cobra.Command {
 			id, err := resolveServiceSessionID(cmd.Context(), svc, args[0])
 			if err != nil {
 				return err
-			}
-			if noSync, _ := cmd.Flags().GetBool("no-sync"); !noSync {
-				return fmt.Errorf("diagnose only reads archived usage")
 			}
 			usage, _, err := sessionUsageDataForCommand(cmd, id)
 			if err != nil {
@@ -139,7 +146,7 @@ func diagnosisMessages(ctx context.Context, svc service.SessionService, id strin
 		}
 		next := page.Messages[len(page.Messages)-1].Ordinal + 1
 		if next <= from {
-			return nil, false, fmt.Errorf("message pagination did not advance")
+			return nil, false, errors.New("message pagination did not advance")
 		}
 		from = next
 	}
@@ -150,9 +157,11 @@ func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.M
 	// Project is not needed for diagnosis and may contain private information.
 	safeUsage := *usage
 	safeUsage.Project = ""
-	out := &sessionDiagnosis{SchemaVersion: 1, SessionID: id, Scope: "usage includes linked subagents; tool and context evidence is the named session only", Usage: &safeUsage,
+	out := &sessionDiagnosis{
+		SchemaVersion: 1, SessionID: id, Scope: "usage includes linked subagents; tool and context evidence is the named session only", Usage: &safeUsage,
 		Coverage: diagnosisCoverage{RequestCountStatus: "unavailable: usage rows do not always represent requests", CacheMissReasons: "unavailable: provider diagnostics not captured", ToolEvidenceScope: "named session only; lengths are not billed tokens", MessagesComplete: complete, UsageStatus: "archived; completeness unknown", CacheBucketAvailability: "unknown: zero can mean missing or unreported"},
-		Context:  []diagnosisContext{}, Compactions: []int{}, LargeResults: []diagnosisTool{}, RetryRuns: []diagnosisRetry{}, ChildLinks: []diagnosisChildLink{}}
+		Context:  []diagnosisContext{}, Compactions: []int{}, LargeResults: []diagnosisTool{}, RetryRuns: []diagnosisRetry{}, ChildLinks: []diagnosisChildLink{},
+	}
 	if !usage.HasTokenData {
 		out.Coverage.UsageStatus = "no token data reported"
 	}
