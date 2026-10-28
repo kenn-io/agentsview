@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
@@ -187,9 +188,10 @@ func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.M
 		if c.ResultLength > 0 {
 			out.LargeResults = append(out.LargeResults, diagnosisTool{c.Ordinal, c.ToolName, c.ResultLength, c.SubagentSessionID})
 		}
-		// Missing arguments cannot establish identical calls; unique placeholders break runs.
+		// Missing and empty-object arguments may be parser placeholders.
+		// Unique placeholders prevent them from forming a retry run.
 		input := c.InputJSON
-		if input == "" {
+		if strings.TrimSpace(input) == "" || strings.TrimSpace(input) == "{}" {
 			input = fmt.Sprintf("\x00missing:%d", i)
 		}
 		rows = append(rows, signals.ToolCallRow{ToolName: c.ToolName, InputJSON: input, MessageOrdinal: c.Ordinal, CallIndex: i})

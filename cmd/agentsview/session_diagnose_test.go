@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,17 +16,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	ordinal := 3
-	usage := &sessionUsageOutput{SessionUsage: db.SessionUsage{
+	usage := &sessionUsageOutput{
 		SessionID: "root", Project: "private-project", HasTokenData: true, SubagentCount: 1,
 		Breakdown: []db.SessionUsageBreakdownEntry{{Source: "message", MessageOrdinal: &ordinal, InputTokens: 40, CacheReadInputTokens: 60, CacheCreationInputTokens: 20, OutputTokens: 10}, {Source: "message", SubagentSessionID: "child", InputTokens: 5, OutputTokens: 2}},
-	}}
+	}
 	messages := []db.Message{{Ordinal: 3, Content: "secret prompt", HasContextTokens: true, ContextTokens: 120, Model: "model-a"}, {Ordinal: 7, IsCompactBoundary: true}}
 	calls := []service.ToolCall{{Ordinal: 3, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 20}, {Ordinal: 4, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 900}, {Ordinal: 5, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 50}, {Ordinal: 6, ToolName: "read", ResultLength: 100, SubagentSessionID: "child"}}
 	got := buildSessionDiagnosis("root", usage, messages, calls, true)
@@ -225,4 +229,30 @@ func TestSessionDiagnoseRejectsSyncBeforeStartingDaemon(t *testing.T) {
 	_, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--no-sync=false")
 	require.ErrorContains(t, err, "diagnose only reads archived usage")
 	assert.False(t, started)
+}
+
+func TestSessionDiagnosisCodexCloudPlaceholderIsNotRetryEvidence(t *testing.T) {
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	records := []mirror.Record{{Kind: mirror.KindThread, FetchedAt: fetched, Data: jsontext.Value(`{"id":"thread-a","createdAt":1,"updatedAt":2}`)}}
+	for _, id := range []string{"a", "b", "c"} {
+		records = append(records, mirror.Record{Kind: mirror.KindItem, FetchedAt: fetched, Data: jsontext.Value(`{"turnId":"turn-1","startedAtMs":1759320000000,"item":{"type":"functionCallOutput","id":"` + id + `","name":"exec","output":"done"}}`)})
+	}
+	path := filepath.Join(t.TempDir(), "account", "thread-a.jsonl.zstd")
+	_, err := mirror.Append(path, 0, records)
+	require.NoError(t, err)
+	parsed, ok, err := parser.ParseCodexCloudFile(t.Context(), path, "machine")
+	require.NoError(t, err)
+	require.True(t, ok)
+	var calls []service.ToolCall
+	for _, m := range parsed.Messages {
+		for _, c := range m.ToolCalls {
+			calls = append(calls, service.ToolCall{Ordinal: m.Ordinal, ToolName: c.ToolName, InputJSON: c.InputJSON})
+		}
+	}
+	require.Len(t, calls, 3)
+	for _, c := range calls {
+		assert.Equal(t, "{}", c.InputJSON)
+	}
+	report := buildSessionDiagnosis(parsed.Session.ID, &sessionUsageOutput{}, nil, calls, true)
+	assert.Empty(t, report.RetryRuns)
 }

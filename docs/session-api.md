@@ -933,7 +933,9 @@ uncached input, cache-read, cache-write and output rows, context observations,
 compaction ordinals, the ten largest recorded tool-result lengths, and runs of
 three or more consecutive calls with identical recorded arguments. Tool and
 context evidence covers the named session only; child links are shown when
-recorded. Missing arguments do not count as identical. These observations can
+recorded. Missing arguments and empty JSON objects do not count as identical,
+because some parsers use empty objects when arguments are unknown. This can
+omit retries with genuinely empty arguments. These observations can
 be incomplete: usage rows are not always
 requests, request counts and provider cache-miss reasons are unavailable, and
 result lengths are not billed tokens. Cost is reported or estimated according
