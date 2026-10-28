@@ -373,8 +373,8 @@ flags as `clickhouse push`.
 
 When the [push watcher](#automatic-push-watcher) runs on this machine, status
 also shows what it last did. The watcher records each push it runs in
-`clickhouse-watch-health.json` in the data directory. `Watcher last success:`
-is the end of the last push that worked. `Watcher failing since:` and
+`clickhouse-watch-health.json` in the data directory. `Watcher last success:` is
+the end of the last push that worked. `Watcher failing since:` and
 `Watcher last error:` appear while pushes fail.
 
 To alert on a stalled watcher, run status from a timer or monitor with
@@ -387,25 +387,31 @@ agentsview clickhouse status --max-stale 10m
 The command exits non-zero, and names the cause, in any of these cases:
 
 - Every push has failed for longer than the limit, for any reason. A watcher
-  that exits during a push counts as a failed push, so a crash loop fails the
-  check too.
+  that exits during a push, or that cannot open the archive when it starts,
+  counts as a failed push, so a crash loop or restart loop fails the check
+  too.
 - A push started more than the limit ago and has not finished.
 - No push has finished for longer than the `--interval` floor plus the limit.
   The watcher pushes at least once per interval even when nothing changed, so
   this catches a watcher that stopped, or one whose pushes wait on a local
   sync that never finishes.
 
-The check reads only what the watcher recorded about its own pushes. It does
-not inspect the archive to guess what a push would send. A failure or a push
-that is still running gets the full limit to recover before the check fails.
-With the default 15-minute interval, `--max-stale 10m` fails after 25 minutes
-without a finished push.
+The check reads only what the watcher recorded about its own pushes. It does not
+inspect the archive to guess what a push would send. A failure or a push that is
+still running gets the full limit to recover before the check fails. With the
+default 15-minute interval, `--max-stale 10m` fails after 25 minutes without a
+finished push.
+
+When the record already shows a stall, status reports it without querying the
+replica, because a stuck push can hold locks that block the status query.
+Otherwise the replica gets one minute to answer, and the check fails if it does
+not.
 
 The check uses wall-clock time. After a machine wakes from a sleep longer than
 the interval plus the limit, the check fails until the watcher's next push:
 within the debounce after a session changes, and otherwise within one interval.
-On a laptop, alert only when the check fails twice in a row, spaced at least
-one interval apart.
+On a laptop, alert only when the check fails twice in a row, spaced at least one
+interval apart.
 
 `--max-stale` fails without a watcher record for the target, because nothing
 reports what pushes did. It also fails when the record was written before the

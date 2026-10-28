@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
+	"os"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -277,6 +281,121 @@ func TestReplicaPushWatchOwnersRecordHealth(t *testing.T) {
 				cancel()
 				require.NoError(t, receiveArchiveTest(t, done))
 			})
+		})
+	}
+}
+
+// TestReplicaWatchRecordsStartupFailures restarts a watcher that cannot open
+// its writer, as a service manager would, and checks that the restarts build
+// a failure streak the stall check reports even right after a restart.
+func TestReplicaWatchRecordsStartupFailures(t *testing.T) {
+	dir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://user@127.0.0.1:1/archive")
+	cfg, _, err := loadPGServeConfigForTest(t)
+	require.NoError(t, err)
+	cfg.PG.AllowInsecure = true
+	restart := func() replicaWatchRecord {
+		t.Helper()
+		_, _, err := prepareReplicaPushWatch(
+			t.Context(), pgReplica{}, cfg, ReplicaPushConfig{NoStartDaemon: true}, "", false,
+		)
+		require.ErrorIs(t, err, errNoWritableDaemon)
+		rec, err := loadReplicaWatchRecord(replicaWatchHealthPath(dir, "pg"))
+		require.NoError(t, err)
+		return rec
+	}
+
+	first := restart()
+	require.False(t, first.FailingSince.IsZero(), "a failed start begins a failure streak")
+	restart()
+	rec := restart()
+	assert.Equal(t, first.FailingSince, rec.FailingSince, "restarts keep the first failure")
+	assert.Equal(t, "opening writer: "+errNoWritableDaemon.Error(), rec.LastError)
+	stall := replicaWatchStall(rec, rec.WatcherStartedAt.Add(11*time.Minute), 10*time.Minute)
+	assert.Contains(t, stall, "pushes have failed since ")
+	assert.Contains(t, stall, errNoWritableDaemon.Error())
+}
+
+// statusStubReplica answers the replica status query with status.
+type statusStubReplica struct {
+	pgReplica
+	status func(context.Context) error
+}
+
+func (r statusStubReplica) Status(
+	ctx context.Context, _ *db.DB, _ storage.ConfiguredReplica, _, _ []string,
+) (storage.ReplicaStatus, error) {
+	return storage.ReplicaStatus{Rows: []storage.StatusRow{{Label: "PG sessions:", Value: "7"}}}, r.status(ctx)
+}
+
+// TestReplicaStatusMaxStaleDoesNotWaitOnReplica checks that a hung replica
+// status query cannot hide a stall: a stall the record shows is reported
+// without querying, and a query that hangs fails at the deadline.
+func TestReplicaStatusMaxStaleDoesNotWaitOnReplica(t *testing.T) {
+	prevTimeout := replicaStatusQueryTimeout
+	t.Cleanup(func() { replicaStatusQueryTimeout = prevTimeout })
+	replicaStatusQueryTimeout = 50 * time.Millisecond
+
+	tests := []struct {
+		name        string
+		lastSuccess time.Duration
+		wantErr     string
+		wantOutput  string
+	}{
+		{
+			name:        "stalled watcher",
+			lastSuccess: 2 * time.Hour,
+			wantErr:     "push watcher stalled for more than --max-stale 10m0s: no push has finished since",
+			wantOutput:  "Watcher last success:",
+		},
+		{
+			name:        "healthy watcher, hung replica",
+			lastSuccess: time.Minute,
+			wantErr:     "PostgreSQL did not answer the status query within 50ms: context deadline exceeded",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			clearConfiguredAgentEnvVars(t)
+			isolateDefaultAgentDirs(t, dataDir)
+			restoreTestLogger(t)
+			writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+			appCfg, err := config.LoadMinimalFor(replicaConfigScope(pgReplica{}, nil))
+			require.NoError(t, err)
+			refs, err := storage.SelectTargets(pgReplica{}, appCfg, "archive", false)
+			require.NoError(t, err)
+			target, err := pgReplica{}.ResolveTarget(appCfg, refs[0])
+			require.NoError(t, err)
+			now := time.Now().UTC()
+			data, err := json.Marshal(replicaWatchRecord{
+				Target: target.Name, Destination: replicaWatchDestination(target.Target),
+				WatcherStartedAt: now.Add(-8 * time.Hour), IntervalSeconds: 900,
+				LastSuccessAt: now.Add(-tt.lastSuccess),
+			})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(replicaWatchHealthPath(dataDir, "pg"), data, 0o600))
+
+			queried := false
+			backend := statusStubReplica{status: func(ctx context.Context) error {
+				queried = true
+				<-ctx.Done()
+				return ctx.Err()
+			}}
+			var runErr error
+			out := captureStdout(t, func() {
+				runErr = runReplicaStatus(t.Context(), backend, "archive", ReplicaStatusConfig{MaxStale: 10 * time.Minute})
+			})
+			require.Error(t, runErr)
+			assert.Contains(t, runErr.Error(), tt.wantErr)
+			assert.Contains(t, out, tt.wantOutput)
+			assert.Equal(t, tt.wantOutput == "", queried, "only a healthy record queries the replica")
 		})
 	}
 }
