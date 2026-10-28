@@ -241,35 +241,53 @@ func (d *DB) ArchiveSourcePending(ctx context.Context, p ArchiveSourceProvenance
 }
 
 func (d *DB) CompleteArchiveSource(ctx context.Context, p ArchiveSourceProvenance, target string) error {
+	return d.completeArchiveSource(ctx, p, target, nil)
+}
+
+// ArchiveSourceCompletion reads the completion marker before a source is
+// parsed. Restoring a member replaces the marker during that parse.
+func (d *DB) ArchiveSourceCompletion(ctx context.Context, p ArchiveSourceProvenance) (string, error) {
+	var completed string
+	err := d.getReader().QueryRowContext(ctx, `SELECT completed_target FROM archive_attachment_sources WHERE `+archiveMembershipWhere,
+		archiveMembershipArgs(p)...).Scan(&completed)
+	return completed, err
+}
+
+// CompleteArchiveSourceFrom completes a source only if its marker still equals
+// observed. A member restored during the parse keeps the source pending, so
+// the next drain applies the upgrade the trashed member skipped.
+func (d *DB) CompleteArchiveSourceFrom(ctx context.Context, p ArchiveSourceProvenance, target, observed string) error {
+	return d.completeArchiveSource(ctx, p, target, &observed)
+}
+
+func (d *DB) completeArchiveSource(ctx context.Context, p ArchiveSourceProvenance, target string, observed *string) error {
 	return d.Update(ctx, func(tx *sql.Tx) error {
 		if err := checkArchiveSourceBindingTx(ctx, tx, p); err != nil {
 			return err
 		}
-		var wanted string
-		if err := tx.QueryRowContext(ctx, `SELECT target FROM archive_attachment_sources WHERE `+archiveMembershipWhere,
-			archiveMembershipArgs(p)...).Scan(&wanted); err != nil {
+		var wanted, completed string
+		if err := tx.QueryRowContext(ctx, `SELECT target,completed_target FROM archive_attachment_sources WHERE `+archiveMembershipWhere,
+			archiveMembershipArgs(p)...).Scan(&wanted, &completed); err != nil {
 			return err
 		}
 		if target == "" || target != wanted {
 			return ErrArchiveSourceConflict
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE archive_attachment_sources SET completed_target=target,last_error=''
-			WHERE `+archiveMembershipWhere+` AND completed_target!=target`, archiveMembershipArgs(p)...)
-		if err != nil {
+		if completed == target || (observed != nil && completed != *observed) {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE archive_attachment_sources SET completed_target=target,last_error=''
+			WHERE `+archiveMembershipWhere, archiveMembershipArgs(p)...); err != nil {
 			return err
 		}
-		n, err := result.RowsAffected()
-		if err != nil || n == 0 {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE archive_attachments SET pending_count=pending_count-1
+		_, err := tx.ExecContext(ctx, `UPDATE archive_attachments SET pending_count=pending_count-1
 			WHERE repository_id=? AND snapshot_id=?`, p.Attachment.RepositoryID, p.Attachment.SnapshotID)
 		return err
 	})
 }
 
 // Restoring a member requires another parse even if its source finished while
-// the member was trashed. Several snapshots can share that source. Count only
+// the member was trashed, or finishes while the restore commits. Several snapshots can share that source. Count only
 // newly pending memberships so restoring another member cannot double-count it.
 func invalidateRestoredArchiveSourceTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE archive_attachments SET pending_count=pending_count+1
@@ -280,7 +298,8 @@ func invalidateRestoredArchiveSourceTx(ctx context.Context, tx *sql.Tx, sessionI
 		)`, sessionID); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE archive_attachment_sources SET completed_target=''
+	// A fresh marker also fences completions already in flight.
+	_, err := tx.ExecContext(ctx, `UPDATE archive_attachment_sources SET completed_target='restored:'||lower(hex(randomblob(8)))
 		WHERE (archive_id,device_id,root_id,source_key) IN (
 			SELECT archive_id,device_id,root_id,source_key FROM archive_session_provenance WHERE session_id=?
 		)`, sessionID)

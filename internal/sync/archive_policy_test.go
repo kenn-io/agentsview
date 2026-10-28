@@ -138,3 +138,56 @@ func TestAttachedSourceCleanupFailureStaysPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, status.Pending)
 }
+
+func TestAttachedSourceRestoreDuringParseStaysPending(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122b13"
+	const device = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	root := writeCodexParityRoot(t, id)
+	database := openTestDB(t)
+	key := db.ArchiveAttachmentKey{RepositoryID: "repository", SnapshotID: "snapshot"}
+	p := db.ArchiveSourceProvenance{Attachment: key, ManifestID: "manifest", Source: db.ArchiveSourceIdentity{
+		ArchiveID: "archive", DeviceID: device, RootID: "root", SourceKey: "source",
+	}}
+	require.NoError(t, database.RegisterArchiveAttachment(t.Context(), key, "archive"))
+	require.NoError(t, database.SetArchiveAttachmentTargets(t.Context(), key, "target", []db.ArchiveSourceTarget{{Provenance: p, Target: "target"}}))
+	cfg := EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: device, IDPrefix: device + "~",
+		Ephemeral: true, ArchiveReparse: true, DiscardPendingWritesOnCancel: true,
+		ArchiveWriteProvenance: func(_ *db.Session, native string) (db.ArchiveSessionProvenance, error) {
+			return db.ArchiveSessionProvenance{ArchiveSourceProvenance: p, NativeSessionID: native}, nil
+		},
+	}
+	parent := NewEngine(t.Context(), database, EngineConfig{Ephemeral: true})
+	defer parent.Close()
+	path := filepath.Join(root, "2024", "01", "01", "rollout-2024-01-01T10-00-00-"+id+".jsonl")
+	sync := func(target string, cleanup func() error) error {
+		_, err := parent.SyncAttachedSource(t.Context(), p, target, func() (EngineConfig, string, func() error, error) {
+			return cfg, path, cleanup, nil
+		}, nil)
+		return err
+	}
+	require.NoError(t, sync("target", func() error { return nil }))
+	ids, err := database.ArchiveSourceSessionIDs(t.Context(), p.Source)
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	// An upgrade parses the source while its only member is trashed. The member
+	// is restored after the parse skipped it, before the source completes.
+	require.NoError(t, database.SoftDeleteSession(t.Context(), ids[0]))
+	require.NoError(t, database.SetArchiveAttachmentTargets(t.Context(), key, "upgraded", []db.ArchiveSourceTarget{{Provenance: p, Target: "upgraded"}}))
+	require.NoError(t, sync("upgraded", func() error {
+		_, err := database.RestoreSession(t.Context(), ids[0])
+		return err
+	}))
+	pending, err := database.ArchiveSourcePending(t.Context(), p, "upgraded")
+	require.NoError(t, err)
+	assert.True(t, pending, "the restored member still needs the upgrade parse")
+	status, err := database.ArchiveAttachmentStatus(t.Context(), key)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), status.Pending)
+
+	require.NoError(t, sync("upgraded", func() error { return nil }))
+	pending, err = database.ArchiveSourcePending(t.Context(), p, "upgraded")
+	require.NoError(t, err)
+	assert.False(t, pending)
+}

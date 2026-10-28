@@ -95,6 +95,12 @@ func (e *Engine) SyncAttachedSource(ctx context.Context, source db.ArchiveSource
 				return err
 			}
 		}
+		// Restores take no sync lock; fence completion against one that lands
+		// after this parse has skipped the trashed member.
+		observed, err := e.db.ArchiveSourceCompletion(ctx, source)
+		if err != nil {
+			return err
+		}
 		cfg, path, cleanup, err := prepare()
 		if err != nil {
 			return err
@@ -162,7 +168,7 @@ func (e *Engine) SyncAttachedSource(ctx context.Context, source db.ArchiveSource
 		if err := cleanup(); err != nil {
 			return err
 		}
-		return e.db.CompleteArchiveSource(ctx, source, target)
+		return e.db.CompleteArchiveSourceFrom(ctx, source, target, observed)
 	})
 	if stats.ChangedArchive() {
 		e.emit("sessions")

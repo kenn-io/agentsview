@@ -20,7 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/rawarchive"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/docbank/docbank"
-	"go.kenn.io/kit/atomicfile"
 )
 
 var errDirectoryBusy = errors.New("archive directory is in use; stop its AgentsView process before attaching it")
@@ -86,11 +85,11 @@ func openDirectoryIndex(ctx context.Context, source config.ArchiveSource, cache 
 	if err := prepareCache(cache); err != nil {
 		return nil, err
 	}
-	scratch, err := os.MkdirTemp(cache, ".bootstrap-")
+	scratch, release, err := newBootstrapScratch(cache)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { retErr = errors.Join(retErr, os.RemoveAll(scratch)) }()
+	defer func() { retErr = errors.Join(retErr, release()) }()
 	// The archive owns attachment identity. Catalog changes register new sources
 	// under the same attachment instead of reparsing completed ones.
 	info := docbank.BackupReaderInfo{RepositoryID: "archive:" + archiveID, SnapshotID: "directory:" + archiveID}
@@ -136,10 +135,7 @@ func publishDirectoryIndex(ctx context.Context, output, cache, archiveID string,
 		if err := validate(); err != nil {
 			return "", "", err
 		}
-		if err := atomicfile.RenameNoReplace(output, path); err != nil {
-			return "", "", err
-		}
-		if err := atomicfile.SyncDir(cache); err != nil {
+		if err := publishIndex(output, path); err != nil {
 			return "", "", err
 		}
 	} else if err != nil {

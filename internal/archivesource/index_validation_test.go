@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -132,6 +133,13 @@ func TestArchiveSourceBootstrapCancellationAndAbandonedFiles(t *testing.T) {
 	abandoned := filepath.Join(cache, ".bootstrap-abandoned")
 	require.NoError(t, os.Mkdir(abandoned, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(abandoned, "sessions.db"), []byte("partial"), 0o600))
+	// A bootstrap in another process, such as a rebuild worker, holds its tree.
+	active := filepath.Join(cache, ".bootstrap-active")
+	require.NoError(t, os.Mkdir(active, 0o700))
+	owner := flock.New(filepath.Join(active, bootstrapLockFile))
+	locked, err := owner.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	index, err := OpenIndex(ctx, source, cache, func(string) { cancel() })
@@ -139,8 +147,12 @@ func TestArchiveSourceBootstrapCancellationAndAbandonedFiles(t *testing.T) {
 	assert.Nil(t, index)
 	files, err := os.ReadDir(cache)
 	require.NoError(t, err)
-	assert.Empty(t, files)
+	require.Len(t, files, 1, "cleanup removes only abandoned bootstrap trees")
+	assert.Equal(t, ".bootstrap-active", files[0].Name())
+	require.NoError(t, owner.Close())
 	index, err = OpenIndex(t.Context(), source, cache, nil)
 	require.NoError(t, err)
 	require.NoError(t, index.Close())
+	_, err = os.Stat(active)
+	assert.ErrorIs(t, err, os.ErrNotExist, "a released tree is abandoned")
 }

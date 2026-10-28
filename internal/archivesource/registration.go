@@ -81,18 +81,8 @@ func (i *Index) source(ctx context.Context, manifestID string) (Source, error) {
 func (i *Index) configureMachineName(ctx context.Context, database *db.DB) error {
 	labels := make(map[string]string)
 	if i.machineName == "" {
-		rows, err := i.database.QueryContext(ctx, `SELECT device_id,min(machine) FROM roots GROUP BY device_id`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var id, machine string
-			if err := rows.Scan(&id, &machine); err != nil {
-				return errors.Join(err, rows.Close())
-			}
-			labels[id] = machine
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		var err error
+		if labels, err = i.capturedMachineNames(ctx); err != nil {
 			return err
 		}
 	} else {
@@ -125,4 +115,21 @@ func (i *Index) configureMachineName(ctx context.Context, database *db.DB) error
 		}
 		return nil
 	})
+}
+
+func (i *Index) capturedMachineNames(ctx context.Context) (map[string]string, error) {
+	rows, err := i.database.QueryContext(ctx, `SELECT device_id,min(machine) FROM roots GROUP BY device_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	labels := make(map[string]string)
+	for rows.Next() {
+		var id, machine string
+		if err := rows.Scan(&id, &machine); err != nil {
+			return nil, err
+		}
+		labels[id] = machine
+	}
+	return labels, rows.Err()
 }

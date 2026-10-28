@@ -436,3 +436,49 @@ func TestScheduledArchiveDrainBacksOffFailedSource(t *testing.T) {
 	require.ErrorContains(t, drainError(manager, t.Context(), nil), "sync incomplete")
 	assert.Equal(t, 5, handoffs, "manual sync retries immediately")
 }
+
+func TestManualArchiveDrainDoesNotJoinScheduledBackoff(t *testing.T) {
+	source, _ := archiveFixture(t)
+	receiver := dbtest.OpenTestDB(t)
+	// Another route owns the Claude ID, so that source fails every parse.
+	dbtest.SeedSession(t, receiver, sourceDevice+"~019eb791-cf7d-75c1-8439-9ed74c122e02", "project")
+	const codex = sourceDevice + "~codex:019eb791-cf7d-75c1-8439-9ed74c122e02"
+	cfg := config.Config{DataDir: filepath.Dir(receiver.Path()), ArchiveSources: []config.ArchiveSource{source}}
+	engine := syncer.NewEngine(t.Context(), receiver, syncer.EngineConfig{Ephemeral: true})
+	defer engine.Close()
+	var handoff func()
+	handoffs := 0
+	manager, err := NewManager(t.Context(), cfg, receiver, engine, func(context.Context) error {
+		handoffs++
+		if handoff != nil {
+			handoff()
+			handoff = nil
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+	require.Error(t, drainError(manager, t.Context(), nil))
+	_, err = manager.DrainScheduled(t.Context())
+	require.Error(t, err)
+	// Restoring the Codex session gives the next scheduled pass work to hold.
+	require.NoError(t, receiver.SoftDeleteSession(t.Context(), codex))
+	_, err = receiver.RestoreSession(t.Context(), codex)
+	require.NoError(t, err)
+	handoffs = 0
+
+	manual := make(chan error, 1)
+	handoff = func() {
+		entered := make(chan struct{})
+		go func() {
+			close(entered)
+			_, err := manager.Drain(t.Context(), nil)
+			manual <- err
+		}()
+		<-entered
+	}
+	_, err = manager.DrainScheduled(t.Context())
+	require.ErrorContains(t, err, "retrying after", "the scheduled pass defers the failing source")
+	require.ErrorContains(t, <-manual, "sync incomplete", "the manual drain retries it")
+	assert.Equal(t, 2, handoffs, "scheduled parsed Codex; manual retried Claude")
+}

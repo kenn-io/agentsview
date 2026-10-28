@@ -340,6 +340,8 @@ transactions.
 Restoring an attached session invalidates source completion in every matching
 attachment and updates pending counts in the restore transaction. The next drain
 reparses the restored row even if an upgrade completed while it was trashed.
+Restores take no sync lock, so they write a fresh completion marker, and a
+source completes only if the marker it read before parsing is unchanged.
 
 Rebuilds copy registrations and ownership bindings before parsing, and copy
 session provenance with retained rows. Available sources run as contributors

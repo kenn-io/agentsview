@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -28,8 +29,9 @@ const indexVersion = 1
 // snapshots or content after opening the repository are errors in that archive.
 var errSourceUnavailable = errors.New("archive source layout unavailable")
 
-// cacheMu keeps one process's bootstraps from removing each other's scratch
-// trees. Backup bootstraps run outside the sync lock, unlike rebuilds.
+// cacheMu serializes this process's bootstraps, which can run outside the sync
+// lock, so they do not copy the same snapshot twice. Scratch locks protect
+// trees across processes.
 var cacheMu sync.Mutex
 
 // Index is disposable source metadata. Session ownership lives in the receiver.
@@ -116,13 +118,59 @@ func prepareCache(directory string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".bootstrap-") {
-			if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
-				return fmt.Errorf("removing abandoned archive bootstrap: %w", err)
-			}
+		if !strings.HasPrefix(entry.Name(), ".bootstrap-") {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		lock := flock.New(filepath.Join(path, bootstrapLockFile))
+		locked, err := lock.TryLock()
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // Its owner removed it meanwhile.
+		}
+		if err != nil {
+			return err
+		}
+		if !locked {
+			continue // Another bootstrap, possibly in a rebuild worker, owns it.
+		}
+		if err := errors.Join(lock.Close(), os.RemoveAll(path)); err != nil {
+			return fmt.Errorf("removing abandoned archive bootstrap: %w", err)
 		}
 	}
 	return nil
+}
+
+const bootstrapLockFile = ".active"
+
+// newBootstrapScratch holds a lock on its tree until release, so cache cleanup
+// in any process removes only trees whose bootstrap ended.
+func newBootstrapScratch(cache string) (string, func() error, error) {
+	scratch, err := os.MkdirTemp(cache, ".bootstrap-")
+	if err != nil {
+		return "", nil, err
+	}
+	lock := flock.New(filepath.Join(scratch, bootstrapLockFile))
+	locked, err := lock.TryLock()
+	if err == nil && !locked {
+		err = errors.New("archive bootstrap scratch is already in use")
+	}
+	if err != nil {
+		return "", nil, errors.Join(err, lock.Close())
+	}
+	// Unlock first: Windows cannot remove a directory holding an open file.
+	return scratch, func() error { return errors.Join(lock.Close(), os.RemoveAll(scratch)) }, nil
+}
+
+// publishIndex installs a finished index. Another process may have published
+// the same snapshot or catalog first; its complete copy is equivalent.
+func publishIndex(output, target string) error {
+	if err := atomicfile.RenameNoReplace(output, target); err != nil {
+		if _, statErr := os.Stat(target); statErr == nil {
+			return nil
+		}
+		return err
+	}
+	return atomicfile.SyncDir(filepath.Dir(target))
 }
 
 func immutableURI(path string) string {
@@ -202,11 +250,11 @@ func (i *Index) Suppressions(ctx context.Context, deviceID string) ([]db.RawArch
 }
 
 func bootstrapIndex(ctx context.Context, reader *docbank.BackupReader, target string, progress func(string)) (retErr error) {
-	scratch, err := os.MkdirTemp(filepath.Dir(target), ".bootstrap-")
+	scratch, release, err := newBootstrapScratch(filepath.Dir(target))
 	if err != nil {
 		return err
 	}
-	defer func() { retErr = errors.Join(retErr, os.RemoveAll(scratch)) }()
+	defer func() { retErr = errors.Join(retErr, release()) }()
 	if err := readRecoveryMetadata(ctx, reader); err != nil {
 		return err
 	}
@@ -232,10 +280,7 @@ func bootstrapIndex(ctx context.Context, reader *docbank.BackupReader, target st
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := atomicfile.RenameNoReplace(output, target); err != nil {
-		return err
-	}
-	return atomicfile.SyncDir(filepath.Dir(target))
+	return publishIndex(output, target)
 }
 
 func copyDatabase(ctx context.Context, reader *docbank.BackupReader, path string, size int64, progress func(string)) error {

@@ -17,9 +17,10 @@ import (
 )
 
 type drainRun struct {
-	done  chan struct{}
-	err   error
-	stats syncer.SyncStats
+	done      chan struct{}
+	err       error
+	stats     syncer.SyncStats
+	scheduled bool
 }
 
 // Scheduled drains wait this long before repeating a copy or parse that failed
@@ -115,6 +116,18 @@ func (m *Manager) start(ctx context.Context, progress syncer.ProgressFunc, sched
 	}
 	m.mu.Lock()
 	run := m.active
+	// A manual caller must not inherit a scheduled run's backoff. Let that run
+	// finish, then start a manual one that retries deferred sources.
+	for run != nil && run.scheduled && !scheduled {
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return syncer.SyncStats{}, ctx.Err()
+		case <-run.done:
+		}
+		m.mu.Lock()
+		run = m.active
+	}
 	if run == nil {
 		report := progress
 		if progress != nil {
@@ -133,7 +146,7 @@ func (m *Manager) start(ctx context.Context, progress syncer.ProgressFunc, sched
 				callbacks.Unlock()
 			}()
 		}
-		run = &drainRun{done: make(chan struct{})}
+		run = &drainRun{done: make(chan struct{}), scheduled: scheduled}
 		m.active = run
 		go func() {
 			stats, err := m.drain(report, scheduled)
