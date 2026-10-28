@@ -28,15 +28,17 @@ coding yesterday?" — across multiple coding agents from one archive.
 !!! note
 
     Usage totals are populated when the source session includes token metadata for
-    **Claude Code**, **Codex**, **Copilot CLI**, **OpenCode** and OpenCode-format
-    forks such as **IcodeMate**, **Kilo**, and **MiMoCode**, **Cursor IDE**, **Posit
-    Assistant**, **Pi**, **Prime Agent**, **Gemini**, **Qwen Code**, **OpenClaw**,
-    **QClaw**, **Hermes**, **WorkBuddy**, **Forge**, **Piebald**, **Antigravity
-    IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual Studio Copilot**, **Mistral
-    Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**, and **StepCode**. Coverage
-    also includes **Cline CLI**, **Tencent CodeBuddy CN**, **Augure Code**,
-    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
-    reads **DeepSeek Harness** formats through version 3.
+    **Claude Code**, **Codex**, **Command Code**, **Copilot CLI**, **OpenCode** and
+    OpenCode-format forks such as **IcodeMate**, **Kilo**, and **MiMoCode**,
+    **Cursor IDE**, **Posit Assistant**, **Pi**, **Prime Agent**, **Gemini**,
+    **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
+    **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
+    Studio Copilot**, **Mistral Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**,
+    and **StepCode**. Coverage also includes **Cline CLI**, **Tencent CodeBuddy
+    CN**, **Augure Code**, **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and
+    **Muse Code**, and reads **DeepSeek Harness** formats through version 3.
+
+    Command Code forks count only usage produced after the fork.
 
     Coverage depends on what each agent records. AgentsView uses recorded costs
     when available; otherwise it estimates cost from usable token counts and a

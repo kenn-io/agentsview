@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import {
   createSessionsStore,
   buildSessionGroups,
@@ -12,6 +12,7 @@ import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
+import { router } from "./router.svelte.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
 
@@ -71,6 +72,7 @@ vi.mock("../api/runtime.js", async (importOriginal) => ({
 
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
+    getApiV1SessionIdsResolve: vi.fn(),
     getApiV1Sessions: vi.fn((params) => api.listSessions(params)),
     getApiV1SessionsSidebarIndex: vi.fn((params) => api.getSidebarSessionIndex(params)),
     getApiV1SessionsById: vi.fn(({ id }) => api.getSession(id)),
@@ -2873,6 +2875,102 @@ describe("SessionsStore", () => {
       });
 
       expect(sessions.agents[0]!.name).toBe("fresh-agent");
+    });
+  });
+
+  describe("bare UUID navigation", () => {
+    const uuid = "123e4567-e89b-12d3-a456-426614174000";
+    const canonical = `pi:${uuid}`;
+    let replace: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      router.navigateToSession(uuid);
+      replace = vi.spyOn(router, "replaceSession");
+      vi.mocked(api.getSession)
+        .mockRejectedValueOnce(new ApiError(404, "missing"))
+        .mockResolvedValue(makeSession({ id: canonical }));
+      vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({ ids: [canonical] });
+    });
+    afterEach(() => {
+      replace.mockRestore();
+      router.replace("sessions");
+    });
+    async function pendingLookup() {
+      const { promise, resolve } = Promise.withResolvers<{ ids: string[] }>();
+      vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockReturnValue(promise);
+      const navigation = sessions.navigateToSession(uuid);
+      await vi.waitFor(() =>
+        expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledOnce(),
+      );
+      return async () => {
+        resolve({ ids: [canonical] });
+        await navigation;
+        expect(replace).not.toHaveBeenCalled();
+      };
+    }
+    it("resolves a missing bare UUID and replaces its URL", async () => {
+      await sessions.navigateToSession(uuid);
+      expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledExactlyOnceWith(
+        { partial: uuid, raw_suffix: true, limit: 2 },
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(sessions.activeSessionId).toBe(canonical);
+      expect(sessions.activeSession?.id).toBe(canonical);
+      expect(sessions.activeSessionNotFound).toBe(false);
+      expect(replace).toHaveBeenCalledExactlyOnceWith(canonical);
+    });
+    it.each([
+      { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
+      { name: "failed", ids: null },
+    ])("keeps a $name lookup missing", async ({ ids }) => {
+      const lookup = vi.mocked(SessionsService.getApiV1SessionIdsResolve);
+      if (ids) lookup.mockResolvedValue({ ids });
+      else lookup.mockRejectedValue(new Error("offline"));
+      await sessions.navigateToSession(uuid);
+      expect(sessions.activeSessionId).toBe(uuid);
+      expect(sessions.activeSessionNotFound).toBe(true);
+      expect(replace).not.toHaveBeenCalled();
+    });
+    it("refuses ambiguity between a hosted branch and an ordinary canonical ID", async () => {
+      vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({
+        ids: [`pi:${uuid}~${"a".repeat(64)}`, `omp:${uuid}`],
+      });
+      await sessions.navigateToSession(uuid);
+      expect(sessions.activeSessionId).toBe(uuid);
+      expect(sessions.activeSessionNotFound).toBe(true);
+      expect(replace).not.toHaveBeenCalled();
+    });
+    it("does not resolve an exact Claude UUID hit", async () => {
+      vi.mocked(api.getSession)
+        .mockReset()
+        .mockResolvedValue(makeSession({ id: uuid }));
+      await sessions.navigateToSession(uuid);
+      expect(sessions.activeSession?.id).toBe(uuid);
+      expect(SessionsService.getApiV1SessionIdsResolve).not.toHaveBeenCalled();
+    });
+    it("does not restore a session after a machine filter change", async () => {
+      const finish = await pendingLookup();
+      sessions.setMachineFilter("local");
+      await finish();
+      expect(sessions.activeSessionId).toBeNull();
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+    });
+    it("does not pull the router back from usage after lookup", async () => {
+      const finish = await pendingLookup();
+      router.navigate("usage");
+      await finish();
+      expect(router.route).toBe("usage");
+      expect(window.location.pathname).toBe("/usage");
+    });
+    it("an aborted metadata 404 cannot poison a revisit", async () => {
+      const { promise, reject } = Promise.withResolvers<Session>();
+      vi.mocked(api.getSession).mockReset().mockReturnValueOnce(promise);
+      const navigation = sessions.navigateToSession(uuid);
+      sessions.deselectSession();
+      sessions.selectSession(uuid);
+      reject(new ApiError(404, "missing"));
+      await navigation;
+      expect(sessions.activeSessionNotFound).toBe(false);
+      expect(sessions.activeSessionId).toBe(uuid);
     });
   });
 

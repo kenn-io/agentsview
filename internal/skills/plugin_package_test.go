@@ -14,10 +14,10 @@ import (
 
 func memoryPluginRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..",
+	root, err := filepath.Abs(filepath.Join("..", "..",
 		"plugins", "agentsview-memory"))
+	require.NoError(t, err)
+	return root
 }
 
 func TestMemoryPluginHookMissingBinaryDoesNotBlockSession(t *testing.T) {

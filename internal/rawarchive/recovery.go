@@ -17,7 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	syncer "go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/docbank"
+	"go.kenn.io/docbank/docbank"
 	"go.kenn.io/kit/atomicfile"
 )
 

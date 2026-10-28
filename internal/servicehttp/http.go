@@ -17,6 +17,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -1096,6 +1097,70 @@ func (b *httpBackend) UsageSummary(
 	}
 	if wire.SchemaVersion != nil {
 		out.SchemaVersion = int(*wire.SchemaVersion)
+	}
+	return out, nil
+}
+
+// subagentUsageAPIVersion mirrors server.SubagentUsageAPIVersion, the first
+// daemon API that folds subagent usage into a session's usage response.
+const subagentUsageAPIVersion = 6
+
+// SessionUsage reads the daemon's usage document for one stored session ID,
+// with the full breakdown and the same subagent scope as the direct backend.
+// A missing session returns nil.
+func (b *httpBackend) SessionUsage(
+	ctx context.Context, req service.SessionUsageRequest,
+) (*service.SessionUsageReport, error) {
+	if !req.OwnOnly && b.apiVersion > 0 && b.apiVersion < subagentUsageAPIVersion {
+		return nil, fmt.Errorf(
+			"server API version %d does not support combined subagent usage; "+
+				"upgrade or restart the server, or request own-session usage",
+			b.apiVersion,
+		)
+	}
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	q := &apiclient.GetAPIV1SessionsIDUsageQuery{Breakdown: new(true)}
+	if !req.OwnOnly {
+		q.Subagents = new(true)
+	}
+	response, err := api.GetAPIV1SessionsIDUsageWithResponse(ctx, &apiclient.GetAPIV1SessionsIDUsageRequestOptions{
+		PathParams: &apiclient.GetAPIV1SessionsIDUsagePath{ID: url.PathEscape(req.ID)},
+		Query:      q,
+	})
+	if response == nil {
+		return nil, err
+	}
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	if errors.Is(err, errHTTPNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	wire := response.JSON200
+	if wire == nil {
+		return nil, errors.New("session usage: empty response")
+	}
+	out := &service.SessionUsageReport{
+		SessionID: wire.SessionID, Agent: wire.Agent, Project: wire.Project,
+		TotalOutputTokens: int(wire.TotalOutputTokens), PeakContextTokens: int(wire.PeakContextTokens),
+		HasTokenData: wire.HasTokenData, Cost: wire.Cost, HasCost: wire.HasCost, CostUSD: wire.CostUsd,
+		Models: wire.Models, UnpricedModels: wire.UnpricedModels,
+		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown,
+		Plan:     wire.PlanUsage,
+		Coverage: wire.CaptureCoverage,
+	}
+	if wire.CostSource != nil {
+		out.CostSource = export.CostSource(*wire.CostSource)
+	}
+	if wire.AiCredits != nil {
+		out.AICredits = *wire.AiCredits
+	}
+	if wire.SubagentCount != nil {
+		out.SubagentCount = int(*wire.SubagentCount)
 	}
 	return out, nil
 }

@@ -87,6 +87,10 @@ type SessionService interface {
 	Search(ctx context.Context, req SearchRequest) (*SessionSearchResult, error)
 	SearchContent(ctx context.Context, req ContentSearchRequest) (*ContentSearchResult, error)
 	UsageSummary(ctx context.Context, req UsageRequest) (*UsageSummaryResult, error)
+	// SessionUsage returns one session's token usage and cost with its
+	// full breakdown, or nil when the session does not exist. It reads the
+	// archive as stored and never refreshes source transcripts.
+	SessionUsage(ctx context.Context, req SessionUsageRequest) (*SessionUsageReport, error)
 	UsagePairwiseComparison(
 		ctx context.Context, req UsagePairwiseComparisonRequest,
 	) (*UsagePairwiseComparisonResponse, error)

@@ -476,10 +476,25 @@ agentsview pg serve [flags]
 | `--tls-key`         |             | TLS key path                                        |
 | `--allowed-subnet`  |             | CIDR allowlist (repeatable/comma-separated)         |
 
-The normal session server is read-only: session uploads, file watching, and
-local sync are disabled. Sessions from all machines appear in a single unified
+The session HTTP API is read-only. Local sync and file watching run only when
+`--push-watch` is enabled. Sessions from all machines appear in a single unified
 view. The same deployment also serves the analytics dashboard and the Usage page
 from PostgreSQL-backed queries.
+
+```bash
+AGENTSVIEW_DATA_DIR=/data agentsview pg serve --push-watch
+# Add --embed to build and publish embeddings.
+```
+
+`--push-watch` ingests mounted roots and publishes to the default PG target in
+the same process. The data directory is the persistent archive; stop any other
+writer using it before starting.
+
+`--embed`, `--debounce` (default `30s`), and `--interval` (default `15m`) require
+`--push-watch`. It rejects `--no-sync` and hosted `raw_tenant`/`raw_derivation`
+configurations. The first published vector generation enables semantic search
+without a restart when vector search is configured. Shutdown waits for ingestion
+and embedding work, including a final push limited to 30 seconds.
 
 When the PostgreSQL role can write the raw-sync tables and ingest-job sequence,
 `pg serve` also registers the

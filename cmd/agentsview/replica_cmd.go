@@ -137,12 +137,17 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 		Short:        "Serve from " + backend.DisplayName() + " (read-only)",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
+		PreRunE:      func(cmd *cobra.Command, args []string) error { return validateReplicaServeWatchFlags(cmd) },
 		Run: func(cmd *cobra.Command, args []string) {
 			appCfg, basePath, err := loadReplicaServeConfig(cmd)
 			if err != nil {
 				fatal("%v", err)
 			}
-			runReplicaServe(backend, appCfg, basePath)
+			watch, err := loadReplicaServeWatch(cmd, appCfg)
+			if err != nil {
+				fatal("%v", err)
+			}
+			runReplicaServe(backend, appCfg, basePath, watch)
 		},
 	}
 	cmd.Flags().String(
@@ -150,6 +155,13 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 		"",
 		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
 	)
+	if backend.Name() == "pg" {
+		cmd.Short = "Serve from PostgreSQL (read-only API; --push-watch also ingests)"
+		cmd.Flags().Bool("push-watch", false, "Ingest and continuously push a local archive in this process")
+		cmd.Flags().Bool("embed", false, "Build embeddings in the local push watcher")
+		cmd.Flags().Duration("debounce", defaultWatchDebounce, "Coalesce window before pushing (--push-watch only)")
+		cmd.Flags().Duration("interval", defaultWatchInterval, "Periodic floor push interval (--push-watch only)")
+	}
 	config.RegisterServePFlags(cmd.Flags())
 	return cmd
 }

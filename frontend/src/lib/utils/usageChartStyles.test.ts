@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
-import { usageChartColorMaps } from "./usageChartColors.js";
+import { usageChartStyleMaps } from "./usageChartStyles.js";
 
 function tenModelSummary(
   models = [
@@ -74,20 +74,28 @@ function tenModelSummary(
   };
 }
 
-describe("usageChartColorMaps", () => {
+describe("usageChartStyleMaps", () => {
   it("assigns Matplotlib colors by aggregate cost descending", () => {
-    const colors = usageChartColorMaps(tenModelSummary(), "matplotlib").model;
+    const styles = usageChartStyleMaps(tenModelSummary(), "matplotlib").model;
 
-    expect(colors.size).toBe(10);
-    expect(colors.get("model-zulu")).toBe("#1f77b4");
-    expect(colors.get("model-india")).toBe("#aec7e8");
-    expect(colors.get("model-alpha")).toBe("#c5b0d5");
+    expect(styles.size).toBe(10);
+    expect(styles.get("model-zulu")?.color).toBe("#1f77b4");
+    expect(styles.get("model-india")?.color).toBe("#aec7e8");
+    expect(styles.get("model-alpha")?.color).toBe("#c5b0d5");
   });
 
   it("keeps Matplotlib colors distinct when a filter exposes more models", () => {
     const models = Array.from({ length: 11 }, (_, index) => `model-${index}`);
-    const colors = usageChartColorMaps(tenModelSummary(models), "matplotlib").model;
+    const styles = usageChartStyleMaps(tenModelSummary(models), "matplotlib").model;
 
-    expect(new Set(colors.values()).size).toBe(11);
+    expect(new Set([...styles.values()].map((style) => style.color)).size).toBe(11);
+  });
+
+  it("hatches color-blind safe series past the tenth color instead of repeating it", () => {
+    const models = Array.from({ length: 11 }, (_, index) => `model-${index}`);
+    const styles = [...usageChartStyleMaps(tenModelSummary(models), "colorblind").model.values()];
+
+    expect(styles.slice(0, 10).every((style) => style.fill === "solid")).toBe(true);
+    expect(styles[10]).toMatchObject({ color: styles[0]!.color, fill: "hatch" });
   });
 });

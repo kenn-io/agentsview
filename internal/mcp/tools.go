@@ -84,6 +84,37 @@ func (t *toolset) lookupActivity(
 	return "", false
 }
 
+// resolveSession looks up a session by its full stored ID or by a raw
+// UUID that matches exactly one stored ID. Missing and ambiguous IDs are
+// errors.
+func (t *toolset) resolveSession(
+	ctx context.Context, id string,
+) (*service.SessionDetail, error) {
+	detail, err := t.svc.Get(ctx, id)
+	if err != nil || detail != nil {
+		return detail, err
+	}
+	ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, id, 2)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) > 1 {
+		return nil, fmt.Errorf(
+			"ambiguous session UUID %q: use a full stored session ID", id,
+		)
+	}
+	if len(ids) == 1 {
+		detail, err = t.svc.Get(ctx, ids[0])
+		if err != nil {
+			return nil, err
+		}
+	}
+	if detail == nil {
+		return nil, fmt.Errorf("session not found: %s", id)
+	}
+	return detail, nil
+}
+
 // --- search_sessions ---
 
 type searchSessionsIn struct {
@@ -119,32 +150,9 @@ func (t *toolset) searchSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchSessionsIn,
 ) (*mcp.CallToolResult, searchSessionsOut, error) {
 	if in.SessionID != "" {
-		detail, err := t.svc.Get(ctx, in.SessionID)
+		detail, err := t.resolveSession(ctx, in.SessionID)
 		if err != nil {
 			return nil, searchSessionsOut{}, err
-		}
-		if detail == nil {
-			ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, in.SessionID, 2)
-			if err != nil {
-				return nil, searchSessionsOut{}, err
-			}
-			if len(ids) > 1 {
-				return nil, searchSessionsOut{}, fmt.Errorf(
-					"ambiguous session UUID %q: use a full stored session ID",
-					in.SessionID,
-				)
-			}
-			if len(ids) == 1 {
-				detail, err = t.svc.Get(ctx, ids[0])
-				if err != nil {
-					return nil, searchSessionsOut{}, err
-				}
-			}
-		}
-		if detail == nil {
-			return nil, searchSessionsOut{}, fmt.Errorf(
-				"session not found: %s", in.SessionID,
-			)
 		}
 		row := toSessionRow(detail.Session)
 		ended := row.EndedAt

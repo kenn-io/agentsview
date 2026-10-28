@@ -79,6 +79,7 @@ func main() {
 	// production scans would suppress) can assert positive rule paths;
 	// the binary always wants the filter on.
 	secrets.EnableFixtureDeny()
+	ensureUsableTempDir(os.Stderr)
 
 	if err := executeCLI(); err != nil {
 		os.Exit(reportCLIError(err, os.Stderr))

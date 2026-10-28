@@ -923,7 +923,8 @@ ______________________________________________________________________
 ### `agentsview session usage`
 
 Per-session token usage and cost estimate. Output shape is stable for the fields
-shown below; new fields may be added.
+shown below; new fields may be added. MCP clients read the same figures with the
+[`get_session_usage`](/docs/mcp/#session-details-reports-and-guides) tool.
 
 Totals cover the named session **and every subagent transcript spawned beneath
 it**. Claude Code writes each Task-tool subagent to its own file under

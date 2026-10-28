@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-09
+last_edited: 2026-10-26
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -9,8 +9,8 @@ The `agentsview mcp` command runs a read-only
 assistant clients can use it to search prior sessions, inspect a session before
 opening it, fetch message slices, search raw content, see which tools a session
 ran and which files it edited, report activity, tool use, and quality signals,
-summarize and compare token usage, and search the AgentsView guides without
-leaving the assistant.
+summarize and compare token usage, explain one session's cost, and search the
+AgentsView guides without leaving the assistant.
 
 MCP tool results warn when the archive is stale during a full parser rebuild.
 
@@ -28,6 +28,7 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 - "Open the relevant messages around this search hit."
 - "Which sessions changed `internal/server/routes.go`, and what did they run?"
 - "Summarize recent token usage for this project."
+- "Why did yesterday's most expensive session cost so much?"
 - "How much agent time and cost did this week take, and where did agents
   struggle?"
 
@@ -79,6 +80,7 @@ client will see these tools:
 | `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
+| `get_session_usage`    | Show one session's tokens and cost by model and by request               |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 | `get_tool_calls`       | List the tool calls one session made, with inputs and result sizes       |
 | `get_recent_edits`     | Find which sessions edited a file, newest edit first                     |
@@ -266,6 +268,29 @@ Omit `path` to list every recently edited file.
 the optional date range, agent, and machine filters. The result has each side's
 cost, tokens, and session count plus the differences. Like `get_usage_summary`,
 it counts one-shot sessions.
+
+`get_session_usage` reports one session's tokens and cost, the same figures as
+[`agentsview session usage`](/docs/session-api/#agentsview-session-usage). Use it
+after `get_activity_report` with `sessions_sort: "cost"` finds an expensive
+session. Pass a full stored ID or a raw UUID as `session_id`. The result has:
+
+- The CLI's JSON fields: `total_output_tokens`, `peak_context_tokens`, `cost`,
+  `has_cost`, `cost_source`, `models`, `unpriced_models`, `subagent_count`,
+  `plan_usage`, and `capture_coverage`.
+- `by_model`: input, output, cache write, and cache read tokens and cost for each
+  model, most expensive first.
+- `breakdown`: one row per request, 20 at a time (maximum 200). Set
+  `breakdown_sort: "cost"` to see the most expensive requests first, and pass
+  `breakdown_next_cursor` back as `breakdown_cursor` for the next page. Pass a
+  row's `message_ordinal` to `get_messages` as `around` to read that turn.
+
+Totals include the subagent sessions the session started. Set `own_only: true`
+to report only its own transcript, like `--own-only`. When any model has no
+known price, `has_cost` is false and `unpriced_models` names those models;
+`by_model` still shows the cost of the priced models. Unlike the CLI, the tool
+does not refresh source files first. It reports the archive as stored, like
+`agentsview session usage --no-sync`. It leaves out the CLI's deprecated
+`cost_usd`, `server_running`, and `refresh_incomplete` fields.
 
 `get_activity_report` returns the same totals as `agentsview activity report`:
 agent minutes, sessions, tokens, and cost, the most agents running at once, and

@@ -407,7 +407,7 @@ func DuckDBQueryDialect() QueryDialect {
 				cond += " AND lower(pl->>'host') = " + hostPh
 			}
 			return "len(list_filter(CAST(json_extract(NULLIF(" + col +
-				", ''), '$[*]') AS JSON[]), pl -> " + cond + ")) > 0"
+				", ''), '$[*]') AS JSON[]), lambda pl: " + cond + ")) > 0"
 		},
 	}
 }

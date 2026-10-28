@@ -20,7 +20,7 @@ describe("Treemap", () => {
             id: "alpha",
             label: "Alpha",
             value: 42,
-            color: "#1f77b4",
+            style: { color: "#1f77b4", fill: "solid" as const },
             meta: "Meta",
           },
         ],
@@ -51,8 +51,20 @@ describe("Treemap", () => {
     const onSelect = vi.fn();
     const onOpen = vi.fn();
     const items = [
-      { id: "alpha", label: "Alpha", value: 42, color: "#1f77b4", selected: true },
-      { id: "beta", label: "Beta", value: 21, color: "#ff7f0e", dimmed: true },
+      {
+        id: "alpha",
+        label: "Alpha",
+        value: 42,
+        style: { color: "#1f77b4", fill: "solid" as const },
+        selected: true,
+      },
+      {
+        id: "beta",
+        label: "Beta",
+        value: 21,
+        style: { color: "#ff7f0e", fill: "solid" as const },
+        dimmed: true,
+      },
     ];
     const component = mount(Treemap, { target: document.body, props: { items, onSelect } });
     await tick();

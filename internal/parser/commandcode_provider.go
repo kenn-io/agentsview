@@ -220,14 +220,17 @@ func commandCodeProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: source,
 		Content: ContentCapabilities{
-			FirstMessage:       CapabilitySupported,
-			SessionName:        CapabilitySupported,
-			Cwd:                CapabilitySupported,
-			GitBranch:          CapabilitySupported,
-			Thinking:           CapabilitySupported,
-			ToolCalls:          CapabilitySupported,
-			ToolResults:        CapabilitySupported,
-			MalformedLineCount: CapabilitySupported,
+			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
+			Cwd:                  CapabilitySupported,
+			GitBranch:            CapabilitySupported,
+			Thinking:             CapabilitySupported,
+			ToolCalls:            CapabilitySupported,
+			ToolResults:          CapabilitySupported,
+			MalformedLineCount:   CapabilitySupported,
+			Relationships:        CapabilitySupported,
+			PerMessageTokenUsage: CapabilitySupported,
+			Model:                CapabilitySupported,
 		},
 	}
 }

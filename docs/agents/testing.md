@@ -20,14 +20,32 @@ Read this file before adding or changing tests.
 - Test helpers must use testify for their own assertions.
 - Use the existing `testDB(t)` helper for database tests.
 - Use `t.TempDir()` for temporary directories.
+- Never locate files from a path returned by `runtime.Caller` or a stack trace;
+  builds use `-trimpath`, so those paths are module-relative. Tests run from
+  their package directory, so use paths relative to it, such as `testdata/...`
+  or `filepath.Join("..", "..", "docs")`.
+- A package whose tests load IANA timezone names, such as `America/New_York`,
+  keeps a `tzdata_test.go` that imports `time/tzdata`. Trimmed test binaries
+  cannot read the zone database in `GOROOT`, and Windows has no system copy.
 
 ### Timing budgets
 
-The kit `deadlinetest` analyzer, run by `kennlint` in `make lint` and `make lint-ci`, rejects sub-second constant budgets in tests outside a `testing/synctest` bubble, such as `context.WithTimeout`, `time.After`, timers, and testify `Eventually`. Wait on a real event, run the test under `synctest.Test`, or use a long hang guard on a `select` that already waits for the event. Mutex acquisition does not durably block in a synctest bubble.
+The kit `deadlinetest` analyzer, run by `kennlint` in `make lint` and
+`make lint-ci`, rejects sub-second constant budgets in tests outside a
+`testing/synctest` bubble, such as `context.WithTimeout`, `time.After`, timers,
+and testify `Eventually`. Wait on a real event, run the test under
+`synctest.Test`, or use a long hang guard on a `select` that already waits for
+the event. Mutex acquisition does not durably block in a synctest bubble.
 
-Mark a site `//nolint:kennlint // reason` only when the asserted result is the deadline or cancellation expiring, or when a `select` on a timer shows that an event does not happen. The reason names which case applies and what holds the wait.
+Mark a site `//nolint:kennlint // reason` only when the asserted result is the
+deadline or cancellation expiring, or when a `select` on a timer shows that an
+event does not happen. The reason names which case applies and what holds the
+wait.
 
-The check sees only the `fts5` test files each lint run compiles: Linux and Windows in full, and on macOS only the packages the macOS job lints. Tests behind `pgtest`, `chtest`, `duckdbtest`, or `s3test` go unchecked. It skips short positive `Never` windows, which cannot fail.
+The check sees only the `fts5` test files each lint run compiles: Linux and
+Windows in full, and on macOS only the packages the macOS job lints. Tests
+behind `pgtest`, `chtest`, `duckdbtest`, or `s3test` go unchecked. It skips
+short positive `Never` windows, which cannot fail.
 
 ## Frontend and End-to-End Tests
 

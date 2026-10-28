@@ -160,6 +160,10 @@ func (s *stubGetService) UsageSummary(context.Context, service.UsageRequest) (*s
 	panic("UsageSummary not expected")
 }
 
+func (s *stubGetService) SessionUsage(context.Context, service.SessionUsageRequest) (*service.SessionUsageReport, error) {
+	panic("SessionUsage not expected")
+}
+
 func (s *stubGetService) UsagePairwiseComparison(context.Context, service.UsagePairwiseComparisonRequest) (*service.UsagePairwiseComparisonResponse, error) {
 	panic("UsagePairwiseComparison not expected")
 }

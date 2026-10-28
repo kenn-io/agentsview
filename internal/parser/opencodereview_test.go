@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -361,9 +360,7 @@ func openCodeReviewFixtureBytes(t *testing.T) []byte {
 	t.Helper()
 	path := os.Getenv("AGENTSVIEW_OCR_REPRO")
 	if path == "" {
-		_, current, _, ok := runtime.Caller(0)
-		require.True(t, ok)
-		path = filepath.Join(filepath.Dir(current), "testdata", "opencodereview", "Users-reviewer-src-wagtail-wagtail", "efb23cb0-2f65-4f32-9f9d-310b0614b737.jsonl")
+		path = filepath.Join("testdata", "opencodereview", "Users-reviewer-src-wagtail-wagtail", "efb23cb0-2f65-4f32-9f9d-310b0614b737.jsonl")
 	}
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)

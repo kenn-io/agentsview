@@ -12,7 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/service"
@@ -360,12 +359,10 @@ func (b localArchiveQueryBackend) SessionUsage(
 		engine.Close()
 	}
 
-	load := func() (*db.SessionUsage, error) {
-		if query.OwnOnly {
-			return b.database.GetSessionUsage(ctx, resolvedID, true)
-		}
-		return service.SessionUsageWithSubagents(
-			ctx, b.database, resolvedID, true)
+	load := func() (*service.SessionUsageReport, error) {
+		return service.LoadSessionUsage(ctx, b.database, service.SessionUsageRequest{
+			ID: resolvedID, OwnOnly: query.OwnOnly,
+		})
 	}
 
 	u, err := load()
@@ -402,13 +399,9 @@ func (b localArchiveQueryBackend) SessionUsage(
 			}
 		}
 	}
-	if u.Agent == "" {
-		if def, ok := parser.AgentByPrefix(u.SessionID); ok {
-			u.Agent = string(def.Type)
-		}
+	out := &sessionUsageOutput{
+		SessionUsageReport: *u, RefreshIncomplete: refreshIncomplete,
 	}
-	out := newStoreSessionUsageOutput(u)
-	out.RefreshIncomplete = refreshIncomplete
 	return out, usageExitCode(out), nil
 }
 

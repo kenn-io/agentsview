@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // Exit codes for the token-use subcommand.
@@ -199,25 +200,13 @@ func usageExitCode(out *sessionUsageOutput) int {
 // sessionUsageOutput is the JSON shape emitted by `session usage`
 // and the deprecated `token-use`. It is a strict superset of the
 // historical token-use output (same fields, plus cost). The shape
-// is experimental and may change.
+// is experimental and may change. The usage document itself is the
+// shared service.SessionUsageReport that the MCP get_session_usage
+// tool also returns.
 type sessionUsageOutput struct {
-	db.SessionUsage
+	service.SessionUsageReport
 	ServerRunning     bool `json:"server_running"`
 	RefreshIncomplete bool `json:"refresh_incomplete,omitzero"`
-	// Plan and Coverage are the session's codex-cloud plan usage and live
-	// capture coverage, with the same names as the HTTP response.
-	Plan     *db.PlanUsageView       `json:"plan_usage,omitempty"`
-	Coverage *db.CaptureCoverageView `json:"capture_coverage,omitempty"`
-}
-
-// newStoreSessionUsageOutput wraps a usage result read straight from a
-// store, exposing its plan usage row the way the HTTP response does.
-func newStoreSessionUsageOutput(u *db.SessionUsage) *sessionUsageOutput {
-	return &sessionUsageOutput{
-		SessionUsage: *u,
-		Plan:         u.PlanUsage.PlanUsageView(),
-		Coverage:     u.PlanUsage.CaptureCoverageView(),
-	}
 }
 
 // startupWaitTimeout is how long CLI subcommands wait for a

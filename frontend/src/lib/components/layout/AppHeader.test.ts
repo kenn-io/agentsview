@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getMarkdownExportUrl: vi.fn().mockReturnValue("/api/v1/sessions/sess-123/md"),
   copyToClipboard: vi.fn().mockResolvedValue(true),
   reportTelemetry: vi.fn(),
+  syncClaudeAI: vi.fn(),
 }));
 
 vi.mock("../../utils/telemetry.js", () => ({ reportTelemetry: mocks.reportTelemetry }));
@@ -13,6 +14,7 @@ vi.mock("../../utils/telemetry.js", () => ({ reportTelemetry: mocks.reportTeleme
 vi.mock("../../api/client.js", () => ({
   downloadExport: mocks.downloadExport,
   getMarkdownExportUrl: mocks.getMarkdownExportUrl,
+  syncClaudeAI: mocks.syncClaudeAI,
 }));
 
 vi.mock("../../utils/clipboard.js", () => ({
@@ -24,6 +26,7 @@ import { sync } from "../../stores/sync.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { router } from "../../stores/router.svelte.js";
+import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import type { Session } from "../../api/types.js";
 
@@ -120,6 +123,24 @@ describe("AppHeader export actions", () => {
       expect(document.querySelector('[role="dialog"]') !== null).toBe(!importDisabled);
     },
   );
+
+  it("marks the Import button while Claude.ai Sync runs with the dialog closed", async () => {
+    mocks.syncClaudeAI.mockReturnValue(new Promise(() => {}));
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
+    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
+    void claudeAISync.start(undefined, () => {});
+    await tick();
+    expect(importButton.getAttribute("aria-label")).toBe(
+      "Claude.ai Sync is running. Open Import to see progress or stop it.",
+    );
+    expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
+    claudeAISync.stop();
+    await tick();
+    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
+    expect(importButton.querySelector(".sync-spinner")).toBeNull();
+  });
 
   it("copies markdown export link from export menu", async () => {
     component = mount(AppHeader, { target: document.body });

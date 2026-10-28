@@ -12,7 +12,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -239,61 +238,30 @@ func httpSessionUsageData(
 			}
 		}
 	}
-	// Request the full breakdown so the remote path matches the
-	// shape returned by the direct store paths, and the same subagent
-	// attribution scope so --server and local agree field for field.
-	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
-	if err != nil {
-		return nil, tokenUseExitErr, err
+	// The shared HTTP backend requests the full breakdown and the same
+	// subagent scope as the direct store paths, so --server and local
+	// agree field for field. The request keeps the CLI's usage timeout.
+	usageCtx := ctx
+	if timeout := sessionUsageHTTPClient.Timeout; timeout > 0 {
+		var cancel context.CancelFunc
+		usageCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	var subagents *bool
-	if !query.OwnOnly {
-		subagents = new(true)
-	}
-	response, err := api.GetAPIV1SessionsIDUsageWithResponse(ctx, &apiclient.GetAPIV1SessionsIDUsageRequestOptions{
-		PathParams: &apiclient.GetAPIV1SessionsIDUsagePath{ID: url.PathEscape(resolvedID)},
-		Query:      &apiclient.GetAPIV1SessionsIDUsageQuery{Breakdown: new(true), Subagents: subagents},
+	usage, err := backend.SessionUsage(usageCtx, service.SessionUsageRequest{
+		ID: resolvedID, OwnOnly: query.OwnOnly,
 	})
-	if response == nil {
-		return nil, tokenUseExitErr, err
+	if err != nil {
+		return nil, tokenUseExitErr, fmt.Errorf("usage: %w", err)
 	}
-	resp := response.HTTPResponse
-	if resp.StatusCode == http.StatusNotFound {
+	if usage == nil {
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		body := response.Body
-		return nil, tokenUseExitErr, fmt.Errorf(
-			"usage: HTTP %d: %s", resp.StatusCode, body,
-		)
+	out := &sessionUsageOutput{
+		SessionUsageReport: *usage,
+		ServerRunning:      true, RefreshIncomplete: refreshIncomplete,
 	}
-	if err != nil {
-		return nil, tokenUseExitErr, err
-	}
-	if len(response.Body) == 0 {
-		return nil, tokenUseExitErr, io.ErrUnexpectedEOF
-	}
-	wire := response.JSON200
-	out := sessionUsageOutput{
-		SessionID: wire.SessionID, Agent: wire.Agent, Project: wire.Project,
-		TotalOutputTokens: int(wire.TotalOutputTokens), PeakContextTokens: int(wire.PeakContextTokens),
-		HasTokenData: wire.HasTokenData, Cost: wire.Cost, HasCost: wire.HasCost, CostUSD: wire.CostUsd,
-		Models: wire.Models, UnpricedModels: wire.UnpricedModels,
-		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown,
-		ServerRunning: true, RefreshIncomplete: refreshIncomplete,
-		Plan: wire.PlanUsage, Coverage: wire.CaptureCoverage,
-	}
-	if wire.CostSource != nil {
-		out.CostSource = export.CostSource(*wire.CostSource)
-	}
-	if wire.AiCredits != nil {
-		out.AICredits = *wire.AiCredits
-	}
-	if wire.SubagentCount != nil {
-		out.SubagentCount = int(*wire.SubagentCount)
-	}
-	return &out, usageExitCode(&out), nil
+	return out, usageExitCode(out), nil
 }
 
 func httpSessionSyncStatus(
@@ -358,13 +326,9 @@ func storeSessionUsageData(
 		return nil, tokenUseExitNotFound, nil
 	}
 
-	var u *db.SessionUsage
-	if query.OwnOnly {
-		u, err = store.GetSessionUsage(ctx, resolvedID, true)
-	} else {
-		u, err = service.SessionUsageWithSubagents(
-			ctx, store, resolvedID, true)
-	}
+	u, err := service.LoadSessionUsage(ctx, store, service.SessionUsageRequest{
+		ID: resolvedID, OwnOnly: query.OwnOnly,
+	})
 	if err != nil {
 		return nil, tokenUseExitErr,
 			fmt.Errorf("querying %s session usage: %w", storeName, err)
@@ -373,12 +337,7 @@ func storeSessionUsageData(
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
-	if u.Agent == "" {
-		if def, ok := parser.AgentByPrefix(u.SessionID); ok {
-			u.Agent = string(def.Type)
-		}
-	}
-	out := newStoreSessionUsageOutput(u)
+	out := &sessionUsageOutput{SessionUsageReport: *u}
 	return out, usageExitCode(out), nil
 }
 

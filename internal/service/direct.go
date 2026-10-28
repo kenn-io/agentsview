@@ -995,6 +995,14 @@ func (b *directBackend) UsageSummary(
 	return summary, nil
 }
 
+// SessionUsage reads one session's usage through LoadSessionUsage, the
+// path `session usage` uses for direct and PostgreSQL reads.
+func (b *directBackend) SessionUsage(
+	ctx context.Context, req SessionUsageRequest,
+) (*SessionUsageReport, error) {
+	return LoadSessionUsage(ctx, b.db, req)
+}
+
 func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {

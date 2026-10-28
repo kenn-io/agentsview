@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -165,12 +164,24 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
+// repositoryRoot walks up from the working directory to the directory
+// holding go.mod, so the tool works when run from anywhere in the checkout.
 func repositoryRoot() (string, error) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", errors.New("memory-e2e: resolve repository root")
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("memory-e2e: resolve repository root: %w", err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")), nil
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New(
+				"memory-e2e: run from inside the agentsview checkout")
+		}
+		dir = parent
+	}
 }
 
 func selectedClients(raw string) ([]clientName, error) {

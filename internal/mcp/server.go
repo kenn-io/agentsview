@@ -33,6 +33,7 @@ const (
 	ToolSearchContent      = "search_content"
 	ToolGetMemoryStatus    = "get_memory_status"
 	ToolGetUsageSummary    = "get_usage_summary"
+	ToolGetSessionUsage    = "get_session_usage"
 	ToolGetToolCalls       = "get_tool_calls"
 	ToolGetRecentEdits     = "get_recent_edits"
 	ToolGetChildSessions   = "get_child_sessions"
@@ -206,9 +207,22 @@ func newServer(opts ServeOptions) *mcp.Server {
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolGetUsageSummary,
 			Description: "Aggregate token usage and cost across all agents: totals plus per-day breakdown, " +
-				"filterable by project, agent, machine, and date range.",
+				"filterable by project, agent, machine, and date range. Use get_session_usage for one " +
+				"session's breakdown.",
 			Annotations: readOnly,
 		}, t.usageSummary)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetSessionUsage,
+			Description: "Explain one session's token usage and cost, the same report as `agentsview session " +
+				"usage`. Call it after get_activity_report with sessions_sort cost finds an expensive " +
+				"session. Returns total output and peak context tokens, cost and its " +
+				"source, models with no known price, input, output, and cache read and write tokens and " +
+				"cost per model, and a page of per-request rows (breakdown_sort cost puts the most " +
+				"expensive requests first). Totals include subagent sessions unless own_only is set. " +
+				"Reads the archive as stored without refreshing source files.",
+			Annotations: readOnly,
+		}, t.sessionUsage)
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolGetToolCalls,
@@ -242,7 +256,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 			Name: ToolGetActivityReport,
 			Description: "Report agent time, sessions, and cost for a day, week, month, or custom range: " +
 				"totals, the busiest moment, breakdowns by project, model, and agent, and a page of the " +
-				"sessions in the range. Page through the sessions with sessions_cursor.",
+				"sessions in the range. Page through the sessions with sessions_cursor. Call " +
+				"get_session_usage on a session to see where its cost came from.",
 			Annotations: readOnly,
 		}, t.activityReport)
 

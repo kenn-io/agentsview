@@ -12898,10 +12898,7 @@ func TestPiSessionIntegration(t *testing.T) {
 
 	// Use the existing pi session fixture from the parser testdata.
 	// The fixture has id="pi-test-session-uuid".
-	_, callerFile, _, _ := runtime.Caller(0)
-	fixtureDir := filepath.Join(
-		filepath.Dir(callerFile), "..", "parser", "testdata", "pi",
-	)
+	fixtureDir := filepath.Join("..", "parser", "testdata", "pi")
 	fixtureContent, err := os.ReadFile(
 		filepath.Join(fixtureDir, "session.jsonl"),
 	)

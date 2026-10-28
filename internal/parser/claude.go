@@ -1389,6 +1389,10 @@ func extractMessagesFrom(
 		}
 
 		if strings.TrimSpace(text) == "" && len(trs) == 0 {
+			if msg, ok := claudeBlankUsageMessage(e, ordinal); ok {
+				messages = append(messages, msg)
+				ordinal++
+			}
 			continue
 		}
 
@@ -2717,6 +2721,10 @@ func extractMessagesContext(
 		}
 
 		if strings.TrimSpace(text) == "" && len(trs) == 0 {
+			if msg, ok := claudeBlankUsageMessage(e, ordinal); ok {
+				messages = append(messages, msg)
+				ordinal++
+			}
 			continue
 		}
 
@@ -2816,6 +2824,35 @@ func extractMessagesContext(
 		return nil, time.Time{}, time.Time{}, err
 	}
 	return messages, startedAt, endedAt, nil
+}
+
+// claudeBlankUsageMessage keeps the token usage of an assistant record
+// that renders no transcript text, such as a response whose only block
+// is an empty thinking block with an opaque signature. Chunks of one
+// response are merged by message.id before extraction, so a record that
+// is still blank here is its own response and its usage would otherwise
+// be lost. The row is flagged as system so the transcript hides it.
+func claudeBlankUsageMessage(e dagEntry, ordinal int) (ParsedMessage, bool) {
+	if e.entryType != "assistant" {
+		return ParsedMessage{}, false
+	}
+	msg := ParsedMessage{
+		Ordinal:            ordinal,
+		Role:               RoleAssistant,
+		Timestamp:          e.timestamp,
+		IsSystem:           true,
+		SourceType:         e.entryType,
+		SourceUUID:         e.uuid,
+		SourceParentUUID:   e.parentUuid,
+		IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
+		tokenPresenceKnown: true,
+	}
+	extractClaudeTokenFields(&msg, e.line)
+	if msg.ContextTokens == 0 && msg.OutputTokens == 0 {
+		return ParsedMessage{}, false
+	}
+	msg.StopReason = gjson.Get(e.line, "message.stop_reason").Str
+	return msg, true
 }
 
 // extractClaudeTokenFields populates Model, TokenUsage,

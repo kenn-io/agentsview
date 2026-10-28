@@ -1303,6 +1303,15 @@ schema, the same server also registers the
 agentsview pg serve [flags]
 ```
 
+```bash
+agentsview pg serve --push-watch
+```
+
+Use `--push-watch` to ingest mounted sessions and publish them in the same
+process; see
+[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for setup
+and shutdown.
+
 Accepts the same serve flags (`--host`, `--port`, `--proxy`, etc.) plus
 PostgreSQL configuration from `config.toml`. When the host's `[vector]` config
 matches a generation pushed to PostgreSQL, semantic and hybrid search are served

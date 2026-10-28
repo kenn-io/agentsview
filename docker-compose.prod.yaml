@@ -14,6 +14,10 @@ services:
       # AGENTSVIEW_PG_URL: postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require
       # Read the bearer token from a mounted secret instead of /data/config.toml.
       # AGENTSVIEW_AUTH_TOKEN_FILE: /run/secrets/agentsview_token
+    # With PostgreSQL mode set above, this block also ingests and publishes mounted sessions.
+    # command: ["--push-watch"]
+    # The final push has a 30s limit; Docker's default stop timeout is 10s.
+    # stop_grace_period: 40s
     volumes:
       - agentsview-data:/data
       - ${HOME}/.claude/projects:/agents/claude:ro

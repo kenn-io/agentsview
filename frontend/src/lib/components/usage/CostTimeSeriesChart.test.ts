@@ -9,7 +9,7 @@ import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { settings } from "../../stores/settings.svelte.js";
 import type { DbDailyUsageEntry, UsageSummaryResponse } from "../../api/generated/index";
-import { usageChartColorMaps } from "../../utils/usageChartColors.js";
+import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
 import { setLocale } from "../../i18n/index.js";
 
 const OBSERVED_WIDTH = 1648;
@@ -144,7 +144,7 @@ function mountChart() {
   return mount(CostTimeSeriesChart, {
     target: document.body,
     props: {
-      colorMap: usageChartColorMaps(usage.summary, settings.chartPalette)[groupBy],
+      styleMap: usageChartStyleMaps(usage.summary, settings.chartPalette)[groupBy],
     },
   });
 }

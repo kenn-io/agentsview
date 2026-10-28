@@ -141,6 +141,11 @@ During Sync, **Stop** cancels the run and progress replaces file upload. Results
 show the imported, updated, unchanged, and failed counts. Other failures show
 **Sync failed** with **Retry**.
 
+Closing the dialog does not stop Sync. While it runs, the header's **Import**
+button shows a spinner. Reopen the dialog to see progress, stop the run, or read
+a result or failure that arrived while it was closed. Reloading or closing the
+AgentsView page ends Sync.
+
 You can also run `agentsview import --type claude-ai --sync` while the server
 and Chrome are running, with no AgentsView tab open.
 
@@ -168,9 +173,10 @@ those turns, but dropped pins and notes stay in the Trash copy. Trashed and
 permanently deleted chats stay deleted.
 
 Each chat has a 32 MiB response limit. Larger chats count as failed while Sync
-continues. An expired sign-in or two chat failures in a row ends Sync. Closing
-the dialog cancels it. Completed chats stay imported, and the next Sync fetches
-unfinished chats.
+continues. An expired sign-in or two chat failures in a row ends Sync. Completed
+chats stay imported and refresh in the session list. The next Sync fetches
+unfinished chats. After **Stop**, the server may briefly report that Chrome Sync
+is already running; wait a moment, then click **Retry**.
 
 Sign-in persists in the browser that holds it. To sign out of Chrome, open
 Claude.ai itself in Chrome and use its log-out menu. In the desktop app, open

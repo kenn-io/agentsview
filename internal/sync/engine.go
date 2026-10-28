@@ -19903,7 +19903,10 @@ func shouldReplaceFullParseMessages(
 		// ResultEvents. An incremental append would leave
 		// existing tool calls without their results.
 		pw.sess.Agent == parser.AgentPoolside ||
-		pw.sess.Agent == parser.AgentReasonix
+		pw.sess.Agent == parser.AgentReasonix ||
+		// Resuming Command Code v2 rewrites it as v3 and merges tool/user
+		// turns. Ordinals shrink, so appending would lose new turns.
+		pw.sess.Agent == parser.AgentCommandCode
 }
 
 // writeIncremental appends new messages and partially updates

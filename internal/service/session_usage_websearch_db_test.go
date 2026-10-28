@@ -63,3 +63,45 @@ func TestSessionUsageWithSubagentsBillsSubagentWebSearches(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.034"),
 		got.Breakdown[1].Cost)
 }
+
+// A model without a price still owes its web-search fee. Its by-model
+// cost keeps that fee, stays marked unpriced, and outranks a priced
+// model that cost less: $0.02 for two searches against the priced
+// model's $0.007.
+func TestSessionUsageByModelKeepsUnpricedWebSearchFee(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	ctx := t.Context()
+
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "test-opus",
+		InputPerMTok:  money.MustParseDollars("2.0"),
+		OutputPerMTok: money.MustParseDollars("10.0"),
+	}}), "UpsertModelPricing")
+
+	const sessionID = "claude:ws-unpriced"
+	seedSubagentSession(t, d, sessionID, nil, "", 1000)
+	priced := usageMessage(sessionID, 0, "10:00:00", "m-1", 1000, 500)
+	unpriced := usageMessage(sessionID, 1, "10:01:00", "m-2", 1000, 500)
+	unpriced.Model = "zz-unpriced-model"
+	unpriced.TokenUsage = jsontext.Value(
+		`{"input_tokens":1000,"output_tokens":500,` +
+			`"server_tool_use":{"web_search_requests":2}}`)
+	dbtest.SeedMessages(t, d, priced, unpriced)
+
+	report, err := service.LoadSessionUsage(ctx, d,
+		service.SessionUsageRequest{ID: sessionID, OwnOnly: true})
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	require.False(t, report.HasCost)
+
+	models, err := report.ByModel()
+	require.NoError(t, err)
+	require.Len(t, models, 2)
+	assert.Equal(t, "zz-unpriced-model", models[0].Model)
+	assert.False(t, models[0].HasCost)
+	assert.Equal(t, 2, models[0].WebSearchRequests)
+	assert.Equal(t, money.MustParseDollars("0.02"), models[0].Cost)
+	assert.Equal(t, "test-opus", models[1].Model)
+	assert.True(t, models[1].HasCost)
+	assert.Equal(t, money.MustParseDollars("0.007"), models[1].Cost)
+}

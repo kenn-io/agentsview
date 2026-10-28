@@ -45,7 +45,7 @@
 
 <style>
   .thinking-block {
-    border-left: 2px solid var(--accent-purple);
+    border-left: var(--role-thinking-bar-width) var(--role-thinking-bar-style) var(--role-thinking-accent);
     background: var(--thinking-bg);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     margin: 0;
@@ -60,7 +60,7 @@
     text-align: left;
     font-size: 12px;
     font-weight: 600;
-    color: var(--accent-purple);
+    color: var(--role-thinking-ink);
     letter-spacing: 0.01em;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     transition: background 0.1s;

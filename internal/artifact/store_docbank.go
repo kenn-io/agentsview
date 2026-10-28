@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/docbank"
+	"go.kenn.io/docbank/docbank"
 	"go.kenn.io/kit/pack"
 	"go.kenn.io/kit/packstore"
 )

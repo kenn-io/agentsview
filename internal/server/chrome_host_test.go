@@ -188,14 +188,15 @@ func TestClaudeAIChromeStatusArchiveChecks(t *testing.T) {
 
 func TestChromeHostLocalOnly(t *testing.T) {
 	for _, tt := range []struct {
-		name, method, route, remote, forwarded string
-		requireAuth                            bool
+		name, method, route, remote, forwarded, body string
+		requireAuth                                  bool
+		status                                       int
 	}{
-		{"remote auth", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "192.0.2.10:1234", "", true},
-		{"bind all", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "192.0.2.10:1234", "", false},
-		{"forwarded", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "127.0.0.1:1234", "for=192.0.2.10", true},
-		{"repeated browser", http.MethodPost, "/api/v1/import/claude-ai/sync?browser&browser=chrome", "192.0.2.10:1234", "", true},
-		{"status", http.MethodGet, "/api/v1/import/claude-ai/chrome", "192.0.2.10:1234", "", true},
+		{"remote auth", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
+		{"bind all", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", false, http.StatusForbidden},
+		{"forwarded", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "127.0.0.1:1234", "for=192.0.2.10", "Chrome Sync requires a local connection", true, http.StatusForbidden},
+		{"repeated browser", http.MethodPost, "/api/v1/import/claude-ai/sync?browser&browser=chrome", "192.0.2.10:1234", "", `expected value to be one of \"chrome\" (query.browser: true)`, true, http.StatusBadRequest},
+		{"status", http.MethodGet, "/api/v1/import/claude-ai/chrome", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -211,8 +212,8 @@ func TestChromeHostLocalOnly(t *testing.T) {
 			req.Header.Set("Forwarded", tt.forwarded)
 			response := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(response, req)
-			assert.Equal(t, http.StatusForbidden, response.Code)
-			assert.Contains(t, response.Body.String(), "Chrome Sync requires a local connection")
+			assert.Equal(t, tt.status, response.Code)
+			assert.Contains(t, response.Body.String(), tt.body)
 			assert.True(t, srv.chrome.Connected())
 			require.NoError(t, conn.SetReadDeadline(time.Now()))
 			_, err := chromehost.ReadFrame(conn)

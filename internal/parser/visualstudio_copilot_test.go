@@ -294,11 +294,8 @@ func TestDiscoverVisualStudioCopilotSessions_EmitsWorkItemPerConversation(t *tes
 }
 
 func TestDiscoverVisualStudioCopilotSessions_SampleFixturesEnumerateBothConversations(t *testing.T) {
-	_, callerFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
 	sampleDir := filepath.Join(
-		filepath.Dir(callerFile), "..", "..",
-		"testdata", "visualstudio-copilot", "redacted",
+		"..", "..", "testdata", "visualstudio-copilot", "redacted",
 	)
 	if _, err := os.Stat(sampleDir); err != nil {
 		t.Skipf("sample dir not available: %v", err)

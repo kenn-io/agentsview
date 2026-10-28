@@ -2026,6 +2026,59 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 	})
 }
 
+func TestParseCodexSessionForkLineage(t *testing.T) {
+	const (
+		parentID = "a1000000-0000-4000-8000-000000000001"
+		childID  = "a1000000-0000-4000-8000-000000000002"
+	)
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "rollout-2026-01-10T10-00-00-"+parentID+".jsonl"),
+		[]byte(testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", tsEarly),
+			testjsonl.CodexMsgJSON("user", "parent question", tsEarly),
+		)), 0o600,
+	))
+	forkMeta := testjsonl.CodexForkedSessionMetaJSON(childID, parentID, "/tmp", "user", tsEarly)
+	subagentFork := testjsonl.CodexSessionMetaWithFieldsJSON(childID, "/tmp", "user", tsEarly, map[string]any{
+		"forked_from_id": parentID,
+		"source": map[string]any{"subagent": map[string]any{
+			"thread_spawn": map[string]any{"parent_thread_id": "spawner"},
+		}},
+	})
+	tests := []struct {
+		name         string
+		meta         string
+		wantParent   string
+		wantRelation RelationshipType
+	}{
+		{"ordinary fork links its source thread", forkMeta, "codex:" + parentID, RelFork},
+		{"subagent parent wins over fork source", subagentFork, "codex:spawner", RelSubagent},
+		{"plain session has no parent", testjsonl.CodexSessionMetaJSON(childID, "/tmp", "user", tsEarly), "", RelNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(root, "rollout-2026-01-10T10-00-01-"+childID+".jsonl")
+			require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+				tt.meta,
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", tsEarlyS1),
+				testjsonl.CodexMsgJSON("user", "child question", tsEarlyS1),
+				testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
+			)), 0o600))
+			sess, msgs, err := newCodexTestProvider(t, root).parseSession(path, "local", false)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, "codex:"+childID, sess.ID)
+			assert.Equal(t, tt.wantParent, sess.ParentSessionID)
+			assert.Equal(t, tt.wantRelation, sess.RelationshipType)
+			require.Len(t, msgs, 2)
+			assert.Equal(t, "child question", msgs[0].Content)
+			assert.Equal(t, "child answer", msgs[1].Content)
+		})
+	}
+}
+
 func TestParseCodexSessionWithCursorActiveForkGateNeverPersistsCheckpoint(
 	t *testing.T,
 ) {

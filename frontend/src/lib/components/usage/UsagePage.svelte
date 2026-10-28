@@ -56,13 +56,13 @@
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
   import { getLocale, m } from "../../i18n/index.js";
-  import { usageChartColorMaps } from "../../utils/usageChartColors.js";
+  import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
 
-  const chartColorMaps = $derived(
-    usageChartColorMaps(
+  const chartStyleMaps = $derived(
+    usageChartStyleMaps(
       usage.colorSummary,
       settings.chartPalette,
     ),
@@ -600,13 +600,13 @@
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart
-        colorMap={chartColorMaps[usage.toggles.timeSeries.groupBy]}
+        styleMap={chartStyleMaps[usage.toggles.timeSeries.groupBy]}
       />
     </Card>
 
     <Card level="default" padding="none" class="chart-panel wide">
       <AttributionPanel
-        colorMap={chartColorMaps[usage.toggles.attribution.groupBy]}
+        styleMap={chartStyleMaps[usage.toggles.attribution.groupBy]}
       />
     </Card>
 

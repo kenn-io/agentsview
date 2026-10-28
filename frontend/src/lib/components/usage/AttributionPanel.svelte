@@ -7,6 +7,7 @@
   } from "../../stores/usage.svelte.js";
   import { tick } from "svelte";
   import { Button } from "@kenn-io/kit-ui";
+  import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
@@ -16,10 +17,17 @@
   import type { DbTopSessionEntry } from "../../api/generated/index.js";
 
   interface Props {
-    colorMap: ReadonlyMap<string, string>;
+    styleMap: ReadonlyMap<string, SeriesStyle>;
   }
 
-  let { colorMap }: Props = $props();
+  let { styleMap }: Props = $props();
+
+  const MUTED_STYLE: SeriesStyle = {
+    color: "var(--text-muted)",
+    fill: "solid",
+    dash: "solid",
+    marker: "circle",
+  };
 
   function fmtPct(v: number, total: number): string {
     if (total <= 0) return "";
@@ -35,7 +43,8 @@
     id: string;
     label: string;
     value: number;
-    color: string;
+    style: SeriesStyle;
+    swatch: string;
     pct: number;
     // Billed only as plan usage: no tokens or cost to show.
     planOnly: boolean;
@@ -145,6 +154,11 @@
     return items;
   });
 
+  function styleFields(style: SeriesStyle | undefined): Pick<Row, "style" | "swatch"> {
+    const resolved = style ?? MUTED_STYLE;
+    return { style: resolved, swatch: seriesSwatchBackground(resolved) };
+  }
+
   const rows = $derived.by((): Row[] => {
     const items = rowItems;
     const total = items.reduce((sum, item) => sum + item.value, 0);
@@ -153,9 +167,9 @@
       id: d.id,
       label: d.label,
       value: d.value,
-      color: zoomedProject
-        ? colorMap.get(zoomedProject.key) ?? "var(--text-muted)"
-        : colorMap.get(d.id) ?? "var(--text-muted)",
+      ...styleFields(
+        zoomedProject ? styleMap.get(zoomedProject.key) : styleMap.get(d.id),
+      ),
       pct: total > 0 ? d.value / total : 0,
       planOnly: d.planOnly ?? false,
     }));
@@ -166,7 +180,7 @@
       id: r.id,
       label: r.label,
       value: r.value,
-      color: r.color,
+      style: r.style,
       title: rowTitle(r.id, r.label),
       selected: usage.isSelected(groupBy, r.id),
       dimmed: !zoomedProject && hasSelection && !usage.isSelected(groupBy, r.id),
@@ -319,7 +333,8 @@
               <span class="rail-rank">{i + 1}</span>
               <span
                 class="rail-dot"
-                style="background: {row.color}"
+                class:patterned={row.style.fill !== "solid"}
+                style="background: {row.swatch}"
               ></span>
               <span class="rail-label">{row.label}</span>
               <span class="rail-cost">
@@ -353,7 +368,8 @@
             <span class="list-rank">{i + 1}</span>
             <span
               class="list-dot"
-              style="background: {row.color}"
+              class:patterned={row.style.fill !== "solid"}
+              style="background: {row.swatch}"
             ></span>
             <div class="list-info">
               <span class="list-label">{row.label}</span>
@@ -361,7 +377,7 @@
                 <div
                   class="list-bar-fill"
                   style="width: {row.planOnly ? 0 : Math.max(row.pct * 100, 1)}%;
-                         background: {row.color};"
+                         background: {row.swatch};"
                 ></div>
               </div>
             </div>
@@ -513,6 +529,23 @@
     height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
+  }
+
+  /* Patterned swatches need room to show at least one full pattern tile.
+     Negative margins keep their footprint at the plain dot's width, so
+     labels stay aligned. */
+  .rail-dot.patterned {
+    width: 10px;
+    height: 10px;
+    margin-inline: -2px;
+    border-radius: 2px;
+  }
+
+  .list-dot.patterned {
+    width: 12px;
+    height: 12px;
+    margin-inline: -2px;
+    border-radius: 2px;
   }
 
   .rail-label {

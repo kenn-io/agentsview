@@ -457,6 +457,11 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	if b.parentSessionID != "" {
 		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
 		b.relationshipType = RelSubagent
+	} else if b.forkedFromID != "" {
+		// An ordinary fork names the thread it was forked from. Revert pages
+		// replace this with their continuation parent after parsing.
+		b.parentSessionID = codexSubagentSessionID(b.forkedFromID)
+		b.relationshipType = RelFork
 	}
 	if payload.Get("originator").Str == codexOriginatorExec && b.sessionKind != SessionKindRoborev {
 		b.sessionKind = SessionKindNonInteractive

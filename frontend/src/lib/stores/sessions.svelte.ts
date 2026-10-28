@@ -21,6 +21,8 @@ import {
   splitLabelFilterParam,
 } from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
+import { router } from "./router.svelte.js";
+import { UUID_PATTERN, resolveSessionId, sessionLookupPartial } from "../utils/go-to-session.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 type SidebarIndexParams = NonNullable<
@@ -1020,6 +1022,25 @@ class SessionsStore {
           this.markActiveSessionFound(id);
         }
       } catch (err) {
+        if (isNotFoundError(err) && UUID_PATTERN.test(id)) {
+          try {
+            const { ids } = await SessionsService.getApiV1SessionIdsResolve(
+              { partial: sessionLookupPartial(id), raw_suffix: true, limit: 2 },
+              { signal },
+            );
+            const result = resolveSessionId(id, ids, ids.length >= 2);
+            if (
+              result.kind === "resolved" &&
+              result.id !== id &&
+              this.activeSessionId === id &&
+              this.navigateRead.isCurrent(signal)
+            ) {
+              if (router.sessionId === id) router.replaceSession(result.id);
+              await this.navigateToSession(result.id);
+              return;
+            }
+          } catch {}
+        }
         // Selection stands without metadata; flag a not-found
         // response so the message pane can say so.
         if (this.navigateRead.isCurrent(signal)) {

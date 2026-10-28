@@ -524,4 +524,50 @@ describe("TrendsPage", () => {
     expect(strokes).toEqual(["#ff7f0e", "#1f77b4"]);
     expect(swatches).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
   });
+
+  it("dashes color-blind safe lines past the tenth color in chart and table", async () => {
+    settings.chartPalette = "colorblind";
+    const terms = Array.from(
+      { length: 11 },
+      (_, index) => `term-${String(index).padStart(2, "0")}`,
+    );
+    mocks.getApiV1TrendsTerms.mockResolvedValueOnce({
+      granularity: "week",
+      from: "2024-01-01",
+      to: "2024-01-31",
+      message_count: 10,
+      buckets: [
+        { date: "2024-01-01", message_count: 5 },
+        { date: "2024-01-08", message_count: 5 },
+      ],
+      series: terms.map((term) => ({
+        term,
+        variants: [term],
+        total: 2,
+        points: [
+          { date: "2024-01-01", count: 1 },
+          { date: "2024-01-08", count: 1 },
+        ],
+      })),
+    });
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    const lines = Array.from(
+      document.querySelectorAll<SVGPathElement>(
+        '.chart path[fill="none"]:not([stroke="transparent"])',
+      ),
+    );
+    expect(lines).toHaveLength(11);
+    // The eleventh term reuses the first color, so only its dash sets it apart.
+    expect(lines[10]!.getAttribute("stroke")).toBe(lines[0]!.getAttribute("stroke"));
+    expect(lines[0]!.getAttribute("stroke-dasharray")).toBe("none");
+    expect(lines[10]!.getAttribute("stroke-dasharray")).toBe("6 4");
+
+    expect(document.querySelectorAll(".swatch")).toHaveLength(10);
+    const dashedSample = document.querySelector<SVGLineElement>(".swatch-line line");
+    expect(dashedSample?.getAttribute("stroke")).toBe(lines[10]!.getAttribute("stroke"));
+    expect(dashedSample?.getAttribute("stroke-dasharray")).toBe("6 4");
+  });
 });

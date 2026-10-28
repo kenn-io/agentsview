@@ -510,6 +510,14 @@ func (s *mcpDaemonService) UsageSummary(
 	})
 }
 
+func (s *mcpDaemonService) SessionUsage(
+	ctx context.Context, req service.SessionUsageRequest,
+) (*service.SessionUsageReport, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*service.SessionUsageReport, error) {
+		return svc.SessionUsage(ctx, req)
+	})
+}
+
 func (s *mcpDaemonService) UsagePairwiseComparison(
 	ctx context.Context, req service.UsagePairwiseComparisonRequest,
 ) (*service.UsagePairwiseComparisonResponse, error) {

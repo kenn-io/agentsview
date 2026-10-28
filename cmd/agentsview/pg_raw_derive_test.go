@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -120,14 +122,32 @@ func runWithTestRuntimeRoot(m *testing.M) int {
 }
 
 func TestPGRawRuntimeReadinessFailureCleansBeforeReturn(t *testing.T) {
-	var cleaned, started atomic.Bool
-	cfg := config.Config{DataDir: t.TempDir(), Host: "invalid host", Port: 12345, NoBrowser: true}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	startup := replicaServeStartup{cfg: cfg, ctx: ctx, srv: server.New(cfg, nil, nil), rtOpts: serveRuntimeOptions{Mode: "pg-serve", RequestedPort: cfg.Port}, cleanup: func() { cleaned.Store(true) }, startWorker: func() { started.Store(true) }}
-	require.Error(t, runPreparedReplicaServe("pg", startup))
-	assert.True(t, cleaned.Load())
-	assert.False(t, started.Load())
+	for _, watch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watch=%t", watch), func(t *testing.T) {
+			var cleaned, started atomic.Bool
+			dir := t.TempDir()
+			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "invalid host", Port: 12345, NoBrowser: true, PG: config.PGConfig{URL: "postgres://user@127.0.0.1:1/archive", AllowInsecure: true}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			startup := replicaServeStartup{cfg: cfg, ctx: ctx, srv: server.New(cfg, nil, nil), rtOpts: serveRuntimeOptions{Mode: "pg-serve", RequestedPort: cfg.Port}, cleanup: func() { cleaned.Store(true) }}
+			if watch {
+				require.NoError(t, attachReplicaServeWatch(&startup, cancel, pgReplica{}, nil, &ReplicaPushConfig{}))
+			}
+			startup.startWorker = func() { started.Store(true) }
+			require.Error(t, runPreparedReplicaServe("pg", startup))
+			assert.True(t, cleaned.Load())
+			assert.False(t, started.Load())
+			if watch {
+				for _, name := range []string{"db.write.lock", "pg-watch.lock"} {
+					lock := flock.New(filepath.Join(cfg.DataDir, name))
+					locked, err := lock.TryLock()
+					require.NoError(t, err)
+					require.True(t, locked)
+					require.NoError(t, lock.Unlock())
+				}
+			}
+		})
+	}
 }
 
 func TestHostedProjectionConfiguredContentPolicies(t *testing.T) {

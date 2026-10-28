@@ -3224,3 +3224,64 @@ func TestParseClaudeSession_GenuineOutputMatchingTagShapeStaysUnflagged(
 	assert.False(t, got.PersistedOutputUnresolved)
 	assert.Equal(t, genuine, DecodeContent(got.ContentRaw))
 }
+
+// TestParseClaudeSession_BlankThinkingKeepsUsage covers an assistant
+// response whose only content is an empty thinking block with an opaque
+// signature. The record renders no text, but its usage belongs to a
+// distinct provider response and must survive as a hidden row.
+func TestParseClaudeSession_BlankThinkingKeepsUsage(t *testing.T) {
+	content := loadFixture(t, "claude/blank_thinking_usage.jsonl")
+
+	assertBlankUsageRow := func(t *testing.T, msgs []ParsedMessage) {
+		t.Helper()
+		require.Len(t, msgs, 3)
+		blank := msgs[1]
+		assert.Equal(t, RoleAssistant, blank.Role)
+		assert.True(t, blank.IsSystem, "blank usage row must stay out of the transcript")
+		assert.Empty(t, blank.Content)
+		assert.Equal(t, "a1", blank.SourceUUID)
+		assert.Equal(t, "msg_blank", blank.ClaudeMessageID)
+		assert.Equal(t, 41, blank.ContextTokens)
+		assert.Equal(t, 7, blank.OutputTokens)
+		assert.JSONEq(t,
+			`{"input_tokens":11,"output_tokens":7,"cache_creation_input_tokens":13,"cache_read_input_tokens":17}`,
+			string(blank.TokenUsage))
+		assert.Equal(t, "msg_answer", msgs[2].ClaudeMessageID)
+		assert.False(t, msgs[2].IsSystem)
+	}
+
+	t.Run("full parse", func(t *testing.T) {
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assertBlankUsageRow(t, msgs)
+		assert.Equal(t, 10, sess.TotalOutputTokens)
+	})
+
+	t.Run("incremental parse", func(t *testing.T) {
+		path := createTestFile(t, "test.jsonl", content)
+		msgs, _, _, err := callParseClaudeSessionFrom(path, 0, 0, "")
+		require.NoError(t, err)
+		assertBlankUsageRow(t, msgs)
+	})
+
+	t.Run("blank thinking chunk merges into its answer", func(t *testing.T) {
+		sameResponse := testjsonl.JoinJSONL(
+			`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-10T11:00:00Z","message":{"role":"user","content":"prompt"}}`,
+			`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-10T11:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"opaque"}],"id":"msg_one","model":"claude-sonnet-4-6","usage":{"input_tokens":2,"output_tokens":3}}}`,
+			`{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2026-01-10T11:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"answer"}],"id":"msg_one","model":"claude-sonnet-4-6","usage":{"input_tokens":2,"output_tokens":3},"stop_reason":"end_turn"}}`,
+		)
+		_, msgs := runClaudeParserTest(t, "test.jsonl", sameResponse)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "answer", msgs[1].Content)
+		assert.False(t, msgs[1].IsSystem)
+	})
+
+	t.Run("blank record without usage is still skipped", func(t *testing.T) {
+		noUsage := testjsonl.JoinJSONL(
+			`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-10T11:00:00Z","message":{"role":"user","content":"prompt"}}`,
+			`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-10T11:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"opaque"}],"id":"msg_blank","usage":{"input_tokens":0,"output_tokens":0}}}`,
+		)
+		_, msgs := runClaudeParserTest(t, "test.jsonl", noUsage)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleUser, msgs[0].Role)
+	})
+}

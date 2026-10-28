@@ -29,6 +29,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── debug.log        # Log of the server, sync, and other commands
 ├── run/             # Windows only: daemon runtime records and locks
 ├── serve.log        # Detached daemon output
+├── tmp/             # Temporary files, only when the system temp directory is unusable
 └── uploads/         # Uploaded session files
 ```
 
@@ -38,6 +39,14 @@ rebuilds it automatically. Back up `sessions.db` for session history, `assets/`
 for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
+
+SQLite needs a writable temp directory for session writes and large sorts.
+AgentsView uses the system temp directory: `TMP` or `TEMP` on Windows, and
+`TMPDIR` elsewhere. If that directory cannot be written, for example inside a
+sandbox that confines child processes, AgentsView prints a warning and uses
+`tmp/` inside the data directory instead. Its child processes inherit the same
+choice. To use a different directory, point those variables at a writable
+directory before you start AgentsView.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
 writes. A running daemon owns local SQLite writes for this data directory and
@@ -252,7 +261,7 @@ zoom_level = 120
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                                              |
+| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                                              |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |

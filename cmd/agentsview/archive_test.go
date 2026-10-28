@@ -18,7 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/rawarchive"
 	syncer "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
-	"go.kenn.io/docbank"
+	"go.kenn.io/docbank/docbank"
 )
 
 func TestArchiveExtractCaptureAfterRestore(t *testing.T) {

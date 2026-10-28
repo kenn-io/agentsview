@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Chart, Circle, Layer, Spline } from "layerchart";
+  import { seriesDashArray, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { scalePoint } from "d3-scale";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
@@ -8,7 +9,7 @@
   interface Props {
     buckets: TrendsBucket[];
     series: TrendsSeries[];
-    colorFor: (term: string, index: number) => string;
+    styleFor: (term: string, index: number) => SeriesStyle;
     activeTerm: string | null;
     normalized: boolean;
     onHover: (term: string | null) => void;
@@ -17,7 +18,7 @@
   let {
     buckets,
     series,
-    colorFor,
+    styleFor,
     activeTerm,
     normalized,
     onHover,
@@ -52,7 +53,7 @@
   const chartSeries = $derived(
     series.map((item, seriesIndex) => ({
       ...item,
-      color: colorFor(item.term, seriesIndex),
+      style: styleFor(item.term, seriesIndex),
       points: item.points.map((point, index) => ({
         date: buckets[index]?.date ?? String(index),
         value: pointValue(point.count, index),
@@ -105,8 +106,9 @@
               x="date"
               y="value"
               fill="none"
-              stroke={item.color}
+              stroke={item.style.color}
               strokeWidth={activeTerm === item.term ? 3 : 2}
+              stroke-dasharray={seriesDashArray(item.style.dash, activeTerm === item.term ? 3 : 2)}
               strokeOpacity={activeTerm !== null && activeTerm !== item.term ? 0.24 : 1}
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -130,7 +132,7 @@
                 x="date"
                 y="value"
                 r={3}
-                fill={item.color}
+                fill={item.style.color}
                 pointer-events="none"
               />
             {/if}

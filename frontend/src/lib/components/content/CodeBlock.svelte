@@ -66,6 +66,7 @@
   .code-block {
     position: relative;
     background: var(--code-bg);
+    border: var(--role-code-frame-width) var(--role-code-frame-style) var(--role-code-accent);
     border-radius: var(--radius-md);
     margin: 4px 0;
     overflow: hidden;

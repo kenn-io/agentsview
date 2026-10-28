@@ -164,6 +164,31 @@ describe("SkillTrend", () => {
     await unmount(component);
   });
 
+  it("draws legend and lines in color-blind safe colors when chosen", async () => {
+    settings.chartPalette = "colorblind";
+    const component = mountWithData();
+    await tick();
+
+    const legendColorBySkill = Object.fromEntries(
+      [...document.querySelectorAll<HTMLElement>(".legend-chip")].map((chip) => [
+        chip.querySelector(".legend-name")?.textContent?.trim(),
+        chip.querySelector<HTMLElement>(".legend-key")?.style.background,
+      ]),
+    );
+    // Petroff's six-color sequence, in skill name order.
+    expect(legendColorBySkill).toEqual({
+      commit: "rgb(87, 144, 252)",
+      deploy: "rgb(248, 156, 32)",
+      review: "rgb(228, 37, 54)",
+    });
+    const lineColors = [...document.querySelectorAll<SVGPathElement>(".series-line")].map(
+      (line) => line.style.stroke,
+    );
+    expect(new Set(lineColors)).toEqual(new Set(Object.values(legendColorBySkill)));
+
+    await unmount(component);
+  });
+
   it("keeps a Matplotlib survivor color stable when a series is hidden", async () => {
     settings.chartPalette = "matplotlib";
     const component = mountWithData();
