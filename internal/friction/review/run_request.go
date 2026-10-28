@@ -17,9 +17,11 @@ type RunRequest struct {
 	DryRun  bool
 }
 
-// LatestCompleteDate returns yesterday in the runner's time zone.
+// LatestCompleteDate returns yesterday in the runner's time zone. It steps
+// back one calendar date rather than 24 hours of wall clock, which a
+// skipped midnight would carry two dates back.
 func (r *Runner) LatestCompleteDate() string {
-	return r.now().In(r.loc()).AddDate(0, 0, -1).Format(time.DateOnly)
+	return addDays(localDate(r.now(), r.loc()), -1)
 }
 
 // Run catches up when called with no options, or builds one requested date.

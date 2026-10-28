@@ -31,6 +31,16 @@ func TestRunnerRun(t *testing.T) {
 		r.Loc = nil
 		assert.Equal(t, "2026-09-15", r.LatestCompleteDate())
 	})
+	t.Run("latest_complete_date_after_a_skipped_midnight", func(t *testing.T) {
+		// Chile skipped 2026-09-06 00:00; that day is complete half an hour
+		// into September 7.
+		santiago, err := time.LoadLocation("America/Santiago")
+		require.NoError(t, err)
+		r := newRunner(t)
+		r.Loc = santiago
+		r.Now = func() time.Time { return time.Date(2026, 9, 7, 0, 30, 0, 0, santiago) }
+		assert.Equal(t, "2026-09-06", r.LatestCompleteDate())
+	})
 	invalid := []struct {
 		name string
 		req  RunRequest
