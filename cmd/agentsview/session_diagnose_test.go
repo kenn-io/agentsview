@@ -3,21 +3,28 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	ordinal := 3
-	usage := &sessionUsageOutput{SessionUsage: db.SessionUsage{SessionID: "root", Project: "private-project", HasTokenData: true, SubagentCount: 1,
-		Breakdown: []db.SessionUsageBreakdownEntry{{Source: "message", MessageOrdinal: &ordinal, InputTokens: 40, CacheReadInputTokens: 60, CacheCreationInputTokens: 20, OutputTokens: 10}, {Source: "message", SubagentSessionID: "child", InputTokens: 5, OutputTokens: 2}}}}
+	usage := &sessionUsageOutput{SessionUsage: db.SessionUsage{
+		SessionID: "root", Project: "private-project", HasTokenData: true, SubagentCount: 1,
+		Breakdown: []db.SessionUsageBreakdownEntry{{Source: "message", MessageOrdinal: &ordinal, InputTokens: 40, CacheReadInputTokens: 60, CacheCreationInputTokens: 20, OutputTokens: 10}, {Source: "message", SubagentSessionID: "child", InputTokens: 5, OutputTokens: 2}},
+	}}
 	messages := []db.Message{{Ordinal: 3, Content: "secret prompt", HasContextTokens: true, ContextTokens: 120, Model: "model-a"}, {Ordinal: 7, IsCompactBoundary: true}}
 	calls := []service.ToolCall{{Ordinal: 3, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 20}, {Ordinal: 4, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 900}, {Ordinal: 5, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 50}, {Ordinal: 6, ToolName: "read", ResultLength: 100, SubagentSessionID: "child"}}
 	got := buildSessionDiagnosis("root", usage, messages, calls, true)
@@ -68,9 +75,10 @@ func (s *diagnosisPageService) Messages(_ context.Context, _ string, f service.M
 	}
 	return &service.MessageList{Messages: []db.Message{{Ordinal: 1000}}}, nil
 }
+
 func TestDiagnosisMessagesPagesAndPinsRevision(t *testing.T) {
 	svc := &diagnosisPageService{}
-	messages, complete, err := diagnosisMessages(context.Background(), svc, "session")
+	messages, complete, err := diagnosisMessages(t.Context(), svc, "session")
 	require.NoError(t, err)
 	assert.True(t, complete)
 	require.Len(t, messages, 1001)
@@ -166,4 +174,55 @@ func FuzzDiagnosisLargestResults(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestSessionDiagnoseColdStartDisablesSourceSync(t *testing.T) {
+	testDataDir(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/version":
+			_, _ = w.Write([]byte(`{"api_version":999}`))
+		case "/api/v1/sessions/remote":
+			_, _ = w.Write([]byte(`{"id":"remote","agent":"codex"}`))
+		case "/api/v1/sessions/remote/usage":
+			_, _ = w.Write([]byte(`{"session_id":"remote","agent":"codex","has_token_data":true,"cost":{"microdollars":0},"has_cost":false,"models":[],"breakdown":[],"breakdown_count":0}`))
+		case "/api/v1/sessions/remote/messages":
+			_, _ = w.Write([]byte(`{"messages":[],"count":0}`))
+		case "/api/v1/sessions/remote/tool-calls":
+			_, _ = w.Write([]byte(`{"tool_calls":[],"count":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	u, err := url.Parse(ts.URL)
+	require.NoError(t, err)
+	host, portText, err := net.SplitHostPort(u.Host)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	var noSync []bool
+	stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
+		noSync = append(noSync, cfg.NoSync)
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+	_, err = executeCommand(newRootCommand(), "session", "diagnose", "remote", "--json")
+	require.NoError(t, err)
+	require.NotEmpty(t, noSync)
+	for _, value := range noSync {
+		assert.True(t, value, "every cold-start daemon must not sync sources")
+	}
+}
+
+func TestSessionDiagnoseRejectsSyncBeforeStartingDaemon(t *testing.T) {
+	testDataDir(t)
+	started := false
+	stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
+		started = true
+		return nil, nil
+	})
+	_, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--no-sync=false")
+	require.ErrorContains(t, err, "diagnose only reads archived usage")
+	assert.False(t, started)
 }
