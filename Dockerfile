@@ -56,6 +56,11 @@ RUN /out/agentsview --version
 
 FROM debian:bookworm-slim
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+RUN ssh -V
+
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN mkdir -p /data /agents
 

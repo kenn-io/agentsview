@@ -611,7 +611,8 @@ type Engine struct {
 	scanProtectedPaths  bool
 	homeDir             string
 	goos                string
-	subagentLinkPending bool         // protected by syncMu; retains failed global linking
+	subagentLinkPending bool // protected by syncMu; retains failed global linking
+	syncWaiter          lockctx.Waiter
 	syncMu              gosync.Mutex // serializes all sync operations
 	mu                  gosync.RWMutex
 	lastSync            time.Time
@@ -5015,7 +5016,7 @@ func (e *Engine) RunExclusiveCtx(ctx context.Context, work func() error) error {
 			"RunExclusiveCtx refused on report-only parse-diff engine",
 		)
 	}
-	if err := lockctx.Lock(ctx, &e.syncMu); err != nil {
+	if err := lockctx.LockQueued(ctx, &e.syncMu, &e.syncWaiter); err != nil {
 		return err
 	}
 	defer e.syncMu.Unlock()

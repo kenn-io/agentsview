@@ -2611,11 +2611,11 @@ token = " remote-token "
 	cfg := f.LoadMinimal(t)
 
 	require.Len(t, cfg.RemoteHosts, 2)
-	assert.Equal(t, RemoteHost{Host: "devbox1", URL: "https://devbox1.example.test", Token: "remote-token", Interval: 5 * time.Minute}, cfg.RemoteHosts[0])
+	assert.Equal(t, RemoteHost{Host: "devbox1", URL: "https://devbox1.example.test", Token: "remote-token", SyncTimeout: 10 * time.Minute, Interval: 5 * time.Minute}, cfg.RemoteHosts[0])
 	assert.Equal(t, 5*time.Minute, cfg.RemoteHosts[0].Interval)
 	assert.Equal(t, time.Duration(0), cfg.RemoteHosts[1].Interval)
 	// Remote values are trimmed before validation and sync.
-	assert.Equal(t, RemoteHost{Host: "laptop2", URL: "https://laptop2.example.test", Token: "remote-token"}, cfg.RemoteHosts[1])
+	assert.Equal(t, RemoteHost{Host: "laptop2", URL: "https://laptop2.example.test", Token: "remote-token", SyncTimeout: 10 * time.Minute}, cfg.RemoteHosts[1])
 	require.NoError(t, cfg.ValidateRemoteHosts())
 }
 
@@ -2633,11 +2633,12 @@ interval = "5m"
 
 	require.Len(t, cfg.RemoteHosts, 1)
 	assert.Equal(t, RemoteHost{
-		Host:      "devbox1",
-		Transport: RemoteTransportHTTP,
-		URL:       "http://devbox1.tailnet.ts.net:8080",
-		Token:     "remote-token",
-		Interval:  5 * time.Minute,
+		Host:        "devbox1",
+		Transport:   RemoteTransportHTTP,
+		URL:         "http://devbox1.tailnet.ts.net:8080",
+		Token:       "remote-token",
+		Interval:    5 * time.Minute,
+		SyncTimeout: 10 * time.Minute,
 	}, cfg.RemoteHosts[0])
 }
 
@@ -2662,6 +2663,7 @@ transport = "ssh"
 		Transport:   RemoteTransportSSH,
 		Destination: "user@a.example.test",
 		Interval:    5 * time.Minute,
+		SyncTimeout: 10 * time.Minute,
 	}, cfg.RemoteHosts[0])
 	assert.Equal(t, "user@a.example.test", cfg.RemoteHosts[0].SSHDestination())
 	assert.Equal(t, "laptop2", cfg.RemoteHosts[1].SSHDestination())
