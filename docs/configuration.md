@@ -2137,8 +2137,9 @@ Notes:
 ### macOS Protected Folders
 
 To label a session with its Git remote, worktree, and branch, AgentsView reads
-Git metadata from the session's recorded working directory. On macOS some
-locations are guarded by a privacy consent prompt, and reading inside one makes
+Git metadata from the session's recorded working directory. It also reads
+`SKILL.md` files referenced by recorded tool calls to infer skill names. On macOS,
+some locations are guarded by a privacy consent prompt, and reading inside one makes
 macOS attribute the request to the AgentsView app and ask the user for access.
 Because the first sync walks every session in the archive at once, this produced
 a burst of prompts at first launch for folders the user never pointed AgentsView
@@ -2165,7 +2166,11 @@ they carry no Git remote, worktree relationship, or branch, and their project
 name comes from the path rather than the enclosing Git repository. Sessions
 anywhere else are unaffected.
 
-If you keep code in one of these folders and want the Git detail, opt in:
+Skill files in these locations also keep path-derived names; AgentsView skips
+their frontmatter without reading the file, including through directory
+symlinks.
+
+If you keep code or skills in one of these folders and want their metadata, opt in:
 
 ```toml
 scan_protected_paths = true

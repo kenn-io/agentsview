@@ -140,6 +140,13 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Protected skill paths (2026-10-28):** Reverified against a local Claude
+  transcript containing a `tool_use` block named `Read` with `input.file_path`
+  pointing to a `SKILL.md` in Downloads. Shared local skill inference applies
+  the macOS protected-path policy before reading frontmatter, including
+  through directory symlinks. `TestSkillInferenceSkipsProtectedPaths` covers
+  this with synthetic files, the explicit opt-in, and ordinary unprotected
+  paths. No producer format changed.
 - **Blank thinking usage (2026-10-27):** Reverified against the synthetic
   transcript in [#2469](https://github.com/kenn-io/agentsview/issues/2469),
   kept in `internal/parser/testdata/claude/blank_thinking_usage.jsonl`. An
@@ -2915,37 +2922,38 @@ schemas keep their existing ordering behavior.
   `timestamp`, `cwd`, and optional `parentSession`, then entries with `id`,
   `parentId`, and `timestamp`. `appendMessage` stores
   `message: {role, content}`, with optional assistant `usage`, `model`, and
-  `effort` at the entry root. Blocks include `text`, `thinking`, `tool_use`, and
-  `tool_result`. `latestSessionInfoName` takes the last `session_info` name,
-  falling back to the sidecar title when that name is empty. `model_change`
-  applies to later turns; effort comes only from a turn's inline value because
-  `recordEffortChange` stores effort per model. The sidecar model is not
-  consumed; it describes the latest selection, and `migrateToV3` copies it only
-  to the last assistant turn. `migrateToV3` and `migrationWriteBack` rewrite v2
-  in place, merging a tool turn with the following user turn. Agentsview shows
-  abandoned branches of a rewound conversation in file order.
+  `effort` at the entry root. Blocks include `text`, `thinking`, `tool_use`,
+  and `tool_result`. `latestSessionInfoName` takes the last `session_info`
+  name, falling back to the sidecar title when that name is empty.
+  `model_change` applies to later turns; effort comes only from a turn's
+  inline value because `recordEffortChange` stores effort per model. The
+  sidecar model is not consumed; it describes the latest selection, and
+  `migrateToV3` copies it only to the last assistant turn. `migrateToV3` and
+  `migrationWriteBack` rewrite v2 in place, merging a tool turn with the
+  following user turn. Agentsview shows abandoned branches of a rewound
+  conversation in file order.
 - **Usage and cost:** `toSessionUsage` writes `inputTokens`, `outputTokens`,
-  `cacheReadTokens`, and `cacheWriteTokens`, with optional `cacheWriteTokens1h`
-  and `costUsd`. Finish handlers take input from `totalUsage.inputTokens` and
-  cache counts from `inputTokenDetails`. In
+  `cacheReadTokens`, and `cacheWriteTokens`, with optional
+  `cacheWriteTokens1h` and `costUsd`. Finish handlers take input from
+  `totalUsage.inputTokens` and cache counts from `inputTokenDetails`. In
   [ai 6.0.116](https://registry.npmjs.org/ai/-/ai-6.0.116.tgz),
   `src/types/usage.ts` defines input as the total; in
   [@ai-sdk/anthropic 3.0.77](https://registry.npmjs.org/@ai-sdk/anthropic/-/anthropic-3.0.77.tgz),
   `src/convert-anthropic-messages-usage.ts` adds uncached, cache-read, and
   cache-write input. Agentsview uses
-  `max(inputTokens - cacheReadTokens - cacheWriteTokens, 0)` for uncached input.
-  `estimateCatalogCostUsd` treats `cacheWriteTokens` as the total and clamps the
-  one-hour subset to that total; the remaining writes use the five-minute rate.
-  Agentsview preserves the total and one-hour subset for model pricing.
-  `costUsd` is not consumed. All four fork paths write `parentSessionId` and
-  `forkedAt` in the sidecar. `cloneSessionFile`, `createBranchedSession`, and
-  `forkFromV3` copy earlier turns with their original usage and timestamps under
-  a new header timestamped at fork time. The CLI's `forkSession` copies the old
-  header too, adding `sessionId` to each line; it keeps the parent's header
-  timestamp and does not add a header `parentSession`. Agentsview links through
-  the sidecar parent, falling back to the header parent path. For a fork, it
-  omits usage at or before the later of the header timestamp and sidecar
-  `forkedAt`.
+  `max(inputTokens - cacheReadTokens - cacheWriteTokens, 0)` for uncached
+  input. `estimateCatalogCostUsd` treats `cacheWriteTokens` as the total and
+  clamps the one-hour subset to that total; the remaining writes use the
+  five-minute rate. Agentsview preserves the total and one-hour subset for
+  model pricing. `costUsd` is not consumed. All four fork paths write
+  `parentSessionId` and `forkedAt` in the sidecar. `cloneSessionFile`,
+  `createBranchedSession`, and `forkFromV3` copy earlier turns with their
+  original usage and timestamps under a new header timestamped at fork time.
+  The CLI's `forkSession` copies the old header too, adding `sessionId` to
+  each line; it keeps the parent's header timestamp and does not add a header
+  `parentSession`. Agentsview links through the sidecar parent, falling back
+  to the header parent path. For a fork, it omits usage at or before the later
+  of the header timestamp and sidecar `forkedAt`.
 - **Agentsview:** `internal/parser/commandcode.go` and
   `internal/parser/commandcode_provider.go`.
 

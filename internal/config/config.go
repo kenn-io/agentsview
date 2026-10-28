@@ -1029,8 +1029,8 @@ type Config struct {
 	// paths.
 	SyncIncludeCwdPrefixes []string `json:"-" toml:"sync_include_cwd_prefixes"`
 
-	// ScanProtectedPaths allows local Git discovery to read working
-	// directories inside macOS locations guarded by a TCC consent prompt
+	// ScanProtectedPaths allows local Git and skill metadata discovery to
+	// read paths inside macOS locations guarded by a TCC consent prompt
 	// (Documents, Downloads, Desktop, iCloud Drive, cloud-provider folders
 	// such as Dropbox, and removable or network volumes under /Volumes). It
 	// defaults to false so a first sync never

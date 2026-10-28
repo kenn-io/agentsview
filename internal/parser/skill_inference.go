@@ -404,7 +404,7 @@ func skillNameFromPath(ctx context.Context, path, baseDir string) string {
 	}
 
 	var name string
-	if readable {
+	if readable && defaultProbeMetadataPath(clean) {
 		name = skillNameFromFrontmatter(clean)
 	}
 	if name == "" && !skillPathIsBare(path) {

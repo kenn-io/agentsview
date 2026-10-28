@@ -53,8 +53,8 @@ func statGitEntry(gitPath string) (os.FileInfo, error) {
 	return osStat(gitPath)
 }
 
-// allowProtectedPathProbes lets project extraction probe recorded working
-// directories inside macOS TCC-protected locations. It is package-level
+// allowProtectedPathProbes lets metadata discovery read recorded paths
+// inside macOS TCC-protected locations. It is package-level
 // because parsers extract project names deep inside per-format code with no
 // engine context to consult. The zero value refuses those probes, so a
 // process that never opts in cannot raise a consent prompt from parsing.
@@ -74,8 +74,8 @@ func filesystemProjectDiscoveryDisabled(ctx context.Context) bool {
 	return disabled
 }
 
-// SetAllowProtectedPathProbes sets whether project extraction may probe
-// macOS TCC-protected working directories for git roots. Wired from the
+// SetAllowProtectedPathProbes sets whether metadata discovery may read
+// macOS TCC-protected locations for Git roots and skill names. Wired from the
 // scan_protected_paths config option by the sync engine.
 func SetAllowProtectedPathProbes(allow bool) {
 	allowProtectedPathProbes.Store(allow)
@@ -86,7 +86,7 @@ func SetAllowProtectedPathProbes(allow bool) {
 // home layout.
 var (
 	probeGitRootForCwd = defaultProbeGitRootForCwd
-	probeGitfileTarget = defaultProbeGitfileTarget
+	probeGitfileTarget = defaultProbeMetadataPath
 )
 
 // classifyProbePath classifies cleaned for the local process: real GOOS,
@@ -134,12 +134,11 @@ func automountCwdProbeAllowed(cleaned string) bool {
 	return true
 }
 
-// defaultProbeGitfileTarget reports whether a path taken from gitfile
-// contents — a gitdir, a common directory, or the .git entry itself when it
-// is a symlink — may be read. Unlike the cwd guard, automount namespaces are
-// refused outright: targets never pass isForeignOSPath's resolved-autofs
-// probe, so reading one would wake automountd unvetted.
-func defaultProbeGitfileTarget(cleaned string) bool {
+// defaultProbeMetadataPath reports whether a recorded skill path or Git
+// metadata target may be read. Unlike the cwd guard, automount namespaces
+// are refused outright: these paths never pass isForeignOSPath's
+// resolved-autofs probe, so reading one would wake automountd unvetted.
+func defaultProbeMetadataPath(cleaned string) bool {
 	switch classifyProbePath(cleaned) {
 	case export.LocalPathProbeAutomountNamespace:
 		return false

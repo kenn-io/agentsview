@@ -386,16 +386,16 @@ func TestGitFileTargetsProbeableVetsSubmoduleConfig(t *testing.T) {
 		"a plain submodule gitdir stays probeable")
 }
 
-// TestDefaultProbeGitfileTargetRefusesAutomount pins the asymmetry between
+// TestDefaultProbeMetadataPathRefusesAutomount pins the asymmetry between
 // the two default guards on macOS: a literal automount cwd stays probeable
 // because isForeignOSPath vetted it with the resolved-autofs probe before
 // the guard runs, but a gitfile target under the same namespace was never
 // autofs-vetted and must be refused so reading it cannot wake automountd.
-func TestDefaultProbeGitfileTargetRefusesAutomount(t *testing.T) {
+func TestDefaultProbeMetadataPathRefusesAutomount(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("the default guards only restrict paths on darwin")
 	}
-	assert.False(t, defaultProbeGitfileTarget("/home/user/repo/.git"),
+	assert.False(t, defaultProbeMetadataPath("/home/user/repo/.git"),
 		"an automount gitfile target must be refused")
 }
 
