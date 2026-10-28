@@ -2,6 +2,8 @@ package servicehttp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -46,42 +48,66 @@ func (b *httpBackend) FrictionDigest(
 		}
 		date = page.Digests[0].Date
 	}
+	// Details and Markdown are separate reads; a rebuild between them could
+	// pair new Markdown with old metadata, so they must agree on the hash.
+	for range frictionDigestReadAttempts {
+		view, consistent, err := b.readFrictionDigest(ctx, api, date)
+		if err != nil || consistent {
+			return view, err
+		}
+	}
+	return nil, fmt.Errorf("friction digest %s changed while it was read; try again", date)
+}
+
+// frictionDigestReadAttempts bounds retries when a digest is rebuilt mid-read.
+const frictionDigestReadAttempts = 3
+
+// readFrictionDigest reads a digest's details and Markdown and reports
+// whether the Markdown matches the details' markdown_sha256.
+func (b *httpBackend) readFrictionDigest(
+	ctx context.Context, api *apiclient.Client, date string,
+) (*service.FrictionDigestView, bool, error) {
 	detail, err := api.GetAPIV1FrictionDigestsDateWithResponse(ctx, &apiclient.GetAPIV1FrictionDigestsDateRequestOptions{
 		PathParams: &apiclient.GetAPIV1FrictionDigestsDatePath{Date: url.PathEscape(date)},
 	})
 	if detail == nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := b.frictionError("friction digest", serviceResponseError(detail.HTTPResponse, detail.Body, err)); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var body struct {
-		Date     string         `json:"date"`
-		Timezone string         `json:"timezone"`
-		BuiltAt  time.Time      `json:"built_at"`
-		Revision int            `json:"revision"`
-		Summary  jsontext.Value `json:"summary"`
+		Date           string         `json:"date"`
+		Timezone       string         `json:"timezone"`
+		BuiltAt        time.Time      `json:"built_at"`
+		Revision       int            `json:"revision"`
+		MarkdownSHA256 string         `json:"markdown_sha256"`
+		Summary        jsontext.Value `json:"summary"`
 	}
 	if err := json.Unmarshal(detail.Body, &body); err != nil {
-		return nil, fmt.Errorf("decoding friction digest: %w", err)
+		return nil, false, fmt.Errorf("decoding friction digest: %w", err)
 	}
 	summary, err := friction.CanonicalSummaryJSON(body.Summary)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	md, err := api.GetAPIV1FrictionDigestsDateMdWithResponse(ctx, &apiclient.GetAPIV1FrictionDigestsDateMdRequestOptions{
 		PathParams: &apiclient.GetAPIV1FrictionDigestsDateMdPath{Date: url.PathEscape(date)},
 	})
 	if md == nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := b.frictionError("friction digest markdown", serviceResponseError(md.HTTPResponse, md.Body, err)); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	sum := sha256.Sum256(md.Body)
+	if hex.EncodeToString(sum[:]) != body.MarkdownSHA256 {
+		return nil, false, nil
 	}
 	return &service.FrictionDigestView{
 		Date: body.Date, Timezone: body.Timezone, BuiltAt: body.BuiltAt,
 		Revision: body.Revision, Markdown: string(md.Body), Summary: summary,
-	}, nil
+	}, true, nil
 }
 
 func (b *httpBackend) FrictionDigests(

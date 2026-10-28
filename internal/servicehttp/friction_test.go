@@ -1,6 +1,9 @@
 package servicehttp
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +16,58 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
+func markdownSHA(md string) string {
+	sum := sha256.Sum256([]byte(md))
+	return hex.EncodeToString(sum[:])
+}
+
+// TestHTTPFrictionDigestRereadsAcrossARebuild serves Markdown from revision 2
+// while the first detail read still describes revision 1.
+func TestHTTPFrictionDigestRereadsAcrossARebuild(t *testing.T) {
+	tests := []struct {
+		name          string
+		staleDetails  int
+		wantRevision  int
+		wantErrSubstr string
+	}{
+		{name: "rebuild_between_reads_is_reread", staleDetails: 1, wantRevision: 2},
+		{name: "digest_that_keeps_changing_fails", staleDetails: 10, wantErrSubstr: "changed while it was read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const md2 = "# Friction Log — 2026-09-14\n\nrebuilt\n"
+			details := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/friction/digests/2026-09-14":
+					details++
+					revision, sha := 2, markdownSHA(md2)
+					if details <= tt.staleDetails {
+						revision, sha = 1, markdownSHA("# Friction Log — 2026-09-14\n")
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = fmt.Fprintf(w, `{"date":"2026-09-14","timezone":"UTC","built_at":"2026-09-15T01:00:00Z","revision":%d,"markdown_sha256":%q,"summary":{}}`, revision, sha)
+				case "/api/v1/friction/digests/2026-09-14/md":
+					w.Header().Set("Content-Type", "text/markdown")
+					_, _ = w.Write([]byte(md2))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(ts.Close)
+			fs := NewHTTPBackend(ts.URL, "", false, "").(service.FrictionService)
+			view, err := fs.FrictionDigest(t.Context(), "2026-09-14")
+			if tt.wantErrSubstr != "" {
+				require.ErrorContains(t, err, tt.wantErrSubstr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRevision, view.Revision)
+			assert.Equal(t, md2, view.Markdown)
+		})
+	}
+}
+
 func TestHTTPFrictionService(t *testing.T) {
 	golden, err := os.ReadFile(filepath.Join("..", "friction", "testdata", "golden", "summary.json"))
 	require.NoError(t, err)
@@ -24,7 +79,7 @@ func TestHTTPFrictionService(t *testing.T) {
 		case "/api/v1/friction/digests":
 			_, _ = w.Write([]byte(`{"digests":[{"date":"2026-09-14","timezone":"UTC","rules_version":"friction-v1","built_at":"2026-09-15T01:00:00Z","revision":1,"sessions_scanned":3}]}`))
 		case "/api/v1/friction/digests/2026-09-14":
-			_, _ = w.Write([]byte(`{"date":"2026-09-14","timezone":"UTC","rules_version":"friction-v1","built_at":"2026-09-15T01:00:00Z","revision":1,"sessions_scanned":3,"markdown_sha256":"s","summary":` + string(golden) + `,"signals":[],"p0_alerts":[]}`))
+			_, _ = w.Write([]byte(`{"date":"2026-09-14","timezone":"UTC","rules_version":"friction-v1","built_at":"2026-09-15T01:00:00Z","revision":1,"sessions_scanned":3,"markdown_sha256":"` + markdownSHA("# Friction Log — 2026-09-14\n") + `","summary":` + string(golden) + `,"signals":[],"p0_alerts":[]}`))
 		case "/api/v1/friction/digests/2026-09-14/md":
 			w.Header().Set("Content-Type", "text/markdown")
 			_, _ = w.Write([]byte("# Friction Log — 2026-09-14\n"))

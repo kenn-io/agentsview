@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,11 +35,13 @@ func seedGoldenDigest(t *testing.T, dataDir string) *db.DB {
 	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	snapJSON, err := review.EncodeSnapshot(review.Snapshot{Date: "2026-09-16", Timezone: "UTC", RulesVersion: friction.RulesVersion})
 	require.NoError(t, err)
+	md := readFrictionGolden(t, "friction-log.md")
+	sum := sha256.Sum256(md)
 	require.NoError(t, d.SaveFrictionDigest(t.Context(), db.FrictionDigest{
 		Date: "2026-09-16", Timezone: "UTC", RulesVersion: friction.RulesVersion,
 		BuiltAt: time.Date(2026, 9, 17, 1, 0, 0, 0, time.UTC), Revision: 1, SessionsScanned: 3,
 		SnapshotJSON: snapJSON, SummaryJSON: readFrictionGolden(t, "summary.json"),
-		Markdown: readFrictionGolden(t, "friction-log.md"), MarkdownSHA256: "s", RunID: "r",
+		Markdown: md, MarkdownSHA256: hex.EncodeToString(sum[:]), RunID: "r",
 	}, nil, nil))
 	return d
 }
