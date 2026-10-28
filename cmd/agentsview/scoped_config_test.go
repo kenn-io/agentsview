@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/daemon"
+	"go.kenn.io/kit/stacktest"
 )
 
 // Run the CLI in a child so serve's fatal startup errors and real stderr are
@@ -57,6 +58,9 @@ func runScopedConfigCLI(t *testing.T, env []string, args ...string) (string, str
 	var stdout, stderr bytes.Buffer
 	child.Stdout, child.Stderr = &stdout, &stderr
 	err := child.Run()
+	if ctx.Err() != nil {
+		stacktest.Dump(t)
+	}
 	require.NoError(t, ctx.Err(), "CLI must finish without waiting for a server")
 	return stdout.String(), stderr.String(), err
 }

@@ -431,6 +431,7 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 
 	// Wait for the port to accept connections.
 	if err := waitForPort(port, 2*time.Second); err != nil {
+		stacktest.Dump(t)
 		select {
 		case <-done:
 			require.FailNowf(t, "test failed", "server failed to start: %v", serveErr)

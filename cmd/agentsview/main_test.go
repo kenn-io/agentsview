@@ -37,6 +37,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/kit/stacktest"
 )
 
 type cursorSecretRecorder struct {
@@ -492,6 +493,7 @@ func runRuntimeWarningHelperProcess(
 		return stdoutOutput.Bytes(), nil
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		stacktest.Dump(t)
 		return combined, fmt.Errorf(
 			"%s helper deadline expired before stdout marker %q: %w\noutput:\n%s",
 			helperName, marker, ctx.Err(), combined,
