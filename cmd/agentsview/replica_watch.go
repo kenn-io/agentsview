@@ -357,7 +357,7 @@ func prepareReplicaPushWatch(
 	// live daemon still wins the writer and rejects the request.
 	appCfg.NoDaemonAutostart = cfg.Embed || requireLocal
 	appCfg.RequireDaemon = cfg.NoStartDaemon
-	// A watcher that cannot reach its push loop records the failure, so a
+	// A watcher that exits with an error records it as a failed push, so a
 	// service manager restarting it builds a failure streak instead of
 	// refreshing the watcher's start time on every attempt.
 	writer, closeWriter, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentLongLived)
@@ -377,6 +377,10 @@ func prepareReplicaPushWatch(
 		return nil, nil, err
 	}
 	return func() error {
-		return writer.ReplicaPushWatch(ctx, backend, target, cfg, projects, exclude, debounce, interval)
+		err := writer.ReplicaPushWatch(ctx, backend, target, cfg, projects, exclude, debounce, interval)
+		if err != nil && ctx.Err() == nil {
+			cfg.Health.finish(err)
+		}
+		return err
 	}, func() { closeWriter(); stopLifecycle(); unlock() }, nil
 }

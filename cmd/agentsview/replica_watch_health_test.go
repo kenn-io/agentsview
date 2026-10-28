@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -285,35 +287,71 @@ func TestReplicaPushWatchOwnersRecordHealth(t *testing.T) {
 	}
 }
 
-// TestReplicaWatchRecordsStartupFailures restarts a watcher that cannot open
-// its writer, as a service manager would, and checks that the restarts build
-// a failure streak the stall check reports even right after a restart.
+// TestReplicaWatchRecordsStartupFailures restarts a watcher that exits
+// before its first push, as a service manager would, and checks that the
+// restarts build a failure streak the stall check reports even right after a
+// restart.
 func TestReplicaWatchRecordsStartupFailures(t *testing.T) {
-	dir := testDataDir(t)
-	t.Setenv("AGENTSVIEW_PG_URL", "postgres://user@127.0.0.1:1/archive")
-	cfg, _, err := loadPGServeConfigForTest(t)
-	require.NoError(t, err)
-	cfg.PG.AllowInsecure = true
-	restart := func() replicaWatchRecord {
-		t.Helper()
-		_, _, err := prepareReplicaPushWatch(
-			t.Context(), pgReplica{}, cfg, ReplicaPushConfig{NoStartDaemon: true}, "", false,
-		)
-		require.ErrorIs(t, err, errNoWritableDaemon)
-		rec, err := loadReplicaWatchRecord(replicaWatchHealthPath(dir, "pg"))
-		require.NoError(t, err)
-		return rec
+	tests := []struct {
+		name string
+		// setup prepares dataDir so the watcher fails, and returns the error
+		// it must report.
+		setup func(t *testing.T, dataDir string) string
+	}{
+		{
+			name: "writer does not open",
+			setup: func(*testing.T, string) string {
+				return "opening writer: " + errNoWritableDaemon.Error()
+			},
+		},
+		{
+			name: "watch exits after the writer opens",
+			setup: func(t *testing.T, dataDir string) string {
+				t.Helper()
+				daemon := pushRuntimeServer(t, "/api/v1/push/pg", func(http.ResponseWriter, *http.Request) {
+					assert.Fail(t, "a watcher that failed to start must not push")
+				})
+				host, port := splitTestServerURL(t, daemon.URL)
+				writeDaemonRuntimeForTest(t, dataDir, host, port, version, false)
+				require.NoError(t, os.WriteFile(filepath.Join(dataDir, "sessions.db"), []byte("not a database"), 0o600))
+				return "reading archive mode"
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := testDataDir(t)
+			t.Setenv("AGENTSVIEW_PG_URL", "postgres://user@127.0.0.1:1/archive")
+			cfg, _, err := loadPGServeConfigForTest(t)
+			require.NoError(t, err)
+			cfg.PG.AllowInsecure = true
+			wantErr := tt.setup(t, dir)
+			restart := func() replicaWatchRecord {
+				t.Helper()
+				run, cleanup, err := prepareReplicaPushWatch(
+					t.Context(), pgReplica{}, cfg, ReplicaPushConfig{NoStartDaemon: true}, "", false,
+				)
+				if err == nil {
+					err = run()
+					cleanup()
+				}
+				require.ErrorContains(t, err, wantErr)
+				rec, err := loadReplicaWatchRecord(replicaWatchHealthPath(dir, "pg"))
+				require.NoError(t, err)
+				return rec
+			}
 
-	first := restart()
-	require.False(t, first.FailingSince.IsZero(), "a failed start begins a failure streak")
-	restart()
-	rec := restart()
-	assert.Equal(t, first.FailingSince, rec.FailingSince, "restarts keep the first failure")
-	assert.Equal(t, "opening writer: "+errNoWritableDaemon.Error(), rec.LastError)
-	stall := replicaWatchStall(rec, rec.WatcherStartedAt.Add(11*time.Minute), 10*time.Minute)
-	assert.Contains(t, stall, "pushes have failed since ")
-	assert.Contains(t, stall, errNoWritableDaemon.Error())
+			first := restart()
+			require.False(t, first.FailingSince.IsZero(), "a failed start begins a failure streak")
+			restart()
+			rec := restart()
+			assert.Equal(t, first.FailingSince, rec.FailingSince, "restarts keep the first failure")
+			assert.Contains(t, rec.LastError, wantErr)
+			stall := replicaWatchStall(rec, rec.WatcherStartedAt.Add(11*time.Minute), 10*time.Minute)
+			assert.Contains(t, stall, "pushes have failed since ")
+			assert.Contains(t, stall, wantErr)
+		})
+	}
 }
 
 // statusStubReplica answers the replica status query with status.

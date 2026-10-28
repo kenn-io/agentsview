@@ -387,7 +387,7 @@ agentsview clickhouse status --max-stale 10m
 The command exits non-zero, and names the cause, in any of these cases:
 
 - Every push has failed for longer than the limit, for any reason. A watcher
-  that exits during a push, or that cannot open the archive when it starts,
+  that exits during a push, or that exits with an error before its first push,
   counts as a failed push, so a crash loop or restart loop fails the check
   too.
 - A push started more than the limit ago and has not finished.
