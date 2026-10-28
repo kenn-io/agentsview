@@ -2904,26 +2904,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} sessiya plan istifadəsi kimi hesablanıb, qiymətləndirilməyib",
-        "countPlural=other": "{countLabel} sessiya plan istifadəsi kimi hesablanıb, qiymətləndirilməyib"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} sessiya qismən tutulub; onun token sayları azdır.",
-        "countPlural=other": "{countLabel} sessiya qismən tutulub; onların token sayları azdır."
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud: ilk sinxronizasiya gözlənilir",
   "status_bar_codex_cloud_importing_found": [
     {

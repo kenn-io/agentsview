@@ -2818,24 +2818,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "플랜 사용량으로 청구되어 가격이 매겨지지 않은 세션 {countLabel}개"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "일부만 수집된 세션 {countLabel}개, 토큰 수가 실제보다 적습니다."
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud: 첫 동기화 대기 중",
   "status_bar_codex_cloud_importing_found": [
     {

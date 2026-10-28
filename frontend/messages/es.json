@@ -2926,26 +2926,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} sesión facturada como uso del plan, sin precio",
-        "countPlural=other": "{countLabel} sesiones facturadas como uso del plan, sin precio"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} sesión capturada en parte; sus recuentos de tokens son bajos.",
-        "countPlural=other": "{countLabel} sesiones capturadas en parte; sus recuentos de tokens son bajos."
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud: esperando la primera sincronización",
   "status_bar_codex_cloud_importing_found": [
     {

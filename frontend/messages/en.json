@@ -2902,26 +2902,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} session billed as plan usage, not priced",
-        "countPlural=other": "{countLabel} sessions billed as plan usage, not priced"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} session partly captured; its token counts are low.",
-        "countPlural=other": "{countLabel} sessions partly captured; their token counts are low."
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud: waiting for first sync",
   "status_bar_codex_cloud_importing_found": [
     {

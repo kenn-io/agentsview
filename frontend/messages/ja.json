@@ -2887,24 +2887,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} セッションはプラン使用量として請求され、料金に含まれていません"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} セッションは一部のみ取得されたため、トークン数が少なめです。"
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud: 初回同期を待機中",
   "status_bar_codex_cloud_importing_found": [
     {
