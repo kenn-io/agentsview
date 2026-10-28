@@ -35,7 +35,6 @@ func TestFrictionPublicURLIncludesBasePath(t *testing.T) {
 		{"no_public_url", "", "/agentsview", ""},
 		{"no_base_path", "https://example.com/", "", "https://example.com"},
 		{"adds_base_path", "https://example.com", "/agentsview", "https://example.com/agentsview"},
-		{"base_path_already_present", "https://example.com/agentsview/", "/agentsview", "https://example.com/agentsview"},
 		{"host_matches_base_path", "https://agentsview", "/agentsview", "https://agentsview/agentsview"},
 	}
 	for _, tt := range tests {
