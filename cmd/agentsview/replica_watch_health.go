@@ -175,13 +175,11 @@ func loadReplicaWatchRecord(path string) (replicaWatchRecord, error) {
 // watcher, or one whose pushes wait on a local sync that never finishes,
 // does not.
 func replicaWatchStall(rec replicaWatchRecord, now time.Time, limit time.Duration) string {
-	if !rec.PushStartedAt.IsZero() {
-		if now.Sub(rec.PushStartedAt) > limit {
-			return fmt.Sprintf(
-				"the push that started %s has not finished; it is stuck or the watcher stopped mid-push",
-				agoText(rec.PushStartedAt, now),
-			)
-		}
+	if !rec.PushStartedAt.IsZero() && now.Sub(rec.PushStartedAt) > limit {
+		return fmt.Sprintf(
+			"the push that started %s has not finished; it is stuck or the watcher stopped mid-push",
+			agoText(rec.PushStartedAt, now),
+		)
 	}
 	if !rec.FailingSince.IsZero() && now.Sub(rec.FailingSince) > limit {
 		return fmt.Sprintf(

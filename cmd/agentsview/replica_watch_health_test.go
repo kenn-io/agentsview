@@ -30,8 +30,8 @@ func TestReplicaWatchHealthRecordsPushOutcomes(t *testing.T) {
 		return rec
 	}
 	target := storage.ConfiguredReplica{
-		ReplicaTargetRef: storage.ReplicaTargetRef{Name: "archive"},
-		Target:           storage.ReplicaTarget{URL: "clickhouse://db.example:9000", Schema: "agentsview"},
+		Name:   "archive",
+		Target: storage.ReplicaTarget{URL: "clickhouse://db.example:9000", Schema: "agentsview"},
 	}
 	dest := replicaWatchDestination(target.Target)
 
