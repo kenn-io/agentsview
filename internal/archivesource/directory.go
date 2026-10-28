@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/artifact"
@@ -90,15 +91,19 @@ func openDirectoryIndex(ctx context.Context, source config.ArchiveSource, cache 
 		return nil, err
 	}
 	defer func() { retErr = errors.Join(retErr, os.RemoveAll(scratch)) }()
-	info := docbank.BackupReaderInfo{RepositoryID: "archive:" + archiveID, SnapshotID: "directory"}
+	// The archive owns attachment identity. Catalog changes register new sources
+	// under the same attachment instead of reparsing completed ones.
+	info := docbank.BackupReaderInfo{RepositoryID: "archive:" + archiveID, SnapshotID: "directory:" + archiveID}
 	output := filepath.Join(scratch, "index.db")
-	if err := buildCompactIndex(ctx, uri, output, info, func(ctx context.Context, tenant string, ref rawsync.ObjectRef) error {
-		_, err := objects.StatObject(ctx, tenant, ref)
-		return err
-	}); err != nil {
+	if err := writeCompactIndex(ctx, uri, output, info); err != nil {
 		return nil, err
 	}
-	path, info, err := publishDirectoryIndex(ctx, output, cache, info)
+	path, catalog, err := publishDirectoryIndex(ctx, output, cache, archiveID, func() error {
+		return validateSavedDatabase(ctx, uri, func(ctx context.Context, tenant string, ref rawsync.ObjectRef) error {
+			_, err := objects.StatObject(ctx, tenant, ref)
+			return err
+		})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -106,42 +111,51 @@ func openDirectoryIndex(ctx context.Context, source config.ArchiveSource, cache 
 	if err != nil {
 		return nil, err
 	}
-	index.objects, index.closeSource = objects, closeSource
+	index.objects, index.closeSource, index.catalog = objects, closeSource, catalog
 	return index, nil
 }
 
 // Hash only the compact acceptance catalog, never the multi-GiB transcript DB.
-// Including its identity makes the same directory movable without merging it
-// with a different archive that happens to contain the same provider files.
-func publishDirectoryIndex(ctx context.Context, output, cache string, info docbank.BackupReaderInfo) (string, docbank.BackupReaderInfo, error) {
+// A catalog already published under this hash was validated when it was
+// written, so unchanged passes skip checking every stored object. Older
+// catalogs of the same archive are removed once the new one is in place.
+func publishDirectoryIndex(ctx context.Context, output, cache, archiveID string, validate func() error) (string, string, error) {
 	file, err := os.Open(output)
 	if err != nil {
-		return "", info, err
+		return "", "", err
 	}
 	hash := sha256.New()
 	_, copyErr := io.Copy(hash, ctxio.Reader{Context: ctx, Reader: file})
 	if err := errors.Join(copyErr, file.Close()); err != nil {
-		return "", info, err
+		return "", "", err
 	}
-	info.SnapshotID = "directory:" + hex.EncodeToString(hash.Sum(nil))
-	path := filepath.Join(cache, fmt.Sprintf("directory-%x.db", hash.Sum(nil)))
-	if _, err := os.Stat(path); err == nil {
-		return path, info, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", info, err
+	catalog := hex.EncodeToString(hash.Sum(nil))
+	prefix := fmt.Sprintf("directory-%x-", sha256.Sum256([]byte(archiveID)))
+	path := filepath.Join(cache, prefix+catalog+".db")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := validate(); err != nil {
+			return "", "", err
+		}
+		if err := atomicfile.RenameNoReplace(output, path); err != nil {
+			return "", "", err
+		}
+		if err := atomicfile.SyncDir(cache); err != nil {
+			return "", "", err
+		}
+	} else if err != nil {
+		return "", "", err
 	}
-	index, err := sql.Open("sqlite3", output)
+	entries, err := os.ReadDir(cache)
 	if err != nil {
-		return "", info, err
+		return "", "", err
 	}
-	_, updateErr := index.ExecContext(ctx, `UPDATE metadata SET snapshot_id=?`, info.SnapshotID)
-	if err := errors.Join(updateErr, index.Close()); err != nil {
-		return "", info, err
+	for _, entry := range entries {
+		if name := entry.Name(); strings.HasPrefix(name, prefix) && name != filepath.Base(path) {
+			// Best effort: another process may still hold an old catalog open.
+			_ = os.Remove(filepath.Join(cache, name))
+		}
 	}
-	if err := atomicfile.RenameNoReplace(output, path); err != nil {
-		return "", info, err
-	}
-	return path, info, atomicfile.SyncDir(cache)
+	return path, catalog, nil
 }
 
 // Both restore commands retain the acceptance database beside the raw vault.

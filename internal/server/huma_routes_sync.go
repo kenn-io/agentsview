@@ -421,7 +421,7 @@ func (s *Server) runSyncWithResyncFallback(
 	if err != nil {
 		return stats, err
 	}
-	stats, err = s.finishLocalSync(ctx, engine, stats, progress)
+	stats, err = s.finishLocalSync(ctx, engine, stats, progress, false)
 	if err != nil {
 		return stats, err
 	}
@@ -483,14 +483,15 @@ func (s *Server) runResyncWithFallback(
 	if err != nil {
 		return stats, err
 	}
-	return s.finishLocalSync(ctx, engine, stats, progress)
+	return s.finishLocalSync(ctx, engine, stats, progress, false)
 }
 
 // Manual sync creates attachment state lazily in --no-sync mode. Startup-only
 // requests never reach this path, and the manager starts no automatic scans.
+// Scheduled callers, such as pushes, leave recently failed sources in backoff.
 func (s *Server) finishLocalSync(
 	ctx context.Context, engine *syncpkg.Engine, stats syncpkg.SyncStats,
-	progress func(syncpkg.Progress),
+	progress func(syncpkg.Progress), scheduled bool,
 ) (syncpkg.SyncStats, error) {
 	if err := requireProcessingComplete(stats); err != nil {
 		return stats, err
@@ -521,7 +522,13 @@ func (s *Server) finishLocalSync(
 		manager = s.onDemandArchiveSources
 		s.mu.Unlock()
 	}
-	archiveStats, err := manager.Drain(ctx, progress)
+	var archiveStats syncpkg.SyncStats
+	var err error
+	if scheduled {
+		archiveStats, err = manager.DrainScheduled(ctx)
+	} else {
+		archiveStats, err = manager.Drain(ctx, progress)
+	}
 	stats.Merge(archiveStats)
 	return stats, err
 }
@@ -738,7 +745,7 @@ func (s *Server) runRemoteSyncRequest(
 			}
 		} else if localStats != nil {
 			// The manager takes the engine lock per source, after coordination releases it.
-			*localStats, blocked = s.finishLocalSync(ctx, engine, *localStats, progress)
+			*localStats, blocked = s.finishLocalSync(ctx, engine, *localStats, progress, false)
 		}
 	} else {
 		exclusiveRun := func() (remotesync.SyncStats, error) {

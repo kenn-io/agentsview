@@ -158,7 +158,7 @@ func TestAttachedClaudeDAGCollisionPreservesExistingSessions(t *testing.T) {
 				stats, err := parent.SyncAttachedSource(t.Context(), incoming, "target", func() (EngineConfig, string, func() error, error) {
 					return EngineConfig{
 						AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
-						Machine:   device, IDPrefix: device + "~", Ephemeral: true, ArchiveReparse: true,
+						Machine:   device, IDPrefix: device + "~", Ephemeral: true, ArchiveReparse: true, DiscardPendingWritesOnCancel: true,
 						ArchiveWriteProvenance: func(_ *db.Session, native string) (db.ArchiveSessionProvenance, error) {
 							return db.ArchiveSessionProvenance{ArchiveSourceProvenance: incoming, NativeSessionID: native}, nil
 						},

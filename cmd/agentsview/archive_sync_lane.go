@@ -379,7 +379,7 @@ func (l *archiveSyncLane) archiveRebuilt(ctx context.Context) (bool, error) {
 func (l *archiveSyncLane) syncAll(ctx context.Context) {
 	stats := l.engine.SyncAll(ctx, nil)
 	if stats.ProcessingComplete() && l.archiveSources != nil {
-		archiveStats, err := l.archiveSources.Drain(ctx, nil)
+		archiveStats, err := l.archiveSources.DrainScheduled(ctx)
 		stats.Merge(archiveStats)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("%s: %v", l.label, err)

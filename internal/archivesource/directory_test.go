@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gofrs/flock"
@@ -86,6 +88,14 @@ func testAttachedRestoredDirectory(t *testing.T, layout string) {
 	labels, err = receiver.GetMachineLabels(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "Saved workstation", labels[sourceDevice])
+	cfg.ArchiveSources[0].MachineName = ""
+	manager, err = NewManager(t.Context(), cfg, receiver, engine, nil)
+	require.NoError(t, err)
+	require.NoError(t, drainError(manager, t.Context(), nil))
+	manager.Close()
+	labels, err = receiver.GetMachineLabels(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "retired-desktop", labels[sourceDevice], "omitting machine_name restores the captured name")
 	options, err := RebuildContributors(t.Context(), cfg)
 	require.NoError(t, err)
 	stats, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
@@ -195,4 +205,44 @@ func TestArchiveDrainRemovesAbandonedMaterialization(t *testing.T) {
 	require.NoError(t, drainError(manager, t.Context(), nil))
 	assert.NoDirExists(t, abandoned)
 	assert.FileExists(t, filepath.Join(scratch, "unrelated"))
+}
+
+func TestAttachedDirectoryCatalogChangeKeepsCompletion(t *testing.T) {
+	_, inputs := archiveFixture(t)
+	directory := filepath.Join(inputs, "seed")
+	receiver := dbtest.OpenTestDB(t)
+	cfg := config.Config{DataDir: filepath.Dir(receiver.Path()), ArchiveSources: []config.ArchiveSource{{Name: "history", Directory: directory}}}
+	engine := syncer.NewEngine(t.Context(), receiver, syncer.EngineConfig{Ephemeral: true})
+	defer engine.Close()
+	manager, err := NewManager(t.Context(), cfg, receiver, engine, nil)
+	require.NoError(t, err)
+	require.NoError(t, drainError(manager, t.Context(), nil))
+	manager.Close()
+
+	// A later supplemental capture changes the catalog but no accepted source.
+	saved, err := sql.Open("sqlite3", filepath.Join(directory, "sessions.db"))
+	require.NoError(t, err)
+	_, err = saved.ExecContext(t.Context(), `INSERT INTO raw_archive_files(root_id,path,sha256,size,mod_time_ns)
+		SELECT id,'later.txt',?,1,0 FROM raw_archive_roots LIMIT 1`, fmt.Sprintf("%x", sha256.Sum256([]byte("later"))))
+	require.NoError(t, err)
+	require.NoError(t, saved.Close())
+	copies := 0
+	manager, err = NewManager(t.Context(), cfg, receiver, engine, func(context.Context) error { copies++; return nil })
+	require.NoError(t, err)
+	defer manager.Close()
+	require.NoError(t, drainError(manager, t.Context(), nil))
+	assert.Zero(t, copies, "completed sources stay complete under the same attachment")
+
+	var attachments int
+	require.NoError(t, receiver.Reader().QueryRow(t.Context(), `SELECT count(*) FROM archive_attachments`).Scan(&attachments))
+	assert.Equal(t, 1, attachments)
+	entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "archive-sources"))
+	require.NoError(t, err)
+	var catalogs int
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "directory-") {
+			catalogs++
+		}
+	}
+	assert.Equal(t, 1, catalogs, "the replaced catalog is removed")
 }

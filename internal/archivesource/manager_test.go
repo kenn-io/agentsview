@@ -398,3 +398,41 @@ func TestArchiveDrainDoesNotRepeatRebuiltSources(t *testing.T) {
 	assert.Zero(t, pending)
 	assert.Zero(t, drainCopies.Load(), "the successful rebuild completed every pending source")
 }
+
+func TestScheduledArchiveDrainBacksOffFailedSource(t *testing.T) {
+	source, _ := archiveFixture(t)
+	receiver := dbtest.OpenTestDB(t)
+	// Another route already owns this ID, so the Claude source fails every parse.
+	dbtest.SeedSession(t, receiver, sourceDevice+"~019eb791-cf7d-75c1-8439-9ed74c122e02", "project")
+	cfg := config.Config{DataDir: filepath.Dir(receiver.Path()), ArchiveSources: []config.ArchiveSource{source}}
+	engine := syncer.NewEngine(t.Context(), receiver, syncer.EngineConfig{Ephemeral: true})
+	defer engine.Close()
+	handoffs := 0
+	manager, err := NewManager(t.Context(), cfg, receiver, engine, func(context.Context) error { handoffs++; return nil })
+	require.NoError(t, err)
+	defer manager.Close()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+
+	require.ErrorContains(t, drainError(manager, t.Context(), nil), "sync incomplete")
+	require.Equal(t, 2, handoffs)
+	_, err = manager.DrainScheduled(t.Context())
+	require.ErrorContains(t, err, "sync incomplete")
+	require.Equal(t, 3, handoffs, "a first failure retries on the next pass")
+	_, err = manager.DrainScheduled(t.Context())
+	require.ErrorContains(t, err, "retrying after 2026-01-01T01:00:00Z")
+	require.ErrorContains(t, err, "sync incomplete", "the recorded failure explains the wait")
+	assert.Equal(t, 3, handoffs, "scheduled passes do not copy a repeatedly failing source again")
+
+	now = now.Add(time.Hour)
+	_, err = manager.DrainScheduled(t.Context())
+	require.ErrorContains(t, err, "sync incomplete")
+	assert.Equal(t, 4, handoffs)
+	now = now.Add(time.Hour)
+	_, err = manager.DrainScheduled(t.Context())
+	require.ErrorContains(t, err, "retrying after 2026-01-01T03:00:00Z", "repeated failures double the wait")
+	assert.Equal(t, 4, handoffs)
+
+	require.ErrorContains(t, drainError(manager, t.Context(), nil), "sync incomplete")
+	assert.Equal(t, 5, handoffs, "manual sync retries immediately")
+}

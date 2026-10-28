@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -27,6 +28,10 @@ const indexVersion = 1
 // snapshots or content after opening the repository are errors in that archive.
 var errSourceUnavailable = errors.New("archive source layout unavailable")
 
+// cacheMu keeps one process's bootstraps from removing each other's scratch
+// trees. Backup bootstraps run outside the sync lock, unlike rebuilds.
+var cacheMu sync.Mutex
+
 // Index is disposable source metadata. Session ownership lives in the receiver.
 type Index struct {
 	Info        docbank.BackupReaderInfo
@@ -35,6 +40,8 @@ type Index struct {
 	objects     rawderive.ObjectStore
 	closeSource func() error
 	machineName string
+	// catalog fingerprints a directory's accepted sources; backups are fixed.
+	catalog string
 }
 
 type Source struct {
@@ -62,6 +69,8 @@ func OpenIndex(ctx context.Context, source config.ArchiveSource, cacheDir string
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
 	if source.Directory != "" {
 		return openDirectoryIndex(ctx, source, cacheDir)
 	}

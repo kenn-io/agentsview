@@ -48,7 +48,7 @@ func TestShutdownCancelsOnDemandArchiveSources(t *testing.T) {
 	engine := srv.syncEngineForLocal(t.Context(), database)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := srv.finishLocalSync(ctx, engine, syncpkg.SyncStats{}, nil)
+	_, err := srv.finishLocalSync(ctx, engine, syncpkg.SyncStats{}, nil, false)
 	require.ErrorIs(t, err, context.Canceled)
 	manager := srv.onDemandArchiveSources
 	require.NotNil(t, manager)

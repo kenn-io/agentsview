@@ -102,6 +102,10 @@ func (e *Engine) SyncAttachedSource(ctx context.Context, source db.ArchiveSource
 		if cfg.ArchiveWriteProvenance == nil || cleanup == nil {
 			return errors.New("archive source ownership and cleanup are required")
 		}
+		// Only scoped bulk writes publish ownership with content.
+		if !cfg.DiscardPendingWritesOnCancel {
+			return errors.New("archive source writes require scoped bulk publication")
+		}
 		baseline := e.db
 		if old, ok := e.archiveStore.(*db.DB); ok {
 			baseline = old

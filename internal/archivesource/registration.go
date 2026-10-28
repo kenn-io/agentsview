@@ -11,7 +11,9 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func attachmentTarget(cfg config.Config) (string, error) {
+// The catalog term re-registers a directory whose accepted sources changed.
+// Unchanged sources keep their completion, so registration reparses nothing.
+func attachmentTarget(cfg config.Config, catalog string) (string, error) {
 	claude, err := completionTarget(Source{Root: db.RawArchiveRoot{Provider: "claude"}}, cfg)
 	if err != nil {
 		return "", err
@@ -20,7 +22,7 @@ func attachmentTarget(cfg config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(claude+codex))), nil
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(claude+codex+catalog))), nil
 }
 
 func (i *Index) register(ctx context.Context, database *db.DB, cfg config.Config) error {
@@ -28,7 +30,7 @@ func (i *Index) register(ctx context.Context, database *db.DB, cfg config.Config
 	if err := database.RegisterArchiveAttachment(ctx, key, i.ArchiveID); err != nil {
 		return err
 	}
-	target, err := attachmentTarget(cfg)
+	target, err := attachmentTarget(cfg, i.catalog)
 	if err != nil {
 		return err
 	}
@@ -74,27 +76,53 @@ func (i *Index) source(ctx context.Context, manifestID string) (Source, error) {
 	return s, err
 }
 
+// configureMachineName applies the configured label, or restores each
+// registered machine's captured label when the setting is omitted.
 func (i *Index) configureMachineName(ctx context.Context, database *db.DB) error {
+	labels := make(map[string]string)
 	if i.machineName == "" {
-		return nil
-	}
-	var count int
-	var id string
-	if err := i.database.QueryRowContext(ctx, `SELECT count(DISTINCT device_id),coalesce(min(device_id),'') FROM roots`).Scan(&count, &id); err != nil {
-		return err
-	}
-	if count != 1 {
-		return errors.New("machine_name requires a single-machine archive; omit it to keep the captured names")
-	}
-	return database.Update(ctx, func(tx *sql.Tx) error {
-		var attached bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_source_bindings WHERE archive_id=? AND device_id=?)`, i.ArchiveID, id).Scan(&attached); err != nil {
+		rows, err := i.database.QueryContext(ctx, `SELECT device_id,min(machine) FROM roots GROUP BY device_id`)
+		if err != nil {
 			return err
 		}
-		if !attached {
-			return errors.New("archive machine has not been registered")
+		for rows.Next() {
+			var id, machine string
+			if err := rows.Scan(&id, &machine); err != nil {
+				return errors.Join(err, rows.Close())
+			}
+			labels[id] = machine
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO pg_sync_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, db.MachineLabelKeyPrefix+id, i.machineName)
-		return err
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+	} else {
+		var count int
+		var id string
+		if err := i.database.QueryRowContext(ctx, `SELECT count(DISTINCT device_id),coalesce(min(device_id),'') FROM roots`).Scan(&count, &id); err != nil {
+			return err
+		}
+		if count != 1 {
+			return errors.New("machine_name requires a single-machine archive; omit it to keep the captured names")
+		}
+		labels[id] = i.machineName
+	}
+	return database.Update(ctx, func(tx *sql.Tx) error {
+		for id, label := range labels {
+			var attached bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_source_bindings WHERE archive_id=? AND device_id=?)`, i.ArchiveID, id).Scan(&attached); err != nil {
+				return err
+			}
+			if !attached {
+				if i.machineName == "" {
+					// Supplemental-only machines have no attached sessions to label.
+					continue
+				}
+				return errors.New("archive machine has not been registered")
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO pg_sync_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value!=excluded.value`, db.MachineLabelKeyPrefix+id, label); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

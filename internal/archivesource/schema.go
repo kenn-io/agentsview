@@ -89,7 +89,14 @@ func checkColumns(ctx context.Context, source *sql.DB, table string, required ma
 	return nil
 }
 
-func buildCompactIndex(ctx context.Context, savedURI, output string, info docbank.BackupReaderInfo, checkObject func(context.Context, string, rawsync.ObjectRef) error) (retErr error) {
+func buildCompactIndex(ctx context.Context, savedURI, output string, info docbank.BackupReaderInfo, checkObject func(context.Context, string, rawsync.ObjectRef) error) error {
+	if err := validateSavedDatabase(ctx, savedURI, checkObject); err != nil {
+		return err
+	}
+	return writeCompactIndex(ctx, savedURI, output, info)
+}
+
+func validateSavedDatabase(ctx context.Context, savedURI string, checkObject func(context.Context, string, rawsync.ObjectRef) error) (retErr error) {
 	source, err := sql.Open("sqlite3", savedURI)
 	if err != nil {
 		return err
@@ -99,7 +106,19 @@ func buildCompactIndex(ctx context.Context, savedURI, output string, info docban
 	if err != nil {
 		return err
 	}
-	if err := validateSavedRecords(ctx, source, archiveID, checkObject); err != nil {
+	return validateSavedRecords(ctx, source, archiveID, checkObject)
+}
+
+// writeCompactIndex copies acceptance records without validating them; callers
+// validate the saved database first or reuse a catalog validated earlier.
+func writeCompactIndex(ctx context.Context, savedURI, output string, info docbank.BackupReaderInfo) (retErr error) {
+	source, err := sql.Open("sqlite3", savedURI)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, source.Close()) }()
+	archiveID, err := checkSavedSchema(ctx, source)
+	if err != nil {
 		return err
 	}
 	file, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

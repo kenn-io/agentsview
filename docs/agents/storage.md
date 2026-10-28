@@ -318,7 +318,9 @@ user contract and limits. Archive-only installations cannot attach sources.
 
 The compact index under `archive-sources/` is disposable. It contains accepted
 source metadata, not messages. Rebuild it from the verified saved application
-database. Do not migrate that saved database or adopt its runtime identity.
+database. Do not migrate that saved database or adopt its runtime identity. Key
+a directory attachment by its archive ID, never by catalog bytes; a changed
+catalog re-registers sources under the same attachment and keeps completion.
 
 `archive_attachments` and `archive_attachment_sources` track membership and
 per-source completion targets. `archive_source_bindings` binds original

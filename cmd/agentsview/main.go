@@ -3140,7 +3140,7 @@ func startPeriodicSync(
 			current := sourceConfig()
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
 			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
-			if _, err := attachedSources.Drain(ctx, nil); err != nil && ctx.Err() == nil {
+			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("archive sources: %v", err)
 			}
 			recomputePendingSessions(engine, database)

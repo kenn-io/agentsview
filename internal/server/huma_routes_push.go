@@ -670,7 +670,7 @@ func (s *Server) syncForPush(
 			return forceFull, nil, err
 		}
 		if stats.ProcessingComplete() {
-			_, err = s.finishLocalSync(ctx, engine, stats, nil)
+			_, err = s.finishLocalSync(ctx, engine, stats, nil, true)
 			return forceFull, nil, err
 		}
 		// Local sync owns retries for failed sources. An unscoped push must

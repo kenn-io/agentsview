@@ -2001,8 +2001,9 @@ attachment error also queue a push in watch mode.
 Use the optional `machine_name` to change the display name of a single-machine
 archive. Restart the daemon and sync to apply a name change; no reparse is
 needed. Omit it for an archive containing several machines, which retain their
-individual captured names. The underlying installation IDs come from the
-archive automatically and stay unchanged when you rename or move it.
+individual captured names. Removing it restores the captured name. The
+underlying installation IDs come from the archive automatically and stay
+unchanged when you rename or move it.
 
 Later syncs skip transcripts whose parser and content-policy versions are
 current. The snapshot stays fixed until you change the configuration. A later
@@ -2021,11 +2022,15 @@ staging. Parsed sessions and retained images occupy the receiving installation's
 normal database and assets directory.
 
 Disconnecting the archive leaves already indexed history browsable. Sync reports
-the unavailable source and retries on a later pass. To move the archive, change
-`repository` and restart the daemon. A copied repository with the same
-repository ID and pinned snapshot continues the same history. A different
-repository at that path is refused. For a directory source, update `directory`;
-the archive identity and accepted source records remain independent of its path.
+the unavailable source and retries on a later pass. When a source fails to copy
+or parse, the next scheduled sync tries it again. If that retry also fails,
+scheduled syncs and pushes wait an hour, doubling to a day, and report the
+recorded error meanwhile. A manual `agentsview sync` retries immediately;
+restarting the daemon clears the wait. To move the archive, change `repository`
+and restart the daemon. A copied repository with the same repository ID and
+pinned snapshot continues the same history. A different repository at that path
+is refused. For a directory source, update `directory`; the archive identity and
+accepted source records remain independent of its path.
 
 Parser upgrades reparse available sources. Use `agentsview sync --full` to
 request a full reparse; individual session refresh directs attached history to

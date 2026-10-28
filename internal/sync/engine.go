@@ -3398,12 +3398,6 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	if err := newDB.CopyAttachedArchiveStateFrom(ctx, origPath); err != nil {
-		newDB.Close()
-		removeTempDB(tempPath)
-		restoreSkipCache()
-		return SyncStats{Aborted: true}, err
-	}
 	newDB.SetToolResultImages(e.toolResultImages)
 	newDB.SetAssetsDir(e.db.AssetsDir())
 	if err := newDB.CopyArchiveIdentityFrom(origPath); err != nil {
@@ -3421,6 +3415,12 @@ func (e *Engine) resyncBuildLocked(
 		e.lastSyncStats = stats
 		e.mu.Unlock()
 		return
+	}
+	if err := newDB.CopyAttachedArchiveStateFrom(ctx, origPath); err != nil {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		return SyncStats{Aborted: true}, err
 	}
 
 	// 2b. Copy excluded session IDs from the old DB so that
