@@ -163,7 +163,11 @@ describe("FrictionReviewSummaryPanel", () => {
   });
 
   it.each([
-    { name: "leaves the agent to the server until one is chosen", requestAgent: undefined, want: {} },
+    {
+      name: "leaves the agent to the server until one is chosen",
+      requestAgent: undefined,
+      want: {},
+    },
     { name: "sends the chosen agent", requestAgent: "codex", want: { agent: "codex" } },
   ])("explicitly opts in and $name", async ({ requestAgent, want }) => {
     mocks.requestAgent = requestAgent;
