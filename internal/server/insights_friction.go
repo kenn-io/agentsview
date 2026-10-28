@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
@@ -49,6 +50,20 @@ func (s *Server) validateFrictionReviewRequest(
 // buildFrictionReviewPayload builds the deterministic friction_review input
 // from the stored digest. It only reads friction state. Its signature matches
 // buildCannedPayload so generateCannedInsight can dispatch on kind.
+// withoutRecurrence clears first-seen dates for the cache hash. They come
+// from shared pattern rows that a later backfill of an earlier day can move,
+// so an unchanged digest revision keeps reusing its saved summary.
+func withoutRecurrence(payload insight.CannedAggregatePayload) insight.CannedAggregatePayload {
+	frozen := *payload.Friction
+	frozen.TopPatterns = slices.Clone(frozen.TopPatterns)
+	for i := range frozen.TopPatterns {
+		frozen.TopPatterns[i].FirstSeenDate = ""
+		frozen.TopPatterns[i].Recurring = false
+	}
+	payload.Friction = &frozen
+	return payload
+}
+
 func (s *Server) buildFrictionReviewPayload(
 	ctx context.Context,
 	kind insight.CannedKind,
@@ -136,7 +151,7 @@ func (s *Server) buildFrictionReviewPayload(
 	}
 	payload.EvidenceRefs = insight.CannedFrictionEvidenceRefs(input)
 
-	aggregateHash, err := insight.CannedAggregateHash(payload)
+	aggregateHash, err := insight.CannedAggregateHash(withoutRecurrence(payload))
 	if err != nil {
 		return insight.CannedAggregatePayload{}, "", "", err
 	}

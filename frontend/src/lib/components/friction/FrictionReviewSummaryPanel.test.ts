@@ -122,6 +122,24 @@ describe("FrictionReviewSummaryPanel", () => {
     expect(screen.queryByText("Fresh summary.") !== null).toBe(shown);
   });
 
+  it("retries a failed read as a read, even when generation is unavailable", async () => {
+    mocks.serverVersion = { read_only: true, insight_generation_available: false };
+    mocks.getInsights
+      .mockRejectedValueOnce(new Error("list failed"))
+      .mockResolvedValueOnce({ insights: [saved("2025-01-15", "Saved summary.")] });
+    render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
+    await settle();
+    await settle();
+    const retry = screen.getByRole("button", { name: /retry/i });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(retry);
+    await settle();
+    await settle();
+    expect(mocks.getInsights).toHaveBeenCalledTimes(2);
+    expect(mocks.generateInsight).not.toHaveBeenCalled();
+    expect(screen.getByText("Saved summary.")).toBeTruthy();
+  });
+
   it("retries a failed regeneration as a regeneration", async () => {
     mocks.getInsights.mockResolvedValue({
       insights: [saved("2025-01-15", "Bash failures dominate.")],

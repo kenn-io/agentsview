@@ -21,6 +21,9 @@
   let error: string | null = $state(null);
   // Retry repeats the failed request, including a forced regeneration.
   let lastForceRefresh = $state(false);
+  // A failed read retries the read, not a paid generation.
+  let loadFailed = $state(false);
+  let reloads = $state(0);
 
   let fetchVersion = 0;
   let genVersion = 0;
@@ -51,10 +54,12 @@
   $effect(() => {
     const requestedDate = date;
     const requestedRevision = revision;
+    void reloads;
     const version = ++fetchVersion;
     const signal = listRead.begin();
     abortGeneration();
     error = null;
+    loadFailed = false;
     generating = false;
     loading = true;
 
@@ -71,6 +76,7 @@
         if (isAbortError(cause) || version !== fetchVersion || !listRead.isCurrent(signal)) return;
         summary = null;
         loading = false;
+        loadFailed = true;
         error = cause instanceof Error ? cause.message : m.friction_load_error();
       })
       .finally(() => listRead.finish(signal));
@@ -156,7 +162,11 @@
   {:else if error}
     <div class="state error">
       <span>{error}</span>
-      {@render controls(m.activity_insight_retry(), lastForceRefresh)}
+      {#if loadFailed}
+        <button class="generate-btn" onclick={() => reloads++}>{m.activity_insight_retry()}</button>
+      {:else}
+        {@render controls(m.activity_insight_retry(), lastForceRefresh)}
+      {/if}
     </div>
   {:else if summary}
     <article class="markdown-body">

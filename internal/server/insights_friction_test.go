@@ -246,6 +246,16 @@ func TestGenerateFrictionReviewInsight_SavesAndCaches(t *testing.T) {
 	require.NoError(t, replaceTestSessionFriction(t.Context(), te.db, "fr-1",
 		frictionTestFindings("fr-1", late), "hash-fr-1-late"))
 
+	// Backfilling an earlier day moves a pattern's first-seen date without
+	// changing this digest's revision.
+	require.NoError(t, te.db.SaveFrictionDigest(t.Context(),
+		frictionTestDigest(t, "2025-01-05", frictionReviewSummary, 1, nil), nil,
+		[]db.FrictionPatternUpdate{{
+			Fingerprint: friction.FingerprintTitle(frictionWkTitle), Kind: "workaround",
+			Title: frictionWkTitle, Date: "2025-01-05", SubjectID: "fr-older", Occurrences: 1,
+		}},
+	))
+
 	w = te.post(t, "/api/v1/insights/generate", frictionReviewRequest)
 	assertStatus(t, w, http.StatusOK)
 	cached, events := doneInsight(t, w.Body.String())
