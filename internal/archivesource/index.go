@@ -113,6 +113,22 @@ func prepareCache(directory string) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return err
 	}
+	return withCacheLock(directory, func() error { return removeAbandonedBootstraps(directory) })
+}
+
+// withCacheLock serializes cleanup with scratch creation in every process. A
+// new tree is visible before its owner locks it, so cleanup must not run then.
+// The lock sits beside the cache so the cache holds only indexes and scratch.
+func withCacheLock(cache string, work func() error) error {
+	lock := flock.New(filepath.Clean(cache) + ".lock")
+	if err := lock.Lock(); err != nil {
+		return err
+	}
+	err := work()
+	return errors.Join(err, lock.Close())
+}
+
+func removeAbandonedBootstraps(directory string) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return err
@@ -142,20 +158,34 @@ func prepareCache(directory string) error {
 
 const bootstrapLockFile = ".active"
 
+// Test seam: invoked after a scratch tree exists and before its owner locks it.
+var bootstrapTestHookBeforeLock func(scratch string)
+
 // newBootstrapScratch holds a lock on its tree until release, so cache cleanup
 // in any process removes only trees whose bootstrap ended.
 func newBootstrapScratch(cache string) (string, func() error, error) {
-	scratch, err := os.MkdirTemp(cache, ".bootstrap-")
+	var scratch string
+	var lock *flock.Flock
+	err := withCacheLock(cache, func() error {
+		var err error
+		if scratch, err = os.MkdirTemp(cache, ".bootstrap-"); err != nil {
+			return err
+		}
+		if bootstrapTestHookBeforeLock != nil {
+			bootstrapTestHookBeforeLock(scratch)
+		}
+		lock = flock.New(filepath.Join(scratch, bootstrapLockFile))
+		locked, err := lock.TryLock()
+		if err == nil && !locked {
+			err = errors.New("archive bootstrap scratch is already in use")
+		}
+		if err != nil {
+			return errors.Join(err, lock.Close(), os.RemoveAll(scratch))
+		}
+		return nil
+	})
 	if err != nil {
 		return "", nil, err
-	}
-	lock := flock.New(filepath.Join(scratch, bootstrapLockFile))
-	locked, err := lock.TryLock()
-	if err == nil && !locked {
-		err = errors.New("archive bootstrap scratch is already in use")
-	}
-	if err != nil {
-		return "", nil, errors.Join(err, lock.Close())
 	}
 	// Unlock first: Windows cannot remove a directory holding an open file.
 	return scratch, func() error { return errors.Join(lock.Close(), os.RemoveAll(scratch)) }, nil

@@ -156,3 +156,27 @@ func TestArchiveSourceBootstrapCancellationAndAbandonedFiles(t *testing.T) {
 	_, err = os.Stat(active)
 	assert.ErrorIs(t, err, os.ErrNotExist, "a released tree is abandoned")
 }
+
+func TestBootstrapScratchCreationExcludesCacheCleanup(t *testing.T) {
+	cache := t.TempDir()
+	var cleanupLocked, sawScratch bool
+	bootstrapTestHookBeforeLock = func(scratch string) {
+		// Another process's cleanup arrives while the new tree is still unlocked.
+		_, err := os.Stat(scratch)
+		sawScratch = err == nil
+		other := flock.New(filepath.Clean(cache) + ".lock")
+		locked, err := other.TryLock()
+		require.NoError(t, err)
+		cleanupLocked = locked
+		require.NoError(t, other.Close())
+	}
+	defer func() { bootstrapTestHookBeforeLock = nil }()
+	scratch, release, err := newBootstrapScratch(cache)
+	require.NoError(t, err)
+	require.True(t, sawScratch)
+	assert.False(t, cleanupLocked, "cleanup cannot run before the new tree is locked")
+	require.NoError(t, prepareCache(cache))
+	assert.DirExists(t, scratch, "cleanup keeps a tree its owner locked during creation")
+	require.NoError(t, release())
+	assert.NoDirExists(t, scratch)
+}
