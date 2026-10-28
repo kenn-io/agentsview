@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
+	"go.kenn.io/kit/stacktest"
 )
 
 func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
@@ -51,6 +52,9 @@ func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
 	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	body, err := chromehost.ReadFrame(conn)
+	if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
+		stacktest.Dump(t)
+	}
 	require.NoError(t, err)
 	var request struct {
 		Version int    `json:"version"`

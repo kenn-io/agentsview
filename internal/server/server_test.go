@@ -447,6 +447,9 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 		defer cancel()
 		if err := te.srv.Shutdown(ctx); err != nil &&
 			!errors.Is(err, http.ErrServerClosed) {
+			if errors.Is(err, context.DeadlineExceeded) {
+				stacktest.Dump(t)
+			}
 			assert.Failf(t, "test failed", "server shutdown error: %v", err)
 		}
 		select {
