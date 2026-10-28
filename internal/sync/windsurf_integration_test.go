@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/kit/stacktest"
 )
 
 func TestReconcileWatchRootsWindsurf300MembersUsesOneExactBoundedScan(t *testing.T) {
@@ -239,6 +240,7 @@ func (probe *retainedOverlapProbe) waitAndRelease(t *testing.T) {
 		select {
 		case <-probe.arrived:
 		case <-time.After(30 * time.Second):
+			stacktest.Dump(t)
 			require.FailNow(t, "timed out waiting for concurrent retained members")
 		}
 	}

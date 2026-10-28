@@ -22,6 +22,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 	"golang.org/x/sys/unix"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -170,6 +171,7 @@ func waitExit(t *testing.T, cmd *exec.Cmd) *exec.ExitError {
 		require.True(t, ok, "wait for serve child: %v", err)
 		return exitErr
 	case <-time.After(processHangGuard):
+		stacktest.Dump(t)
 		require.FailNow(t, fmt.Sprintf("serve child did not exit within %s", processHangGuard))
 		return nil
 	}
@@ -219,6 +221,7 @@ func waitForSnapshotDir(t *testing.T, created <-chan struct{}) {
 	select {
 	case <-created:
 	case <-time.After(processHangGuard):
+		stacktest.Dump(t)
 		require.FailNow(t,
 			fmt.Sprintf("no SQLite snapshot directory appeared within %s", processHangGuard))
 	}

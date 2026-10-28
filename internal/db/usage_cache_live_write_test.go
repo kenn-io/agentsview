@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 )
 
 // seedLiveWriteSession inserts one session whose message carries a unique
@@ -156,6 +157,7 @@ func waitUsageNotification(t *testing.T, batches <-chan struct{}) {
 	select {
 	case <-batches:
 	case <-time.After(10 * time.Second):
+		stacktest.Dump(t)
 		require.FailNow(t, "usage notification batch did not finish")
 	}
 }

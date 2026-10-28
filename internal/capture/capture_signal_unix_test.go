@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 )
 
 func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
@@ -199,6 +200,7 @@ func waitForCaptureSignalMarker(t *testing.T, marker string) int {
 		}
 		select {
 		case <-deadline:
+			stacktest.Dump(t)
 			require.FailNow(t, "child did not write signal marker")
 		case <-poll.C:
 		}

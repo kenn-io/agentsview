@@ -25,6 +25,7 @@ import (
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/rawtest"
+	"go.kenn.io/kit/stacktest"
 )
 
 type hostedCaptureClient struct {
@@ -70,6 +71,7 @@ func startParityRuntime(t *testing.T, policy config.ArchiveContent) (*replicaSer
 		case err := <-finished:
 			assert.NoError(t, err)
 		case <-time.After(10 * time.Second):
+			stacktest.Dump(t)
 			t.Error("runtime failed to join")
 		}
 		startup.cleanup()

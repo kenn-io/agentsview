@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 
 	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
@@ -102,6 +103,7 @@ func runAssetCache(t *testing.T, cache *assetCache) context.CancelFunc {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
+			stacktest.Dump(t)
 			require.FailNow(t, "cache sweep loop did not stop after cancellation")
 		}
 	}

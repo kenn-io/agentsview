@@ -458,6 +458,7 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 				)
 			}
 		case <-time.After(5 * time.Second):
+			stacktest.Dump(t)
 			assert.Fail(t, "timed out waiting for server goroutine")
 		}
 	})
