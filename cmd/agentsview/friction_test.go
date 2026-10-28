@@ -164,6 +164,16 @@ func TestFrictionRunLocalWithoutDaemon(t *testing.T) {
 	assert.Empty(t, stdout)
 }
 
+func TestFrictionRunIgnoresUnrelatedInvalidSettings(t *testing.T) {
+	dataDir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	require.NoError(t, dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db")).Close())
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"),
+		[]byte("public_url = \"ftp://example.test\"\n\n[friction]\nenabled = true\n"), 0o600))
+	_, _, err := runInsightCommand(t, "friction", "run", "--date", "2026-09-14", "--dry-run")
+	require.NoError(t, err, "an invalid public_url is not this command's concern")
+}
+
 func TestFrictionRunThroughDaemon(t *testing.T) {
 	dataDir := testDataDir(t)
 	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

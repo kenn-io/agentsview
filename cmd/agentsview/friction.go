@@ -133,7 +133,9 @@ func runFrictionReview(cmd *cobra.Command, req review.RunRequest) ([]frictionRun
 		}
 		return runFrictionReviewHTTP(cmd.Context(), strings.TrimSpace(remote), token, req)
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	// Like other archive commands, load only local settings so an unrelated
+	// section cannot block a run; [friction] is checked before running here.
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -143,6 +145,9 @@ func runFrictionReview(cmd *cobra.Command, req review.RunRequest) ([]frictionRun
 	}
 	if tr.Mode == transportHTTP {
 		return runFrictionReviewHTTP(cmd.Context(), tr.URL, cfg.AuthToken, req)
+	}
+	if err := cfg.Friction.Validate(); err != nil {
+		return nil, err
 	}
 	database, lock, err := openWriteDB(cmd.Context(), cfg)
 	if err != nil {
