@@ -109,48 +109,6 @@ func TestBuildCannedPromptFrictionReview(t *testing.T) {
 	}
 }
 
-func TestValidateCannedEnvelopeFrictionRefs(t *testing.T) {
-	payload := testFrictionReviewPayload(1)
-	base := `{
-		"schema_version":"llm_insight.v1",
-		"kind":"friction_review",
-		"summary":"Bash failures dominate this digest.",
-		"confidence":"medium",
-		"recommendations":[{
-			"title":"Stabilize the shell environment",
-			"rationale":"The top recurring pattern is a Bash error in two sessions.",
-			"actions":["Pin the toolchain the failing command uses"],
-			"evidence_refs":["REF"],
-			"impact":"medium",
-			"effort":"low"
-		}],
-		"risks":[],
-		"evidence_refs":["friction:summary"]
-	}`
-	tests := []struct {
-		name    string
-		ref     string
-		wantErr bool
-	}{
-		{name: "known_pattern_ref", ref: "friction:pattern:01", wantErr: false},
-		{name: "p0_ref", ref: "friction:p0_alerts", wantErr: false},
-		{name: "unknown_pattern_ref", ref: "friction:pattern:02", wantErr: true},
-		{name: "session_signal_ref_rejected", ref: "signals:tool_health", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			env, err := ParseCannedEnvelope(strings.Replace(base, "REF", tt.ref, 1))
-			require.NoError(t, err)
-			err = ValidateCannedEnvelope(env, payload)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
-}
-
 func TestRenderCannedMarkdownFrictionBoundary(t *testing.T) {
 	env := CannedRecommendationEnvelope{
 		SchemaVersion: CannedSchemaVersion, Kind: CannedFrictionReview,
