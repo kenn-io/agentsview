@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/kit/stacktest"
 )
 
 // newTestLoop wires a pushLoop with caller-controlled timers.
@@ -45,6 +46,7 @@ func receivePushLoopValue[T any](t *testing.T, values <-chan T) T {
 	case value := <-values:
 		return value
 	case <-time.After(time.Second):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for push loop value")
 		var zero T
 		return zero

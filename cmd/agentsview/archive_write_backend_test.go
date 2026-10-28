@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/kit/stacktest"
 )
 
 // TestDaemonPushHeartbeat pins the daemon-delegated push's client-side
@@ -996,6 +997,7 @@ func receiveArchiveTest[T any](t *testing.T, ch <-chan T) T {
 	case value := <-ch:
 		return value
 	case <-time.After(time.Second):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for archive watch result")
 		var zero T
 		return zero

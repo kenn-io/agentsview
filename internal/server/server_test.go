@@ -4817,6 +4817,7 @@ func (f *flushRecorder) WaitForWrite(t *testing.T) {
 	select {
 	case <-f.writes:
 	case <-time.After(5 * time.Second):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for response write")
 	}
 }

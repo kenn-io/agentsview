@@ -21,6 +21,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 )
 
 func TestFSEventsFlagMapping(t *testing.T) {
@@ -2769,6 +2770,7 @@ func waitForDarwinBatch(
 				return batch
 			}
 		case <-timer.C:
+			stacktest.Dump(t)
 			require.FailNow(t, "timed out waiting for matching Darwin watcher batch")
 			return WatchBatch{}
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
@@ -138,6 +139,7 @@ func requireChannelClosed(t *testing.T, ch <-chan struct{}, message string) {
 	select {
 	case <-ch:
 	case <-time.After(time.Second):
+		stacktest.Dump(t)
 		require.FailNow(t, message)
 	}
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -1010,6 +1011,7 @@ func requireReceivePollRoots(
 	case roots := <-results:
 		return roots
 	case <-time.After(timeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "poll coordinator ownership did not arrive before timeout")
 		return nil
 	}
@@ -1032,6 +1034,7 @@ func requireReceivePollResult(
 	case err := <-results:
 		return err
 	case <-time.After(timeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "poll coordinator result did not arrive before timeout")
 		return nil
 	}
@@ -1042,6 +1045,7 @@ func requirePollWithin(t *testing.T, ch <-chan struct{}, timeout time.Duration) 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "poll did not run before timeout")
 	}
 }

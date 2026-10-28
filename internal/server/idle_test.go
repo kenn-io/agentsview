@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 )
 
 // idleTrackerFixture bundles an IdleTracker with a buffered channel
@@ -59,6 +60,7 @@ func (f *idleTrackerFixture) requireFiredWithin(
 	case firedAt := <-f.fired:
 		return firedAt
 	case <-time.After(d):
+		stacktest.Dump(t)
 		require.FailNow(t, msg)
 		return time.Time{}
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -165,6 +166,7 @@ func requireWatchEvent(
 			}
 			return ev
 		case <-deadline:
+			stacktest.Dump(t)
 			require.FailNowf(t, "test failed", "did not receive %q event within %s", event, timeout)
 		}
 	}
@@ -184,6 +186,7 @@ func requireChannelClosed[T any](
 				return
 			}
 		case <-deadline:
+			stacktest.Dump(t)
 			require.FailNowf(t, "test failed", "channel not closed within %s", timeout)
 		}
 	}

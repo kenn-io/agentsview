@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 )
 
 const streamTestTimeout = 10 * time.Second
@@ -238,6 +239,7 @@ func waitForPath(t *testing.T, events <-chan Event, path string) Event {
 				return event
 			}
 		case <-timer.C:
+			stacktest.Dump(t)
 			require.FailNow(t, "timed out waiting for FSEvent", "path: %s", path)
 		}
 	}
@@ -256,6 +258,7 @@ func requireReceive[T any](t *testing.T, ch <-chan T) T {
 	case value := <-ch:
 		return value
 	case <-time.After(streamTestTimeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for channel value")
 		var zero T
 		return zero

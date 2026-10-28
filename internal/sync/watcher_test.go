@@ -417,6 +417,7 @@ func receiveWatcherCall(t *testing.T, calls <-chan watcherCall) watcherCall {
 	case call := <-calls:
 		return call
 	case <-time.After(watcherTestTimeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for watcher callback")
 		return watcherCall{}
 	}
@@ -433,6 +434,7 @@ func waitForPath(t *testing.T, calls <-chan []string, path string) {
 				return
 			}
 		case <-deadline.C:
+			stacktest.Dump(t)
 			require.FailNowf(t, "test failed", "timed out waiting for watcher path %q", path)
 		}
 	}
@@ -462,6 +464,7 @@ func receiveWatchBatch(t *testing.T, calls <-chan WatchBatch) WatchBatch {
 	case batch := <-calls:
 		return batch
 	case <-time.After(watcherTestTimeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for watcher callback")
 		return WatchBatch{}
 	}

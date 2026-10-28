@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/poller"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/kit/stacktest"
 )
 
 // Resync may spend up to five seconds draining SQLite connections before a
@@ -175,6 +176,7 @@ func awaitPricingResult(t *testing.T, result <-chan error) {
 	case err := <-result:
 		require.NoError(t, err)
 	case <-time.After(pricingResyncTestTimeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "pricing operation did not finish")
 	}
 }
