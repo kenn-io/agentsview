@@ -1762,6 +1762,7 @@ agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
+agentsview session diagnose <id> --json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
 agentsview session label <id> k=v ...    # add or remove labels

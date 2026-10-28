@@ -920,6 +920,29 @@ origin — `reveal=true` is only honored on a localhost-bound daemon.
 
 ______________________________________________________________________
 
+### `agentsview session diagnose`
+
+`agentsview session diagnose <id> --json` reports archived usage and evidence
+for investigating an expensive task. It uses the same pricing and linked
+subagent accounting as `session usage`, without refreshing source files. Pass
+`--own-only` to exclude subagent usage. Human output is the default; `--pg`
+and `--server` select the same read transports as other session commands.
+
+The versioned JSON includes the usage breakdown, totals of its normalized
+uncached input, cache-read, cache-write and output rows, context observations,
+compaction ordinals, the ten largest recorded tool-result lengths, and runs of
+three or more consecutive calls with identical recorded arguments. Tool and
+context evidence covers the named session only; child links are shown when
+recorded. Missing arguments do not count as identical. These observations can
+be incomplete: usage rows are not always
+requests, request counts and provider cache-miss reasons are unavailable, and
+result lengths are not billed tokens. Cost is reported or estimated according
+to the existing usage contract; no causal savings or invoice total is inferred.
+The report omits transcript content and tool arguments. Message evidence is
+limited to 10,000 rows and reports whether that limit was reached. Usage,
+messages and tool calls are separate reads and can reflect different archive
+revisions if ingestion runs concurrently.
+
 ### `agentsview session usage`
 
 Per-session token usage and cost estimate. Output shape is stable for the fields
