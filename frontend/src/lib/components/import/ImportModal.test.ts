@@ -11,6 +11,7 @@ import { m } from "../../i18n/index.js";
 import { setLocale } from "../../paraglide/runtime.js";
 import { ApiError } from "../../api/runtime.js";
 import { sync as syncState } from "../../stores/sync.svelte.js";
+import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
 
 const host = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
 const getBrowserHost = vi.hoisted(() => vi.fn());
@@ -50,6 +51,8 @@ beforeEach(() => {
   void setLocale("en", { reload: false });
 });
 afterEach(() => {
+  claudeAISync.stop();
+  claudeAISync.dismiss();
   vi.useRealTimers();
   vi.resetAllMocks();
   vi.restoreAllMocks();
@@ -93,38 +96,93 @@ it("shows setup instructions when disconnected", async () => {
   expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
 });
 
-it.each(["stop", "cancel"])(
-  "shows progress and refreshes completed chats after %s",
-  async (exit) => {
-    let reject!: (error: Error) => void;
-    let signal!: AbortSignal;
-    let progress!: (value: typeof stats) => void;
-    syncClaudeAI.mockImplementation((_host, callbacks, runSignal) => {
-      signal = runSignal;
-      progress = callbacks.onProgress;
-      return new Promise((_, r) => {
-        reject = r;
-      });
+function pendingSync() {
+  const run = {} as {
+    signal: AbortSignal;
+    progress: (value: typeof stats) => void;
+    resolve: (value: typeof stats) => void;
+    reject: (error: Error) => void;
+  };
+  syncClaudeAI.mockImplementation((_host, callbacks, signal) => {
+    run.signal = signal;
+    run.progress = callbacks.onProgress;
+    return new Promise((resolve, reject) => {
+      run.resolve = resolve;
+      run.reject = reject;
     });
+  });
+  return run;
+}
+
+it("cancels Sync with Stop and refreshes completed chats", async () => {
+  const run = pendingSync();
+  const p = props();
+  render(ImportModal, p);
+  await clickSync();
+  expect(screen.getByText("Syncing...")).toBeTruthy();
+  expect(screen.getByText(m.import_claude_sync_background())).toBeTruthy();
+  expect(screen.queryByText(m.import_drop_here())).toBeNull();
+  run.progress({ imported: 128, updated: 0, skipped: 0, errors: 0 });
+  await tick();
+  expect(screen.getByText("128 conversations processed...")).toBeTruthy();
+  await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  expect(run.signal.aborted).toBe(true);
+  expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  expect(screen.queryByText("128 conversations processed...")).toBeNull();
+  expect(syncButton().disabled).toBe(false);
+  run.reject(new Error("Stopped"));
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+  expect(p.onclose).not.toHaveBeenCalled();
+  expect(screen.queryByText("Stopped")).toBeNull();
+});
+
+it.each(["close button", "dialog X", "overlay", "escape"])(
+  "keeps Sync running after closing with %s and shows its progress on reopen",
+  async (exit) => {
+    const run = pendingSync();
     const p = props();
-    render(ImportModal, p);
+    const view = render(ImportModal, p);
     await clickSync();
-    expect(screen.getByText("Syncing...")).toBeTruthy();
-    expect(screen.queryByText(m.import_drop_here())).toBeNull();
-    progress({ imported: 128, updated: 0, skipped: 0, errors: 0 });
+    run.progress({ imported: 128, updated: 0, skipped: 0, errors: 0 });
     await tick();
-    expect(screen.getByText("128 conversations processed...")).toBeTruthy();
-    await fireEvent.click(
-      screen.getByRole("button", { name: exit === "stop" ? "Stop" : "Cancel" }),
-    );
-    expect(signal.aborted).toBe(true);
-    expect(p.onclose.mock.calls.length).toBe(exit === "stop" ? 0 : 1);
-    reject(new Error("Stopped"));
-    await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-    if (exit === "stop") expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(screen.queryByText("Stopped")).toBeNull();
+    if (exit === "overlay") {
+      const overlay = screen.getByRole("dialog").parentElement!;
+      await fireEvent.pointerDown(overlay);
+      await fireEvent.pointerUp(overlay);
+      await fireEvent.click(overlay);
+    } else if (exit === "escape") {
+      await fireEvent.keyDown(window, { key: "Escape" });
+    } else {
+      const name = exit === "close button" ? "Close" : m.import_close();
+      await fireEvent.click(screen.getByRole("button", { name }));
+    }
+    expect(p.onclose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(run.signal.aborted).toBe(false);
+    run.progress({ imported: 200, updated: 0, skipped: 0, errors: 0 });
+    await view.rerender({ ...p, open: true });
+    expect(screen.getByText("200 conversations processed...")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    run.resolve(stats);
+    await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+    expect(p.onimported).toHaveBeenCalledOnce();
   },
 );
+
+it("shows a result or failure that arrived while the dialog was closed, until the next close", async () => {
+  const run = pendingSync();
+  const p = props();
+  const view = render(ImportModal, p);
+  await clickSync();
+  await view.rerender({ ...p, open: false });
+  run.reject(new Error("Network interrupted"));
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+  await view.rerender({ ...p, open: true });
+  expect(screen.getByRole("alert").textContent).toContain("Network interrupted");
+  await view.rerender({ ...p, open: false });
+  await view.rerender({ ...p, open: true });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
 
 it("reuses results and returns to Ready with Import more", async () => {
   const p = props();
@@ -136,6 +194,65 @@ it("reuses results and returns to Ready with Import more", async () => {
   await fireEvent.click(screen.getByRole("button", { name: "Import more" }));
   expect(screen.getByText("Connected")).toBeTruthy();
   expect(syncButton().disabled).toBe(false);
+});
+
+it("queues a new Sync behind a stopped run and ignores the old run's progress and cleanup", async () => {
+  let rejectOld!: (error: Error) => void;
+  let rejectQueued!: (error: Error) => void;
+  let resolveRetry!: (result: typeof stats) => void;
+  let queuedSignal!: AbortSignal;
+  const progress: ((value: typeof stats) => void)[] = [];
+  // The client starts a new run only after the stopped run settles, so the
+  // queued call stays pending while the old run finishes.
+  syncClaudeAI
+    .mockImplementationOnce((_host, callbacks) => {
+      progress.push(callbacks.onProgress);
+      return new Promise((_, reject) => {
+        rejectOld = reject;
+      });
+    })
+    .mockImplementationOnce((_host, _callbacks, signal) => {
+      queuedSignal = signal;
+      return new Promise((_, reject) => {
+        rejectQueued = reject;
+      });
+    })
+    .mockImplementationOnce((_host, callbacks) => {
+      progress.push(callbacks.onProgress);
+      return new Promise<typeof stats>((resolve) => {
+        resolveRetry = resolve;
+      });
+    });
+  const p = props();
+  render(ImportModal, p);
+  await clickSync();
+  await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await clickSync();
+  expect(syncClaudeAI).toHaveBeenCalledTimes(2);
+  progress[0]!({ imported: 128, updated: 0, skipped: 0, errors: 0 });
+  rejectOld(new Error("Stopped old run"));
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+  expect(screen.queryByText("128 conversations processed...")).toBeNull();
+  expect(screen.getByText("Syncing...")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  expect(queuedSignal.aborted).toBe(false);
+  rejectQueued(new ApiError(409, "Server conflict text", "claude_ai_sync_running"));
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
+  );
+  expect(p.onimported).toHaveBeenCalledOnce();
+  expect(screen.queryByText("Server conflict text")).toBeNull();
+  expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ code: "claude_ai_sync_running" }),
+  );
+  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(syncClaudeAI).toHaveBeenCalledTimes(3);
+  progress[1]!({ imported: 7, updated: 0, skipped: 0, errors: 0 });
+  await tick();
+  expect(screen.getByText("7 conversations processed...")).toBeTruthy();
+  resolveRetry(stats);
+  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+  expect(p.onimported).toHaveBeenCalledTimes(2);
 });
 
 it("offers browser sign-in after auth failure", async () => {
@@ -190,22 +307,6 @@ it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])(
   },
 );
 
-it("shows and reports an overlapping Chrome Sync refusal", async () => {
-  syncClaudeAI.mockRejectedValueOnce(
-    new ApiError(409, "Server conflict text", "claude_ai_sync_running"),
-  );
-  render(ImportModal, props());
-  await clickSync();
-  await waitFor(() =>
-    expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
-  );
-  expect(screen.queryByText("Server conflict text")).toBeNull();
-  expect(reportSyncFailed).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ code: "claude_ai_sync_running" }),
-  );
-  expect(syncButton().disabled).toBe(false);
-});
-
 it("clears a Sync conflict after closing while status hangs", async () => {
   syncClaudeAI.mockRejectedValueOnce(
     new ApiError(409, "Server conflict text", "claude_ai_sync_running"),
@@ -220,12 +321,14 @@ it("clears a Sync conflict after closing while status hangs", async () => {
     }),
   );
   await fireEvent.click(syncButton());
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."),
+  );
   await waitFor(() => expect(chromeStatus).toHaveBeenCalledTimes(2));
   await view.rerender({ ...p, open: false });
   await view.rerender({ ...p, open: true });
-  resolve(ready);
-  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
-  await tick();
+  resolve({ connected: false });
+  await waitFor(() => expect(screen.getByText("Not connected")).toBeTruthy());
   expect(screen.queryByText("Chrome Sync is already running.")).toBeNull();
 });
 

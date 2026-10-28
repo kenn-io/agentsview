@@ -22,6 +22,19 @@ The latest release is
   expensive requests first on request. It reads the archive as stored and does
   not refresh source files first.
 
+- You can now set the color of each message type in Settings > Appearance:
+  user messages, assistant text, thinking blocks, tool calls, and code blocks.
+  A color-blind safe preset and optional line patterns make the types easy to
+  tell apart without relying on hue. The setting warns when a chosen color
+  would make text hard to read in light, dark, or high-contrast mode.
+
+- Charts can use color-blind safe colors. Choose **Color-blind safe** under
+  **Settings > Appearance > Chart colors**, or set `chart_palette =
+  "colorblind"`. The skill trend, Trends, and Usage charts then use Petroff's
+  color sequences, which stay distinguishable with common forms of color
+  blindness. Past the tenth series, colors repeat with a pattern: hatched
+  Usage bars, areas, and treemap tiles, and dashed Trends lines.
+
 - PostgreSQL and ClickHouse push services can use a separately managed
   collector with `service install --no-start-daemon`, avoiding competing daemons
   and archive write locks during restarts. The push service exits if no writable
@@ -61,6 +74,8 @@ The latest release is
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on
   upgrade to recover it.
+- Links with bare session UUIDs from Pi, OMP, Codex and other tools now open
+  matching sessions. Ambiguous IDs still require the full session ID.
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**
   button now runs that rebuild on every server, and the status bar shows when a
   sync fails instead of staying silent. A rebuild that does not finish is

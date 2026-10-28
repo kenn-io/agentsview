@@ -96,6 +96,7 @@
   "header_actions_import_archive_only": "アーカイブ専用モードではインポートできません",
   "header_actions_import_conversations": "会話をインポートする",
   "header_actions_import": "インポート",
+  "header_actions_import_claude_syncing": "Claude.ai の同期を実行中です。インポートを開くと、進行状況の確認や停止ができます。",
   "header_actions_toggle_theme": "テーマの切り替え",
   "header_actions_settings": "設定",
   "header_actions_keyboard_shortcuts": "キーボードショートカット",
@@ -864,7 +865,7 @@
   "settings_search_empty": "一致する設定がありません",
   "settings_search_clear": "検索をクリア",
   "settings_search_result": "{category}を表示中",
-  "settings_search_keywords_appearance": "テーマのコントラスト レイアウト テキスト フォント ブロック ズーム zoom",
+  "settings_search_keywords_appearance": "テーマのコントラスト レイアウト テキスト フォント ブロック ズーム zoom 色 色覚 color",
   "settings_search_keywords_language": "言語ロケールの翻訳",
   "settings_search_keywords_date_ranges": "リンクされたページの日付範囲",
   "settings_search_keywords_terminal": "ターミナル再開バイナリ引数クリップボードの起動",
@@ -2038,6 +2039,7 @@
   "appearance_chart_palette": "グラフの色",
   "appearance_chart_palette_agentsview": "エージェントビュー",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "色覚サポート",
   "appearance_message_layout": "メッセージのレイアウト",
   "appearance_block_visibility": "ブロックの表示",
   "settings_github_token_saved": "GitHub トークンが保存されました。",
@@ -2598,6 +2600,7 @@
   "import_claude_reload_extension": "次に {url} で拡張機能を再読み込みしてください。",
   "import_claude_update_app": "AgentsView をアップグレードした場合は再起動してください。",
   "import_claude_syncing": "同期中...",
+  "import_claude_sync_background": "このダイアログを閉じても同期は続きます。",
   "import_claude_sync_failed": "同期に失敗しました",
   "import_claude_sign_in_failed": "ログインに失敗しました",
   "import_claude_desktop_note": "ログインにはメールで届くコードを使います。Google アカウントの場合は Chrome のウェブ UI から同期してください。",
@@ -2884,24 +2887,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} セッションはプラン使用量として請求され、料金に含まれていません"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} セッションは一部のみ取得されたため、トークン数が少なめです。"
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud: 初回同期を待機中",
   "status_bar_codex_cloud_importing_found": [
     {
@@ -2929,5 +2914,33 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud: ライブトークンの確認が必要です",
   "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
   "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
-  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
+  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}",
+  "appearance_message_colors": "メッセージの色",
+  "appearance_message_colors_description": "メッセージの種類ごとに色を設定します。色覚サポートのプリセットは、一般的な色覚特性でも区別しやすい色合いを使い、線のパターンも加えるため、種類を色だけでなく形でも見分けられます。",
+  "appearance_message_colors_preset": "メッセージの色のプリセット",
+  "appearance_message_colors_preset_default": "テーマの既定",
+  "appearance_message_colors_preset_colorblind": "色覚サポート",
+  "appearance_message_colors_preset_custom": "カスタム",
+  "appearance_message_colors_patterns": "色に加えて線のパターンでメッセージの種類を示す",
+  "appearance_message_colors_reset_all": "既定に戻す",
+  "appearance_message_colors_reset_role": "リセット",
+  "appearance_message_colors_reset_role_label": "{role}の色をリセット",
+  "appearance_message_colors_role_label": "{role}の色",
+  "appearance_message_colors_picker": "カラーピッカーを開く",
+  "appearance_message_colors_hex": "16 進カラー",
+  "appearance_message_colors_warning_text": "{modes}では文字が読みにくい可能性があります（{ratio}:1、必要 {required}:1）。",
+  "appearance_message_colors_warning_marker": "{modes}では色のマーカーが見えにくい可能性があります（{ratio}:1、必要 {required}:1）。",
+  "appearance_message_colors_mode_light": "ライトモード",
+  "appearance_message_colors_mode_dark": "ダークモード",
+  "appearance_message_colors_mode_high_contrast_light": "ハイコントラストのライトモード",
+  "appearance_message_colors_mode_high_contrast_dark": "ハイコントラストのダークモード",
+  "appearance_message_colors_swatch_blue": "青",
+  "appearance_message_colors_swatch_vermillion": "朱色",
+  "appearance_message_colors_swatch_bluish_green": "青緑",
+  "appearance_message_colors_swatch_reddish_purple": "赤紫",
+  "appearance_message_colors_swatch_dark_yellow": "暗い黄色",
+  "appearance_message_colors_swatch_gray": "グレー",
+  "appearance_message_colors_preview": "プレビュー",
+  "appearance_message_colors_preview_user": "日付のテストはなぜ失敗するのですか？",
+  "appearance_message_colors_preview_assistant": "フィクスチャが UTC を前提にしていたので更新しました。"
 }

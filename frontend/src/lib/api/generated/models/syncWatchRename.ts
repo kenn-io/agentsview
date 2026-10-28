@@ -4,7 +4,10 @@
 
 export interface SyncWatchRename {
   agent?: string;
-  /** @minimum 0 */
+  /**
+   * @minimum 0
+   * @maximum 255
+   */
   item_type?: number;
   path: string;
   root?: string;

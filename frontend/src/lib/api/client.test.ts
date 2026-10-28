@@ -10,7 +10,7 @@ import {
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
-import { ApiError } from "./runtime.js";
+import { ApiError, setAuthToken, setServerUrl } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
 import * as telemetry from "../utils/telemetry.js";
 import type { BrowserHost } from "./browserHost.js";
@@ -277,6 +277,94 @@ describe("syncClaudeAI browser relay", () => {
     await expect(syncClaudeAI(host)).rejects.toThrow(expected);
     expect(host.fetch).toHaveBeenCalledWith("/api/organizations/org/chat_conversations_v2");
     expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it("makes a retry wait for a stopped run's browser close", async () => {
+    const events: string[] = [];
+    const closes: (() => void)[] = [];
+    const host = {
+      close: vi.fn(() => {
+        events.push("close");
+        return new Promise<void>((resolve) => closes.push(resolve));
+      }),
+    } as unknown as BrowserHost;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, options: RequestInit) => {
+        if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        events.push("sync");
+        return new Response(
+          'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
+          {
+            headers: { "Content-Type": "text/event-stream" },
+          },
+        );
+      }),
+    );
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    await syncClaudeAI(host);
+    const stopped = new AbortController();
+    const canceled = syncClaudeAI(host, undefined, stopped.signal);
+    stopped.abort();
+    const retry = syncClaudeAI(host);
+    closes[0]!();
+    await expect(canceled).rejects.toThrow();
+    await settle();
+    expect(events).toEqual(["sync", "close", "close"]);
+    closes[1]!();
+    await expect(retry).resolves.toMatchObject({ imported: 0 });
+    expect(events).toEqual(["sync", "close", "close", "sync", "close"]);
+    closes[2]!();
+  });
+
+  it("relays a late browser response to the server Sync started on", async () => {
+    localStorage.setItem("agentsview-auth-token", "local-token");
+    let respond!: (value: { status: number; body: string }) => void;
+    const host = {
+      close: vi.fn().mockResolvedValue(undefined),
+      fetch: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            respond = resolve;
+          }),
+      ),
+    } as unknown as BrowserHost;
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const fetch = vi.fn(async (url: string, _options: RequestInit) => {
+      if (url === "/api/v1/import/claude-ai/sync") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller;
+              stream.enqueue(
+                encoder.encode('event: fetch\ndata: {"id":"late","path":"/chat"}\n\n'),
+              );
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      stream.enqueue(
+        encoder.encode('event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n'),
+      );
+      stream.close();
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const run = syncClaudeAI(host);
+      await vi.waitFor(() => expect(host.fetch).toHaveBeenCalledWith("/chat"));
+      setServerUrl("https://remote.example");
+      setAuthToken("remote-token");
+      respond({ status: 200, body: "chat contents" });
+      await expect(run).resolves.toMatchObject({ imported: 1 });
+      const [url, options] = fetch.mock.calls[1]!;
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/late");
+      expect(new Headers(options.headers).get("Authorization")).toBe("Bearer local-token");
+    } finally {
+      localStorage.clear();
+    }
   });
 
   it("ends the stream when posting a result fails", async () => {

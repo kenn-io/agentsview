@@ -233,6 +233,13 @@ export class RouterStore {
     window.history.pushState(null, "", url);
   }
 
+  replaceSession(id: string) {
+    const url = this.#buildUrl(sessionPath(id), this.params);
+    this.sessionId = id;
+    this.isRootPath = false;
+    window.history.replaceState(null, "", url);
+  }
+
   navigateFromSession(params: Record<string, string> = {}) {
     const url = this.#buildUrl("/sessions", params);
     this.#updateSticky(params);

@@ -3634,6 +3634,12 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
 	require.NoError(t, err)
 	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
+
+	w = putSettings(`{"chart_palette":"colorblind"}`)
+	assertStatus(t, w, http.StatusOK)
+	_, err = toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, config.ChartPaletteColorblind, persisted.ChartPalette)
 }
 
 func TestReadOnlySettingsAcceptDisplayPreferences(t *testing.T) {

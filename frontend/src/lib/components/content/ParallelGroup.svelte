@@ -49,7 +49,8 @@
 
 <style>
   .parallel-group {
-    border-left: 2px solid var(--cat-mixed);
+    /* The members drop their own bars, so the rail carries the tool marker. */
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
     background: color-mix(in srgb, var(--text-primary) 3%, transparent);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     margin: 6px 0;

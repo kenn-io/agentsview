@@ -1,8 +1,28 @@
 import { describe, expect, it } from "vite-plus/test";
-import { chartSeriesColorMap, DEFAULT_CHART_PALETTE, isChartPalette } from "./chartPalette.js";
+import {
+  chartSeriesColorMap,
+  DEFAULT_CHART_PALETTE,
+  isChartPalette,
+  orderedChartSeriesColorMap,
+} from "./chartPalette.js";
 
 const ids = (count: number) =>
   Array.from({ length: count }, (_, i) => `series-${String(i).padStart(2, "0")}`);
+
+// Petroff's published color-blind safe sequences, as matplotlib ships them.
+const PETROFF6 = ["#5790fc", "#f89c20", "#e42536", "#964a8b", "#9c9ca1", "#7a21dd"];
+const PETROFF10 = [
+  "#3f90da",
+  "#ffa90e",
+  "#bd1f01",
+  "#94a4a2",
+  "#832db6",
+  "#a96b59",
+  "#e76300",
+  "#b9ac70",
+  "#717581",
+  "#92dadd",
+];
 
 const EXPECTED_TAB20 = [
   "#1f77b4",
@@ -123,14 +143,14 @@ describe("chartSeriesColorMap", () => {
   });
 
   it("preserves the supplied agentsview colors", () => {
-    const colors = chartSeriesColorMap(
-      ["beta", "alpha"],
-      DEFAULT_CHART_PALETTE,
-      (_id, index) => ["legacy-a", "legacy-b"][index]!,
-    );
+    const colors = chartSeriesColorMap(["beta", "alpha"], DEFAULT_CHART_PALETTE, [
+      "legacy-a",
+      "legacy-b",
+    ]);
     expect([...colors.values()]).toEqual(["legacy-a", "legacy-b"]);
     expect(isChartPalette("agentsview")).toBe(true);
     expect(isChartPalette("matplotlib")).toBe(true);
+    expect(isChartPalette("colorblind")).toBe(true);
     expect(isChartPalette("neon")).toBe(false);
   });
 
@@ -138,9 +158,43 @@ describe("chartSeriesColorMap", () => {
     const colors = chartSeriesColorMap(
       ["commit", "__other__"],
       "agentsview",
-      () => "legacy",
+      ["legacy"],
       "var(--chart-series-other)",
     );
     expect(colors.get("__other__")).toBe("var(--chart-series-other)");
+  });
+
+  it("uses the Petroff sequence that fits the series count for the color-blind palette", () => {
+    expect([...chartSeriesColorMap(["web", "api", "docs"], "colorblind").entries()]).toEqual([
+      ["api", PETROFF6[0]],
+      ["docs", PETROFF6[1]],
+      ["web", PETROFF6[2]],
+    ]);
+    expect([...chartSeriesColorMap(ids(10), "colorblind").values()]).toEqual(PETROFF10);
+  });
+
+  it("replaces a chart's own colors with color-blind safe ones and keeps Other muted", () => {
+    const colors = chartSeriesColorMap(
+      ["commit", "__other__"],
+      "colorblind",
+      ["legacy"],
+      "var(--chart-series-other)",
+    );
+    expect(colors.get("commit")).toBe(PETROFF6[0]);
+    expect(colors.get("__other__")).toBe("var(--text-muted)");
+  });
+});
+
+describe("orderedChartSeriesColorMap", () => {
+  it("keeps the caller's ranking for every palette", () => {
+    const ranked = ["zeta", "alpha", "", "mid"];
+    expect([...orderedChartSeriesColorMap(ranked, "colorblind").entries()]).toEqual([
+      ["zeta", PETROFF6[0]],
+      ["alpha", PETROFF6[1]],
+      ["", "var(--text-muted)"],
+      ["mid", PETROFF6[2]],
+    ]);
+    expect(orderedChartSeriesColorMap(ranked, "matplotlib").get("zeta")).toBe("#1f77b4");
+    expect(orderedChartSeriesColorMap(ranked, "agentsview").get("zeta")).toBe("var(--accent-blue)");
   });
 });

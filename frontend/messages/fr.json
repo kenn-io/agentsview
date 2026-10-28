@@ -96,6 +96,7 @@
   "header_actions_import_archive_only": "Import indisponible en mode archive seule",
   "header_actions_import_conversations": "Importer des conversations",
   "header_actions_import": "Importer",
+  "header_actions_import_claude_syncing": "La synchronisation Claude.ai est en cours. Ouvrez Importer pour suivre la progression ou l'arrêter.",
   "header_actions_toggle_theme": "Changer de thème",
   "header_actions_settings": "Paramètres",
   "header_actions_keyboard_shortcuts": "Raccourcis clavier",
@@ -864,7 +865,7 @@
   "settings_search_empty": "Aucun paramètre correspondant",
   "settings_search_clear": "Effacer la recherche",
   "settings_search_result": "Affichage de {category}",
-  "settings_search_keywords_appearance": "thème contraste disposition texte police blocs theme contrast layout text font blocks zoom",
+  "settings_search_keywords_appearance": "thème contraste disposition texte police blocs theme contrast layout text font blocks zoom couleur daltonisme color",
   "settings_search_keywords_language": "langue paramètres régionaux traduction language locale translation",
   "settings_search_keywords_date_ranges": "date plage pages liées date range linked pages",
   "settings_search_keywords_terminal": "terminal reprise lancement exécutable arguments presse-papiers terminal resume launch binary clipboard",
@@ -2049,6 +2050,7 @@
   "appearance_chart_palette": "Couleurs des graphiques",
   "appearance_chart_palette_agentsview": "Agentsview",
   "appearance_chart_palette_matplotlib": "Matplotlib",
+  "appearance_chart_palette_colorblind": "Adapté au daltonisme",
   "appearance_message_layout": "Disposition des messages",
   "appearance_block_visibility": "Visibilité des blocs",
   "settings_github_token_saved": "Token GitHub enregistré.",
@@ -2623,6 +2625,7 @@
   "import_claude_reload_extension": "Rechargez ensuite l’extension dans {url}.",
   "import_claude_update_app": "Redémarrez AgentsView si vous l'avez mis à jour.",
   "import_claude_syncing": "Synchronisation...",
+  "import_claude_sync_background": "La synchronisation continue si vous fermez cette boîte de dialogue.",
   "import_claude_sync_failed": "Échec de la synchronisation",
   "import_claude_sign_in_failed": "Échec de la connexion",
   "import_claude_desktop_note": "La connexion utilise un code reçu par e-mail. Pour les comptes Google, synchronisez depuis l’interface web dans Chrome.",
@@ -2923,26 +2926,6 @@
       }
     }
   ],
-  "usage_plan_only_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} session facturée comme utilisation du forfait, sans prix",
-        "countPlural=other": "{countLabel} sessions facturées comme utilisation du forfait, sans prix"
-      }
-    }
-  ],
-  "usage_partly_captured_sessions": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} session partiellement capturée ; ses comptes de tokens sont bas.",
-        "countPlural=other": "{countLabel} sessions partiellement capturées ; leurs comptes de tokens sont bas."
-      }
-    }
-  ],
   "status_bar_codex_cloud_waiting": "Codex Cloud\u202f: en attente de la première synchronisation",
   "status_bar_codex_cloud_importing_found": [
     {
@@ -2972,5 +2955,33 @@
   "status_bar_codex_cloud_live_attention": "Codex Cloud\u202f: les jetons en direct demandent votre attention",
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec\u202f: {time}",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie\u202f: {time}",
-  "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}"
+  "status_bar_codex_cloud_homes": "Dossiers Codex\u202f: {homes}",
+  "appearance_message_colors": "Couleurs des messages",
+  "appearance_message_colors_description": "Attribuez une couleur à chaque type de message. Le préréglage daltonisme utilise des teintes qui restent distinctes avec les déficiences de la vision des couleurs les plus courantes et ajoute des motifs de ligne, pour distinguer les types par la forme autant que par la couleur.",
+  "appearance_message_colors_preset": "Préréglage des couleurs de message",
+  "appearance_message_colors_preset_default": "Thème par défaut",
+  "appearance_message_colors_preset_colorblind": "Adapté au daltonisme",
+  "appearance_message_colors_preset_custom": "Personnalisé",
+  "appearance_message_colors_patterns": "Distinguer les types de message par des motifs de ligne en plus de la couleur",
+  "appearance_message_colors_reset_all": "Rétablir les valeurs par défaut",
+  "appearance_message_colors_reset_role": "Réinitialiser",
+  "appearance_message_colors_reset_role_label": "Réinitialiser la couleur : {role}",
+  "appearance_message_colors_role_label": "Couleur : {role}",
+  "appearance_message_colors_picker": "Ouvrir le sélecteur de couleur",
+  "appearance_message_colors_hex": "Couleur hexadécimale",
+  "appearance_message_colors_warning_text": "Le texte risque d’être difficile à lire en {modes} ({ratio}:1, minimum {required}:1).",
+  "appearance_message_colors_warning_marker": "Le repère de couleur risque d’être peu visible en {modes} ({ratio}:1, minimum {required}:1).",
+  "appearance_message_colors_mode_light": "mode clair",
+  "appearance_message_colors_mode_dark": "mode sombre",
+  "appearance_message_colors_mode_high_contrast_light": "mode clair à contraste élevé",
+  "appearance_message_colors_mode_high_contrast_dark": "mode sombre à contraste élevé",
+  "appearance_message_colors_swatch_blue": "Bleu",
+  "appearance_message_colors_swatch_vermillion": "Vermillon",
+  "appearance_message_colors_swatch_bluish_green": "Vert bleuté",
+  "appearance_message_colors_swatch_reddish_purple": "Pourpre rougeâtre",
+  "appearance_message_colors_swatch_dark_yellow": "Jaune foncé",
+  "appearance_message_colors_swatch_gray": "Gris",
+  "appearance_message_colors_preview": "Aperçu",
+  "appearance_message_colors_preview_user": "Pourquoi le test de date échoue-t-il ?",
+  "appearance_message_colors_preview_assistant": "Le jeu de test attend l’UTC. Je l’ai corrigé."
 }

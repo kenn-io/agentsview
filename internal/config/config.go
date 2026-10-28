@@ -827,17 +827,18 @@ type ChartPalette string
 const (
 	ChartPaletteAgentsview ChartPalette = "agentsview"
 	ChartPaletteMatplotlib ChartPalette = "matplotlib"
+	ChartPaletteColorblind ChartPalette = "colorblind"
 	DefaultChartPalette                 = ChartPaletteAgentsview
 )
 
 func ParseChartPalette(value string) (ChartPalette, error) {
 	palette := ChartPalette(value)
 	switch palette {
-	case ChartPaletteAgentsview, ChartPaletteMatplotlib:
+	case ChartPaletteAgentsview, ChartPaletteMatplotlib, ChartPaletteColorblind:
 		return palette, nil
 	default:
 		return "", fmt.Errorf(
-			`chart_palette must be "agentsview" or "matplotlib" (got %q)`,
+			`chart_palette must be "agentsview", "matplotlib", or "colorblind" (got %q)`,
 			value,
 		)
 	}

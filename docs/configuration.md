@@ -261,7 +261,7 @@ zoom_level = 120
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                                              |
+| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                                              |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -1368,18 +1368,17 @@ update for it and saw it end on the same connection, or when a token update
 from a later turn covers it. Any other finished turn, such as a chat's last
 turn that ran while AgentsView was not connected, may be missing some or all of
 its tokens from the chat's counts. A session with such turns and with recorded
-token counts stays in the token and cost totals, which then say "N sessions
-partly captured; their token counts are low."
+token counts stays in the token and cost totals, which then run low for that
+session.
 
 A chat that AgentsView never listened in on, or listened in on without receiving
 a token update, has no token counts. For those, AgentsView asks OpenAI's usage
 report for the chat's share of your plan's weekly and five-hour limits, and the
 credits figure the report includes. That plan usage shows in the session
-details. Such sessions are left out of token and cost totals, and the totals say
-how many were left out ("N sessions billed as plan usage, not priced"). That
-count includes a chat AgentsView has not asked about yet, such as one waiting
-while plan usage is paused. Its session details say "Plan usage: not checked
-yet" until the first answer arrives.
+details. Such sessions are left out of token and cost totals; `agentsview usage`
+reports how many were left out. That count includes a chat AgentsView has not
+asked about yet, such as one waiting while plan usage is paused. Its session
+details say "Plan usage: not checked yet" until the first answer arrives.
 
 AgentsView asks for plan usage again after a failed request or an incomplete
 report, waiting longer each time, up to 6 hours between requests. It refreshes

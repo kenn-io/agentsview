@@ -55,14 +55,14 @@
     panelDateState,
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
-  import { getLocale, m } from "../../i18n/index.js";
-  import { usageChartColorMaps } from "../../utils/usageChartColors.js";
+  import { m } from "../../i18n/index.js";
+  import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
 
-  const chartColorMaps = $derived(
-    usageChartColorMaps(
+  const chartStyleMaps = $derived(
+    usageChartStyleMaps(
       usage.colorSummary,
       settings.chartPalette,
     ),
@@ -167,27 +167,6 @@
       return m.usage_summary_unsupported_generic();
     }
     return "";
-  });
-  // The derived summary for a dragged time range keeps the parent range's
-  // counts, so the notes wait for the range's own summary.
-  const usageCountNotes = $derived.by(() => {
-    const summary = usage.isTimeRangeSummaryProvisional ? null : usage.summary;
-    const notes: string[] = [];
-    const planOnly = summary?.planOnlySessions ?? 0;
-    if (planOnly > 0) {
-      notes.push(m.usage_plan_only_sessions({
-        count: planOnly,
-        countLabel: planOnly.toLocaleString(getLocale()),
-      }));
-    }
-    const partly = summary?.partlyCapturedSessions ?? 0;
-    if (partly > 0) {
-      notes.push(m.usage_partly_captured_sessions({
-        count: partly,
-        countLabel: partly.toLocaleString(getLocale()),
-      }));
-    }
-    return notes;
   });
   const sessionUrlParams = $derived(
     filtersToParams(sessions.filters),
@@ -586,27 +565,17 @@
       </Card>
     {/if}
 
-    {#if usageCountNotes.length > 0}
-      <Card level="default" padding="none" class="usage-note">
-        <div role="status">
-          {#each usageCountNotes as note (note)}
-            <div>{note}</div>
-          {/each}
-        </div>
-      </Card>
-    {/if}
-
     <UsageSummaryCards />
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart
-        colorMap={chartColorMaps[usage.toggles.timeSeries.groupBy]}
+        styleMap={chartStyleMaps[usage.toggles.timeSeries.groupBy]}
       />
     </Card>
 
     <Card level="default" padding="none" class="chart-panel wide">
       <AttributionPanel
-        colorMap={chartColorMaps[usage.toggles.attribution.groupBy]}
+        styleMap={chartStyleMaps[usage.toggles.attribution.groupBy]}
       />
     </Card>
 

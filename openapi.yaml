@@ -7829,6 +7829,7 @@ components:
           type: string
         item_type:
           format: int32
+          maximum: 255
           minimum: 0
           type: integer
         path:

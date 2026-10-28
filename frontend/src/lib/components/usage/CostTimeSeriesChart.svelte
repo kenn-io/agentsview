@@ -5,6 +5,7 @@
     SegmentedControl,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
+  import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { scaleLinear } from "d3-scale";
   import { curveLinear, curveMonotoneX } from "d3-shape";
   import {
@@ -16,16 +17,20 @@
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import { addDays } from "../../utils/dates.js";
+  import { seriesPaint } from "../../utils/seriesPaint.js";
+  import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
   import type {
     DbDailyUsageEntry,
     UsageSummaryResponse,
   } from "../../api/generated/index";
 
   interface Props {
-    colorMap: ReadonlyMap<string, string>;
+    styleMap: ReadonlyMap<string, SeriesStyle>;
   }
 
-  let { colorMap }: Props = $props();
+  let { styleMap }: Props = $props();
+
+  const uid = $props.id();
 
   // Plot geometry matches the Activity timeline.
   const TOP_PAD = 8;
@@ -350,10 +355,23 @@
     return PLOT_BOTTOM - (value / scale.max) * PLOT_H;
   }
 
-  function seriesColor(key: string): string {
-    return key === "__other__"
-      ? "var(--text-muted)"
-      : colorMap.get(key) ?? "var(--text-muted)";
+  const MUTED_STYLE: SeriesStyle = {
+    color: "var(--text-muted)",
+    fill: "solid",
+    dash: "solid",
+    marker: "circle",
+  };
+
+  function seriesStyle(key: string): SeriesStyle {
+    return key === "__other__" ? MUTED_STYLE : styleMap.get(key) ?? MUTED_STYLE;
+  }
+
+  function seriesFill(key: string): string {
+    return seriesPaint(uid, seriesStyle(key));
+  }
+
+  function seriesSwatch(key: string): string {
+    return seriesSwatchBackground(seriesStyle(key));
   }
 
   function seriesLabel(key: string): string {
@@ -373,7 +391,7 @@
       const y = yForValue(stacked + value);
       const height = yForValue(stacked) - y;
       stacked += value;
-      return [{ key, y, height, color: seriesColor(key) }];
+      return [{ key, y, height, fill: seriesFill(key) }];
     });
     return {
       idx,
@@ -391,7 +409,7 @@
     const below = seriesData.points.map(() => 0);
     return seriesData.keys.map((key) => ({
       key,
-      color: seriesColor(key),
+      fill: seriesFill(key),
       data: seriesData.points.map((point, i) => {
         const y0 = below[i] ?? 0;
         const y1 = y0 + (point.values[key] ?? 0);
@@ -463,7 +481,8 @@
         key,
         label: seriesLabel(key),
         value: point.values[key] ?? 0,
-        color: seriesColor(key),
+        swatch: seriesSwatch(key),
+        patterned: seriesStyle(key).fill !== "solid",
       }))
       .sort((a, b) => b.value - a.value);
   }
@@ -685,7 +704,8 @@
           >
             <span
               class="legend-dot"
-              style="background: {seriesColor(key)}"
+              class:patterned={seriesStyle(key).fill !== "solid"}
+              style="background: {seriesSwatch(key)}"
             ></span>
             {seriesLabel(key)}
           </span>
@@ -713,6 +733,7 @@
         height={SVG_H}
       >
         <Layer class="chart-svg" title={chartTitle}>
+          <SeriesPatternDefs scope={uid} styles={seriesData.keys.map(seriesStyle)} />
           {#each yTickValues as value (value)}
             <Line
               x1={yLabelWidth}
@@ -740,7 +761,7 @@
                     y={seg.y}
                     width={cell.w}
                     height={seg.height}
-                    fill={seg.color}
+                    fill={seg.fill}
                   />
                 {/each}
               </g>
@@ -752,7 +773,7 @@
                 x="time"
                 y0="y0"
                 y1="y1"
-                fill={layer.color}
+                fill={layer.fill}
                 curve={areaCurve}
               />
             {/each}
@@ -818,7 +839,11 @@
             {#each tooltipRows(tooltipPoint) as row (row.key)}
               <div class="tooltip-row">
                 <dt>
-                  <span class="tooltip-swatch" style="background: {row.color}"></span>
+                  <span
+                    class="tooltip-swatch"
+                    class:patterned={row.patterned}
+                    style="background: {row.swatch}"
+                  ></span>
                   <span class="tooltip-name">{row.label}</span>
                 </dt>
                 <dd>
@@ -896,6 +921,16 @@
     height: 8px;
     border-radius: 2px;
     flex-shrink: 0;
+  }
+
+  /* Patterned swatches need room to show at least one full pattern tile.
+     Negative margins keep their footprint at the plain swatch's width, so
+     labels stay aligned. */
+  .legend-dot.patterned,
+  .tooltip-swatch.patterned {
+    width: 12px;
+    height: 12px;
+    margin-inline: -2px;
   }
 
   .chart-body {
