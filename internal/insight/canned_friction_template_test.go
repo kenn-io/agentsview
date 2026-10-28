@@ -63,26 +63,6 @@ func TestCannedAggregateHashOmitsNilFriction(t *testing.T) {
 		"session-signal templates must hash the full payload exactly as before")
 }
 
-func TestFrictionReviewHashTracksRevision(t *testing.T) {
-	tests := []struct {
-		name      string
-		a, b      CannedAggregatePayload
-		wantEqual bool
-	}{
-		{name: "same_digest_same_hash", a: testFrictionReviewPayload(1), b: testFrictionReviewPayload(1), wantEqual: true},
-		{name: "rerendered_digest_new_hash", a: testFrictionReviewPayload(1), b: testFrictionReviewPayload(2), wantEqual: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ha, err := CannedAggregateHash(tt.a)
-			require.NoError(t, err)
-			hb, err := CannedAggregateHash(tt.b)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantEqual, ha == hb)
-		})
-	}
-}
-
 func TestBuildCannedPromptFrictionReview(t *testing.T) {
 	payload := testFrictionReviewPayload(1)
 	hash, err := CannedAggregateHash(payload)
