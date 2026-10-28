@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 )
 
 const watcherTestTimeout = 5 * time.Second
@@ -28,6 +29,7 @@ func requireReceiveWithin[T any](t *testing.T, ch <-chan T, timeout time.Duratio
 	case value := <-ch:
 		return value
 	case <-time.After(timeout):
+		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for channel value")
 		var zero T
 		return zero

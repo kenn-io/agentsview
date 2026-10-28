@@ -1,6 +1,7 @@
 name: Desktop Artifacts (macOS)
 
 env:
+  GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"
 

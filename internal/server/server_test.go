@@ -27,6 +27,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/stacktest"
 
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
@@ -1403,6 +1404,7 @@ func (te *testEnv) waitForSSEEvent(t *testing.T, w *flushRecorder, expectedEvent
 		case <-time.After(remaining):
 		}
 	}
+	stacktest.Dump(t)
 	require.FailNowf(t, "test failed", "timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
 }
 
@@ -1441,6 +1443,7 @@ func (te *testEnv) emitUntilSSEEvent(
 		case <-time.After(remaining):
 		}
 	}
+	stacktest.Dump(t)
 	require.FailNowf(t, "test failed", "timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
 }
 
