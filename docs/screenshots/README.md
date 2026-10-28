@@ -105,6 +105,11 @@ Each of the two runs:
    dates and identities are fixed. Both asset refs exist locally; no hydrator
    fetch is required. Missing documentation tools fail the attempt.
 
+Preview publication and hydration use the pinned capture revision's tools and
+screenshot inventory. Documentation content and its dependencies come from the
+prepared application revision, so adding a capture does not require preparing
+the same application again.
+
 `receipt.json` identifies the inputs and both results. Its `publication_assets`
 and `preview` fields locate the final images and assembled website. The receipt
 includes site file hashes for inspection; site bytes are not part of the capture

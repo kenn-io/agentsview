@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -18,13 +19,25 @@ from prepare import build, capture_source, inventory, immutable_image
 ROOT = Path(__file__).resolve().parent
 
 
+def preview_source(prepared, source):
+    source.mkdir()
+    with tarfile.open(prepared / "bundle/docs-source.tar") as archive:
+        archive.extractall(source, filter="data")
+    # Publication and hydration belong to the capture revision. The retained
+    # application supplies the docs content and dependencies, which may be older.
+    for name in ("screenshots/expected-assets.txt",
+                 "screenshots/update-generated-assets-branch.sh",
+                 "assets/hydrate-assets.sh"):
+        target = source / "docs" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT.parent / name, target)
+
+
 def preview(prepared, assets, output, reference_now):
     manifest = json.loads((prepared / "prepared.json").read_bytes())
     output.mkdir()
     source = output / "source"
-    source.mkdir()
-    with tarfile.open(prepared / "bundle/docs-source.tar") as archive:
-        archive.extractall(source, filter="data")
+    preview_source(prepared, source)
     command = ["docker", "run", "--rm", "--network=none", "--platform=linux/amd64",
                "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp/preview-home"]
     for origin, target, readonly in [

@@ -24,7 +24,7 @@ def capture_source():
     git = ["git", "-C", str(repository)]
     revision = subprocess.check_output(git + ["rev-parse", "HEAD"]).decode().strip()
     changed = subprocess.check_output(git + ["status", "--porcelain", "--untracked-files=all",
-                                              "--", "docs/screenshots"])
+                                              "--", "docs/screenshots", "docs/assets/hydrate-assets.sh"])
     if changed:
         raise ValueError("commit capture tools before sealing execution inputs")
     return revision
