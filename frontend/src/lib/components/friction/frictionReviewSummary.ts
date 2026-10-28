@@ -38,7 +38,7 @@ export function pickFrictionReviewInsight(
 
 export function frictionReviewRequest(
   date: string,
-  agent: string,
+  agent: string | undefined,
   forceRefresh: boolean,
 ): GenerateInsightRequest {
   return {
@@ -47,7 +47,7 @@ export function frictionReviewRequest(
     llm_opt_in: true,
     date_from: date,
     date_to: date,
-    agent,
+    ...(agent ? { agent } : {}),
     ...(forceRefresh ? { force_refresh: true } : {}),
   };
 }

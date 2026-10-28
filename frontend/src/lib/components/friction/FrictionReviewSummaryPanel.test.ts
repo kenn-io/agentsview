@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getInsights: vi.fn(),
   setAgent: vi.fn(),
   agent: "claude",
+  requestAgent: undefined as string | undefined,
   serverVersion: { read_only: false } as {
     read_only: boolean;
     insight_generation_available?: boolean;
@@ -30,6 +31,9 @@ vi.mock("../../stores/insights.svelte.js", () => ({
     setAgent: mocks.setAgent,
     get agent() {
       return mocks.agent;
+    },
+    get requestAgent() {
+      return mocks.requestAgent;
     },
   },
 }));
@@ -63,6 +67,7 @@ beforeEach(() => {
   for (const fn of [mocks.generateInsight, mocks.getInsights, mocks.setAgent]) fn.mockReset();
   mocks.serverVersion = { read_only: false };
   mocks.agent = "claude";
+  mocks.requestAgent = undefined;
   mocks.getInsights.mockResolvedValue({ insights: [] });
 });
 
@@ -157,8 +162,11 @@ describe("FrictionReviewSummaryPanel", () => {
     expect(mocks.generateInsight.mock.calls[1]?.[0]).toMatchObject({ force_refresh: true });
   });
 
-  it("explicitly opts in with the selected agent", async () => {
-    mocks.agent = "codex";
+  it.each([
+    { name: "leaves the agent to the server until one is chosen", requestAgent: undefined, want: {} },
+    { name: "sends the chosen agent", requestAgent: "codex", want: { agent: "codex" } },
+  ])("explicitly opts in and $name", async ({ requestAgent, want }) => {
+    mocks.requestAgent = requestAgent;
     mocks.generateInsight.mockReturnValue({ abort: vi.fn(), done: new Promise(() => {}) });
     render(FrictionReviewSummaryPanel, { date: "2025-01-15", revision: 1 });
     await settle();
@@ -170,7 +178,7 @@ describe("FrictionReviewSummaryPanel", () => {
         llm_opt_in: true,
         date_from: "2025-01-15",
         date_to: "2025-01-15",
-        agent: "codex",
+        ...want,
       },
       expect.any(Function),
     );

@@ -95,7 +95,7 @@
     lastForceRefresh = forceRefresh;
 
     const version = ++genVersion;
-    const current = generateInsight(frictionReviewRequest(date, insights.agent, forceRefresh), (next) => {
+    const current = generateInsight(frictionReviewRequest(date, insights.requestAgent, forceRefresh), (next) => {
       if (version === genVersion) phase = next;
     });
     handle = current;
