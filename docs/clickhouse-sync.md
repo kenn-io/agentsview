@@ -384,21 +384,28 @@ To alert on a stalled watcher, run status from a timer or monitor with
 agentsview clickhouse status --max-stale 10m
 ```
 
-The command exits non-zero, and names the cause, when one of these has lasted
-longer than the limit:
+The command exits non-zero, and names the cause, in any of these cases:
 
-- Every push has failed, for any reason. A watcher that exits during a push
-  counts as a failed push, so a crash loop fails the check too.
-- A push started and has not finished.
-- A session changed after the last successful push started, and no push has
-  picked it up within the limit. This catches a watcher that stopped or is
-  waiting for a local sync.
+- Every push has failed for longer than the limit, for any reason. A watcher
+  that exits during a push counts as a failed push, so a crash loop fails the
+  check too.
+- A push started more than the limit ago and has not finished.
+- No push has finished for longer than the `--interval` floor plus the limit.
+  The watcher pushes at least once per interval even when nothing changed, so
+  this catches a watcher that stopped, or one whose pushes wait on a local
+  sync that never finishes.
 
-An idle machine or a laptop that slept does not fail the check: with no new
-sessions there is nothing to push. A failure or a push that is still running
-gets the full limit to recover before the check fails. Set the limit above the
-watcher's `--debounce` plus the time one push takes. It does not need to exceed
-the `--interval` floor.
+The check reads only what the watcher recorded about its own pushes. It does
+not inspect the archive to guess what a push would send. A failure or a push
+that is still running gets the full limit to recover before the check fails.
+With the default 15-minute interval, `--max-stale 10m` fails after 25 minutes
+without a finished push.
+
+The check uses wall-clock time. After a machine wakes from a sleep longer than
+the interval plus the limit, the check fails until the watcher's next push:
+within the debounce after a session changes, and otherwise within one interval.
+On a laptop, alert only when the check fails twice in a row, spaced at least
+one interval apart.
 
 `--max-stale` fails without a watcher record for the target, because nothing
 reports what pushes did. It also fails when the record was written before the

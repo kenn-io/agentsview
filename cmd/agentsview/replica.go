@@ -521,18 +521,7 @@ func runReplicaStatusTarget(
 			backend.Name(), recErr,
 		)
 	}
-	stall, err := replicaWatchStall(rec, now, cfg.MaxStale,
-		func(from, until time.Time) (int, error) {
-			if database == nil {
-				return 0, errors.New("--max-stale needs the local archive to count changed sessions")
-			}
-			return database.CountSessionsChangedBetween(ctx, from, until)
-		},
-	)
-	if err != nil {
-		return err
-	}
-	if stall != "" {
+	if stall := replicaWatchStall(rec, now, cfg.MaxStale); stall != "" {
 		return fmt.Errorf(
 			"push watcher stalled for more than --max-stale %s: %s; run `agentsview %s service logs` for details",
 			cfg.MaxStale, stall, backend.Name(),

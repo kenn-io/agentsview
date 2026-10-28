@@ -19,8 +19,9 @@ The latest release is
 - `pg status` and `clickhouse status` show when the push watcher last pushed
   successfully and, while pushes fail, since when and why. Run them with
   `--max-stale 10m` from a timer or monitor to get an alert when pushes keep
-  failing for any reason, a push hangs, or new sessions go unpushed. Idle
-  machines and laptops that slept do not trigger it.
+  failing for any reason, a push hangs, or the watcher stops pushing. Right
+  after a machine wakes from sleep, the check can fail until the watcher's
+  next push.
 - Assistants connected through MCP can now explain where one session's cost came
   from. The new `get_session_usage` tool reports the same tokens and cost as
   `agentsview session usage`, split by model and by request, with the most

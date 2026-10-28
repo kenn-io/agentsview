@@ -6888,29 +6888,6 @@ const writerHandoffPollInterval = 50 * time.Millisecond
 // it is waiting, so a short handoff stays quiet.
 const writerHandoffNoticeAfter = 5 * time.Second
 
-// CountSessionsChangedBetween counts sessions whose sync_marker is at or after
-// from and not after until, matching the inclusive lower bound of a push
-// window. A zero from counts from the beginning. The upper bound keeps a
-// future-dated marker from reading as a pending change.
-func (db *DB) CountSessionsChangedBetween(
-	ctx context.Context, from, until time.Time,
-) (int, error) {
-	lower := ""
-	if !from.IsZero() {
-		lower = from.UTC().Format(mirrorWindowBoundLayout)
-	}
-	// Sessions with no marker are skipped, as no incremental push selects
-	// them either.
-	var n int
-	if err := db.getReader().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sessions WHERE sync_marker <> '' AND sync_marker >= ? AND sync_marker <= ?",
-		lower, until.UTC().Format(mirrorWindowBoundLayout),
-	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("counting sessions changed since %s: %w", from, err)
-	}
-	return n, nil
-}
-
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
 // as ms-precision UTC text matching the sync_marker column format, so the
 // bound compares correctly against trigger-maintained markers.

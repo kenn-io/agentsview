@@ -21,21 +21,23 @@ import (
 const replicaWatchErrorLimit = 500
 
 // replicaWatchRecord is what a replica watcher last did, persisted so
-// `<backend> status --max-stale` can tell a stalled watcher from an idle one.
-// It records the outcome of each push the watcher ran instead of predicting
-// what a push would send, so any cause of failure counts.
+// `<backend> status --max-stale` can tell a stalled watcher from a working
+// one. It records the outcome of each push the watcher ran instead of
+// predicting what a push would send, so any cause of failure counts.
 type replicaWatchRecord struct {
 	// Target is the configured target name; empty for an unnamed default.
 	Target string `json:"target"`
 	// Destination fingerprints the target's URL and schema, so a record
 	// written for an earlier destination of the same target is not reused.
 	Destination string `json:"destination"`
+	// WatcherStartedAt is when the watcher that wrote the record started.
+	WatcherStartedAt time.Time `json:"watcher_started_at"`
+	// IntervalSeconds is the watcher's push floor: it pushes at least this
+	// often even when nothing changed.
+	IntervalSeconds int64 `json:"interval_seconds"`
 	// PushStartedAt is set while a push runs and cleared when it finishes.
 	PushStartedAt time.Time `json:"push_started_at,omitzero"`
 	LastSuccessAt time.Time `json:"last_success_at,omitzero"`
-	// LastSuccessStartedAt is when the last successful push started.
-	// Sessions changed from then on may not have reached the replica.
-	LastSuccessStartedAt time.Time `json:"last_success_started_at,omitzero"`
 	// FailingSince is the first failure after the last success. It is zero
 	// while pushes succeed.
 	FailingSince  time.Time `json:"failing_since,omitzero"`
@@ -69,14 +71,15 @@ func (rec replicaWatchRecord) matches(target storage.ConfiguredReplica) bool {
 		rec.Destination == replicaWatchDestination(target.Target)
 }
 
-// newReplicaWatchHealth keeps the last success and failure streak of an
-// earlier watcher for the same target and destination, so a restart does not
-// hide a stall. A push still marked as running belonged to a watcher that
-// exited mid-push; it becomes a failure so a crash loop builds a failure
-// streak instead of looking like a fresh push after every restart.
+// newReplicaWatchHealth records that a watcher with the given push floor
+// started. It keeps the last success and failure streak of an earlier watcher
+// for the same target and destination, so a restart does not hide a stall. A
+// push still marked as running belonged to a watcher that exited mid-push; it
+// becomes a failure so a crash loop builds a failure streak instead of
+// looking like a fresh push after every restart.
 func newReplicaWatchHealth(
 	dataDir, backend string, target storage.ConfiguredReplica,
-	now func() time.Time,
+	interval time.Duration, now func() time.Time,
 ) *replicaWatchHealth {
 	h := &replicaWatchHealth{
 		path: replicaWatchHealthPath(dataDir, backend),
@@ -97,11 +100,13 @@ func newReplicaWatchHealth(
 			}
 			h.rec.LastFailureAt = started
 			h.rec.LastError = "the watcher exited during a push"
-			h.writeLocked()
 		}
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		log.Printf("warning: reading %s: %v", h.path, err)
 	}
+	h.rec.WatcherStartedAt = now().UTC()
+	h.rec.IntervalSeconds = int64(interval / time.Second)
+	h.writeLocked()
 	return h
 }
 
@@ -122,11 +127,9 @@ func (h *replicaWatchHealth) finish(err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now().UTC()
-	started := h.rec.PushStartedAt
 	h.rec.PushStartedAt = time.Time{}
 	if err == nil {
 		h.rec.LastSuccessAt = now
-		h.rec.LastSuccessStartedAt = started
 		h.rec.FailingSince = time.Time{}
 		h.rec.LastError = ""
 	} else {
@@ -164,54 +167,45 @@ func loadReplicaWatchRecord(path string) (replicaWatchRecord, error) {
 }
 
 // replicaWatchStall explains why the watcher has stalled, or returns "" when
-// it is healthy or idle. A watcher stalls when a push has run for longer than
-// limit, when pushes have failed for longer than limit, or when a session
-// changed after the last successful push started and has waited longer than
-// limit without a push. A running push or a failure streak younger than limit
-// is given that time to finish or recover. changedBetween counts archive
-// sessions changed from one time through another; a zero start counts from
-// the beginning.
-func replicaWatchStall(
-	rec replicaWatchRecord, now time.Time, limit time.Duration,
-	changedBetween func(from, until time.Time) (int, error),
-) (string, error) {
-	if !rec.PushStartedAt.IsZero() && now.Sub(rec.PushStartedAt) > limit {
-		return fmt.Sprintf(
-			"the push that started %s has not finished; it is stuck or the watcher stopped mid-push",
-			agoText(rec.PushStartedAt, now),
-		), nil
+// it is working. It reads only what the watcher recorded. A watcher stalls
+// when a push has run for longer than limit, when pushes have failed for
+// longer than limit, or when no push has finished for longer than limit past
+// the watcher's push floor. The floor pushes even when nothing changed, so a
+// running watcher finishes a push at least once per interval; a stopped
+// watcher, or one whose pushes wait on a local sync that never finishes,
+// does not.
+func replicaWatchStall(rec replicaWatchRecord, now time.Time, limit time.Duration) string {
+	if !rec.PushStartedAt.IsZero() {
+		if now.Sub(rec.PushStartedAt) > limit {
+			return fmt.Sprintf(
+				"the push that started %s has not finished; it is stuck or the watcher stopped mid-push",
+				agoText(rec.PushStartedAt, now),
+			)
+		}
 	}
 	if !rec.FailingSince.IsZero() && now.Sub(rec.FailingSince) > limit {
 		return fmt.Sprintf(
 			"pushes have failed since %s: %s",
 			agoText(rec.FailingSince, now), rec.LastError,
-		), nil
+		)
 	}
-	if !rec.PushStartedAt.IsZero() || !rec.FailingSince.IsZero() {
-		return "", nil
+	if !rec.PushStartedAt.IsZero() {
+		return ""
 	}
-	waitedUntil := now.Add(-limit)
-	from := rec.LastSuccessStartedAt
-	if !from.IsZero() && from.After(waitedUntil) {
-		return "", nil
+	interval := time.Duration(rec.IntervalSeconds) * time.Second
+	last := rec.WatcherStartedAt
+	for _, t := range []time.Time{rec.LastSuccessAt, rec.LastFailureAt} {
+		if t.After(last) {
+			last = t
+		}
 	}
-	changed, err := changedBetween(from, waitedUntil)
-	if err != nil {
-		return "", err
-	}
-	if changed == 0 {
-		return "", nil
-	}
-	if from.IsZero() {
-		return fmt.Sprintf(
-			"%d session(s) are waiting and no push has succeeded; check that the watcher is running",
-			changed,
-		), nil
+	if now.Sub(last) <= interval+limit {
+		return ""
 	}
 	return fmt.Sprintf(
-		"%d session(s) changed after the last successful push started %s and nothing has pushed them; check that the watcher is running",
-		changed, agoText(from, now),
-	), nil
+		"no push has finished since %s, though the watcher pushes at least every %s; it has stopped or is waiting for a local sync, so check that it is running",
+		agoText(last, now), interval,
+	)
 }
 
 // replicaWatchRows describes the health record for `<backend> status`.
