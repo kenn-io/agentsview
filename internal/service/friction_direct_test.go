@@ -87,3 +87,35 @@ func TestDirectFrictionService(t *testing.T) {
 		})
 	}
 }
+
+func TestDirectFrictionReadsRejectMalformedFilters(t *testing.T) {
+	fs := service.NewDirectBackend(dbtest.OpenTestDB(t), nil).(service.FrictionService)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"digests_bad_date", func() error { _, err := fs.FrictionDigests(t.Context(), "2026-9-01", ""); return err }},
+		{"digests_reversed_range", func() error { _, err := fs.FrictionDigests(t.Context(), "2026-09-30", "2026-09-01"); return err }},
+		{"findings_bad_date", func() error {
+			_, err := fs.FrictionFindings(t.Context(), service.FrictionFindingFilter{Date: "2026-9-01"})
+			return err
+		}},
+		{"findings_bad_kind", func() error {
+			_, err := fs.FrictionFindings(t.Context(), service.FrictionFindingFilter{Kind: "nope"})
+			return err
+		}},
+		{"patterns_bad_since", func() error {
+			_, err := fs.FrictionPatterns(t.Context(), service.FrictionPatternFilter{Since: "last-week"})
+			return err
+		}},
+		{"patterns_limit_over_max", func() error {
+			_, err := fs.FrictionPatterns(t.Context(), service.FrictionPatternFilter{Limit: 5000})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.call())
+		})
+	}
+}

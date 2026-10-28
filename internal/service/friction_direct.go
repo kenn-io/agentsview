@@ -4,14 +4,38 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 func (b *directBackend) SupportsFriction() bool {
 	_, ok := b.db.(db.FrictionReader)
 	return ok
+}
+
+var frictionKinds = []friction.Kind{
+	friction.KindCorrection, friction.KindError, friction.KindWorkaround, friction.KindDeferral,
+	friction.KindPattern, friction.KindFrustration, friction.KindInterruption,
+}
+
+// validateFrictionFilter applies the HTTP routes' rules to direct reads, so a
+// malformed date is an error rather than a silent lexical comparison.
+func validateFrictionFilter(dates map[string]string, kind string, limit int) error {
+	for field, date := range dates {
+		if date != "" && !timeutil.IsValidDate(date) {
+			return fmt.Errorf("invalid %s %q: use YYYY-MM-DD", field, date)
+		}
+	}
+	if kind != "" && !slices.Contains(frictionKinds, friction.Kind(kind)) {
+		return fmt.Errorf("invalid kind %q", kind)
+	}
+	if limit < 0 || limit > db.MaxFrictionListLimit {
+		return fmt.Errorf("limit must be between 1 and %d", db.MaxFrictionListLimit)
+	}
+	return nil
 }
 
 func (b *directBackend) frictionReader() (db.FrictionReader, error) {
@@ -58,6 +82,12 @@ func (b *directBackend) FrictionDigest(
 func (b *directBackend) FrictionDigests(
 	ctx context.Context, from, to string,
 ) ([]FrictionDigestListItem, error) {
+	if err := validateFrictionFilter(map[string]string{"from": from, "to": to}, "", 0); err != nil {
+		return nil, err
+	}
+	if from != "" && to != "" && from > to {
+		return nil, fmt.Errorf("from %s is after to %s", from, to)
+	}
 	fr, err := b.frictionReader()
 	if err != nil {
 		return nil, err
@@ -79,6 +109,9 @@ func (b *directBackend) FrictionDigests(
 func (b *directBackend) FrictionFindings(
 	ctx context.Context, f FrictionFindingFilter,
 ) (*FrictionFindingPage, error) {
+	if err := validateFrictionFilter(map[string]string{"date": f.Date}, f.Kind, f.Limit); err != nil {
+		return nil, err
+	}
 	fr, err := b.frictionReader()
 	if err != nil {
 		return nil, err
@@ -106,6 +139,9 @@ func (b *directBackend) FrictionFindings(
 func (b *directBackend) FrictionPatterns(
 	ctx context.Context, f FrictionPatternFilter,
 ) (*FrictionPatternPage, error) {
+	if err := validateFrictionFilter(map[string]string{"since": f.Since}, f.Kind, f.Limit); err != nil {
+		return nil, err
+	}
 	fr, err := b.frictionReader()
 	if err != nil {
 		return nil, err
