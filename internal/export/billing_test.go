@@ -200,13 +200,12 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		custom                                            bool
 		requestInput                                      int
 		bandInput, bandOutput                             string
-		wantNoBands                                       bool
 	}{
-		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", "", false},
-		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", "", false},
-		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", "", false},
-		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33", false},
-		{"missing tier band falls back to standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45", false},
+		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", ""},
+		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
+		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
+		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
+		{"missing tier band falls back to standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -240,9 +239,6 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
 			assert.Equal(t, tc.pattern, lookup.Pattern)
 			assert.Equal(t, tc.adjustment, lookup.Adjustment)
-			if tc.wantNoBands {
-				assert.Empty(t, lookup.Rates.Bands, "Fast row without published bands keeps flat rates")
-			}
 			if tc.requestInput > 0 {
 				selected := lookup.Rates.RatesForTokens(tc.requestInput, 0, 0)
 				assert.Equal(t, money.MustParseDollars(tc.bandInput), selected.InputPerMTok, "request band input rate")
