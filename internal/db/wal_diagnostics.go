@@ -127,9 +127,11 @@ func (db *DB) walMaintenanceTick(ctx context.Context, diag *walDiagnostics) {
 				stall.unmovedPages, stall.logPages, stall.attempts,
 			)
 			db.reads.logOpenReads()
-			var stacks bytes.Buffer
-			_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2)
-			log.Printf("sqlite wal goroutine dump:\n%s", stacks.String())
+			if stall.attempts == walStallLogAttempts {
+				var stacks bytes.Buffer
+				_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+				log.Printf("sqlite wal goroutine dump:\n%s", stacks.String())
+			}
 		}
 	}
 

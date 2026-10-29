@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -208,7 +209,7 @@ func holdDiagnosticRows(t *testing.T, d *DB) *sql.Rows {
 
 func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
 	d := testDB(t)
-	holdDiagnosticTransaction(t, d)
+	reader := holdDiagnosticTransaction(t, d)
 	output := captureLog(t)
 	var diag walDiagnostics
 	for attempt := range walStallLogAttempts {
@@ -220,6 +221,33 @@ func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
 	assert.Contains(t, text, "sqlite open reads: 1")
 	assert.Contains(t, text, "sqlite wal goroutine dump:\ngoroutine ")
 	assert.Contains(t, text, "[running]:")
+	assert.Equal(t, 1, strings.Count(text, "sqlite wal goroutine dump:"))
+
+	for range 2 {
+		d.walMaintenanceTick(t.Context(), &diag)
+	}
+	text = output.String()
+	assert.Equal(t, 3, strings.Count(text, "pages unmoved after"))
+	assert.Equal(t, 3, strings.Count(text, "sqlite open reads: 1"))
+	assert.Equal(t, 1, strings.Count(text, "sqlite wal goroutine dump:"))
+
+	require.NoError(t, reader.Rollback())
+	d.walMaintenanceTick(t.Context(), &diag)
+	assert.Equal(t, text, output.String())
+
+	holdDiagnosticTransaction(t, d)
+	for attempt := range walStallLogAttempts - 1 {
+		insertSession(t, d, fmt.Sprintf("diagnostic-again-%d", attempt), "proj")
+		d.walMaintenanceTick(t.Context(), &diag)
+	}
+	assert.Equal(t, text, output.String())
+	for range 3 {
+		d.walMaintenanceTick(t.Context(), &diag)
+	}
+	text = output.String()
+	assert.Equal(t, 6, strings.Count(text, "pages unmoved after"))
+	assert.Equal(t, 6, strings.Count(text, "sqlite open reads: 1"))
+	assert.Equal(t, 2, strings.Count(text, "sqlite wal goroutine dump:"))
 }
 
 func TestReadDiagnostics(t *testing.T) {
