@@ -283,7 +283,7 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 }
 
 func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel string) PricingLookup {
-	base, pattern, rates, ok := r.priorityRow(lookup.Pattern, pricedModel)
+	base, pattern, rates, ok := r.priorityRow(pricedModel, lookup.Pattern)
 	if !ok {
 		return lookup
 	}
@@ -295,7 +295,7 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel str
 }
 
 // priorityRow returns the first model key with a LiteLLM priority row, along
-// with that key's standard row so Fast bands inherit from the same source.
+// with that key's standard row.
 func (r *PricingResolver) priorityRow(models ...string) (PricingLookup, string, ModelRates, bool) {
 	for _, model := range models {
 		base := r.Lookup(model)

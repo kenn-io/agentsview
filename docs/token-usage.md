@@ -603,8 +603,10 @@ Codex messages whose latest `thread_settings_applied` event records provider
 prices. This records the selected tier, not the tier Codex sent with every
 request. Codex may omit priority for a model that does not advertise support,
 so the estimate can exceed the billed cost. Fast bands take precedence at
-matching thresholds; a standard band fills a threshold with no Fast band. If
-neither row publishes bands, Fast base rates apply at every request size.
+matching thresholds. A standard input threshold fills a gap; its published
+companion rates fill fields missing from that Fast band, while other fields use
+the Fast base rate. If neither row publishes bands, Fast base rates apply at
+every request size.
 Ultrafast and other recorded tiers use standard rates. Rollouts without a tier
 record also use standard rates. The embedded catalog includes tier prices for
 offline use. A model without a price for its tier, and any custom override,
