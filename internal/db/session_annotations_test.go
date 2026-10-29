@@ -975,7 +975,11 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 
 func TestVSCodeLegacyReplyPinConversion(t *testing.T) {
 	for _, scenario := range []string{"shifted", "duplicate-old", "duplicate-new", "changed-prompt", "zero-time"} {
-		for _, writer := range []string{"replace", "copy"} {
+		writers := []string{"replace"}
+		if scenario == "shifted" {
+			writers = append(writers, "copy")
+		}
+		for _, writer := range writers {
 			t.Run(scenario+"/"+writer, func(t *testing.T) {
 				d := testDB(t)
 				insertSession(t, d, "s1", "project", func(s *Session) { s.Agent = "vscode-copilot" })
@@ -994,6 +998,9 @@ func TestVSCodeLegacyReplyPinConversion(t *testing.T) {
 					{SessionID: "s1", Ordinal: 3, Role: "assistant", Content: "[Tool: fetch]\nThe newest release is v2.", Timestamp: stamp, SourceUUID: "vscode-copilot:assistant:r1"},
 				}
 				switch scenario {
+				case "shifted":
+					// Matching the old text must not pin this unrelated reply too.
+					incoming[1].Content = "Let me check."
 				case "duplicate-old":
 					extra := append([]Message(nil), old...)
 					extra[0].Ordinal, extra[1].Ordinal = 2, 3

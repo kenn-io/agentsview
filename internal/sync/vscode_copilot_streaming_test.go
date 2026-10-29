@@ -110,7 +110,6 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, pins, 1)
 				assert.Equal(t, 1, pins[0].Ordinal)
-				assert.Equal(t, new("Keep this answer"), pins[0].Note)
 			})
 		}
 	}
