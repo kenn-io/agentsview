@@ -552,7 +552,7 @@ lint-golangci-ci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 
 .PHONY: lint-config-check lint-sql
 lint-sql:
-	go run go.kenn.io/kit/cmd/kennlint@v0.47.2 sql internal/db/schema.sql
+	go run go.kenn.io/kit/cmd/kennlint@v0.34.1 sql internal/db/schema.sql
 
 lint-config-check:
 	go run go.kenn.io/kit/cmd/kennlint@v0.47.2 config -check
