@@ -168,6 +168,45 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	t.Run("GenAI alias uses matching LiteLLM priority row", func(t *testing.T) {
+		const model = "gpt-5.3-chat-latest"
+		embedded := pricingpkg.EmbeddedGenAIDocument()
+		require.Equal(t, "openai/gpt-5.3", embedded.Prices.ModelPattern("", model))
+		rows := []EffectivePricingRow{{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: PricingRowSourceEmbedded,
+		}}
+		for _, row := range pricingpkg.FallbackPricing() {
+			if row.ModelPattern != model && row.ModelPattern != model+"@priority" {
+				continue
+			}
+			rows = append(rows, EffectivePricingRow{
+				ModelPattern: row.ModelPattern,
+				Rates: ModelRates{
+					InputPerMTok: row.InputPerMTok, OutputPerMTok: row.OutputPerMTok,
+					CacheWritePerMTok:   row.CacheCreationPerMTok,
+					CacheWrite1hPerMTok: row.CacheCreation1hPerMTok,
+					CacheReadPerMTok:    row.CacheReadPerMTok,
+					Source:              PricingRowSourceFetched,
+				},
+			})
+		}
+		require.Len(t, rows, 3)
+		resolver := NewPricingResolver(rows)
+
+		pricedModel, lookup, err := resolver.ResolveBilledAt(
+			pricingpkg.OpenAIPriorityProviderID,
+			model, model,
+			time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, model, pricedModel)
+		assert.Equal(t, money.MustParseDollars("3.5"), lookup.Rates.InputPerMTok)
+		assert.Equal(t, money.MustParseDollars("28"), lookup.Rates.OutputPerMTok)
+		assert.Equal(t, model+"@priority", lookup.Pattern)
+		assert.Equal(t, pricingpkg.OpenAIPriorityProviderID, lookup.Adjustment)
+	})
+
 	t.Run("GenAI dated alias", func(t *testing.T) {
 		genAI, err := pricingpkg.ParseGenAIPrices([]byte("[" + codexLunaGenAIProvider + "]"))
 		require.NoError(t, err)

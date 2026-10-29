@@ -267,7 +267,7 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 		return pricedModel, lookup, nil
 	}
 	if providerID == pricingpkg.OpenAIPriorityProviderID {
-		return pricedModel, r.withPriorityTier(lookup), nil
+		return pricedModel, r.withPriorityTier(lookup, pricedModel), nil
 	}
 	policy, ok := pricingpkg.BillingPolicyFor(providerID)
 	if !ok {
@@ -282,10 +282,8 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 	return pricedModel, lookup, nil
 }
 
-func (r *PricingResolver) withPriorityTier(lookup PricingLookup) PricingLookup {
-	base := r.Lookup(lookup.Pattern)
-	pattern := catalog.PriorityPattern(base.Pattern)
-	rates, ok := r.byModel[pattern]
+func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel string) PricingLookup {
+	base, pattern, rates, ok := r.priorityRow(lookup.Pattern, pricedModel)
 	if !ok {
 		return lookup
 	}
@@ -294,6 +292,22 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup) PricingLookup {
 	lookup.Pattern = pattern
 	lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
 	return lookup
+}
+
+// priorityRow returns the first model key with a LiteLLM priority row, along
+// with that key's standard row so Fast bands inherit from the same source.
+func (r *PricingResolver) priorityRow(models ...string) (PricingLookup, string, ModelRates, bool) {
+	for _, model := range models {
+		if model == "" {
+			continue
+		}
+		base := r.Lookup(model)
+		pattern := catalog.PriorityPattern(base.Pattern)
+		if rates, ok := r.byModel[pattern]; base.OK && ok {
+			return base, pattern, rates, true
+		}
+	}
+	return PricingLookup{}, "", ModelRates{}, false
 }
 
 // mergePriorityBands uses standard thresholds where LiteLLM has no priority
@@ -461,7 +475,7 @@ func (r *PricingResolver) DependencyFingerprint(
 			writeField(fingerprint)
 			if providerID == pricingpkg.OpenAIPriorityProviderID && fingerprint != "none" {
 				genAI := PricingLookup{Pattern: r.genAI.ModelPattern(candidate.provider, candidate.model)}
-				writeLookup("", r.withPriorityTier(genAI))
+				writeLookup(candidate.priced, r.withPriorityTier(genAI, candidate.priced))
 			}
 		}
 		return flat, custom, matched
