@@ -625,7 +625,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Positron sources in place; source and session identities are unchanged.)
 // (155: add the Fast billing identity to Codex-format messages. Re-parse Codex
 // sources in place; source and session identities are unchanged.)
-const dataVersion = 155
+// (156: type pi-subagents runs whose header records parentSession as
+// subagents instead of forks, and stop a nested run from resolving to itself.
+// Re-parse Pi-format sources in place; source and session identities are
+// unchanged.)
+const dataVersion = 156
 
 const archiveOnlyVersionBase = 1 << 20
 

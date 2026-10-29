@@ -120,12 +120,17 @@ func parsePiLikeSession(
 	}
 
 	// The pi-subagents extension writes a fresh child to
-	// <project>/<parent>/<runId>/run-N/session.jsonl with no parentSession in
-	// its header, so lineage comes from the parent transcript three levels up.
+	// <project>/<parent>/<runId>/run-N/session.jsonl. Older releases leave
+	// parentSession out of the header, so lineage comes from the parent
+	// transcript three levels up. Newer releases record parentSession, the same
+	// field /fork uses, so the run directory is what marks the child as a
+	// subagent. The header's parent wins when both are present.
 	var isPiSubagent bool
-	if (agent == AgentPi || agent == AgentOMO) && parentSessionID == "" {
+	if agent == AgentPi || agent == AgentOMO {
 		if parentID := piSubagentParentSessionID(path); parentID != "" {
-			parentSessionID = idPrefix + parentID
+			if parentSessionID == "" {
+				parentSessionID = idPrefix + parentID
+			}
 			isPiSubagent = true
 		}
 	}
@@ -364,7 +369,7 @@ func parsePiLikeSession(
 	}
 	// A persisted parent means the transcript was branched from another
 	// session (/fork, /clone), not spawned as a subagent. A subagent child
-	// that got its lineage from the run directory still overrides this below.
+	// found in a pi-subagents run directory still overrides this below.
 	if (agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO ||
 		agent == AgentStepCode) && parentSessionID != "" {
 		sess.RelationshipType = RelFork
@@ -397,8 +402,12 @@ func piPersistedPathBase(value string) string {
 func primeParentSessionID(childPath, persistedPath string) string {
 	base := piPersistedPathBase(persistedPath)
 	localSibling := filepath.Join(filepath.Dir(childPath), base)
-	if headerID, ok := piSessionHeaderID(localSibling); ok && headerID != "" {
-		return headerID
+	// pi-subagents names every child session.jsonl, so a nested child's parent
+	// basename can match the child's own file. A session is never its own parent.
+	if filepath.Clean(localSibling) != filepath.Clean(childPath) {
+		if headerID, ok := piSessionHeaderID(localSibling); ok && headerID != "" {
+			return headerID
+		}
 	}
 	if filepath.IsAbs(persistedPath) &&
 		filepath.Clean(persistedPath) != filepath.Clean(localSibling) {

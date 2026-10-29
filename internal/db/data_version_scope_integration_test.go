@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"encoding/json/jsontext"
 	"fmt"
 	"os"
@@ -685,4 +686,59 @@ func TestCodexCloudToolTextUpgradeReparsesInPlace(t *testing.T) {
 	var sessions int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 	assert.Equal(t, 1, sessions)
+}
+
+func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(155, 156)
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentPi, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode,
+	}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	stem := "2026-10-09T10-00-00-000Z_parent-uuid"
+	parentPath := filepath.Join(root, "encoded-cwd", stem+".jsonl")
+	childPath := filepath.Join(root, "encoded-cwd", stem, "run-abc", "run-0", "session.jsonl")
+	dbtest.WriteTestFile(t, parentPath, []byte(
+		`{"type":"session","version":3,"id":"parent-uuid","timestamp":"2026-10-09T10:00:00Z","cwd":"/work/project"}`+"\n"+
+			`{"type":"message","id":"p1","timestamp":"2026-10-09T10:00:01Z","message":{"role":"user","content":"run a subagent"}}`+"\n"))
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
+	dbtest.WriteTestFile(t, childPath, []byte(
+		`{"type":"session","version":3,"id":"child-uuid","timestamp":"2026-10-09T10:05:00Z","cwd":"/work/project","parentSession":`+string(parentPathJSON)+`}`+"\n"+
+			`{"type":"message","id":"c1","timestamp":"2026-10-09T10:05:01Z","message":{"role":"user","content":"do the task"}}`+"\n"))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 2, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "pi:child-uuid"
+	// Reproduce the previous parser, which typed the child as a fork.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf("UPDATE sessions SET relationship_type='fork' WHERE id=?; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1), id)
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the Pi subagent upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(ctx, nil).Synced)
+	var rel, parent string
+	require.NoError(t, database.Reader().QueryRow(ctx,
+		"SELECT relationship_type, parent_session_id FROM sessions WHERE id=?", id).Scan(&rel, &parent))
+	assert.Equal(t, "subagent", rel)
+	assert.Equal(t, "pi:parent-uuid", parent)
+	assert.Equal(t, childPath, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 2, sessions)
 }

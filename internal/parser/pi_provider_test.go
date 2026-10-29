@@ -761,6 +761,77 @@ func TestPiProviderLinksForkedSubagentToParent(t *testing.T) {
 	assert.Equal(t, RelFork, fork.RelationshipType)
 }
 
+// piChildFixture is a pi-subagents child whose header records the launching
+// session in parentSession, as pi-subagents 0.77.0 and later write it.
+func piChildFixture(t *testing.T, sessionID, parentPath string) string {
+	t.Helper()
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
+	return strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"2026-10-09T10:05:00Z","cwd":"/Users/alice/code/pi-project","parentSession":` + string(parentPathJSON) + `}`,
+		`{"type":"message","id":"c1","timestamp":"2026-10-09T10:05:01Z","message":{"role":"user","content":"do the task"}}`,
+		"",
+	}, "\n")
+}
+
+// TestPiProviderMarksHeaderParentedSubagentRunsAsSubagents checks that a
+// pi-subagents child is a subagent even when its header records parentSession.
+// Toggle-provable: guarding the run-directory lineage on an empty
+// parentSessionID types these children as forks.
+func TestPiProviderMarksHeaderParentedSubagentRunsAsSubagents(t *testing.T) {
+	for _, agent := range []AgentType{AgentPi, AgentOMO} {
+		t.Run(string(agent), func(t *testing.T) {
+			prefix := string(agent) + ":"
+			root := t.TempDir()
+			proj := filepath.Join(root, "encoded-cwd")
+			parentStem := "2026-10-09T10-00-00-000Z_parent-uuid"
+			parentPath := filepath.Join(proj, parentStem+".jsonl")
+			childPath := filepath.Join(proj, parentStem, "run-abc", "run-0", "session.jsonl")
+			deepPath := filepath.Join(
+				proj, parentStem, "run-abc", "run-0", "session",
+				"run-def", "run-0", "session.jsonl",
+			)
+			writeSourceFile(t, parentPath, piProviderFixture("parent-uuid"))
+			writeSourceFile(t, childPath, piChildFixture(t, "child-uuid", parentPath))
+			writeSourceFile(t, deepPath, piChildFixture(t, "grandchild-uuid", childPath))
+
+			child, _, err := parsePiLikeSession(childPath, "proj", "local", agent, prefix)
+			require.NoError(t, err)
+			assert.Equal(t, prefix+"parent-uuid", child.ParentSessionID)
+			assert.Equal(t, RelSubagent, child.RelationshipType)
+
+			grandchild, _, err := parsePiLikeSession(deepPath, "proj", "local", agent, prefix)
+			require.NoError(t, err)
+			assert.Equal(t, prefix+"child-uuid", grandchild.ParentSessionID)
+			assert.Equal(t, RelSubagent, grandchild.RelationshipType)
+		})
+	}
+}
+
+// TestPiProviderKeepsHeaderParentOutsideSubagentRunsAsFork checks that the
+// run-directory rule does not retype other children that record parentSession:
+// a run under an explicit sessionDir has no parent transcript above it, and a
+// session outside a run-N directory is a /fork or /clone.
+func TestPiProviderKeepsHeaderParentOutsideSubagentRunsAsFork(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "encoded-cwd")
+	parentPath := filepath.Join(proj, "2026-10-09T10-00-00-000Z_parent-uuid.jsonl")
+	writeSourceFile(t, parentPath, piProviderFixture("parent-uuid"))
+	for name, path := range map[string]string{
+		"explicit session dir": filepath.Join(root, "custom", "run-abc", "run-0", "session.jsonl"),
+		"sibling fork":         filepath.Join(proj, "2026-10-09T10-05-00-000Z_fork-uuid.jsonl"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			writeSourceFile(t, path, piChildFixture(t, "fork-uuid", parentPath))
+
+			child, _, err := parsePiLikeSession(path, "proj", "local", AgentPi, "pi:")
+			require.NoError(t, err)
+			assert.Equal(t, "pi:parent-uuid", child.ParentSessionID)
+			assert.Equal(t, RelFork, child.RelationshipType)
+		})
+	}
+}
+
 // TestPiProviderDiscoversNestedSubagentsWithoutDuplicates checks that a child
 // that delegates to its own child is found at every depth exactly once. The
 // nested path reuses the child's session.jsonl stem because that is what

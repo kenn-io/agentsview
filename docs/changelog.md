@@ -160,6 +160,11 @@ The latest release is
   way forks from other agents already do. Before, it showed up as an unrelated
   top-level session. Existing Codex, TraeX, and Augure Code sessions are
   reprocessed on upgrade.
+- Pi subagent runs started by pi-subagents 0.77.0 or later now show as
+  subagents instead of forks, so subagent filters and usage rollups include
+  them. Nested subagent runs also link to the run that started them rather than
+  to themselves. Existing Pi, OMO, Prime Agent, and StepCode sessions are
+  reprocessed on upgrade.
 
 ## 0.46.1
 
