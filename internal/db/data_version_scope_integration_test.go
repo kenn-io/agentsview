@@ -333,8 +333,8 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 }
 
 func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
-	const version = 155
-	scope := db.ScopedDataVersionProviders(version-1, version)
+	version := db.CurrentDataVersion()
+	scope := db.ScopedDataVersionProviders(154, 155)
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}, scope)
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))

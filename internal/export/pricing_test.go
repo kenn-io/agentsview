@@ -1331,7 +1331,7 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			"model_match": {"starts_with": "genai-"},
 			"models": [` + model("genai-alpha", alphaLater) + `,` +
 			model("genai-beta", betaLater) + `,` + model("genai-gamma", gammaLater) + `]
-		},` + codexLunaGenAIProvider + `]`))
+		}]`))
 		require.NoError(t, err)
 		return prices
 	}

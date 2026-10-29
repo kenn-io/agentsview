@@ -13,25 +13,6 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
-const codexLunaGenAIProvider = `{
-    "id": "openai",
-    "name": "OpenAI",
-    "api_pattern": "https://example.invalid",
-    "model_match": {"starts_with": "gpt-"},
-    "provider_match": {"contains": "openai"},
-    "models": [{
-        "id": "gpt-5.6-luna",
-        "match": {"or": [
-            {"equals": "gpt-5.6-luna"},
-            {"regex": "^gpt-5\\.6-luna-\\d{4}-\\d{2}-\\d{2}$"}
-        ]},
-        "prices": [
-            {"prices": {"input_mtok": 1}},
-            {"constraint": {"start_date": "2026-07-30"}, "prices": {"input_mtok": 0.2}}
-        ]
-    }]
-}`
-
 func TestResolveBilledScalesEveryRateFieldAndBand(t *testing.T) {
 	r := ModelRates{
 		InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000},
