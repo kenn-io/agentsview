@@ -1,17 +1,18 @@
 <script lang="ts">
   import type { DbMessage as Message } from "../../api/generated/index.js";
-  import { formatTimestamp } from "../../utils/format.js";
   import { ChevronRightIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
+  import MessageContent from "./MessageContent.svelte";
 
   interface Props {
     messages: Message[];
   }
 
   let { messages }: Props = $props();
+  let open = $state(false);
 </script>
 
-<details class="empty-run">
+<details class="empty-run" bind:open>
   <summary class="empty-summary" title={m.transcript_empty_messages_title()}>
     <span class="empty-line"></span>
     <span class="empty-label">
@@ -22,18 +23,15 @@
     </span>
     <span class="empty-line"></span>
   </summary>
-  <ul class="empty-list">
-    {#each messages as message (message.id)}
-      <li class="empty-item" data-message-ordinal={message.ordinal}>
-        {message.role === "user"
-          ? m.message_content_role_user()
-          : m.message_content_role_assistant()}
-        {#if message.timestamp}
-          <span class="empty-time">&middot; {formatTimestamp(message.timestamp)}</span>
-        {/if}
-      </li>
-    {/each}
-  </ul>
+  {#if open}
+    <div class="empty-messages">
+      {#each messages as message (message.id)}
+        <div data-message-ordinal={message.ordinal}>
+          <MessageContent {message} searchOrdinal={message.ordinal} />
+        </div>
+      {/each}
+    </div>
+  {/if}
 </details>
 
 <style>
@@ -73,18 +71,11 @@
   .empty-run[open] .empty-chevron {
     transform: rotate(90deg);
   }
-  .empty-list {
-    margin: 4px 0 0;
-    padding: 0 0 8px;
-    list-style: none;
+  /* Matches the 5px padding above and below each transcript row. */
+  .empty-messages {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 2px;
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
-  .empty-time {
-    color: var(--text-muted);
+    gap: 10px;
+    padding-top: 10px;
   }
 </style>
