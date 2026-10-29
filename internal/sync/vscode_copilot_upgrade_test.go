@@ -76,3 +76,52 @@ func TestVSCodeCopilotSharedToolCallIDResyncPreservesIdentity(t *testing.T) {
 	}
 	assert.Equal(t, []string{"toolu_fetch vscode_fetchWebPage_internal"}, calls)
 }
+
+func TestVSCodeCopilotGrowingResponseUpgradePreservesIdentity(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentVSCodeCopilot, parser.AgentPositron} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "workspaceStorage", "abc123", "chatSessions", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl")
+			dbtest.WriteTestFile(t, path, []byte(growingCopilotStart+growingCopilotFinish))
+			database := dbtest.OpenTestDB(t)
+			agentDirs := map[parser.AgentType][]string{agent: {root}}
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			before := page.Sessions[0]
+
+			// The old writer saved the completed file's fingerprint but kept
+			// the first response at ordinal 1. Leave that fingerprint intact.
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE messages SET content = '[Task: manage_todo_list] Updated todo list' WHERE session_id = ? AND ordinal = 1`, before.ID); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `DELETE FROM tool_calls WHERE session_id = ? AND tool_use_id = 'toolu_0000000000000000000000001'`, before.ID); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 152")
+				return err
+			}))
+			require.NoError(t, database.SetSessionDataVersion(t.Context(), before.ID, 152))
+			engine.Close()
+			dbPath := database.Path()
+			require.NoError(t, database.Close())
+			database, err = db.OpenIsolated(t.Context(), dbPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			require.Equal(t, 152, database.GetSessionDataVersion(t.Context(), before.ID))
+			engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+			after, err := database.GetSession(t.Context(), before.ID)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.FilePath, after.FilePath)
+			assert.Equal(t, 153, database.GetSessionDataVersion(t.Context(), before.ID))
+			assertGrowingCopilotResponse(t, database, before.ID)
+		})
+	}
+}

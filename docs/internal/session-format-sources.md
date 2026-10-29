@@ -2599,6 +2599,14 @@ schemas keep their existing ordering behavior.
   output VS Code renders elsewhere, such as file edits and todo lists, so
   Agentsview keeps hidden calls and only collapses repeated IDs. It keeps one
   call per `toolCallId`, preferring a visible invocation over a hidden one.
+- **Growing responses (2026-10-29):** A request's response can grow through
+  successive `kind: 2` pushes after its first sync, as reported in
+  [agentsview#2455](https://github.com/kenn-io/agentsview/issues/2455). Reverified against
+  `requestSchema.response` in the pinned
+  [chatSessionOperationLog.ts](https://github.com/microsoft/vscode/blob/693614c9f239b49f6d13d55da7f1a851d5b82c36/src/vs/workbench/contrib/chat/common/model/chatSessionOperationLog.ts),
+  which tracks the response array's mutations. VS Code Copilot and Positron
+  sync replace existing messages; data version 153 reparses their sources
+  in place to repair replies already stored before completion.
 - **Session names (2026-09-30):** The session's `customTitle` holds both a name
   set with `/rename` and the title VS Code generates after the first request;
   nothing marks which one it is. See `setSessionTitle` and

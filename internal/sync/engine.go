@@ -19947,6 +19947,9 @@ func shouldReplaceFullParseMessages(
 		// assistant tool-call message and attach result events to it. An
 		// append would leave the persisted tool call without those events.
 		pw.sess.Agent == parser.AgentCopilot ||
+		// VS Code-format replies grow at an existing message position.
+		pw.sess.Agent == parser.AgentVSCodeCopilot ||
+		pw.sess.Agent == parser.AgentPositron ||
 		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
 		pw.sess.Agent == parser.AgentVSCopilot ||
 		pw.sess.Agent == parser.AgentAntigravity ||
