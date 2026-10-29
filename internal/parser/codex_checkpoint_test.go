@@ -99,6 +99,9 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	checkpoint := outcome.Results[0].Result.Checkpoint
 	require.NotEmpty(t, checkpoint,
 		"a full parse of a safe-offset transcript must produce a checkpoint")
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	concrete.cursorCache = newProductionCodexCursorCache()
 
 	tail := testjsonl.JoinJSONL(
 		testjsonl.CodexFunctionCallOutputJSON(

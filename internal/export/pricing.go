@@ -297,6 +297,9 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel str
 // priorityRow returns the first model key with a LiteLLM priority row, along
 // with that key's standard row.
 func (r *PricingResolver) priorityRow(models ...string) (PricingLookup, string, ModelRates, bool) {
+	if r == nil {
+		return PricingLookup{}, "", ModelRates{}, false
+	}
 	for _, model := range models {
 		base := r.Lookup(model)
 		pattern := catalog.PriorityPattern(base.Pattern)
