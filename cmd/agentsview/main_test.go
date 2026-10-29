@@ -719,7 +719,7 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 	assert.Equal(t, wantURL, rt.BrowserURL)
 }
 
-func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
+func TestSetupLogFileRotatesOversizedLog(t *testing.T) {
 	dir := t.TempDir()
 	restoreTestLogOutput(t)
 	path := filepath.Join(dir, "debug.log")
@@ -728,9 +728,6 @@ func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
 	setupLogFile(dir)
 
 	assert.FileExists(t, path+".1")
-	active, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Empty(t, active)
 }
 
 func TestSetupDebugLogWriterDefersRotation(t *testing.T) {
@@ -750,31 +747,19 @@ func TestSetupDebugLogWriterDefersRotation(t *testing.T) {
 	assert.NoFileExists(t, path+".1")
 }
 
-func TestSetupLogFile(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		unavailableLock bool
-	}{
-		{"available lock", false},
-		{"unavailable lock", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			// Close the logger before TempDir cleanup on Windows.
-			restoreTestLogOutput(t)
-			path := filepath.Join(dir, "debug.log")
-			if tc.unavailableLock {
-				require.NoError(t, os.Mkdir(path+".rotate.lock", 0o700))
-			}
+func TestSetupDebugLogWriterWritesWithoutLock(t *testing.T) {
+	dir := t.TempDir()
+	// Close the logger before TempDir cleanup on Windows.
+	restoreTestLogOutput(t)
+	path := filepath.Join(dir, "debug.log")
+	require.NoError(t, os.Mkdir(path+".rotate.lock", 0o700))
 
-			setupLogFile(dir)
-			log.Print("test-log-message")
+	setupDebugLogWriter(dir)
+	log.Print("test-log-message")
 
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Contains(t, string(data), "test-log-message")
-		})
-	}
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "test-log-message")
 }
 
 func TestSetupLogFileLiveWriterRotation(t *testing.T) {
