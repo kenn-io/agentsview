@@ -104,10 +104,10 @@ func (c *diagnosticReaderConn) QueryContext(ctx context.Context, query string, a
 	return c.reads.rows(id, rows, err)
 }
 
-func (c *diagnosticReaderConn) Query(query string, args []driver.Value) (driver.Rows, error) {
+func (c *diagnosticReaderConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	id := c.reads.start()
-	rows, err := c.SQLiteConn.Query(query, args)
-	return c.reads.rows(id, rows, err)
+	defer c.reads.finish(id)
+	return c.SQLiteConn.ExecContext(ctx, query, args)
 }
 
 func (c *diagnosticReaderConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
@@ -116,22 +116,8 @@ func (c *diagnosticReaderConn) BeginTx(ctx context.Context, opts driver.TxOption
 	return c.reads.transaction(id, tx, err)
 }
 
-func (c *diagnosticReaderConn) Begin() (driver.Tx, error) {
-	id := c.reads.start()
-	tx, err := c.SQLiteConn.Begin()
-	return c.reads.transaction(id, tx, err)
-}
-
 func (c *diagnosticReaderConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	stmt, err := c.SQLiteConn.PrepareContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	return &diagnosticReaderStmt{SQLiteStmt: stmt.(*sqlite3.SQLiteStmt), reads: c.reads}, nil
-}
-
-func (c *diagnosticReaderConn) Prepare(query string) (driver.Stmt, error) {
-	stmt, err := c.SQLiteConn.Prepare(query)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +135,10 @@ func (s *diagnosticReaderStmt) QueryContext(ctx context.Context, args []driver.N
 	return s.reads.rows(id, rows, err)
 }
 
-func (s *diagnosticReaderStmt) Query(args []driver.Value) (driver.Rows, error) {
+func (s *diagnosticReaderStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
 	id := s.reads.start()
-	rows, err := s.SQLiteStmt.Query(args)
-	return s.reads.rows(id, rows, err)
+	defer s.reads.finish(id)
+	return s.SQLiteStmt.ExecContext(ctx, args)
 }
 
 type diagnosticReaderRows struct {

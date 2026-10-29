@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -224,17 +225,8 @@ func holdDiagnosticRow(t *testing.T, d *DB) *sql.Row {
 	return d.getReader().QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sessions")
 }
 
-func captureDiagnosticLog(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var output bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&output)
-	t.Cleanup(func() { log.SetOutput(previous) })
-	return &output
-}
-
 func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
-	output := captureDiagnosticLog(t)
+	output := captureLog(t)
 	synctest.Test(t, func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "before-read", "proj")
@@ -280,7 +272,7 @@ func TestReadDiagnosticsReleaseAndPreparedReuse(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "pinned", "proj")
 			holdDiagnosticTransaction(t, d)
-			output := captureDiagnosticLog(t)
+			output := captureLog(t)
 			ctx := t.Context()
 			switch end {
 			case "commit", "rollback":
@@ -317,7 +309,7 @@ func TestReadDiagnosticsReleaseAndPreparedReuse(t *testing.T) {
 					defer rows.Close()
 					d.reads.logOpenReads()
 					assert.Contains(t, output.String(), "sqlite open reads: 2")
-					assert.Contains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsReleaseAndPreparedReuse.func1 (")
+					assert.Contains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsReleaseAndPreparedReuse.")
 					require.NoError(t, rows.Close())
 					require.NoError(t, rows.Err())
 					output.Reset()
@@ -350,7 +342,7 @@ func TestReadDiagnosticsReleaseAndPreparedReuse(t *testing.T) {
 				d.walMaintenanceTick(ctx, &diag)
 			}
 			assert.Contains(t, output.String(), "sqlite open reads: 1")
-			assert.NotContains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsReleaseAndPreparedReuse.func1 (")
+			assert.NotContains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsReleaseAndPreparedReuse.")
 		})
 	}
 }
@@ -363,7 +355,7 @@ func TestReadDiagnosticsAcrossReopenAndReadOnly(t *testing.T) {
 	require.NoError(t, d.Reopen())
 	newRows := holdDiagnosticRows(t, d)
 	defer newRows.Close()
-	output := captureDiagnosticLog(t)
+	output := captureLog(t)
 	d.reads.logOpenReads()
 	assert.Contains(t, output.String(), "sqlite open reads: 2")
 	require.NoError(t, oldRows.Close())
@@ -395,32 +387,96 @@ func TestReadDiagnosticsAcrossReopenAndReadOnly(t *testing.T) {
 }
 
 func TestReadDiagnosticsIncludesExecutingQuery(t *testing.T) {
+	for _, operation := range []string{"query", "exec", "prepared exec"} {
+		t.Run(operation, func(t *testing.T) {
+			d := testDB(t)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			defer conn.Close()
+			entered, release := make(chan struct{}), make(chan struct{})
+			require.NoError(t, conn.Raw(func(raw any) error {
+				return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("wait_for_diagnostics", func() int {
+					close(entered)
+					<-release
+					return 1
+				}, false)
+			}))
+			var stmt *sql.Stmt
+			if operation == "prepared exec" {
+				stmt, err = conn.PrepareContext(t.Context(), "SELECT wait_for_diagnostics()")
+				require.NoError(t, err)
+				defer stmt.Close()
+			}
+			done := make(chan error, 1)
+			go func() {
+				switch operation {
+				case "exec":
+					_, err := conn.ExecContext(t.Context(), "SELECT wait_for_diagnostics()")
+					done <- err
+				case "prepared exec":
+					_, err := stmt.ExecContext(t.Context())
+					done <- err
+				default:
+					var value int
+					done <- conn.QueryRowContext(t.Context(), "SELECT wait_for_diagnostics()").Scan(&value)
+				}
+			}()
+			<-entered
+			output := captureLog(t)
+			d.reads.logOpenReads()
+			text := output.String()
+			close(release)
+			require.NoError(t, <-done)
+			assert.Contains(t, text, "sqlite open reads: 1")
+			assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsIncludesExecutingQuery.")
+			output.Reset()
+			d.reads.logOpenReads()
+			assert.Contains(t, output.String(), "sqlite open reads: 0")
+		})
+	}
+}
+
+func TestReadDiagnosticsHasFTSExecutingRead(t *testing.T) {
 	d := testDB(t)
+	insertSession(t, d, "pinned-fts-probe", "proj")
+	holdDiagnosticTransaction(t, d)
 	conn, err := d.getReader().Conn(t.Context())
 	require.NoError(t, err)
 	defer conn.Close()
 	entered, release := make(chan struct{}), make(chan struct{})
 	require.NoError(t, conn.Raw(func(raw any) error {
-		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("wait_for_diagnostics", func() int {
-			close(entered)
-			<-release
-			return 1
-		}, false)
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, _, _, _ string) int {
+			if op == sqlite3.SQLITE_SELECT {
+				select {
+				case <-entered:
+				default:
+					close(entered)
+					<-release
+				}
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
 	}))
-	done := make(chan error, 1)
-	go func() {
-		var value int
-		done <- conn.QueryRowContext(t.Context(), "SELECT wait_for_diagnostics()").Scan(&value)
-	}()
+	require.NoError(t, conn.Close())
+	done := make(chan bool, 1)
+	go func() { done <- d.HasFTS(t.Context()) }()
 	<-entered
-	output := captureDiagnosticLog(t)
-	d.reads.logOpenReads()
+	output := captureLog(t)
+	var diag walDiagnostics
+	for attempt := range walStallLogAttempts {
+		insertSession(t, d, fmt.Sprintf("during-fts-%d", attempt), "proj")
+		d.walMaintenanceTick(t.Context(), &diag)
+	}
 	text := output.String()
 	close(release)
-	require.NoError(t, <-done)
-	assert.Contains(t, text, "sqlite open reads: 1")
-	assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsIncludesExecutingQuery.func2 (")
+	require.True(t, <-done)
+	assert.Contains(t, text, "sqlite open reads: 2")
+	assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.(*DB).HasFTS (")
 	output.Reset()
-	d.reads.logOpenReads()
-	assert.Contains(t, output.String(), "sqlite open reads: 0")
+	d.walMaintenanceTick(t.Context(), &diag)
+	assert.Contains(t, output.String(), "sqlite open reads: 1")
+	assert.NotContains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.(*DB).HasFTS (")
 }
