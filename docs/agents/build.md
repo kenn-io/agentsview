@@ -5,6 +5,8 @@ or frontend dependencies. Use the `Makefile` as the command reference.
 
 ## CI runner policy
 
+Update the CI path filters when adding a reader of files in another lane.
+
 All CI jobs use standard GitHub-hosted runners, including fork pull requests,
 scheduled checks, and desktop builds. Select labels from
 [GitHub's supported runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
