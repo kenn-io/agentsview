@@ -1586,13 +1586,7 @@ func mustLoadConfig(cmd *cobra.Command) config.Config {
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
 
 func setupLogFile(dataDir string) {
-	setupLogFileNamed(dataDir, "debug.log")
-}
-
-// setupLogFileNamed redirects the standard logger to the named file
-// in dataDir, rotating it first if it exceeds maxLogSize.
-func setupLogFileNamed(dataDir, name string) {
-	logPath := filepath.Join(dataDir, name)
+	logPath := filepath.Join(dataDir, "debug.log")
 	rotateLogFile(logPath, maxLogSize)
 	f, err := os.OpenFile(
 		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
@@ -1602,6 +1596,30 @@ func setupLogFileNamed(dataDir, name string) {
 		return
 	}
 	log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(logPath))})
+}
+
+// setupLogFileNamed redirects the standard logger to the named file
+// in dataDir, truncating it first if it exceeds maxLogSize.
+func setupLogFileNamed(dataDir, name string) {
+	logPath := filepath.Join(dataDir, name)
+	truncateLogFile(logPath, maxLogSize)
+	f, err := os.OpenFile(
+		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
+	)
+	if err != nil {
+		log.Printf("warning: cannot open log file: %v", err)
+		return
+	}
+	log.SetOutput(f)
+}
+
+// truncateLogFile clears oversized logs, skipping symlinks and ignoring errors.
+func truncateLogFile(path string, limit int64) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
+		return
+	}
+	_ = os.Truncate(path, 0)
 }
 
 func logRotationLockPath(path string) string {

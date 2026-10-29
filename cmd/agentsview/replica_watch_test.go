@@ -1,8 +1,8 @@
 package main
 
 import (
-	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,7 +28,7 @@ func replicaWatchLockFixture(t *testing.T) (string, string) {
 	t.Cleanup(func() {
 		watchLog := log.Writer()
 		log.SetOutput(output)
-		if f, ok := watchLog.(io.Closer); ok && watchLog != output {
+		if f, ok := watchLog.(*os.File); ok && watchLog != output {
 			require.NoError(t, f.Close())
 		}
 	})

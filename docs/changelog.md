@@ -95,12 +95,11 @@ The latest release is
 
 **Bug fixes**
 
-- Opening an oversized `debug.log`, `pg-watch.log`, or `clickhouse-watch.log`
-  preserves up to its last 10 MB in a backup with `.1` appended, replacing the
-  older backup before clearing the active log. Writers wait during rotation,
-  so their messages survive alongside the retained tail to help investigate a
-  stalled server. The backup starts at a full line when one fits, and keeps the
-  raw tail otherwise.
+- Opening an oversized `debug.log` preserves up to its last 10 MB in
+  `debug.log.1`, replacing the older backup before clearing the active log.
+  Writers wait during rotation, so their messages survive alongside the
+  retained tail to help investigate a stalled server. The backup starts at a
+  full line when one fits, and keeps the raw tail otherwise.
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on
