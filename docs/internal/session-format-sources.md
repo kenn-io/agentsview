@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-26
+last_edited: 2026-10-27
 ---
 
 # Session Format Source Inventory
@@ -611,21 +611,21 @@ fixtures retain this field; missing identities remain source-local.
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
-  defines `ImageGenerationCall`, serialized as `image_generation_call` with an
-  optional `id`, `status`, an optional `revised_prompt`, and a string `result`.
-  The
+  defines `ImageGenerationCall`, serialized as `image_generation_call` with
+  an optional `id`, `status`, an optional `revised_prompt`, and a string
+  `result`. The
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists that response item in every history mode, and in legacy mode also
   keeps an `image_generation_end` event that repeats `call_id`, `status`,
   `revised_prompt`, and `result` and adds `saved_path`. A field-shape check of
   local rollouts on 2026-10-29 matched both records; `result` held base64 PNG
   data of about 2.7 MB. Agentsview reads only the response item. It stores the
-  item without `result` as the call input and the image as
-  one `input_image` block in the call's result, so the storage image policy
-  owns the payload and the session viewer shows the image. A `result` that is
-  not strict base64 of a PNG, JPEG, WebP, or GIF image stays in the input, and
-  an item with no `id` keeps no result. TraeX and Augure Code share this
-  parser. Data version 153 reparses these providers in place. Covered by
+  item without `result` as the call input and the image as one `input_image`
+  block in the call's result, so the storage image policy owns the payload and
+  the session viewer shows the image. A `result` that is not strict base64 of
+  a PNG, JPEG, WebP, or GIF image stays in the input, and an item with no `id`
+  keeps no result. TraeX and Augure Code share this parser. Data version 153
+  reparses these providers in place. Covered by
   `TestCodexGeneratedImageStoredAsImageResult` and
   `TestCodexGeneratedImageUpgradeReparsesUnchangedSource`.
 
@@ -3445,9 +3445,9 @@ schemas keep their existing ordering behavior.
   never imports it, so its delegated threads show as top-level sessions whose
   parent is not in the archive.
 - **Tool items:** A read-only survey of the maintainer's mirror files on
-  2026-10-29 found every `commandExecution` item's `command` is one string, such
-  as `/bin/bash -lc "..."`, next to a `cwd` string. Each `fileChange` entry in
-  `changes` is `{path, kind, diff}`, where `kind` is `{type}` or
+  2026-10-29 found every `commandExecution` item's `command` is one string,
+  such as `/bin/bash -lc "..."`, next to a `cwd` string. Each `fileChange`
+  entry in `changes` is `{path, kind, diff}`, where `kind` is `{type}` or
   `{type, move_path}`. Every `update` diff starts with a `@@` hunk header; no
   `add` diff does. The parser stores each entry as its file's call input. Each
   tool item's message text is the codex parser's tool marker, such as `[Bash]`
@@ -3504,8 +3504,8 @@ schemas keep their existing ordering behavior.
   login found it answers `thread/goal/get`: both chats it listed returned
   `{"goal": null}`. AgentsView assumes the hosted resume runs the same idle
   step.
-- **Items with no text:** A read-only survey of the maintainer's mirror files
-  on 2026-10-29 found `agentMessage` items with `phase: "final_answer"` and an
+- **Items with no text:** A read-only survey of the maintainer's mirror files on
+  2026-10-29 found `agentMessage` items with `phase: "final_answer"` and an
   empty `text`. Four of the five ended a turn whose last tool item was
   `imageGeneration`. It also found one `userMessage` whose only content part
   was `{"type": "text", "text": "", "text_elements": []}`, with no image part.
@@ -3518,9 +3518,9 @@ schemas keep their existing ordering behavior.
   (`no-public-source`; the shape came from a session the maintainer viewed).
   Agentsview handles it like the local Codex `image_generation_call`: the item
   without `result` becomes the call input, and the image becomes one
-  `input_image` result block. A `result` that is not a supported image stays in
-  the input. Data version 153 reparses Codex Cloud mirrors in place. Covered by
-  `TestCodexCloudGeneratedImageBecomesImageResult`.
+  `input_image` result block. A `result` that is not a supported image stays
+  in the input. Data version 153 reparses Codex Cloud mirrors in place.
+  Covered by `TestCodexCloudGeneratedImageBecomesImageResult`.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
   limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).
@@ -4147,6 +4147,54 @@ schemas keep their existing ordering behavior.
   archived session's working-directory filter during sync and rebuilds,
   rechecked with synthetic stores on 2026-10-13.
 
+- **Workspace and parent evidence (checked 2026-10-26):** The summary store also
+  records each conversation's `workspace_uris`, a JSON array of folder URIs,
+  and `parent_conversation_id`, the conversation that started a sub-agent
+  conversation. Verified against conversations Antigravity CLI 1.4.7 wrote on
+  Linux, whose store has the same `conversation_summaries` table: every row
+  held `["file:///<folder>"]`, and a `research` sub-agent the main
+  conversation invoked wrote its own `conversations/<uuid>.db` and a row
+  naming the main conversation, with `nesting_depth` 1. Top-level rows hold
+  `''`. The desktop app and IDE read the same table for titles, but their
+  values for these columns remain unconfirmed.
+
+- **Workspace and parent handling:** Agentsview takes the first `file:` URI as
+  the session CWD and derives the project from it. Windows drive URIs become
+  backslash paths, and a URI with a host becomes a UNC path. A non-`file:`
+  URI, such as a remote development folder, leaves CWD empty; a remote root
+  keeps the folder only as a project hint, as for the CLI. A parent that is a
+  conversation UUID other than the conversation itself links the session as a
+  sub-agent. A missing row or column changes nothing.
+
+- **Keeping archived sessions current:** Both values are part of each source's
+  fingerprint, and both providers require the fingerprint hash for freshness,
+  so a full sync reparses exactly the conversations whose store values
+  changed. Data version 154 reparses existing `antigravity` and
+  `antigravity-cli` sources once in place, which also reaches remote mirrors
+  that are otherwise unchanged. A store write routes only the sessions whose
+  archived working directory or parent differs from what the store says,
+  including CLI `implicit/` sessions, and only sessions archived from the same
+  root; a title-only write routes none. Parents are compared both ways where
+  the store decides them: always for the app and IDE, and for CLI conversations
+  without a reader sidecar. With a cwd allow-list, a session not archived
+  yet is routed once the store gives it an allowed workspace. The comparison
+  uses the archive, so it holds after a restart, on a retry after failed
+  processing, and for remote imports that plan without discovery. A remote
+  session's workspace change alone is not routed; the next full import applies
+  it.
+
+- **Unavailable store:** While a store that was read before cannot be read or
+  has disappeared, its last good read stands in, so the outage neither changes
+  fingerprints nor clears stored values. Without a good read in this process,
+  an unreadable store fails each source's fingerprint, so the root's archived
+  sessions stay as they are and are retried. A missing app or IDE store,
+  remote roots included, likewise leaves alone any archived session holding a
+  store-supplied working directory, parent, or project; a project the user
+  assigned does not count. A CLI root without a store is normal for older
+  builds, so CLI sessions do not wait for one; a CLI conversation whose
+  working directory came only from a removed store loses it on its next
+  reparse.
+
 - **Change detection (checked 2026-10-20):** Parsing opens conversation
   databases and the title store read-only, which rewrites their `-shm` WAL
   index. Those `-shm` events, including removals, are non-data, matching the
@@ -4205,11 +4253,16 @@ schemas keep their existing ordering behavior.
   `workspace` value and the current CLI's `cache/last_conversations.json`
   workspace-to-conversation mapping are authoritative session CWD sources when
   the workspace is an absolute path. Agentsview prefers the first valid
-  current-cache folder for an exact conversation ID, retains the strict
-  prompt/time fallback for older untagged history rows, and leaves CWD empty
-  when the value is missing or relative. The exact absolute workspace remains
-  the CWD. The project label is derived from the path text without probing the
-  recorded folder when filesystem discovery is disabled.
+  current-cache folder for an exact conversation ID. The cache keeps only each
+  folder's latest conversation, and CLI 1.4.7 `history.jsonl` rows carry no
+  `conversationId` (checked 2026-10-26), so conversations neither maps take
+  their folder from the root's `conversation_summaries.db`, as described in
+  the `antigravity` entry. Its `parent_conversation_id` links a sub-agent
+  conversation when the reader sidecar names no `parentCascadeId`. Agentsview
+  retains the strict prompt/time fallback for older untagged history rows, and
+  leaves CWD empty when the value is missing or relative. The exact absolute
+  workspace remains the CWD. The project label is derived from the path text
+  without probing the recorded folder when filesystem discovery is disabled.
 - **Change detection (checked 2026-10-20):** SQLite's
   [WAL-index format](https://sqlite.org/walformat.html#the_wal_index_or_shm_file)
   describes `-shm` as a transient index rather than database content.

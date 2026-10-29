@@ -17,6 +17,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // newAntigravityTestProvider builds a concrete antigravityProvider for the given
@@ -1944,14 +1945,43 @@ func TestAntigravityCLIReadsAgyReaderParentLink(t *testing.T) {
 	const (
 		childID  = "12121212-3434-5656-7878-909090909090"
 		parentID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		storeID  = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 	)
 	tests := []struct {
 		name             string
 		ext              string
 		parentCascadeID  string
+		storeParent      string
 		wantParent       string
 		wantRelationship RelationshipType
 	}{
+		{
+			name:             "summary store parent without reader metadata",
+			ext:              ".db",
+			storeParent:      storeID,
+			wantParent:       antigravityCLIIDPrefix + storeID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name:             "reader metadata wins over the summary store",
+			ext:              ".db",
+			parentCascadeID:  parentID,
+			storeParent:      storeID,
+			wantParent:       antigravityCLIIDPrefix + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name:             "self parent in the summary store is ignored",
+			ext:              ".db",
+			storeParent:      childID,
+			wantRelationship: RelNone,
+		},
+		{
+			name:             "invalid summary store parent is ignored",
+			ext:              ".db",
+			storeParent:      "../../not-a-cascade",
+			wantRelationship: RelNone,
+		},
 		{
 			name:             "legacy pb with parent metadata",
 			ext:              ".pb",
@@ -2008,6 +2038,11 @@ func TestAntigravityCLIReadsAgyReaderParentLink(t *testing.T) {
 				`"metadata":{"createdAt":"2026-07-15T00:00:00Z"},` +
 				`"userInput":{"userResponse":"child prompt"}}]}`
 			mustWrite(t, strings.TrimSuffix(sourcePath, tc.ext)+".trajectory.json", []byte(sidecar))
+			if tc.storeParent != "" {
+				testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+					childID: {ParentID: tc.storeParent},
+				})
+			}
 
 			sess, _, err := parseAntigravityCLITestSession(
 				t, sourcePath, "", "test-machine",
