@@ -1101,9 +1101,18 @@ func installSpoolSessions(
 			SELECT cached.id FROM usage_cached_sessions cached
 			JOIN usage_install_sessions install
 			  ON install.session_id = cached.session_id
+		) AND NOT EXISTS (
+			SELECT 1 FROM usage_fill_spool.facts facts
+			JOIN usage_cached_sessions cached
+			  ON cached.session_id = facts.session_id
+			WHERE cached.id = usage_facts.cached_session_id
+			  AND facts.fact_index = usage_facts.fact_index
 		)`); err != nil {
 		return nil, err
 	}
+	// Extraction still supplies a complete snapshot. Retain equal facts so a
+	// small append does not rewrite the session's history and identity indexes.
+	// IS NOT compares nullable fields without treating NULL as a change.
 	if _, err := cacheConn.ExecContext(ctx, `INSERT INTO usage_facts(
 		cached_session_id, fact_index, source, message_ordinal, timestamp_ms,
 		timestamp_ns, raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
@@ -1124,7 +1133,41 @@ func installSpoolSessions(
 	  ON install.session_id = facts.session_id
 	JOIN usage_cached_sessions cached
 	  ON cached.session_id = install.session_id
-	ORDER BY cached.id, facts.fact_index`,
+	ORDER BY cached.id, facts.fact_index
+	ON CONFLICT(cached_session_id, fact_index) DO UPDATE SET
+		(source, message_ordinal, timestamp_ms, timestamp_ns, raw_timestamp,
+		 uses_session_start, model, input_tokens, output_tokens, reasoning_tokens,
+		 provider_id, cache_creation_tokens, cache_creation_1h_tokens,
+		 cache_read_tokens, web_search_requests, reported_cost_microdollars,
+		 cost_source, request_scoped, claude_message_id, claude_request_id,
+		 source_uuid, usage_dedup_key, token_eligible, activity_eligible) =
+		(excluded.source, excluded.message_ordinal, excluded.timestamp_ms,
+		 excluded.timestamp_ns, excluded.raw_timestamp, excluded.uses_session_start,
+		 excluded.model, excluded.input_tokens, excluded.output_tokens,
+		 excluded.reasoning_tokens, excluded.provider_id, excluded.cache_creation_tokens,
+		 excluded.cache_creation_1h_tokens, excluded.cache_read_tokens,
+		 excluded.web_search_requests, excluded.reported_cost_microdollars,
+		 excluded.cost_source, excluded.request_scoped, excluded.claude_message_id,
+		 excluded.claude_request_id, excluded.source_uuid, excluded.usage_dedup_key,
+		 excluded.token_eligible, excluded.activity_eligible)
+	WHERE (usage_facts.source, usage_facts.message_ordinal, usage_facts.timestamp_ms,
+		 usage_facts.timestamp_ns, usage_facts.raw_timestamp, usage_facts.uses_session_start,
+		 usage_facts.model, usage_facts.input_tokens, usage_facts.output_tokens,
+		 usage_facts.reasoning_tokens, usage_facts.provider_id, usage_facts.cache_creation_tokens,
+		 usage_facts.cache_creation_1h_tokens, usage_facts.cache_read_tokens,
+		 usage_facts.web_search_requests, usage_facts.reported_cost_microdollars,
+		 usage_facts.cost_source, usage_facts.request_scoped, usage_facts.claude_message_id,
+		 usage_facts.claude_request_id, usage_facts.source_uuid, usage_facts.usage_dedup_key,
+		 usage_facts.token_eligible, usage_facts.activity_eligible) IS NOT
+		(excluded.source, excluded.message_ordinal, excluded.timestamp_ms,
+		 excluded.timestamp_ns, excluded.raw_timestamp, excluded.uses_session_start,
+		 excluded.model, excluded.input_tokens, excluded.output_tokens,
+		 excluded.reasoning_tokens, excluded.provider_id, excluded.cache_creation_tokens,
+		 excluded.cache_creation_1h_tokens, excluded.cache_read_tokens,
+		 excluded.web_search_requests, excluded.reported_cost_microdollars,
+		 excluded.cost_source, excluded.request_scoped, excluded.claude_message_id,
+		 excluded.claude_request_id, excluded.source_uuid, excluded.usage_dedup_key,
+		 excluded.token_eligible, excluded.activity_eligible)`,
 	); err != nil {
 		return nil, err
 	}
