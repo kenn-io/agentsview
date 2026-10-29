@@ -33,9 +33,11 @@ Read this file before adding or changing tests.
 The kit `deadlinetest` analyzer, run by `kennlint` in `make lint` and
 `make lint-ci`, rejects sub-second constant budgets in tests outside a
 `testing/synctest` bubble, such as `context.WithTimeout`, `time.After`, timers,
-and testify `Eventually`. Wait on a real event, run the test under
-`synctest.Test`, or use a long hang guard on a `select` that already waits for
-the event. Mutex acquisition does not durably block in a synctest bubble.
+and testify `Eventually`. It also checks configuration fields, same-module
+helper arguments, and standalone `time.Now().Add` deadlines. Wait on a real
+event, run the test under `synctest.Test`, or use a long hang guard on a
+`select` that already waits for the event. Mutex acquisition does not durably
+block in a synctest bubble.
 
 Mark a site `//nolint:kennlint // deadlinetest: <reason>` only when the asserted
 result is the deadline or cancellation expiring, or when a `select` on a timer
