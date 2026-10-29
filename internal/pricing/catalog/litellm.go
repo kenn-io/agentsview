@@ -274,11 +274,6 @@ func parsePricingBands(
 		for _, companion := range companions {
 			key := companion.prefix + suffix
 			rate, exists, err := parseOptionalRate(fields, key)
-			standardSuffix := strings.TrimSuffix(suffix, "_"+priorityTier)
-			if err == nil && !exists && standardSuffix != suffix {
-				key = companion.prefix + standardSuffix
-				rate, exists, err = parseOptionalRate(fields, key)
-			}
 			if err != nil {
 				return nil, fmt.Errorf(
 					"parsing %s %s: %w",
