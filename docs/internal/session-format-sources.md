@@ -2605,7 +2605,7 @@ schemas keep their existing ordering behavior.
   `requestSchema.response` in the pinned
   [chatSessionOperationLog.ts](https://github.com/microsoft/vscode/blob/693614c9f239b49f6d13d55da7f1a851d5b82c36/src/vs/workbench/contrib/chat/common/model/chatSessionOperationLog.ts),
   which tracks the response array's mutations. VS Code Copilot and Positron
-  sync replace existing messages; data version 153 reparses their sources
+  sync replace existing messages; data version 154 reparses their sources
   in place to repair replies already stored before completion.
 - **Session names (2026-09-30):** The session's `customTitle` holds both a name
   set with `/rename` and the title VS Code generates after the first request;

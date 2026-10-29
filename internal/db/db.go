@@ -619,10 +619,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // and each file of a change carries its own path and diff as input. Re-parse
 // Codex cloud sources in place; source and session identities are unchanged.)
 // (153: show images Codex generates, in local rollouts and Codex Cloud, as
-// tool-result images, and repair growing VS Code-format replies. Re-parse
-// Codex-format, Codex Cloud, VS Code Copilot, and Positron sources in place;
+// tool-result images. Re-parse Codex-format and Codex Cloud sources in place;
 // source and session identities are unchanged.)
-const dataVersion = 153
+// (154: repair growing VS Code-format replies. Re-parse VS Code Copilot and
+// Positron sources in place; source and session identities are unchanged.)
+const dataVersion = 154
 
 const archiveOnlyVersionBase = 1 << 20
 

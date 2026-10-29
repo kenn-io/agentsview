@@ -23,14 +23,15 @@ func TestVSCodeCopilotUpgradePreservesIdentity(t *testing.T) {
 		previousVersion int
 		extension       string
 		initial         string
+		growingResponse bool
 	}{
 		{"shared-tool-id", parser.AgentVSCodeCopilot, 146, ".json", `{"version":3,"sessionId":"` + uuid + `","creationDate":1786000235709,` +
 			`"requests":[{"requestId":"r1","timestamp":1786000291425,"message":{"text":"newest release?"},"response":[` +
 			`{"kind":"toolInvocationSerialized","presentation":"hidden","invocationMessage":"","isComplete":true,"toolCallId":"toolu_fetch","toolId":"copilot_fetchWebPage"},` +
 			`{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Fetched https://example.com/releases"},"isComplete":true,"toolCallId":"toolu_fetch","toolId":"vscode_fetchWebPage_internal"},` +
-			`{"value":"The newest release is v2."}]}]}`},
-		{"growing-vscode-copilot", parser.AgentVSCodeCopilot, 152, ".jsonl", growingCopilotStart},
-		{"growing-positron", parser.AgentPositron, 152, ".jsonl", growingCopilotStart},
+			`{"value":"The newest release is v2."}]}]}`, false},
+		{"growing-vscode-copilot", parser.AgentVSCodeCopilot, 153, ".jsonl", growingCopilotStart, true},
+		{"growing-positron", parser.AgentPositron, 153, ".jsonl", growingCopilotStart, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -46,7 +47,7 @@ func TestVSCodeCopilotUpgradePreservesIdentity(t *testing.T) {
 			require.Len(t, page.Sessions, 1)
 			before := page.Sessions[0]
 
-			if tc.previousVersion == 152 {
+			if tc.growingResponse {
 				// The old writer kept this first parsed response while advancing
 				// the fingerprint to the completed file.
 				dbtest.WriteTestFile(t, path, []byte(growingCopilotStart+growingCopilotFinish))
@@ -91,7 +92,7 @@ func TestVSCodeCopilotUpgradePreservesIdentity(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, after)
 			assert.Equal(t, before.FilePath, after.FilePath)
-			if tc.previousVersion == 152 {
+			if tc.growingResponse {
 				assertGrowingCopilotResponse(t, database, before.ID)
 			} else {
 				msgs, err := database.GetAllMessages(t.Context(), before.ID)
