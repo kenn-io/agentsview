@@ -37,15 +37,16 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 	textStart := initial + "\n" + `{"kind":2,"k":["requests",0,"response"],"v":[{"value":"Let me check."}]}` + "\n"
 	for _, agent := range []parser.AgentType{parser.AgentVSCodeCopilot, parser.AgentPositron} {
 		for _, tc := range []struct {
-			name            string
-			mode            syncWriteMode
-			watcher, legacy bool
+			name                        string
+			mode                        syncWriteMode
+			watcher, legacy, fullResync bool
 		}{
 			{name: "ordinary"},
 			{name: "bulk", mode: syncWriteBulk},
 			{name: "watcher", watcher: true},
 			{name: "legacy/ordinary", legacy: true},
 			{name: "legacy/bulk", mode: syncWriteBulk, legacy: true},
+			{name: "legacy/full-resync", legacy: true, fullResync: true},
 		} {
 			t.Run(string(agent)+"/"+tc.name, func(t *testing.T) {
 				start, finish := textStart, textStart+todo+growingCopilotFinish
@@ -71,7 +72,7 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 				messages, err := database.GetAllMessages(t.Context(), sessionID)
 				require.NoError(t, err)
 				require.Len(t, messages, 2)
-				_, err = database.PinMessage(t.Context(), sessionID, messages[1].ID, nil)
+				_, err = database.PinMessage(t.Context(), sessionID, messages[1].ID, new("Keep this answer"))
 				require.NoError(t, err)
 				dbtest.WriteTestFile(t, path, []byte(finish))
 				if tc.legacy {
@@ -100,7 +101,13 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 					engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 					t.Cleanup(engine.Close)
 				}
-				sync()
+				if tc.fullResync {
+					stats := engine.ResyncAll(t.Context(), nil)
+					require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
+					require.Zero(t, stats.Failed)
+				} else {
+					sync()
+				}
 				assertGrowingCopilotResponse(t, database, sessionID)
 				assert.Equal(t, path, database.GetSessionFilePath(t.Context(), sessionID))
 				assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
@@ -108,6 +115,9 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, pins, 1)
 				assert.Equal(t, 1, pins[0].Ordinal)
+				if tc.fullResync {
+					assert.Equal(t, new("Keep this answer"), pins[0].Note)
+				}
 			})
 		}
 	}

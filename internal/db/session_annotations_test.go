@@ -975,55 +975,67 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 
 func TestVSCodeLegacyReplyPinConversion(t *testing.T) {
 	for _, scenario := range []string{"shifted", "duplicate-old", "duplicate-new", "changed-prompt", "zero-time"} {
-		t.Run(scenario, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project", func(s *Session) { s.Agent = "vscode-copilot" })
-			stamp := "2026-08-06T05:51:31.425Z"
-			if scenario == "zero-time" {
-				stamp = ""
-			}
-			old := []Message{
-				{SessionID: "s1", Ordinal: 0, Role: "user", Content: "Which release?", Timestamp: stamp},
-				{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Let me check.", Timestamp: stamp},
-			}
-			incoming := []Message{
-				{SessionID: "s1", Ordinal: 0, Role: "user", Content: "Earlier question", Timestamp: stamp, SourceUUID: "vscode-copilot:user:earlier"},
-				{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Earlier answer", Timestamp: stamp, SourceUUID: "vscode-copilot:assistant:earlier"},
-				{SessionID: "s1", Ordinal: 2, Role: "user", Content: "Which release?", Timestamp: stamp, SourceUUID: "vscode-copilot:user:r1"},
-				{SessionID: "s1", Ordinal: 3, Role: "assistant", Content: "[Tool: fetch]\nThe newest release is v2.", Timestamp: stamp, SourceUUID: "vscode-copilot:assistant:r1"},
-			}
-			switch scenario {
-			case "duplicate-old":
-				extra := append([]Message(nil), old...)
-				extra[0].Ordinal, extra[1].Ordinal = 2, 3
-				old = append(old, extra...)
-			case "duplicate-new":
-				incoming[0].Content = "Which release?"
-			case "changed-prompt":
-				incoming[2].Content = "A different question"
-			}
-			insertMessages(t, d, old...)
-			stored, err := d.GetAllMessages(t.Context(), "s1")
-			require.NoError(t, err)
-			note := "Release notes"
-			_, err = d.PinMessage(t.Context(), "s1", stored[1].ID, &note)
-			require.NoError(t, err)
-			beforePins, err := d.ListPinnedMessages(t.Context(), "", "")
-			require.NoError(t, err)
-			require.Len(t, beforePins, 1)
-			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", incoming))
-			pins, err := d.ListPinnedMessages(t.Context(), "", "")
-			require.NoError(t, err)
-			if scenario != "shifted" {
-				assert.Empty(t, pins)
-				return
-			}
-			require.Len(t, pins, 1)
-			assert.Equal(t, 3, pins[0].Ordinal)
-			assert.Equal(t, &note, pins[0].Note)
-			assert.Equal(t, beforePins[0].CreatedAt, pins[0].CreatedAt)
-			require.NotNil(t, pins[0].Content)
-			assert.Contains(t, *pins[0].Content, "The newest release is v2.")
-		})
+		for _, writer := range []string{"replace", "copy"} {
+			t.Run(scenario+"/"+writer, func(t *testing.T) {
+				d := testDB(t)
+				insertSession(t, d, "s1", "project", func(s *Session) { s.Agent = "vscode-copilot" })
+				stamp := "2026-08-06T05:51:31.425Z"
+				if scenario == "zero-time" {
+					stamp = ""
+				}
+				old := []Message{
+					{SessionID: "s1", Ordinal: 0, Role: "user", Content: "Which release?", Timestamp: stamp},
+					{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Let me check.", Timestamp: stamp},
+				}
+				incoming := []Message{
+					{SessionID: "s1", Ordinal: 0, Role: "user", Content: "Earlier question", Timestamp: stamp, SourceUUID: "vscode-copilot:user:earlier"},
+					{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Earlier answer", Timestamp: stamp, SourceUUID: "vscode-copilot:assistant:earlier"},
+					{SessionID: "s1", Ordinal: 2, Role: "user", Content: "Which release?", Timestamp: stamp, SourceUUID: "vscode-copilot:user:r1"},
+					{SessionID: "s1", Ordinal: 3, Role: "assistant", Content: "[Tool: fetch]\nThe newest release is v2.", Timestamp: stamp, SourceUUID: "vscode-copilot:assistant:r1"},
+				}
+				switch scenario {
+				case "duplicate-old":
+					extra := append([]Message(nil), old...)
+					extra[0].Ordinal, extra[1].Ordinal = 2, 3
+					old = append(old, extra...)
+				case "duplicate-new":
+					incoming[0].Content = "Which release?"
+				case "changed-prompt":
+					incoming[2].Content = "A different question"
+				}
+				insertMessages(t, d, old...)
+				stored, err := d.GetAllMessages(t.Context(), "s1")
+				require.NoError(t, err)
+				note := "Release notes"
+				_, err = d.PinMessage(t.Context(), "s1", stored[1].ID, &note)
+				require.NoError(t, err)
+				beforePins, err := d.ListPinnedMessages(t.Context(), "", "")
+				require.NoError(t, err)
+				require.Len(t, beforePins, 1)
+				if writer == "copy" {
+					fresh := testDB(t)
+					insertSession(t, fresh, "s1", "project", func(s *Session) { s.Agent = "vscode-copilot" })
+					insertMessages(t, fresh, incoming...)
+					path := d.Path()
+					require.NoError(t, d.Close())
+					require.NoError(t, fresh.CopySessionMetadataFrom(path))
+					d = fresh
+				} else {
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", incoming))
+				}
+				pins, err := d.ListPinnedMessages(t.Context(), "", "")
+				require.NoError(t, err)
+				if scenario != "shifted" {
+					assert.Empty(t, pins)
+					return
+				}
+				require.Len(t, pins, 1)
+				assert.Equal(t, 3, pins[0].Ordinal)
+				assert.Equal(t, &note, pins[0].Note)
+				assert.Equal(t, beforePins[0].CreatedAt, pins[0].CreatedAt)
+				require.NotNil(t, pins[0].Content)
+				assert.Contains(t, *pins[0].Content, "The newest release is v2.")
+			})
+		}
 	}
 }

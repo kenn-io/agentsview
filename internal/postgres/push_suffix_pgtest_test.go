@@ -165,3 +165,46 @@ func TestPushSuffixPublication(t *testing.T) {
 		})
 	}
 }
+
+func TestPushLegacyVSCodeReplyPin(t *testing.T) {
+	for _, agent := range []string{"vscode-copilot", "positron"} {
+		t.Run(agent, func(t *testing.T) {
+			const schema = "agentsview_legacy_reply_pin_test"
+			url := testPGURL(t)
+			cleanNamedPGSchema(t, url, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+			local := testDB(t)
+			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "s1", Agent: agent, Project: "project", Machine: "machine", MessageCount: 2}))
+			messages := []db.Message{
+				{SessionID: "s1", Ordinal: 0, Role: "user", Content: "Which release?", Timestamp: "2026-08-06T05:51:31.425Z"},
+				{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Let me check.", Timestamp: "2026-08-06T05:51:31.425Z"},
+			}
+			require.NoError(t, local.InsertMessages(t.Context(), messages))
+			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			result, err := syncer.Push(t.Context(), true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			store := &Store{pg: syncer.pg}
+			_, err = store.PinMessage(t.Context(), "s1", 1, new("Keep the release notes"))
+			require.NoError(t, err)
+			messages[0].SourceUUID = agent + ":user:r1"
+			messages[1].SourceUUID = agent + ":assistant:r1"
+			messages[1].Content = "[Tool: fetch]\nThe newest release is v2."
+			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "s1", messages))
+			result, err = syncer.Push(t.Context(), false, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			pins, err := store.ListPinnedMessages(t.Context(), "s1", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			require.Equal(t, 1, pins[0].Ordinal)
+			assert.Equal(t, new("Keep the release notes"), pins[0].Note)
+			grown, err := store.GetMessages(t.Context(), "s1", 0, 100, true)
+			require.NoError(t, err)
+			require.Len(t, grown, 2)
+			assert.Equal(t, "[Tool: fetch]\nThe newest release is v2.", grown[pins[0].Ordinal].Content)
+		})
+	}
+}

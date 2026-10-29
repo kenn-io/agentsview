@@ -603,6 +603,11 @@ func (s *MessageSnapshot) GetMessages(
 	return getMessagesWith(ctx, s.tx, sessionID, from, limit, asc)
 }
 
+// LegacyVSCodeReplyAnchors reads request anchors from the publication snapshot.
+func (s *MessageSnapshot) LegacyVSCodeReplyAnchors(sessionID string) ([]LegacyVSCodeReplyAnchor, error) {
+	return loadLegacyVSCodeReplyAnchorsTx(s.tx, "main", sessionID)
+}
+
 // Close ends the snapshot. A snapshot whose context already ended has
 // nothing left to release.
 func (s *MessageSnapshot) Close() error {
@@ -2043,6 +2048,7 @@ type savedPin struct {
 	sourceUUID          string
 	role                string
 	content             string
+	isSystem            bool
 	ordinal             int
 	sourceUUIDCount     int
 	sourceIdentityCount int
@@ -2757,78 +2763,116 @@ func savePinsTx(tx transactionQueries, sessionID string, incoming []Message) ([]
 	return pins, nil
 }
 
-// identifyLegacyVSCodePinsTx enriches old reply pins only when the unchanged
-// prompt and request timestamp identify a unique request on both sides.
-// Ordinals locate the old prompt; they never select the incoming reply.
-func identifyLegacyVSCodePinsTx(tx transactionQueries, sessionID string, pins []savedPin, incoming []Message) error {
-	if !slices.ContainsFunc(pins, func(p savedPin) bool { return p.sourceUUID == "" && p.role == "assistant" && p.messageFound != 0 }) {
-		return nil
+// LegacyVSCodeReplyAnchor identifies a request by its prompt and timestamp.
+// Ordinal locates the old reply; SourceUUID names the incoming reply.
+type LegacyVSCodeReplyAnchor struct {
+	Ordinal                              int
+	Prompt, Timestamp, SourceUUID, Agent string
+}
+
+// legacyVSCodeReplyAnchors extracts adjacent prompt/reply pairs emitted by the
+// shared VS Code parser. Empty prompts and system rows cannot anchor a reply.
+func legacyVSCodeReplyAnchors(messages []Message) []LegacyVSCodeReplyAnchor {
+	var anchors []LegacyVSCodeReplyAnchor
+	for i, reply := range messages {
+		if i == 0 || reply.Role != "assistant" || reply.IsSystem {
+			continue
+		}
+		prompt := messages[i-1]
+		if prompt.Role != "user" || prompt.IsSystem || prompt.Content == "" || prompt.Ordinal+1 != reply.Ordinal || prompt.Timestamp != reply.Timestamp {
+			continue
+		}
+		anchors = append(anchors, LegacyVSCodeReplyAnchor{Ordinal: reply.Ordinal, Prompt: prompt.Content, Timestamp: reply.Timestamp, SourceUUID: reply.SourceUUID})
 	}
-	type anchor struct{ prompt, timestamp string }
+	return anchors
+}
+
+// MatchLegacyVSCodeReplyAnchors returns native reply IDs only for unique,
+// unchanged prompt/timestamp pairs. The pin restore still checks ID uniqueness.
+func MatchLegacyVSCodeReplyAnchors(old, incoming []LegacyVSCodeReplyAnchor) map[int]string {
+	type anchorKey struct {
+		prompt    string
+		timestamp time.Time
+	}
+	keyFor := func(a LegacyVSCodeReplyAnchor) (anchorKey, bool) {
+		stamp, err := time.Parse(time.RFC3339Nano, a.Timestamp)
+		return anchorKey{a.Prompt, stamp.UTC()}, err == nil && !stamp.IsZero()
+	}
 	type match struct {
 		uuid  string
 		count int
 	}
-	incomingAnchors := map[anchor]match{}
-	for i, msg := range incoming {
-		if i == 0 || msg.Role != "assistant" || msg.IsSystem {
+	incomingMatches := map[anchorKey]match{}
+	for _, a := range incoming {
+		key, ok := keyFor(a)
+		if !ok {
 			continue
 		}
-		prompt := incoming[i-1]
-		if prompt.Role != "user" || prompt.IsSystem || prompt.Content == "" || prompt.Ordinal+1 != msg.Ordinal || prompt.Timestamp != msg.Timestamp {
-			continue
-		}
-		stamp, err := time.Parse(time.RFC3339Nano, msg.Timestamp)
-		if err != nil || stamp.IsZero() {
-			continue
-		}
-		key := anchor{prompt.Content, msg.Timestamp}
-		m := incomingAnchors[key]
-		m.uuid, m.count = msg.SourceUUID, m.count+1
-		incomingAnchors[key] = m
+		m := incomingMatches[key]
+		m.uuid, m.count = a.SourceUUID, m.count+1
+		incomingMatches[key] = m
 	}
-	if len(incomingAnchors) == 0 {
-		return nil
+	oldCounts := map[anchorKey]int{}
+	for _, a := range old {
+		if key, ok := keyFor(a); ok {
+			oldCounts[key]++
+		}
 	}
-	rows, err := tx.Query(`
-        SELECT a.ordinal, u.content, a.timestamp, s.agent
-        FROM messages a
-        JOIN messages u ON u.session_id = a.session_id AND u.ordinal = a.ordinal - 1
-        JOIN sessions s ON s.id = a.session_id
-        WHERE a.session_id = ? AND s.agent IN ('vscode-copilot', 'positron')
-          AND a.role = 'assistant' AND u.role = 'user'
-          AND a.is_system = 0 AND u.is_system = 0
-          AND u.content != '' AND a.timestamp = u.timestamp`, sessionID)
+	matches := map[int]string{}
+	for _, a := range old {
+		key, ok := keyFor(a)
+		m := incomingMatches[key]
+		if ok && oldCounts[key] == 1 && m.count == 1 && strings.HasPrefix(m.uuid, a.Agent+":assistant:") {
+			matches[a.Ordinal] = m.uuid
+		}
+	}
+	return matches
+}
+
+func loadLegacyVSCodeReplyAnchorsTx(tx transactionQueries, schema, sessionID string) ([]LegacyVSCodeReplyAnchor, error) {
+	rows, err := tx.Query(fmt.Sprintf(`
+  SELECT a.ordinal, u.content, a.timestamp, COALESCE(a.source_uuid, ''), s.agent
+  FROM %[1]s.messages a
+  JOIN %[1]s.messages u ON u.session_id = a.session_id AND u.ordinal = a.ordinal - 1
+  JOIN %[1]s.sessions s ON s.id = a.session_id
+  WHERE a.session_id = ? AND s.agent IN ('vscode-copilot', 'positron')
+    AND a.role = 'assistant' AND u.role = 'user'
+    AND a.is_system = 0 AND u.is_system = 0
+    AND u.content != '' AND a.timestamp = u.timestamp`, schema), sessionID)
 	if err != nil {
-		return fmt.Errorf("reading legacy reply anchors: %w", err)
+		return nil, fmt.Errorf("reading legacy reply anchors: %w", err)
 	}
 	defer rows.Close()
-	oldAnchors := map[int]anchor{}
-	oldCounts := map[anchor]int{}
-	var agent string
+	var anchors []LegacyVSCodeReplyAnchor
 	for rows.Next() {
-		var ordinal int
-		var key anchor
-		if err := rows.Scan(&ordinal, &key.prompt, &key.timestamp, &agent); err != nil {
-			return fmt.Errorf("scanning legacy reply anchor: %w", err)
+		var a LegacyVSCodeReplyAnchor
+		if err := rows.Scan(&a.Ordinal, &a.Prompt, &a.Timestamp, &a.SourceUUID, &a.Agent); err != nil {
+			return nil, fmt.Errorf("scanning legacy reply anchor: %w", err)
 		}
-		oldAnchors[ordinal] = key
-		oldCounts[key]++
+		anchors = append(anchors, a)
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("reading legacy reply anchors: %w", err)
+	return anchors, rows.Err()
+}
+
+func identifyLegacyVSCodePinsTx(tx transactionQueries, sessionID string, pins []savedPin, incoming []Message) error {
+	if !slices.ContainsFunc(pins, func(p savedPin) bool { return p.sourceUUID == "" && p.role == "assistant" && p.messageFound != 0 }) {
+		return nil
 	}
+	old, err := loadLegacyVSCodeReplyAnchorsTx(tx, "main", sessionID)
+	if err != nil {
+		return err
+	}
+	identifyLegacyVSCodePins(pins, MatchLegacyVSCodeReplyAnchors(old, legacyVSCodeReplyAnchors(incoming)))
+	return nil
+}
+
+func identifyLegacyVSCodePins(pins []savedPin, matches map[int]string) {
 	for i := range pins {
 		pin := &pins[i]
-		key, ok := oldAnchors[pin.ordinal]
-		m := incomingAnchors[key]
-		prefix := agent + ":assistant:"
-		if !ok || pin.sourceUUID != "" || pin.role != "assistant" || oldCounts[key] != 1 || m.count != 1 || !strings.HasPrefix(m.uuid, prefix) {
-			continue
+		if uuid := matches[pin.ordinal]; uuid != "" && pin.sourceUUID == "" && pin.role == "assistant" && pin.messageFound != 0 {
+			pin.sourceUUID, pin.sourceUUIDCount = uuid, 1
 		}
-		pin.sourceUUID, pin.sourceUUIDCount = m.uuid, 1
 	}
-	return nil
 }
 
 // savePinsFromTx saves the pins whose message sits at or after
@@ -2836,6 +2880,10 @@ func identifyLegacyVSCodePinsTx(tx transactionQueries, sessionID string, pins []
 func savePinsFromTx(
 	tx transactionQueries, sessionID string, fromOrdinal int,
 ) ([]savedPin, error) {
+	return savePinsFromSchemaTx(tx, "main", sessionID, fromOrdinal)
+}
+
+func savePinsFromSchemaTx(tx transactionQueries, schema, sessionID string, fromOrdinal int) ([]savedPin, error) {
 	// Save existing pins before deletion. The ON DELETE CASCADE on
 	// pinned_messages.message_id would otherwise wipe them when
 	// messages are deleted below. source_uuid comes from the joined
@@ -2843,20 +2891,21 @@ func savePinsFromTx(
 	// message_id no longer resolves cleanly. The counts capture whether
 	// source_uuid, or source_uuid plus role and content, uniquely identify
 	// the old message before it is deleted.
-	pinRows, err := tx.Query(`
+	pinRows, err := tx.Query(fmt.Sprintf(`
 		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
 			COALESCE(m.role, ''), COALESCE(m.content, ''),
+			COALESCE(m.is_system, 0),
 			CASE WHEN m.id IS NULL THEN 0 ELSE 1 END,
 			(
 				SELECT COUNT(*)
-				FROM messages same_uuid
+				FROM %[1]s.messages same_uuid
 				WHERE same_uuid.session_id = m.session_id
 					AND same_uuid.source_uuid = m.source_uuid
 					AND m.source_uuid != ''
 			),
 			(
 				SELECT COUNT(*)
-				FROM messages same_identity
+				FROM %[1]s.messages same_identity
 				WHERE same_identity.session_id = m.session_id
 					AND same_identity.source_uuid = m.source_uuid
 					AND same_identity.role = m.role
@@ -2865,7 +2914,7 @@ func savePinsFromTx(
 			),
 			(
 				SELECT COUNT(*)
-				FROM messages identity_rank
+				FROM %[1]s.messages identity_rank
 				WHERE identity_rank.session_id = m.session_id
 					AND identity_rank.source_uuid = m.source_uuid
 					AND identity_rank.role = m.role
@@ -2875,7 +2924,7 @@ func savePinsFromTx(
 			),
 			(
 				SELECT COUNT(*)
-				FROM messages legacy_identity
+				FROM %[1]s.messages legacy_identity
 				WHERE legacy_identity.session_id = m.session_id
 					AND legacy_identity.role = m.role
 					AND legacy_identity.content = m.content
@@ -2883,7 +2932,7 @@ func savePinsFromTx(
 			),
 			(
 				SELECT COUNT(*)
-				FROM messages legacy_rank
+				FROM %[1]s.messages legacy_rank
 				WHERE legacy_rank.session_id = m.session_id
 					AND legacy_rank.role = m.role
 					AND legacy_rank.content = m.content
@@ -2891,9 +2940,9 @@ func savePinsFromTx(
 					AND legacy_rank.ordinal <= m.ordinal
 			),
 			p.note, p.created_at
-		FROM pinned_messages p
-		LEFT JOIN messages m ON m.id = p.message_id
-		WHERE p.session_id = ? AND (m.id IS NULL OR m.ordinal >= ?)`,
+		FROM %[1]s.pinned_messages p
+		LEFT JOIN %[1]s.messages m ON m.id = p.message_id
+		WHERE p.session_id = ? AND (m.id IS NULL OR m.ordinal >= ?)`, schema),
 		sessionID, fromOrdinal,
 	)
 	if err != nil {
@@ -2905,6 +2954,7 @@ func savePinsFromTx(
 		var sp savedPin
 		if err := pinRows.Scan(
 			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
+			&sp.isSystem,
 			&sp.messageFound, &sp.sourceUUIDCount,
 			&sp.sourceIdentityCount, &sp.sourceIdentityRank,
 			&sp.legacyIdentityCount, &sp.legacyIdentityRank,

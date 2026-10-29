@@ -3093,6 +3093,10 @@ func (s *Sync) pushMessages(
 	if err != nil {
 		return 0, false, err
 	}
+	if err := identifyLegacyVSCodePinnedReplies(ctx, tx, sessionID, savedPins, snapshot); err != nil {
+		return 0, false, err
+	}
+
 	if usageChanged {
 		usageChanged, err = s.replaceUsageEvents(ctx, tx, sessionID)
 		if err != nil {
@@ -3404,6 +3408,51 @@ func snapshotPinnedMessages(
 		return nil, fmt.Errorf("iterating pg pin snapshots: %w", err)
 	}
 	return pins, nil
+}
+
+func identifyLegacyVSCodePinnedReplies(ctx context.Context, tx *sql.Tx, sessionID string, pins []savedPostgresPin, snapshot *db.MessageSnapshot) error {
+	if !slices.ContainsFunc(pins, func(p savedPostgresPin) bool { return p.sourceUUID == "" && p.role == "assistant" && p.messageFound }) {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT a.ordinal, u.content, a.timestamp, s.agent
+  FROM messages a JOIN messages u ON u.session_id = a.session_id AND u.ordinal = a.ordinal - 1
+  JOIN sessions s ON s.id = a.session_id
+  WHERE a.session_id = $1 AND s.agent IN ('vscode-copilot', 'positron')
+    AND a.role = 'assistant' AND u.role = 'user' AND NOT a.is_system AND NOT u.is_system
+    AND u.content != '' AND a.timestamp = u.timestamp`, sessionID)
+	if err != nil {
+		return fmt.Errorf("reading pg legacy reply anchors: %w", err)
+	}
+	var old []db.LegacyVSCodeReplyAnchor
+	for rows.Next() {
+		var anchor db.LegacyVSCodeReplyAnchor
+		var stamp time.Time
+		if err := rows.Scan(&anchor.Ordinal, &anchor.Prompt, &stamp, &anchor.Agent); err != nil {
+			rows.Close()
+			return err
+		}
+		anchor.Timestamp = stamp.UTC().Format(time.RFC3339Nano)
+		old = append(old, anchor)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	incoming, err := snapshot.LegacyVSCodeReplyAnchors(sessionID)
+	if err != nil {
+		return err
+	}
+	matches := db.MatchLegacyVSCodeReplyAnchors(old, incoming)
+	for i := range pins {
+		pin := &pins[i]
+		if uuid := matches[pin.anchorOrdinal]; uuid != "" && pin.sourceUUID == "" && pin.role == "assistant" && pin.messageFound {
+			pin.sourceUUID, pin.sourceUUIDCount = uuid, 1
+		}
+	}
+	return nil
 }
 
 // restorePinnedMessages moves the snapshotted pins from their saved session
