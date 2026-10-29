@@ -1580,7 +1580,7 @@ func mustLoadConfig(cmd *cobra.Command) config.Config {
 }
 
 // maxLogSize is the threshold at which the debug log file is
-// rotated on startup to preserve recent diagnostic messages.
+// rotated when opened to preserve recent diagnostic messages.
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
 
 func setupLogFile(dataDir string) {
@@ -1607,6 +1607,15 @@ func setupLogFileNamed(dataDir, name string) {
 // Errors are best-effort; a failed backup leaves the active log intact.
 func rotateLogFile(path string, limit int64) {
 	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
+		return
+	}
+	lock, err := tryAcquireNamedLock(filepath.Dir(path), filepath.Base(path)+".rotate.lock")
+	if err != nil {
+		return
+	}
+	defer lock.Close()
+	info, err = os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
 		return
 	}

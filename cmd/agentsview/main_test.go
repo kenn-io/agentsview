@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -722,7 +723,7 @@ func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
 	dir := t.TempDir()
 	restoreTestLogOutput(t)
 	path := filepath.Join(dir, "debug.log")
-	previous := bytes.Repeat([]byte("x"), maxLogSize+1)
+	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("last message before restart\n")...)
 	writeTestFile(t, path, previous)
 	writeTestFile(t, path+".1", []byte("older log"))
 
@@ -796,6 +797,52 @@ func TestRotateLogFile(t *testing.T) {
 	backup, err := os.ReadFile(path + ".1")
 	require.NoError(t, err)
 	assert.Equal(t, big, backup)
+}
+
+func TestRotateLogFileHeldLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+	content := bytes.Repeat([]byte("x"), 1024)
+	writeTestFile(t, path, content)
+	writeTestFile(t, path+".1", []byte("older log"))
+	lock, err := tryAcquireNamedLock(dir, "test.log.rotate.lock")
+	require.NoError(t, err)
+	defer lock.Close()
+
+	rotateLogFile(path, 512)
+
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, content, active, "another rotator must keep the active log intact")
+	backup, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, "older log", string(backup))
+}
+
+func TestRotateLogFileConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("final diagnostic\n")...)
+	for round := range 10 {
+		writeTestFile(t, path, previous)
+		start := make(chan struct{})
+		var rotators sync.WaitGroup
+		for range 2 {
+			rotators.Go(func() {
+				<-start
+				rotateLogFile(path, maxLogSize)
+			})
+		}
+		close(start)
+		rotators.Wait()
+
+		backup, err := os.ReadFile(path + ".1")
+		require.NoError(t, err)
+		require.Len(t, backup, len(previous), "round %d: previous log was cut short", round)
+		assert.True(t, bytes.Equal(previous, backup), "round %d: previous log changed", round)
+		active, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Zero(t, active.Size())
+	}
 }
 
 func TestRotateLogFileWithinLimit(t *testing.T) {

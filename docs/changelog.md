@@ -95,9 +95,10 @@ The latest release is
 
 **Bug fixes**
 
-- Restarting AgentsView preserves an oversized `debug.log` as `debug.log.1`,
-  replacing the older backup before clearing the active log. Logs from before
-  a restart remain available to investigate a stalled server.
+- Opening an oversized `debug.log`, `pg-watch.log`, or `clickhouse-watch.log`
+  preserves its contents in a backup with `.1` appended, replacing the older backup
+  before clearing the active log. Logs from before a restart remain available to
+  investigate a stalled server.
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on

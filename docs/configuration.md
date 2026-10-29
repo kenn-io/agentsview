@@ -27,16 +27,18 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
 ├── debug.log        # Log of the server, sync, and other commands
-├── debug.log.1      # Previous oversized log, retained at startup
+├── debug.log.1      # Previous oversized log
+├── debug.log.rotate.lock # Serializes rotation of debug.log
 ├── run/             # Windows only: daemon runtime records and locks
 ├── serve.log        # Detached daemon output
 ├── tmp/             # Temporary files, only when the system temp directory is unusable
 └── uploads/         # Uploaded session files
 ```
 
-When startup opens a log larger than 10 MB, it saves the contents to
-`debug.log.1`, replacing the older backup, then clears `debug.log` for new
-messages. If the backup fails, startup keeps the active log intact.
+When any command opens a log larger than 10 MB, it saves the contents to the same
+filename with `.1` appended, replacing the older backup, then clears the active log
+for new messages. This applies to `debug.log`, `pg-watch.log`, and
+`clickhouse-watch.log`. If the backup fails, AgentsView keeps the active log intact.
 
 `usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
 It is safe to delete when no AgentsView process is running; the next usage query
