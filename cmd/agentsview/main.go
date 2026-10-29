@@ -22,6 +22,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
@@ -166,7 +167,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		cfg.NoSync = true
 	}
 	start := time.Now()
-	setupLogFile(cfg.DataDir)
 	applyServeMemoryLimit()
 	applyServeMallocTuning()
 
@@ -202,6 +202,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		return
 	}
 	defer releaseForegroundServeLaunch()
+	setupLogFile(cfg.DataDir)
 
 	// Acquire the daemon start lock immediately after config setup,
 	// before opening the DB, so token-use never sees a window
@@ -1599,10 +1600,32 @@ func setupLogFileNamed(dataDir, name string) {
 		log.Printf("warning: cannot open log file: %v", err)
 		return
 	}
-	log.SetOutput(f)
+	log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logPath + ".rotate.lock")})
 }
 
-// rotateLogFile saves an oversized log to path+".1" before clearing it.
+type lockedLogWriter struct {
+	mu   stdsync.Mutex
+	file *os.File
+	lock *flock.Flock
+}
+
+func (w *lockedLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.lock.RLock(); err != nil {
+		return 0, err
+	}
+	n, err := w.file.Write(p)
+	return n, errors.Join(err, w.lock.Unlock())
+}
+
+func (w *lockedLogWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return errors.Join(w.file.Close(), w.lock.Close())
+}
+
+// rotateLogFile saves the tail of an oversized log to path+".1" before clearing it.
 // Copying keeps existing writers on the active file. Symlinks are skipped.
 // Errors are best-effort; a failed backup leaves the active log intact.
 func rotateLogFile(path string, limit int64) {
@@ -1610,7 +1633,7 @@ func rotateLogFile(path string, limit int64) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
 		return
 	}
-	lock, err := tryAcquireNamedLock(filepath.Dir(path), filepath.Base(path)+".rotate.lock")
+	lock, err := acquireNamedLock(filepath.Dir(path), filepath.Base(path)+".rotate.lock")
 	if err != nil {
 		return
 	}
@@ -1624,29 +1647,18 @@ func rotateLogFile(path string, limit int64) {
 		return
 	}
 	defer source.Close()
-	backup, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if _, err := source.Seek(info.Size()-limit, io.SeekStart); err != nil {
+		return
+	}
+	backup, err := atomicfile.Create(path+".1", atomicfile.WithPerm(info.Mode().Perm()))
 	if err != nil {
 		return
 	}
-	defer os.Remove(backup.Name())
-	_, copyErr := io.Copy(backup, source)
-	if err := backup.Close(); copyErr != nil || err != nil {
+	defer func() { _ = backup.Abort() }()
+	if _, err := backup.ReadFrom(io.LimitReader(source, limit)); err != nil {
 		return
 	}
-	if err := atomicfile.Replace(backup.Name(), path+".1"); err != nil {
-		return
-	}
-	finishLogRotation(path, source)
-}
-
-// finishLogRotation retains messages appended during the initial copy.
-func finishLogRotation(path string, source io.Reader) {
-	backup, err := os.OpenFile(path+".1", os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		return
-	}
-	_, copyErr := io.Copy(backup, source)
-	if err := backup.Close(); copyErr != nil || err != nil {
+	if err := backup.Commit(); err != nil {
 		return
 	}
 	_ = os.Truncate(path, 0)

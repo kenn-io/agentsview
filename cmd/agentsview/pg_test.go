@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -30,8 +31,8 @@ func restoreTestLogger(t *testing.T) {
 	t.Helper()
 	oldWriter := log.Writer()
 	t.Cleanup(func() {
-		if file, ok := log.Writer().(*os.File); ok && file != os.Stderr && file != os.Stdout {
-			_ = file.Close()
+		if closer, ok := log.Writer().(io.Closer); ok && log.Writer() != oldWriter {
+			_ = closer.Close()
 		}
 		log.SetOutput(oldWriter)
 	})
