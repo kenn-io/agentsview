@@ -27,8 +27,8 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
 ├── debug.log        # Log of the server, sync, and other commands
-├── debug.log.1      # Previous oversized log
-├── debug.log.rotate.lock # Serializes rotation of debug.log
+├── *.log.1          # Previous oversized logs, including watcher logs
+├── *.log.rotate.lock # Serializes rotation of each log
 ├── run/             # Windows only: daemon runtime records and locks
 ├── serve.log        # Detached daemon output
 ├── tmp/             # Temporary files, only when the system temp directory is unusable

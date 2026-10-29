@@ -1636,6 +1636,19 @@ func rotateLogFile(path string, limit int64) {
 	if err := atomicfile.Replace(backup.Name(), path+".1"); err != nil {
 		return
 	}
+	finishLogRotation(path, source)
+}
+
+// finishLogRotation retains messages appended during the initial copy.
+func finishLogRotation(path string, source io.Reader) {
+	backup, err := os.OpenFile(path+".1", os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return
+	}
+	_, copyErr := io.Copy(backup, source)
+	if err := backup.Close(); copyErr != nil || err != nil {
+		return
+	}
 	_ = os.Truncate(path, 0)
 }
 

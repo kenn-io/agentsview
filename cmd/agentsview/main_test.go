@@ -819,6 +819,31 @@ func TestRotateLogFileHeldLock(t *testing.T) {
 	assert.Equal(t, "older log", string(backup))
 }
 
+func TestFinishLogRotationDrainsAppendedMessages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	writeTestFile(t, path, []byte("before snapshot\n"))
+	source, err := os.Open(path)
+	require.NoError(t, err)
+	defer source.Close()
+	backup, err := os.Create(path + ".1")
+	require.NoError(t, err)
+	_, copyErr := io.Copy(backup, source)
+	require.NoError(t, errors.Join(copyErr, backup.Close()))
+	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	_, writeErr := writer.WriteString("after snapshot\n")
+	require.NoError(t, errors.Join(writeErr, writer.Close()))
+
+	finishLogRotation(path, source)
+
+	retained, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, "before snapshot\nafter snapshot\n", string(retained))
+	active, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Zero(t, active.Size())
+}
+
 func TestRotateLogFileConcurrent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
 	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("final diagnostic\n")...)
