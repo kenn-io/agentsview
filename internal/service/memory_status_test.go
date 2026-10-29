@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"encoding/json/v2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,8 +55,8 @@ func TestDirectMemoryStatusAndSearchCoverageShareSemantics(t *testing.T) {
 	assert.False(t, status.Archive.ReadOnly)
 	assert.Equal(t, service.MemoryReady, status.Lexical.Status)
 	assert.Equal(t, service.MemoryPartial, status.Semantic.Status)
-	assert.EqualValues(t, 9, status.Semantic.Embedded)
-	assert.EqualValues(t, 2, status.Semantic.Missing)
+	assert.Equal(t, new(int64(9)), status.Semantic.Embedded)
+	assert.Equal(t, new(int64(2)), status.Semantic.Missing)
 	assert.Equal(t, service.MemoryUnknown, status.Sources.Status)
 	assert.Equal(t, "source_telemetry_unavailable", status.Sources.Reason)
 
@@ -82,4 +83,39 @@ func TestMemoryStatusUnsupportedServiceIsExplicit(t *testing.T) {
 	assert.Equal(t, service.MemoryUnknown, status.Status)
 	assert.Equal(t, "unsupported", status.Lexical.Reason)
 	assert.Equal(t, "unsupported", status.Semantic.Reason)
+}
+
+func TestMemoryStatusSemanticCountPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status db.SemanticReadiness
+		want   string
+	}{
+		{
+			name:   "unmeasured counts",
+			status: db.SemanticReadiness{State: "ready", Reason: "counts_unavailable"},
+			want:   `{"status":"ready","reason":"counts_unavailable"}`,
+		},
+		{
+			name:   "measured counts",
+			status: db.SemanticReadiness{State: "partial", Generation: "gen-1", Embedded: 9, Missing: 2, Reason: "index_incomplete"},
+			want:   `{"status":"partial","reason":"index_incomplete","generation":"gen-1","embedded":9,"missing":2}`,
+		},
+		{
+			name:   "measured zero counts",
+			status: db.SemanticReadiness{State: "ready", Generation: "gen-1"},
+			want:   `{"status":"ready","generation":"gen-1","embedded":0,"missing":0}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			database.SetVectorSearcher(&readinessVectorSearcher{status: tc.status})
+			backend := service.NewDirectBackend(database, nil)
+			status, err := service.GetMemoryStatus(t.Context(), backend)
+			require.NoError(t, err)
+			encoded, err := json.Marshal(status.Semantic)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.want, string(encoded))
+		})
+	}
 }

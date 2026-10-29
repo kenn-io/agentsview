@@ -25,8 +25,8 @@ type MemoryVectorStatus struct {
 	Status     MemoryReadinessState `json:"status" enum:"ready,partial,unavailable,unknown"`
 	Reason     string               `json:"reason,omitempty"`
 	Generation string               `json:"generation,omitempty"`
-	Embedded   int64                `json:"embedded,omitempty"`
-	Missing    int64                `json:"missing,omitempty"`
+	Embedded   *int64               `json:"embedded,omitempty"`
+	Missing    *int64               `json:"missing,omitempty"`
 }
 
 type MemoryArchiveStatus struct {
@@ -115,8 +115,10 @@ func memoryStateFromDB(state string) MemoryReadinessState {
 func vectorStatusFromDB(in db.SemanticReadiness) MemoryVectorStatus {
 	out := MemoryVectorStatus{
 		Generation: in.Generation,
-		Embedded:   in.Embedded,
-		Missing:    in.Missing,
+	}
+	if in.Generation != "" {
+		out.Embedded = &in.Embedded
+		out.Missing = &in.Missing
 	}
 	out.Status = memoryStateFromDB(in.State)
 	out.Reason = in.Reason

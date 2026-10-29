@@ -98,5 +98,5 @@ func TestStoreSemanticReadinessPreservesNegotiationReason(t *testing.T) {
 	status, err = s.SemanticReadiness(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "ready", status.State)
-	assert.Empty(t, status.Reason)
+	assert.Equal(t, "counts_unavailable", status.Reason)
 }

@@ -412,10 +412,10 @@ func writeDoctorMemoryReport(w io.Writer, report doctorMemoryReport) error {
 		report.Target.Lexical.Reason)
 	writeDoctorMemoryCapability(w, "Semantic search", report.Target.Semantic.Status,
 		report.Target.Semantic.Reason)
-	if report.Target.Semantic.Generation != "" {
+	if report.Target.Semantic.Generation != "" && report.Target.Semantic.Embedded != nil && report.Target.Semantic.Missing != nil {
 		fmt.Fprintf(w, "Semantic generation: %s (%d embedded, %d missing)\n",
 			sanitizeTerminal(report.Target.Semantic.Generation),
-			report.Target.Semantic.Embedded, report.Target.Semantic.Missing)
+			*report.Target.Semantic.Embedded, *report.Target.Semantic.Missing)
 	}
 	writeDoctorMemoryCapability(w, "Source freshness", report.Target.Sources.Status,
 		report.Target.Sources.Reason)

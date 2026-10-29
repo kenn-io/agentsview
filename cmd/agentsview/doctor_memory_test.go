@@ -49,7 +49,7 @@ func TestDoctorMemoryReportsRemoteTargetAndClientState(t *testing.T) {
 		Lexical: service.MemoryCapabilityStatus{Status: service.MemoryReady},
 		Semantic: service.MemoryVectorStatus{
 			Status: service.MemoryPartial, Reason: "incomplete_generation",
-			Generation: "gen-1", Embedded: 8, Missing: 2,
+			Generation: "gen-1", Embedded: new(int64(8)), Missing: new(int64(2)),
 		},
 		Sources: service.MemorySourceStatus{
 			Status: service.MemoryUnknown, Reason: "source_telemetry_unavailable",
@@ -168,7 +168,7 @@ func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
 		},
 		Lexical: service.MemoryCapabilityStatus{Status: service.MemoryReady},
 		Semantic: service.MemoryVectorStatus{
-			Status: service.MemoryReady, Generation: "gen-1", Embedded: 10,
+			Status: service.MemoryReady, Generation: "gen-1", Embedded: new(int64(10)), Missing: new(int64(0)),
 		},
 		Sources: service.MemorySourceStatus{
 			Status: service.MemoryUnknown, Reason: "source_telemetry_unavailable",
