@@ -602,17 +602,6 @@ func (p *GenAIPrices) Resolve(
 	return rates, ok
 }
 
-// ModelPattern names the provider/model row Resolve matches, or "" when none does.
-func (p *GenAIPrices) ModelPattern(providerID, modelID string) string {
-	if p == nil || modelID == "" {
-		return ""
-	}
-	if resolved := p.resolveModel(providerID, modelID); resolved.model != nil {
-		return resolved.provider.id + "/" + resolved.model.id
-	}
-	return ""
-}
-
 // ModelFingerprint hashes the matched model and every conditional price Resolve can select.
 func (p *GenAIPrices) ModelFingerprint(providerID, modelID string) string {
 	if p == nil || modelID == "" {

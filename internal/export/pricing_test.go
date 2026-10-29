@@ -1380,7 +1380,6 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 		"genai-alpha:cloud": {reported: "genai-alpha:cloud", canonical: "genai-alpha:cloud"},
 		"genai-gamma":       {reported: "genai-gamma", canonical: "genai-gamma"},
 		"priority":          {provider: pricingpkg.OpenAIPriorityProviderID, reported: "gpt-5.6-luna", canonical: "gpt-5.6-luna"},
-		"priority alias":    {provider: pricingpkg.OpenAIPriorityProviderID, reported: "gpt-5.6-luna-2026-07-13", canonical: "gpt-5.6-luna-2026-07-13"},
 	}
 	usesModelA := []string{"model-a", "alias-a", "billed", "tier"}
 
@@ -1480,7 +1479,7 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			require.NotEqual(t, -1, index, "the priority row belongs to this fixture")
 			rows[index].Rates.InputPerMTok = money.MustParseDollars("0.6")
 			return rows
-		}, []string{"priority", "priority alias"}},
+		}, []string{"priority"}},
 		{"custom rate removed exposes genai", func(rows []EffectivePricingRow) []EffectivePricingRow {
 			return rows[:len(rows)-1]
 		}, []string{"genai-gamma"}},

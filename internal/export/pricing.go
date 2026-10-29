@@ -263,7 +263,7 @@ func (r *PricingResolver) ResolveBilled(providerID, reportedModel, canonicalMode
 // timestamp before applying one exact provider adjustment.
 func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalModel string, timestamp time.Time) (string, PricingLookup, error) {
 	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, timestamp)
-	if !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+	if r == nil || !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
 		return pricedModel, lookup, nil
 	}
 	if providerID == pricingpkg.OpenAIPriorityProviderID {
@@ -283,7 +283,7 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 }
 
 func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel string) PricingLookup {
-	pattern, rates, ok := r.priorityRow(pricedModel, lookup.Pattern)
+	pattern, rates, ok := r.priorityRow(pricedModel)
 	if !ok {
 		return lookup
 	}
@@ -294,15 +294,12 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel str
 	return lookup
 }
 
-// priorityRow returns the first model key with a LiteLLM priority row, along
-// with the matching priority rates.
-func (r *PricingResolver) priorityRow(models ...string) (string, ModelRates, bool) {
-	for _, model := range models {
-		base := r.Lookup(model)
-		pattern := catalog.PriorityPattern(base.Pattern)
-		if rates, ok := r.byModel[pattern]; base.OK && ok {
-			return pattern, rates, true
-		}
+// priorityRow returns the LiteLLM priority row and rates for a model.
+func (r *PricingResolver) priorityRow(model string) (string, ModelRates, bool) {
+	base := r.Lookup(model)
+	pattern := catalog.PriorityPattern(base.Pattern)
+	if rates, ok := r.byModel[pattern]; base.OK && ok {
+		return pattern, rates, true
 	}
 	return "", ModelRates{}, false
 }
@@ -447,10 +444,6 @@ func (r *PricingResolver) DependencyFingerprint(
 			writeField(candidate.model)
 			writeField(candidate.priced)
 			writeField(fingerprint)
-			if providerID == pricingpkg.OpenAIPriorityProviderID && fingerprint != "none" {
-				genAI := PricingLookup{Pattern: r.genAI.ModelPattern(candidate.provider, candidate.model)}
-				writeLookup(candidate.priced, r.withPriorityTier(genAI, candidate.priced))
-			}
 		}
 		return flat, custom, matched
 	}

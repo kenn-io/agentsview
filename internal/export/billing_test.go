@@ -168,53 +168,6 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
-	t.Run("GenAI aliases use test-owned priority rows", func(t *testing.T) {
-		genAI, err := pricingpkg.ParseGenAIPrices([]byte("[" + codexLunaGenAIProvider + "]"))
-		require.NoError(t, err)
-		resolver := NewPricingResolver([]EffectivePricingRow{
-			{GenAI: genAI, GenAIVersion: genAI.Version(), GenAISource: PricingRowSourceEmbedded},
-			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.3"), Source: PricingRowSourceFetched}},
-			{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4"), Source: PricingRowSourceFetched}},
-		})
-		timestamp := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-		for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-luna-2026-07-13"} {
-			t.Run(model, func(t *testing.T) {
-				_, standard := resolver.ResolveAt(model, model, timestamp)
-				require.True(t, standard.OK)
-				require.Equal(t, "openai/gpt-5.6-luna", standard.Pattern)
-				require.Equal(t, PricingRowSourceEmbedded, standard.Rates.Source)
-				require.Equal(t, money.MustParseDollars("0.2"), standard.Rates.InputPerMTok)
-
-				_, lookup, err := resolver.ResolveBilledAt(pricingpkg.OpenAIPriorityProviderID, model, model, timestamp)
-				require.NoError(t, err)
-				require.True(t, lookup.OK)
-				assert.Equal(t, money.MustParseDollars("0.4"), lookup.Rates.InputPerMTok, "priority input rate")
-				assert.Equal(t, "gpt-5.6-luna@priority", lookup.Pattern)
-				assert.Equal(t, pricingpkg.OpenAIPriorityProviderID, lookup.Adjustment)
-			})
-		}
-	})
-
-	t.Run("dated model row beats canonical row", func(t *testing.T) {
-		row := func(pattern, input string) EffectivePricingRow {
-			return EffectivePricingRow{ModelPattern: pattern, Rates: ModelRates{
-				InputPerMTok: money.MustParseDollars(input), Source: PricingRowSourceFetched,
-			}}
-		}
-		resolver := NewPricingResolver([]EffectivePricingRow{
-			row("gpt-4o-2024-05-13", "5"),
-			row("gpt-4o-2024-05-13@priority", "8.75"),
-			row("gpt-4o", "3"),
-			row("gpt-4o@priority", "6"),
-		})
-		model := "gpt-4o-2024-05-13"
-		_, lookup, err := resolver.ResolveBilledAt(
-			pricingpkg.OpenAIPriorityProviderID, model, model, time.Time{})
-		require.NoError(t, err)
-		assert.Equal(t, "gpt-4o-2024-05-13@priority", lookup.Pattern)
-		assert.Equal(t, money.MustParseDollars("8.75"), lookup.Rates.InputPerMTok)
-	})
-
 	for _, tc := range []struct {
 		name, model, input, pattern, adjustment string
 		custom                                  bool

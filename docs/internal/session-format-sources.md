@@ -103,11 +103,6 @@ standard thresholds where LiteLLM has no matching priority band. Data version
 155 reparses Codex, TraeX, and Augure Code sources in place to add the billing
 identity.
 
-Timestamped GenAI matches can use a different model key from LiteLLM. The
-pinned GenAI catalog matches `gpt-5.3-chat-latest` as `openai/gpt-5.3`, while
-LiteLLM stores its Fast row as `gpt-5.3-chat-latest@priority`; the resolver
-checks the selected model key when the GenAI match has no Fast row.
-
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this
 pricing metadata. Agentsview therefore uses their request boundaries and token
