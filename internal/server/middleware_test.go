@@ -343,19 +343,35 @@ func TestBuildCSPPolicyKeepsLocalOriginWithPublicURL(t *testing.T) {
 }
 
 // The SPA's index.html inlines frontend/src/hold-first-paint.js verbatim,
-// and script-src allows it by hash in both the server's CSP and the desktop
-// webview's. Editing the script without updating the hash would leave the
-// inline script blocked and the page flashing unstyled.
+// and so do the backend-only fallback page and the desktop loading page.
+// script-src allows the script by hash in both the server's CSP and the
+// desktop webview's. Editing a copy without updating the hash would leave
+// that inline script blocked and the page flashing unstyled.
 func TestHoldFirstPaintScriptHashMatchesSource(t *testing.T) {
 	t.Parallel()
 
+	scriptHash := func(script []byte) string {
+		digest := sha256.Sum256(script)
+		return "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
+	}
+
 	source, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "hold-first-paint.js"))
 	require.NoError(t, err)
-	digest := sha256.Sum256(source)
-	assert.Equal(t,
-		"'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'",
-		holdFirstPaintScriptHash,
-	)
+	assert.Equal(t, holdFirstPaintScriptHash, scriptHash(source))
+
+	for _, page := range []string{
+		filepath.Join("..", "web", "fallback", "index.html"),
+		filepath.Join("..", "..", "desktop", "ui", "index.html"),
+	} {
+		html, err := os.ReadFile(page)
+		require.NoError(t, err)
+		_, rest, found := strings.Cut(string(html), "<script>")
+		require.True(t, found, "%s has no inline script", page)
+		script, _, found := strings.Cut(rest, "</script>")
+		require.True(t, found, "%s has an unclosed script", page)
+		assert.Equal(t, holdFirstPaintScriptHash, scriptHash([]byte(script)),
+			"%s inlines a hold-first-paint script the CSP does not allow", page)
+	}
 
 	raw, err := os.ReadFile(filepath.Join("..", "..", "desktop", "src-tauri", "tauri.conf.json"))
 	require.NoError(t, err)
