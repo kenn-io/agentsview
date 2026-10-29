@@ -1177,3 +1177,19 @@ describe("hasVisibleSegments", () => {
     expect(hasVisibleSegments(m, noTool)).toBe(true);
   });
 });
+
+describe("Codex Cloud tool markers", () => {
+  // Codex Cloud stores each call's marker as the message text; the tool
+  // block renders the call, so no marker may surface as prose.
+  it.each([
+    ["Bash", "[Bash]\n$ /bin/bash -lc \"python - <<'PY'\nprint(1)\nPY\""],
+    ["two-file edit", "[Edit: /workspace/project-a/a.go]\n[Edit: /workspace/project-a/b.go]"],
+    ["MCP", "[Tool: mcp__notes__create_note]"],
+    ["web search", "[Tool: web_search]\nzstd frames"],
+    ["unknown item", "[Other: unknownType]"],
+  ])("leaves no prose for a %s marker", (_name, content) => {
+    const msg = makeMsg({ content, content_length: content.length, has_tool_use: true });
+    expect(isToolOnly(msg)).toBe(true);
+    expect(parseContent(content, true).filter((segment) => segment.type !== "tool")).toEqual([]);
+  });
+});

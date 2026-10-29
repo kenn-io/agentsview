@@ -4,13 +4,8 @@
   import { onDestroy } from "svelte";
   import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import SubagentInline from "./SubagentInline.svelte";
-  import {
-    bashCommandText,
-    extractToolParamMeta,
-    toolCopyText,
-    type MetaTag,
-  } from "../../utils/tool-params.js";
-  import { parseToolInput, resolveToolInput } from "../../search/tool-input.js";
+  import { bashCommandText, toolCopyText } from "../../utils/tool-params.js";
+  import { parseToolInput, resolveToolInput, toolMetaTags } from "../../search/tool-input.js";
   import { searchBlock } from "../../search/session-block.svelte.js";
   import { searchCollapsed, toolSearchKey, type ToolSearchScope } from "../../search/component-state.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
@@ -56,13 +51,16 @@
   let outputCopied = $state(false);
   let outputMode: "raw" | "formatted" = $state("raw");
   // The index uses source text. Temporarily expose that same representation
-  // during find without overwriting the user's formatted-output preference.
-  let rawOutputForSearch = $derived(searchScope !== undefined && inSessionSearch.isActive);
+  // during find without overwriting the user's formatted-output preference,
+  // and show shortened field values in full.
+  let sourceTextForSearch = $derived(searchScope !== undefined && inSessionSearch.isActive);
   let inputCopyTimer: ReturnType<typeof setTimeout> | undefined;
   let outputCopyTimer: ReturnType<typeof setTimeout> | undefined;
 
   let inputKey = $derived(toolSearchKey(searchScope, "tool-input"));
   let outputKey = $derived(toolSearchKey(searchScope, "tool-output"));
+  let metaTags = $derived(toolMetaTags(toolCall));
+  let metaKeys = $derived((metaTags ?? []).map((_, index) => toolSearchKey(searchScope, "tool-meta", index)));
   // Empty timing marks only carry timestamps; keep each event's raw index so search keys still match.
   let resultEvents = $derived((toolCall?.result_events ?? [])
     .map((event, rawIndex) => ({ ...event, content: displayToolResult(event.content), rawIndex }))
@@ -72,9 +70,12 @@
   let currentOutput = $derived(inSessionSearch.isCurrentBlock(outputKey));
   let currentHistory = $derived(historyKeys.some((key) => inSessionSearch.isCurrentBlock(key)));
   let historyCount = $derived(historyKeys.reduce((count, key) => count + inSessionSearch.countForBlock(key), 0));
-  let matchCount = $derived(inSessionSearch.countForBlock(inputKey) + inSessionSearch.countForBlock(outputKey) + historyCount);
+  let currentMeta = $derived(metaKeys.some((key) => inSessionSearch.isCurrentBlock(key)));
+  let metaCount = $derived(metaKeys.reduce((count, key) => count + inSessionSearch.countForBlock(key), 0));
+  let matchCount = $derived(inSessionSearch.countForBlock(inputKey) + inSessionSearch.countForBlock(outputKey)
+    + historyCount + metaCount);
   let collapsed = $derived(searchCollapsed(userCollapsed,
-    currentInput || currentOutput || currentHistory, inSessionSearch.navigationRevision, overrideSeq));
+    currentMeta || currentInput || currentOutput || currentHistory, inSessionSearch.navigationRevision, overrideSeq));
   let outputCollapsed = $derived(searchCollapsed(userOutputCollapsed,
     currentOutput, inSessionSearch.navigationRevision, outputOverrideSeq));
   let historyCollapsed = $derived(searchCollapsed(userHistoryCollapsed,
@@ -107,34 +108,6 @@
     { value: "formatted", label: m.tool_block_formatted() },
   ]);
   let legacyPreview = $derived(content.split("\n")[0]?.slice(0, 100) ?? "");
-
-  let taskMeta = $derived.by(() => {
-    if (!isTask || !inputParams) return null;
-    const meta: { label: string; value: string }[] = [];
-    if (inputParams.subagent_type) meta.push({ label: "type", value: String(inputParams.subagent_type) });
-    if (inputParams.description) meta.push({ label: "description", value: String(inputParams.description) });
-    return meta.length ? meta : null;
-  });
-  let taskCreateMeta = $derived.by(() => {
-    if (toolCall?.tool_name !== "TaskCreate" || !inputParams) return null;
-    const meta: { label: string; value: string }[] = [];
-    if (inputParams.subject) meta.push({ label: "subject", value: String(inputParams.subject) });
-    if (inputParams.description) meta.push({ label: "description", value: String(inputParams.description) });
-    return meta.length ? meta : null;
-  });
-  let taskUpdateMeta = $derived.by(() => {
-    if (toolCall?.tool_name !== "TaskUpdate" || !inputParams) return null;
-    const meta: { label: string; value: string }[] = [];
-    if (inputParams.taskId) meta.push({ label: "task", value: `#${inputParams.taskId}` });
-    if (inputParams.status) meta.push({ label: "status", value: String(inputParams.status) });
-    if (inputParams.subject) meta.push({ label: "subject", value: String(inputParams.subject) });
-    return meta.length ? meta : null;
-  });
-  let toolParamMeta = $derived.by(() => {
-    if (!inputParams || !toolCall) return null;
-    return extractToolParamMeta(toolCall.tool_name, inputParams, toolCall.category);
-  });
-  let metaTags = $derived<MetaTag[] | null>(taskMeta ?? taskCreateMeta ?? taskUpdateMeta ?? toolParamMeta ?? null);
 
   // Display and search share this source; copy retains the complete payload.
   let resolvedInput = $derived(resolveToolInput(toolCall, content));
@@ -231,10 +204,10 @@
   {#if !collapsed}
     {#if metaTags}
       <div class="tool-meta">
-        {#each metaTags as { label: metaLabel, value, displayValue }}
+        {#each metaTags as { label: metaLabel, value, displayValue }, tagIndex}
           <span class="meta-tag"><span class="meta-label">{metaLabel}:</span>
-            {#if displayValue}<span class="meta-value" title={value}>{displayValue}<span class="kit-sr-only">{value}</span></span>
-            {:else}<span>{value}</span>{/if}
+            {#if displayValue && !sourceTextForSearch}<span class="meta-value" title={value}>{displayValue}<span class="kit-sr-only">{value}</span></span>
+            {:else}<span {@attach searchBlock(metaKeys[tagIndex])}>{value}</span>{/if}
           </span>
         {/each}
       </div>
@@ -271,7 +244,7 @@
           <SearchMatchCount searchKey={outputKey} />
           {#if outputCollapsed && outputPreviewLine}<span class="tool-preview">{outputPreviewLine}</span>{/if}
         </button>
-        {#if !outputCollapsed && rawOutputForSearch}
+        {#if !outputCollapsed && sourceTextForSearch}
           <span class="search-output-hint">{m.session_find_raw_output()}</span>
         {:else if !outputCollapsed}
           <SegmentedControl class="output-mode" options={outputModeOptions} value={outputMode}
@@ -282,7 +255,7 @@
           title={m.tool_block_copy_output()} copiedTitle={m.tool_block_copied_output()} onclick={handleOutputCopy} />
       </div>
       {#if !outputCollapsed}
-        {#if outputMode === "formatted" && !rawOutputForSearch}
+        {#if outputMode === "formatted" && !sourceTextForSearch}
           <div class="tool-content output-content formatted-output"
             {@attach searchBlock(outputKey)} use:highlightCodeFences={{ content: formattedOutputContent }}
             use:loadAssetImages={formattedOutputContent}>

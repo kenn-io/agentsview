@@ -6,7 +6,7 @@ export interface ToolSearchScope {
 
 export function toolSearchKey(
   scope: ToolSearchScope | undefined,
-  kind: "tool-input" | "tool-output" | "tool-history",
+  kind: "tool-meta" | "tool-input" | "tool-output" | "tool-history",
   eventIndex?: number,
 ): string | undefined {
   if (!scope) return undefined;

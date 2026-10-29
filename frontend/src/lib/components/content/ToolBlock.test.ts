@@ -313,6 +313,19 @@ describe("ToolBlock output and controls", () => {
     expect(text(".tool-meta")).toContain(path);
     expect(document.querySelector(`.meta-value[title="${path}"]`)).not.toBeNull();
   });
+  it("reveals a field match and shows the field in full while find runs", async () => {
+    const cwd = "/workspace/" + "nested-directory/".repeat(5) + "service-under-test";
+    searchState.active = true;
+    searchState.current = "7:tool-meta:0.0";
+    searchState.query = "nested-directory";
+    await render({
+      toolCall: call("shell_command", { command: "make test", cwd }, { category: "Bash" }),
+      searchScope: { ordinal: 7, callIdx: 0 },
+    });
+    expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".tool-meta .meta-value")).toBeNull();
+    expect(text(".tool-meta")).toBe(`cwd: ${cwd}`);
+  });
   it("keeps canonical path metadata accessible without labelling ordinary metadata", async () => {
     const path =
       "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";

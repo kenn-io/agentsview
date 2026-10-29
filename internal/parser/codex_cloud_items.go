@@ -105,28 +105,36 @@ func codexCloudItemMessages(
 		return []ParsedMessage{codexCloudNote(codexCloudNoteText(item, record.Item), ts)}
 	}
 
-	// The tool block renders the call, so the message carries no text of
-	// its own; inlined text would show the call twice.
 	call, result := codexCloudToolCall(item, record.Item)
-	callMsg := assistant(ParsedMessage{HasToolUse: true, ToolCalls: []ParsedToolCall{call}})
+	calls := []ParsedToolCall{call}
 	if item.Type == "fileChange" && len(item.Changes) > 0 {
 		// One call per file, as the codex parser emits for apply_patch, so
 		// file-keyed views group by path. Results pair by tool-use ID, so
 		// each file of a multi-file change gets its own ID and result. Each
 		// call's input is its own change, {path, kind, diff}, so the viewer
 		// shows that file's path and diff.
-		calls := make([]ParsedToolCall, 0, len(item.Changes))
+		calls = make([]ParsedToolCall, 0, len(item.Changes))
 		for i, change := range item.Changes {
 			perFile := call
 			perFile.InputJSON = string(change.Raw)
 			perFile.FilePath = change.Path
+			perFile.Rendering = formatToolHeader("Edit", change.Path)
 			if len(item.Changes) > 1 {
 				perFile.ToolUseID = fmt.Sprintf("%s#%d", item.ID, i+1)
 			}
 			calls = append(calls, perFile)
 		}
-		callMsg.ToolCalls = calls
 	}
+	// The message text is the calls' tool markers, as the codex parser
+	// writes them. The viewer hides a marker behind its tool block, while
+	// global search, exports, and MCP message reads still see the call.
+	renderings := make([]string, 0, len(calls))
+	for _, c := range calls {
+		renderings = append(renderings, c.Rendering)
+	}
+	callMsg := assistant(ParsedMessage{
+		Content: strings.Join(renderings, "\n"), HasToolUse: true, ToolCalls: calls,
+	})
 	messages := []ParsedMessage{callMsg}
 	if result == "" && !codexCloudTerminal(item.Status) {
 		return messages
@@ -163,45 +171,63 @@ func codexCloudToolCall(item codexCloudItem, raw jsontext.Value) (ParsedToolCall
 		command := codexCloudCommand(item.Command)
 		call.ToolName, call.Category = "shell_command", "Bash"
 		call.InputJSON = codexCloudJSON(map[string]string{"command": command, "cwd": item.Cwd})
+		call.Rendering = "[Bash]\n$ " + command
 		result = codexCloudJoinResult(item.AggregatedOutput, codexCloudCommandFooter(item))
 	case "mcpToolCall":
 		call.ToolName = "mcp__" + item.Server + "__" + item.Tool
 		call.Category = NormalizeToolCategory(call.ToolName)
 		call.InputJSON = string(item.Arguments)
+		call.Rendering = formatToolHeader("Tool", call.ToolName)
 		result = codexCloudJoinResult(codexCloudPayload(item.Result, item.Error), codexCloudDuration(item.DurationMs))
 	case "fileChange":
 		call.ToolName, call.Category = "apply_patch", "Edit"
 		call.InputJSON = string(raw)
+		call.Rendering = formatToolHeader("Edit", "")
 	case "webSearch":
 		call.ToolName, call.Category = "web_search", "Tool"
 		call.InputJSON = codexCloudJSON(map[string]string{"query": item.Query})
+		call.Rendering = codexCloudMarker(formatToolHeader("Tool", call.ToolName), item.Query)
 	case "functionCallOutput":
 		call.ToolName = firstNonEmpty(item.Name, item.Type)
 		call.Category = NormalizeToolCategory(call.ToolName)
 		call.InputJSON = "{}"
+		call.Rendering = formatToolHeader("Tool", call.ToolName)
 		result = codexCloudPayload(item.Output, nil)
 	case "dynamicToolCall":
 		call.ToolName = firstNonEmpty(item.Tool, item.Name, item.Type)
 		call.Category = NormalizeToolCategory(call.ToolName)
 		call.InputJSON = string(item.Arguments)
+		call.Rendering = formatToolHeader("Tool", call.ToolName)
 		result = codexCloudPayload(item.Result, item.Error)
 	case "collabAgentToolCall":
 		call.ToolName, call.Category = firstNonEmpty(item.Tool, item.Type), "Task"
 		call.InputJSON = string(raw)
+		call.Rendering = formatToolHeader("Task", call.ToolName)
 	case "imageView":
 		call.ToolName, call.Category = "view_image", "Read"
 		call.InputJSON = codexCloudJSON(map[string]string{"path": item.Path})
+		call.Rendering = formatToolHeader("Read", item.Path)
 	case "imageGeneration":
 		call.ToolName, call.Category = "image_generation", "Tool"
 		call.InputJSON = string(raw)
+		call.Rendering = formatToolHeader("Tool", call.ToolName)
 	default:
 		call.ToolName, call.Category = item.Type, "Other"
 		call.InputJSON = string(raw)
+		call.Rendering = formatToolHeader("Other", item.Type)
 	}
 	if call.InputJSON == "" {
 		call.InputJSON = "{}"
 	}
 	return call, result
+}
+
+// codexCloudMarker puts detail on the line after a tool marker header.
+func codexCloudMarker(header, detail string) string {
+	if strings.TrimSpace(detail) == "" {
+		return header
+	}
+	return header + "\n" + detail
 }
 
 func codexCloudNote(text string, ts time.Time) ParsedMessage {

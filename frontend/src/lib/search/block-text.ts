@@ -6,7 +6,7 @@ import { renderMarkdown, type MarkdownRenderOptions } from "../utils/markdown.js
 import { isSystemMessage } from "../utils/messages.js";
 import { displayToolResult } from "../utils/toolDisplay.js";
 import { domText } from "./dom-text.js";
-import { resolveToolInputText } from "./tool-input.js";
+import { resolveToolInputText, toolMetaTags } from "./tool-input.js";
 
 export { resolveToolInputText } from "./tool-input.js";
 
@@ -15,6 +15,7 @@ export type SearchBlockKind =
   | "thinking"
   | "code"
   | "skill"
+  | "tool-meta"
   | "tool-input"
   | "tool-output"
   | "tool-history";
@@ -99,6 +100,9 @@ export function collectSearchBlocks(
     label?: string,
   ) => {
     const name = call?.tool_name ?? label;
+    toolMetaTags(call)?.forEach((tag, tagIndex) => {
+      add("tool-meta", `${index}.${tagIndex}`, tag.value, name);
+    });
     add("tool-input", index, resolveToolInputText(call, content), name);
     add("tool-output", index, displayToolResult(call?.result_content ?? ""), name);
     call?.result_events?.forEach((event, eventIndex) => {

@@ -60,6 +60,7 @@ function kindVisible(
       return isVisible("thinking");
     case "code":
       return isVisible("code");
+    case "tool-meta":
     case "tool-input":
     case "tool-output":
     case "tool-history":

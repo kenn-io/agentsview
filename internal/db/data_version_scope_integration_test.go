@@ -594,7 +594,7 @@ func TestCodexCloudToolTextUpgradeReparsesInPlace(t *testing.T) {
 	messages, err := database.GetAllMessages(ctx, id)
 	require.NoError(t, err)
 	require.NotEmpty(t, messages)
-	// Reproduce the previous parser, which copied the call into the text.
+	// Reproduce the previous parser, which wrote the call as plain prose.
 	messages[0].Content = "$ make"
 	messages[0].ContentLength = len(messages[0].Content)
 	require.NoError(t, database.ReplaceSessionMessages(ctx, id, messages))
@@ -617,7 +617,7 @@ func TestCodexCloudToolTextUpgradeReparsesInPlace(t *testing.T) {
 	messages, err = database.GetAllMessages(ctx, id)
 	require.NoError(t, err)
 	require.NotEmpty(t, messages)
-	assert.Empty(t, messages[0].Content)
+	assert.Equal(t, "[Bash]\n$ make", messages[0].Content)
 	require.Len(t, messages[0].ToolCalls, 1)
 	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
 	var sessions int

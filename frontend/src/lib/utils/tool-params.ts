@@ -26,6 +26,13 @@ export function pathDisplayValue(value: string): string {
   return parts.slice(-2).join("/");
 }
 
+/** Keep the full value; show at most `max` characters. */
+function textMetaValue(value: unknown, max: number): Pick<MetaTag, "value" | "displayValue"> {
+  const canonical = paramText(value);
+  const displayValue = truncate(canonical, max);
+  return displayValue === canonical ? { value: canonical } : { value: canonical, displayValue };
+}
+
 function pathMetaValue(value: unknown): Pick<MetaTag, "value" | "displayValue"> {
   const canonical = paramText(value);
   const displayValue = pathDisplayValue(canonical);
@@ -166,17 +173,14 @@ export function extractToolParamMeta(
     // The command is the block body, so the other parameters, such as the
     // working directory, become labeled fields.
     if (params.description)
-      meta.push({
-        label: "description",
-        value: truncate(paramText(params.description), 80),
-      });
+      meta.push({ label: "description", ...textMetaValue(params.description, 80) });
     for (const [key, value] of Object.entries(params)) {
       if (BASH_BODY_PARAMS.has(key) || INTERNAL_PARAMS.has(key)) continue;
       if (value == null || value === "") continue;
       meta.push(
         BASH_PATH_PARAMS.has(key)
           ? { label: key, ...pathMetaValue(value) }
-          : { label: key, value: truncate(paramText(value), 80) },
+          : { label: key, ...textMetaValue(value, 80) },
       );
     }
   } else if (toolName === "Skill" || toolName === "skill") {
@@ -338,6 +342,8 @@ function copyTextFor(name: string, params: Params): string | null {
         ...newLines.map((line) => `+${line}`),
       ].join("\n");
     }
+    // Pi edits list operations against a path; the JSON fallback keeps them.
+    if (Array.isArray(params.edits)) return null;
     return filePathParam(params);
   }
   if (name === "Write" || (name === "write" && params.command === "create")) {

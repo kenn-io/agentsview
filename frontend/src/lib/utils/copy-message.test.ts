@@ -31,6 +31,35 @@ describe("formatMessageForCopy", () => {
     };
     expect(formatMessageForCopy(msg)).toBe("[shell_command] cwd: /repo\n\nmake\nmake test");
   });
+  it("copies long Bash field values in full", () => {
+    const description = `Run ${"the full integration suite ".repeat(4)}`;
+    const msg: Message = {
+      has_context_tokens: false,
+      has_output_tokens: false,
+      id: 1,
+      session_id: "s1",
+      ordinal: 1,
+      role: "assistant",
+      content: "",
+      timestamp: "",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: true,
+      content_length: 0,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      is_system: false,
+      tool_calls: [
+        {
+          tool_name: "Bash",
+          category: "Bash",
+          input_json: JSON.stringify({ command: "make test", description }),
+        },
+      ],
+    };
+    expect(formatMessageForCopy(msg)).toBe(`[Bash] description: ${description}\n\nmake test`);
+  });
   it("includes tool call params", () => {
     const msg: Message = {
       has_context_tokens: false,

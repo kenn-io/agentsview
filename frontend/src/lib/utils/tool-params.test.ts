@@ -149,6 +149,32 @@ describe("extractToolParamMeta", () => {
     ]);
   });
 
+  it("keeps long Bash field values whole and shortens only their display", () => {
+    const description = `Run ${"the full integration suite ".repeat(4)}`;
+    const env = {
+      NODE_OPTIONS: "--max-old-space-size=8192",
+      CI: "true",
+      TEST_FILTER: "sync-and-watcher",
+    };
+    const envText =
+      '{"NODE_OPTIONS":"--max-old-space-size=8192","CI":"true","TEST_FILTER":"sync-and-watcher"}';
+    const meta = extractToolParamMeta("Bash", {
+      command: "make test",
+      description,
+      env,
+      timeout: 600000,
+    });
+    expect(meta).toEqual([
+      {
+        label: "description",
+        value: description,
+        displayValue: `${description.slice(0, 80)}\u2026`,
+      },
+      { label: "env", value: envText, displayValue: `${envText.slice(0, 80)}\u2026` },
+      { label: "timeout", value: "600000" },
+    ]);
+  });
+
   it("has no Bash fields when only the command is set", () => {
     expect(extractToolParamMeta("Bash", { command: "ls -la" })).toBeNull();
   });
@@ -679,6 +705,13 @@ describe("toolCopyText", () => {
       "/repo/a.go",
     ],
     [
+      "a Pi edit's operations as JSON",
+      "edit",
+      "Edit",
+      { path: "/repo/a.go", edits: [{ set_line: { anchor: "3:ab", new_text: "x" } }] },
+      '{\n  "path": "/repo/a.go",\n  "edits": [\n    {\n      "set_line": {\n        "anchor": "3:ab",\n        "new_text": "x"\n      }\n    }\n  ]\n}',
+    ],
+    [
       "a write's file content",
       "Write",
       "Write",
@@ -707,7 +740,7 @@ describe("toolCopyText", () => {
   });
 
   it("falls back to the tool name when the category has no rule", () => {
-    expect(toolCopyText("Read", "", { file_path: "/repo/a.go" })).toBe("/repo/a.go");
+    expect(toolCopyText("Read", "", { file_path: "/repo/a.go", offset: 10 })).toBe("/repo/a.go");
   });
 
   it("leaves Task calls and empty input to the caller", () => {
