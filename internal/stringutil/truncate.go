@@ -1,4 +1,5 @@
 // Package stringutil provides shared string operations.
+// Callers choose byte or rune limits for truncation.
 package stringutil
 
 import (
