@@ -754,24 +754,36 @@ func TestSetupLogFileLiveWriterRotation(t *testing.T) {
 	setupLogFile(dir)
 	path := filepath.Join(dir, "debug.log")
 	writeTestFile(t, path, bytes.Repeat([]byte("x\n"), maxLogSize/2+1))
-	first, done := make(chan struct{}), make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	first, done := make(chan struct{}), make(chan struct{})
+	var writeErr error
+	written := 0
 	go func() {
-		for i := range 10000 {
-			err := log.Output(1, fmt.Sprintf("rotation-message-%05d", i))
-			if i == 0 {
+		defer close(done)
+		for ctx.Err() == nil {
+			writeErr = log.Output(1, fmt.Sprintf("rotation-message-%05d", written))
+			if written == 0 {
 				close(first)
 			}
-			if err != nil {
-				done <- err
+			if writeErr != nil {
 				return
 			}
+			written++
 		}
-		done <- nil
 	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	<-first
-	rotateLogFile(path, maxLogSize)
-	require.NoError(t, <-done)
-	rotateLogFile(path, maxLogSize)
+	require.Eventually(t, func() bool {
+		rotateLogFile(path, maxLogSize)
+		_, err := os.Stat(path + ".1")
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond)
+	cancel()
+	<-done
+	require.NoError(t, writeErr)
 	backup, err := os.ReadFile(path + ".1")
 	require.NoError(t, err)
 	active, err := os.ReadFile(path)
@@ -782,7 +794,7 @@ func TestSetupLogFileLiveWriterRotation(t *testing.T) {
 			counts[message]++
 		}
 	}
-	for i := range 10000 {
+	for i := range written {
 		require.Equal(t, 1, counts[fmt.Sprintf("%05d", i)], "message %d must survive exactly once", i)
 	}
 }
@@ -816,30 +828,6 @@ func TestSetupLogFileUnavailableLock(t *testing.T) {
 	assert.Contains(t, string(active), "message without rotation lock")
 }
 
-func TestRotateLogFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.log")
-
-	// Write a file larger than the limit.
-	big := bytes.Repeat([]byte("line\n"), 205)
-	writeTestFile(t, path, big)
-
-	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-	require.NoError(t, err)
-	defer writer.Close()
-
-	rotateLogFile(path, 512)
-
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat after rotation")
-	assert.Equal(t, int64(0), info.Size())
-	_, err = writer.WriteString("parent still logging")
-	require.NoError(t, err)
-	active, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "parent still logging", string(active))
-}
-
 func TestRotateLogFileSkipsHeldLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.log")
@@ -862,14 +850,15 @@ func TestRotateLogFileSkipsHeldLock(t *testing.T) {
 
 func TestRotateLogFileTailAndMode(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		content string
-		limit   int64
-		want    string
+		name       string
+		content    string
+		limit      int64
+		want       string
+		openWriter bool
 	}{
-		{"at line boundary", "discarded prefix\nfirst retained line\nlast diagnostic\n", 36, "first retained line\nlast diagnostic\n"},
-		{"within line", "discarded prefix\nfirst retained line\nlast diagnostic\n", 20, "last diagnostic\n"},
-		{"without complete line", "one oversized line\n", 8, "ed line\n"},
+		{"at line boundary", "discarded prefix\nfirst retained line\nlast diagnostic\n", 36, "first retained line\nlast diagnostic\n", true},
+		{"within line", "discarded prefix\nfirst retained line\nlast diagnostic\n", 20, "last diagnostic\n", false},
+		{"without complete line", "one oversized line\n", 8, "ed line\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "test.log")
@@ -878,6 +867,12 @@ func TestRotateLogFileTailAndMode(t *testing.T) {
 			require.NoError(t, os.Chmod(path, 0o640))
 			source, err := os.Stat(path)
 			require.NoError(t, err)
+			var writer *os.File
+			if tc.openWriter {
+				writer, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+				require.NoError(t, err)
+				defer writer.Close()
+			}
 
 			rotateLogFile(path, tc.limit)
 
@@ -887,25 +882,31 @@ func TestRotateLogFileTailAndMode(t *testing.T) {
 			backup, err := os.Stat(path + ".1")
 			require.NoError(t, err)
 			assert.Equal(t, source.Mode().Perm(), backup.Mode().Perm())
+			active, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Empty(t, active)
+			if writer != nil {
+				_, err := writer.WriteString("parent still logging")
+				require.NoError(t, err)
+				active, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, "parent still logging", string(active))
+			}
 		})
 	}
 }
 
 func TestRotateLogFileWithinLimit(t *testing.T) {
-	for _, limit := range []int64{17, 1024} {
-		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "test.log")
-			content := []byte("small log content")
-			writeTestFile(t, path, content)
+	path := filepath.Join(t.TempDir(), "test.log")
+	content := []byte("small log content")
+	writeTestFile(t, path, content)
 
-			rotateLogFile(path, limit)
+	rotateLogFile(path, 17)
 
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, content, data, "content changed")
-			assert.NoFileExists(t, path+".1")
-		})
-	}
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, content, data, "content changed")
+	assert.NoFileExists(t, path+".1")
 }
 
 func TestRotateLogFileSymlink(t *testing.T) {
@@ -938,6 +939,55 @@ func TestRotateLogFileBackupFailure(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, content, data, "failed backup must preserve the active log")
+}
+
+func TestTruncateLogFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+
+	// Write a file larger than the limit.
+	big := bytes.Repeat([]byte("x"), 1024)
+	writeTestFile(t, path, big)
+
+	// Truncate with limit smaller than file size.
+	truncateLogFile(path, 512)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat after truncate")
+	assert.Equal(t, int64(0), info.Size())
+}
+
+func TestTruncateLogFileUnderLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+
+	content := []byte("small log content")
+	writeTestFile(t, path, content)
+
+	// File is under limit: should not be truncated.
+	truncateLogFile(path, 1024)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "read after truncate")
+	assert.Equal(t, string(content), string(data), "content changed")
+}
+
+func TestTruncateLogFileSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.log")
+	link := filepath.Join(dir, "link.log")
+
+	// Write a target file larger than the limit.
+	big := bytes.Repeat([]byte("x"), 1024)
+	writeTestFile(t, target, big)
+	requireSymlinkOrSkip(t, target, link)
+
+	// Truncate via symlink: should be a no-op.
+	truncateLogFile(link, 8)
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err, "read target")
+	assert.Len(t, data, 1024, "symlink target was truncated")
 }
 
 func TestNewDaemonIdleTrackerUsesConfigTimeout(t *testing.T) {

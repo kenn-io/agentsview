@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,17 +23,6 @@ func loadPGServeConfigForTest(t *testing.T, args ...string) (config.Config, stri
 		return config.Config{}, "", err
 	}
 	return loadReplicaServeConfig(cmd)
-}
-
-func restoreTestLogger(t *testing.T) {
-	t.Helper()
-	oldWriter := log.Writer()
-	t.Cleanup(func() {
-		if closer, ok := log.Writer().(io.Closer); ok && log.Writer() != oldWriter {
-			_ = closer.Close()
-		}
-		log.SetOutput(oldWriter)
-	})
 }
 
 func clearConfiguredAgentEnvVars(t *testing.T) {
@@ -147,7 +134,7 @@ func TestRunPGPush_IgnoresBrokenUnselectedTarget(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
 	writeTestConfig(t, dataDir, `
 default_pg = "archive"
@@ -176,7 +163,7 @@ func TestRunPGStatus_IgnoresBrokenUnselectedTarget(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
 	writeTestConfig(t, dataDir, `
 default_pg = "archive"
@@ -202,7 +189,7 @@ func TestRunPGStatus_IgnoresUnreadableLocalWatermark(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	writeTestConfig(t, dataDir, `
 default_pg = "archive"
 
@@ -229,7 +216,7 @@ func TestRunPGPushAll_AggregatesTargetFailures(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
 	writeTestConfig(t, dataDir, `
 default_pg = "work"
@@ -255,7 +242,7 @@ func TestRunPGStatusAll_AggregatesTargetFailures(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
 	writeTestConfig(t, dataDir, `
 default_pg = "work"
@@ -282,7 +269,7 @@ func TestPGPushCommandPrefixesErrors(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	writeTestConfig(t, dataDir, `
 default_pg = "archive"
 
@@ -306,7 +293,7 @@ func TestPGStatusCommandPrefixesErrors(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	writeTestConfig(t, dataDir, `
 default_pg = "archive"
 

@@ -398,7 +398,7 @@ func TestReplicaStatusMaxStaleDoesNotWaitOnReplica(t *testing.T) {
 			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 			clearConfiguredAgentEnvVars(t)
 			isolateDefaultAgentDirs(t, dataDir)
-			restoreTestLogger(t)
+			restoreTestLogOutput(t)
 			writeTestConfig(t, dataDir, `
 default_pg = "archive"
 

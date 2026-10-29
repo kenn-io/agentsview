@@ -366,7 +366,7 @@ func TestReplicaWatchEmbedSpacesRecipeLookups(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, embedder.Close()) })
 	embedder.resolveRetry = time.Hour
 	var logs bytes.Buffer
-	restoreTestLogger(t)
+	restoreTestLogOutput(t)
 	log.SetOutput(&logs)
 
 	embedder.ensureScheduler(t.Context())
@@ -629,7 +629,7 @@ func TestReplicaPushEmbedUsesLocalWriterWithoutDaemon(t *testing.T) {
 		t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 		clearConfiguredAgentEnvVars(t)
 		isolateDefaultAgentDirs(t, dataDir)
-		restoreTestLogger(t)
+		restoreTestLogOutput(t)
 		starts := 0
 		stubStartBackgroundServeForTransport(t, func(
 			context.Context, *config.Config, time.Duration, bool,
