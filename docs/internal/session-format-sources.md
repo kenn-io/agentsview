@@ -657,8 +657,9 @@ fixtures retain this field; missing identities remain source-local.
   ([fork persistence](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/core/src/session/mod.rs#L1783-L1810)).
   `turn_context` carries no tier. Codex
   [filters unsupported tiers before sending a request](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/openai_models.rs#L1040-L1044).
-  Agentsview bills Fast only when the settings record `model_provider_id` as
-  `openai` and `service_tier` as `priority`; all other settings clear that identity.
+  Agentsview estimates Fast when the latest settings record `model_provider_id`
+  as `openai` and `service_tier` as `priority`; Codex can omit that selected tier
+  from requests for models that do not advertise support.
 
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)

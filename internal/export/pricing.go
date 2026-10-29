@@ -298,9 +298,6 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel str
 // with that key's standard row so Fast bands inherit from the same source.
 func (r *PricingResolver) priorityRow(models ...string) (PricingLookup, string, ModelRates, bool) {
 	for _, model := range models {
-		if model == "" {
-			continue
-		}
 		base := r.Lookup(model)
 		pattern := catalog.PriorityPattern(base.Pattern)
 		if rates, ok := r.byModel[pattern]; base.OK && ok {
