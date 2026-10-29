@@ -1613,7 +1613,7 @@ func (w *lockedLogWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.lock.RLock(); err != nil {
-		return 0, err
+		return w.file.Write(p)
 	}
 	n, err := w.file.Write(p)
 	return n, errors.Join(err, w.lock.Unlock())

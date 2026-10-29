@@ -810,6 +810,25 @@ func TestSetupLogFileOpenFailure(t *testing.T) {
 		"expected warning about log file")
 }
 
+func TestSetupLogFileUnavailableLock(t *testing.T) {
+	dir := t.TempDir()
+	restoreTestLogOutput(t)
+	setupLogFile(dir)
+	path := filepath.Join(dir, "debug.log")
+	previous := bytes.Repeat([]byte("x"), 1024)
+	writeTestFile(t, path, previous)
+	require.NoError(t, os.Mkdir(path+".rotate.lock", 0o700))
+
+	rotateLogFile(path, 512)
+	log.Print("message without rotation lock")
+
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(active, previous), "unavailable lock must preserve the active log")
+	assert.Contains(t, string(active), "message without rotation lock")
+	assert.NoFileExists(t, path+".1")
+}
+
 func TestRotateLogFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.log")
