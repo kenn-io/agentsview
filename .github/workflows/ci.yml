@@ -191,7 +191,7 @@ jobs:
         run: make docs-check
 
       - name: Check that docs pages paint with their stylesheets and fonts
-        uses: kenn-io/actions/first-paint@ee1ddcce6a620e49ba96f613bb8d113e0193b4f6  # first-paint, kenn-io/actions#6
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
         with:
           dist: docs/site
 
@@ -202,7 +202,7 @@ jobs:
           cp -R internal/web/fallback "$RUNNER_TEMP/app-pages/fallback"
 
       - name: Check that static app pages paint with their stylesheets and fonts
-        uses: kenn-io/actions/first-paint@ee1ddcce6a620e49ba96f613bb8d113e0193b4f6  # first-paint, kenn-io/actions#6
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
         with:
           dist: ${{ runner.temp }}/app-pages
 
@@ -916,9 +916,9 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      # The first-paint check loads pages from the real server so they carry
-      # its Content-Security-Policy, which must allow the inline script that
-      # holds first paint.
+      # The first-paint check reads the pages the binary serves from its
+      # embedded build: the root and a client route, which takes the SPA
+      # fallback.
       - name: Start the server for the first-paint check
         if: matrix.browser == 'chromium'
         timeout-minutes: 2
@@ -935,17 +935,11 @@ jobs:
 
       - name: Check that pages paint with their stylesheets and fonts
         if: matrix.browser == 'chromium'
-        uses: kenn-io/actions/first-paint@ee1ddcce6a620e49ba96f613bb8d113e0193b4f6  # first-paint, kenn-io/actions#6
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
         with:
           urls: |
             http://127.0.0.1:8095/
             http://127.0.0.1:8095/sessions/test-session-large-1500
-            http://127.0.0.1:8095/usage
-            http://127.0.0.1:8095/activity
-            http://127.0.0.1:8095/trends
-            http://127.0.0.1:8095/quality
-            http://127.0.0.1:8095/data
-            http://127.0.0.1:8095/settings
 
       - name: Stop the first-paint server
         if: always() && matrix.browser == 'chromium'
