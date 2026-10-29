@@ -29,37 +29,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read
       pull-requests: read
     outputs:
       groups: ${{ steps.changes.outputs.groups }}
       all: ${{ steps.changes.outputs.all }}
     steps:
-      - uses: kenn-io/actions/changes@cd015067d6f0171d677fa16bf5fea3a0539fcedd
+      - uses: kenn-io/actions/changes@00d179408cb4e47c17fff4c6c7106575c6e0bd21
         id: changes
         with:
           filters: |
             go:
-              - '**/*.go'
-              - 'cmd/**'
-              - 'internal/**'
-              - 'testdata/**'
+              - '!{frontend/**,desktop/**,*.md,docs/{README,changelog,contributing}.md,docs/agents/**/*.md,docs/internal/**/!(session-format-sources).md,docs/website/**/*.md}'
               - 'desktop/src-tauri/icons/**'
               - 'desktop/scripts/prepare-sidecar.sh'
-            frontend: ['frontend/**']
-            desktop: ['desktop/**']
-            docs: ['docs/**', '*.md', 'scripts/**', 'desktop/scripts/**']
-            all:
-              - 'internal/web/**'
-              - 'internal/importer/claude_ai_requests.txt'
-              - 'docs/internal/session-format-sources.md'
-              - 'docs/assets/**'
-              - 'docs/screenshots/**'
-              - 'docs/scripts/**'
-              - 'docs/zensical-docs.sh'
-              - 'scripts/check-docs.sh'
-              - added|deleted: 'docs/*.md'
-              - modified: 'docs/{activity,artifact-sync,chat-import,clickhouse-sync,commands,configuration,conversation-export,data,duckdb,filesystem-sync,hosted-raw-sync,index,mcp,one-shot-capture,pg-sync,quality,quickstart,recall,recent-edits,remote-access,reporting-export,semantic-search-internals,semantic-search,session-api,session-export,session-intelligence,stats,token-usage,usage}.md'
+            frontend:
+              - '!{*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
+            node:
+              - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
+            desktop:
+              - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,frontend/**}'
 
   lint:
     needs: changes
@@ -186,7 +174,7 @@ jobs:
 
   frontend-node-26:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'frontend')) }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'node')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
