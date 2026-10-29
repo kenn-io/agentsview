@@ -445,7 +445,7 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
@@ -461,8 +461,10 @@ test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
 test-postgres-core-ci:
 	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci
 
+# These packages drop schemas that can own database-wide extensions, so their
+# cleanup must finish before another package starts using the same database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -skip '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -skip '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
 test-postgres-core-heavy-ci: pricing-snapshot ensure-embed-dir
