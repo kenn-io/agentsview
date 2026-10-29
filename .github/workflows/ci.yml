@@ -25,7 +25,45 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      groups: ${{ steps.changes.outputs.groups }}
+      all: ${{ steps.changes.outputs.all }}
+    steps:
+      - uses: kenn-io/actions/changes@cd015067d6f0171d677fa16bf5fea3a0539fcedd
+        id: changes
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'cmd/**'
+              - 'internal/**'
+              - 'testdata/**'
+              - 'desktop/src-tauri/icons/**'
+              - 'desktop/scripts/prepare-sidecar.sh'
+            frontend: ['frontend/**']
+            desktop: ['desktop/**']
+            docs: ['docs/**', '*.md', 'scripts/**', 'desktop/scripts/**']
+            all:
+              - 'internal/web/**'
+              - 'internal/importer/claude_ai_requests.txt'
+              - 'docs/internal/session-format-sources.md'
+              - 'docs/assets/**'
+              - 'docs/screenshots/**'
+              - 'docs/scripts/**'
+              - 'docs/zensical-docs.sh'
+              - 'scripts/check-docs.sh'
+              - added|deleted: 'docs/*.md'
+              - modified: 'docs/{activity,artifact-sync,chat-import,clickhouse-sync,commands,configuration,conversation-export,data,duckdb,filesystem-sync,hosted-raw-sync,index,mcp,one-shot-capture,pg-sync,quality,quickstart,recall,recent-edits,remote-access,reporting-export,semantic-search-internals,semantic-search,session-api,session-export,session-intelligence,stats,token-usage,usage}.md'
+
   lint:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go')) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.linter == 'nilaway' && 30 || 10 }}
     strategy:
@@ -87,6 +125,8 @@ jobs:
         uses: ./.github/actions/go-cache-save
 
   frontend:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go') || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'frontend')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -145,6 +185,8 @@ jobs:
         working-directory: frontend
 
   frontend-node-26:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'frontend')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -199,6 +241,8 @@ jobs:
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   test:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go')) }}
     name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     env:
@@ -394,6 +438,8 @@ jobs:
 
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
   test-isolated-packages-windows:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go')) }}
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
     strategy:
@@ -589,6 +635,8 @@ jobs:
 
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go')) }}
     name: Go Test (windows-latest, DuckDB)
     runs-on: windows-latest
     steps:
@@ -638,6 +686,8 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go')) }}
     name: Go Test (race detector, ${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -721,6 +771,8 @@ jobs:
 
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'desktop')) }}
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
     steps:
@@ -763,6 +815,8 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go')) }}
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
@@ -838,6 +892,8 @@ jobs:
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
   e2e:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'go') || contains(fromJSON(needs.changes.outputs.groups || '[]'), 'frontend')) }}
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
     env:
