@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
@@ -164,7 +163,7 @@ func activityMemoPairingReads(tb testing.TB, d *DB) map[string]int {
 	defer conn.Close()
 	reads := make(map[string]int)
 	require.NoError(tb, conn.Raw(func(driverConn any) error {
-		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("agentsview_timestamp_unix_micro", func(raw string) any {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("agentsview_timestamp_unix_micro", func(raw string) any {
 			reads[raw]++
 			return sqliteTimestampUnixMicro(raw)
 		}, false)

@@ -1556,9 +1556,9 @@ func forceReaderVarLimit(t *testing.T, d *DB, limit int) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, conn.Close()) }()
 	require.NoError(t, conn.Raw(func(dc any) error {
-		sc, ok := dc.(*sqlite3.SQLiteConn)
+		sc, ok := dc.(interface{ SetLimit(int, int) int })
 		if !ok {
-			return fmt.Errorf("reader conn is %T, want *sqlite3.SQLiteConn", dc)
+			return fmt.Errorf("reader conn is %T, want SetLimit capability", dc)
 		}
 		sc.SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
 		return nil

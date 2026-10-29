@@ -840,6 +840,7 @@ type DB struct {
 	path                 string
 	writer               atomic.Pointer[sql.DB]
 	reader               atomic.Pointer[sql.DB]
+	reads                readRegistry
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	usageBackfillMu      sync.Mutex
@@ -1885,11 +1886,11 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 		)
 	}
 
-	reader, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
-	if err != nil {
-		return nil, fmt.Errorf("opening read-only reader: %w", err)
+	db := &DB{
+		path: path, readOnly: true,
+		usageCache: newUsageCacheManager(path),
 	}
-	configureReaderPool(reader)
+	reader := db.openReader(path)
 	if err := reader.PingContext(ctx); err != nil {
 		reader.Close()
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
@@ -1909,10 +1910,6 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	if schemaStale {
 		reader.Close()
 		return nil, errors.New("opening read-only database: schema is stale or incomplete")
-	}
-	db := &DB{
-		path: path, readOnly: true,
-		usageCache: newUsageCacheManager(path),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -4663,14 +4660,8 @@ func openAndInit(
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	reader, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
-	if err != nil {
-		writer.Close()
-		return nil, fmt.Errorf("opening reader: %w", err)
-	}
-	configureReaderPool(reader)
-
 	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
@@ -5449,14 +5440,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}
 
-	reader, err := sql.Open(
-		sqliteArchiveDriverName, makeDSN(db.path, true),
-	)
-	if err != nil {
-		writer.Close()
-		return fmt.Errorf("reopening reader: %w", err)
-	}
-	configureReaderPool(reader)
+	reader := db.openReader(db.path)
 
 	db.connMu.Lock()
 	retired := append([]*sql.DB(nil), db.retired...)

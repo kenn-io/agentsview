@@ -1,11 +1,13 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"runtime/pprof"
 	"time"
 )
 
@@ -124,6 +126,13 @@ func (db *DB) walMaintenanceTick(ctx context.Context, diag *walDiagnostics) {
 					"holding the WAL",
 				stall.unmovedPages, stall.logPages, stall.attempts,
 			)
+			db.reads.logOpenReads()
+			var stacks bytes.Buffer
+			if err := pprof.Lookup("goroutine").WriteTo(&stacks, 2); err != nil {
+				log.Printf("sqlite wal goroutine dump: %v", err)
+			} else {
+				log.Printf("sqlite wal goroutine dump:\n%s", stacks.String())
+			}
 		}
 	}
 

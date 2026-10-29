@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -165,7 +164,7 @@ func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
 	require.NoError(t, err)
 	// Fail during SQLite row evaluation, after QueryContext has returned rows.
 	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("strftime", func(...any) (string, error) {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
 			return "", errors.New("summary read failure")
 		}, false)
 	}))
