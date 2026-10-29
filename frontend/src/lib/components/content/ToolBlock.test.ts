@@ -906,4 +906,14 @@ describe("ToolBlock result images", () => {
     await tick();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
+
+  it("releases the modal slot when an open viewer unmounts", async () => {
+    await render({ toolCall: call("image_generation", {}, { result_content: imageResult }) });
+    await click('.tool-images button[aria-label="Show image at full size"]');
+    expect(ui.activeModal).toBe("toolImage");
+
+    for (const component of components.splice(0)) await unmount(component);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(ui.activeModal).toBeNull();
+  });
 });

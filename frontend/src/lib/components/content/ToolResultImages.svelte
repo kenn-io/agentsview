@@ -1,6 +1,7 @@
 <!-- ABOUTME: Shows the images a tool result holds as transcript-sized previews. -->
 <!-- ABOUTME: Each preview opens the image at full size in a dialog. -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { Modal } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { assetImageSource, loadAssetImages } from "../../utils/markdown.js";
@@ -28,6 +29,12 @@
     openIndex = null;
     if (ui.activeModal === "toolImage") ui.activeModal = null;
   }
+
+  // Leaving the session with the dialog open unmounts this component, and a
+  // slot left behind would keep blocking transcript shortcuts.
+  onDestroy(() => {
+    if (openIndex !== null) close();
+  });
 
   // Transcript rows are positioned with transforms, which would confine a
   // fixed dialog to its row and route its clicks through the row's handlers.
