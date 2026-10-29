@@ -943,6 +943,14 @@ CREATE TABLE IF NOT EXISTS project_identity_observations (
 CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
     ON project_identity_observations(project);
 
+-- Stable automatic names for source-recorded repositories. Parser snapshots
+-- retain their original labels; explicit folder/session assignments win.
+CREATE TABLE IF NOT EXISTS repository_project_names (
+    normalized_remote TEXT PRIMARY KEY,
+    project TEXT NOT NULL,
+    reason TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
     session_id         TEXT PRIMARY KEY,
     project            TEXT NOT NULL,
@@ -970,6 +978,9 @@ CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
     ON session_project_identity_snapshots(
         machine, root_path, git_remote, observed_at DESC, session_id
     );
+
+CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_remote
+    ON session_project_identity_snapshots(normalized_remote);
 
 CREATE TABLE IF NOT EXISTS background_migrations (
     name            TEXT PRIMARY KEY,

@@ -1278,7 +1278,7 @@ func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
 // If the schema is current but the data version is stale, the database
 // is also preserved and marked for a re-sync on the next cycle.
 func Open(ctx context.Context, path string) (*DB, error) {
-	return open(ctx, path, true, config.ArchiveContentFull, nil)
+	return open(ctx, path, openOptions{backgroundMaintenance: true}, config.ArchiveContentFull, nil)
 }
 
 // OpenWithArchiveContent opens an archive under a storage policy. The policy
@@ -1311,19 +1311,19 @@ func (progress OpenProgressFunc) report(detail string) {
 func OpenWithProgress(
 	ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc,
 ) (*DB, error) {
-	return open(ctx, path, true, policy, progress)
+	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
 }
 
 // OpenIsolated opens an archive without starting long-running database
 // maintenance. Short-lived, isolated workflows must close the returned DB.
 func OpenIsolated(ctx context.Context, path string) (*DB, error) {
-	return open(ctx, path, false, config.ArchiveContentFull, nil)
+	return open(ctx, path, openOptions{}, config.ArchiveContentFull, nil)
 }
 
 // OpenIsolatedContext is OpenIsolated with cooperative cancellation between
 // database initialization phases. The returned database must be closed.
 func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
-	return open(ctx, path, false, config.ArchiveContentFull, nil)
+	return open(ctx, path, openOptions{}, config.ArchiveContentFull, nil)
 }
 
 // OpenIsolatedWithArchiveContent is OpenIsolatedContext under a storage
@@ -1332,7 +1332,18 @@ func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
 func OpenIsolatedWithArchiveContent(
 	ctx context.Context, path string, policy config.ArchiveContent,
 ) (*DB, error) {
-	return open(ctx, path, false, policy, nil)
+	return open(ctx, path, openOptions{}, policy, nil)
+}
+
+// OpenForRepositoryProjectRepair opens an archive for an explicit, possibly
+// scoped repair. Other migrations still run, but automatic repository repair
+// waits for the next normal writable open so it cannot exceed the caller's
+// scope or consume changes before RepairRepositoryProjects reports them.
+// The caller must hold exclusive archive ownership and close the returned DB.
+func OpenForRepositoryProjectRepair(
+	ctx context.Context, path string, policy config.ArchiveContent,
+) (*DB, error) {
+	return open(ctx, path, openOptions{deferRepositoryProjectRepair: true}, policy, nil)
 }
 
 // OpenFreshIsolatedContext initializes a current-schema archive in an empty,
@@ -1384,9 +1395,14 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	return d, nil
 }
 
+type openOptions struct {
+	backgroundMaintenance        bool
+	deferRepositoryProjectRepair bool
+}
+
 func open(
 	ctx context.Context, path string,
-	backgroundMaintenance bool, policy config.ArchiveContent,
+	options openOptions, policy config.ArchiveContent,
 	progress OpenProgressFunc,
 ) (*DB, error) {
 	if err := ctx.Err(); err != nil {
@@ -1417,7 +1433,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	d, err := openAndInit(ctx, path, schemaRepairNeeded, backgroundMaintenance, progress)
+	d, err := openAndInit(ctx, path, schemaRepairNeeded, options.backgroundMaintenance, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -1459,6 +1475,12 @@ func open(
 	}
 	if err := d.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
 		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
+	}
+
+	if !options.deferRepositoryProjectRepair {
+		if err := d.migrateRepositoryProjects(ctx, progress); err != nil {
+			return closeOnError(fmt.Errorf("repairing repository project names: %w", err))
+		}
 	}
 
 	if dataStale || schemaRepairNeeded {

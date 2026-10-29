@@ -788,6 +788,27 @@ for automatic adoption and mirror updates.
 
 ______________________________________________________________________
 
+### `agentsview db repair-projects`
+
+Available in source builds after 0.46.1. Preview corrections for temporary
+worktree project names using repository URLs already saved in the archive:
+
+```bash
+agentsview db repair-projects
+agentsview db repair-projects --project sample_feature --format json
+agentsview db repair-projects --project sample_feature --apply
+```
+
+The default is read-only. `--project` selects an exact current project label;
+omit it to examine all projects. `--apply` requires exclusive archive access, so
+stop the daemon or desktop app first. JSON output includes each repository, old
+and new project names, reason, session count, and the number of sessions left
+unresolved because checkout names conflict. See
+[repair worktree project names](/docs/data/#repair-worktree-project-names) for
+the naming rules and preservation guarantees.
+
+______________________________________________________________________
+
 ### `agentsview db compact`
 
 Reclaim unused space in the local SQLite archive. The command writes and checks

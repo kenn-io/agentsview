@@ -733,21 +733,8 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 		return fmt.Errorf("beginning project identity observation upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertProjectIdentityObservationExec(
-		ctx, tx,
-		func(ctx context.Context, query string, args ...any) rowScanner {
-			return tx.QueryRowContext(ctx, query, args...)
-		},
-		obs,
-	); err != nil {
-		return err
-	}
-	if err := writeSessionProjectIdentitySnapshotExec(
-		ctx, tx,
-		func(ctx context.Context, query string, args ...any) rowScanner {
-			return tx.QueryRowContext(ctx, query, args...)
-		},
-		obs, snapshotProject, false, allowSnapshotProjectCorrection,
+	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection,
 	); err != nil {
 		return err
 	}
@@ -910,6 +897,10 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 	if err != nil {
 		return err
 	}
+	normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
+	if err != nil {
+		return err
+	}
 	if err := upsertProjectIdentityObservationExec(
 		ctx, tx,
 		func(ctx context.Context, query string, args ...any) rowScanner {
@@ -1008,6 +999,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		  AND snap.remote_resolution = 'resolved'
 		  AND snap.git_remote != ''
 		  AND s.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = s.id)
 		  AND s.project != snap.project`)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -1049,6 +1041,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			WHERE snap.session_id = sessions.id
 		)
 		WHERE sessions.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id)
 		  AND EXISTS (
 			SELECT 1
 			FROM session_project_identity_snapshots snap
@@ -1076,6 +1069,9 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		); err != nil {
 			return 0, err
 		}
+	}
+	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf(

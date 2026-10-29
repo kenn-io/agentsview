@@ -1993,6 +1993,20 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	// Old naming decisions win over provisional choices made while reparsing.
+	// Discard new provisional choices too: the complete source snapshots can
+	// now supply established checkout aliases regardless of parse order.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM main.repository_project_names`); err != nil {
+		return fmt.Errorf("resetting provisional repository project names: %w", err)
+	}
+	if oldDBHasTable(ctx, tx, "repository_project_names") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.repository_project_names (normalized_remote, project, reason)
+			SELECT normalized_remote, project, reason FROM old_db.repository_project_names`); err != nil {
+			return fmt.Errorf("copying repository project names: %w", err)
+		}
+	}
+
 	// Copy persistent worktree project mappings. Omit id so
 	// primary-key values from old_db cannot shadow existing
 	// destination rows. ResyncAll may pre-copy mappings into
