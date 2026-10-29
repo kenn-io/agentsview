@@ -266,8 +266,10 @@ type SummaryStoreExpectation struct {
 	// directory; Cwd is then the value a parse stores.
 	Cwd      string
 	CwdKnown bool
-	// ParentSessionID is the parent the store names, or "".
+	// ParentKnown reports whether the store decides the session's parent;
+	// ParentSessionID is then the parent a parse stores, or "" for none.
 	ParentSessionID string
+	ParentKnown     bool
 }
 
 // SummaryStoreExpectationLister lists, for a summary store write, every
@@ -279,8 +281,10 @@ type SummaryStoreExpectationLister interface {
 }
 
 // summaryExpectation describes source's session from the store's facts.
-func summaryExpectation(source SourceRef, sessionID, parentID string) SummaryStoreExpectation {
-	expectation := SummaryStoreExpectation{Source: source, SessionID: sessionID, ParentSessionID: parentID}
+func summaryExpectation(source SourceRef, sessionID, parentID string, parentKnown bool) SummaryStoreExpectation {
+	expectation := SummaryStoreExpectation{
+		Source: source, SessionID: sessionID, ParentSessionID: parentID, ParentKnown: parentKnown,
+	}
 	switch source.CwdResolution.State {
 	case SourceCwdResolved:
 		expectation.Cwd, expectation.CwdKnown = source.CwdResolution.Path, true
@@ -290,4 +294,19 @@ func summaryExpectation(source SourceRef, sessionID, parentID string) SummarySto
 		// The store does not decide this session's working directory.
 	}
 	return expectation
+}
+
+// AntigravitySummarySessionRoot returns the configured root that owns an
+// archived session path of agent, so a store write in one root never routes a
+// same-ID session archived from another.
+func AntigravitySummarySessionRoot(agent AgentType, path string) (string, bool) {
+	if agent == AgentAntigravity {
+		return AntigravitySessionRoot(path)
+	}
+	if agent == AgentAntigravityCLI {
+		root := filepath.Dir(filepath.Dir(filepath.Clean(path)))
+		_, ok := antigravityCLISessionIDForPath(root, path)
+		return root, ok
+	}
+	return "", false
 }

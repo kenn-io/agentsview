@@ -183,6 +183,17 @@ func TestAntigravityProviderMarksRemoteWorkspace(t *testing.T) {
 			assert.Equal(t, SourceCwdResolution{State: SourceCwdRemote}, source.CwdResolution)
 			assert.Equal(t, workspace, source.ProjectHint)
 
+			// A remote root with no store reports it unavailable, since the
+			// archived project and parent came from it.
+			bare := t.TempDir()
+			writeAntigravityIDEProviderFixture(t, bare, summaryTestID)
+			bareProvider, ok := NewProvider(AgentAntigravity, config(bare))
+			require.True(t, ok)
+			bareSource, ok, err := bareProvider.FindSource(t.Context(), FindSourceRequest{RawSessionID: summaryTestID})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, SourceCwdResolution{State: SourceCwdUnavailable}, bareSource.CwdResolution)
+
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
@@ -368,16 +379,18 @@ func TestAntigravitySummaryStoreExpectations(t *testing.T) {
 		assert.ElementsMatch(t, []summaryExpectationView{
 			{
 				Path: filepath.Join(root, "conversations", summaryTestID+".db"), SessionID: "antigravity:" + summaryTestID,
-				Cwd: "/tmp/ws-proj", CwdKnown: true, Parent: "antigravity:" + summaryTestParent,
+				Cwd: "/tmp/ws-proj", CwdKnown: true, Parent: "antigravity:" + summaryTestParent, ParentKnown: true,
 			},
-			{Path: filepath.Join(root, "conversations", other+".db"), SessionID: "antigravity:" + other},
+			{Path: filepath.Join(root, "conversations", other+".db"), SessionID: "antigravity:" + other, ParentKnown: true},
 		}, viewSummaryExpectations(got))
 	})
 	t.Run("CLI", func(t *testing.T) {
 		root := t.TempDir()
 		// summaryTestCLIID has conversations/ and implicit/ sources, and
 		// history maps its workspace; other has only an implicit/ source.
+		// The conversations/ source has a reader sidecar, whose parent wins.
 		writeAntigravityCLIProviderFixture(t, root, summaryTestCLIID)
+		mustWrite(t, filepath.Join(root, "conversations", summaryTestCLIID+".trajectory.json"), []byte(`{}`))
 		mustWrite(t, filepath.Join(root, "implicit", other+".pb"), []byte("implicit"))
 		store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
 			summaryTestCLIID: {WorkspaceURIs: `["file:///tmp/store-proj"]`, ParentID: summaryTestParent},
@@ -394,11 +407,11 @@ func TestAntigravitySummaryStoreExpectations(t *testing.T) {
 			},
 			{
 				Path: filepath.Join(root, "implicit", summaryTestCLIID+".pb"), SessionID: "antigravity-cli:implicit-" + summaryTestCLIID,
-				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent,
+				Cwd: "/tmp/db-proj", CwdKnown: true, Parent: "antigravity-cli:" + summaryTestParent, ParentKnown: true,
 			},
 			{
 				Path: filepath.Join(root, "implicit", other+".pb"), SessionID: "antigravity-cli:implicit-" + other,
-				Cwd: "/tmp/store-proj", CwdKnown: true,
+				Cwd: "/tmp/store-proj", CwdKnown: true, ParentKnown: true,
 			},
 		}, viewSummaryExpectations(got))
 	})
@@ -425,7 +438,7 @@ func TestAntigravitySummaryFingerprintFailsClosedOnUnreadableStore(t *testing.T)
 
 type summaryExpectationView struct {
 	Path, SessionID, Cwd, Parent string
-	CwdKnown                     bool
+	CwdKnown, ParentKnown        bool
 }
 
 func viewSummaryExpectations(expectations []SummaryStoreExpectation) []summaryExpectationView {
@@ -433,7 +446,7 @@ func viewSummaryExpectations(expectations []SummaryStoreExpectation) []summaryEx
 	for i, e := range expectations {
 		views[i] = summaryExpectationView{
 			Path: e.Source.DisplayPath, SessionID: e.SessionID, Cwd: e.Cwd,
-			CwdKnown: e.CwdKnown, Parent: e.ParentSessionID,
+			CwdKnown: e.CwdKnown, Parent: e.ParentSessionID, ParentKnown: e.ParentKnown,
 		}
 	}
 	return views
