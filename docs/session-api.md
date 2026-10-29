@@ -924,9 +924,11 @@ ______________________________________________________________________
 
 ### `agentsview session usage-batch`
 
-Read usage for several sessions with one backend selection and archive or
-PostgreSQL connection. IDs resolve as they do for `session usage`, including
-short IDs. Repeated IDs produce repeated results in input order.
+Read usage for several sessions in one CLI process. Local and PostgreSQL modes
+select the backend and open the archive or connection once. With `--server`,
+the command still makes requests for each ID. IDs resolve as they do for
+`session usage`, including short IDs. Repeated IDs produce repeated results in
+input order.
 
 ```bash
 agentsview session usage-batch <id>... [--format json] [--own-only] [--no-sync]

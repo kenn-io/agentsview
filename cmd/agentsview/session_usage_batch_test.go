@@ -20,6 +20,7 @@ func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
 	store := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	seedSubagentOnlyUsage(t, store, "claude:parent", "agent-child", 42)
+	seedUsageSession(t, store, "codex:later", "usage-project", "codex", 17)
 	opens, closes := 0, 0
 	original := openPGReadStore
 	openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
@@ -31,18 +32,24 @@ func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
 	var out *sessionUsageBatchOutput
 	stderr := captureStderr(t, func() {
 		var err error
-		out, err = sessionUsageBatchDataForCommand(cmd, []string{"claude:parent", "codex:missing", "claude:parent"})
+		out, err = sessionUsageBatchDataForCommand(cmd, []string{
+			"claude:parent", "codex:missing", "codex:later", "claude:parent",
+		})
 		require.NoError(t, err)
 	})
 	assert.Empty(t, stderr)
-	require.Len(t, out.Results, 3)
+	require.Len(t, out.Results, 4)
 	assert.Equal(t, 1, opens)
 	assert.Equal(t, 1, closes)
 	assert.Equal(t, "claude:parent", out.Results[0].RequestedID)
 	assert.Equal(t, 0, out.Results[0].ExitCode)
 	assert.Equal(t, 2, out.Results[1].ExitCode)
 	assert.Nil(t, out.Results[1].Usage)
-	assert.Equal(t, out.Results[0], out.Results[2])
+	assert.Equal(t, "codex:later", out.Results[2].RequestedID)
+	assert.Equal(t, 0, out.Results[2].ExitCode)
+	require.NotNil(t, out.Results[2].Usage)
+	assert.Equal(t, 17, out.Results[2].Usage.TotalOutputTokens)
+	assert.Equal(t, out.Results[0], out.Results[3])
 	var human strings.Builder
 	require.NoError(t, renderSessionUsageBatch(&human, out, "human"))
 	assert.Contains(t, human.String(), "claude:parent (exit 0)")
