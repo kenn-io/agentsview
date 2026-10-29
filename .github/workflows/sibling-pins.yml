@@ -8,12 +8,12 @@ name: Sibling pins on main
 # The action reads only the candidate's dependency files.
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   merge_group:
     types: [checks_requested]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.action == 'edited' && !github.event.changes.base && github.run_id || github.event.pull_request.number || (github.event_name == 'pull_request' && github.ref) || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -21,7 +21,8 @@ permissions:
 
 jobs:
   sibling-pins:
-    name: Sibling pins on main
+    name: ${{ github.event.action == 'edited' && !github.event.changes.base && 'PR metadata' || 'Sibling pins on main' }}
+    if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
