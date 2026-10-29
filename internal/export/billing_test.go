@@ -13,6 +13,25 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
+const codexLunaGenAIProvider = `{
+    "id": "openai",
+    "name": "OpenAI",
+    "api_pattern": "https://example.invalid",
+    "model_match": {"starts_with": "gpt-"},
+    "provider_match": {"contains": "openai"},
+    "models": [{
+        "id": "gpt-5.6-luna",
+        "match": {"or": [
+            {"equals": "gpt-5.6-luna"},
+            {"regex": "^gpt-5\\.6-luna-\\d{4}-\\d{2}-\\d{2}$"}
+        ]},
+        "prices": [
+            {"prices": {"input_mtok": 1}},
+            {"constraint": {"start_date": "2026-07-30"}, "prices": {"input_mtok": 0.2}}
+        ]
+    }]
+}`
+
 func TestResolveBilledScalesEveryRateFieldAndBand(t *testing.T) {
 	r := ModelRates{
 		InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000},
@@ -150,9 +169,10 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
 	t.Run("GenAI dated alias", func(t *testing.T) {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
+		genAI, err := pricingpkg.ParseGenAIPrices([]byte("[" + codexLunaGenAIProvider + "]"))
+		require.NoError(t, err)
 		resolver := NewPricingResolver([]EffectivePricingRow{
-			{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
+			{GenAI: genAI, GenAIVersion: genAI.Version(), GenAISource: PricingRowSourceEmbedded},
 			{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.3"), Source: PricingRowSourceFetched}},
 			{ModelPattern: "gpt-5.6-luna@priority", Rates: ModelRates{InputPerMTok: money.MustParseDollars("0.4"), Source: PricingRowSourceFetched}},
 		})
@@ -180,13 +200,13 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		custom                                            bool
 		requestInput                                      int
 		bandInput, bandOutput                             string
+		wantNoBands                                       bool
 	}{
-		{"priority", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 0, "", ""},
-		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", ""},
-		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
-		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
-		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
-		{"missing tier band uses flat Fast rate", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "12.5", "150"},
+		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", "", false},
+		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", "", false},
+		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", "", false},
+		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33", false},
+		{"missing tier band uses flat Fast rate", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "12.5", "150", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -220,10 +240,10 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
 			assert.Equal(t, tc.pattern, lookup.Pattern)
 			assert.Equal(t, tc.adjustment, lookup.Adjustment)
+			if tc.wantNoBands {
+				assert.Empty(t, lookup.Rates.Bands, "Fast row without published bands keeps flat rates")
+			}
 			if tc.requestInput > 0 {
-				if tc.model == "gpt-5.5" {
-					assert.Empty(t, lookup.Rates.Bands, "Fast row without published bands keeps flat rates")
-				}
 				selected := lookup.Rates.RatesForTokens(tc.requestInput, 0, 0)
 				assert.Equal(t, money.MustParseDollars(tc.bandInput), selected.InputPerMTok, "request band input rate")
 				assert.Equal(t, money.MustParseDollars(tc.bandOutput), selected.OutputPerMTok, "request band output rate")

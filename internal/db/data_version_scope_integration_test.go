@@ -333,9 +333,11 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 }
 
 func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(152, 153)
 	assert.ElementsMatch(t,
-		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
-		db.ScopedDataVersionProviders(152, 153))
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
@@ -356,9 +358,12 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 
-	// Version 152 archived the same rollout without its billing tier.
+	// Simulate an archive that does not yet have the billing identity.
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "UPDATE messages SET provider_id=''; UPDATE sessions SET data_version=152; PRAGMA user_version=152")
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"UPDATE messages SET provider_id=''; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
 		return err
 	}))
 	path := database.Path()
@@ -370,14 +375,14 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, needsSync)
 	assert.False(t, fullRebuild)
-	assert.Equal(t, 152, database.GetSessionDataVersion(ctx, sessionID))
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, sessionID))
 	engine = sync.NewEngine(ctx, database, cfg)
 	t.Cleanup(engine.Close)
 	assert.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
 	after, err := database.GetSessionFull(ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, after)
-	assert.Equal(t, 153, after.DataVersion)
+	assert.Equal(t, version, after.DataVersion)
 	messages, err := database.GetAllMessages(ctx, sessionID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)

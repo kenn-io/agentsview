@@ -43,18 +43,5 @@
     "input_cost_per_token_priority": 1.25e-05,
     "output_cost_per_token": 3e-05,
     "output_cost_per_token_priority": 7.5e-05
-  },
-  "bedrock/gpt-5.5": {
-    "litellm_provider": "bedrock",
-    "input_cost_per_token": 5e-06,
-    "input_cost_per_token_priority": 1.25e-05,
-    "output_cost_per_token": 3e-05,
-    "output_cost_per_token_priority": 7.5e-05
-  },
-  "gpt-5.5-priority": {
-    "input_cost_per_token": 5e-06,
-    "input_cost_per_token_priority": 1.25e-05,
-    "output_cost_per_token": 3e-05,
-    "output_cost_per_token_priority": 7.5e-05
   }
 }

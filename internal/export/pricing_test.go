@@ -5,7 +5,6 @@ import (
 	"math"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -1318,7 +1317,6 @@ func TestPricingResolverPricesKimiK27CodeOllamaCloudFromEmbeddedCatalog(t *testi
 func TestPricingResolverDependencyFingerprint(t *testing.T) {
 	observed := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	later := observed.Add(24 * time.Hour)
-	embedded := strings.TrimSpace(string(pricingpkg.EmbeddedGenAIDocument().RawJSON()))
 	genAIDocument := func(alphaLater, betaLater, gammaLater string) *pricingpkg.GenAIPrices {
 		model := func(id, laterPrice string) string {
 			return `{"id": "` + id + `", "match": {"equals": "` + id + `"},
@@ -1333,7 +1331,7 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			"model_match": {"starts_with": "genai-"},
 			"models": [` + model("genai-alpha", alphaLater) + `,` +
 			model("genai-beta", betaLater) + `,` + model("genai-gamma", gammaLater) + `]
-		},` + embedded[1:]))
+		},` + codexLunaGenAIProvider + `]`))
 		require.NoError(t, err)
 		return prices
 	}
@@ -1476,7 +1474,11 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			return rows
 		}, nil},
 		{"priority rate", func(rows []EffectivePricingRow) []EffectivePricingRow {
-			rows[7].Rates.InputPerMTok = money.MustParseDollars("0.6")
+			index := slices.IndexFunc(rows, func(row EffectivePricingRow) bool {
+				return row.ModelPattern == "gpt-5.6-luna@priority"
+			})
+			require.NotEqual(t, -1, index, "the priority row belongs to this fixture")
+			rows[index].Rates.InputPerMTok = money.MustParseDollars("0.6")
 			return rows
 		}, []string{"priority", "priority alias"}},
 		{"custom rate removed exposes genai", func(rows []EffectivePricingRow) []EffectivePricingRow {

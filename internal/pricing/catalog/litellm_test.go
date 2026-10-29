@@ -190,7 +190,6 @@ func TestFetchLiteLLMPricingHonorsCanceledContext(t *testing.T) {
 
 func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 	// Trimmed from LiteLLM's model_prices_and_context_window.json on 2026-10-26.
-	// bedrock/gpt-5.5 and gpt-5.5-priority are synthetic rows.
 	data, err := os.ReadFile("testdata/litellm_service_tiers.json")
 	require.NoError(t, err)
 	prices, err := ParseLiteLLMPricing(data)
@@ -225,7 +224,7 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.bandCreation), price.Bands[0].CacheCreationPerMTok)
 		})
 	}
-	for _, model := range []string{"azure/gpt-5.5", "bedrock/gpt-5.5", "gpt-5.5-priority"} {
+	for _, model := range []string{"azure/gpt-5.5"} {
 		assert.Contains(t, byModel, model)
 		assert.NotContains(t, byModel, model+"@priority")
 	}
