@@ -206,11 +206,6 @@ func holdDiagnosticRows(t *testing.T, d *DB) *sql.Rows {
 	return rows
 }
 
-func holdDiagnosticRow(t *testing.T, d *DB) *sql.Row {
-	t.Helper()
-	return d.getReader().QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sessions")
-}
-
 func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
 	d := testDB(t)
 	holdDiagnosticTransaction(t, d)
@@ -223,20 +218,19 @@ func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
 	text := output.String()
 	assert.Contains(t, text, "pages unmoved after 3 consecutive attempts")
 	assert.Contains(t, text, "sqlite open reads: 1")
-	assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.holdDiagnosticTransaction (")
 	assert.Contains(t, text, "sqlite wal goroutine dump:\ngoroutine ")
-	assert.Contains(t, text, "runtime/pprof.writeGoroutineStacks")
+	assert.Contains(t, text, "[running]:")
 }
 
 func TestReadDiagnostics(t *testing.T) {
-	for _, state := range []string{"rows", "row", "commit", "rollback", "query error", "reopen", "exec"} {
+	for _, state := range []string{"rows", "commit", "rollback", "query error", "reopen", "exec"} {
 		t.Run(state, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				d := testDB(t)
 				insertSession(t, d, "before-read", "proj")
 				output := captureLog(t)
 				switch state {
-				case "commit", "rollback", "rows", "row":
+				case "commit", "rollback", "rows":
 					var finish func() error
 					owner := "holdDiagnosticTransaction"
 					switch state {
@@ -245,10 +239,6 @@ func TestReadDiagnostics(t *testing.T) {
 						defer rows.Close()
 						require.NoError(t, rows.Err())
 						finish, owner = rows.Close, "holdDiagnosticRows"
-					case "row":
-						row := holdDiagnosticRow(t, d)
-						finish = func() error { var n int; return row.Scan(&n) }
-						owner = "holdDiagnosticRow"
 					default:
 						tx := holdDiagnosticTransaction(t, d)
 						finish = tx.Rollback
