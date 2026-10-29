@@ -2760,14 +2760,27 @@ schemas keep their existing ordering behavior.
   `getSubagentSessionRoot` puts a child session under the parent transcript's
   stem (`<project>/<parent>/<runId>/run-N/session.jsonl`), forked children
   land one level over in `<parent>/forks/`, and a delegated child repeats the
-  same shape below its own `session.jsonl`. Fresh children carry no
-  `parentSession` header; forked children record the parent path as usual.
+  same shape below its own `session.jsonl`. Releases through v0.70.1 write
+  fresh children with no `parentSession` header; forked children record the
+  parent path as usual. Reverified 2026-10-29 against v0.77.0 at
+  `1ac9b964eb9cda1662507c52f5277764637daccc`
+  (`src/runs/shared/child-session.ts`, `parentSessionFile`): fresh children now
+  record the launching session's file as `parentSession`, the same field Pi
+  uses for forks, so the header alone cannot tell a subagent from a fork.
   Agentsview indexes a transcript at any depth. It links a fresh child at
   `<parent>/<runId>/run-N/session.jsonl` to `<parent>.jsonl` as a subagent
-  when that parent is a Pi transcript, and an explicit `sessionDir` with no
-  parent transcript above the run stays unlinked. Checked 2026-09-23 against
-  two local pi-subagents runs: the parent's `subagent` tool result records
-  each child's path in `details.results[].sessionFile`, matching that layout.
+  when that parent is a Pi transcript, whether or not the header names a
+  parent. The header's parent wins when both are present, and the run
+  directory decides the type. A `parentSession` header outside that layout, such
+  as a `/fork` or a run under an explicit `sessionDir` with no parent transcript
+  above it, stays a fork or unlinked. A delegated child's own header names the
+  child's `session.jsonl`, so the parent lookup ignores a sibling that is the
+  child's own file. Checked 2026-09-23 against two local pi-subagents runs: the
+  parent's `subagent` tool result records each child's path in
+  `details.results[].sessionFile`, matching that layout. Checked 2026-10-29
+  against 133 local run directories, with and without the header: all type as
+  subagents with a parent, none resolve to themselves, and the other Pi
+  sessions keep their fork type. Data version 156 reparses Pi-format archives.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the

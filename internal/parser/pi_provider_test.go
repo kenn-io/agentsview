@@ -768,7 +768,7 @@ func piChildFixture(t *testing.T, sessionID, parentPath string) string {
 	parentPathJSON, err := json.Marshal(parentPath)
 	require.NoError(t, err)
 	return strings.Join([]string{
-		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"2026-10-09T10:05:00Z","cwd":"/Users/alice/code/pi-project","parentSession":` + string(parentPathJSON) + `}`,
+		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"2026-10-09T10:05:00Z","cwd":"/work/project","parentSession":` + string(parentPathJSON) + `}`,
 		`{"type":"message","id":"c1","timestamp":"2026-10-09T10:05:01Z","message":{"role":"user","content":"do the task"}}`,
 		"",
 	}, "\n")
