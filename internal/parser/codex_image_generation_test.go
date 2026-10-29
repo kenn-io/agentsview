@@ -33,10 +33,16 @@ func TestParseCodexImageGenerationWithoutIDKeepsImageInInput(t *testing.T) {
 	_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 
 	var calls []ParsedToolCall
+	var callText []string
 	for _, msg := range msgs {
+		if len(msg.ToolCalls) > 0 {
+			callText = append(callText, msg.Content)
+		}
 		calls = append(calls, msg.ToolCalls...)
 	}
 	require.Len(t, calls, 1)
+	assert.Equal(t, []string{"[Tool: image_generation]"}, callText,
+		"the call's message holds only the marker the viewer hides")
 	assert.Equal(t, "image_generation", calls[0].ToolName)
 	assert.Empty(t, calls[0].ResultEvents, "a call without an id has no result to attach")
 	var input map[string]jsontext.Value

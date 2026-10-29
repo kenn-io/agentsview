@@ -825,7 +825,8 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 			inputJSON = input
 		}
 	}
-	const content = "Generate image"
+	// The viewer hides tool markers, so the call shows once, as its block.
+	content := formatToolHeader("Tool", generatedImageCallName)
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
 		Role:            RoleAssistant,
 		Content:         content,
