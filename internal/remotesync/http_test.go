@@ -1366,7 +1366,9 @@ func TestHTTPAntigravityAppliedStatesCoverMultipleRoots(t *testing.T) {
 		require.NoError(t, err)
 		conns = append(conns, conn)
 		require.NoError(t, conn.Raw(func(raw any) error {
-			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			raw.(interface {
+				RegisterAuthorizer(func(int, string, string, string) int)
+			}).RegisterAuthorizer(func(op int, table, column, _ string) int {
 				if op == sqlite3.SQLITE_READ && table == "sessions" && column == "session_name" {
 					archiveTitleReads.Add(1)
 				}

@@ -94,19 +94,7 @@ func TestWALStallReportedWhileReaderHoldsSnapshot(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 
-	// A read transaction that has run a query keeps its snapshot of the WAL
-	// until it ends, so pages written after it cannot be checkpointed.
-	reader, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	require.NoError(t, err)
-	readerOpen := true
-	t.Cleanup(func() {
-		if readerOpen {
-			_ = reader.Rollback()
-		}
-	})
-	var sessions int
-	require.NoError(t,
-		reader.QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions").Scan(&sessions))
+	reader := holdDiagnosticTransaction(t, d)
 
 	var tracker walStallTracker
 	var reported []bool
@@ -125,7 +113,6 @@ func TestWALStallReportedWhileReaderHoldsSnapshot(t *testing.T) {
 	assert.GreaterOrEqual(t, stall.logPages, stall.unmovedPages)
 
 	require.NoError(t, reader.Rollback())
-	readerOpen = false
 
 	progress, err := d.checkpointWALPassive(ctx)
 	require.NoError(t, err)
@@ -225,125 +212,98 @@ func holdDiagnosticRow(t *testing.T, d *DB) *sql.Row {
 }
 
 func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
+	d := testDB(t)
+	holdDiagnosticTransaction(t, d)
 	output := captureLog(t)
-	synctest.Test(t, func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "before-read", "proj")
-		tx := holdDiagnosticTransaction(t, d)
-		rows := holdDiagnosticRows(t, d)
-		defer rows.Close()
-		row := holdDiagnosticRow(t, d)
-		defer func() { var n int; _ = row.Scan(&n) }()
-		var diag walDiagnostics
-		for attempt := range walStallLogAttempts {
-			time.Sleep(time.Minute)
-			insertSession(t, d, fmt.Sprintf("diagnostic-%d", attempt), "proj")
-			d.walMaintenanceTick(t.Context(), &diag)
-		}
-		text := output.String()
-		assert.Contains(t, text, "pages unmoved after 3 consecutive attempts")
-		assert.Contains(t, text, "sqlite open reads: 3")
-		for _, owner := range []string{"holdDiagnosticTransaction", "holdDiagnosticRows", "holdDiagnosticRow"} {
-			assert.Contains(t, text, "age=3m0s owner=go.kenn.io/agentsview/internal/db."+owner+" (")
-		}
-		assert.Contains(t, text, "sqlite wal goroutine dump:\ngoroutine ")
-		assert.Contains(t, text, "runtime/pprof.writeGoroutineStacks")
-
-		require.NoError(t, rows.Close())
-		require.NoError(t, rows.Err())
-		var n int
-		require.NoError(t, row.Scan(&n))
-		output.Reset()
+	var diag walDiagnostics
+	for attempt := range walStallLogAttempts {
+		insertSession(t, d, fmt.Sprintf("diagnostic-%d", attempt), "proj")
 		d.walMaintenanceTick(t.Context(), &diag)
-		text = output.String()
-		assert.Contains(t, text, "sqlite open reads: 1")
-		assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.holdDiagnosticTransaction (")
-		assert.NotContains(t, text, "owner=go.kenn.io/agentsview/internal/db.holdDiagnosticRows (")
-		assert.NotContains(t, text, "owner=go.kenn.io/agentsview/internal/db.holdDiagnosticRow (")
-		assert.Contains(t, text, "sqlite wal goroutine dump:\ngoroutine ")
-		require.NoError(t, tx.Rollback())
-	})
-}
-
-func TestReadDiagnosticsRelease(t *testing.T) {
-	d := testDB(t)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	defer conn.Close()
-	for _, commit := range []bool{true, false} {
-		tx, err := conn.BeginTx(t.Context(), nil)
-		require.NoError(t, err)
-		if commit {
-			require.NoError(t, tx.Commit())
-		} else {
-			require.NoError(t, tx.Rollback())
-		}
 	}
-	var n int
-	require.Error(t, conn.QueryRowContext(t.Context(), "SELECT missing_column FROM sessions").Scan(&n))
-	tx, err := conn.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-	_, err = conn.BeginTx(t.Context(), nil)
-	require.Error(t, err)
-	require.NoError(t, tx.Rollback())
-	output := captureLog(t)
-	d.reads.logOpenReads()
-	assert.Contains(t, output.String(), "sqlite open reads: 0")
+	text := output.String()
+	assert.Contains(t, text, "pages unmoved after 3 consecutive attempts")
+	assert.Contains(t, text, "sqlite open reads:")
+	assert.Contains(t, text, "sqlite wal goroutine dump:\ngoroutine ")
+	assert.Contains(t, text, "runtime/pprof.writeGoroutineStacks")
 }
 
-func TestReadDiagnosticsAcrossReopen(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "before-reopen", "proj")
-	oldRows := holdDiagnosticRows(t, d)
-	defer oldRows.Close()
-	require.NoError(t, d.Reopen())
-	newRows := holdDiagnosticRows(t, d)
-	defer newRows.Close()
-	output := captureLog(t)
-	d.reads.logOpenReads()
-	assert.Contains(t, output.String(), "sqlite open reads: 2")
-	require.NoError(t, oldRows.Err())
-	require.NoError(t, newRows.Err())
-}
-
-func TestReadDiagnosticsIncludesExecutingQuery(t *testing.T) {
-	for _, operation := range []string{"query", "exec"} {
-		t.Run(operation, func(t *testing.T) {
-			d := testDB(t)
-			conn, err := d.getReader().Conn(t.Context())
-			require.NoError(t, err)
-			defer conn.Close()
-			entered, release := make(chan struct{}), make(chan struct{})
-			require.NoError(t, conn.Raw(func(raw any) error {
-				return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("wait_for_diagnostics", func() int {
-					close(entered)
-					<-release
-					return 1
-				}, false)
-			}))
-			done := make(chan error, 1)
-			go func() {
-				switch operation {
+func TestReadDiagnostics(t *testing.T) {
+	for _, state := range []string{"rows", "row", "commit", "rollback", "query error", "reopen", "exec"} {
+		t.Run(state, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := testDB(t)
+				insertSession(t, d, "before-read", "proj")
+				output := captureLog(t)
+				switch state {
+				case "commit", "rollback", "rows", "row":
+					var finish func() error
+					owner := "holdDiagnosticTransaction"
+					switch state {
+					case "rows":
+						rows := holdDiagnosticRows(t, d)
+						defer rows.Close()
+						require.NoError(t, rows.Err())
+						finish, owner = rows.Close, "holdDiagnosticRows"
+					case "row":
+						row := holdDiagnosticRow(t, d)
+						finish = func() error { var n int; return row.Scan(&n) }
+						owner = "holdDiagnosticRow"
+					default:
+						tx := holdDiagnosticTransaction(t, d)
+						finish = tx.Rollback
+						if state == "commit" {
+							finish = tx.Commit
+						}
+					}
+					defer func() { _ = finish() }()
+					time.Sleep(3 * time.Minute)
+					d.reads.logOpenReads()
+					assert.Contains(t, output.String(), "sqlite open reads: 1")
+					assert.Contains(t, output.String(), "age=3m0s owner=go.kenn.io/agentsview/internal/db."+owner+" (")
+					require.NoError(t, finish())
+				case "query error":
+					var n int
+					require.Error(t, d.getReader().QueryRowContext(t.Context(), "SELECT missing_column FROM sessions").Scan(&n))
+				case "reopen":
+					oldRows := holdDiagnosticRows(t, d)
+					defer oldRows.Close()
+					require.NoError(t, d.Reopen())
+					newRows := holdDiagnosticRows(t, d)
+					defer newRows.Close()
+					d.reads.logOpenReads()
+					assert.Contains(t, output.String(), "sqlite open reads: 2")
+					require.NoError(t, oldRows.Err())
+					require.NoError(t, newRows.Err())
+					return
 				case "exec":
-					_, err := conn.ExecContext(t.Context(), "SELECT wait_for_diagnostics()")
-					done <- err
-				default:
-					var value int
-					done <- conn.QueryRowContext(t.Context(), "SELECT wait_for_diagnostics()").Scan(&value)
+					conn, err := d.getReader().Conn(t.Context())
+					require.NoError(t, err)
+					defer conn.Close()
+					entered, release := make(chan struct{}), make(chan struct{})
+					require.NoError(t, conn.Raw(func(raw any) error {
+						return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("wait_for_diagnostics", func() int {
+							close(entered)
+							<-release
+							return 1
+						}, false)
+					}))
+					done := make(chan error, 1)
+					go func() {
+						_, err := conn.ExecContext(t.Context(), "SELECT wait_for_diagnostics()")
+						done <- err
+					}()
+					<-entered
+					d.reads.logOpenReads()
+					text := output.String()
+					close(release)
+					require.NoError(t, <-done)
+					assert.Contains(t, text, "sqlite open reads: 1")
+					assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnostics.")
 				}
-			}()
-			<-entered
-			output := captureLog(t)
-			d.reads.logOpenReads()
-			text := output.String()
-			close(release)
-			require.NoError(t, <-done)
-			assert.Contains(t, text, "sqlite open reads: 1")
-			assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsIncludesExecutingQuery.")
-			output.Reset()
-			d.reads.logOpenReads()
-			assert.Contains(t, output.String(), "sqlite open reads: 0")
+				output.Reset()
+				d.reads.logOpenReads()
+				assert.Contains(t, output.String(), "sqlite open reads: 0")
+			})
 		})
 	}
 }

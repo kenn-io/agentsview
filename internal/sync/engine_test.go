@@ -12211,7 +12211,9 @@ func countSessionFileHashReads(t *testing.T, archive *db.DB) *atomic.Int32 {
 	conn, err := reader.Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, table, column, _ string) int {
 			if op == sqlite3.SQLITE_READ && table == "sessions" && column == "file_hash" {
 				reads.Add(1)
 			}
