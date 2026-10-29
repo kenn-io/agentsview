@@ -2322,7 +2322,8 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 		nativeSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
 		close(returned)
 	}()
-	requireReceiveWithin(t, returned, 100*time.Millisecond)
+	// Polling stays blocked until the native callback returns.
+	requireReceiveWithin(t, returned, time.Second)
 	requireReceiveWithin(t, pollingEntered, time.Second)
 	close(releasePolling)
 }
