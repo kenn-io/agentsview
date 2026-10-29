@@ -111,17 +111,23 @@ func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	require.Equal(t, want, resultContent(t, database))
 
-	// Model an archive written before data version 153, which kept no image.
+	// Model an archive written before data version 153, which kept no image:
+	// no result event and no result summary that could restore it.
 	const previousVersion = 152
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(),
-			`UPDATE tool_calls SET result_content = '' WHERE session_id = ?`, sessionID); err != nil {
-			return err
+		for _, statement := range []string{
+			`DELETE FROM tool_result_events WHERE session_id = ?`,
+			`UPDATE tool_calls SET result_content = NULL, result_content_length = NULL WHERE session_id = ?`,
+		} {
+			if _, err := tx.ExecContext(t.Context(), statement, sessionID); err != nil {
+				return err
+			}
 		}
 		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", previousVersion))
 		return err
 	}))
 	require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, previousVersion))
+	require.Empty(t, resultContent(t, database), "the modeled archive holds no image")
 	engine.Close()
 	dbPath := database.Path()
 	require.NoError(t, database.Close())

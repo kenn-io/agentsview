@@ -816,7 +816,9 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 	callID := payload.Get("id").Str
 	inputJSON := payload.Raw
 	image, hasImage := generatedImageResult(payload.Get("result").Str)
-	if hasImage {
+	// A result attaches to its call by id, so an item without one keeps the
+	// image in its input.
+	if hasImage && callID != "" {
 		input, ok := jsonWithoutField(jsontext.Value(payload.Raw), "result")
 		hasImage = ok
 		if ok {
