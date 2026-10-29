@@ -3,9 +3,11 @@
 Read this file before changing build commands, toolchain setup, CI build tags,
 or frontend dependencies. Use the `Makefile` as the command reference.
 
-## CI runner policy
+## CI path filters
 
 Update the CI path filters when adding a reader of files in another lane.
+
+## CI runner policy
 
 All CI jobs use standard GitHub-hosted runners, including fork pull requests,
 scheduled checks, and desktop builds. Select labels from
