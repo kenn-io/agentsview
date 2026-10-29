@@ -608,11 +608,13 @@ companion rates fill fields missing from that Fast band, while other fields use
 the Fast base rate. If neither row publishes bands, Fast base rates apply at
 every request size.
 Ultrafast and other recorded tiers use standard rates. Rollouts without a tier
-record also use standard rates. The embedded catalog includes tier prices for
-offline use. A model without a price for its tier, and any custom override,
-keeps its standard rates.
+record also use standard rates. Forks can inherit the parent's last recorded
+tier through replay until the child records a new setting. The embedded catalog
+includes tier prices for offline use. A model without a price for its tier,
+and any custom override, keeps its standard rates.
 
-Tier prices are LiteLLM's current ones and apply at every date.
+LiteLLM's current Fast prices apply to every session date because the catalog
+doesn't keep historical Fast prices.
 
 ### Copilot CLI Token Metrics
 

@@ -283,54 +283,30 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 }
 
 func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel string) PricingLookup {
-	base, pattern, rates, ok := r.priorityRow(pricedModel, lookup.Pattern)
+	pattern, rates, ok := r.priorityRow(pricedModel, lookup.Pattern)
 	if !ok {
 		return lookup
 	}
 	lookup.Rates = rates
-	lookup.Rates.Bands = mergePriorityBands(base.Rates.Bands, rates.Bands)
 	lookup.Pattern = pattern
 	lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
 	return lookup
 }
 
 // priorityRow returns the first model key with a LiteLLM priority row, along
-// with that key's standard row.
-func (r *PricingResolver) priorityRow(models ...string) (PricingLookup, string, ModelRates, bool) {
+// with the matching priority rates.
+func (r *PricingResolver) priorityRow(models ...string) (string, ModelRates, bool) {
 	if r == nil {
-		return PricingLookup{}, "", ModelRates{}, false
+		return "", ModelRates{}, false
 	}
 	for _, model := range models {
 		base := r.Lookup(model)
 		pattern := catalog.PriorityPattern(base.Pattern)
 		if rates, ok := r.byModel[pattern]; base.OK && ok {
-			return base, pattern, rates, true
+			return pattern, rates, true
 		}
 	}
-	return PricingLookup{}, "", ModelRates{}, false
-}
-
-// mergePriorityBands uses standard thresholds where LiteLLM has no priority
-// band, while preserving priority rates at thresholds it publishes.
-func mergePriorityBands(standard, priority []PricingBand) []PricingBand {
-	if len(standard) == 0 && len(priority) == 0 {
-		return nil
-	}
-	byThreshold := make(map[int]PricingBand, len(standard)+len(priority))
-	for _, band := range standard {
-		byThreshold[band.AboveInputTokens] = band
-	}
-	for _, band := range priority {
-		byThreshold[band.AboveInputTokens] = band
-	}
-	merged := make([]PricingBand, 0, len(byThreshold))
-	for _, band := range byThreshold {
-		merged = append(merged, band)
-	}
-	slices.SortFunc(merged, func(a, b PricingBand) int {
-		return cmp.Compare(a.AboveInputTokens, b.AboveInputTokens)
-	})
-	return merged
+	return "", ModelRates{}, false
 }
 
 func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {

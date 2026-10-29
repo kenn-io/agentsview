@@ -284,8 +284,19 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 		})
 	}
 
-	t.Run("embedded priority rows inherit standard bands", func(t *testing.T) {
-		resolver := NewPricingResolver(embeddedCodexPricingRows(t, "gpt-5.5"))
+	t.Run("embedded priority rows carry normalized standard bands", func(t *testing.T) {
+		rows := embeddedCodexPricingRows(t, "gpt-5.5")
+		var priorityBands []PricingBand
+		for _, row := range rows {
+			if row.ModelPattern == "gpt-5.5@priority" {
+				priorityBands = row.Rates.Bands
+				break
+			}
+		}
+		require.Len(t, priorityBands, 1)
+		assert.Equal(t, 272_000, priorityBands[0].AboveInputTokens)
+
+		resolver := NewPricingResolver(rows)
 		_, lookup, err := resolver.ResolveBilledAt(
 			pricingpkg.OpenAIPriorityProviderID, "gpt-5.5", "gpt-5.5", time.Time{})
 		require.NoError(t, err)

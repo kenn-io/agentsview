@@ -189,7 +189,8 @@ func TestFetchLiteLLMPricingHonorsCanceledContext(t *testing.T) {
 }
 
 func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
-	// Trimmed from LiteLLM's model_prices_and_context_window.json on 2026-10-26.
+	// Based on LiteLLM's 2026-10-26 catalog, with synthetic one-hour rates and a
+	// sparse model added to exercise partial-rate fallback.
 	data, err := os.ReadFile("testdata/litellm_service_tiers.json")
 	require.NoError(t, err)
 	prices, err := ParseLiteLLMPricing(data)
