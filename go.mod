@@ -12,7 +12,7 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/dlclark/regexp2/v2 v2.11.0
 	github.com/dmarkham/enumer v1.7.2
-	github.com/doordash-oss/oapi-codegen-dd/v3 v3.76.3
+	github.com/doordash-oss/oapi-codegen-dd/v3 v3.76.5
 	github.com/duckdb/duckdb-go/v2 v2.20000.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-playground/validator/v10 v10.30.5
