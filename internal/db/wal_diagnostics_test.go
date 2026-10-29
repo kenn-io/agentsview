@@ -257,6 +257,7 @@ func TestReadDiagnostics(t *testing.T) {
 					switch state {
 					case "rows":
 						rows := holdDiagnosticRows(t, d)
+						require.NoError(t, rows.Err())
 						finish, owner = rows.Close, "holdDiagnosticRows"
 					default:
 						tx := holdDiagnosticTransaction(t, d)
