@@ -27,6 +27,7 @@ permissions:
 # Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   changes:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
