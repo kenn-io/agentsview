@@ -87,32 +87,30 @@ func TestMemoryStatusUnsupportedServiceIsExplicit(t *testing.T) {
 
 func TestMemoryStatusSemanticCountPresence(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		status       db.SemanticReadiness
-		wantCoverage string
+		name   string
+		status db.SemanticReadiness
+		want   string
 	}{
 		{
-			name:         "unmeasured counts",
-			status:       db.SemanticReadiness{State: "ready", Reason: "counts_unavailable"},
-			wantCoverage: `{"status":"ready","lexical":{"status":"ready"},"semantic":{"status":"ready","reason":"counts_unavailable"}}`,
+			name:   "unmeasured counts",
+			status: db.SemanticReadiness{State: "ready", Reason: "counts_unavailable"},
+			want:   `{"status":"ready","reason":"counts_unavailable"}`,
 		},
 		{
-			name:         "measured zero counts",
-			status:       db.SemanticReadiness{State: "ready", Generation: "gen-1"},
-			wantCoverage: `{"status":"ready","lexical":{"status":"ready"},"semantic":{"status":"ready","generation":"gen-1","embedded":0,"missing":0}}`,
+			name:   "measured zero counts",
+			status: db.SemanticReadiness{State: "ready", Generation: "gen-1"},
+			want:   `{"status":"ready","generation":"gen-1","embedded":0,"missing":0}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			database.SetVectorSearcher(&readinessVectorSearcher{status: tc.status})
 			backend := service.NewDirectBackend(database, nil)
-			search, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
-				Pattern: "absent", Mode: "substring",
-			})
+			status, err := service.GetMemoryStatus(t.Context(), backend)
 			require.NoError(t, err)
-			coverage, err := json.Marshal(search.Coverage)
+			encoded, err := json.Marshal(status.Semantic)
 			require.NoError(t, err)
-			assert.JSONEq(t, tc.wantCoverage, string(coverage))
+			assert.JSONEq(t, tc.want, string(encoded))
 		})
 	}
 }
