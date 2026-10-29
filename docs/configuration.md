@@ -15,24 +15,24 @@ AgentsView stores all persistent data under a single directory, defaulting to
 
 ```
 ~/.agentsview/
-├── sessions.db                   # SQLite database (WAL mode)
-├── assets/                       # Images stored outside SQLite
-├── vectors.db                    # Semantic-search vector index (when [vector] is enabled)
-├── usage-cache-v6-<id>.db        # Disposable usage-aggregate cache
-├── telemetry-install-id          # Application installation ID
+├── sessions.db      # SQLite database (WAL mode)
+├── assets/          # Images stored outside SQLite
+├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
+├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
+├── telemetry-install-id # Application installation ID
 ├── telemetry-daemon-active.lock  # Serializes daily daemon reports
 ├── telemetry-setup-finished.lock # Serializes the one-time setup report
 ├── telemetry-screen-views.lock   # Serializes screen view claims
-├── config.toml                   # Configuration file
-├── config.toml.lock              # Serializes concurrent config writers
-├── db.write.lock                 # Per-data-dir SQLite write-owner lock
-├── debug.log                     # Log of the server, sync, and other commands
-├── debug.log.1                   # Previous oversized debug log
-├── debug.log.rotate.lock         # Serializes debug log rotation and writes
-├── run/                          # Windows only: daemon runtime records and locks
-├── serve.log                     # Detached daemon output
-├── tmp/                          # Temporary files, only when the system temp directory is unusable
-└── uploads/                      # Uploaded session files
+├── config.toml      # Configuration file
+├── config.toml.lock # Serializes concurrent config writers
+├── db.write.lock    # Per-data-dir SQLite write-owner lock
+├── debug.log        # Log of the server, sync, and other commands
+├── debug.log.1      # Previous oversized debug log
+├── debug.log.rotate.lock
+├── run/             # Windows only: daemon runtime records and locks
+├── serve.log        # Detached daemon output
+├── tmp/             # Temporary files, only when the system temp directory is unusable
+└── uploads/         # Uploaded session files
 ```
 
 When a command opens `debug.log` larger than 10 MB, it saves the last 10 MB
