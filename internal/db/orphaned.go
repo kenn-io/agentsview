@@ -3254,21 +3254,9 @@ func copyLegacyVSCodePinsTx(tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("listing legacy reply pin sessions: %w", err)
 	}
-	var sessions []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		sessions = append(sessions, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
+	sessions, err := scanStrings(rows)
+	if err != nil {
+		return fmt.Errorf("scanning legacy reply pin sessions: %w", err)
 	}
 	for _, id := range sessions {
 		pins, err := savePinsFromSchemaTx(tx, "old_db", id, math.MinInt)
@@ -3277,7 +3265,7 @@ func copyLegacyVSCodePinsTx(tx *sql.Tx) error {
 		}
 		legacy := pins[:0]
 		for _, pin := range pins {
-			if pin.sourceUUID == "" && !pin.isSystem {
+			if pin.sourceUUID == "" {
 				legacy = append(legacy, pin)
 			}
 		}

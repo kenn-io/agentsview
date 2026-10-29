@@ -23,15 +23,6 @@ const growingCopilotStart = `{"kind":0,"v":{"version":3,"sessionId":"aaaaaaaa-bb
 const growingCopilotFinish = `{"kind":2,"k":["requests",0,"response"],"v":[{"kind":"toolInvocationSerialized","presentation":"hidden","toolId":"copilot_fetchWebPage","toolCallId":"toolu_0000000000000000000000001","isComplete":true},{"kind":"toolInvocationSerialized","toolId":"vscode_fetchWebPage_internal","toolCallId":"toolu_0000000000000000000000001","pastTenseMessage":{"value":"Fetched https://example.com/releases"},"isComplete":true},{"value":"The newest release is **v0.46.1**."}]}
 `
 
-func assertGrowingCopilotResponse(t *testing.T, database *db.DB, sessionID string) {
-	t.Helper()
-	messages, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Contains(t, messages[1].Content, "The newest release is **v0.46.1**.")
-	require.Len(t, messages[1].ToolCalls, 2)
-}
-
 func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 	initial, todo, _ := strings.Cut(growingCopilotStart, "\n")
 	textStart := initial + "\n" + `{"kind":2,"k":["requests",0,"response"],"v":[{"value":"Let me check."}]}` + "\n"
@@ -108,16 +99,18 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 				} else {
 					sync()
 				}
-				assertGrowingCopilotResponse(t, database, sessionID)
+				messages, err = database.GetAllMessages(t.Context(), sessionID)
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Contains(t, messages[1].Content, "The newest release is **v0.46.1**.")
+				require.Len(t, messages[1].ToolCalls, 2)
 				assert.Equal(t, path, database.GetSessionFilePath(t.Context(), sessionID))
 				assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
 				pins, err := database.ListPinnedMessages(t.Context(), sessionID, "")
 				require.NoError(t, err)
 				require.Len(t, pins, 1)
 				assert.Equal(t, 1, pins[0].Ordinal)
-				if tc.fullResync {
-					assert.Equal(t, new("Keep this answer"), pins[0].Note)
-				}
+				assert.Equal(t, new("Keep this answer"), pins[0].Note)
 			})
 		}
 	}

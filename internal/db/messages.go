@@ -2048,7 +2048,6 @@ type savedPin struct {
 	sourceUUID          string
 	role                string
 	content             string
-	isSystem            bool
 	ordinal             int
 	sourceUUIDCount     int
 	sourceIdentityCount int
@@ -2894,7 +2893,6 @@ func savePinsFromSchemaTx(tx transactionQueries, schema, sessionID string, fromO
 	pinRows, err := tx.Query(fmt.Sprintf(`
 		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
 			COALESCE(m.role, ''), COALESCE(m.content, ''),
-			COALESCE(m.is_system, 0),
 			CASE WHEN m.id IS NULL THEN 0 ELSE 1 END,
 			(
 				SELECT COUNT(*)
@@ -2954,7 +2952,6 @@ func savePinsFromSchemaTx(tx transactionQueries, schema, sessionID string, fromO
 		var sp savedPin
 		if err := pinRows.Scan(
 			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
-			&sp.isSystem,
 			&sp.messageFound, &sp.sourceUUIDCount,
 			&sp.sourceIdentityCount, &sp.sourceIdentityRank,
 			&sp.legacyIdentityCount, &sp.legacyIdentityRank,
