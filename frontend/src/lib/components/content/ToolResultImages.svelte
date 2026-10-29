@@ -4,6 +4,7 @@
   import { Modal } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { loadAssetImages } from "../../utils/markdown.js";
+  import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
     /** Inline data URIs or asset:// references, in result order. */
@@ -14,6 +15,24 @@
   let { sources, alt }: Props = $props();
   let openIndex: number | null = $state(null);
   let openSource = $derived(openIndex === null ? null : (sources[openIndex] ?? null));
+
+  // The app-wide modal slot lets Escape close this dialog without also
+  // leaving the session, and pauses transcript shortcuts while it is open.
+  $effect(() => {
+    if (ui.activeModal !== "toolImage") openIndex = null;
+  });
+
+  function close() {
+    openIndex = null;
+    if (ui.activeModal === "toolImage") ui.activeModal = null;
+  }
+
+  // Transcript rows are positioned with transforms, which would confine a
+  // fixed dialog to its row and route its clicks through the row's handlers.
+  function attachToBody(node: HTMLElement) {
+    document.body.appendChild(node);
+    return () => node.remove();
+  }
 </script>
 
 <div class="tool-images" use:loadAssetImages={sources.join("\n")}>
@@ -26,6 +45,7 @@
       onclick={(event) => {
         event.stopPropagation();
         openIndex = index;
+        ui.activeModal = "toolImage";
       }}
     >
       <img {src} {alt} loading="lazy" decoding="async" />
@@ -33,16 +53,18 @@
   {/each}
 </div>
 {#if openSource !== null}
-  <Modal
-    title={m.tool_block_image_dialog()}
-    closeLabel={m.tool_block_image_close()}
-    maxWidth="calc(100vw - 32px)"
-    onclose={() => (openIndex = null)}
-  >
-    <div class="tool-image-full" use:loadAssetImages={openSource}>
-      <img src={openSource} {alt} />
-    </div>
-  </Modal>
+  <div {@attach attachToBody}>
+    <Modal
+      title={m.tool_block_image_dialog()}
+      closeLabel={m.tool_block_image_close()}
+      maxWidth="calc(100vw - 32px)"
+      onclose={close}
+    >
+      <div class="tool-image-full" use:loadAssetImages={openSource}>
+        <img src={openSource} {alt} />
+      </div>
+    </Modal>
+  </div>
 {/if}
 
 <style>

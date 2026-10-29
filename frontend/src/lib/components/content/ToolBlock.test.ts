@@ -7,6 +7,7 @@ import retainedFixtureSource from "../../utils/__fixtures__/retained-tool-image-
 const SMALL_PNG_DATA_URI =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 import ToolBlock from "./ToolBlock.svelte";
+import { ui } from "../../stores/ui.svelte.js";
 
 const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const searchState = vi.hoisted(() => ({ active: false, current: "", query: "" }));
@@ -835,6 +836,18 @@ describe("ToolBlock result images", () => {
     expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("false");
 
     await click('[role="dialog"] button[aria-label="Close full-size image"]');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(ui.activeModal).toBeNull();
+  });
+
+  it("holds the app modal slot so Escape closes only the dialog", async () => {
+    await render({ toolCall: call("image_generation", {}, { result_content: imageResult }) });
+    await click('.tool-images button[aria-label="Show image at full size"]');
+    expect(ui.activeModal).toBe("toolImage");
+
+    // The global Escape handler clears the slot before it would leave the session.
+    ui.activeModal = null;
+    await tick();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 });
