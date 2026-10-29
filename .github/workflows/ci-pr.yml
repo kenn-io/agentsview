@@ -1,5 +1,6 @@
 name: CI
 
+# Workflow edits exercise the full set of CI lanes.
 # Run the workflow from this revision so its steps match the code under test.
 on:
   pull_request:
