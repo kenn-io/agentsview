@@ -116,6 +116,15 @@ func TestMemoryStatusSemanticCountPresence(t *testing.T) {
 			encoded, err := json.Marshal(status.Semantic)
 			require.NoError(t, err)
 			assert.JSONEq(t, tc.want, string(encoded))
+			if tc.name == "unmeasured counts" {
+				search, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
+					Pattern: "absent", Mode: "substring",
+				})
+				require.NoError(t, err)
+				coverage, err := json.Marshal(search.Coverage)
+				require.NoError(t, err)
+				assert.JSONEq(t, `{"status":"ready","lexical":{"status":"ready"},"semantic":{"status":"ready","reason":"counts_unavailable"}}`, string(coverage))
+			}
 		})
 	}
 }
