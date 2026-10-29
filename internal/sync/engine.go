@@ -12377,11 +12377,16 @@ func (e *Engine) processProviderFile(
 		cwdAgent = file.Agent
 	}
 	if providerSemantics.UnavailableCwdKeepsArchivedSession &&
-		cwdDecision.resolution.State == parser.SourceCwdUnavailable &&
-		cwdDecision.storedOK && cwdDecision.storedCwd != "" {
-		return markSourceFailure(file, processResult{err: fmt.Errorf(
-			"%s: session metadata unavailable; keeping the archived session", cwdPath,
-		)}, failurecache.Identity{}, false), true
+		cwdDecision.resolution.State == parser.SourceCwdUnavailable {
+		keep, err := e.archivedSessionHasSourceMetadata(ctx, cwdPath, cwdAgent)
+		if err != nil {
+			return processResult{err: err}, true
+		}
+		if keep {
+			return markSourceFailure(file, processResult{err: fmt.Errorf(
+				"%s: session metadata unavailable; keeping the archived session", cwdPath,
+			)}, failurecache.Identity{}, false), true
+		}
 	}
 	explicitForce := e.forceParseBypassesCache(file) || file.ForceFullParse
 	forceSourceCwdParse := cwdDecision.forceParse

@@ -591,8 +591,9 @@ func (s antigravitySourceSet) summaryStoreExpectations(
 			if p := summaries.parent(id); p != "" {
 				parent = antigravityIDPrefix + p
 			}
+			// Only the store names an app or IDE parent.
 			expectations = append(expectations, summaryExpectation(
-				s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent,
+				s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent, true,
 			))
 		}
 	}
@@ -610,6 +611,11 @@ func (s antigravitySourceSet) newSourceRef(ctx context.Context, src antigravityS
 	if s.remote || antigravityRemoteRoot(s.remoteRoots, src.Root) {
 		project = summaries.byID[src.ID].workspace
 		resolution = SourceCwdResolution{State: SourceCwdRemote}
+		if summaries.err != nil || summaries.missing {
+			// A remote cwd stays empty either way, but its project and parent
+			// also came from the store, so they must not be cleared.
+			resolution = SourceCwdResolution{State: SourceCwdUnavailable}
+		}
 	}
 	return SourceRef{
 		Provider:       AgentAntigravity,

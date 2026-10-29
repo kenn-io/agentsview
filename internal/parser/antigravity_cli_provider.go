@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -580,8 +581,10 @@ func (s antigravityCLISourceSet) summaryStoreExpectations(
 				if !ok {
 					continue
 				}
+				// A reader sidecar's parent wins over the store's.
+				_, sidecarErr := os.Stat(strings.TrimSuffix(path, filepath.Ext(path)) + ".trajectory.json")
 				expectations = append(expectations, summaryExpectation(
-					source, antigravityCLIIDPrefix+rawID, parent,
+					source, antigravityCLIIDPrefix+rawID, parent, errors.Is(sidecarErr, fs.ErrNotExist),
 				))
 			}
 		}

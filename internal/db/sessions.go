@@ -3624,6 +3624,39 @@ func (db *DB) GetCwdByAgentPath(ctx context.Context, path, agent string) (cwd st
 	return cwd, true
 }
 
+// SessionSourceMetadata is what the parser stored for a session from data
+// outside its own transcript, before any user project assignment.
+type SessionSourceMetadata struct {
+	Cwd                   string
+	ParserParentSessionID string
+	ParserProject         string
+}
+
+// GetSessionSourceMetadataByAgentPath returns the source metadata of the live
+// session archived from path, and whether one exists. The parser project is
+// the assignment's original project when the user assigned one.
+func (db *DB) GetSessionSourceMetadataByAgentPath(
+	ctx context.Context, path, agent string,
+) (SessionSourceMetadata, bool, error) {
+	var meta SessionSourceMetadata
+	err := db.getReader().QueryRowContext(ctx, `
+		SELECT COALESCE(s.cwd, ''), COALESCE(s.parser_parent_session_id, ''),
+		       COALESCE(a.original_project, s.project, '')
+		FROM sessions s INDEXED BY idx_sessions_file_path
+		LEFT JOIN session_project_assignments a ON a.session_id = s.id
+		WHERE s.file_path = ? AND s.agent = ? AND s.deleted_at IS NULL
+		ORDER BY s.file_mtime DESC LIMIT 1`,
+		path, agent,
+	).Scan(&meta.Cwd, &meta.ParserParentSessionID, &meta.ParserProject)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SessionSourceMetadata{}, false, nil
+	}
+	if err != nil {
+		return SessionSourceMetadata{}, false, fmt.Errorf("reading session source metadata: %w", err)
+	}
+	return meta, true, nil
+}
+
 // UpdateSessionCwd updates only the durable workspace identity for an
 // existing session. It is used when a parsed source is excluded by a cwd
 // filter but its source-owned identity still has to be reconciled.

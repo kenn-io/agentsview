@@ -4169,20 +4169,29 @@ schemas keep their existing ordering behavior.
 - **Keeping archived sessions current:** Both values are part of each source's
   fingerprint, and both providers require the fingerprint hash for freshness,
   so a full sync reparses exactly the conversations whose store values
-  changed. A store write routes only the sessions whose archived working
-  directory or parent differs from what the store says, including CLI
-  `implicit/` sessions; a title-only write routes none. The comparison uses
-  the archive, so it holds after a restart, on a retry after failed
-  processing, and for remote imports that plan without discovery.
+  changed. Data version 148 reparses existing `antigravity` and
+  `antigravity-cli` sources once in place, which also reaches remote mirrors
+  that are otherwise unchanged. A store write routes only the sessions whose
+  archived working directory or parent differs from what the store says,
+  including CLI `implicit/` sessions, and only sessions archived from the same
+  root; a title-only write routes none. Parents are compared both ways where
+  the store decides them: always for the app and IDE, and for CLI conversations
+  without a reader sidecar. With a cwd allow-list, a session not archived
+  yet is routed once the store gives it an allowed workspace. The comparison
+  uses the archive, so it holds after a restart, on a retry after failed
+  processing, and for remote imports that plan without discovery. A remote
+  session's workspace change alone is not routed; the next full import applies
+  it.
 
 - **Unavailable store:** While a store that was read before cannot be read or
   has disappeared, its last good read stands in, so the outage neither changes
   fingerprints nor clears stored values. Without a good read in this process,
   an unreadable store fails each source's fingerprint, so the root's archived
-  sessions stay as they are and are retried. A missing app or IDE store
-  likewise leaves alone any archived session that has a working directory,
-  since only the store supplies one. A CLI root without a store is normal for
-  older builds, so CLI sessions do not wait for one; a CLI conversation whose
+  sessions stay as they are and are retried. A missing app or IDE store,
+  remote roots included, likewise leaves alone any archived session holding a
+  store-supplied working directory, parent, or project; a project the user
+  assigned does not count. A CLI root without a store is normal for older
+  builds, so CLI sessions do not wait for one; a CLI conversation whose
   working directory came only from a removed store loses it on its next
   reparse.
 
