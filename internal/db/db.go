@@ -621,12 +621,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (153: show images Codex generates, in local rollouts and Codex Cloud, as
 // tool-result images. Re-parse Codex-format and Codex Cloud sources in place;
 // source and session identities are unchanged.)
-const dataVersion = 153
-// (148: fill Antigravity working directories, projects, and sub-agent parents
+// (154: fill Antigravity working directories, projects, and sub-agent parents
 // from conversation_summaries.db. Re-parse unchanged antigravity and
 // antigravity-cli sources in place, so remote mirrors that are otherwise
 // unchanged catch up; source and session identities are unchanged.)
-const dataVersion = 148
+const dataVersion = 154
 
 const archiveOnlyVersionBase = 1 << 20
 
