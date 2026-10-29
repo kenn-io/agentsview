@@ -238,6 +238,56 @@ describe("MessageList follow cancellation", () => {
     ]);
   });
 
+  it("selects the clicked card inside an open empty row", async () => {
+    ui.followLatest = false;
+    const empty = (ordinal: number, role: string) => ({
+      ...makeMessage(ordinal),
+      role,
+      content: "",
+      content_length: 0,
+    });
+    messages.messages = [makeMessage(10), empty(11, "assistant"), empty(12, "user")];
+    setVirtualRows(2);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    component.scrollToOrdinal(11);
+    await flushScrollUpdates();
+
+    const userCard = document.querySelector<HTMLElement>('[data-message-ordinal="12"]')!;
+    userCard.querySelector<HTMLElement>(".role-label")!.click();
+    expect(ui.selectedOrdinal).toBe(12);
+  });
+
+  it("lands a jump on the target card of an open empty row", async () => {
+    ui.followLatest = false;
+    const empty = (ordinal: number) => ({
+      ...makeMessage(ordinal),
+      content: "",
+      content_length: 0,
+    });
+    messages.messages = [makeMessage(10), empty(11), empty(12)];
+    setVirtualRows(2);
+    virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      const top = this.matches('[data-message-ordinal="12"]')
+        ? 260
+        : this.matches(".virtual-row")
+          ? 40
+          : 0;
+      return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
+    });
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    component.scrollToOrdinal(12);
+
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
+    });
+  });
+
   it("keeps an ordinal jump on its message through an older load past five seconds", async () => {
     const { flushFrames } = controlFrames();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1020,6 +1070,57 @@ describe("MessageList follow cancellation", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
+  it("leaves cards of an open empty row unread until they are on screen", async () => {
+    const empty = (ordinal: number, role: string) => ({
+      ...makeMessage(ordinal),
+      role,
+      content: "",
+      content_length: 0,
+    });
+    messages.messages = [makeMessage(0), empty(1, "assistant"), empty(2, "user")];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    ui.followLatest = false;
+    const rows = (emptyRowStart: number) => [
+      { index: 0, key: "row-0", start: 0, end: 100 },
+      { index: 1, key: "row-1", start: emptyRowStart, end: emptyRowStart + 100 },
+    ];
+    // The empty row starts below the 200px viewport.
+    virtualizerMock.getVirtualItems.mockReturnValue(rows(300));
+    readProgress.baseline("s1", "previous", 0);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      if (this.matches(".message-list-scroll")) {
+        return DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 200 });
+      }
+      const top = this.matches('[data-message-ordinal="1"]')
+        ? 120
+        : this.matches('[data-message-ordinal="2"]')
+          ? 260
+          : 0;
+      return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 60 });
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(readProgress.get("s1")?.token).toBe("previous");
+
+    const row = document.querySelector<HTMLDetailsElement>("details.empty-run")!;
+    row.querySelector("summary")!.click();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await tick();
+    expect(row.open).toBe(true);
+
+    // Scroll so the open row's first card is on screen and its second is not.
+    virtualizerMock.getVirtualItems.mockReturnValue(rows(100));
+    document.querySelector(".message-list-scroll")!.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("previous");
   });
 
   it("rechecks visible progress when filters change after mounting", async () => {

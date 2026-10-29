@@ -222,7 +222,9 @@
         continue;
       }
 
-      const groupOrdinals = item.kind === "empty-group"
+      // A closed empty row stands for all its members; an open one has a
+      // card per member, so only cards on screen count as read.
+      const groupOrdinals = item.kind === "empty-group" && !emptyGroupOpen(item)
         ? item.ordinals
         : visibleToolGroupOrdinals(row.index);
       for (const ordinal of groupOrdinals) {
@@ -549,6 +551,32 @@
     }
   }
 
+  function emptyGroupOpen(item: DisplayItem): boolean {
+    return item.ordinals.some((ordinal) => openEmptyOrdinals.has(ordinal));
+  }
+
+  // A click on a card inside an open empty row selects that card's message.
+  function clickedEmptyMemberOrdinal(
+    item: DisplayItem,
+    target: EventTarget | null,
+  ): number | undefined {
+    if (item.kind !== "empty-group" || !(target instanceof Element)) return undefined;
+    const card = target.closest<HTMLElement>("[data-message-ordinal]");
+    const ordinal = Number(card?.dataset.messageOrdinal);
+    return item.ordinals.includes(ordinal) ? ordinal : undefined;
+  }
+
+  // Distance from the top of a display row to the card of `ordinal` inside an
+  // open empty row, so a jump lands on that card instead of the row's top.
+  function emptyMemberOffset(index: number, ordinal: number): number {
+    const item = itemAt(index);
+    if (!containerRef || item?.kind !== "empty-group") return 0;
+    const row = containerRef.querySelector<HTMLElement>(`.virtual-row[data-index="${index}"]`);
+    const card = row?.querySelector<HTMLElement>(`[data-message-ordinal="${ordinal}"]`);
+    if (!row || !card) return 0;
+    return card.getBoundingClientRect().top - row.getBoundingClientRect().top;
+  }
+
   function displayIndexOf(ordinal: number): number {
     const ascIndex = displayItemsAsc.findIndex((item) => item.ordinals.includes(ordinal));
     if (ascIndex < 0) return -1;
@@ -608,8 +636,10 @@
     // TanStack's private getMeasurements() rebuilds it; getTotalSize() runs that rebuild publicly.
     // getOffsetForIndex also initializes scrollOffset through TanStack's private getter.
     instance.getTotalSize();
-    const offset = instance.getOffsetForIndex(index, "start")?.[0];
-    if (offset === undefined) return;
+    const rowOffset = instance.getOffsetForIndex(index, "start")?.[0];
+    if (rowOffset === undefined) return;
+    const memberOffset = emptyMemberOffset(index, jump.ordinal);
+    const offset = rowOffset + memberOffset;
     const previousOffset = untrack(() => jump.offset);
     jump.offset = offset;
     if (Math.abs(offset - (instance.scrollOffset ?? 0)) <= 1) return;
@@ -618,7 +648,8 @@
       endScrollOwnership(jump.reqId);
       return;
     }
-    instance.scrollToIndex(index, { align: "start" });
+    if (memberOffset > 0) instance.scrollToOffset(offset);
+    else instance.scrollToIndex(index, { align: "start" });
   });
 
   function endScrollOwnership(reqId = lastScrollRequest): number {
@@ -669,7 +700,17 @@
     const emptyGroup = displayItemsAsc.find(
       (item) => item.kind === "empty-group" && item.ordinals.includes(ordinal),
     );
-    if (emptyGroup) setEmptyGroupOpen(emptyGroup.ordinals, true);
+    if (emptyGroup && !emptyGroupOpen(emptyGroup)) {
+      setEmptyGroupOpen(emptyGroup.ordinals, true);
+      // Let the opened row render and be measured before the jump scrolls
+      // into it. A row that grows above the scroll position makes the
+      // virtualizer shift the scroll by the growth, past the target card.
+      await tick();
+      await raf();
+      if (!isCurrent()) return endScrollOwnership(reqId);
+      await raf();
+      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
+    }
 
     const settled = await scrollToDisplayIndex(() => displayIndexOf(ordinal), 0, 0, reqId, "start", targetHolds);
     if (!isCurrent() || !targetHolds() || !settled) return endScrollOwnership(reqId);
@@ -958,10 +999,10 @@
             data-index={row.index}
             style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({row.start}px);"
             use:measureElement={virtualizer.instance}
-            onclick={() => {
+            onclick={(event) => {
               const sel = window.getSelection();
               if (sel && sel.toString().length > 0) return;
-              ui.selectOrdinal(item.ordinals[0]!);
+              ui.selectOrdinal(clickedEmptyMemberOrdinal(item, event.target) ?? item.ordinals[0]!);
             }}
           >
             {#if item.kind !== "tool-group" && readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
@@ -982,7 +1023,7 @@
             {:else if item.kind === "empty-group"}
               <EmptyMessagesRow
                 messages={item.messages}
-                open={item.ordinals.some((ordinal) => openEmptyOrdinals.has(ordinal))}
+                open={emptyGroupOpen(item)}
                 onToggle={(open) => setEmptyGroupOpen(item.ordinals, open)}
               />
             {:else if item.message.is_compact_boundary}
