@@ -38,6 +38,7 @@ import (
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/telemetry"
+	"go.kenn.io/kit/atomicfile"
 )
 
 var (
@@ -1579,7 +1580,7 @@ func mustLoadConfig(cmd *cobra.Command) config.Config {
 }
 
 // maxLogSize is the threshold at which the debug log file is
-// truncated on startup to prevent unbounded growth.
+// rotated on startup to preserve recent diagnostic messages.
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
 
 func setupLogFile(dataDir string) {
@@ -1587,10 +1588,10 @@ func setupLogFile(dataDir string) {
 }
 
 // setupLogFileNamed redirects the standard logger to the named file
-// in dataDir, truncating it first if it exceeds maxLogSize.
+// in dataDir, rotating it first if it exceeds maxLogSize.
 func setupLogFileNamed(dataDir, name string) {
 	logPath := filepath.Join(dataDir, name)
-	truncateLogFile(logPath, maxLogSize)
+	rotateLogFile(logPath, maxLogSize)
 	f, err := os.OpenFile(
 		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
 	)
@@ -1601,16 +1602,29 @@ func setupLogFileNamed(dataDir, name string) {
 	log.SetOutput(f)
 }
 
-// truncateLogFile truncates the log file if it exceeds limit
-// bytes. Symlinks are skipped to avoid truncating unrelated
-// files. Errors are silently ignored since logging is
-// best-effort.
-func truncateLogFile(path string, limit int64) {
+// rotateLogFile saves an oversized log to path+".1" before clearing it.
+// Copying keeps existing writers on the active file. Symlinks are skipped.
+// Errors are best-effort; a failed backup leaves the active log intact.
+func rotateLogFile(path string, limit int64) {
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
 		return
 	}
-	if info.Size() <= limit {
+	source, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer source.Close()
+	backup, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(backup.Name())
+	_, copyErr := io.Copy(backup, source)
+	if err := backup.Close(); copyErr != nil || err != nil {
+		return
+	}
+	if err := atomicfile.Replace(backup.Name(), path+".1"); err != nil {
 		return
 	}
 	_ = os.Truncate(path, 0)

@@ -718,6 +718,26 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 	assert.Equal(t, wantURL, rt.BrowserURL)
 }
 
+func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
+	dir := t.TempDir()
+	restoreTestLogOutput(t)
+	path := filepath.Join(dir, "debug.log")
+	previous := bytes.Repeat([]byte("x"), maxLogSize+1)
+	writeTestFile(t, path, previous)
+	writeTestFile(t, path+".1", []byte("older log"))
+
+	setupLogFile(dir)
+	log.Print("message after restart")
+
+	backup, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(previous, backup), "backup must contain the entire previous log")
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(active), "message after restart")
+	assert.Less(t, len(active), 1024, "active log must start fresh")
+}
+
 func TestSetupLogFile(t *testing.T) {
 	dir := t.TempDir()
 	// Register after TempDir so LIFO cleanup closes the log file before
@@ -751,7 +771,7 @@ func TestSetupLogFileOpenFailure(t *testing.T) {
 		"expected warning about log file")
 }
 
-func TestTruncateLogFile(t *testing.T) {
+func TestRotateLogFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.log")
 
@@ -759,30 +779,43 @@ func TestTruncateLogFile(t *testing.T) {
 	big := bytes.Repeat([]byte("x"), 1024)
 	writeTestFile(t, path, big)
 
-	// Truncate with limit smaller than file size.
-	truncateLogFile(path, 512)
+	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	defer writer.Close()
+
+	rotateLogFile(path, 512)
 
 	info, err := os.Stat(path)
-	require.NoError(t, err, "stat after truncate")
+	require.NoError(t, err, "stat after rotation")
 	assert.Equal(t, int64(0), info.Size())
+	_, err = writer.WriteString("parent still logging")
+	require.NoError(t, err)
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "parent still logging", string(active))
+	backup, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, big, backup)
 }
 
-func TestTruncateLogFileUnderLimit(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.log")
+func TestRotateLogFileWithinLimit(t *testing.T) {
+	for _, limit := range []int64{17, 1024} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test.log")
+			content := []byte("small log content")
+			writeTestFile(t, path, content)
 
-	content := []byte("small log content")
-	writeTestFile(t, path, content)
+			rotateLogFile(path, limit)
 
-	// File is under limit: should not be truncated.
-	truncateLogFile(path, 1024)
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err, "read after truncate")
-	assert.Equal(t, string(content), string(data), "content changed")
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, content, data, "content changed")
+			assert.NoFileExists(t, path+".1")
+		})
+	}
 }
 
-func TestTruncateLogFileSymlink(t *testing.T) {
+func TestRotateLogFileSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.log")
 	link := filepath.Join(dir, "link.log")
@@ -792,12 +825,26 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 	writeTestFile(t, target, big)
 	requireSymlinkOrSkip(t, target, link)
 
-	// Truncate via symlink: should be a no-op.
-	truncateLogFile(link, 512)
+	rotateLogFile(link, 512)
 
 	data, err := os.ReadFile(target)
 	require.NoError(t, err, "read target")
-	assert.Len(t, data, 1024, "symlink target was truncated")
+	assert.Equal(t, big, data, "symlink target changed")
+	assert.NoFileExists(t, link+".1")
+}
+
+func TestRotateLogFileBackupFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+	content := bytes.Repeat([]byte("x"), 1024)
+	writeTestFile(t, path, content)
+	require.NoError(t, os.Mkdir(path+".1", 0o755))
+
+	rotateLogFile(path, 512)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, content, data, "failed backup must preserve the active log")
 }
 
 func TestNewDaemonIdleTrackerUsesConfigTimeout(t *testing.T) {
