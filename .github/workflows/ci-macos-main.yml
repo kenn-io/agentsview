@@ -55,6 +55,13 @@ jobs:
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
+      - name: Run focused macOS FSEvents deadline linters
+        run: |
+          make lint-tools nilaway-golangci-build
+          ./custom-gcl run --enable-only kennlint,kennnolint,nolintlint ./internal/fsevents ./internal/sync
+        env:
+          CGO_ENABLED: "1"
+
       - name: Run focused macOS FSEvents tests
         if: github.event_name == 'push'
         run: CGO_ENABLED=1 go test -tags "fts5" ./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview -count=1 -timeout=20m
