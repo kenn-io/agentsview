@@ -996,7 +996,8 @@ func receiveArchiveTest[T any](t *testing.T, ch <-chan T) T {
 	select {
 	case value := <-ch:
 		return value
-	case <-time.After(time.Second):
+	// Full archive rebuilds include disk I/O; this only guards against hangs.
+	case <-time.After(30 * time.Second):
 		stacktest.Dump(t)
 		require.FailNow(t, "timed out waiting for archive watch result")
 		var zero T
