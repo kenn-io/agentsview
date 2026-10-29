@@ -2250,7 +2250,7 @@ func replaceSessionMessagesFromTx(ctx context.Context,
 func replaceSessionMessagesTx(
 	tx *sql.Tx, sessionID string, msgs []Message,
 ) error {
-	pins, err := savePinsTx(tx, sessionID)
+	pins, err := savePinsTx(tx, sessionID, msgs)
 	if err != nil {
 		return err
 	}
@@ -2746,8 +2746,91 @@ func setSessionAutomationTx(
 	return nil
 }
 
-func savePinsTx(tx transactionQueries, sessionID string) ([]savedPin, error) {
-	return savePinsFromTx(tx, sessionID, math.MinInt)
+func savePinsTx(tx transactionQueries, sessionID string, incoming []Message) ([]savedPin, error) {
+	pins, err := savePinsFromTx(tx, sessionID, math.MinInt)
+	if err != nil {
+		return nil, err
+	}
+	if err := identifyLegacyVSCodePinsTx(tx, sessionID, pins, incoming); err != nil {
+		return nil, err
+	}
+	return pins, nil
+}
+
+// identifyLegacyVSCodePinsTx enriches old reply pins only when the unchanged
+// prompt and request timestamp identify a unique request on both sides.
+// Ordinals locate the old prompt; they never select the incoming reply.
+func identifyLegacyVSCodePinsTx(tx transactionQueries, sessionID string, pins []savedPin, incoming []Message) error {
+	if !slices.ContainsFunc(pins, func(p savedPin) bool { return p.sourceUUID == "" && p.role == "assistant" && p.messageFound != 0 }) {
+		return nil
+	}
+	type anchor struct{ prompt, timestamp string }
+	type match struct {
+		uuid  string
+		count int
+	}
+	incomingAnchors := map[anchor]match{}
+	uuidCounts := map[string]int{}
+	for i, msg := range incoming {
+		uuidCounts[msg.SourceUUID]++
+		if i == 0 || msg.Role != "assistant" || msg.IsSystem {
+			continue
+		}
+		prompt := incoming[i-1]
+		if prompt.Role != "user" || prompt.IsSystem || prompt.Content == "" || prompt.Ordinal+1 != msg.Ordinal || prompt.Timestamp != msg.Timestamp {
+			continue
+		}
+		stamp, err := time.Parse(time.RFC3339Nano, msg.Timestamp)
+		if err != nil || stamp.IsZero() {
+			continue
+		}
+		key := anchor{prompt.Content, msg.Timestamp}
+		m := incomingAnchors[key]
+		m.uuid, m.count = msg.SourceUUID, m.count+1
+		incomingAnchors[key] = m
+	}
+	if len(incomingAnchors) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(`
+        SELECT a.ordinal, u.content, a.timestamp, s.agent
+        FROM messages a
+        JOIN messages u ON u.session_id = a.session_id AND u.ordinal = a.ordinal - 1
+        JOIN sessions s ON s.id = a.session_id
+        WHERE a.session_id = ? AND s.agent IN ('vscode-copilot', 'positron')
+          AND a.role = 'assistant' AND u.role = 'user'
+          AND a.is_system = 0 AND u.is_system = 0
+          AND u.content != '' AND a.timestamp = u.timestamp`, sessionID)
+	if err != nil {
+		return fmt.Errorf("reading legacy reply anchors: %w", err)
+	}
+	defer rows.Close()
+	oldAnchors := map[int]anchor{}
+	oldCounts := map[anchor]int{}
+	var agent string
+	for rows.Next() {
+		var ordinal int
+		var key anchor
+		if err := rows.Scan(&ordinal, &key.prompt, &key.timestamp, &agent); err != nil {
+			return fmt.Errorf("scanning legacy reply anchor: %w", err)
+		}
+		oldAnchors[ordinal] = key
+		oldCounts[key]++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading legacy reply anchors: %w", err)
+	}
+	for i := range pins {
+		pin := &pins[i]
+		key, ok := oldAnchors[pin.ordinal]
+		m := incomingAnchors[key]
+		prefix := agent + ":assistant:"
+		if !ok || pin.sourceUUID != "" || pin.role != "assistant" || oldCounts[key] != 1 || m.count != 1 || uuidCounts[m.uuid] != 1 || !strings.HasPrefix(m.uuid, prefix) || len(m.uuid) == len(prefix) {
+			continue
+		}
+		pin.sourceUUID, pin.sourceUUIDCount = m.uuid, 1
+	}
+	return nil
 }
 
 // savePinsFromTx saves the pins whose message sits at or after

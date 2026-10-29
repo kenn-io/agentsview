@@ -2607,6 +2607,12 @@ schemas keep their existing ordering behavior.
   which tracks the response array's mutations. VS Code Copilot and Positron
   sync replace existing messages; data version 154 reparses their sources
   in place to repair replies already stored before completion.
+  Nonempty native `requestId` values identify user and assistant messages with
+  distinct provider and role prefixes, so pins survive changing tool summaries.
+  Older replies gain that pin identity only when the unchanged user prompt and
+  nonzero request timestamp identify one request in both transcripts and the
+  incoming assistant ID is unique. Windsurf's synthesized request IDs remain
+  excluded from message identity.
 - **Session names (2026-09-30):** The session's `customTitle` holds both a name
   set with `/rename` and the title VS Code generates after the first request;
   nothing marks which one it is. See `setSessionTitle` and

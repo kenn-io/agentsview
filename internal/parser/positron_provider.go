@@ -150,7 +150,7 @@ func (p *positronProvider) parseSession(
 	}
 
 	// Reuse VSCode Copilot parsing logic since formats are identical.
-	sess, msgs, err := parseVSCodeCopilotData(data, path, project, machine)
+	sess, msgs, err := parseVSCodeCopilotData(data, path, project, machine, AgentPositron)
 	if err != nil {
 		return nil, nil, err
 	}

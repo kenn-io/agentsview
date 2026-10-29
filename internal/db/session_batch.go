@@ -520,7 +520,7 @@ func (db *DB) writeOneSessionBatchTx(
 			return 0, err
 		}
 		if replacementTranscriptChanged {
-			pins, err = savePinsTx(queries, write.Session.ID)
+			pins, err = savePinsTx(queries, write.Session.ID, msgs)
 			if err != nil {
 				return 0, err
 			}

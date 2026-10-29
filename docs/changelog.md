@@ -121,7 +121,9 @@ The latest release is
   Copilot, Positron, and Windsurf sessions are reprocessed on upgrade.
 - VS Code Copilot and Positron replies now update when synced while the agent
   is still answering. Existing sessions are reprocessed on upgrade to recover
-  replies stored before completion.
+  replies stored before completion. Pins keep their notes as replies change.
+  During upgrade, pins on older replies are retained when the unchanged prompt
+  and request timestamp uniquely identify the reply.
 - Kiro CLI subagent runs now appear as child sessions of the session that
   started them, including subagents started by other subagents. The parent
   transcript shows each delegation with its prompt and result, and links to the

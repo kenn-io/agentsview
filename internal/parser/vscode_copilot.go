@@ -154,7 +154,7 @@ func (p *vscodeCopilotProvider) parseSession(
 	}
 
 	sess, msgs, err := parseVSCodeCopilotData(
-		data, path, project, machine,
+		data, path, project, machine, AgentVSCodeCopilot,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -180,7 +180,7 @@ func (p *vscodeCopilotProvider) parseSession(
 // data. Used by both VSCode Copilot and Positron parsers since
 // the formats are identical.
 func parseVSCodeCopilotData(
-	data []byte, path, project, machine string,
+	data []byte, path, project, machine string, agent AgentType,
 ) (*ParsedSession, []ParsedMessage, error) {
 	var session vscodeCopilotSession
 	if err := json.Unmarshal(data, &session); err != nil {
@@ -204,6 +204,11 @@ func parseVSCodeCopilotData(
 	startedAt := session.CreationDate.Time()
 
 	for _, req := range session.Requests {
+		userUUID, assistantUUID := "", ""
+		if req.RequestID != "" && (agent == AgentVSCodeCopilot || agent == AgentPositron) {
+			userUUID = string(agent) + ":user:" + req.RequestID
+			assistantUUID = string(agent) + ":assistant:" + req.RequestID
+		}
 		// User message
 		text := strings.TrimSpace(req.Message.Text)
 		if text != "" {
@@ -215,6 +220,7 @@ func parseVSCodeCopilotData(
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleUser,
+				SourceUUID:    userUUID,
 				Content:       text,
 				Timestamp:     req.Timestamp.Time(),
 				ContentLength: len(text),
@@ -262,6 +268,7 @@ func parseVSCodeCopilotData(
 		messages = append(messages, ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          RoleAssistant,
+			SourceUUID:    assistantUUID,
 			Content:       displayContent,
 			Timestamp:     req.Timestamp.Time(),
 			HasToolUse:    hasToolUse,

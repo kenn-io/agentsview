@@ -603,7 +603,7 @@ func replaceSessionMessagesTxStaged(
 	ctx context.Context, tx *sql.Tx, sessionID string, msgs []Message,
 	staged StagedToolResults, blocked map[string]bool,
 ) error {
-	pins, err := savePinsTx(tx, sessionID)
+	pins, err := savePinsTx(tx, sessionID, msgs)
 	if err != nil {
 		return err
 	}

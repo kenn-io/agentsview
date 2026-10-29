@@ -990,6 +990,7 @@ func parseWindsurfSessionContext(
 		virtualPath,
 		project,
 		machine,
+		AgentWindsurf,
 	)
 	if err != nil {
 		return nil, nil, err

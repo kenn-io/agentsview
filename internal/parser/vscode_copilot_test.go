@@ -1512,3 +1512,31 @@ func TestParseVSCodeCopilotSession_SharedToolCallID(t *testing.T) {
 		"a hidden call with its own ID is kept")
 	assert.Equal(t, "copilot_replaceString", calls[1].ToolName)
 }
+
+func TestVSCodeCopilotRequestSourceIdentity(t *testing.T) {
+	for _, agent := range []AgentType{AgentVSCodeCopilot, AgentPositron, AgentWindsurf} {
+		for _, requestID := range []string{"r1", ""} {
+			t.Run(string(agent)+"/"+requestID, func(t *testing.T) {
+				var previous []ParsedMessage
+				for _, response := range []string{`[{"value":"Checking."}]`, `[{"kind":"toolInvocationSerialized","toolId":"fetch","toolCallId":"t1","isComplete":true},{"value":"Complete."}]`} {
+					data := []byte(fmt.Sprintf(`{"sessionId":"s1","requests":[{"requestId":%q,"timestamp":1786000291425,"message":{"text":"Which release?"},"response":%s}]}`, requestID, response))
+					_, messages, err := parseVSCodeCopilotData(data, "session.json", "project", "local", agent)
+					require.NoError(t, err)
+					require.Len(t, messages, 2)
+					if agent == AgentWindsurf || requestID == "" {
+						assert.Empty(t, messages[0].SourceUUID)
+						assert.Empty(t, messages[1].SourceUUID)
+					} else {
+						assert.Equal(t, string(agent)+":user:r1", messages[0].SourceUUID)
+						assert.Equal(t, string(agent)+":assistant:r1", messages[1].SourceUUID)
+						if previous != nil {
+							assert.Equal(t, previous[1].SourceUUID, messages[1].SourceUUID)
+							assert.NotEqual(t, previous[1].Content, messages[1].Content)
+						}
+					}
+					previous = messages
+				}
+			})
+		}
+	}
+}
