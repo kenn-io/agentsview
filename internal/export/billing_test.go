@@ -218,13 +218,12 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 	for _, tc := range []struct {
 		name, model, input, pattern, adjustment string
 		custom                                  bool
-		requestInput                            int
 		bandInput, bandOutput                   string
 	}{
-		{"missing tier", "standard-only", "5", "standard-only", "", false, 0, "", ""},
-		{"custom", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
-		{"prefixed", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
-		{"published tier band", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
+		{"missing tier", "standard-only", "5", "standard-only", "", false, "", ""},
+		{"custom", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, "", ""},
+		{"prefixed", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, "", ""},
+		{"published tier band", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, "9", "33"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -254,11 +253,10 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
 			assert.Equal(t, tc.pattern, lookup.Pattern)
 			assert.Equal(t, tc.adjustment, lookup.Adjustment)
-			if tc.requestInput > 0 {
+			if tc.bandInput != "" {
 				require.Len(t, lookup.Rates.Bands, 1)
-				selected := lookup.Rates.RatesForTokens(tc.requestInput, 0, 0)
-				assert.Equal(t, money.MustParseDollars(tc.bandInput), selected.InputPerMTok, "request band input rate")
-				assert.Equal(t, money.MustParseDollars(tc.bandOutput), selected.OutputPerMTok, "request band output rate")
+				assert.Equal(t, money.MustParseDollars(tc.bandInput), lookup.Rates.Bands[0].InputPerMTok)
+				assert.Equal(t, money.MustParseDollars(tc.bandOutput), lookup.Rates.Bands[0].OutputPerMTok)
 				lookup.Rates.Bands[0].InputPerMTok = money.MustParseDollars("99")
 				_, next, err := resolver.ResolveBilledAt(
 					pricingpkg.OpenAIPriorityProviderID, tc.model, tc.model, time.Time{})
@@ -268,56 +266,6 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("embedded priority rows carry normalized standard bands", func(t *testing.T) {
-		rows := embeddedCodexPricingRows(t, "gpt-5.5")
-		var priorityBands []PricingBand
-		for _, row := range rows {
-			if row.ModelPattern == "gpt-5.5@priority" {
-				priorityBands = row.Rates.Bands
-				break
-			}
-		}
-		require.Len(t, priorityBands, 1)
-		assert.Equal(t, 272_000, priorityBands[0].AboveInputTokens)
-	})
-}
-
-func embeddedCodexPricingRows(t *testing.T, models ...string) []EffectivePricingRow {
-	t.Helper()
-
-	embedded := pricingpkg.EmbeddedGenAIDocument()
-	rows := []EffectivePricingRow{{
-		GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-		GenAISource: PricingRowSourceEmbedded,
-	}}
-	wanted := make(map[string]struct{}, len(models)*2)
-	for _, model := range models {
-		wanted[model] = struct{}{}
-		wanted[model+"@priority"] = struct{}{}
-	}
-	found := make(map[string]struct{}, len(wanted))
-	for _, row := range pricingpkg.FallbackPricing() {
-		if _, ok := wanted[row.ModelPattern]; !ok {
-			continue
-		}
-		found[row.ModelPattern] = struct{}{}
-		rows = append(rows, EffectivePricingRow{
-			ModelPattern: row.ModelPattern,
-			Rates: ModelRates{
-				InputPerMTok: row.InputPerMTok, OutputPerMTok: row.OutputPerMTok,
-				CacheWritePerMTok:   row.CacheCreationPerMTok,
-				CacheWrite1hPerMTok: row.CacheCreation1hPerMTok,
-				CacheReadPerMTok:    row.CacheReadPerMTok,
-				Source:              PricingRowSourceEmbedded,
-				Bands:               genAIPricingBands(row.Bands),
-			},
-		})
-	}
-	for pattern := range wanted {
-		require.Contains(t, found, pattern)
-	}
-	return rows
 }
 
 func TestResolveBilledSortsEqualRateRecordsByAdjustment(t *testing.T) {

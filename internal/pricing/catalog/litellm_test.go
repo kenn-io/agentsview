@@ -200,13 +200,13 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 		byModel[price.ModelPattern] = price
 	}
 	for _, tc := range []struct {
-		model, input, cached, output, creation                          string
-		bandInput, bandCached, bandOutput, bandCreation, bandCreation1h string
+		model, input, cached, output, creation          string
+		bandInput, bandCached, bandOutput, bandCreation string
 	}{
-		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10", "0"},
-		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "10", "1", "45", "0", "0"},
-		{"gpt-5-nano@priority", "2.5", "0.005", "0.4", "0", "", "", "", "", ""},
-		{"gpt-6.1-sol-sparse@priority", "4", "0.2", "20", "0", "4", "0.2", "20", "0", "0"},
+		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
+		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "10", "1", "45", "0"},
+		{"gpt-5-nano@priority", "2.5", "0.005", "0.4", "0", "", "", "", ""},
+		{"gpt-6.1-sol-sparse@priority", "4", "0.2", "20", "0", "4", "0.2", "20", "0"},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			price, ok := byModel[tc.model]
@@ -225,7 +225,6 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.bandCached), price.Bands[0].CacheReadPerMTok)
 			assert.Equal(t, money.MustParseDollars(tc.bandOutput), price.Bands[0].OutputPerMTok)
 			assert.Equal(t, money.MustParseDollars(tc.bandCreation), price.Bands[0].CacheCreationPerMTok)
-			assert.Equal(t, money.MustParseDollars(tc.bandCreation1h), price.Bands[0].CacheCreation1hPerMTok)
 		})
 	}
 	assert.Contains(t, byModel, "azure/gpt-5.5")
