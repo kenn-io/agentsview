@@ -159,7 +159,7 @@ func ParseLiteLLMPricing(
 			CacheCreation1hPerMTok: cacheCreation1h,
 			CacheReadPerMTok:       cacheRead,
 		}
-		p.Bands, err = parsePricingBands(model, fields, p, inputThresholdRatePattern)
+		p.Bands, err = parsePricingBands(model, fields, p, inputThresholdRatePattern, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -211,112 +211,31 @@ func parsePriorityPricing(model string, fields map[string]jsontext.Value, p Mode
 		}
 	}
 	tp.Bands, err = parsePricingBands(model, fields, tp,
-		priorityInputThresholdRatePattern)
-	if err != nil {
-		return ModelPricing{}, false, err
-	}
-	tp.Bands, err = addStandardPriorityThresholds(model, fields, p.Bands, tp)
+		priorityInputThresholdRatePattern, p.Bands)
 	if err != nil {
 		return ModelPricing{}, false, err
 	}
 	return tp, true, nil
 }
 
-func addStandardPriorityThresholds(
-	model string,
-	fields map[string]jsontext.Value,
-	standardBands []PricingBand,
-	priority ModelPricing,
-) ([]PricingBand, error) {
-	bands := slices.Clone(priority.Bands)
-	priorityThresholds := make(map[int]struct{}, len(bands))
-	for _, band := range bands {
-		priorityThresholds[band.AboveInputTokens] = struct{}{}
-	}
-	standardByThreshold := make(map[int]PricingBand, len(standardBands))
-	for _, band := range standardBands {
-		standardByThreshold[band.AboveInputTokens] = band
-	}
-
-	for key := range fields {
-		matches := inputThresholdRatePattern.FindStringSubmatch(key)
-		if matches == nil {
-			continue
-		}
-		threshold, err := parseThreshold(matches[1], matches[2] == "k")
-		if err != nil {
-			return nil, fmt.Errorf("parsing %s pricing threshold %q: %w", model, key, err)
-		}
-		if _, exists := priorityThresholds[threshold]; exists {
-			continue
-		}
-		standard, exists := standardByThreshold[threshold]
-		if !exists {
-			continue
-		}
-
-		suffix := strings.TrimPrefix(key, "input_cost_per_token")
-		band := PricingBand{
-			AboveInputTokens:       threshold,
-			InputPerMTok:           standard.InputPerMTok,
-			OutputPerMTok:          priority.OutputPerMTok,
-			CacheCreationPerMTok:   priority.CacheCreationPerMTok,
-			CacheCreation1hPerMTok: priority.CacheCreation1hPerMTok,
-			CacheReadPerMTok:       priority.CacheReadPerMTok,
-		}
-		companions := []struct {
-			prefix string
-			dest   *money.Money
-		}{
-			{prefix: "output_cost_per_token", dest: &band.OutputPerMTok},
-			{prefix: "cache_creation_input_token_cost", dest: &band.CacheCreationPerMTok},
-			{prefix: "cache_creation_input_token_cost_above_1hr", dest: &band.CacheCreation1hPerMTok},
-			{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
-		}
-		for _, companion := range companions {
-			for _, companionKey := range []string{
-				companion.prefix + suffix + "_" + priorityTier,
-				companion.prefix + suffix,
-			} {
-				rate, present, err := parseOptionalRate(fields, companionKey)
-				if err != nil {
-					return nil, fmt.Errorf(
-						"parsing %s %s: %w", model, companionKey, err,
-					)
-				}
-				if present {
-					*companion.dest = rate
-					break
-				}
-			}
-		}
-		bands = append(bands, band)
-		priorityThresholds[threshold] = struct{}{}
-	}
-
-	if err := NormalizePricingBands(model, bands); err != nil {
-		return nil, err
-	}
-	return bands, nil
-}
-
+// parsePricingBands fills unpublished tier thresholds from standard bands when
+// fallbackBands is provided; tier-specific companion rates still take priority.
 func parsePricingBands(
 	model string,
 	fields map[string]jsontext.Value,
 	base ModelPricing,
 	thresholdPattern *regexp.Regexp,
+	fallbackBands []PricingBand,
 ) ([]PricingBand, error) {
 	var bands []PricingBand
 	thresholds := make(map[int]struct{})
 	for key := range fields {
-		matches := thresholdPattern.FindStringSubmatch(key)
-		if matches == nil {
-			continue
-		}
-
-		threshold, err := parseThreshold(matches[1], matches[2] == "k")
+		threshold, matched, err := parsePricingThreshold(model, key, thresholdPattern)
 		if err != nil {
-			return nil, fmt.Errorf("parsing %s pricing threshold %q: %w", model, key, err)
+			return nil, err
+		}
+		if !matched {
+			continue
 		}
 		if _, exists := thresholds[threshold]; exists {
 			return nil, fmt.Errorf(
@@ -336,58 +255,112 @@ func parsePricingBands(
 		thresholds[threshold] = struct{}{}
 
 		suffix := strings.TrimPrefix(key, "input_cost_per_token")
-		band := PricingBand{
-			AboveInputTokens:       threshold,
-			InputPerMTok:           input,
-			OutputPerMTok:          base.OutputPerMTok,
-			CacheCreationPerMTok:   base.CacheCreationPerMTok,
-			CacheCreation1hPerMTok: base.CacheCreation1hPerMTok,
-			CacheReadPerMTok:       base.CacheReadPerMTok,
+		fallbackSuffix := strings.TrimSuffix(suffix, "_"+priorityTier)
+		suffixes := []string{suffix}
+		if fallbackSuffix != suffix {
+			suffixes = append(suffixes, fallbackSuffix)
 		}
-		companions := []struct {
-			prefix string
-			dest   *money.Money
-		}{
-			{prefix: "output_cost_per_token", dest: &band.OutputPerMTok},
-			{prefix: "cache_creation_input_token_cost", dest: &band.CacheCreationPerMTok},
-			{prefix: "cache_creation_input_token_cost_above_1hr", dest: &band.CacheCreation1hPerMTok},
-			{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
-		}
-		for _, companion := range companions {
-			key := companion.prefix + suffix
-			rate, exists, err := parseOptionalRate(fields, key)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"parsing %s %s: %w",
-					model,
-					key,
-					err,
-				)
-			}
-			standardSuffix := strings.TrimSuffix(suffix, "_"+priorityTier)
-			if !exists && standardSuffix != suffix {
-				key = companion.prefix + standardSuffix
-				rate, exists, err = parseOptionalRate(fields, key)
-				if err != nil {
-					return nil, fmt.Errorf(
-						"parsing %s %s: %w",
-						model,
-						key,
-						err,
-					)
-				}
-			}
-			if exists {
-				*companion.dest = rate
-			}
+		band, err := parsePricingBand(model, fields, base, threshold, input, suffixes...)
+		if err != nil {
+			return nil, err
 		}
 		bands = append(bands, band)
+	}
+	if len(fallbackBands) > 0 {
+		standardByThreshold := make(map[int]PricingBand, len(fallbackBands))
+		for _, band := range fallbackBands {
+			standardByThreshold[band.AboveInputTokens] = band
+		}
+		for key := range fields {
+			threshold, matched, err := parsePricingThreshold(
+				model, key, inputThresholdRatePattern,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if !matched {
+				continue
+			}
+			if _, exists := thresholds[threshold]; exists {
+				continue
+			}
+			standard, exists := standardByThreshold[threshold]
+			if !exists {
+				continue
+			}
+			suffix := strings.TrimPrefix(key, "input_cost_per_token")
+			band, err := parsePricingBand(
+				model, fields, base, threshold, standard.InputPerMTok,
+				suffix+"_"+priorityTier, suffix,
+			)
+			if err != nil {
+				return nil, err
+			}
+			bands = append(bands, band)
+			thresholds[threshold] = struct{}{}
+		}
 	}
 
 	if err := NormalizePricingBands(model, bands); err != nil {
 		return nil, err
 	}
 	return bands, nil
+}
+
+func parsePricingThreshold(
+	model, key string,
+	pattern *regexp.Regexp,
+) (int, bool, error) {
+	matches := pattern.FindStringSubmatch(key)
+	if matches == nil {
+		return 0, false, nil
+	}
+	threshold, err := parseThreshold(matches[1], matches[2] == "k")
+	if err != nil {
+		return 0, true, fmt.Errorf("parsing %s pricing threshold %q: %w", model, key, err)
+	}
+	return threshold, true, nil
+}
+
+func parsePricingBand(
+	model string,
+	fields map[string]jsontext.Value,
+	base ModelPricing,
+	threshold int,
+	input money.Money,
+	suffixes ...string,
+) (PricingBand, error) {
+	band := PricingBand{
+		AboveInputTokens:       threshold,
+		InputPerMTok:           input,
+		OutputPerMTok:          base.OutputPerMTok,
+		CacheCreationPerMTok:   base.CacheCreationPerMTok,
+		CacheCreation1hPerMTok: base.CacheCreation1hPerMTok,
+		CacheReadPerMTok:       base.CacheReadPerMTok,
+	}
+	companions := []struct {
+		prefix string
+		dest   *money.Money
+	}{
+		{prefix: "output_cost_per_token", dest: &band.OutputPerMTok},
+		{prefix: "cache_creation_input_token_cost", dest: &band.CacheCreationPerMTok},
+		{prefix: "cache_creation_input_token_cost_above_1hr", dest: &band.CacheCreation1hPerMTok},
+		{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
+	}
+	for _, companion := range companions {
+		for _, suffix := range suffixes {
+			key := companion.prefix + suffix
+			rate, exists, err := parseOptionalRate(fields, key)
+			if err != nil {
+				return PricingBand{}, fmt.Errorf("parsing %s %s: %w", model, key, err)
+			}
+			if exists {
+				*companion.dest = rate
+				break
+			}
+		}
+	}
+	return band, nil
 }
 
 // NormalizePricingBands validates and sorts a model's complete request-pricing

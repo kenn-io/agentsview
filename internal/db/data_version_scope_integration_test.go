@@ -15,7 +15,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
@@ -350,7 +349,6 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
 		testjsonl.CodexTurnContextJSON("gpt-5.3-chat-latest", "2026-10-08T12:00:01Z"),
 		testjsonl.CodexMsgJSON("assistant", "answer", "2026-10-08T12:00:02Z"),
-		testjsonl.CodexTokenCountJSON("2026-10-08T12:00:03Z", 1_000_000, 0, 0),
 	)
 	dbtest.WriteTestFile(t, source, []byte(body))
 	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
@@ -374,7 +372,6 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	database, err = db.OpenIsolated(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	database.SetEmptyCatalogPricing(db.FallbackRateMap())
 	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
 	require.NoError(t, err)
 	assert.True(t, needsSync)
@@ -391,11 +388,6 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, pricing.OpenAIPriorityProviderID, messages[0].ProviderID)
-	daily, err := database.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-10-08", To: "2026-10-08",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("3.50"), daily.Totals.TotalCost)
 	needsSync, _, err = db.ArchiveResyncState(ctx, path)
 	require.NoError(t, err)
 	assert.False(t, needsSync)

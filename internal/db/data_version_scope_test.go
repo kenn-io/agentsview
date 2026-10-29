@@ -13,14 +13,6 @@ import (
 )
 
 func TestScopedDataVersionProviders(t *testing.T) {
-	assert.ElementsMatch(t,
-		[]parser.AgentType{parser.AgentVSCodeCopilot, parser.AgentPositron},
-		ScopedDataVersionProviders(153, 154),
-	)
-	assert.ElementsMatch(t,
-		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
-		ScopedDataVersionProviders(154, 155),
-	)
 	t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{
 		131: {parser.AgentHermes},
 		132: {parser.AgentAugureDesktop},

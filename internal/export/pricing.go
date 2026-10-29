@@ -288,6 +288,7 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel str
 		return lookup
 	}
 	lookup.Rates = rates
+	lookup.Rates.Bands = slices.Clone(rates.Bands)
 	lookup.Pattern = pattern
 	lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
 	return lookup
@@ -296,9 +297,6 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel str
 // priorityRow returns the first model key with a LiteLLM priority row, along
 // with the matching priority rates.
 func (r *PricingResolver) priorityRow(models ...string) (string, ModelRates, bool) {
-	if r == nil {
-		return "", ModelRates{}, false
-	}
 	for _, model := range models {
 		base := r.Lookup(model)
 		pattern := catalog.PriorityPattern(base.Pattern)
