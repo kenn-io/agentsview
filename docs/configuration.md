@@ -27,20 +27,21 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
 ├── debug.log        # Log of the server, sync, and other commands
-├── *.log.1           # Previous oversized logs, including watcher logs
-├── *.log.rotate.lock # Serializes rotation of each log
+├── *.log.1          # Previous oversized logs, including watcher logs
+├── *.rotate.lock    # Serializes rotation of each log
 ├── run/             # Windows only: daemon runtime records and locks
 ├── serve.log        # Detached daemon output
 ├── tmp/             # Temporary files, only when the system temp directory is unusable
 └── uploads/         # Uploaded session files
 ```
 
-When any command opens a log larger than 10 MB, it saves up to the last 10 MB,
-starting at a full line, to the same filename with `.1` appended. It replaces
-the older backup, then clears the active log for new messages. This applies to
+When any command opens a log larger than 10 MB, it saves up to the last 10 MB to
+the same filename with `.1` appended, replacing the older backup. The backup
+starts at a full line when one fits, and keeps the raw tail otherwise.
+AgentsView then clears the active log for new messages. This applies to
 `debug.log`, `pg-watch.log`, and `clickhouse-watch.log`. Log writes wait while
-rotation holds the per-log lock. If the lock is busy, the tail has no full line,
-or the backup fails, AgentsView keeps the active log intact.
+rotation holds the per-log lock. If the lock is busy or the backup fails,
+AgentsView keeps the active log intact.
 
 `usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
 It is safe to delete when no AgentsView process is running; the next usage query

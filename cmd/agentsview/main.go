@@ -1648,16 +1648,12 @@ func rotateLogFile(path string, limit int64) {
 		return
 	}
 	defer source.Close()
-	if _, err := source.Seek(info.Size()-limit-1, io.SeekStart); err != nil {
-		return
-	}
 	// Include the preceding byte so a tail already on a line boundary stays intact.
-	tail := bufio.NewReader(io.LimitReader(source, limit+1))
-	if _, err := tail.ReadString('\n'); err != nil {
-		return
-	}
-	if _, err := tail.Peek(1); err != nil {
-		return
+	tail := bufio.NewReader(io.NewSectionReader(source, info.Size()-limit-1, limit+1))
+	_, err = tail.ReadString('\n')
+	if _, peekErr := tail.Peek(1); err != nil || peekErr != nil {
+		// Without a usable line boundary, keep the raw bounded tail.
+		tail.Reset(io.NewSectionReader(source, info.Size()-limit, limit))
 	}
 	backup, err := atomicfile.Create(path+".1", atomicfile.WithPerm(info.Mode().Perm()))
 	if err != nil {
