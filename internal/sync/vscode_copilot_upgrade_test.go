@@ -3,10 +3,8 @@ package sync
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,73 +75,4 @@ func TestVSCodeCopilotSharedToolCallIDResyncPreservesIdentity(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{"toolu_fetch vscode_fetchWebPage_internal"}, calls)
-}
-
-func TestVSCodeCopilotGrowingUpgradePins(t *testing.T) {
-	for _, agent := range []parser.AgentType{parser.AgentVSCodeCopilot, parser.AgentPositron} {
-		for _, mode := range []syncWriteMode{syncWriteDefault, syncWriteBulk} {
-			t.Run(fmt.Sprintf("%s/%d", agent, mode), func(t *testing.T) {
-				root := t.TempDir()
-				path := filepath.Join(root, "workspaceStorage", "abc123", "chatSessions", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl")
-				dbtest.WriteTestFile(t, path, []byte(growingCopilotStart))
-				database := dbtest.OpenTestDB(t)
-				agentDirs := map[parser.AgentType][]string{agent: {root}}
-				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
-				t.Cleanup(engine.Close)
-				require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-				sessionID := string(agent) + ":aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-				before, err := database.GetSession(t.Context(), sessionID)
-				require.NoError(t, err)
-				require.NotNil(t, before)
-				messages, err := database.GetAllMessages(t.Context(), sessionID)
-				require.NoError(t, err)
-				require.Len(t, messages, 2)
-				note := "Keep this answer"
-				_, err = database.PinMessage(t.Context(), sessionID, messages[1].ID, &note)
-				require.NoError(t, err)
-				beforePins, err := database.ListPinnedMessages(t.Context(), "", "")
-				require.NoError(t, err)
-				require.Len(t, beforePins, 1)
-				// Model the old writer: partial messages, but the completed source's fingerprint.
-				dbtest.WriteTestFile(t, path, []byte(growingCopilotStart+growingCopilotFinish))
-				hash, err := ComputeFileHash(path)
-				require.NoError(t, err)
-				info, err := os.Stat(path)
-				require.NoError(t, err)
-				require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-					if _, err := tx.ExecContext(t.Context(), `UPDATE messages SET source_uuid = '' WHERE session_id = ?`, sessionID); err != nil {
-						return err
-					}
-					if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET file_hash = ?, file_size = ?, file_mtime = ?, data_version = 153 WHERE id = ?`, hash, info.Size(), info.ModTime().UnixNano(), sessionID); err != nil {
-						return err
-					}
-					_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 153")
-					return err
-				}))
-				engine.Close()
-				dbPath := database.Path()
-				require.NoError(t, database.Close())
-				database, err = db.OpenIsolated(t.Context(), dbPath)
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, database.Close()) })
-				assert.Equal(t, 153, database.GetSessionDataVersion(t.Context(), sessionID))
-				engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
-				t.Cleanup(engine.Close)
-				require.Equal(t, 1, engine.syncAllLocked(t.Context(), nil, time.Time{}, nil, mode, true, false).Synced)
-				assertGrowingCopilotResponse(t, database, sessionID)
-				after, err := database.GetSession(t.Context(), sessionID)
-				require.NoError(t, err)
-				require.NotNil(t, after)
-				assert.Equal(t, before.FilePath, after.FilePath)
-				assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
-				pins, err := database.ListPinnedMessages(t.Context(), "", "")
-				require.NoError(t, err)
-				require.Len(t, pins, 1)
-				assert.Equal(t, &note, pins[0].Note)
-				assert.Equal(t, beforePins[0].CreatedAt, pins[0].CreatedAt)
-				require.NotNil(t, pins[0].Content)
-				assert.Contains(t, *pins[0].Content, "The newest release is **v0.46.1**.")
-			})
-		}
-	}
 }

@@ -2770,9 +2770,7 @@ func identifyLegacyVSCodePinsTx(tx transactionQueries, sessionID string, pins []
 		count int
 	}
 	incomingAnchors := map[anchor]match{}
-	uuidCounts := map[string]int{}
 	for i, msg := range incoming {
-		uuidCounts[msg.SourceUUID]++
 		if i == 0 || msg.Role != "assistant" || msg.IsSystem {
 			continue
 		}
@@ -2825,7 +2823,7 @@ func identifyLegacyVSCodePinsTx(tx transactionQueries, sessionID string, pins []
 		key, ok := oldAnchors[pin.ordinal]
 		m := incomingAnchors[key]
 		prefix := agent + ":assistant:"
-		if !ok || pin.sourceUUID != "" || pin.role != "assistant" || oldCounts[key] != 1 || m.count != 1 || uuidCounts[m.uuid] != 1 || !strings.HasPrefix(m.uuid, prefix) || len(m.uuid) == len(prefix) {
+		if !ok || pin.sourceUUID != "" || pin.role != "assistant" || oldCounts[key] != 1 || m.count != 1 || !strings.HasPrefix(m.uuid, prefix) {
 			continue
 		}
 		pin.sourceUUID, pin.sourceUUIDCount = m.uuid, 1

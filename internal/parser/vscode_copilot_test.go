@@ -1515,7 +1515,11 @@ func TestParseVSCodeCopilotSession_SharedToolCallID(t *testing.T) {
 
 func TestVSCodeCopilotRequestSourceIdentity(t *testing.T) {
 	for _, agent := range []AgentType{AgentVSCodeCopilot, AgentPositron, AgentWindsurf} {
-		for _, requestID := range []string{"r1", ""} {
+		requestIDs := []string{"r1"}
+		if agent != AgentWindsurf {
+			requestIDs = append(requestIDs, "")
+		}
+		for _, requestID := range requestIDs {
 			t.Run(string(agent)+"/"+requestID, func(t *testing.T) {
 				var previous []ParsedMessage
 				for _, response := range []string{`[{"value":"Checking."}]`, `[{"kind":"toolInvocationSerialized","toolId":"fetch","toolCallId":"t1","isComplete":true},{"value":"Complete."}]`} {

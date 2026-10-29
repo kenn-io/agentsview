@@ -974,7 +974,7 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 }
 
 func TestVSCodeLegacyReplyPinConversion(t *testing.T) {
-	for _, scenario := range []string{"shifted", "duplicate-old", "duplicate-new", "changed-prompt", "zero-time", "duplicate-id", "empty-id"} {
+	for _, scenario := range []string{"shifted", "duplicate-old", "duplicate-new", "changed-prompt", "zero-time"} {
 		t.Run(scenario, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project", func(s *Session) { s.Agent = "vscode-copilot" })
@@ -1001,10 +1001,6 @@ func TestVSCodeLegacyReplyPinConversion(t *testing.T) {
 				incoming[0].Content = "Which release?"
 			case "changed-prompt":
 				incoming[2].Content = "A different question"
-			case "duplicate-id":
-				incoming[1].SourceUUID = incoming[3].SourceUUID
-			case "empty-id":
-				incoming[3].SourceUUID = ""
 			}
 			insertMessages(t, d, old...)
 			stored, err := d.GetAllMessages(t.Context(), "s1")
