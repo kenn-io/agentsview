@@ -55,8 +55,6 @@ func TestDirectMemoryStatusAndSearchCoverageShareSemantics(t *testing.T) {
 	assert.False(t, status.Archive.ReadOnly)
 	assert.Equal(t, service.MemoryReady, status.Lexical.Status)
 	assert.Equal(t, service.MemoryPartial, status.Semantic.Status)
-	assert.Equal(t, new(int64(9)), status.Semantic.Embedded)
-	assert.Equal(t, new(int64(2)), status.Semantic.Missing)
 	assert.Equal(t, service.MemoryUnknown, status.Sources.Status)
 	assert.Equal(t, "source_telemetry_unavailable", status.Sources.Reason)
 
@@ -95,6 +93,11 @@ func TestMemoryStatusSemanticCountPresence(t *testing.T) {
 			name:   "unmeasured counts",
 			status: db.SemanticReadiness{State: "ready", Reason: "counts_unavailable"},
 			want:   `{"status":"ready","reason":"counts_unavailable"}`,
+		},
+		{
+			name:   "measured counts",
+			status: db.SemanticReadiness{State: "partial", Generation: "gen-1", Embedded: 9, Missing: 2, Reason: "index_incomplete"},
+			want:   `{"status":"partial","reason":"index_incomplete","generation":"gen-1","embedded":9,"missing":2}`,
 		},
 		{
 			name:   "measured zero counts",

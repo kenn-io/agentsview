@@ -158,49 +158,49 @@ func TestDoctorMemoryReportsStandaloneTargetMismatch(t *testing.T) {
 }
 
 func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
-	setDoctorMemoryTestEnvironment(t, t.TempDir())
-	server := memoryStatusServer(t, service.MemoryStatus{
-		Status:        service.MemoryReady,
-		ObservedAt:    time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
-		ServerVersion: "v1.2.3",
-		Archive: service.MemoryArchiveStatus{
-			Backend: "sqlite", Identity: "archive-1",
-		},
-		Lexical: service.MemoryCapabilityStatus{Status: service.MemoryReady},
-		Semantic: service.MemoryVectorStatus{
-			Status: service.MemoryReady, Generation: "gen-1", Embedded: new(int64(10)), Missing: new(int64(0)),
-		},
-		Sources: service.MemorySourceStatus{
-			Status: service.MemoryUnknown, Reason: "source_telemetry_unavailable",
-		},
-	})
+	for _, tc := range []struct {
+		name     string
+		embedded *int64
+		missing  *int64
+	}{
+		{name: "measured counts", embedded: new(int64(10)), missing: new(int64(0))},
+		{name: "counts absent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setDoctorMemoryTestEnvironment(t, t.TempDir())
+			server := memoryStatusServer(t, service.MemoryStatus{
+				Status:        service.MemoryReady,
+				ObservedAt:    time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
+				ServerVersion: "v1.2.3",
+				Archive: service.MemoryArchiveStatus{
+					Backend: "sqlite", Identity: "archive-1",
+				},
+				Lexical: service.MemoryCapabilityStatus{Status: service.MemoryReady},
+				Semantic: service.MemoryVectorStatus{
+					Status: service.MemoryReady, Generation: "gen-1", Embedded: tc.embedded, Missing: tc.missing,
+				},
+				Sources: service.MemorySourceStatus{
+					Status: service.MemoryUnknown, Reason: "source_telemetry_unavailable",
+				},
+			})
 
-	out, err := executeCommand(newRootCommand(), "doctor", "memory",
-		"--server", server.URL)
-	require.NoError(t, err)
-	assert.Contains(t, out, "Memory Diagnostics")
-	assert.Contains(t, out, "Target: server")
-	assert.Contains(t, out, "Server version: v1.2.3")
-	assert.Contains(t, out, "Archive: ready (sqlite)")
-	assert.Contains(t, out, "Semantic generation: gen-1 (10 embedded, 0 missing)")
-	assert.Contains(t, out, "Client integration: unknown")
-	assert.Contains(t, out, "Native plugin root was not provided")
-	assert.NotContains(t, out, server.URL)
-}
-
-func TestDoctorMemoryHumanOutputOmitsUnmeasuredGenerationCounts(t *testing.T) {
-	setDoctorMemoryTestEnvironment(t, t.TempDir())
-	server := memoryStatusServer(t, service.MemoryStatus{
-		Status: service.MemoryReady,
-		Semantic: service.MemoryVectorStatus{
-			Status: service.MemoryReady, Reason: "counts_unavailable", Generation: "gen-1",
-		},
-	})
-
-	out, err := executeCommand(newRootCommand(), "doctor", "memory",
-		"--server", server.URL)
-	require.NoError(t, err)
-	assert.NotContains(t, out, "Semantic generation:")
+			out, err := executeCommand(newRootCommand(), "doctor", "memory",
+				"--server", server.URL)
+			require.NoError(t, err)
+			assert.Contains(t, out, "Memory Diagnostics")
+			assert.Contains(t, out, "Target: server")
+			assert.Contains(t, out, "Server version: v1.2.3")
+			assert.Contains(t, out, "Archive: ready (sqlite)")
+			if tc.embedded != nil {
+				assert.Contains(t, out, "Semantic generation: gen-1 (10 embedded, 0 missing)")
+			} else {
+				assert.NotContains(t, out, "Semantic generation:")
+			}
+			assert.Contains(t, out, "Client integration: unknown")
+			assert.Contains(t, out, "Native plugin root was not provided")
+			assert.NotContains(t, out, server.URL)
+		})
+	}
 }
 
 func setDoctorMemoryTestEnvironment(t *testing.T, home string) {

@@ -927,6 +927,11 @@ construction: a session becomes semantically searchable only once the machine
 that owns it has pushed its embeddings, so a freshly pushed session's text can
 match lexically (through the hybrid keyword leg) before its vectors arrive.
 
+PostgreSQL semantic coverage in memory status and search responses reports
+`ready` with `counts_unavailable`, omits `embedded` and `missing`, and cannot
+report `partial` because it cannot measure source sessions that haven't been
+pushed.
+
 ### Storage and indexing
 
 Embeddings are stored as pgvector `halfvec` (16-bit) columns, one chunk table
