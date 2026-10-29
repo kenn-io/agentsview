@@ -392,15 +392,24 @@ func TestDetectTransport_LocalDaemonUnreachableDoesNotSetDirectIncompatible(t *t
 // TestDetectTransport_DaemonStarting simulates a server that's
 // starting up (start lock held, no runtime record, no listener).
 // The held kit lock makes IsDaemonStarting return true.
-// The helper waits out the timeout then falls back to direct.
+// The startup-wait hook reports no daemon, then discovery falls back to direct.
 func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
-	t.Parallel()
 	dir := daemonRuntimeDir(t)
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	waited := false
+	stubWaitForDaemonStartupForTransport(t, func(
+		_ context.Context, dataDir string, wait time.Duration, _ ...string,
+	) bool {
+		waited = true
+		assert.Equal(t, dir, dataDir)
+		assert.Equal(t, time.Second, wait)
+		return false
+	})
 
 	tr, err := detectTransport(dir, "", time.Second)
 	require.NoError(t, err)
+	assert.True(t, waited)
 	// Still no runtime record after wait, so IsDaemonActive sees
 	// only the start lock and returns direct (writable) since
 	// no runtime record means no daemon claim.

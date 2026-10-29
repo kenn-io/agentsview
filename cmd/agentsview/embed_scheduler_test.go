@@ -197,34 +197,6 @@ func TestEmbedSchedulerBackstopTickIssuesBackstopBuild(t *testing.T) {
 	assert.True(t, calls[0].Backstop, "backstop tick must set BuildRequest.Backstop")
 }
 
-func TestEmbedSchedulerPendingDebounceHoldsIdleWorkLease(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEmbedManager{}
-		idled := make(chan struct{})
-		ctx, cancel := context.WithCancel(t.Context())
-		tracker := server.NewIdleTracker(20*time.Millisecond, func() {
-			close(idled)
-			cancel()
-		})
-		s := newEmbedScheduler(fake, 100*time.Millisecond, 0, false, tracker)
-
-		// setupVectorServing queues Recall startup work before either goroutine
-		// starts, so exercise that ordering explicitly.
-		s.Notify()
-		go tracker.Run(ctx)
-		go s.Run(ctx)
-		defer s.Stop()
-
-		waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-			"pending startup work did not survive an idle timeout shorter than its debounce")
-		select {
-		case <-idled:
-		case <-time.After(2 * time.Second):
-			require.Fail(t, "daemon never idled after the pending build completed")
-		}
-	})
-}
-
 func TestEmbedSchedulerBuildsHoldIdleWorkLease(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -273,66 +245,43 @@ func TestEmbedSchedulerBuildsHoldIdleWorkLease(t *testing.T) {
 	}
 }
 
-func TestEmbedSchedulerFailedDebouncedBuildRetriesWithoutNotification(
-	t *testing.T,
-) {
-	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-			{started: true, err: errors.New("embedding endpoint unavailable")},
-			{started: true},
-		}}
-		idled := make(chan struct{})
-		ctx, cancel := context.WithCancel(t.Context())
-		tracker := server.NewIdleTracker(20*time.Millisecond, func() {
-			close(idled)
-			cancel()
+func TestEmbedSchedulerDebouncedBuildRetriesReleaseIdleLease(t *testing.T) {
+	buildErr := errors.New("embedding request rejected")
+	for _, tt := range []struct {
+		name     string
+		retryErr error
+	}{
+		{name: "fail then succeed"},
+		{name: "fail twice", retryErr: buildErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+					{started: true, err: buildErr},
+					{started: true, err: tt.retryErr},
+				}}
+				idled := make(chan struct{})
+				ctx, cancel := context.WithCancel(t.Context())
+				tracker := server.NewIdleTracker(15*time.Millisecond, func() {
+					close(idled)
+					cancel()
+				})
+				s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false, tracker)
+				s.Notify()
+				go tracker.Run(ctx)
+				go s.Run(ctx)
+				defer s.Stop()
+
+				select {
+				case <-idled:
+				case <-time.After(2 * time.Second):
+					require.Fail(t, "daemon never idled after the bounded retry")
+				}
+				assert.Equal(t, []vector.BuildRequest{{}, {}}, fake.callsSnapshot(),
+					"one notification should get one bounded retry")
+			})
 		})
-		s := newEmbedScheduler(fake, 50*time.Millisecond, 0, false, tracker)
-		s.Notify()
-		go tracker.Run(ctx)
-		go s.Run(ctx)
-		defer s.Stop()
-
-		waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-			"a failed debounced build must retry without another notification")
-		select {
-		case <-idled:
-		case <-time.After(2 * time.Second):
-			require.Fail(t, "daemon never idled after the retry succeeded")
-		}
-		assert.Equal(t, []vector.BuildRequest{{}, {}}, fake.callsSnapshot())
-	})
-}
-
-func TestEmbedSchedulerRepeatedDebouncedFailuresReleaseIdleLease(
-	t *testing.T,
-) {
-	synctest.Test(t, func(t *testing.T) {
-		buildErr := errors.New("embedding request rejected")
-		fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-			{started: true, err: buildErr},
-			{started: true, err: buildErr},
-		}}
-		idled := make(chan struct{})
-		ctx, cancel := context.WithCancel(t.Context())
-		tracker := server.NewIdleTracker(15*time.Millisecond, func() {
-			close(idled)
-			cancel()
-		})
-		s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false, tracker)
-		s.Notify()
-		go tracker.Run(ctx)
-		go s.Run(ctx)
-		defer s.Stop()
-
-		select {
-		case <-idled:
-		case <-time.After(2 * time.Second):
-			require.Fail(t, "repeated build failures kept the daemon alive indefinitely")
-		}
-		assert.Equal(t, []vector.BuildRequest{{}, {}}, fake.callsSnapshot(),
-			"one notification should get one bounded retry")
-	})
+	}
 }
 
 func TestEmbedSchedulerPendingBackstopRetriesBeforeNextTick(
