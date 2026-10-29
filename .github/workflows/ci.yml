@@ -35,7 +35,7 @@ jobs:
       groups: ${{ steps.changes.outputs.groups }}
       all: ${{ steps.changes.outputs.all }}
     steps:
-      - uses: kenn-io/actions/changes@a7cba46214aa665161db4a4130d9bee2ce1ede16
+      - uses: kenn-io/actions/changes@3f6b27f495fb6bfbf4080cdb28135b847e516dfa
         id: changes
         with:
           filters: |
