@@ -78,11 +78,10 @@
   .empty-run[open] .empty-chevron {
     transform: rotate(90deg);
   }
-  /* Matches the 5px padding above and below each transcript row. */
   .empty-messages {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding-top: 10px;
+    gap: var(--space-5);
+    padding-top: var(--space-5);
   }
 </style>
