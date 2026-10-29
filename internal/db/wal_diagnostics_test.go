@@ -222,7 +222,8 @@ func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
 	}
 	text := output.String()
 	assert.Contains(t, text, "pages unmoved after 3 consecutive attempts")
-	assert.Contains(t, text, "sqlite open reads:")
+	assert.Contains(t, text, "sqlite open reads: 1")
+	assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.holdDiagnosticTransaction (")
 	assert.Contains(t, text, "sqlite wal goroutine dump:\ngoroutine ")
 	assert.Contains(t, text, "runtime/pprof.writeGoroutineStacks")
 }
