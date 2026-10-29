@@ -245,7 +245,9 @@ func TestEmbedSchedulerBuildsHoldIdleWorkLease(t *testing.T) {
 	}
 }
 
-func TestEmbedSchedulerDebouncedBuildRetriesReleaseIdleLease(t *testing.T) {
+func TestEmbedSchedulerDebouncedBuildRetriesReleaseIdleLease(
+	t *testing.T,
+) {
 	buildErr := errors.New("embedding request rejected")
 	for _, tt := range []struct {
 		name     string
