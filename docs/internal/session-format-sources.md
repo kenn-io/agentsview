@@ -97,7 +97,7 @@ threshold; when several bands exist, the highest eligible threshold wins.
 Batch, Flex, and regional suffixes are excluded because stored usage does not
 identify those variants. For entries whose `litellm_provider` is `openai`,
 Agentsview imports `_priority` fields and their `_above_272k_tokens` bands as
-`<model>@priority` rows for Codex Fast billing. Data version 153 reparses
+`<model>@priority` rows for Codex Fast billing. Data version 154 reparses
 Codex, TraeX, and Augure Code sources in place to add the billing identity.
 
 Claude and Codex session artifacts provide normalized input, output,
