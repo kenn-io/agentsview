@@ -104,6 +104,7 @@ type VectorSearchPage func(context.Context, int) ([]VectorHit, bool, error)
 
 // SemanticReadiness is a bounded, read-only snapshot of the semantic search
 // index. It deliberately contains no filesystem paths or provider secrets.
+// Producers set Generation only when Embedded and Missing are measured counts.
 type SemanticReadiness struct {
 	State      string
 	Reason     string
