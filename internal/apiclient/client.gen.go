@@ -24746,7 +24746,7 @@ func (a ActivityKeyMinutes) Validate() error {
 
 type ActivityPeak struct {
 	Agents int64   `json:"agents"`
-	At     *string `json:"at,omitempty" validate:"required"`
+	At     *string `json:"at" validate:"required"`
 }
 
 func (a ActivityPeak) Validate() error {
@@ -24775,6 +24775,9 @@ func (a ActivityReportSessionsResponse) Validate() error {
 	}
 	if err := typesValidator.Var(a.ReportID, "required"); err != nil {
 		errors = errors.Append("ReportID", err)
+	}
+	if err := typesValidator.Var(a.Sessions, "required"); err != nil {
+		errors = errors.Append("Sessions", err)
 	}
 	for i, item := range a.Sessions {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -25075,6 +25078,9 @@ type DBCacheHitRatioDistribution struct {
 
 func (d DBCacheHitRatioDistribution) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.Buckets, "required"); err != nil {
+		errors = errors.Append("Buckets", err)
+	}
 	for i, item := range d.Buckets {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -25161,7 +25167,7 @@ type DBContentMatch struct {
 	Agent         string      `json:"agent" validate:"required"`
 	ContextAfter  []DBMessage `json:"context_after,omitempty"`
 	ContextBefore []DBMessage `json:"context_before,omitempty"`
-	DisplayName   *string     `json:"display_name,omitempty" validate:"required"`
+	DisplayName   *string     `json:"display_name" validate:"required"`
 	IsSidechain   *bool       `json:"is_sidechain,omitempty"`
 
 	// Location Where the match occurred: message, thinking, tool_input, or tool_result.
@@ -25215,6 +25221,12 @@ func (d DBContentMatch) Validate() error {
 	}
 	if err := typesValidator.Var(d.OrdinalRange, "required"); err != nil {
 		errors = errors.Append("OrdinalRange", err)
+	}
+	if d.OrdinalRange != nil && len(d.OrdinalRange) < 2 {
+		errors = errors.Add("OrdinalRange", fmt.Sprintf("must have at least 2 items, got %d", len(d.OrdinalRange)))
+	}
+	if len(d.OrdinalRange) > 2 {
+		errors = errors.Add("OrdinalRange", fmt.Sprintf("must have at most 2 items, got %d", len(d.OrdinalRange)))
 	}
 	if err := typesValidator.Var(d.Project, "required"); err != nil {
 		errors = errors.Append("Project", err)
@@ -25286,7 +25298,20 @@ type DBDistributionBucketV1 struct {
 }
 
 func (d DBDistributionBucketV1) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.Edge, "required"); err != nil {
+		errors = errors.Append("Edge", err)
+	}
+	if d.Edge != nil && len(d.Edge) < 2 {
+		errors = errors.Add("Edge", fmt.Sprintf("must have at least 2 items, got %d", len(d.Edge)))
+	}
+	if len(d.Edge) > 2 {
+		errors = errors.Add("Edge", fmt.Sprintf("must have at most 2 items, got %d", len(d.Edge)))
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type DBMachineBreakdown struct {
@@ -25546,6 +25571,9 @@ type DBRecentEditFile struct {
 
 func (d DBRecentEditFile) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.Edits, "required"); err != nil {
+		errors = errors.Append("Edits", err)
+	}
 	for i, item := range d.Edits {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -25577,6 +25605,9 @@ type DBScopedDistribution struct {
 
 func (d DBScopedDistribution) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.Buckets, "required"); err != nil {
+		errors = errors.Append("Buckets", err)
+	}
 	for i, item := range d.Buckets {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -25643,13 +25674,13 @@ type DBSessionExternalParent = db.SessionExternalParent
 type DBSessionLabels = db.SessionLabels
 
 type DBSessionPlanUsageGroup struct {
-	Credits           *string  `json:"credits,omitempty" validate:"required"`
-	FiveHourPercent   *float64 `json:"five_hour_percent,omitempty"`
+	Credits           *string  `json:"credits" validate:"required"`
+	FiveHourPercent   *float64 `json:"five_hour_percent"`
 	Model             string   `json:"model" validate:"required"`
 	ProductExperience string   `json:"product_experience" validate:"required"`
 	ReasoningEffort   string   `json:"reasoning_effort" validate:"required"`
 	Speed             string   `json:"speed" validate:"required"`
-	WeeklyPercent     *float64 `json:"weekly_percent,omitempty"`
+	WeeklyPercent     *float64 `json:"weekly_percent"`
 }
 
 func (d DBSessionPlanUsageGroup) Validate() error {
@@ -25661,10 +25692,10 @@ type DBSessionStats = db.SessionStats
 type DBSignalCalibration struct {
 	AffectedIncompleteRate float64  `json:"affected_incomplete_rate"`
 	AffectedSessions       int64    `json:"affected_sessions"`
-	AvgScoreDelta          *float64 `json:"avg_score_delta,omitempty"`
+	AvgScoreDelta          *float64 `json:"avg_score_delta"`
 	BaselineIncompleteRate float64  `json:"baseline_incomplete_rate"`
 	BaselineSessions       int64    `json:"baseline_sessions"`
-	IncompleteLift         *float64 `json:"incomplete_lift,omitempty"`
+	IncompleteLift         *float64 `json:"incomplete_lift"`
 	Signal                 string   `json:"signal" validate:"required"`
 }
 
@@ -25678,8 +25709,8 @@ type DBSignalSessionExample struct {
 	EditChurn      *int64  `json:"edit_churn,omitempty"`
 	Excerpt        string  `json:"excerpt" validate:"required"`
 	FailureSignals *int64  `json:"failure_signals,omitempty"`
-	HealthGrade    *string `json:"health_grade,omitempty" validate:"required"`
-	HealthScore    *int64  `json:"health_score,omitempty"`
+	HealthGrade    *string `json:"health_grade" validate:"required"`
+	HealthScore    *int64  `json:"health_score"`
 	IsAutomated    *bool   `json:"is_automated,omitempty"`
 	MessageOrdinal *int64  `json:"message_ordinal,omitempty"`
 	Outcome        string  `json:"outcome" validate:"required"`
@@ -25699,7 +25730,7 @@ type DBSignalSessionsResponse = db.SignalSessionsResponse
 type DBSignalsAgentRow struct {
 	Agent             string   `json:"agent" validate:"required"`
 	AvgFailureSignals float64  `json:"avg_failure_signals"`
-	AvgHealthScore    *float64 `json:"avg_health_score,omitempty"`
+	AvgHealthScore    *float64 `json:"avg_health_score"`
 	CompletedRate     float64  `json:"completed_rate"`
 	SessionCount      int64    `json:"session_count"`
 }
@@ -25712,7 +25743,7 @@ type DBSignalsAnalyticsResponse = db.SignalsAnalyticsResponse
 
 type DBSignalsContextHealth struct {
 	AvgCompactionCount            float64  `json:"avg_compaction_count"`
-	AvgContextPressure            *float64 `json:"avg_context_pressure,omitempty"`
+	AvgContextPressure            *float64 `json:"avg_context_pressure"`
 	HighPressureSessions          int64    `json:"high_pressure_sessions"`
 	MidTaskCompactionCount        int64    `json:"mid_task_compaction_count"`
 	SessionsWithCompaction        int64    `json:"sessions_with_compaction"`
@@ -25722,7 +25753,7 @@ type DBSignalsContextHealth struct {
 
 type DBSignalsProjectRow struct {
 	AvgFailureSignals float64  `json:"avg_failure_signals"`
-	AvgHealthScore    *float64 `json:"avg_health_score,omitempty"`
+	AvgHealthScore    *float64 `json:"avg_health_score"`
 	CompletedRate     float64  `json:"completed_rate"`
 	Project           string   `json:"project" validate:"required"`
 	SessionCount      int64    `json:"session_count"`
@@ -25767,7 +25798,7 @@ type DBSignalsToolHealth struct {
 type DBSignalsTrendBucket struct {
 	Abandoned         int64    `json:"abandoned"`
 	AvgFailureSignals float64  `json:"avg_failure_signals"`
-	AvgHealthScore    *float64 `json:"avg_health_score,omitempty"`
+	AvgHealthScore    *float64 `json:"avg_health_score"`
 	Completed         int64    `json:"completed"`
 	Date              string   `json:"date" validate:"required"`
 	Errored           int64    `json:"errored"`
@@ -25954,6 +25985,9 @@ type DBStatsTemporal struct {
 
 func (d DBStatsTemporal) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.HourlyUtc, "required"); err != nil {
+		errors = errors.Append("HourlyUtc", err)
+	}
 	for i, item := range d.HourlyUtc {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26038,6 +26072,9 @@ func (d DBToolAgentBreakdown) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(d.Agent, "required"); err != nil {
 		errors = errors.Append("Agent", err)
+	}
+	if err := typesValidator.Var(d.Categories, "required"); err != nil {
+		errors = errors.Append("Categories", err)
 	}
 	for i, item := range d.Categories {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -26126,14 +26163,14 @@ type DBToolUsageAnalysis struct {
 	CallCount          int64    `json:"call_count"`
 	Category           string   `json:"category" validate:"required"`
 	EmptyCalls         int64    `json:"empty_calls"`
-	EmptyRate          *float64 `json:"empty_rate,omitempty"`
+	EmptyRate          *float64 `json:"empty_rate"`
 	KnownOutcomeCalls  int64    `json:"known_outcome_calls"`
 	MissingCalls       int64    `json:"missing_calls"`
 	OpenSequences      int64    `json:"open_sequences"`
 	Pct                float64  `json:"pct"`
 	RecoveredSequences int64    `json:"recovered_sequences"`
-	RecoveryRate       *float64 `json:"recovery_rate,omitempty"`
-	RepeatRate         *float64 `json:"repeat_rate,omitempty"`
+	RecoveryRate       *float64 `json:"recovery_rate"`
+	RepeatRate         *float64 `json:"repeat_rate"`
 	RepeatedCalls      int64    `json:"repeated_calls"`
 	SessionCount       int64    `json:"session_count"`
 	ToolName           string   `json:"tool_name" validate:"required"`
@@ -26173,6 +26210,9 @@ type EmbeddingsGenerationsResponse struct {
 
 func (e EmbeddingsGenerationsResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(e.Generations, "required"); err != nil {
+		errors = errors.Append("Generations", err)
+	}
 	for i, item := range e.Generations {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26199,7 +26239,7 @@ type ExportEffectiveModelRate struct {
 	CacheWriteCostPerMtok   MoneyMoney               `json:"cache_write_cost_per_mtok"`
 	CostSource              string                   `json:"cost_source" validate:"required"`
 	InputCostPerMtok        MoneyMoney               `json:"input_cost_per_mtok"`
-	MatchedPattern          *string                  `json:"matched_pattern,omitempty" validate:"required"`
+	MatchedPattern          *string                  `json:"matched_pattern" validate:"required"`
 	OutputCostPerMtok       MoneyMoney               `json:"output_cost_per_mtok"`
 	PricedModel             string                   `json:"priced_model" validate:"required"`
 }
@@ -26210,6 +26250,9 @@ func (e ExportEffectiveModelRate) Validate() error {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("Application", err)
 		}
+	}
+	if err := typesValidator.Var(e.Bands, "required"); err != nil {
+		errors = errors.Append("Bands", err)
 	}
 	for i, item := range e.Bands {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -26270,6 +26313,9 @@ func (e ExportModelPricingProvenance) Validate() error {
 	if err := typesValidator.Var(e.CostSource, "required"); err != nil {
 		errors = errors.Append("CostSource", err)
 	}
+	if err := typesValidator.Var(e.Resolutions, "required"); err != nil {
+		errors = errors.Append("Resolutions", err)
+	}
 	for i, item := range e.Resolutions {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26291,6 +26337,9 @@ type ExportPricingApplication struct {
 
 func (e ExportPricingApplication) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(e.Bands, "required"); err != nil {
+		errors = errors.Append("Bands", err)
+	}
 	for i, item := range e.Bands {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26420,12 +26469,18 @@ func (f FrictionDigestResponse) Validate() error {
 	if err := typesValidator.Var(f.MarkdownSha256, "required"); err != nil {
 		errors = errors.Append("MarkdownSha256", err)
 	}
+	if err := typesValidator.Var(f.P0Alerts, "required"); err != nil {
+		errors = errors.Append("P0Alerts", err)
+	}
 	for i, item := range f.P0Alerts {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
 				errors = errors.Append(fmt.Sprintf("P0Alerts[%d]", i), err)
 			}
 		}
+	}
+	if err := typesValidator.Var(f.Patterns, "required"); err != nil {
+		errors = errors.Append("Patterns", err)
 	}
 	for i, item := range f.Patterns {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -26443,6 +26498,9 @@ func (f FrictionDigestResponse) Validate() error {
 				errors = errors.Append(fmt.Sprintf("Sessions[%s]", k), err)
 			}
 		}
+	}
+	if err := typesValidator.Var(f.Signals, "required"); err != nil {
+		errors = errors.Append("Signals", err)
 	}
 	for i, item := range f.Signals {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -26471,6 +26529,9 @@ type FrictionDigestsResponse struct {
 
 func (f FrictionDigestsResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(f.Digests, "required"); err != nil {
+		errors = errors.Append("Digests", err)
+	}
 	for i, item := range f.Digests {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26485,14 +26546,14 @@ func (f FrictionDigestsResponse) Validate() error {
 }
 
 type FrictionFindingItem struct {
-	CallIndex      *int64     `json:"call_index,omitempty"`
+	CallIndex      *int64     `json:"call_index"`
 	Detector       string     `json:"detector" validate:"required"`
 	Evidence       string     `json:"evidence" validate:"required"`
 	Fingerprint    string     `json:"fingerprint" validate:"required"`
 	Kind           string     `json:"kind" validate:"required"`
 	Label          string     `json:"label" validate:"required"`
-	MessageOrdinal *int64     `json:"message_ordinal,omitempty"`
-	OccurredAt     *time.Time `json:"occurred_at,omitempty" validate:"required"`
+	MessageOrdinal *int64     `json:"message_ordinal"`
+	OccurredAt     *time.Time `json:"occurred_at" validate:"required"`
 	RulesVersion   string     `json:"rules_version" validate:"required"`
 	Seq            int64      `json:"seq"`
 	SessionID      string     `json:"session_id" validate:"required"`
@@ -26512,6 +26573,9 @@ type FrictionFindingsResponse struct {
 
 func (f FrictionFindingsResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(f.Findings, "required"); err != nil {
+		errors = errors.Append("Findings", err)
+	}
 	for i, item := range f.Findings {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26541,7 +26605,7 @@ type FrictionPatternItem struct {
 	Fingerprint     string `json:"fingerprint" validate:"required"`
 	FirstSeenDate   string `json:"first_seen_date" validate:"required"`
 	Kind            string `json:"kind" validate:"required"`
-	LastOrdinal     *int64 `json:"last_ordinal,omitempty"`
+	LastOrdinal     *int64 `json:"last_ordinal"`
 	LastSeenDate    string `json:"last_seen_date" validate:"required"`
 	LastSubjectID   string `json:"last_subject_id" validate:"required"`
 	OccurrenceCount int64  `json:"occurrence_count"`
@@ -26562,6 +26626,9 @@ func (f FrictionPatternsResponse) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(f.NextCursor, "required"); err != nil {
 		errors = errors.Append("NextCursor", err)
+	}
+	if err := typesValidator.Var(f.Patterns, "required"); err != nil {
+		errors = errors.Append("Patterns", err)
 	}
 	for i, item := range f.Patterns {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -26615,6 +26682,9 @@ type FrictionRunResponse struct {
 
 func (f FrictionRunResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(f.Reports, "required"); err != nil {
+		errors = errors.Append("Reports", err)
+	}
 	for i, item := range f.Reports {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26641,7 +26711,7 @@ func (f FrictionSession) Validate() error {
 
 type FrictionSignal struct {
 	Agent          string     `json:"agent" validate:"required"`
-	CallIndex      *int64     `json:"call_index,omitempty"`
+	CallIndex      *int64     `json:"call_index"`
 	Channel        string     `json:"channel" validate:"required"`
 	Detector       string     `json:"detector" validate:"required"`
 	Evidence       string     `json:"evidence" validate:"required"`
@@ -26649,8 +26719,8 @@ type FrictionSignal struct {
 	Kind           string     `json:"kind" validate:"required"`
 	Label          string     `json:"label" validate:"required"`
 	Machine        string     `json:"machine" validate:"required"`
-	MessageOrdinal *int64     `json:"message_ordinal,omitempty"`
-	OccurredAt     *time.Time `json:"occurred_at,omitempty" validate:"required"`
+	MessageOrdinal *int64     `json:"message_ordinal"`
+	OccurredAt     *time.Time `json:"occurred_at" validate:"required"`
 	Persona        string     `json:"persona" validate:"required"`
 	Seat           string     `json:"seat" validate:"required"`
 	SessionURL     string     `json:"session_url" validate:"required"`
@@ -26721,6 +26791,9 @@ type ProjectsResponse struct {
 
 func (p ProjectsResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(p.Projects, "required"); err != nil {
+		errors = errors.Append("Projects", err)
+	}
 	for i, item := range p.Projects {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26752,6 +26825,9 @@ type RawSyncMissingObjectsInputBody struct {
 
 func (r RawSyncMissingObjectsInputBody) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Objects, "required"); err != nil {
+		errors = errors.Append("Objects", err)
+	}
 	for i, item := range r.Objects {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26774,6 +26850,9 @@ type RawSyncMissingObjectsResponse struct {
 
 func (r RawSyncMissingObjectsResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Missing, "required"); err != nil {
+		errors = errors.Append("Missing", err)
+	}
 	for i, item := range r.Missing {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26851,7 +26930,7 @@ func (r RawSyncUploadStartInputBody) Validate() error {
 
 type RawsyncDeviceStatus struct {
 	DeviceID   string     `json:"device_id" validate:"required"`
-	LastSeenAt *time.Time `json:"last_seen_at,omitempty" validate:"required"`
+	LastSeenAt *time.Time `json:"last_seen_at" validate:"required"`
 }
 
 func (r RawsyncDeviceStatus) Validate() error {
@@ -26868,6 +26947,9 @@ type RawsyncEntry struct {
 
 func (r RawsyncEntry) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Objects, "required"); err != nil {
+		errors = errors.Append("Objects", err)
+	}
 	for i, item := range r.Objects {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26913,8 +26995,8 @@ type RawsyncSourceHeadStatus struct {
 	ConfiguredRootID     string     `json:"configured_root_id" validate:"required"`
 	DeviceID             string     `json:"device_id" validate:"required"`
 	Generation           int64      `json:"generation"`
-	LastAcceptedAt       *time.Time `json:"last_accepted_at,omitempty" validate:"required"`
-	LastParseCompletedAt *time.Time `json:"last_parse_completed_at,omitempty" validate:"required"`
+	LastAcceptedAt       *time.Time `json:"last_accepted_at" validate:"required"`
+	LastParseCompletedAt *time.Time `json:"last_parse_completed_at" validate:"required"`
 	ParseFailed          bool       `json:"parse_failed"`
 	ParseLeased          bool       `json:"parse_leased"`
 	ParsePending         bool       `json:"parse_pending"`
@@ -26936,6 +27018,9 @@ type RawsyncStatus struct {
 
 func (r RawsyncStatus) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Devices, "required"); err != nil {
+		errors = errors.Append("Devices", err)
+	}
 	for i, item := range r.Devices {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -26947,6 +27032,9 @@ func (r RawsyncStatus) Validate() error {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("ParseJobs", err)
 		}
+	}
+	if err := typesValidator.Var(r.SourceHeads, "required"); err != nil {
+		errors = errors.Append("SourceHeads", err)
 	}
 	for i, item := range r.SourceHeads {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -26967,7 +27055,7 @@ func (r RawsyncStatus) Validate() error {
 }
 
 type RawsyncUploadStatusSummary struct {
-	OldestOpenSession *RawsyncOpenUploadStatus `json:"oldest_open_session,omitempty"`
+	OldestOpenSession *RawsyncOpenUploadStatus `json:"oldest_open_session"`
 	OpenCount         int64                    `json:"open_count"`
 	PendingBytes      int64                    `json:"pending_bytes"`
 }
@@ -26996,6 +27084,9 @@ type RecallEntriesResponse struct {
 
 func (r RecallEntriesResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Entries, "required"); err != nil {
+		errors = errors.Append("Entries", err)
+	}
 	for i, item := range r.Entries {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27055,6 +27146,9 @@ type RemoteSyncRequest struct {
 
 func (r RemoteSyncRequest) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Hosts, "required"); err != nil {
+		errors = errors.Append("Hosts", err)
+	}
 	for i, item := range r.Hosts {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27126,6 +27220,9 @@ type RemotesyncManifest struct {
 
 func (r RemotesyncManifest) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.Files, "required"); err != nil {
+		errors = errors.Append("Files", err)
+	}
 	for i, item := range r.Files {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27178,6 +27275,9 @@ func (s SearchResponse) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(s.Query, "required"); err != nil {
 		errors = errors.Append("Query", err)
+	}
+	if err := typesValidator.Var(s.Results, "required"); err != nil {
+		errors = errors.Append("Results", err)
 	}
 	for i, item := range s.Results {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -27394,31 +27494,33 @@ func (s ServiceToolCall) Validate() error {
 type ServiceToolCallList = service.ToolCallList
 
 type ServiceUsagePairwiseComparisonDelta struct {
-	CacheCreationDelta      int64      `json:"cacheCreationDelta"`
-	CacheCreationDeltaRatio *float64   `json:"cacheCreationDeltaRatio,omitempty"`
-	CacheReadDelta          int64      `json:"cacheReadDelta"`
-	CacheReadDeltaRatio     *float64   `json:"cacheReadDeltaRatio,omitempty"`
-	CostPerSessionDelta     MoneyMoney `json:"costPerSessionDelta"`
-	CostPerSessionRatio     *float64   `json:"costPerSessionRatio,omitempty"`
-	InputTokensDelta        int64      `json:"inputTokensDelta"`
-	InputTokensDeltaRatio   *float64   `json:"inputTokensDeltaRatio,omitempty"`
-	OutputTokensDelta       int64      `json:"outputTokensDelta"`
-	OutputTokensDeltaRatio  *float64   `json:"outputTokensDeltaRatio,omitempty"`
-	SessionCountDelta       int64      `json:"sessionCountDelta"`
-	SessionCountDeltaRatio  *float64   `json:"sessionCountDeltaRatio,omitempty"`
-	TokensPerSessionDelta   *float64   `json:"tokensPerSessionDelta,omitempty"`
-	TokensPerSessionRatio   *float64   `json:"tokensPerSessionRatio,omitempty"`
-	TotalCostDelta          MoneyMoney `json:"totalCostDelta"`
-	TotalCostDeltaRatio     *float64   `json:"totalCostDeltaRatio,omitempty"`
-	TotalTokensDelta        int64      `json:"totalTokensDelta"`
-	TotalTokensDeltaRatio   *float64   `json:"totalTokensDeltaRatio,omitempty"`
+	CacheCreationDelta      int64       `json:"cacheCreationDelta"`
+	CacheCreationDeltaRatio *float64    `json:"cacheCreationDeltaRatio"`
+	CacheReadDelta          int64       `json:"cacheReadDelta"`
+	CacheReadDeltaRatio     *float64    `json:"cacheReadDeltaRatio"`
+	CostPerSessionDelta     *MoneyMoney `json:"costPerSessionDelta"`
+	CostPerSessionRatio     *float64    `json:"costPerSessionRatio"`
+	InputTokensDelta        int64       `json:"inputTokensDelta"`
+	InputTokensDeltaRatio   *float64    `json:"inputTokensDeltaRatio"`
+	OutputTokensDelta       int64       `json:"outputTokensDelta"`
+	OutputTokensDeltaRatio  *float64    `json:"outputTokensDeltaRatio"`
+	SessionCountDelta       int64       `json:"sessionCountDelta"`
+	SessionCountDeltaRatio  *float64    `json:"sessionCountDeltaRatio"`
+	TokensPerSessionDelta   *float64    `json:"tokensPerSessionDelta"`
+	TokensPerSessionRatio   *float64    `json:"tokensPerSessionRatio"`
+	TotalCostDelta          MoneyMoney  `json:"totalCostDelta"`
+	TotalCostDeltaRatio     *float64    `json:"totalCostDeltaRatio"`
+	TotalTokensDelta        int64       `json:"totalTokensDelta"`
+	TotalTokensDeltaRatio   *float64    `json:"totalTokensDeltaRatio"`
 }
 
 func (s ServiceUsagePairwiseComparisonDelta) Validate() error {
 	var errors runtime.ValidationErrors
-	if v, ok := any(s.CostPerSessionDelta).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("CostPerSessionDelta", err)
+	if s.CostPerSessionDelta != nil {
+		if v, ok := any(s.CostPerSessionDelta).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("CostPerSessionDelta", err)
+			}
 		}
 	}
 	if v, ok := any(s.TotalCostDelta).(runtime.Validator); ok {
@@ -27480,6 +27582,9 @@ type SessionToolSequence struct {
 
 func (s SessionToolSequence) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(s.Calls, "required"); err != nil {
+		errors = errors.Append("Calls", err)
+	}
 	for i, item := range s.Calls {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27551,6 +27656,9 @@ type SessionToolSequencesResponse struct {
 
 func (s SessionToolSequencesResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(s.Sequences, "required"); err != nil {
+		errors = errors.Append("Sequences", err)
+	}
 	for i, item := range s.Sequences {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27602,6 +27710,9 @@ func (s SessionUsageResponse) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(s.Agent, "required"); err != nil {
 		errors = errors.Append("Agent", err)
+	}
+	if err := typesValidator.Var(s.Breakdown, "required"); err != nil {
+		errors = errors.Append("Breakdown", err)
 	}
 	for i, item := range s.Breakdown {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -27879,6 +27990,9 @@ type UsageSummaryResponse struct {
 
 func (u UsageSummaryResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(u.AgentTotals, "required"); err != nil {
+		errors = errors.Append("AgentTotals", err)
+	}
 	for i, item := range u.AgentTotals {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27898,6 +28012,9 @@ func (u UsageSummaryResponse) Validate() error {
 			}
 		}
 	}
+	if err := typesValidator.Var(u.Daily, "required"); err != nil {
+		errors = errors.Append("Daily", err)
+	}
 	for i, item := range u.Daily {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -27907,6 +28024,9 @@ func (u UsageSummaryResponse) Validate() error {
 	}
 	if err := typesValidator.Var(u.From, "required"); err != nil {
 		errors = errors.Append("From", err)
+	}
+	if err := typesValidator.Var(u.ModelTotals, "required"); err != nil {
+		errors = errors.Append("ModelTotals", err)
 	}
 	for i, item := range u.ModelTotals {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -27921,6 +28041,9 @@ func (u UsageSummaryResponse) Validate() error {
 				errors = errors.Append("Pricing", err)
 			}
 		}
+	}
+	if err := typesValidator.Var(u.ProjectTotals, "required"); err != nil {
+		errors = errors.Append("ProjectTotals", err)
 	}
 	for i, item := range u.ProjectTotals {
 		if v, ok := any(item).(runtime.Validator); ok {
