@@ -939,9 +939,10 @@ single-session command's rules below.
 JSON always contains a `results` array, even for one ID. Each entry has
 `requested_id`, `exit_code`, and `usage` when available. `usage` has the same
 shape as `session usage --json`. Per-session failures include `error` text;
-missing sessions have code 2, and sessions without token data or cost have code
-3\. Code 0 means token data or cost is available. Other lookup errors have code
-1\. The command continues after a per-session failure.
+missing sessions have code 2, and sessions without token data, cost, or plan
+usage figures have code 3. Code 0 means token data, cost, or Codex Cloud plan
+usage figures are available. Other lookup errors have code 1. The command
+continues after a per-session failure.
 
 ```json
 {

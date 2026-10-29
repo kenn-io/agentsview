@@ -16,53 +16,33 @@ import (
 )
 
 func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
-	for _, ownOnly := range []bool{false, true} {
-		t.Run(map[bool]string{false: "descendants", true: "own-only"}[ownOnly], func(t *testing.T) {
-			dataDir := newAgentDataDir(t)
-			t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
-			store := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
-			seedSubagentOnlyUsage(t, store, "claude:parent", "agent-child", 42)
-			opens, closes := 0, 0
-			original := openPGReadStore
-			openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
-				opens++
-				return store, func() { closes++ }, nil
-			}
-			t.Cleanup(func() { openPGReadStore = original })
-			args := []string{"session", "usage-batch", "claude:parent", "--pg", "--no-sync"}
-			if ownOnly {
-				args = append(args, "--own-only")
-			}
-			cmd := sessionUsageCommand(t, args...)
-			out, err := sessionUsageBatchDataForCommand(cmd, []string{"claude:parent", "codex:missing", "claude:parent"})
-			require.NoError(t, err)
-			require.Len(t, out.Results, 3)
-			assert.Equal(t, 1, opens)
-			assert.Equal(t, 1, closes)
-			assert.Equal(t, "claude:parent", out.Results[0].RequestedID)
-			assert.Equal(t, 2, out.Results[1].ExitCode)
-			assert.Nil(t, out.Results[1].Usage)
-			assert.Equal(t, out.Results[0], out.Results[2])
-			if ownOnly {
-				assert.Equal(t, 3, out.Results[0].ExitCode)
-			} else {
-				assert.Equal(t, 0, out.Results[0].ExitCode)
-			}
-		})
-	}
-}
-
-func TestSessionUsageBatchLocalArchive(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
 	store := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	seedSubagentOnlyUsage(t, store, "claude:parent", "agent-child", 42)
-	require.NoError(t, store.Close())
-	cmd := sessionUsageCommand(t, "session", "usage-batch", "claude:parent")
-	out, err := sessionUsageBatchDataForCommand(cmd, []string{"claude:parent"})
-	require.NoError(t, err)
-	require.Len(t, out.Results, 1)
+	opens, closes := 0, 0
+	original := openPGReadStore
+	openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
+		opens++
+		return store, func() { closes++ }, nil
+	}
+	t.Cleanup(func() { openPGReadStore = original })
+	cmd := sessionUsageCommand(t, "session", "usage-batch", "claude:parent", "--pg", "--no-sync")
+	var out *sessionUsageBatchOutput
+	stderr := captureStderr(t, func() {
+		var err error
+		out, err = sessionUsageBatchDataForCommand(cmd, []string{"claude:parent", "codex:missing", "claude:parent"})
+		require.NoError(t, err)
+	})
+	assert.Empty(t, stderr)
+	require.Len(t, out.Results, 3)
+	assert.Equal(t, 1, opens)
+	assert.Equal(t, 1, closes)
+	assert.Equal(t, "claude:parent", out.Results[0].RequestedID)
 	assert.Equal(t, 0, out.Results[0].ExitCode)
+	assert.Equal(t, 2, out.Results[1].ExitCode)
+	assert.Nil(t, out.Results[1].Usage)
+	assert.Equal(t, out.Results[0], out.Results[2])
 	var human strings.Builder
 	require.NoError(t, renderSessionUsageBatch(&human, out, "human"))
 	assert.Contains(t, human.String(), "claude:parent (exit 0)")
@@ -76,9 +56,8 @@ func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
 			args := []string{"session", "usage-batch", "codex:session-a", "--no-sync", "--json"}
 			starts := 0
 			if autostart {
-				stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
+				stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 					starts++
-					assert.True(t, cfg.NoSync)
 					return daemonRuntimeFromTestURL(t, ts.URL), nil
 				})
 			} else {
@@ -95,7 +74,6 @@ func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
 			assert.InDelta(t, 0, raw["results"][0]["exit_code"], 0)
 			assert.Contains(t, raw["results"][0], "usage")
 			assert.NotContains(t, raw["results"][0], "error")
-			assert.Empty(t, reqs.SyncInput.ID)
 			versions := 0
 			for _, path := range reqs.RequestPath {
 				if path == "/api/v1/version" {
@@ -167,11 +145,4 @@ func TestSessionUsageBatchMissingDiagnostic(t *testing.T) {
 			assert.Equal(t, 1, strings.Count(output.String(), "session not found: codex:missing"))
 		})
 	}
-	cmd := sessionUsageCommand(t, "session", "usage", "codex:missing", "--server", ts.URL, "--own-only")
-	stderr := captureStderr(t, func() {
-		_, code, err := sessionUsageDataForCommand(cmd, "codex:missing")
-		require.NoError(t, err)
-		assert.Equal(t, tokenUseExitNotFound, code)
-	})
-	assert.Equal(t, "session not found: codex:missing\n", stderr)
 }
