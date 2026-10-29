@@ -855,6 +855,46 @@ describe("ToolBlock result images", () => {
     expect(ui.activeModal).toBeNull();
   });
 
+  it("loads offloaded images in the preview and the full-size view", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("image"));
+    vi.stubGlobal("fetch", fetchMock);
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce("blob:preview")
+      .mockReturnValueOnce("blob:full-size");
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const offloaded = JSON.stringify([
+      {
+        type: "agentsview_image",
+        version: 1,
+        text: "![Image: image/png, 3 bytes](asset://abc.png)",
+        image_ref: "asset://abc.png",
+      },
+    ]);
+    await render({ toolCall: call("image_generation", {}, { result_content: offloaded }) });
+
+    await vi.waitFor(() => {
+      expect(previews().map((preview) => preview.src)).toEqual(["blob:preview"]);
+    });
+    await click('.tool-images button[aria-label="Show image at full size"]');
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(
+        "blob:full-size",
+      );
+    });
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringMatching(/\/api\/v1\/assets\/abc\.png$/),
+      expect.stringMatching(/\/api\/v1\/assets\/abc\.png$/),
+    ]);
+    ui.activeModal = null;
+  });
+
   it("holds the app modal slot so Escape closes only the dialog", async () => {
     await render({ toolCall: call("image_generation", {}, { result_content: imageResult }) });
     await click('.tool-images button[aria-label="Show image at full size"]');

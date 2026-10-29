@@ -3,7 +3,7 @@
 <script lang="ts">
   import { Modal } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
-  import { loadAssetImages } from "../../utils/markdown.js";
+  import { assetImageSource, loadAssetImages } from "../../utils/markdown.js";
   import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
@@ -14,7 +14,9 @@
 
   let { sources, alt }: Props = $props();
   let openIndex: number | null = $state(null);
-  let openSource = $derived(openIndex === null ? null : (sources[openIndex] ?? null));
+  // Offloaded images arrive as asset:// references, which only the loader can fetch.
+  let imageSources = $derived(sources.map(assetImageSource));
+  let openSource = $derived(openIndex === null ? null : (imageSources[openIndex] ?? null));
 
   // The app-wide modal slot lets Escape close this dialog without also
   // leaving the session, and pauses transcript shortcuts while it is open.
@@ -35,8 +37,8 @@
   }
 </script>
 
-<div class="tool-images" use:loadAssetImages={sources.join("\n")}>
-  {#each sources as src, index (index)}
+<div class="tool-images" use:loadAssetImages={imageSources.join("\n")}>
+  {#each imageSources as src, index (index)}
     <button
       type="button"
       class="tool-image"
@@ -81,7 +83,7 @@
     padding: 0;
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-sm);
-    background: var(--bg-inset);
+    background: none;
     cursor: zoom-in;
     overflow: hidden;
   }

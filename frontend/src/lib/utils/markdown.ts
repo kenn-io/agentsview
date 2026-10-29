@@ -789,10 +789,19 @@ const cache = new LRUCache<string, RenderCacheEntry>(6000);
 const ASSET_PLACEHOLDER_PREFIX = "/__agentsview_asset__/";
 
 function resolveAssetURLs(text: string): string {
-  return text.replace(
-    /asset:\/\/([^\s)]+)/g,
-    (_match, reference: string) => `${ASSET_PLACEHOLDER_PREFIX}${encodeURIComponent(reference)}`,
+  return text.replace(/asset:\/\/([^\s)]+)/g, (_match, reference: string) =>
+    assetPlaceholderURL(reference),
   );
+}
+
+function assetPlaceholderURL(reference: string): string {
+  return `${ASSET_PLACEHOLDER_PREFIX}${encodeURIComponent(reference)}`;
+}
+
+/** Returns an image source loadAssetImages can fetch: asset:// references
+ * become loader URLs, and any other source is returned unchanged. */
+export function assetImageSource(src: string): string {
+  return src.startsWith("asset://") ? assetPlaceholderURL(src.slice("asset://".length)) : src;
 }
 
 function getAssetReference(src: string | null): string | undefined {
