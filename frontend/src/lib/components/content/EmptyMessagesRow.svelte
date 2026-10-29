@@ -6,13 +6,20 @@
 
   interface Props {
     messages: Message[];
+    open: boolean;
+    onToggle: (open: boolean) => void;
   }
 
-  let { messages }: Props = $props();
-  let open = $state(false);
+  let { messages, open, onToggle }: Props = $props();
 </script>
 
-<details class="empty-run" bind:open>
+<details
+  class="empty-run"
+  {open}
+  ontoggle={(event) => {
+    if (event.currentTarget.open !== open) onToggle(event.currentTarget.open);
+  }}
+>
   <summary class="empty-summary" title={m.transcript_empty_messages_title()}>
     <span class="empty-line"></span>
     <span class="empty-label">

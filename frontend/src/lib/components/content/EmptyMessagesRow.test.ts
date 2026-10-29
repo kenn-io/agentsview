@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
@@ -37,10 +37,15 @@ function emptyMessage(id: number, ordinal: number, role: string): Message {
 }
 
 describe("EmptyMessagesRow", () => {
-  it("shows the count collapsed and the usual message cards when expanded", async () => {
+  it("shows only the count while closed and asks to open when clicked", async () => {
+    const onToggle = vi.fn();
     const c = mount(EmptyMessagesRow, {
       target: document.body,
-      props: { messages: [emptyMessage(1, 4, "assistant"), emptyMessage(2, 5, "user")] },
+      props: {
+        messages: [emptyMessage(1, 4, "assistant"), emptyMessage(2, 5, "user")],
+        open: false,
+        onToggle,
+      },
     });
     const summary = document.querySelector("summary")!;
     expect(summary.textContent).toContain("2 empty messages");
@@ -48,12 +53,26 @@ describe("EmptyMessagesRow", () => {
 
     summary.click();
     await toggled();
+    expect(onToggle).toHaveBeenCalledWith(true);
+    unmount(c);
+  });
+
+  it("shows the usual message cards while open and asks to close when clicked", async () => {
+    const onToggle = vi.fn();
+    const c = mount(EmptyMessagesRow, {
+      target: document.body,
+      props: {
+        messages: [emptyMessage(1, 4, "assistant"), emptyMessage(2, 5, "user")],
+        open: true,
+        onToggle,
+      },
+    });
     const labels = [...document.querySelectorAll(".role-label")].map((el) => el.textContent);
     expect(labels).toEqual(["Assistant", "User"]);
 
-    summary.click();
+    document.querySelector("summary")!.click();
     await toggled();
-    expect(document.querySelectorAll(".role-label")).toHaveLength(0);
+    expect(onToggle).toHaveBeenCalledWith(false);
     unmount(c);
   });
 });

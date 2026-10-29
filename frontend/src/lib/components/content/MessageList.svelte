@@ -1,6 +1,7 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, tick, untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
@@ -533,6 +534,21 @@
     return new Promise((r) => requestAnimationFrame(() => r()));
   }
 
+  // Ordinals of empty messages whose collapsed row is open. Ordinals are
+  // per session, so a session change closes every row.
+  const openEmptyOrdinals = new SvelteSet<number>();
+  $effect(() => {
+    void messages.sessionId;
+    untrack(() => openEmptyOrdinals.clear());
+  });
+
+  function setEmptyGroupOpen(ordinals: number[], open: boolean) {
+    for (const ordinal of ordinals) {
+      if (open) openEmptyOrdinals.add(ordinal);
+      else openEmptyOrdinals.delete(ordinal);
+    }
+  }
+
   function displayIndexOf(ordinal: number): number {
     const ascIndex = displayItemsAsc.findIndex((item) => item.ordinals.includes(ordinal));
     if (ascIndex < 0) return -1;
@@ -648,6 +664,12 @@
       await raf();
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
+
+    // A message inside a collapsed empty row has no card until the row opens.
+    const emptyGroup = displayItemsAsc.find(
+      (item) => item.kind === "empty-group" && item.ordinals.includes(ordinal),
+    );
+    if (emptyGroup) setEmptyGroupOpen(emptyGroup.ordinals, true);
 
     const settled = await scrollToDisplayIndex(() => displayIndexOf(ordinal), 0, 0, reqId, "start", targetHolds);
     if (!isCurrent() || !targetHolds() || !settled) return endScrollOwnership(reqId);
@@ -958,7 +980,11 @@
                   : undefined}
               />
             {:else if item.kind === "empty-group"}
-              <EmptyMessagesRow messages={item.messages} />
+              <EmptyMessagesRow
+                messages={item.messages}
+                open={item.ordinals.some((ordinal) => openEmptyOrdinals.has(ordinal))}
+                onToggle={(open) => setEmptyGroupOpen(item.ordinals, open)}
+              />
             {:else if item.message.is_compact_boundary}
               <CompactBoundaryDivider message={item.message} />
             {:else if isSystemBoundaryMessage(item.message)}

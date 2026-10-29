@@ -213,6 +213,31 @@ describe("MessageList follow cancellation", () => {
     document.body.innerHTML = "";
   });
 
+  it("opens a collapsed empty row when a jump targets a message inside it", async () => {
+    ui.followLatest = false;
+    const empty = (ordinal: number) => ({
+      ...makeMessage(ordinal),
+      content: "",
+      content_length: 0,
+    });
+    messages.messages = [makeMessage(10), empty(11), empty(12), makeMessage(13)];
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    const row = document.querySelector<HTMLDetailsElement>("details.empty-run")!;
+    expect(row.open).toBe(false);
+    expect(row.querySelectorAll(".role-label")).toHaveLength(0);
+
+    component.scrollToOrdinal(12);
+    await flushScrollUpdates();
+
+    expect(row.open).toBe(true);
+    expect([...row.querySelectorAll(".role-label")].map((el) => el.textContent)).toEqual([
+      "Assistant",
+      "User",
+    ]);
+  });
+
   it("keeps an ordinal jump on its message through an older load past five seconds", async () => {
     const { flushFrames } = controlFrames();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
