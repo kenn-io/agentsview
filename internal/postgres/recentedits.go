@@ -14,7 +14,7 @@ func (s *Store) RecentEdits(
 	ctx context.Context, p db.RecentEditsParams,
 ) (db.RecentEditsResult, error) {
 	p = db.NormalizeRecentEditsParams(p)
-	b := db.NewQueryBuilder(db.PostgresQueryDialect(), 0)
+	b := db.NewQueryBuilder(s.sessionDialect(), 0)
 	query := db.BuildRecentEditsQuery(p, b, "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal")
 	rows, err := s.pg.QueryContext(ctx, query, b.Args()...)
 	if err != nil {

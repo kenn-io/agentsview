@@ -90,6 +90,7 @@ func (h *HostedStore) GetSidebarSessionIndex(ctx context.Context, f db.SessionFi
 		r := hostedRefs{}
 		for i := range p.Sessions {
 			r.add(&p.Sessions[i].ID)
+			r.sourceMachines(p.Sessions[i].ID, &p.Sessions[i].SourceMachines)
 			r.parent(p.Sessions[i].ID, &p.Sessions[i].ParentSessionID, &p.Sessions[i].ParentSessionIDs)
 		}
 		if err = r.mapIDs(ctx, h); err != nil {

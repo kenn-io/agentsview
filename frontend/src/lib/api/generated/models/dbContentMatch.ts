@@ -26,6 +26,8 @@ export interface DbContentMatch {
   score?: number;
   session_id: string;
   snippet: string;
+  /** Contributing hosted device machine IDs; omitted for sessions without hosted provenance. */
+  source_machines?: string[];
   subordinate?: boolean;
   timestamp: string;
   tool_name?: string;

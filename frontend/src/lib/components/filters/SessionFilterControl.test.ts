@@ -100,6 +100,24 @@ it("shows a temporary machine failure, disables rows, and retries when reopened"
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+it("selects hosted devices with the same display name by their distinct IDs", async () => {
+  const devices = ["raw-device:61", "raw-device:62"];
+  sessions.setSelectedMachines([]);
+  sessions.machines = devices;
+  sessions.machineLabels = { "raw-device:61": "Workstation", "raw-device:62": "Workstation" };
+  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+
+  component = mount(SessionFilterControl, { target: document.body });
+  await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+
+  expect(screen.getAllByRole("button", { name: "Workstation" })).toHaveLength(2);
+  for (const device of devices) await fireEvent.click(screen.getByTitle(device));
+  expect(sessions.selectedMachines).toEqual(devices);
+  expect(filtersToParams(sessions.filters).machine).toBe(devices.join(","));
+});
+
 describe("SessionFilterControl agent options", () => {
   it("keeps custom session labels under one base Claude option", () => {
     sessions.agents = [{ name: "claude", session_count: 2 }];

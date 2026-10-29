@@ -69,8 +69,9 @@ type hostedLink struct {
 	plural       *[]string
 }
 type hostedRefs struct {
-	fields []*string
-	links  []hostedLink
+	fields   []*string
+	links    []hostedLink
+	machines []hostedMachineRef
 }
 
 func (r *hostedRefs) link(owner string, p *string) {
@@ -92,6 +93,9 @@ func (r *hostedRefs) add(p *string) {
 }
 
 func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
+	if err := r.mapSourceMachines(ctx, h); err != nil {
+		return err
+	}
 	edges := map[string][]string{}
 	owners := make([]string, 0, len(r.links))
 	for _, l := range r.links {
@@ -203,6 +207,7 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 }
 
 func (r *hostedRefs) session(s *db.Session) {
+	r.sourceMachines(s.ID, &s.SourceMachines)
 	r.add(&s.ID)
 	r.parent(s.ID, &s.ParentSessionID, &s.ParentSessionIDs)
 	s.ParserParentSessionID = nil

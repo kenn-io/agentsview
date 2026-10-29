@@ -27,6 +27,7 @@ func (h *HostedStore) Search(ctx context.Context, f db.SearchFilter) (db.SearchP
 		p.Results = slices.Clone(p.Results)
 		for i := range p.Results {
 			r.add(&p.Results[i].SessionID)
+			r.sourceMachines(p.Results[i].SessionID, &p.Results[i].SourceMachines)
 		}
 	})
 }
@@ -52,6 +53,7 @@ func (h *HostedStore) SearchContent(ctx context.Context, f db.ContentSearchFilte
 		for i := range p.Matches {
 			m := &p.Matches[i]
 			r.add(&m.SessionID)
+			r.sourceMachines(m.SessionID, &m.SourceMachines)
 			r.link(m.SessionID, &m.ParentSessionID)
 			m.ContextBefore = r.messages(m.ContextBefore)
 			m.ContextAfter = r.messages(m.ContextAfter)

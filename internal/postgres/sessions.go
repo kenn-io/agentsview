@@ -255,9 +255,9 @@ const pgRootSessionFilter = `message_count > 0
 	AND deleted_at IS NULL`
 
 func buildPGSessionBaseFilter(
-	f db.SessionFilter,
+	f db.SessionFilter, dialect db.QueryDialect,
 ) (string, []any) {
-	return db.BuildSessionBaseFilterSQL(f, db.PostgresQueryDialect())
+	return db.BuildSessionBaseFilterSQL(f, dialect)
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor.
@@ -355,7 +355,7 @@ func (s *Store) ListSessions(
 
 	where, args := db.BuildSessionFilterSQL(f, s.sessionDialect())
 
-	dialect := db.PostgresQueryDialect()
+	dialect := s.sessionDialect()
 	rs := db.ResolveSort(f)
 
 	var total int
@@ -562,9 +562,7 @@ func (s *Store) getSidebarSessionIndexPage(
 		}
 	}
 
-	pageBuilder := db.NewQueryBuilder(
-		db.PostgresQueryDialect(), len(rootArgs),
-	)
+	pageBuilder := db.NewQueryBuilder(s.sessionDialect(), len(rootArgs))
 	cursorWhere := ""
 	if f.Cursor != "" {
 		cursorWhere = "WHERE (activity, id) < (" +
@@ -645,7 +643,7 @@ func (s *Store) getSidebarSessionIndexPage(
 		})
 	}
 
-	page := db.NewQueryBuilder(db.PostgresQueryDialect(), 0)
+	page := db.NewQueryBuilder(s.sessionDialect(), 0)
 	cteParts := make([]string, 0, len(selected))
 	treeArgs := make([]any, 0, len(selected)*2)
 	for i, root := range selected {
@@ -913,6 +911,18 @@ func (s *Store) GetStats(
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
 		MIN(COALESCE(started_at, created_at))
 		FROM sessions WHERE ` + filter
+	if s.hostedRelations {
+		query = `WITH filtered_sessions AS MATERIALIZED (
+			SELECT id,tenant_id,project,machine,provenance_kind,
+			       message_count,started_at,created_at
+			FROM sessions WHERE ` + filter + `
+		)` + hostedFilteredMachinesCTESQL + `
+		SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+		       COUNT(DISTINCT project),
+		       (SELECT COUNT(DISTINCT machine) FROM filtered_source_machines),
+		       MIN(COALESCE(started_at, created_at))
+		FROM filtered_sessions`
+	}
 
 	var st db.Stats
 	var earliest *time.Time

@@ -87,7 +87,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 
 	messageWhere := appendPGUsageBranchFilterClauses(pgUsageMatchingMessageEligibility+`
 	AND NOT EXISTS (SELECT 1 FROM usage_events ue WHERE ue.session_id = s.id)`,
-		pb, f, "m.model")
+		pb, f, "m.model", s.sessionDialect())
 	messageWhere = appendPGUsageColumnBounds(
 		messageWhere, "COALESCE(m.timestamp, s.started_at)", b)
 	query := `
@@ -104,7 +104,7 @@ WHERE ` + messageWhere
 	AND NOT EXISTS (
 		SELECT 1 FROM messages m
 		WHERE m.session_id = s.id AND `+pgUsageMatchingMessageSourceEligibility+`
-	)`, pb, f)
+	)`, pb, f, s.sessionDialect())
 		sessionWhere = appendPGUsageColumnBounds(sessionWhere, "s.started_at", b)
 		query += `
 UNION ALL
@@ -115,7 +115,7 @@ WHERE ` + sessionWhere
 	}
 
 	eventWhere := appendPGUsageBranchFilterClauses(pgUsageEventEligibility+`
-	AND p.uncaptured_turns > 0`, pb, f, "ue.model")
+	AND p.uncaptured_turns > 0`, pb, f, "ue.model", s.sessionDialect())
 	eventWhere = appendPGUsageColumnBounds(
 		eventWhere, "COALESCE(ue.occurred_at, s.started_at)", b)
 	query += `

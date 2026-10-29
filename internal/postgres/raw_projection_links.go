@@ -96,6 +96,7 @@ func (s *Store) sessionDialect() db.QueryDialect {
 	if !s.hostedRelations {
 		return d
 	}
+	d = d.WithMachinePredicate(hostedMachinePredicate)
 	return d.WithParentRelation(func(child, parent string) string {
 		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
 	})

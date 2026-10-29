@@ -26,18 +26,6 @@ func (h *HostedStore) GetAgents(ctx context.Context, excludeOneShot, excludeAuto
 	return h.physical.GetAgents(ctx, excludeOneShot, excludeAutomated)
 }
 
-func (h *HostedStore) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
-	return h.physical.GetMachines(ctx, excludeOneShot, excludeAutomated)
-}
-
-func (h *HostedStore) GetMachineLabels(ctx context.Context) (map[string]string, error) {
-	return h.physical.GetMachineLabels(ctx)
-}
-
-func (h *HostedStore) GetMachineAliases(ctx context.Context) (map[string]string, error) {
-	return h.physical.GetMachineAliases(ctx)
-}
-
 func (h *HostedStore) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
 	return h.physical.GetBranches(ctx, excludeOneShot, excludeAutomated)
 }
@@ -197,7 +185,3 @@ func (h *HostedStore) WriteSessionBatchAtomic(ctx context.Context,
 	return h.physical.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
 }
 func (h *HostedStore) ReadOnly() bool { return h.physical.ReadOnly() }
-
-func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
-	return h.physical.GetMatchingMachineIDs(ctx, candidates)
-}
