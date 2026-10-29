@@ -95,8 +95,9 @@ The latest release is
 
 **Bug fixes**
 
-- Opening an oversized `debug.log` preserves up to its last 10 MB in
-  `debug.log.1`, replacing the older backup before clearing the active log.
+- Successful rotation of an oversized `debug.log` saves up to its last
+  10 MB to `debug.log.1`, replacing the older backup before clearing the active
+  log. A busy lock or failed backup leaves the active log intact.
   Writers wait during rotation, so their messages survive alongside the
   retained tail to help investigate a stalled server. The backup starts at a
   full line when one fits, and keeps the raw tail otherwise.
