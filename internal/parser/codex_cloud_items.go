@@ -41,8 +41,10 @@ type codexCloudEdit struct {
 }
 
 // codexCloudItemMessages maps one item to messages. Every item type yields
-// at least one message, so nothing is dropped silently, except a reasoning
-// item with no text, which would only add an empty thinking row.
+// at least one message, so nothing is dropped silently, except a user,
+// agent, plan, or reasoning item with no text, which would only add a row
+// with no body. Codex ends an image generation turn with an empty final
+// answer, for example.
 func codexCloudItemMessages(
 	record mirror.ItemRecord, ts time.Time, meta *mirror.Thread,
 ) []ParsedMessage {
@@ -63,12 +65,16 @@ func codexCloudItemMessages(
 	switch item.Type {
 	case "userMessage":
 		text := codexCloudUserText(item.Content)
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
 		return []ParsedMessage{{
 			Role: RoleUser, Content: text, Timestamp: ts, ContentLength: len(text),
 		}}
-	case "agentMessage":
-		return []ParsedMessage{assistant(ParsedMessage{Content: item.Text})}
-	case "plan":
+	case "agentMessage", "plan":
+		if strings.TrimSpace(item.Text) == "" {
+			return nil
+		}
 		return []ParsedMessage{assistant(ParsedMessage{Content: item.Text})}
 	case "reasoning":
 		thinking := strings.Join(item.Summary, "\n\n")
