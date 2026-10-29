@@ -86,7 +86,8 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     skipToolGrouping: !isVisible("tool"),
   });
   const itemVisible = (item: DisplayItem): boolean =>
-    item.kind === "tool-group" || hasVisibleSegments(item.message, isTranscriptBlockVisible);
+    item.kind === "tool-group" ||
+    (item.kind === "message" && hasVisibleSegments(item.message, isTranscriptBlockVisible));
 
   const normalItems = hasBlockFilters ? filteredItems.filter(itemVisible) : baseItems;
   let items: DisplayItem[];
@@ -106,7 +107,7 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
   const messages: Message[] = [];
   const included = new Set<Message>();
   for (const item of items) {
-    const group = item.kind === "tool-group" ? item.messages : [item.message];
+    const group = item.kind === "message" ? [item.message] : item.messages;
     for (const message of group) {
       if (included.has(message)) continue;
       included.add(message);

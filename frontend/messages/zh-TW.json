@@ -379,6 +379,16 @@
   "thinking_block_label": "思考",
   "compact_boundary_title": "上下文窗口在此處被壓縮",
   "compact_boundary_label": "上下文已壓縮",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{count} 則空訊息"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "這些訊息沒有文字、思考內容或工具呼叫",
   "compact_boundary_show_full_summary": "顯示完整摘要",
   "sidebar_session_count": [
     {

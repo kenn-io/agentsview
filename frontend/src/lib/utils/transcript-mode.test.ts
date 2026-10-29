@@ -83,6 +83,25 @@ describe("filterDisplayItemsByTranscriptMode", () => {
     expect(filterDisplayItemsByTranscriptMode(items, "normal")).toEqual(items);
   });
 
+  it("treats a run holding an empty prompt as a turn boundary", () => {
+    expect(
+      ordinalsOf([
+        userMsg(0, "draw a bird"),
+        assistantMsg(1, "here is the bird"),
+        assistantMsg(2, ""),
+        userMsg(3, ""),
+        assistantMsg(4, "what should change?"),
+        userMsg(5, "make it smaller"),
+      ]),
+    ).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("drops a run of empty assistant rows without ending the turn", () => {
+    expect(
+      ordinalsOf([userMsg(0), assistantMsg(1, "answer"), assistantMsg(2, ""), userMsg(3)]),
+    ).toEqual([0, 1, 3]);
+  });
+
   it("keeps one turn across task notifications", () => {
     expect(
       ordinalsOf([

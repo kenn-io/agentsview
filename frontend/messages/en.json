@@ -391,6 +391,17 @@
   "thinking_block_label": "Thinking",
   "compact_boundary_title": "Context window compacted at this point",
   "compact_boundary_label": "Context compacted",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} empty message",
+        "countPlural=other": "{count} empty messages"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "These messages have no text, thinking, or tool calls",
   "compact_boundary_show_full_summary": "Show full summary",
   "sidebar_session_count": [
     {

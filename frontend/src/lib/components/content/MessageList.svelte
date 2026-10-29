@@ -13,6 +13,7 @@
   import { cancelScrollReconcile, createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import CompactBoundaryDivider from "./CompactBoundaryDivider.svelte";
+  import EmptyMessagesRow from "./EmptyMessagesRow.svelte";
   import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import ToolCallGroup from "./ToolCallGroup.svelte";
   import type { DbMessage as Message } from "../../api/generated/index.js";
@@ -110,6 +111,9 @@
         if (!item) return `${sid}-${index}`;
         if (item.kind === "tool-group") {
           return `${sid}-tg-${item.ordinals[0]}`;
+        }
+        if (item.kind === "empty-group") {
+          return `${sid}-eg-${item.ordinals[0]}`;
         }
         return `${sid}-m-${item.message.ordinal}`;
       },
@@ -217,7 +221,10 @@
         continue;
       }
 
-      for (const ordinal of visibleToolGroupOrdinals(row.index)) {
+      const groupOrdinals = item.kind === "empty-group"
+        ? item.ordinals
+        : visibleToolGroupOrdinals(row.index);
+      for (const ordinal of groupOrdinals) {
         visibleOrdinals.add(ordinal);
         maxVisibleOrdinal = maxVisibleOrdinal === null
           ? ordinal
@@ -714,7 +721,7 @@
   function latestDisplaySignature(): string {
     const item = displayItemsAsc[displayItemsAsc.length - 1];
     if (!item) return "";
-    if (item.kind === "tool-group") {
+    if (item.kind !== "message") {
       return item.messages
         .map((m) => `${m.ordinal}:${m.content_length}:${m.timestamp}`)
         .join("|");
@@ -950,6 +957,8 @@
                   ? readProgressDivider
                   : undefined}
               />
+            {:else if item.kind === "empty-group"}
+              <EmptyMessagesRow messages={item.messages} />
             {:else if item.message.is_compact_boundary}
               <CompactBoundaryDivider message={item.message} />
             {:else if isSystemBoundaryMessage(item.message)}

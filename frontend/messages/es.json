@@ -393,6 +393,17 @@
   "thinking_block_label": "Razonamiento",
   "compact_boundary_title": "Ventana de contexto compactada en este punto",
   "compact_boundary_label": "Contexto compactado",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} mensaje vacío",
+        "countPlural=other": "{count} mensajes vacíos"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "Estos mensajes no tienen texto, razonamiento ni llamadas a herramientas",
   "compact_boundary_show_full_summary": "Mostrar resumen completo",
   "sidebar_session_count": [
     {

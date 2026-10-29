@@ -391,6 +391,17 @@
   "thinking_block_label": "Réflexion",
   "compact_boundary_title": "Fenêtre de contexte compactée à ce stade",
   "compact_boundary_label": "Contexte compacté",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} message vide",
+        "countPlural=other": "{count} messages vides"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "Ces messages ne contiennent ni texte, ni réflexion, ni appel d’outil",
   "compact_boundary_show_full_summary": "Afficher le résumé complet",
   "sidebar_session_count": [
     {

@@ -39,6 +39,21 @@ export function filterDisplayItemsByTranscriptMode(
       continue;
     }
 
+    // An empty prompt still starts a turn, so a run that holds one closes
+    // the pending answer like any prompt and stays visible. A run of empty
+    // assistant rows holds no answer and is dropped.
+    if (item.kind === "empty-group") {
+      if (item.messages.some((message) => message.role === "user")) {
+        if (pendingAssistant && !toolAfterPendingAssistant) {
+          filtered.push(pendingAssistant);
+        }
+        pendingAssistant = null;
+        toolAfterPendingAssistant = false;
+        filtered.push(item);
+      }
+      continue;
+    }
+
     // Mid-turn system rows are neither prompts nor answers. Focused mode
     // drops them with the rest of the intermediate work; normal mode still
     // renders them as boundary cards.

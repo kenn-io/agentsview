@@ -391,6 +391,16 @@
   "thinking_block_label": "考え",
   "compact_boundary_title": "この時点でコンテキスト ウィンドウが圧縮されました",
   "compact_boundary_label": "圧縮されたコンテキスト",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "空のメッセージ {count} 件"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "これらのメッセージにはテキスト、思考、ツール呼び出しがありません",
   "compact_boundary_show_full_summary": "完全な概要を表示",
   "sidebar_session_count": [
     {

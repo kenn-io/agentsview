@@ -393,6 +393,17 @@
   "thinking_block_label": "Düşünmə",
   "compact_boundary_title": "Bu nöqtədə kontekst pəncərəsi sıxlaşdırılıb",
   "compact_boundary_label": "Kontekst sıxlaşdırılıb",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} boş mesaj",
+        "countPlural=other": "{count} boş mesaj"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "Bu mesajlarda mətn, düşüncə və ya alət çağırışı yoxdur",
   "compact_boundary_show_full_summary": "Tam xülasəni göstər",
   "sidebar_session_count": [
     {

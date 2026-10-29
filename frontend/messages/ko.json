@@ -379,6 +379,16 @@
   "thinking_block_label": "사고",
   "compact_boundary_title": "이 지점에서 컨텍스트 창이 컴팩션되었습니다",
   "compact_boundary_label": "컨텍스트 컴팩션됨",
+  "transcript_empty_messages": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "빈 메시지 {count}개"
+      }
+    }
+  ],
+  "transcript_empty_messages_title": "이 메시지에는 텍스트, 사고 과정, 도구 호출이 없습니다",
   "compact_boundary_show_full_summary": "전체 요약 표시",
   "sidebar_session_count": [
     {
