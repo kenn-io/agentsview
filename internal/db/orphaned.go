@@ -1576,7 +1576,8 @@ func (d *DB) CopySessionMetadataFrom(
 				OR old_m.source_uuid = '')`
 		}
 		oldMVisible, oldYVisible, oldY2Visible := "", "", ""
-		if oldDBHasColumn(ctx, tx, "messages", "is_system") {
+		hasIsSystem := oldDBHasColumn(ctx, tx, "messages", "is_system")
+		if hasIsSystem {
 			oldMVisible = `
 			AND old_m.is_system = 0`
 			oldYVisible = `
@@ -1584,8 +1585,8 @@ func (d *DB) CopySessionMetadataFrom(
 			oldY2Visible = `
 				AND y2.is_system = 0`
 		}
-		if hasSourceUUID && oldDBHasColumn(ctx, tx, "messages", "is_system") {
-			if err := copyLegacyVSCodePinsTx(tx); err != nil {
+		if hasSourceUUID && hasIsSystem {
+			if err := copyLegacyVSCodePinsTx(ctx, tx); err != nil {
 				return err
 			}
 			// These pins use the same conversion and fallback as local replacement.
@@ -3244,8 +3245,8 @@ func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) erro
 
 // copyLegacyVSCodePinsTx restores UUID-less pins through the shared request
 // matcher before applying the ordinary legacy-content fallback.
-func copyLegacyVSCodePinsTx(tx *sql.Tx) error {
-	rows, err := tx.Query(`SELECT DISTINCT p.session_id
+func copyLegacyVSCodePinsTx(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT p.session_id
   FROM old_db.pinned_messages p
   JOIN old_db.messages m ON m.id = p.message_id
   JOIN old_db.sessions old_s ON old_s.id = p.session_id

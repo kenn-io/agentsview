@@ -3423,22 +3423,18 @@ func identifyLegacyVSCodePinnedReplies(ctx context.Context, tx *sql.Tx, sessionI
 	if err != nil {
 		return fmt.Errorf("reading pg legacy reply anchors: %w", err)
 	}
+	defer rows.Close()
 	var old []db.LegacyVSCodeReplyAnchor
 	for rows.Next() {
 		var anchor db.LegacyVSCodeReplyAnchor
 		var stamp time.Time
 		if err := rows.Scan(&anchor.Ordinal, &anchor.Prompt, &stamp, &anchor.Agent); err != nil {
-			rows.Close()
 			return err
 		}
 		anchor.Timestamp = stamp.UTC().Format(time.RFC3339Nano)
 		old = append(old, anchor)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	incoming, err := snapshot.LegacyVSCodeReplyAnchors(sessionID)
