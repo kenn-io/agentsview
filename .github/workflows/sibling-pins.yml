@@ -8,7 +8,7 @@ name: Sibling pins on main
 # The action reads only the candidate's dependency files.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
 
