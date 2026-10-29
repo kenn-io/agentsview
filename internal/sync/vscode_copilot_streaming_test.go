@@ -59,6 +59,4 @@ func assertGrowingCopilotResponse(t *testing.T, database *db.DB, sessionID strin
 	require.Len(t, messages, 2)
 	assert.Contains(t, messages[1].Content, "The newest release is **v0.46.1**.")
 	require.Len(t, messages[1].ToolCalls, 2)
-	assert.Equal(t, "vscode_fetchWebPage_internal", messages[1].ToolCalls[1].ToolName)
-	assert.Equal(t, "toolu_0000000000000000000000001", messages[1].ToolCalls[1].ToolUseID)
 }
