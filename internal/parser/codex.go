@@ -851,6 +851,7 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 		HasToolUse:      true,
 		ContentLength:   len(content),
 		Model:           b.model,
+		ProviderID:      b.serviceTierProviderID,
 		ReasoningEffort: b.reasoningEffort,
 		ToolCalls: []ParsedToolCall{{
 			ToolUseID: callID,

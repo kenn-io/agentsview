@@ -229,3 +229,43 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 		assert.NotContains(t, byModel, model+"@priority")
 	}
 }
+
+func TestParseLiteLLMPriorityBandsFallbackToStandardCompanions(t *testing.T) {
+	data := []byte(`{
+		"gpt-6.1-sol": {
+			"litellm_provider": "openai",
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000001,
+			"cache_creation_input_token_cost": 0.0000025,
+			"cache_creation_input_token_cost_above_1hr": 0.000005,
+			"input_cost_per_token_above_272k_tokens": 0.000004,
+			"output_cost_per_token_above_272k_tokens": 0.000015,
+			"cache_read_input_token_cost_above_272k_tokens": 0.0000004,
+			"cache_creation_input_token_cost_above_272k_tokens": 0.000005,
+			"cache_creation_input_token_cost_above_1hr_above_272k_tokens": 0.000008,
+			"input_cost_per_token_priority": 0.000004,
+			"output_cost_per_token_priority": 0.00002,
+			"cache_read_input_token_cost_priority": 0.0000002,
+			"cache_creation_input_token_cost_priority": 0.000008,
+			"input_cost_per_token_above_272k_tokens_priority": 0.000008,
+			"cache_creation_input_token_cost_above_1hr_above_272k_tokens_priority": 0
+		}
+	}`)
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	var priority ModelPricing
+	for _, price := range prices {
+		if price.ModelPattern == "gpt-6.1-sol@priority" {
+			priority = price
+			break
+		}
+	}
+	require.NotEmpty(t, priority.ModelPattern)
+	require.Len(t, priority.Bands, 1)
+	band := priority.Bands[0]
+	assert.Equal(t, money.MustParseDollars("15"), band.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.4"), band.CacheReadPerMTok)
+	assert.Equal(t, money.MustParseDollars("5"), band.CacheCreationPerMTok)
+	assert.Equal(t, money.MustParseDollars("0"), band.CacheCreation1hPerMTok)
+}
