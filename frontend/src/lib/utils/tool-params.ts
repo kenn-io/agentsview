@@ -133,6 +133,11 @@ export function extractToolParamMeta(
         ...pathMetaValue(filePath),
       });
     if (params.replace_all) meta.push({ label: "mode", value: "replace_all" });
+    // A Codex cloud change that renames its file names the new path here.
+    const kind = params.kind;
+    const movePath = kind && typeof kind === "object" ? (kind as Params).move_path : undefined;
+    if (typeof movePath === "string" && movePath)
+      meta.push({ label: "moved to", ...pathMetaValue(movePath) });
   } else if (cat === "Write") {
     const filePath = params.file_path ?? params.path ?? params.file;
     if (filePath)
@@ -326,6 +331,12 @@ function filePathParam(params: Params): string | null {
   return nonEmptyText(params.file_path ?? params.path ?? params.filePath ?? params.file);
 }
 
+function visibleEntries(params: Params): Array<[string, unknown]> {
+  return Object.entries(params).filter(
+    ([key, value]) => !INTERNAL_PARAMS.has(key) && value != null && value !== "",
+  );
+}
+
 function copyTextFor(name: string, params: Params): string | null {
   if (name === "Bash" || name === "run_command") return bashCommandText(params);
   if (name === "Edit" || params.command === "strReplace") {
@@ -342,9 +353,9 @@ function copyTextFor(name: string, params: Params): string | null {
         ...newLines.map((line) => `+${line}`),
       ].join("\n");
     }
-    // Pi edits list operations against a path; the JSON fallback keeps them.
-    if (Array.isArray(params.edits)) return null;
-    return filePathParam(params);
+    // Only a bare path copies as the path; any other input, such as Pi
+    // edit operations or RooCode replacement content, goes out as JSON.
+    return visibleEntries(params).length === 1 ? filePathParam(params) : null;
   }
   if (name === "Write" || (name === "write" && params.command === "create")) {
     return nonEmptyText(params.content) ?? filePathParam(params);
@@ -367,9 +378,7 @@ export function toolCopyText(
   if (toolName === "Task" || toolName === "Agent") return null;
   const known = (category ? copyTextFor(category, params) : null) ?? copyTextFor(toolName, params);
   if (known != null) return known;
-  const visible = Object.entries(params).filter(
-    ([key, value]) => !INTERNAL_PARAMS.has(key) && value != null && value !== "",
-  );
+  const visible = visibleEntries(params);
   if (visible.length === 0) return null;
   const [first] = visible;
   if (visible.length === 1 && first && typeof first[1] === "string") return first[1];

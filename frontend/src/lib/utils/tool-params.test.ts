@@ -249,6 +249,24 @@ describe("extractToolParamMeta", () => {
     expect(meta![0]!.value).toBe("/a.ts");
   });
 
+  it("names the new path of a Codex Cloud change that renames its file", () => {
+    const moved = extractToolParamMeta(
+      "apply_patch",
+      { path: "/repo/old.go", kind: { type: "update", move_path: "/repo/new.go" }, diff: "@@" },
+      "Edit",
+    );
+    expect(moved).toEqual([
+      { label: "file", value: "/repo/old.go" },
+      { label: "moved to", value: "/repo/new.go" },
+    ]);
+    const inPlace = extractToolParamMeta(
+      "apply_patch",
+      { path: "/repo/a.go", kind: { type: "update", move_path: null }, diff: "@@" },
+      "Edit",
+    );
+    expect(inPlace).toEqual([{ label: "file", value: "/repo/a.go" }]);
+  });
+
   it("extracts Edit file path from pi 'path' field", () => {
     const meta = extractToolParamMeta("Edit", { path: "/src/app.ts" });
     expect(meta).toEqual([{ label: "file", value: "/src/app.ts" }]);
@@ -710,6 +728,13 @@ describe("toolCopyText", () => {
       "Edit",
       { path: "/repo/a.go", edits: [{ set_line: { anchor: "3:ab", new_text: "x" } }] },
       '{\n  "path": "/repo/a.go",\n  "edits": [\n    {\n      "set_line": {\n        "anchor": "3:ab",\n        "new_text": "x"\n      }\n    }\n  ]\n}',
+    ],
+    [
+      "a RooCode replacement's path and content as JSON",
+      "searchAndReplace",
+      "Edit",
+      { path: "/repo/a.go", content: "func a() {}" },
+      '{\n  "path": "/repo/a.go",\n  "content": "func a() {}"\n}',
     ],
     [
       "a write's file content",
