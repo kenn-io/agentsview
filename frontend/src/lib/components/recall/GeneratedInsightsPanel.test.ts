@@ -82,7 +82,9 @@ vi.mock("../../stores/insights.svelte.js", async () => {
   for (const key of ["selectedTask", "selectedTaskId"]) {
     Object.defineProperty(state.store, key, {
       get: () => selected.get(key),
-      set: (value: unknown) => selected.set(key, value),
+      set: (value: unknown) => {
+        selected.set(key, value);
+      },
     });
   }
   return { insights: state.store };
