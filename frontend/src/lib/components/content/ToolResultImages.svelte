@@ -57,7 +57,7 @@
 {#if openSource !== null}
   <div {@attach attachToBody}>
     <Modal
-      title={m.tool_block_image_dialog()}
+      ariaLabel={alt}
       closeLabel={m.tool_block_image_close()}
       maxWidth="calc(100vw - 32px)"
       onclose={close}

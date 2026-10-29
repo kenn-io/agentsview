@@ -390,7 +390,6 @@
   ],
   "tool_block_image_alt": "Image issue de la sortie de l'outil",
   "tool_block_image_open": "Afficher l'image en taille réelle",
-  "tool_block_image_dialog": "Image en taille réelle",
   "tool_block_image_close": "Fermer l'image en taille réelle",
   "thinking_block_label": "Réflexion",
   "compact_boundary_title": "Fenêtre de contexte compactée à ce stade",

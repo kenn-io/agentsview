@@ -392,7 +392,6 @@
   ],
   "tool_block_image_alt": "Imagen de la salida de la herramienta",
   "tool_block_image_open": "Ver la imagen a tamaño completo",
-  "tool_block_image_dialog": "Imagen a tamaño completo",
   "tool_block_image_close": "Cerrar la imagen a tamaño completo",
   "thinking_block_label": "Razonamiento",
   "compact_boundary_title": "Ventana de contexto compactada en este punto",
