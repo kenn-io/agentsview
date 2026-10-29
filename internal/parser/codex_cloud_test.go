@@ -368,35 +368,6 @@ func TestCodexCloudSkipsEmptyReasoning(t *testing.T) {
 	assert.Equal(t, 2, result.Session.MessageCount)
 }
 
-// An image generation turn ends with an empty final answer, and a prompt
-// can arrive with only an empty text part. Neither has a body to show, so
-// neither becomes a message, while an image-only prompt keeps its image.
-func TestCodexCloudSkipsItemsWithoutText(t *testing.T) {
-	result := parseCodexCloud(t, writeCodexCloudMirror(t, "thread-a",
-		ccRecord(mirror.KindThread, ccListing),
-		ccItem("turn-1", `{"type":"userMessage","id":"u1","content":[{"type":"text","text":"Draw a bird","text_elements":[]}]}`, 1759320000000),
-		ccItem("turn-1", `{"type":"imageGeneration","id":"g1","status":"completed"}`, 1759320001000),
-		ccItem("turn-1", `{"type":"agentMessage","id":"a1","text":"","phase":"final_answer"}`, 1759320002000),
-		ccItem("turn-2", `{"type":"userMessage","id":"u2","content":[{"type":"text","text":"","text_elements":[]}]}`, 1759320010000),
-		ccItem("turn-2", `{"type":"plan","id":"p1","text":"  \n"}`, 1759320011000),
-		ccItem("turn-2", `{"type":"agentMessage","id":"a2","text":"What should change?","phase":"final_answer"}`, 1759320012000),
-		ccItem("turn-3", `{"type":"userMessage","id":"u3","content":[{"type":"localImage","path":"/tmp/bird.png","detail":null}]}`, 1759320020000),
-	))
-	var got []string
-	for _, msg := range result.Messages {
-		got = append(got, string(msg.Role)+": "+msg.Content)
-	}
-	assert.Equal(t, []string{
-		"user: Draw a bird",
-		"assistant: Generate image",
-		"user: ",
-		"assistant: What should change?",
-		"user: [image: /tmp/bird.png]",
-	}, got)
-	assert.Equal(t, 5, result.Session.MessageCount)
-	assert.Equal(t, 2, result.Session.UserMessageCount)
-}
-
 func TestCodexCloudDelegatedParent(t *testing.T) {
 	const parentID = "0f8e1c2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b"
 	const childID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"

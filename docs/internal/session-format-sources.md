@@ -3475,15 +3475,6 @@ schemas keep their existing ordering behavior.
   login found it answers `thread/goal/get`: both chats it listed returned
   `{"goal": null}`. AgentsView assumes the hosted resume runs the same idle
   step.
-- **Items with no text:** A read-only survey of the maintainer's mirror files
-  on 2026-10-29 found `agentMessage` items with `phase: "final_answer"` and an
-  empty `text`. Four of the five ended a turn whose last tool item was
-  `imageGeneration`. It also found one `userMessage` whose only content part
-  was `{"type": "text", "text": "", "text_elements": []}`, with no image part.
-  AgentsView stores items as the server returned them, so the server sent
-  these items empty. The parser drops `userMessage`, `agentMessage`, and
-  `plan` items whose text is blank, as the Codex parser drops blank rollout
-  messages. A prompt with only an image keeps its `[image: ...]` text.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
   limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).

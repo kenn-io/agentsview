@@ -615,10 +615,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (151: record kiro-cli subagent spawns as Task calls linked to the subagent
 // sessions. Re-parse Kiro sources in place; source and session identities are
 // unchanged.)
-// (152: drop Codex cloud user, agent, and plan items that have no text, such
-// as the empty final answer after an image generation. Re-parse Codex cloud
-// sources in place; source and session identities are unchanged.)
-const dataVersion = 152
+const dataVersion = 151
 
 const archiveOnlyVersionBase = 1 << 20
 
