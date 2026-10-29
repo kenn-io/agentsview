@@ -29,6 +29,7 @@ const (
 	copilotEventAssistantReason = "assistant.reasoning"
 	copilotEventModelChange     = "session.model_change"
 	copilotEventSessionShutdown = "session.shutdown"
+	copilotEventUsageRecord     = "session.usage_record"
 	copilotReportedCostSource   = "copilot-reported"
 )
 
@@ -50,8 +51,19 @@ type copilotSessionBuilder struct {
 	currentModel            string
 	shutdownCoveredMessages int
 	usageCoveredAt          time.Time
+	lastShutdownAt          time.Time
+	usageRecords            []copilotUsageRecord
 	fallbackOutput          int
 	hasFallbackOutput       bool
+}
+
+// copilotUsageRecord is a per-request session.usage_record event. It is the
+// only token source for sessions that ended without a session.shutdown event
+// (crash, kill) or for activity after the last shutdown.
+type copilotUsageRecord struct {
+	at    time.Time
+	model string
+	usage ParsedUsageEvent
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -90,8 +102,78 @@ func (b *copilotSessionBuilder) processLine(line string) {
 			b.currentModel = normalizeCopilotModel(v.Str)
 		}
 	case copilotEventSessionShutdown:
+		if ts.After(b.lastShutdownAt) {
+			b.lastShutdownAt = ts
+		}
 		b.handleShutdown(data, ts)
+	case copilotEventUsageRecord:
+		b.handleUsageRecord(data, ts)
 	}
+}
+
+func (b *copilotSessionBuilder) handleUsageRecord(
+	data gjson.Result, ts time.Time,
+) {
+	usage := data.Get("usage")
+	if !usage.Exists() {
+		return
+	}
+	model := normalizeCopilotModel(usage.Get("model").Str)
+	if model == "" {
+		model = b.currentModel
+	}
+	cacheRead := int(usage.Get("cacheReadTokens").Int())
+	cacheWrite := int(usage.Get("cacheWriteTokens").Int())
+	// inputTokens includes cached tokens, as in shutdown metrics.
+	fresh := max(int(usage.Get("inputTokens").Int())-cacheRead-cacheWrite, 0)
+	b.usageRecords = append(b.usageRecords, copilotUsageRecord{
+		at:    ts,
+		model: model,
+		usage: ParsedUsageEvent{
+			Source:                   "usage-record",
+			Model:                    model,
+			ProviderID:               usage.Get("provider.id").Str,
+			InputTokens:              fresh,
+			OutputTokens:             int(usage.Get("outputTokens").Int()),
+			CacheReadInputTokens:     cacheRead,
+			CacheCreationInputTokens: cacheWrite,
+			ReasoningTokens:          int(usage.Get("reasoningTokens").Int()),
+		},
+	})
+}
+
+// applyUsageRecordFallback aggregates usage records newer than the last
+// shutdown event per model. It reports whether any usage was added.
+func (b *copilotSessionBuilder) applyUsageRecordFallback() bool {
+	byModel := make(map[string]*ParsedUsageEvent)
+	var models []string
+	for _, r := range b.usageRecords {
+		if !b.lastShutdownAt.IsZero() && !r.at.After(b.lastShutdownAt) {
+			continue
+		}
+		agg := byModel[r.model]
+		if agg == nil {
+			e := r.usage
+			e.InputTokens, e.OutputTokens = 0, 0
+			e.CacheReadInputTokens, e.CacheCreationInputTokens = 0, 0
+			e.ReasoningTokens = 0
+			agg = &e
+			byModel[r.model] = agg
+			models = append(models, r.model)
+		}
+		agg.InputTokens += r.usage.InputTokens
+		agg.OutputTokens += r.usage.OutputTokens
+		agg.CacheReadInputTokens += r.usage.CacheReadInputTokens
+		agg.CacheCreationInputTokens += r.usage.CacheCreationInputTokens
+		agg.ReasoningTokens += r.usage.ReasoningTokens
+		agg.OccurredAt = timeString(r.at, b.startedAt)
+		b.markUsageCoveredAt(r.at)
+	}
+	sort.Strings(models)
+	for _, m := range models {
+		b.usageEvents = append(b.usageEvents, *byModel[m])
+	}
+	return len(models) > 0
 }
 
 func (b *copilotSessionBuilder) handleSessionStart(
@@ -700,6 +782,8 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	}
 	if usesStoreUsage {
 		b.retainStoreOutputRemainder()
+	} else if b.applyUsageRecordFallback() {
+		usesStoreUsage = true
 	}
 	b.applyMessageUsageFallback()
 
@@ -749,6 +833,10 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 			sess.HasTotalOutputTokens = true
 			sess.TotalOutputTokens += b.fallbackOutput
 		}
+	}
+	// Shutdown metrics are authoritative when messages carry no token data.
+	if !usesStoreUsage && !sess.HasTotalOutputTokens {
+		applyUsageEventTokenTotals(sess, b.usageEvents)
 	}
 
 	// Stamp the session ID on usage events (not known until here).
