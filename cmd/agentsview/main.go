@@ -22,6 +22,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
@@ -1593,9 +1594,7 @@ func setupLogFile(dataDir string) {
 func setupDebugLogWriter(dataDir string) {
 	path := filepath.Join(dataDir, "debug.log")
 	if f := openLogFile(path); f != nil {
-		// Keep the descriptor open across writes; flock.Unlock closes its descriptor.
-		lock, _ := os.OpenFile(logRotationLockPath(path), os.O_CREATE|os.O_RDONLY, 0o600)
-		log.SetOutput(&lockedLogWriter{file: f, lock: lock})
+		log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(path))})
 	}
 }
 
@@ -1640,22 +1639,19 @@ func logRotationLockPath(path string) string {
 
 type lockedLogWriter struct {
 	file *os.File
-	lock *os.File
+	lock *flock.Flock
 }
 
 func (w *lockedLogWriter) Write(p []byte) (int, error) {
 	// The standard logger serializes calls to Write.
-	if w.lock == nil || w.lockShared() != nil {
+	if err := w.lock.RLock(); err != nil {
 		return w.file.Write(p)
 	}
 	n, err := w.file.Write(p)
-	return n, errors.Join(err, w.unlockShared())
+	return n, errors.Join(err, w.lock.Unlock())
 }
 
 func (w *lockedLogWriter) Close() error {
-	if w.lock == nil {
-		return w.file.Close()
-	}
 	return errors.Join(w.file.Close(), w.lock.Close())
 }
 
