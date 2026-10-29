@@ -106,7 +106,9 @@
   });
   let historyPreviewLine = $derived.by(() => {
     const last = resultEvents[resultEvents.length - 1];
-    return last ? `${last.status}: ${last.content.split("\n")[0]}`.slice(0, 100) : "";
+    if (!last) return "";
+    const stored = toolCall?.result_events?.[last.rawIndex]?.content ?? "";
+    return `${last.status}: ${displayToolResultPreview(stored).split("\n")[0]}`.slice(0, 100);
   });
   let inputParams = $derived(parseToolInput(toolCall?.input_json).params);
   let imageAlt = $derived.by(() => {

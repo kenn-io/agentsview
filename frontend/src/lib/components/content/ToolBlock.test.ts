@@ -793,7 +793,19 @@ describe("ToolBlock result images", () => {
       toolCall: call(
         "image_generation",
         { id: "ig_1", status: "completed", revised_prompt: "A teal circle" },
-        { category: "Tool", result_content: imageResult },
+        {
+          category: "Tool",
+          result_content: imageResult,
+          result_events: [
+            {
+              event_index: 0,
+              status: "completed",
+              source: "image_generation_call",
+              content: imageResult,
+              content_length: imageResult.length,
+            },
+          ],
+        },
       ),
     });
     expect(previews()).toEqual([{ src: SMALL_PNG_DATA_URI, alt: "A teal circle" }]);
@@ -802,6 +814,9 @@ describe("ToolBlock result images", () => {
     expect(text(".tool-content")).toContain("revised_prompt: A teal circle");
     expect(text(".tool-content")).not.toContain("base64");
     expect(text(".output-header .tool-preview")).toMatch(/^\[Image: image\/png, \d+ bytes\]$/);
+    expect(text(".history-header .tool-preview")).toMatch(
+      /^completed: \[Image: image\/png, \d+ bytes\]$/,
+    );
     expect(previews()).toHaveLength(1);
   });
 
