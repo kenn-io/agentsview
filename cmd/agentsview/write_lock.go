@@ -44,19 +44,6 @@ func tryAcquireWriteOwnerLock(dataDir string) (*writeOwnerLock, error) {
 	return tryAcquireNamedLock(dataDir, writeOwnerLockFile)
 }
 
-func acquireNamedLock(dataDir, filename string) (*writeOwnerLock, error) {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, fmt.Errorf("creating data dir for write lock: %w", err)
-	}
-	path := filepath.Join(dataDir, filename)
-	lock := flock.New(path)
-	if err := lock.Lock(); err != nil {
-		_ = lock.Close()
-		return nil, fmt.Errorf("acquiring write lock %s: %w", path, err)
-	}
-	return &writeOwnerLock{path: path, lock: lock}, nil
-}
-
 // tryAcquireNamedLock acquires an exclusive flock named filename inside
 // dataDir. It backs both tryAcquireWriteOwnerLock (db.write.lock, guarding
 // direct sessions.db writes) and the embeddings CLI's direct path

@@ -27,6 +27,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -723,7 +724,7 @@ func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
 	dir := t.TempDir()
 	restoreTestLogOutput(t)
 	path := filepath.Join(dir, "debug.log")
-	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("last message before restart\n")...)
+	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("\nlast message before restart\n")...)
 	writeTestFile(t, path, previous)
 	writeTestFile(t, path+".1", []byte("older log"))
 
@@ -732,7 +733,8 @@ func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
 
 	backup, err := os.ReadFile(path + ".1")
 	require.NoError(t, err)
-	assert.True(t, bytes.Equal(previous[len(previous)-maxLogSize:], backup), "backup must contain the last 10 MB")
+	assert.Equal(t, "last message before restart\n", string(backup))
+	assert.LessOrEqual(t, len(backup), maxLogSize)
 	active, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Contains(t, string(active), "message after restart")
@@ -762,7 +764,7 @@ func TestSetupLogFileLiveWriterRotation(t *testing.T) {
 	restoreTestLogOutput(t)
 	setupLogFile(dir)
 	path := filepath.Join(dir, "debug.log")
-	writeTestFile(t, path, bytes.Repeat([]byte("x"), maxLogSize+1))
+	writeTestFile(t, path, bytes.Repeat([]byte("x\n"), maxLogSize/2+1))
 	first, done := make(chan struct{}), make(chan error, 1)
 	go func() {
 		for i := range 10000 {
@@ -780,6 +782,7 @@ func TestSetupLogFileLiveWriterRotation(t *testing.T) {
 	<-first
 	rotateLogFile(path, maxLogSize)
 	require.NoError(t, <-done)
+	rotateLogFile(path, maxLogSize)
 	backup, err := os.ReadFile(path + ".1")
 	require.NoError(t, err)
 	active, err := os.ReadFile(path)
@@ -834,7 +837,7 @@ func TestRotateLogFile(t *testing.T) {
 	path := filepath.Join(dir, "test.log")
 
 	// Write a file larger than the limit.
-	big := bytes.Repeat([]byte("x"), 1024)
+	big := bytes.Repeat([]byte("line\n"), 205)
 	writeTestFile(t, path, big)
 
 	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
@@ -853,57 +856,79 @@ func TestRotateLogFile(t *testing.T) {
 	assert.Equal(t, "parent still logging", string(active))
 	backup, err := os.ReadFile(path + ".1")
 	require.NoError(t, err)
-	assert.Equal(t, big[512:], backup)
+	assert.Equal(t, bytes.Repeat([]byte("line\n"), 102), backup)
 }
 
-func TestRotateLogFileWaitsForLock(t *testing.T) {
+func TestRotateLogFileSkipsHeldLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.log")
 	content := bytes.Repeat([]byte("x"), 1024)
 	writeTestFile(t, path, content)
 	writeTestFile(t, path+".1", []byte("older log"))
-	lock, err := tryAcquireNamedLock(dir, "test.log.rotate.lock")
+	lock := flock.New(path + ".rotate.lock")
+	require.NoError(t, lock.RLock())
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+
+	rotateLogFile(path, 512)
+
+	active, err := os.ReadFile(path)
 	require.NoError(t, err)
-	done := make(chan struct{})
-	go func() {
-		rotateLogFile(path, 512)
-		close(done)
-	}()
-	t.Cleanup(func() {
-		require.NoError(t, lock.Close())
-		<-done
-	})
-	select {
-	case <-done:
-		require.FailNow(t, "rotation must wait for the current lock holder")
-	case <-time.After(time.Second):
-	}
-	require.NoError(t, lock.Close())
-	<-done
+	assert.Equal(t, content, active)
 	backup, err := os.ReadFile(path + ".1")
 	require.NoError(t, err)
-	assert.Equal(t, content[512:], backup)
+	assert.Equal(t, "older log", string(backup))
 }
 
 func TestRotateLogFileTailAndMode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.log")
-	tail := append(bytes.Repeat([]byte("t"), 496), []byte("last diagnostic\n")...)
-	writeTestFile(t, path, append([]byte("discarded prefix\n"), tail...))
-	require.NoError(t, os.Chmod(path, 0o640))
-	source, err := os.Stat(path)
-	require.NoError(t, err)
-	rotateLogFile(path, 512)
-	retained, err := os.ReadFile(path + ".1")
-	require.NoError(t, err)
-	assert.Equal(t, tail, retained)
-	backup, err := os.Stat(path + ".1")
-	require.NoError(t, err)
-	assert.Equal(t, source.Mode().Perm(), backup.Mode().Perm())
+	for _, tc := range []struct {
+		name  string
+		limit int64
+		want  string
+	}{
+		{"within line", 20, "last diagnostic\n"},
+		{"at line boundary", 36, "first retained line\nlast diagnostic\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test.log")
+			writeTestFile(t, path, []byte("discarded prefix\nfirst retained line\nlast diagnostic\n"))
+			require.NoError(t, os.Chmod(path, 0o640))
+			source, err := os.Stat(path)
+			require.NoError(t, err)
+
+			rotateLogFile(path, tc.limit)
+
+			retained, err := os.ReadFile(path + ".1")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(retained))
+			backup, err := os.Stat(path + ".1")
+			require.NoError(t, err)
+			assert.Equal(t, source.Mode().Perm(), backup.Mode().Perm())
+		})
+	}
+}
+
+func TestRotateLogFileWithoutCompleteLine(t *testing.T) {
+	for _, content := range []string{"one oversized line", "one oversized line\n"} {
+		t.Run(content, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test.log")
+			writeTestFile(t, path, []byte(content))
+			writeTestFile(t, path+".1", []byte("older log"))
+
+			rotateLogFile(path, 8)
+
+			active, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, content, string(active))
+			backup, err := os.ReadFile(path + ".1")
+			require.NoError(t, err)
+			assert.Equal(t, "older log", string(backup))
+		})
+	}
 }
 
 func TestRotateLogFileConcurrent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("final diagnostic\n")...)
+	previous := append(bytes.Repeat([]byte("x"), maxLogSize+1), []byte("\nfinal diagnostic\n")...)
 	for round := range 10 {
 		writeTestFile(t, path, previous)
 		start := make(chan struct{})
@@ -919,8 +944,7 @@ func TestRotateLogFileConcurrent(t *testing.T) {
 
 		backup, err := os.ReadFile(path + ".1")
 		require.NoError(t, err)
-		require.Len(t, backup, maxLogSize, "round %d: retained tail was cut short", round)
-		assert.True(t, bytes.Equal(previous[len(previous)-maxLogSize:], backup), "round %d: retained tail changed", round)
+		assert.Equal(t, "final diagnostic\n", string(backup), "round %d: retained tail changed", round)
 		active, err := os.Stat(path)
 		require.NoError(t, err)
 		assert.Zero(t, active.Size())
@@ -965,7 +989,7 @@ func TestRotateLogFileSymlink(t *testing.T) {
 func TestRotateLogFileBackupFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.log")
-	content := bytes.Repeat([]byte("x"), 1024)
+	content := bytes.Repeat([]byte("line\n"), 205)
 	writeTestFile(t, path, content)
 	require.NoError(t, os.Mkdir(path+".1", 0o755))
 

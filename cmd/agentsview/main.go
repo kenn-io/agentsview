@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -1600,18 +1601,19 @@ func setupLogFileNamed(dataDir, name string) {
 		log.Printf("warning: cannot open log file: %v", err)
 		return
 	}
-	log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logPath + ".rotate.lock")})
+	log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(logPath))})
+}
+
+func logRotationLockPath(path string) string {
+	return path + ".rotate.lock"
 }
 
 type lockedLogWriter struct {
-	mu   stdsync.Mutex
 	file *os.File
 	lock *flock.Flock
 }
 
 func (w *lockedLogWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.lock.RLock(); err != nil {
 		return w.file.Write(p)
 	}
@@ -1620,8 +1622,6 @@ func (w *lockedLogWriter) Write(p []byte) (int, error) {
 }
 
 func (w *lockedLogWriter) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
 	return errors.Join(w.file.Close(), w.lock.Close())
 }
 
@@ -1633,7 +1633,8 @@ func rotateLogFile(path string, limit int64) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
 		return
 	}
-	lock, err := acquireNamedLock(filepath.Dir(path), filepath.Base(path)+".rotate.lock")
+	lockPath := logRotationLockPath(path)
+	lock, err := tryAcquireNamedLock(filepath.Dir(lockPath), filepath.Base(lockPath))
 	if err != nil {
 		return
 	}
@@ -1647,7 +1648,15 @@ func rotateLogFile(path string, limit int64) {
 		return
 	}
 	defer source.Close()
-	if _, err := source.Seek(info.Size()-limit, io.SeekStart); err != nil {
+	if _, err := source.Seek(info.Size()-limit-1, io.SeekStart); err != nil {
+		return
+	}
+	// Include the preceding byte so a tail already on a line boundary stays intact.
+	tail := bufio.NewReader(io.LimitReader(source, limit+1))
+	if _, err := tail.ReadString('\n'); err != nil {
+		return
+	}
+	if _, err := tail.Peek(1); err != nil {
 		return
 	}
 	backup, err := atomicfile.Create(path+".1", atomicfile.WithPerm(info.Mode().Perm()))
@@ -1655,7 +1664,7 @@ func rotateLogFile(path string, limit int64) {
 		return
 	}
 	defer func() { _ = backup.Abort() }()
-	if _, err := backup.ReadFrom(io.LimitReader(source, limit)); err != nil {
+	if _, err := backup.ReadFrom(tail); err != nil {
 		return
 	}
 	if err := backup.Commit(); err != nil {
