@@ -14,6 +14,10 @@ on:
       - 'internal/**'
       - 'go.mod'
       - 'go.sum'
+      - '.custom-gcl.yml'
+      - '.golangci.yml'
+      - '.golangci.overlay.yml'
+      - 'Makefile'
       - '.github/workflows/ci-macos-main.yml'
   push:
     branches: [main]
@@ -23,6 +27,10 @@ on:
       - 'testdata/golden/**'
       - 'go.mod'
       - 'go.sum'
+      - '.custom-gcl.yml'
+      - '.golangci.yml'
+      - '.golangci.overlay.yml'
+      - 'Makefile'
       - '.github/workflows/ci-macos-main.yml'
 
 permissions:
