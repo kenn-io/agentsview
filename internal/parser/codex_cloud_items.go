@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,8 +37,22 @@ type codexCloudItem struct {
 	Changes          []codexCloudEdit `json:"changes"`
 }
 
+// codexCloudEdit is one fileChange entry, {path, kind, diff}, with its raw
+// JSON kept as the per-file call input.
 type codexCloudEdit struct {
-	Path string `json:"path"`
+	Path string
+	Raw  jsontext.Value
+}
+
+func (e *codexCloudEdit) UnmarshalJSON(data []byte) error {
+	var fields struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	e.Path, e.Raw = fields.Path, jsontext.Value(slices.Clone(data))
+	return nil
 }
 
 // codexCloudItemMessages maps one item to messages. Every item type yields
@@ -90,17 +105,20 @@ func codexCloudItemMessages(
 		return []ParsedMessage{codexCloudNote(codexCloudNoteText(item, record.Item), ts)}
 	}
 
+	// The tool block renders the call, so the message carries no text of
+	// its own; inlined text would show the call twice.
 	call, result := codexCloudToolCall(item, record.Item)
-	callMsg := assistant(ParsedMessage{
-		Content: call.Rendering, HasToolUse: true, ToolCalls: []ParsedToolCall{call},
-	})
+	callMsg := assistant(ParsedMessage{HasToolUse: true, ToolCalls: []ParsedToolCall{call}})
 	if item.Type == "fileChange" && len(item.Changes) > 0 {
 		// One call per file, as the codex parser emits for apply_patch, so
 		// file-keyed views group by path. Results pair by tool-use ID, so
-		// each file of a multi-file change gets its own ID and result.
+		// each file of a multi-file change gets its own ID and result. Each
+		// call's input is its own change, {path, kind, diff}, so the viewer
+		// shows that file's path and diff.
 		calls := make([]ParsedToolCall, 0, len(item.Changes))
 		for i, change := range item.Changes {
 			perFile := call
+			perFile.InputJSON = string(change.Raw)
 			perFile.FilePath = change.Path
 			if len(item.Changes) > 1 {
 				perFile.ToolUseID = fmt.Sprintf("%s#%d", item.ID, i+1)
@@ -145,54 +163,40 @@ func codexCloudToolCall(item codexCloudItem, raw jsontext.Value) (ParsedToolCall
 		command := codexCloudCommand(item.Command)
 		call.ToolName, call.Category = "shell_command", "Bash"
 		call.InputJSON = codexCloudJSON(map[string]string{"command": command, "cwd": item.Cwd})
-		call.Rendering = "$ " + command
 		result = codexCloudJoinResult(item.AggregatedOutput, codexCloudCommandFooter(item))
 	case "mcpToolCall":
 		call.ToolName = "mcp__" + item.Server + "__" + item.Tool
 		call.Category = NormalizeToolCategory(call.ToolName)
 		call.InputJSON = string(item.Arguments)
-		call.Rendering = item.Server + "/" + item.Tool
 		result = codexCloudJoinResult(codexCloudPayload(item.Result, item.Error), codexCloudDuration(item.DurationMs))
 	case "fileChange":
 		call.ToolName, call.Category = "apply_patch", "Edit"
 		call.InputJSON = string(raw)
-		paths := make([]string, 0, len(item.Changes))
-		for _, change := range item.Changes {
-			paths = append(paths, change.Path)
-		}
-		call.Rendering = "Edit " + strings.Join(paths, ", ")
 	case "webSearch":
 		call.ToolName, call.Category = "web_search", "Tool"
 		call.InputJSON = codexCloudJSON(map[string]string{"query": item.Query})
-		call.Rendering = "Search: " + item.Query
 	case "functionCallOutput":
 		call.ToolName = firstNonEmpty(item.Name, item.Type)
 		call.Category = NormalizeToolCategory(call.ToolName)
 		call.InputJSON = "{}"
-		call.Rendering = call.ToolName
 		result = codexCloudPayload(item.Output, nil)
 	case "dynamicToolCall":
 		call.ToolName = firstNonEmpty(item.Tool, item.Name, item.Type)
 		call.Category = NormalizeToolCategory(call.ToolName)
 		call.InputJSON = string(item.Arguments)
-		call.Rendering = call.ToolName
 		result = codexCloudPayload(item.Result, item.Error)
 	case "collabAgentToolCall":
 		call.ToolName, call.Category = firstNonEmpty(item.Tool, item.Type), "Task"
 		call.InputJSON = string(raw)
-		call.Rendering = call.ToolName
 	case "imageView":
 		call.ToolName, call.Category = "view_image", "Read"
 		call.InputJSON = codexCloudJSON(map[string]string{"path": item.Path})
-		call.Rendering = "View " + item.Path
 	case "imageGeneration":
 		call.ToolName, call.Category = "image_generation", "Tool"
 		call.InputJSON = string(raw)
-		call.Rendering = "Generate image"
 	default:
 		call.ToolName, call.Category = item.Type, "Other"
 		call.InputJSON = string(raw)
-		call.Rendering = "[" + item.Type + "]"
 	}
 	if call.InputJSON == "" {
 		call.InputJSON = "{}"

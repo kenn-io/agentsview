@@ -3423,6 +3423,13 @@ schemas keep their existing ordering behavior.
   an empty preview, and the default `thread/list` never returns it. AgentsView
   never imports it, so its delegated threads show as top-level sessions whose
   parent is not in the archive.
+- **Tool items:** A read-only survey of the maintainer's mirror files on
+  2026-10-29 found every `commandExecution` item's `command` is one string, such
+  as `/bin/bash -lc "..."`, next to a `cwd` string. Each `fileChange` entry in
+  `changes` is `{path, kind, diff}`, where `kind` is `{type}` or
+  `{type, move_path}`. Every `update` diff starts with a `@@` hunk header; no
+  `add` diff does. The parser stores each entry as its file's call input and
+  writes no message text for tool items, because the viewer renders the call.
 - **Usage and cost:** The hosted thread history carries no token counts. Token
   counts come only from `thread/tokenUsage/updated` notifications while
   AgentsView is joined to a running thread; counters arrive as JSON numbers

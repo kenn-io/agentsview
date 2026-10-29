@@ -148,6 +148,53 @@ func TestCodexCloudMappingEveryItemType(t *testing.T) {
 	}
 }
 
+// The tool block shows each call, so the call's message carries no text of
+// its own, and each file of a change carries only its own path and diff.
+func TestCodexCloudToolCallMessagesCarryNoText(t *testing.T) {
+	items := []string{
+		`{"type":"commandExecution","id":"c1","command":"/bin/bash -lc \"printf 'a\\nb'\"","cwd":"/workspace/project-a","aggregatedOutput":"a","exitCode":0,"status":"completed"}`,
+		`{"type":"mcpToolCall","id":"m1","server":"notes","tool":"create","arguments":{"path":"/notes/a.md"},"status":"completed"}`,
+		`{"type":"fileChange","id":"f1","changes":[` +
+			`{"path":"/workspace/project-a/a.go","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1 @@\n-old\n+new\n"},` +
+			`{"path":"/workspace/project-a/b.go","kind":{"type":"add"},"diff":"package b\n"}],"status":"completed"}`,
+	}
+	records := []mirror.Record{ccRecord(mirror.KindThread, ccListing)}
+	for i, item := range items {
+		records = append(records, ccItem("turn-1", item, 1759320000000+int64(i)*1000))
+	}
+	msgs := parseCodexCloud(t, writeCodexCloudMirror(t, "thread-a", records...)).Messages
+
+	var callMessages int
+	for _, msg := range msgs {
+		if len(msg.ToolCalls) == 0 {
+			continue
+		}
+		callMessages++
+		assert.Empty(t, msg.Content, msg.ToolCalls[0].ToolUseID)
+		assert.Zero(t, msg.ContentLength, msg.ToolCalls[0].ToolUseID)
+	}
+	assert.Equal(t, 3, callMessages)
+
+	calls := toolCallsByID(msgs)
+	assert.JSONEq(t, `{"command":"/bin/bash -lc \"printf 'a\\nb'\"","cwd":"/workspace/project-a"}`, calls["c1"][0].InputJSON)
+	assert.JSONEq(t, `{"path":"/workspace/project-a/a.go","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1 @@\n-old\n+new\n"}`,
+		calls["f1#1"][0].InputJSON)
+	assert.JSONEq(t, `{"path":"/workspace/project-a/b.go","kind":{"type":"add"},"diff":"package b\n"}`, calls["f1#2"][0].InputJSON)
+	assert.Equal(t, "/workspace/project-a/b.go", calls["f1#2"][0].FilePath)
+}
+
+// A change entry that is not an object leaves the item unreadable, so it
+// shows as a note instead of an edit with no path.
+func TestCodexCloudUnreadableFileChangeBecomesNote(t *testing.T) {
+	msgs := parseCodexCloud(t, writeCodexCloudMirror(t, "thread-a",
+		ccRecord(mirror.KindThread, ccListing),
+		ccItem("turn-1", `{"type":"fileChange","id":"f1","changes":["a.go"],"status":"completed"}`, 1759320000000),
+	)).Messages
+	require.Len(t, msgs, 1)
+	assert.True(t, msgs[0].IsSystem)
+	assert.Contains(t, msgs[0].Content, "[unreadable fileChange item]")
+}
+
 func TestCodexCloudNewestRecordWins(t *testing.T) {
 	path := writeCodexCloudMirror(t, "thread-a",
 		ccRecord(mirror.KindThread, ccListing),

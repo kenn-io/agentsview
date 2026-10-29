@@ -4,7 +4,12 @@
   import { onDestroy } from "svelte";
   import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import SubagentInline from "./SubagentInline.svelte";
-  import { extractToolParamMeta, type MetaTag } from "../../utils/tool-params.js";
+  import {
+    bashCommandText,
+    extractToolParamMeta,
+    toolCopyText,
+    type MetaTag,
+  } from "../../utils/tool-params.js";
   import { parseToolInput, resolveToolInput } from "../../search/tool-input.js";
   import { searchBlock } from "../../search/session-block.svelte.js";
   import { searchCollapsed, toolSearchKey, type ToolSearchScope } from "../../search/component-state.js";
@@ -13,6 +18,7 @@
   import { m } from "../../i18n/index.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
+  import { highlightToHtml } from "../../utils/syntax-highlight.js";
   import { ChevronRightIcon } from "../../icons.js";
   import { summarizeToolCall, summarizeToolCallPath } from "../../utils/tool-summary.js";
   import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
@@ -34,64 +40,6 @@
     isRunning?: boolean;
     /** Flatten outer spacing when inside a parallel group. */
     inGroup?: boolean;
-  }
-
-  type Params = Record<string, unknown>;
-  const INTERNAL_COPY_PARAMS = new Set(["agent__intent", "_i"]);
-
-  function stringifyCopyValue(value: unknown): string {
-    return typeof value === "string" ? value : JSON.stringify(value);
-  }
-
-  function copyParamLines(params: Params, excluded = new Set<string>()): string[] {
-    const lines: string[] = [];
-    for (const [key, value] of Object.entries(params)) {
-      if (INTERNAL_COPY_PARAMS.has(key) || excluded.has(key)) continue;
-      if (value == null || value === "") continue;
-      lines.push(`${key}: ${stringifyCopyValue(value)}`);
-    }
-    return lines;
-  }
-
-  function generateInputCopyContent(toolName: string, params: Params): string | null {
-    if (toolName === "Task" || toolName === "Agent") return null;
-    if (toolName === "Bash" || toolName === "run_command") {
-      const cmd = params.command ?? params.cmd;
-      if (cmd != null) {
-        const lines: string[] = [];
-        if (params.description) lines.push(`description: ${String(params.description)}`);
-        lines.push(`command: ${String(cmd)}`);
-        lines.push(...copyParamLines(params, new Set(["description", "command", "cmd"])));
-        return lines.join("\n");
-      }
-    }
-    const isEdit = toolName === "Edit" || params.command === "strReplace";
-    if (isEdit) {
-      const oldStr = params.old_string ?? params.old_str ?? params.oldString ?? params.oldStr;
-      const newStr = params.new_string ?? params.new_str ?? params.newString ?? params.newStr;
-      const diffText = params.diff;
-      if (typeof diffText === "string" && diffText) return diffText;
-      const patchText = params.patch ?? params.patch_text ?? params.patchText;
-      if (typeof patchText === "string" && patchText) return patchText;
-      if (oldStr != null || newStr != null) {
-        const oldLines = String(oldStr ?? "").split("\n");
-        const newLines = String(newStr ?? "").split("\n");
-        const lines = [`@@ -1,${oldLines.length} +1,${newLines.length} @@`];
-        for (const line of oldLines) lines.push(`-${line}`);
-        for (const line of newLines) lines.push(`+${line}`);
-        return lines.join("\n");
-      }
-    }
-    if (toolName === "Write" || (toolName === "write" && params.command === "create")) {
-      if (params.content != null) {
-        const text = String(params.content);
-        if (!text) return "(empty file)";
-        const lines = text.split("\n");
-        return `@@ -0,0 +1,${lines.length} @@\n${lines.map(line => `+${line}`).join("\n")}`;
-      }
-    }
-    const lines = copyParamLines(params);
-    return lines.length ? lines.join("\n") : null;
   }
 
   let { content, label, toolCall, searchScope, durationLabel,
@@ -193,13 +141,14 @@
   let fallbackContent = $derived(resolvedInput.fallbackContent);
   let isTask = $derived(resolvedInput.isTask);
   let taskPrompt = $derived(resolvedInput.taskPrompt);
-  let inputCopyFallback = $derived.by(() => {
-    if (content || !inputParams || !toolCall) return null;
-    const cat = toolCall.category || null;
-    const result = cat ? generateInputCopyContent(cat, inputParams) : null;
-    return result ?? generateInputCopyContent(toolCall.tool_name, inputParams);
-  });
-  let inputCopySource = $derived(taskPrompt ?? inputCopyFallback ?? resolvedInput.text);
+  let inputCopyPayload = $derived(inputParams && toolCall
+    ? toolCopyText(toolCall.tool_name, toolCall.category, inputParams) : null);
+  let inputCopySource = $derived(taskPrompt ?? inputCopyPayload ?? resolvedInput.text);
+  // A Bash body built from input_json is the command alone; show it as code.
+  let isCommand = $derived(fallbackContent !== null && inputParams !== null && !!toolCall
+    && ["Bash", "run_command"].includes(toolCall.category || toolCall.tool_name)
+    && bashCommandText(inputParams) !== null);
+  let commandHtml = $state<string | null>(null);
   let subagentSessionId = $derived(isTask ? toolCall?.subagent_session_id ?? null : null);
   const CONTENT_PREVIEW_LINES = 20;
   let displayContent = $derived.by(() => {
@@ -214,6 +163,20 @@
     ? m.tool_block_show_all_lines({ count: displayContent.totalLines ?? 0 }) : "");
   let isDiff = $derived(resolvedInput.text.startsWith("--- a/") || resolvedInput.text.startsWith("@@"));
   let diffLines = $derived(isDiff ? resolvedInput.text.split("\n") : []);
+
+  $effect(() => {
+    const source = displayContent.text;
+    const highlight = isCommand && !collapsed;
+    commandHtml = null;
+    if (!highlight) return;
+    let cancelled = false;
+    void highlightToHtml(source, "bash").then((html) => {
+      if (!cancelled) commandHtml = html;
+    }).catch(() => {
+      // Keep the plain command if the optional syntax highlighter fails.
+    });
+    return () => { cancelled = true; };
+  });
 
   async function handleInputCopy(event: MouseEvent) {
     event.stopPropagation();
@@ -281,7 +244,11 @@
     {:else if fallbackContent && isDiff}
       <pre class="diff-view" {@attach searchBlock(inputKey)}>{#each diffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < diffLines.length - 1 ? "\n" : ""}{/each}</pre>
     {:else if displayContent.text}
-      <pre class="tool-content" {@attach searchBlock(inputKey)}>{displayContent.text}</pre>
+      {#if isCommand}
+        <pre class="tool-content tool-command" {@attach searchBlock(inputKey)}><code>{#if commandHtml !== null}{@html commandHtml}{:else}{displayContent.text}{/if}</code></pre>
+      {:else}
+        <pre class="tool-content" {@attach searchBlock(inputKey)}>{displayContent.text}</pre>
+      {/if}
       {#if displayContent.isLong}
         <button class="show-more-btn" onclick={(e) => {
           e.stopPropagation();
@@ -397,6 +364,8 @@
   }
   .show-more-btn:hover { background: var(--bg-surface-hover); }
   .tool-content { padding: 8px 14px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); line-height: 1.5; overflow-x: auto; border-top: 1px solid var(--border-muted); }
+  .tool-command { background: var(--code-bg); color: var(--code-text); }
+  .tool-command code { font-family: inherit; }
   .output-header {
     display: flex; align-items: center; gap: 6px; padding: 5px 10px; width: 100%; text-align: left;
     font-size: 12px; color: var(--text-secondary); min-width: 0; transition: background 0.1s; user-select: text; flex: 1 1 auto;

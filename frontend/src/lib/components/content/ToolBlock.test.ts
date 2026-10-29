@@ -516,7 +516,7 @@ describe("ToolBlock input source and copy", () => {
     await click(".tool-header");
     expect(text(".tool-content")).not.toContain("hidden-line-229");
     await click('button[aria-label="Copy input"]');
-    expect(copyToClipboardMock).toHaveBeenCalledWith(`command: ${command}`);
+    expect(copyToClipboardMock).toHaveBeenCalledWith(command);
     expect(text(".tool-content")).not.toContain("hidden-line-229");
   });
   it.each([
@@ -566,6 +566,42 @@ describe("ToolBlock input source and copy", () => {
     const body = text(".diff-view") || text(".tool-content");
     expect(body).toContain(first);
     if (second) expect(body).toContain(second);
+  });
+  it("shows a Bash command as code with its working directory as a field", async () => {
+    const command = "/bin/bash -lc \"python - <<'PY'\nprint('hi')\nPY\"";
+    await render({
+      toolCall: call("shell_command", { command, cwd: "/workspace/app" }, { category: "Bash" }),
+    });
+    await click(".tool-header");
+    expect(document.querySelector(".tool-content.tool-command code")?.textContent).toBe(command);
+    expect(text(".tool-meta")).toContain("cwd:");
+    expect(text(".tool-meta")).toContain("/workspace/app");
+    expect(text(".tool-meta")).not.toContain("cmd:");
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith(command);
+  });
+  it("copies the command when the block shows legacy segment text", async () => {
+    await render({
+      content: "$ make build",
+      toolCall: call("Bash", { command: "make build" }, { category: "Bash" }),
+    });
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith("make build");
+  });
+  it("names the file in the header and copies the diff of a per-file change", async () => {
+    const diff = "@@ -1 +1 @@\n-old\n+new\n";
+    await render({
+      toolCall: call(
+        "apply_patch",
+        { path: "src/app.go", kind: { type: "update" }, diff },
+        { category: "Edit" },
+      ),
+    });
+    expect(text(".tool-header .tool-preview")).toBe("src/app.go");
+    await click(".tool-header");
+    expect(text(".diff-view")).toContain("+new");
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith(diff);
   });
   it("prefers supplied content over synthesized input", async () => {
     await render({ content: "explicit source", toolCall: call("Bash", { command: "fallback" }) });

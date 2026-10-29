@@ -3,6 +3,34 @@ import { formatMessageForCopy } from "./copy-message.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
 
 describe("formatMessageForCopy", () => {
+  it("copies a Bash call's command under a header naming its directory", () => {
+    const msg: Message = {
+      has_context_tokens: false,
+      has_output_tokens: false,
+      id: 1,
+      session_id: "s1",
+      ordinal: 1,
+      role: "assistant",
+      content: "",
+      timestamp: "",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: true,
+      content_length: 0,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      is_system: false,
+      tool_calls: [
+        {
+          tool_name: "shell_command",
+          category: "Bash",
+          input_json: JSON.stringify({ command: "make\nmake test", cwd: "/repo" }),
+        },
+      ],
+    };
+    expect(formatMessageForCopy(msg)).toBe("[shell_command] cwd: /repo\n\nmake\nmake test");
+  });
   it("includes tool call params", () => {
     const msg: Message = {
       has_context_tokens: false,

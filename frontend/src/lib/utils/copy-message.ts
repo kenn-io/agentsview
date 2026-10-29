@@ -22,7 +22,10 @@ export function formatMessageForCopy(message: Message): string {
 
       parts.push(header);
 
-      const body = input.raw ?? generateFallbackContent(tc.tool_name, params);
+      const body =
+        input.raw ??
+        (tc.category ? generateFallbackContent(tc.category, params) : null) ??
+        generateFallbackContent(tc.tool_name, params);
       if (body) parts.push(body);
 
       if (tc.result_content) parts.push(tc.result_content);

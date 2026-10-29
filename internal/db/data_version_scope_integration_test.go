@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"database/sql"
+	"encoding/json/jsontext"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -566,4 +568,59 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 			assert.Zero(t, engine.SyncAll(ctx, nil).Synced, "unchanged sources must stop reparsing after the upgrade")
 		})
 	}
+}
+
+func TestCodexCloudToolTextUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(151, 152)
+	assert.Equal(t, []parser.AgentType{parser.AgentCodexCloud}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	source := filepath.Join(root, "account-key", "thread-a.jsonl.zstd")
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	_, err := mirror.Append(source, 0, []mirror.Record{
+		{Kind: mirror.KindThread, FetchedAt: fetched, Data: jsontext.Value(`{"id":"thread-a","createdAt":1759320000,"updatedAt":1759323600,"cwd":"/workspace/project-a"}`)},
+		{Kind: mirror.KindItem, FetchedAt: fetched, Data: jsontext.Value(`{"turnId":"turn-1","startedAtMs":1759320000000,"item":` +
+			`{"type":"commandExecution","id":"c1","command":"make","cwd":"/workspace/project-a","status":"completed"}}`)},
+	})
+	require.NoError(t, err)
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodexCloud: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "codex-cloud:thread-a"
+	messages, err := database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	// Reproduce the previous parser, which copied the call into the text.
+	messages[0].Content = "$ make"
+	messages[0].ContentLength = len(messages[0].Content)
+	require.NoError(t, database.ReplaceSessionMessages(ctx, id, messages))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the Codex cloud upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	messages, err = database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	assert.Empty(t, messages[0].Content)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
 }

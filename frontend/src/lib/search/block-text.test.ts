@@ -120,7 +120,7 @@ describe("collectSearchBlocks", () => {
         .filter((block) => block.kind.startsWith("tool-"))
         .map((block) => [block.key, block.text]),
     ).toEqual([
-      ["7:tool-input:0", "command: echo actual"],
+      ["7:tool-input:0", "echo actual"],
       ["7:tool-output:0", "output"],
     ]);
   });
@@ -274,7 +274,7 @@ describe("resolveToolInputText", () => {
         { ...call("exec_command", { cmd: "echo hello" }), category: "Bash" },
         "",
       ),
-    ).toBe("command: echo hello");
+    ).toBe("echo hello");
     expect(resolveToolInputText(call("custom_tool", { value: "hello" }), "")).toBe("value: hello");
     expect(resolveToolInputText(call("Bash", { command: "ignored" }), "legacy")).toBe("legacy");
     expect(resolveToolInputText(undefined, "legacy")).toBe("legacy");

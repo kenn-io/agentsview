@@ -4,6 +4,7 @@ import {
   pathDisplayValue,
   extractToolParamMeta,
   generateFallbackContent,
+  toolCopyText,
 } from "./tool-params.js";
 
 describe("truncate", () => {
@@ -111,11 +112,6 @@ describe("extractToolParamMeta", () => {
     expect(meta).toEqual([{ label: "pattern", value: '{"regex":"TODO","flags":"i"}' }]);
   });
 
-  it("joins an array command with commas", () => {
-    const meta = extractToolParamMeta("shell", { command: ["bash", "-lc", "ls -la"] }, "Bash");
-    expect(meta).toEqual([{ label: "cmd", value: "bash,-lc,ls -la" }]);
-  });
-
   it("extracts Glob params", () => {
     const meta = extractToolParamMeta("Glob", {
       pattern: "**/*.ts",
@@ -127,29 +123,34 @@ describe("extractToolParamMeta", () => {
     ]);
   });
 
-  it("extracts Bash description and cmd", () => {
+  it("labels Bash parameters other than the command, which is the body", () => {
     const meta = extractToolParamMeta("Bash", {
       command: "npm test",
       description: "Run test suite",
+      cwd: "/repo/frontend",
+      timeout: 120000,
+      env: { CI: "true" },
+      agent__intent: "internal note",
     });
     expect(meta).toEqual([
       { label: "description", value: "Run test suite" },
-      { label: "cmd", value: "npm test" },
+      { label: "cwd", value: "/repo/frontend" },
+      { label: "timeout", value: "120000" },
+      { label: "env", value: '{"CI":"true"}' },
     ]);
   });
 
-  it("extracts Bash cmd without description", () => {
-    const meta = extractToolParamMeta("Bash", {
-      command: "ls -la",
-    });
-    expect(meta).toEqual([{ label: "cmd", value: "ls -la" }]);
+  it("shortens a long Bash working directory and keeps the full path", () => {
+    const workdir =
+      "/home/example/projects/a-very-long-directory-name/with-more-nesting/another-long-segment/frontend";
+    const meta = extractToolParamMeta("exec_command", { cmd: "ls", workdir }, "Bash");
+    expect(meta).toEqual([
+      { label: "workdir", value: workdir, displayValue: "another-long-segment/frontend" },
+    ]);
   });
 
-  it("shows only first line of multiline Bash command", () => {
-    const meta = extractToolParamMeta("Bash", {
-      command: "echo hello\necho world",
-    });
-    expect(meta).toEqual([{ label: "cmd", value: "echo hello" }]);
+  it("has no Bash fields when only the command is set", () => {
+    expect(extractToolParamMeta("Bash", { command: "ls -la" })).toBeNull();
   });
 
   it("extracts Skill name", () => {
@@ -165,8 +166,12 @@ describe("extractToolParamMeta", () => {
   });
 
   it("dispatches on category for Gemini run_command", () => {
-    const meta = extractToolParamMeta("run_command", { command: "go test ./..." }, "Bash");
-    expect(meta).toEqual([{ label: "cmd", value: "go test ./..." }]);
+    const meta = extractToolParamMeta(
+      "run_command",
+      { command: "go test ./...", cwd: "/repo" },
+      "Bash",
+    );
+    expect(meta).toEqual([{ label: "cwd", value: "/repo" }]);
   });
 
   it("dispatches on category for Gemini grep_search", () => {
@@ -515,39 +520,21 @@ describe("generateFallbackContent", () => {
 });
 
 describe("generateFallbackContent - Bash", () => {
-  it("shows full command for Bash tool", () => {
-    const result = generateFallbackContent("Bash", {
-      command: "npm test",
-    });
-    expect(result).toBe("command: npm test");
-  });
-
-  it("shows description and command for Bash tool", () => {
-    const result = generateFallbackContent("Bash", {
-      command: "npm test",
-      description: "Run test suite",
-    });
-    expect(result).toBe("description: Run test suite\ncommand: npm test");
-  });
-
-  it("shows remaining visible params after Bash command", () => {
+  it("shows only the command; the other parameters are labeled fields", () => {
     const result = generateFallbackContent("Bash", {
       command: "npm test",
       description: "Run test suite",
       workdir: "/repo/frontend",
       timeout: 120000,
-      env: { CI: "true" },
-      agent__intent: "internal note",
     });
-    expect(result).toBe(
-      [
-        "description: Run test suite",
-        "command: npm test",
-        "workdir: /repo/frontend",
-        "timeout: 120000",
-        'env: {"CI":"true"}',
-      ].join("\n"),
-    );
+    expect(result).toBe("npm test");
+  });
+
+  it("quotes an argument array so it can be pasted into a shell", () => {
+    const result = generateFallbackContent("Bash", {
+      command: ["bash", "-lc", "echo 'hi there'", ""],
+    });
+    expect(result).toBe(`bash -lc 'echo '\\''hi there'\\''' ''`);
   });
 
   it("shows full multiline heredoc command without truncation", () => {
@@ -583,14 +570,14 @@ describe("generateFallbackContent - Bash", () => {
     const result = generateFallbackContent("run_command", {
       command: "go test ./...",
     });
-    expect(result).toBe("command: go test ./...");
+    expect(result).toBe("go test ./...");
   });
 
   it("uses cmd param for codex exec_command", () => {
     const result = generateFallbackContent("Bash", {
       cmd: "ls -la /tmp",
     });
-    expect(result).toBe("command: ls -la /tmp");
+    expect(result).toBe("ls -la /tmp");
   });
 });
 
@@ -631,7 +618,7 @@ describe("generateFallbackContent - agent__intent filtering", () => {
       agent__intent: "Running test suite",
     });
     expect(result).not.toContain("agent__intent");
-    expect(result).toBe("command: npm test");
+    expect(result).toBe("npm test");
   });
 
   it("does not include agent__intent for read tool (generic path)", () => {
@@ -657,5 +644,74 @@ describe("generateFallbackContent - agent__intent filtering", () => {
     });
     expect(result).toBe("foo: bar\nbaz: qux");
     expect(result).not.toContain("agent__intent");
+  });
+});
+
+describe("toolCopyText", () => {
+  it.each([
+    [
+      "a Bash command without its working directory",
+      "shell_command",
+      "Bash",
+      { command: "python - <<'PY'\nprint(1)\nPY", cwd: "/repo", description: "Run it" },
+      "python - <<'PY'\nprint(1)\nPY",
+    ],
+    ["a codex exec_command cmd", "exec_command", "Bash", { cmd: "ls", workdir: "/repo" }, "ls"],
+    [
+      "an edit's diff",
+      "apply_patch",
+      "Edit",
+      { path: "/repo/a.go", kind: { type: "update" }, diff: "@@ -1 +1 @@\n-old\n+new\n" },
+      "@@ -1 +1 @@\n-old\n+new\n",
+    ],
+    [
+      "an edit built from old and new strings",
+      "Edit",
+      "Edit",
+      { file_path: "/repo/a.go", old_string: "old", new_string: "new" },
+      "@@ -1,1 +1,1 @@\n-old\n+new",
+    ],
+    [
+      "an edit's path when it has no diff",
+      "Edit",
+      "Edit",
+      { file_path: "/repo/a.go" },
+      "/repo/a.go",
+    ],
+    [
+      "a write's file content",
+      "Write",
+      "Write",
+      { file_path: "/repo/a.txt", content: "one\ntwo" },
+      "one\ntwo",
+    ],
+    [
+      "an empty write's path",
+      "Write",
+      "Write",
+      { file_path: "/repo/a.txt", content: "" },
+      "/repo/a.txt",
+    ],
+    ["a read's path", "read_file", "Read", { file_path: "/repo/a.go", offset: 10 }, "/repo/a.go"],
+    ["a search pattern", "Grep", "Grep", { pattern: "TODO", path: "/repo" }, "TODO"],
+    ["a single text argument", "web_search", "Tool", { query: "zstd frames" }, "zstd frames"],
+    [
+      "other input as JSON",
+      "mcp__notes__create",
+      "Tool",
+      { path: "/notes/a.md", tags: ["x"], agent__intent: "internal" },
+      '{\n  "path": "/notes/a.md",\n  "tags": [\n    "x"\n  ]\n}',
+    ],
+  ] as const)("copies %s", (_name, toolName, category, params, want) => {
+    expect(toolCopyText(toolName, category, { ...params })).toBe(want);
+  });
+
+  it("falls back to the tool name when the category has no rule", () => {
+    expect(toolCopyText("Read", "", { file_path: "/repo/a.go" })).toBe("/repo/a.go");
+  });
+
+  it("leaves Task calls and empty input to the caller", () => {
+    expect(toolCopyText("Task", "Task", { prompt: "do it" })).toBeNull();
+    expect(toolCopyText("custom", "Other", { _i: "internal" })).toBeNull();
   });
 });
