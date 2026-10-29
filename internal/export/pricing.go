@@ -283,9 +283,6 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 }
 
 func (r *PricingResolver) withPriorityTier(lookup PricingLookup) PricingLookup {
-	if r == nil {
-		return lookup
-	}
 	base := r.Lookup(lookup.Pattern)
 	pattern := catalog.PriorityPattern(base.Pattern)
 	rates, ok := r.byModel[pattern]
@@ -293,10 +290,33 @@ func (r *PricingResolver) withPriorityTier(lookup PricingLookup) PricingLookup {
 		return lookup
 	}
 	lookup.Rates = rates
-	lookup.Rates.Bands = slices.Clone(rates.Bands)
+	lookup.Rates.Bands = mergePriorityBands(base.Rates.Bands, rates.Bands)
 	lookup.Pattern = pattern
 	lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
 	return lookup
+}
+
+// mergePriorityBands uses standard thresholds where LiteLLM has no priority
+// band, while preserving priority rates at thresholds it publishes.
+func mergePriorityBands(standard, priority []PricingBand) []PricingBand {
+	if len(standard) == 0 && len(priority) == 0 {
+		return nil
+	}
+	byThreshold := make(map[int]PricingBand, len(standard)+len(priority))
+	for _, band := range standard {
+		byThreshold[band.AboveInputTokens] = band
+	}
+	for _, band := range priority {
+		byThreshold[band.AboveInputTokens] = band
+	}
+	merged := make([]PricingBand, 0, len(byThreshold))
+	for _, band := range byThreshold {
+		merged = append(merged, band)
+	}
+	slices.SortFunc(merged, func(a, b PricingBand) int {
+		return cmp.Compare(a.AboveInputTokens, b.AboveInputTokens)
+	})
+	return merged
 }
 
 func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {

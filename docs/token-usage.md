@@ -599,12 +599,12 @@ authoritative, and fixed web-search fees remain at their published face value.
 ### Codex Fast Billing
 
 Codex messages whose latest `thread_settings_applied` event records provider
-`openai` and service tier `priority` use LiteLLM's `_priority` prices, including
-any request bands LiteLLM publishes for Fast. A Fast row without published bands
-uses its Fast base rates at every request size. Ultrafast and any tier Codex omits
-bill at standard rates. The embedded catalog includes tier prices for
-offline use. A model without a price for its tier, and any custom override, keeps
-its standard rates.
+`openai` and service tier `priority` use LiteLLM's `_priority` prices. Fast bands
+take precedence at matching thresholds; a standard band fills a threshold with
+no Fast band. If neither row publishes bands, Fast base rates apply at every
+request size. Ultrafast and any tier Codex omits bill at standard rates. The
+embedded catalog includes tier prices for offline use. A model without a price
+for its tier, and any custom override, keeps its standard rates.
 
 Tier prices are LiteLLM's current ones and apply at every date.
 
