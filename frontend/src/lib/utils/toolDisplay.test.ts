@@ -11,6 +11,17 @@ import retainedFixtureSource from "./__fixtures__/retained-tool-image-1735.json?
 const SMALL_PNG_DATA_URI =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
+// A summary whose first section is pretty-printed with a blank line between
+// its blocks, as some providers write it.
+const BLANK_LINE_SUMMARY = `agent-a:\n[\n  {"type": "input_text", "text": "Saved"},\n\n  ${JSON.stringify(
+  {
+    type: "input_image",
+    image_url: SMALL_PNG_DATA_URI,
+  },
+)}\n]\n\nagent-b:\n${JSON.stringify([
+  { type: "input_image", image_url: SMALL_PNG_DATA_URI },
+])}\n\nTrailing prose`;
+
 describe("displayToolName", () => {
   it("returns category for codex exec_command", () => {
     expect(displayToolName({ tool_name: "exec_command", category: "Bash" })).toBe("Bash");
@@ -179,6 +190,15 @@ describe("displayToolResultPreview", () => {
   it("leaves results without images unchanged", () => {
     expect(displayToolResultPreview("plain output")).toBe("plain output");
   });
+
+  it("names images in summary sections whose JSON holds blank lines", () => {
+    const decodedBytes = atob(SMALL_PNG_DATA_URI.split(",")[1]!).length;
+    const placeholder = `[Image: image/png, ${decodedBytes} bytes]`;
+    const preview = displayToolResultPreview(BLANK_LINE_SUMMARY);
+    expect(preview).toBe(
+      `agent-a:\nSaved\n\n${placeholder}\n\nagent-b:\n${placeholder}\n\nTrailing prose`,
+    );
+  });
 });
 
 describe("toolResultImageSources", () => {
@@ -195,6 +215,13 @@ describe("toolResultImageSources", () => {
       },
     ])}`;
     expect(toolResultImageSources(content)).toEqual([SMALL_PNG_DATA_URI, "asset://abc.png"]);
+  });
+
+  it("finds images in summary sections whose JSON holds blank lines", () => {
+    expect(toolResultImageSources(BLANK_LINE_SUMMARY)).toEqual([
+      SMALL_PNG_DATA_URI,
+      SMALL_PNG_DATA_URI,
+    ]);
   });
 
   it.each([

@@ -59,19 +59,56 @@ function projectToolResult(content: string, mode: ToolResultDisplayMode): string
   const direct = displayToolResultArray(content, mode);
   if (direct !== null) return direct;
 
-  // Multi-agent summaries join labelled results and trailing anonymous output
-  // with blank lines. Keep each label and any unrecognized part as stored.
-  return content
-    .split("\n\n")
+  // Keep each label and any unrecognized part as stored.
+  return summarySections(content)
     .map((part) => {
-      const newline = part.indexOf("\n");
-      if (newline > 0 && part.slice(0, newline).trimEnd().endsWith(":")) {
-        const body = part.slice(newline + 1);
-        return part.slice(0, newline + 1) + (displayToolResultArray(body, mode) ?? body);
-      }
-      return displayToolResultArray(part, mode) ?? part;
+      const [label, body] = splitSectionLabel(part);
+      return label + (displayToolResultArray(body, mode) ?? body);
     })
     .join("\n\n");
+}
+
+// Multi-agent summaries join labelled results and trailing anonymous output
+// with blank lines, and a result's JSON can hold blank lines of its own. Like
+// the archive's scanSummarySections, rejoin pieces until a section's JSON
+// parses. Joining the sections with blank lines restores the content.
+function summarySections(content: string): string[] {
+  const pieces = content.split("\n\n");
+  const join = (from: number, to: number) => pieces.slice(from, to).join("\n\n");
+  const sections: string[] = [];
+  for (let start = 0; start < pieces.length;) {
+    let end = start + 1;
+    const first = join(start, end);
+    if (splitSectionLabel(first)[1].trimStart().startsWith("[") && !parsesAsJSON(first)) {
+      for (let to = end + 1; to <= pieces.length; to++) {
+        if (parsesAsJSON(join(start, to))) {
+          end = to;
+          break;
+        }
+      }
+    }
+    sections.push(join(start, end));
+    start = end;
+  }
+  return sections;
+}
+
+/** Splits an "agent:" label line from a summary section's body. */
+function splitSectionLabel(part: string): [string, string] {
+  const newline = part.indexOf("\n");
+  if (newline > 0 && part.slice(0, newline).trimEnd().endsWith(":")) {
+    return [part.slice(0, newline + 1), part.slice(newline + 1)];
+  }
+  return ["", part];
+}
+
+function parsesAsJSON(section: string): boolean {
+  try {
+    JSON.parse(splitSectionLabel(section)[1]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function displayToolResultArray(content: string, mode: ToolResultDisplayMode): string | null {
@@ -141,15 +178,12 @@ function toolResultImageSource(block: unknown): string | null {
   return null;
 }
 
-// Mirrors the section split in projectToolResult: a whole-result array, or
-// blank-line-separated summary sections with optional agent label lines.
+// A whole-result array, or the arrays of a multi-agent summary's sections.
 function toolResultBlockArrays(content: string): unknown[][] {
   const direct = parseBlockArray(content);
   if (direct !== null) return [direct];
-  return content.split("\n\n").flatMap((part) => {
-    const newline = part.indexOf("\n");
-    const labelled = newline > 0 && part.slice(0, newline).trimEnd().endsWith(":");
-    const blocks = parseBlockArray(labelled ? part.slice(newline + 1) : part);
+  return summarySections(content).flatMap((part) => {
+    const blocks = parseBlockArray(splitSectionLabel(part)[1]);
     return blocks === null ? [] : [blocks];
   });
 }
