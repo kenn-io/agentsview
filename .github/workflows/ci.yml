@@ -542,8 +542,18 @@ jobs:
         shell: pwsh
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
 
+      - name: Upload ${{ matrix.name }} test events
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
+          path: go-test-events.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Summarize ${{ matrix.name }} test timing
         if: always()
+        timeout-minutes: 2
         shell: pwsh
         run: |
           $eventsPath = "go-test-events.jsonl"
@@ -632,15 +642,6 @@ jobs:
 
           $summary | Write-Output
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-
-      - name: Upload ${{ matrix.name }} test events
-        if: failure()
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
-          path: go-test-events.jsonl
-          if-no-files-found: warn
-          retention-days: 7
 
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
