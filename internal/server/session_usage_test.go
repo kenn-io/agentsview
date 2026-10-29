@@ -3,6 +3,7 @@ package server_test
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -473,4 +474,106 @@ func TestHandleSessionUsage_BreakdownRoundTripsWebSearchRequests(t *testing.T) {
 	require.True(t, ok)
 	assert.NotContains(t, noSearchRow, "web_search_requests",
 		"a row with no web searches must omit the field, not send zero")
+}
+
+// Raw lookup must preserve aggregation flags and return archive identities.
+func TestHandleSessionUsage_RawIDModes(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "codex:native:thread", "project", 1, func(s *db.Session) { s.Agent = "codex" })
+	te.seedSession(t, "codex:child", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+		s.ParentSessionID = new("codex:native:thread")
+		s.RelationshipType = "subagent"
+	})
+	for _, id := range []string{"codex:native:thread", "codex:child"} {
+		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
+			m.Role, m.Model = "assistant", controlledSessionUsageModel
+			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
+		})
+	}
+	for _, tc := range []struct {
+		query  string
+		cost   float64
+		rows   int
+		rollup bool
+	}{
+		{"", 10500, 0, false},
+		{"breakdown=true", 10500, 1, false},
+		{"subagents=true", 21000, 0, false},
+		{"subagents=true&breakdown=true", 21000, 2, false},
+		{"rollup=true", 10500, 0, true},
+		{"rollup=true&breakdown=true", 10500, 1, true},
+		{"rollup=true&subagents=true&breakdown=true", 10500, 1, true},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			w := te.get(t, "/api/v1/sessions/native:thread/usage?"+tc.query)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+			assert.Equal(t, "codex:native:thread", got["session_id"])
+			assert.Equal(t, map[string]any{"microdollars": tc.cost}, got["cost"])
+			assert.Len(t, got["breakdown"], tc.rows)
+			if tc.rollup {
+				assert.Equal(t, map[string]any{"microdollars": float64(21000)}, got["rollup_cost"])
+				assert.NotContains(t, got, "subagent_count")
+			}
+		})
+	}
+}
+
+func TestHandleSessionUsage_RawIDIdentity(t *testing.T) {
+	te := setup(t)
+	for _, id := range []string{"archive~codex:hosted", "archive-a~codex:shared", "archive-b~codex:shared", "claude-id", "codex:claude-id", "codex:portable", "codex:codex:missing", "codex:freebuff:missing"} {
+		te.seedSession(t, id, "project", 0)
+	}
+	for _, tc := range []struct {
+		id, canonical string
+		status        int
+	}{
+		{"hosted", "archive~codex:hosted", 200},
+		{"claude-id", "claude-id", 200},
+		{"shared", "", 409},
+		{"absent", "", 404},
+		{"table", "", 404},
+		{"codex:missing", "", 404},
+		{"freebuff:missing", "", 404},
+		{"other~hosted", "", 404},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			w := te.get(t, "/api/v1/sessions/"+tc.id+"/usage")
+			require.Equal(t, tc.status, w.Code, w.Body.String())
+			var got struct {
+				SessionID string `json:"session_id"`
+				Error     struct {
+					Code       string   `json:"code"`
+					Candidates []string `json:"candidates"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+			if tc.status == 200 {
+				assert.Equal(t, tc.canonical, got.SessionID)
+			}
+			if tc.status == 409 {
+				assert.Equal(t, "ambiguous_session_id", got.Error.Code)
+				assert.ElementsMatch(t, []string{"archive-a~codex:shared", "archive-b~codex:shared"}, got.Error.Candidates)
+			}
+			if tc.status == 404 {
+				assert.Equal(t, "session_not_found", got.Error.Code)
+				assert.Empty(t, got.Error.Candidates)
+			}
+		})
+	}
+	for i := range 7 {
+		te.seedSession(t, fmt.Sprintf("archive-%d~codex:many", i), "project", 0)
+	}
+	w := te.get(t, "/api/v1/sessions/many/usage")
+	require.Equal(t, 409, w.Code, w.Body.String())
+	var got struct {
+		Error struct {
+			Candidates []string `json:"candidates"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Len(t, got.Error.Candidates, 5)
 }
