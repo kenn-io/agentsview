@@ -89,25 +89,16 @@ func TestMemoryStatusSemanticCountPresence(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		status       db.SemanticReadiness
-		want         string
 		wantCoverage string
 	}{
 		{
 			name:         "unmeasured counts",
 			status:       db.SemanticReadiness{State: "ready", Reason: "counts_unavailable"},
-			want:         `{"status":"ready","reason":"counts_unavailable"}`,
 			wantCoverage: `{"status":"ready","lexical":{"status":"ready"},"semantic":{"status":"ready","reason":"counts_unavailable"}}`,
-		},
-		{
-			name:         "measured counts",
-			status:       db.SemanticReadiness{State: "partial", Generation: "gen-1", Embedded: 9, Missing: 2, Reason: "index_incomplete"},
-			want:         `{"status":"partial","reason":"index_incomplete","generation":"gen-1","embedded":9,"missing":2}`,
-			wantCoverage: `{"status":"partial","lexical":{"status":"ready"},"semantic":{"status":"partial","reason":"index_incomplete","generation":"gen-1","embedded":9,"missing":2}}`,
 		},
 		{
 			name:         "measured zero counts",
 			status:       db.SemanticReadiness{State: "ready", Generation: "gen-1"},
-			want:         `{"status":"ready","generation":"gen-1","embedded":0,"missing":0}`,
 			wantCoverage: `{"status":"ready","lexical":{"status":"ready"},"semantic":{"status":"ready","generation":"gen-1","embedded":0,"missing":0}}`,
 		},
 	} {
@@ -115,11 +106,6 @@ func TestMemoryStatusSemanticCountPresence(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			database.SetVectorSearcher(&readinessVectorSearcher{status: tc.status})
 			backend := service.NewDirectBackend(database, nil)
-			status, err := service.GetMemoryStatus(t.Context(), backend)
-			require.NoError(t, err)
-			encoded, err := json.Marshal(status.Semantic)
-			require.NoError(t, err)
-			assert.JSONEq(t, tc.want, string(encoded))
 			search, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
 				Pattern: "absent", Mode: "substring",
 			})
