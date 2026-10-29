@@ -430,7 +430,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			require.NoError(t, err)
 			var appendBatch WatchBatch
 			observedBeforeClose := false
-			observationTimer := time.NewTimer(750 * time.Millisecond) //nolint:kennlint // absence check; the window only records whether the open append surfaces before close, and either outcome passes
+			observationTimer := time.NewTimer(750 * time.Millisecond) //nolint:kennlint // deadlinetest: absence check; the window only records whether the open append surfaces before close, and either outcome passes
 		observeOpenAppend:
 			for {
 				select {

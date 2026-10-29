@@ -149,7 +149,7 @@ func TestRepeatedWrapperSignalEscalatesIgnoredChild(t *testing.T) {
 	select {
 	case early := <-done:
 		require.FailNowf(t, "test failed", "signal-ignoring child exited before escalation: %+v", early)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the signal-ignoring child must outlive the first SIGTERM
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the signal-ignoring child must outlive the first SIGTERM
 	}
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
 

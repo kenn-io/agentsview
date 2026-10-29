@@ -221,7 +221,7 @@ func TestMaterializeTrailingProbeObservesCancellation(t *testing.T) {
 			return &probeStallReader{ctx: ctx, data: data}
 		},
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond) //nolint:kennlint // the deadline is the expected result; the stalled probe returns only when the context ends
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond) //nolint:kennlint // deadlinetest: the deadline is the expected result; the stalled probe returns only when the context ends
 	defer cancel()
 	started := time.Now()
 

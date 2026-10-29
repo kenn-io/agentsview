@@ -198,7 +198,7 @@ func TestTelemetryClaimsDoNotBlockConfigSaves(t *testing.T) {
 				select {
 				case <-readDone:
 					require.FailNow(t, "setup read returned while the claim was pending", "claimed=%v err=%v", claimed, readErr)
-				case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows the read waits while the claim holds the setup record lock
+				case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: timer shows the read waits while the claim holds the setup record lock
 				}
 			}
 			saved := make(chan error, 1)

@@ -93,7 +93,7 @@ firstWave:
 		select {
 		case host := <-entered:
 			assert.Fail(t, "a fifth transfer started while four were blocked", host)
-		case <-time.After(100 * time.Millisecond): //nolint:kennlint // Assert no fifth transfer starts while all four worker slots are held.
+		case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: Assert no fifth transfer starts while all four worker slots are held.
 		}
 	}
 	close(release)

@@ -44,7 +44,7 @@ func TestUsageSummaryWaitsForPreparationBeyondWriteTimeout(t *testing.T) {
 		"/comparison", "/pairwise-comparison",
 	} {
 		t.Run(path, func(t *testing.T) {
-			s := testServer(t, 10*time.Millisecond)
+			s := testServer(t, 10*time.Millisecond) //nolint:kennlint // deadlinetest: absence check; usage preparation must outlive the write deadline without a timeout response
 			s.db = delayedUsageStore{Store: s.db, delay: 50 * time.Millisecond}
 			s.sessions = service.NewReadOnlyBackend(s.db)
 			ts := httptest.NewServer(s.Handler())

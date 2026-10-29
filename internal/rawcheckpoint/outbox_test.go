@@ -725,7 +725,7 @@ func TestCollectGarbageWaitsForObjectPublication(t *testing.T) {
 		finishPublication()
 		require.FailNow(t, "garbage collection completed during publication",
 			"report=%+v error=%v", outcome.report, outcome.err)
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the active publication keeps garbage collection waiting
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the active publication keeps garbage collection waiting
 		assert.FileExists(t, store.ObjectPath(ref))
 	}
 

@@ -268,7 +268,7 @@ func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 		Provider:          string(ProviderClaude),
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}}
-	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond) //nolint:kennlint // the deadline is the expected result; the open rows hold the archive close until the finalization deadline
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond) //nolint:kennlint // deadlinetest: the deadline is the expected result; the open rows hold the archive close until the finalization deadline
 	defer cancel()
 	started := time.Now()
 	result, err := finishIngestedResult(

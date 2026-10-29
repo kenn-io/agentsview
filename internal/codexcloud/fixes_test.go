@@ -108,7 +108,7 @@ func TestCancelledPassRecordsNoFailure(t *testing.T) {
 func TestUnansweredCallEndsAccountPass(t *testing.T) {
 	env := newPassEnv(t)
 	env.syncer.Dial = func(ctx context.Context, o DialOptions) (*Conn, error) {
-		o.CallTimeout = 200 * time.Millisecond
+		o.CallTimeout = 200 * time.Millisecond //nolint:kennlint // deadlinetest: the unanswered fixture call ends only when its deadline expires
 		return Dial(ctx, o)
 	}
 	env.host.Handle("thread/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
@@ -603,7 +603,7 @@ func TestOffPageRetryStoresNewestListing(t *testing.T) {
 func TestUnansweredThreadWaitsSoLaterThreadsImport(t *testing.T) {
 	env := newPassEnv(t)
 	env.syncer.Dial = func(ctx context.Context, o DialOptions) (*Conn, error) {
-		o.CallTimeout = 200 * time.Millisecond
+		o.CallTimeout = 200 * time.Millisecond //nolint:kennlint // deadlinetest: the unanswered fixture call ends only when its deadline expires
 		return Dial(ctx, o)
 	}
 	env.threads.Set(finishedThread("slow", ago(time.Hour), message("m", "one")))

@@ -245,7 +245,7 @@ func TestUploadServiceSerializesDuplicateFinalization(t *testing.T) {
 	select {
 	case <-custody.finalizeStarted:
 		require.FailNow(t, "duplicate finalization reached custody concurrently")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the held first finalization keeps the duplicate out of custody
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held first finalization keeps the duplicate out of custody
 	}
 	close(custody.finalizeRelease)
 

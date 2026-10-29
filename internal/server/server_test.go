@@ -338,7 +338,7 @@ func (te *testEnv) writeSessionFile(
 
 func waitForPort(port int, timeout time.Duration) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	dialer := &net.Dialer{Timeout: 50 * time.Millisecond}
+	dialer := &net.Dialer{Timeout: time.Second}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	timer := time.NewTimer(timeout)
@@ -480,7 +480,7 @@ func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
 			continue
 		}
 
-		conn, dialErr := (&net.Dialer{Timeout: 50 * time.Millisecond}).DialContext(
+		conn, dialErr := (&net.Dialer{Timeout: time.Second}).DialContext(
 			t.Context(), "tcp", addr,
 		)
 		if dialErr != nil {

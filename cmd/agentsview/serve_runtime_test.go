@@ -194,7 +194,7 @@ func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
 
 	err := waitForBackendReady(
 		t.Context(), testBackendReadyConfig(ts, "persistent-token"),
-		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil,
+		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil, //nolint:kennlint // deadlinetest: the foreign listener never presents valid readiness proof, so the deadline must end the wait
 	)
 	require.Error(t, err,
 		"an unrelated HTTP listener must not satisfy backend readiness")
@@ -217,7 +217,7 @@ func TestWaitForBackendReadyRejectsCounterfeitStartupProof(t *testing.T) {
 
 	err := waitForBackendReady(
 		t.Context(), testBackendReadyConfig(ts, ""),
-		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil,
+		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil, //nolint:kennlint // deadlinetest: the foreign listener never presents valid readiness proof, so the deadline must end the wait
 	)
 	require.Error(t, err,
 		"a listener without the server-held proof must not satisfy readiness")
@@ -234,7 +234,7 @@ func TestWaitForBackendReadyRejectsRedirectToServingServer(t *testing.T) {
 
 	err := waitForBackendReady(
 		t.Context(), testBackendReadyConfig(redirector, ""),
-		srv, "", 300*time.Millisecond, nil,
+		srv, "", 300*time.Millisecond, nil, //nolint:kennlint // deadlinetest: the foreign listener never presents valid readiness proof, so the deadline must end the wait
 	)
 	require.Error(t, err,
 		"a foreign first-hop listener must not relay readiness to the serving server")

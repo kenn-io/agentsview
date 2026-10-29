@@ -361,7 +361,7 @@ func TestSyncWatchBatchThenRunChangedPathCardinalityAndSerialization(t *testing.
 			select {
 			case err := <-secondDone:
 				require.Failf(t, "concurrent sync entered callback critical section", "%v", err)
-			case <-time.After(25 * time.Millisecond): //nolint:kennlint // absence check; the held callback keeps the second sync out
+			case <-time.After(25 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held callback keeps the second sync out
 			}
 			close(releaseCallback)
 			require.NoError(t, <-firstDone)
