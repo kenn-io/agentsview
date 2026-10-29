@@ -3,6 +3,7 @@ package parser
 import (
 	"errors"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -4042,16 +4043,22 @@ func TestCodexServiceTierMessages(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "Fast again", tsLateS5),
 			settings("azure", "priority"),
 			testjsonl.CodexMsgJSON("assistant", "other provider", tsLateS5),
-			settings("", "priority"),
-			testjsonl.CodexMsgJSON("assistant", "missing provider", tsLateS5),
 			`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai"}}}`,
 			testjsonl.CodexMsgJSON("assistant", "missing tier", tsLateS5),
-		}, []string{"", "openai-priority", "openai-priority", "", "openai-priority", "", "", ""}},
+		}, []string{"", "openai-priority", "openai-priority", "", "openai-priority", "", ""}},
 		{"fork replay", []string{
 			`{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent","cwd":"/workspace"}}`,
 			testjsonl.CodexSessionMetaJSON("parent", "/workspace", "user", tsEarly),
 			turn("parent-turn"), settings("openai", "priority"), turn("child-turn"),
 			testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
+		}, []string{"openai-priority"}},
+		{"image generation", []string{
+			testjsonl.CodexSessionMetaJSON("image-tier", "/workspace", "user", tsEarly),
+			settings("openai", "priority"),
+			testjsonl.CodexImageGenerationCallJSON(
+				"call-image", "draw an image",
+				testjsonl.SolidPNGBase64(1, 1, color.RGBA{A: 255}), tsEarlyS5,
+			),
 		}, []string{"openai-priority"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

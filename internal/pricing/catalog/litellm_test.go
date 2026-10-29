@@ -199,11 +199,13 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 		byModel[price.ModelPattern] = price
 	}
 	for _, tc := range []struct {
-		model, input, cached, output, creation, bandInput, bandCached, bandOutput, bandCreation string
+		model, input, cached, output, creation                          string
+		bandInput, bandCached, bandOutput, bandCreation, bandCreation1h string
 	}{
-		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
-		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "10", "1", "45", "0"},
-		{"gpt-5-nano@priority", "2.5", "0.005", "0.4", "0", "", "", "", ""},
+		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10", "0"},
+		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "10", "1", "45", "0", "0"},
+		{"gpt-5-nano@priority", "2.5", "0.005", "0.4", "0", "", "", "", "", ""},
+		{"gpt-6.1-sol-sparse@priority", "4", "0.2", "20", "0", "4", "0.2", "20", "0", "0"},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			price, ok := byModel[tc.model]
@@ -222,50 +224,9 @@ func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
 			assert.Equal(t, money.MustParseDollars(tc.bandCached), price.Bands[0].CacheReadPerMTok)
 			assert.Equal(t, money.MustParseDollars(tc.bandOutput), price.Bands[0].OutputPerMTok)
 			assert.Equal(t, money.MustParseDollars(tc.bandCreation), price.Bands[0].CacheCreationPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.bandCreation1h), price.Bands[0].CacheCreation1hPerMTok)
 		})
 	}
-	for _, model := range []string{"azure/gpt-5.5"} {
-		assert.Contains(t, byModel, model)
-		assert.NotContains(t, byModel, model+"@priority")
-	}
-}
-
-func TestParseLiteLLMPriorityBandsFallbackToStandardCompanions(t *testing.T) {
-	data := []byte(`{
-		"gpt-6.1-sol": {
-			"litellm_provider": "openai",
-			"input_cost_per_token": 0.000002,
-			"output_cost_per_token": 0.00001,
-			"cache_read_input_token_cost": 0.0000001,
-			"cache_creation_input_token_cost": 0.0000025,
-			"cache_creation_input_token_cost_above_1hr": 0.000005,
-			"input_cost_per_token_above_272k_tokens": 0.000004,
-			"output_cost_per_token_above_272k_tokens": 0.000015,
-			"cache_read_input_token_cost_above_272k_tokens": 0.0000004,
-			"cache_creation_input_token_cost_above_272k_tokens": 0.000005,
-			"cache_creation_input_token_cost_above_1hr_above_272k_tokens": 0.000008,
-			"input_cost_per_token_priority": 0.000004,
-			"output_cost_per_token_priority": 0.00002,
-			"cache_read_input_token_cost_priority": 0.0000002,
-			"cache_creation_input_token_cost_priority": 0.000008,
-			"input_cost_per_token_above_272k_tokens_priority": 0.000008,
-			"cache_creation_input_token_cost_above_1hr_above_272k_tokens_priority": 0
-		}
-	}`)
-	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
-	var priority ModelPricing
-	for _, price := range prices {
-		if price.ModelPattern == "gpt-6.1-sol@priority" {
-			priority = price
-			break
-		}
-	}
-	require.NotEmpty(t, priority.ModelPattern)
-	require.Len(t, priority.Bands, 1)
-	band := priority.Bands[0]
-	assert.Equal(t, money.MustParseDollars("15"), band.OutputPerMTok)
-	assert.Equal(t, money.MustParseDollars("0.4"), band.CacheReadPerMTok)
-	assert.Equal(t, money.MustParseDollars("5"), band.CacheCreationPerMTok)
-	assert.Equal(t, money.MustParseDollars("0"), band.CacheCreation1hPerMTok)
+	assert.Contains(t, byModel, "azure/gpt-5.5")
+	assert.NotContains(t, byModel, "azure/gpt-5.5@priority")
 }

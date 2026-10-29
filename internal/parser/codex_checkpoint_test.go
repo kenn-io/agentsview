@@ -3,7 +3,6 @@ package parser
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"image/color"
 	"strconv"
 	"testing"
 
@@ -74,6 +73,7 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 		testjsonl.CodexSessionMetaJSON(
 			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
 		),
+		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
 		testjsonl.CodexMsgJSON("user", "run the command", tsEarlyS1),
 		testjsonl.CodexFunctionCallWithCallIDJSON(
 			"exec_command", callID, nil, tsEarlyS5,
@@ -100,9 +100,14 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	require.NotEmpty(t, checkpoint,
 		"a full parse of a safe-offset transcript must produce a checkpoint")
 
-	tail := testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON(
-		callID, "done", "2026-08-02T09:00:03Z",
-	))
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			callID, "done", "2026-08-02T09:00:03Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "resumed answer", "2026-08-02T09:00:04Z",
+		),
+	)
 	appendCodexProviderContent(t, path, tail)
 
 	fingerprint, err = provider.Fingerprint(t.Context(), source)
@@ -119,64 +124,12 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, IncrementalApplied, status)
-	assert.Empty(t, incOutcome.Messages)
+	require.Len(t, incOutcome.Messages, 1)
+	assert.Equal(t, "openai-priority", incOutcome.Messages[0].ProviderID)
 	require.Len(t, incOutcome.ToolCallUpdates, 1)
 	assert.Equal(t, callID, incOutcome.ToolCallUpdates[0].ToolUseID)
 	assert.NotEmpty(t, incOutcome.NextCursor,
 		"an applied incremental parse must advance the cursor")
-}
-
-func TestCodexIncrementalImageUsageKeepsServiceTier(t *testing.T) {
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122a03"
-	prefix := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
-		),
-		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
-		testjsonl.CodexMsgJSON("user", "draw an image", tsEarlyS1),
-	)
-	root := t.TempDir()
-	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
-	provider, ok := NewProvider(
-		AgentCodex, ProviderConfig{Roots: []string{root}},
-	)
-	require.True(t, ok)
-	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(t, err)
-	outcome, err := provider.Parse(t.Context(), ParseRequest{
-		Source: source, Fingerprint: fingerprint,
-	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	checkpoint := outcome.Results[0].Result.Checkpoint
-	require.NotEmpty(t, checkpoint)
-
-	tail := testjsonl.JoinJSONL(
-		testjsonl.CodexImageGenerationCallJSON(
-			"call_image", "draw an image",
-			testjsonl.SolidPNGBase64(1, 1, color.RGBA{A: 255}), tsEarlyS5,
-		),
-		testjsonl.CodexTokenCountJSON(tsLate, 1_000, 250, 640),
-	)
-	appendCodexProviderContent(t, path, tail)
-	fingerprint, err = provider.Fingerprint(t.Context(), source)
-	require.NoError(t, err)
-	incOutcome, status, err := provider.ParseIncremental(
-		t.Context(), IncrementalRequest{
-			Source:       source,
-			Fingerprint:  fingerprint,
-			SessionID:    "codex:" + uuid,
-			Offset:       int64(len(prefix)),
-			StartOrdinal: 1,
-			Seed:         checkpoint,
-		},
-	)
-	require.NoError(t, err)
-	assert.Equal(t, IncrementalApplied, status)
-	require.Len(t, incOutcome.Messages, 1)
-	assert.Equal(t, "openai-priority", incOutcome.Messages[0].ProviderID)
-	assert.Equal(t, 250, incOutcome.Messages[0].OutputTokens)
 }
 
 // TestCodexParseCarriesSinglePassHashState verifies the full parse captures

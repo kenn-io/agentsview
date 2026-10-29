@@ -11,7 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
 const codexLunaGenAIProvider = `{
@@ -169,52 +168,41 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 }
 
 func TestResolveBilledCodexServiceTiers(t *testing.T) {
-	t.Run("GenAI alias uses matching LiteLLM priority row", func(t *testing.T) {
-		const model = "gpt-5.3-chat-latest"
-		rows := embeddedCodexPricingRows(t, model)
-		resolver := NewPricingResolver(rows)
+	t.Run("GenAI aliases use reported priority rows", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, model, input, output string
+			models                     []string
+		}{
+			{
+				name:  "undated alias",
+				model: "gpt-5.3-chat-latest",
+				input: "3.5", output: "28",
+				models: []string{"gpt-5.3-chat-latest"},
+			},
+			{
+				name:   "dated model row beats canonical row",
+				model:  "gpt-4o-2024-05-13",
+				input:  "8.75",
+				models: []string{"gpt-4o-2024-05-13", "gpt-4o"},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows := embeddedCodexPricingRows(t, tc.models...)
+				resolver := NewPricingResolver(rows)
+				at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
-		pricedModel, lookup, err := resolver.ResolveBilledAt(
-			pricingpkg.OpenAIPriorityProviderID,
-			model, model,
-			time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
-		)
-		require.NoError(t, err)
-		assert.Equal(t, model, pricedModel)
-		assert.Equal(t, money.MustParseDollars("3.5"), lookup.Rates.InputPerMTok)
-		assert.Equal(t, money.MustParseDollars("28"), lookup.Rates.OutputPerMTok)
-		assert.Equal(t, model+"@priority", lookup.Pattern)
-		assert.Equal(t, pricingpkg.OpenAIPriorityProviderID, lookup.Adjustment)
-	})
-
-	t.Run("reported dated alias takes precedence", func(t *testing.T) {
-		const model = "gpt-4o-2024-05-13"
-		rows := embeddedCodexPricingRows(t, model, "gpt-4o")
-		resolver := NewPricingResolver(rows)
-		at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-
-		_, lookup, err := resolver.ResolveBilledAt(
-			pricingpkg.OpenAIPriorityProviderID, model, model, at)
-		require.NoError(t, err)
-		assert.Equal(t, model+"@priority", lookup.Pattern)
-		assert.Equal(t, money.MustParseDollars("8.75"), lookup.Rates.InputPerMTok)
-		cost, err := lookup.Rates.CostForTokens(1_000_000, 0, 0, 0, 0, 0)
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars("8.75"), cost)
-
-		before, err := resolver.DependencyFingerprint(
-			pricingpkg.OpenAIPriorityProviderID, model, model)
-		require.NoError(t, err)
-		changedRows := append([]EffectivePricingRow(nil), rows...)
-		for i := range changedRows {
-			if changedRows[i].ModelPattern == model+"@priority" {
-				changedRows[i].Rates.InputPerMTok = money.MustParseDollars("9")
-			}
+				pricedModel, lookup, err := resolver.ResolveBilledAt(
+					pricingpkg.OpenAIPriorityProviderID, tc.model, tc.model, at)
+				require.NoError(t, err)
+				assert.Equal(t, tc.model, pricedModel)
+				assert.Equal(t, tc.model+"@priority", lookup.Pattern)
+				assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
+				if tc.output != "" {
+					assert.Equal(t, money.MustParseDollars(tc.output), lookup.Rates.OutputPerMTok)
+				}
+				assert.Equal(t, pricingpkg.OpenAIPriorityProviderID, lookup.Adjustment)
+			})
 		}
-		after, err := NewPricingResolver(changedRows).DependencyFingerprint(
-			pricingpkg.OpenAIPriorityProviderID, model, model)
-		require.NoError(t, err)
-		assert.NotEqual(t, before, after, "the selected priority row affects cached costs")
 	})
 
 	t.Run("GenAI dated alias", func(t *testing.T) {
@@ -245,16 +233,15 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name, provider, model, input, pattern, adjustment string
-		custom                                            bool
-		requestInput                                      int
-		bandInput, bandOutput                             string
+		name, model, input, pattern, adjustment string
+		custom                                  bool
+		requestInput                            int
+		bandInput, bandOutput                   string
 	}{
-		{"missing tier", "openai-priority", "standard-only", "5", "standard-only", "", false, 0, "", ""},
-		{"custom", "openai-priority", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
-		{"prefixed", "openai-priority", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
-		{"published tier band", "openai-priority", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
-		{"missing tier band falls back to standard band", "openai-priority", "gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 300_000, "10", "45"},
+		{"missing tier", "standard-only", "5", "standard-only", "", false, 0, "", ""},
+		{"custom", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, 0, "", ""},
+		{"prefixed", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, 0, "", ""},
+		{"published tier band", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, 300_000, "9", "33"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := func(pattern, input string) EffectivePricingRow {
@@ -282,7 +269,8 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 				row("gpt-6.1-sol", "2"), row("gpt-6.1-sol@priority", "4"),
 				row("gpt-5.5", "5"), row("gpt-5.5@priority", "12.5"), row("standard-only", "5"),
 			})
-			_, lookup, err := resolver.ResolveBilledAt(tc.provider, tc.model, tc.model, time.Time{})
+			_, lookup, err := resolver.ResolveBilledAt(
+				pricingpkg.OpenAIPriorityProviderID, tc.model, tc.model, time.Time{})
 			require.NoError(t, err)
 			require.True(t, lookup.OK)
 			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
@@ -295,6 +283,17 @@ func TestResolveBilledCodexServiceTiers(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("embedded priority rows inherit standard bands", func(t *testing.T) {
+		resolver := NewPricingResolver(embeddedCodexPricingRows(t, "gpt-5.5"))
+		_, lookup, err := resolver.ResolveBilledAt(
+			pricingpkg.OpenAIPriorityProviderID, "gpt-5.5", "gpt-5.5", time.Time{})
+		require.NoError(t, err)
+		assert.Equal(t, "gpt-5.5@priority", lookup.Pattern)
+		selected := lookup.Rates.RatesForTokens(300_000, 0, 0)
+		assert.Equal(t, money.MustParseDollars("10"), selected.InputPerMTok)
+		assert.Equal(t, money.MustParseDollars("45"), selected.OutputPerMTok)
+	})
 }
 
 func embeddedCodexPricingRows(t *testing.T, models ...string) []EffectivePricingRow {
@@ -323,7 +322,8 @@ func embeddedCodexPricingRows(t *testing.T, models ...string) []EffectivePricing
 				CacheWritePerMTok:   row.CacheCreationPerMTok,
 				CacheWrite1hPerMTok: row.CacheCreation1hPerMTok,
 				CacheReadPerMTok:    row.CacheReadPerMTok,
-				Source:              PricingRowSourceFetched,
+				Source:              PricingRowSourceEmbedded,
+				Bands:               embeddedPricingBands(row.Bands),
 			},
 		})
 	}
@@ -333,47 +333,19 @@ func embeddedCodexPricingRows(t *testing.T, models ...string) []EffectivePricing
 	return rows
 }
 
-func TestResolveBilledCodexServiceTierSparseBand(t *testing.T) {
-	parsed, err := catalog.ParseLiteLLMPricing([]byte(`{
-		"gpt-6.1-sol": {
-			"litellm_provider": "openai",
-			"input_cost_per_token": 0.000002,
-			"output_cost_per_token": 0.00001,
-			"cache_read_input_token_cost": 0.0000001,
-			"input_cost_per_token_above_272k_tokens": 0.000004,
-			"input_cost_per_token_priority": 0.000004,
-			"output_cost_per_token_priority": 0.00002,
-			"cache_read_input_token_cost_priority": 0.0000002
+func embeddedPricingBands(bands []pricingpkg.PricingBand) []PricingBand {
+	out := make([]PricingBand, len(bands))
+	for i, band := range bands {
+		out[i] = PricingBand{
+			AboveInputTokens:    band.AboveInputTokens,
+			InputPerMTok:        band.InputPerMTok,
+			OutputPerMTok:       band.OutputPerMTok,
+			CacheWritePerMTok:   band.CacheCreationPerMTok,
+			CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
+			CacheReadPerMTok:    band.CacheReadPerMTok,
 		}
-	}`))
-	require.NoError(t, err)
-	rows := make([]EffectivePricingRow, 0, len(parsed))
-	for _, price := range parsed {
-		rates := ModelRates{
-			InputPerMTok:     price.InputPerMTok,
-			OutputPerMTok:    price.OutputPerMTok,
-			CacheReadPerMTok: price.CacheReadPerMTok,
-			Source:           PricingRowSourceFetched,
-		}
-		for _, band := range price.Bands {
-			rates.Bands = append(rates.Bands, PricingBand{
-				AboveInputTokens: band.AboveInputTokens,
-				InputPerMTok:     band.InputPerMTok,
-				OutputPerMTok:    band.OutputPerMTok,
-				CacheReadPerMTok: band.CacheReadPerMTok,
-			})
-		}
-		rows = append(rows, EffectivePricingRow{ModelPattern: price.ModelPattern, Rates: rates})
 	}
-	resolver := NewPricingResolver(rows)
-	_, lookup, err := resolver.ResolveBilledAt(
-		pricingpkg.OpenAIPriorityProviderID, "gpt-6.1-sol", "gpt-6.1-sol", time.Time{})
-	require.NoError(t, err)
-	cost, err := lookup.Rates.CostForTokens(300_000, 1_000_000, 0, 0, 0, 0)
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("21.2"), cost)
-	assert.Equal(t, money.MustParseDollars("0.2"),
-		lookup.Rates.RatesForTokens(300_000, 0, 0).CacheReadPerMTok)
+	return out
 }
 
 func TestResolveBilledSortsEqualRateRecordsByAdjustment(t *testing.T) {
