@@ -128,11 +128,8 @@ func (db *DB) walMaintenanceTick(ctx context.Context, diag *walDiagnostics) {
 			)
 			db.reads.logOpenReads()
 			var stacks bytes.Buffer
-			if err := pprof.Lookup("goroutine").WriteTo(&stacks, 2); err != nil {
-				log.Printf("sqlite wal goroutine dump: %v", err)
-			} else {
-				log.Printf("sqlite wal goroutine dump:\n%s", stacks.String())
-			}
+			_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+			log.Printf("sqlite wal goroutine dump:\n%s", stacks.String())
 		}
 	}
 

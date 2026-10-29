@@ -17,41 +17,37 @@ import (
 // executing queries, unclosed rows, and open transactions have records.
 type readRegistry struct {
 	mu     sync.Mutex
-	nextID uint64
-	active map[uint64]openRead
+	active map[*openRead]struct{}
 }
 
 type openRead struct {
-	id      uint64
 	started time.Time
 	stack   [32]uintptr
 	depth   int
 }
 
-func (r *readRegistry) start() uint64 {
-	read := openRead{started: time.Now()}
+func (r *readRegistry) start() *openRead {
+	read := &openRead{started: time.Now()}
 	read.depth = runtime.Callers(2, read.stack[:])
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.nextID++
-	read.id = r.nextID
 	if r.active == nil {
-		r.active = make(map[uint64]openRead)
+		r.active = make(map[*openRead]struct{})
 	}
-	r.active[read.id] = read
-	return read.id
+	r.active[read] = struct{}{}
+	return read
 }
 
-func (r *readRegistry) finish(id uint64) {
+func (r *readRegistry) finish(read *openRead) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.active, id)
+	delete(r.active, read)
 }
 
 func (r *readRegistry) logOpenReads() {
 	r.mu.Lock()
-	reads := make([]openRead, 0, len(r.active))
-	for _, read := range r.active {
+	reads := make([]*openRead, 0, len(r.active))
+	for read := range r.active {
 		reads = append(reads, read)
 	}
 	r.mu.Unlock()
@@ -71,24 +67,8 @@ func (r *readRegistry) logOpenReads() {
 				break
 			}
 		}
-		log.Printf("sqlite open read: id=%d age=%s owner=%s", read.id, time.Since(read.started).Round(time.Millisecond), owner)
+		log.Printf("sqlite open read: age=%s owner=%s", time.Since(read.started).Round(time.Millisecond), owner)
 	}
-}
-
-func (r *readRegistry) rows(id uint64, rows driver.Rows, err error) (driver.Rows, error) {
-	if err != nil {
-		r.finish(id)
-		return nil, err
-	}
-	return &diagnosticReaderRows{SQLiteRows: rows.(*sqlite3.SQLiteRows), reads: r, id: id}, nil
-}
-
-func (r *readRegistry) transaction(id uint64, tx driver.Tx, err error) (driver.Tx, error) {
-	if err != nil {
-		r.finish(id)
-		return nil, err
-	}
-	return &diagnosticReaderTx{Tx: tx, reads: r, id: id}, nil
 }
 
 // Embedding preserves the SQLite driver's optional capabilities, including
@@ -99,74 +79,57 @@ type diagnosticReaderConn struct {
 }
 
 func (c *diagnosticReaderConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	id := c.reads.start()
+	read := c.reads.start()
 	rows, err := c.SQLiteConn.QueryContext(ctx, query, args)
-	return c.reads.rows(id, rows, err)
+	if err != nil {
+		c.reads.finish(read)
+		return nil, err
+	}
+	return &diagnosticReaderRows{SQLiteRows: rows.(*sqlite3.SQLiteRows), reads: c.reads, read: read}, nil
 }
 
 func (c *diagnosticReaderConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	id := c.reads.start()
-	defer c.reads.finish(id)
+	read := c.reads.start()
+	defer c.reads.finish(read)
 	return c.SQLiteConn.ExecContext(ctx, query, args)
 }
 
 func (c *diagnosticReaderConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	id := c.reads.start()
+	read := c.reads.start()
 	tx, err := c.SQLiteConn.BeginTx(ctx, opts)
-	return c.reads.transaction(id, tx, err)
-}
-
-func (c *diagnosticReaderConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
-	stmt, err := c.SQLiteConn.PrepareContext(ctx, query)
 	if err != nil {
+		c.reads.finish(read)
 		return nil, err
 	}
-	return &diagnosticReaderStmt{SQLiteStmt: stmt.(*sqlite3.SQLiteStmt), reads: c.reads}, nil
-}
-
-type diagnosticReaderStmt struct {
-	*sqlite3.SQLiteStmt
-	reads *readRegistry
-}
-
-func (s *diagnosticReaderStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	id := s.reads.start()
-	rows, err := s.SQLiteStmt.QueryContext(ctx, args)
-	return s.reads.rows(id, rows, err)
-}
-
-func (s *diagnosticReaderStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
-	id := s.reads.start()
-	defer s.reads.finish(id)
-	return s.SQLiteStmt.ExecContext(ctx, args)
+	return &diagnosticReaderTx{Tx: tx, reads: c.reads, read: read}, nil
 }
 
 type diagnosticReaderRows struct {
 	*sqlite3.SQLiteRows
 	reads *readRegistry
-	id    uint64
+	read  *openRead
 }
 
 func (r *diagnosticReaderRows) Close() error {
 	err := r.SQLiteRows.Close()
-	r.reads.finish(r.id)
+	r.reads.finish(r.read)
 	return err
 }
 
 type diagnosticReaderTx struct {
 	driver.Tx
 	reads *readRegistry
-	id    uint64
+	read  *openRead
 }
 
 func (t *diagnosticReaderTx) Commit() error {
 	err := t.Tx.Commit()
-	t.reads.finish(t.id)
+	t.reads.finish(t.read)
 	return err
 }
 
 func (t *diagnosticReaderTx) Rollback() error {
 	err := t.Tx.Rollback()
-	t.reads.finish(t.id)
+	t.reads.finish(t.read)
 	return err
 }

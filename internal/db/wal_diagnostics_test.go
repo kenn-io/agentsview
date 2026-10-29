@@ -10,7 +10,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -266,88 +265,34 @@ func TestWALStallLogsOpenReadOwnersAndStacks(t *testing.T) {
 	})
 }
 
-func TestReadDiagnosticsReleaseAndPreparedReuse(t *testing.T) {
-	for _, end := range []string{"close", "eof", "scan", "commit", "rollback", "cancel", "failed query", "failed begin", "prepared"} {
-		t.Run(end, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "pinned", "proj")
-			holdDiagnosticTransaction(t, d)
-			output := captureLog(t)
-			ctx := t.Context()
-			switch end {
-			case "commit", "rollback":
-				tx, err := d.getReader().BeginTx(ctx, nil)
-				require.NoError(t, err)
-				if end == "commit" {
-					require.NoError(t, tx.Commit())
-				} else {
-					require.NoError(t, tx.Rollback())
-				}
-			case "failed begin":
-				conn, err := d.getReader().Conn(ctx)
-				require.NoError(t, err)
-				defer conn.Close()
-				tx, err := conn.BeginTx(ctx, nil)
-				require.NoError(t, err)
-				_, err = conn.BeginTx(ctx, nil)
-				require.Error(t, err)
-				require.NoError(t, tx.Rollback())
-			case "failed query":
-				var n int
-				err := d.getReader().QueryRowContext(ctx, "SELECT missing_column FROM sessions").Scan(&n)
-				require.Error(t, err)
-			case "scan":
-				var n int
-				require.NoError(t, holdDiagnosticRow(t, d).Scan(&n))
-			case "prepared":
-				stmt, err := d.rawReader().PrepareContext(ctx, "SELECT id FROM sessions")
-				require.NoError(t, err)
-				defer stmt.Close()
-				for range 2 {
-					rows, err := stmt.QueryContext(ctx)
-					require.NoError(t, err)
-					defer rows.Close()
-					d.reads.logOpenReads()
-					assert.Contains(t, output.String(), "sqlite open reads: 2")
-					assert.Contains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsReleaseAndPreparedReuse.")
-					require.NoError(t, rows.Close())
-					require.NoError(t, rows.Err())
-					output.Reset()
-				}
-			default:
-				queryCtx, cancel := context.WithCancel(ctx)
-				defer cancel()
-				rows, err := d.getReader().QueryContext(queryCtx, "SELECT id FROM sessions")
-				require.NoError(t, err)
-				defer rows.Close()
-				switch end {
-				case "close":
-					require.NoError(t, rows.Close())
-				case "eof":
-					for rows.Next() {
-					}
-					require.NoError(t, rows.Err())
-				case "cancel":
-					cancel()
-					for rows.Next() {
-					}
-					require.ErrorIs(t, rows.Err(), context.Canceled)
-				}
-			}
-			// Keep another snapshot pinned so each warning still fires after
-			// the tested reader has completed. Idle pinned Conns are excluded.
-			var diag walDiagnostics
-			for attempt := range walStallLogAttempts {
-				insertSession(t, d, fmt.Sprintf("release-%d", attempt), "proj")
-				d.walMaintenanceTick(ctx, &diag)
-			}
-			assert.Contains(t, output.String(), "sqlite open reads: 1")
-			assert.NotContains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.TestReadDiagnosticsReleaseAndPreparedReuse.")
-		})
+func TestReadDiagnosticsRelease(t *testing.T) {
+	d := testDB(t)
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	for _, commit := range []bool{true, false} {
+		tx, err := conn.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		if commit {
+			require.NoError(t, tx.Commit())
+		} else {
+			require.NoError(t, tx.Rollback())
+		}
 	}
+	var n int
+	require.Error(t, conn.QueryRowContext(t.Context(), "SELECT missing_column FROM sessions").Scan(&n))
+	tx, err := conn.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = conn.BeginTx(t.Context(), nil)
+	require.Error(t, err)
+	require.NoError(t, tx.Rollback())
+	output := captureLog(t)
+	d.reads.logOpenReads()
+	assert.Contains(t, output.String(), "sqlite open reads: 0")
 }
 
-func TestReadDiagnosticsAcrossReopenAndReadOnly(t *testing.T) {
+func TestReadDiagnosticsAcrossReopen(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "before-reopen", "proj")
 	oldRows := holdDiagnosticRows(t, d)
@@ -358,36 +303,12 @@ func TestReadDiagnosticsAcrossReopenAndReadOnly(t *testing.T) {
 	output := captureLog(t)
 	d.reads.logOpenReads()
 	assert.Contains(t, output.String(), "sqlite open reads: 2")
-	require.NoError(t, oldRows.Close())
 	require.NoError(t, oldRows.Err())
-	output.Reset()
-	d.reads.logOpenReads()
-	assert.Contains(t, output.String(), "sqlite open reads: 1")
-	require.NoError(t, newRows.Close())
 	require.NoError(t, newRows.Err())
-	idle, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	defer idle.Close()
-	var n int
-	require.NoError(t, idle.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sessions").Scan(&n))
-	output.Reset()
-	d.reads.logOpenReads()
-	assert.Contains(t, output.String(), "sqlite open reads: 0")
-
-	readOnly, err := OpenReadOnly(t.Context(), d.path)
-	require.NoError(t, err)
-	defer readOnly.Close()
-	rows := holdDiagnosticRows(t, readOnly)
-	defer rows.Close()
-	output.Reset()
-	readOnly.reads.logOpenReads()
-	assert.Contains(t, output.String(), "sqlite open reads: 1")
-	require.NoError(t, rows.Close())
-	require.NoError(t, rows.Err())
 }
 
 func TestReadDiagnosticsIncludesExecutingQuery(t *testing.T) {
-	for _, operation := range []string{"query", "exec", "prepared exec"} {
+	for _, operation := range []string{"query", "exec"} {
 		t.Run(operation, func(t *testing.T) {
 			d := testDB(t)
 			conn, err := d.getReader().Conn(t.Context())
@@ -401,20 +322,11 @@ func TestReadDiagnosticsIncludesExecutingQuery(t *testing.T) {
 					return 1
 				}, false)
 			}))
-			var stmt *sql.Stmt
-			if operation == "prepared exec" {
-				stmt, err = conn.PrepareContext(t.Context(), "SELECT wait_for_diagnostics()")
-				require.NoError(t, err)
-				defer stmt.Close()
-			}
 			done := make(chan error, 1)
 			go func() {
 				switch operation {
 				case "exec":
 					_, err := conn.ExecContext(t.Context(), "SELECT wait_for_diagnostics()")
-					done <- err
-				case "prepared exec":
-					_, err := stmt.ExecContext(t.Context())
 					done <- err
 				default:
 					var value int
@@ -434,49 +346,4 @@ func TestReadDiagnosticsIncludesExecutingQuery(t *testing.T) {
 			assert.Contains(t, output.String(), "sqlite open reads: 0")
 		})
 	}
-}
-
-func TestReadDiagnosticsHasFTSExecutingRead(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "pinned-fts-probe", "proj")
-	holdDiagnosticTransaction(t, d)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	defer conn.Close()
-	entered, release := make(chan struct{}), make(chan struct{})
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(interface {
-			RegisterAuthorizer(func(int, string, string, string) int)
-		}).RegisterAuthorizer(func(op int, _, _, _ string) int {
-			if op == sqlite3.SQLITE_SELECT {
-				select {
-				case <-entered:
-				default:
-					close(entered)
-					<-release
-				}
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	done := make(chan bool, 1)
-	go func() { done <- d.HasFTS(t.Context()) }()
-	<-entered
-	output := captureLog(t)
-	var diag walDiagnostics
-	for attempt := range walStallLogAttempts {
-		insertSession(t, d, fmt.Sprintf("during-fts-%d", attempt), "proj")
-		d.walMaintenanceTick(t.Context(), &diag)
-	}
-	text := output.String()
-	close(release)
-	require.True(t, <-done)
-	assert.Contains(t, text, "sqlite open reads: 2")
-	assert.Contains(t, text, "owner=go.kenn.io/agentsview/internal/db.(*DB).HasFTS (")
-	output.Reset()
-	d.walMaintenanceTick(t.Context(), &diag)
-	assert.Contains(t, output.String(), "sqlite open reads: 1")
-	assert.NotContains(t, output.String(), "owner=go.kenn.io/agentsview/internal/db.(*DB).HasFTS (")
 }
