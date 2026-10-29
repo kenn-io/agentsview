@@ -188,6 +188,21 @@ func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
 	assert.NotContains(t, out, server.URL)
 }
 
+func TestDoctorMemoryHumanOutputOmitsUnmeasuredGenerationCounts(t *testing.T) {
+	setDoctorMemoryTestEnvironment(t, t.TempDir())
+	server := memoryStatusServer(t, service.MemoryStatus{
+		Status: service.MemoryReady,
+		Semantic: service.MemoryVectorStatus{
+			Status: service.MemoryReady, Reason: "counts_unavailable", Generation: "gen-1",
+		},
+	})
+
+	out, err := executeCommand(newRootCommand(), "doctor", "memory",
+		"--server", server.URL)
+	require.NoError(t, err)
+	assert.NotContains(t, out, "Semantic generation:")
+}
+
 func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 	t.Helper()
 	setTestHome(t, home)
