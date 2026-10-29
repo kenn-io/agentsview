@@ -208,9 +208,14 @@ func codexCloudToolCall(item codexCloudItem, raw jsontext.Value) (ParsedToolCall
 		call.InputJSON = codexCloudJSON(map[string]string{"path": item.Path})
 		call.Rendering = formatToolHeader("Read", item.Path)
 	case "imageGeneration":
-		call.ToolName, call.Category = "image_generation", "Tool"
+		call.ToolName, call.Category = generatedImageCallName, "Tool"
 		call.InputJSON = string(raw)
 		call.Rendering = formatToolHeader("Tool", call.ToolName)
+		if image, ok := generatedImageResult(codexCloudString(item.Result)); ok {
+			if input, ok := jsonWithoutField(raw, "result"); ok {
+				call.InputJSON, result = input, image
+			}
+		}
 	default:
 		call.ToolName, call.Category = item.Type, "Other"
 		call.InputJSON = string(raw)

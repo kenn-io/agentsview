@@ -778,3 +778,63 @@ describe("ToolBlock collapsed previews", () => {
     expect(text(".tool-preview")).not.toContain("legacy todo");
   });
 });
+
+describe("ToolBlock result images", () => {
+  const imageResult = JSON.stringify([{ type: "input_image", image_url: SMALL_PNG_DATA_URI }]);
+  const previews = () =>
+    Array.from(document.querySelectorAll<HTMLImageElement>(".tool-images img"), (img) => ({
+      src: img.getAttribute("src"),
+      alt: img.getAttribute("alt"),
+    }));
+
+  it("shows a generated image while collapsed and keeps its payload out of the text", async () => {
+    await render({
+      toolCall: call(
+        "image_generation",
+        { id: "ig_1", status: "completed", revised_prompt: "A teal circle" },
+        { category: "Tool", result_content: imageResult },
+      ),
+    });
+    expect(previews()).toEqual([{ src: SMALL_PNG_DATA_URI, alt: "A teal circle" }]);
+
+    await click(".tool-header");
+    expect(text(".tool-content")).toContain("revised_prompt: A teal circle");
+    expect(text(".tool-content")).not.toContain("base64");
+    expect(text(".output-header .tool-preview")).toMatch(/^\[Image: image\/png, \d+ bytes\]$/);
+    expect(previews()).toHaveLength(1);
+  });
+
+  it("shows other tools' images only once the block is expanded", async () => {
+    await render({
+      toolCall: call(
+        "view_image",
+        { path: "/workspace/shot.png" },
+        { result_content: imageResult },
+      ),
+    });
+    expect(previews()).toEqual([]);
+    await click(".tool-header");
+    expect(previews()).toEqual([{ src: SMALL_PNG_DATA_URI, alt: "Image from tool output" }]);
+  });
+
+  it("opens the image at full size and closes it again", async () => {
+    await render({
+      toolCall: call(
+        "image_generation",
+        { revisedPrompt: "A teal circle" },
+        { result_content: imageResult },
+      ),
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    await click('.tool-images button[aria-label="Show image at full size"]');
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.getAttribute("aria-label")).toBe("Full-size image");
+    expect(dialog?.querySelector("img")?.getAttribute("src")).toBe(SMALL_PNG_DATA_URI);
+    expect(dialog?.querySelector("img")?.getAttribute("alt")).toBe("A teal circle");
+    expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("false");
+
+    await click('[role="dialog"] button[aria-label="Close full-size image"]');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+});

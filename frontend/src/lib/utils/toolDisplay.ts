@@ -18,12 +18,20 @@ export function displayToolName(call: { tool_name: string; category?: string | n
 const INLINE_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const INLINE_IMAGE_DATA_URI = /^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/;
 
-function inlineImageMarkdown(imageURL: unknown): string | null {
+interface InlineImage {
+  url: string;
+  mediaType: string;
+  byteSize: number;
+}
+
+function inlineImage(imageURL: unknown): InlineImage | null {
   if (typeof imageURL !== "string") return null;
   const match = INLINE_IMAGE_DATA_URI.exec(imageURL);
   if (!match || !INLINE_IMAGE_MEDIA_TYPES.has(match[1]!)) return null;
-  if (match[2]!.length % 4 !== 0) return null;
-  return `![${match[1]}](${imageURL})`;
+  const payload = match[2]!;
+  if (payload.length % 4 !== 0) return null;
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  return { url: imageURL, mediaType: match[1]!, byteSize: (payload.length / 4) * 3 - padding };
 }
 
 /** Display retained image placeholders alongside their surrounding text.
@@ -36,11 +44,17 @@ export function displayFormattedToolResult(content: string): string {
   return projectToolResult(content, "formatted");
 }
 
-type ToolResultDisplayMode = "stored" | "formatted";
+/** One-line previews name retained images with the archive's drop-mode
+ * placeholder text instead of showing their base64 payload. */
+export function displayToolResultPreview(content: string): string {
+  return projectToolResult(content, "preview");
+}
+
+type ToolResultDisplayMode = "stored" | "formatted" | "preview";
 
 function projectToolResult(content: string, mode: ToolResultDisplayMode): string {
   const hasPlaceholderMarker = content.includes('"agentsview_image"');
-  const hasRetainedImageMarker = mode === "formatted" && content.includes('"input_image"');
+  const hasRetainedImageMarker = mode !== "stored" && content.includes('"input_image"');
   if (!hasPlaceholderMarker && !hasRetainedImageMarker) return content;
   const direct = displayToolResultArray(content, mode);
   if (direct !== null) return direct;
@@ -80,11 +94,15 @@ function displayToolResultArray(content: string, mode: ToolResultDisplayMode): s
       text?: unknown;
       image_url?: unknown;
     };
-    if (mode === "formatted" && candidate.type === "input_image") {
-      const image = inlineImageMarkdown(candidate.image_url);
+    if (mode !== "stored" && candidate.type === "input_image") {
+      const image = inlineImage(candidate.image_url);
       if (image === null) return content;
       hasImage = true;
-      text.push(image);
+      text.push(
+        mode === "formatted"
+          ? `![${image.mediaType}](${image.url})`
+          : `[Image: ${image.mediaType}, ${image.byteSize} bytes]`,
+      );
     } else if (typeof candidate.text !== "string") {
       return content;
     } else if (candidate.type === "agentsview_image" && candidate.version === 1) {
@@ -97,4 +115,50 @@ function displayToolResultArray(content: string, mode: ToolResultDisplayMode): s
     }
   }
   return hasImage ? text.join("\n\n") : content;
+}
+
+/** Image sources a tool result holds, in block order: inline data URIs for
+ * retained images and asset:// references for offloaded ones. Dropped images
+ * have no source. */
+export function toolResultImageSources(content: string): string[] {
+  if (!content.includes('"input_image"') && !content.includes('"image_ref"')) return [];
+  return toolResultBlockArrays(content).flatMap((blocks) =>
+    blocks.map(toolResultImageSource).filter((src) => src !== null),
+  );
+}
+
+function toolResultImageSource(block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const candidate = block as { type?: unknown; image_url?: unknown; image_ref?: unknown };
+  if (candidate.type === "input_image") return inlineImage(candidate.image_url)?.url ?? null;
+  if (
+    candidate.type === "agentsview_image" &&
+    typeof candidate.image_ref === "string" &&
+    candidate.image_ref.startsWith("asset://")
+  ) {
+    return candidate.image_ref;
+  }
+  return null;
+}
+
+// Mirrors the section split in projectToolResult: a whole-result array, or
+// blank-line-separated summary sections with optional agent label lines.
+function toolResultBlockArrays(content: string): unknown[][] {
+  const direct = parseBlockArray(content);
+  if (direct !== null) return [direct];
+  return content.split("\n\n").flatMap((part) => {
+    const newline = part.indexOf("\n");
+    const labelled = newline > 0 && part.slice(0, newline).trimEnd().endsWith(":");
+    const blocks = parseBlockArray(labelled ? part.slice(newline + 1) : part);
+    return blocks === null ? [] : [blocks];
+  });
+}
+
+function parseBlockArray(content: string): unknown[] | null {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }

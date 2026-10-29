@@ -376,6 +376,10 @@
       }
     }
   ],
+  "tool_block_image_alt": "도구 출력의 이미지",
+  "tool_block_image_open": "이미지를 원본 크기로 보기",
+  "tool_block_image_dialog": "원본 크기 이미지",
+  "tool_block_image_close": "원본 크기 이미지 닫기",
   "thinking_block_label": "사고",
   "compact_boundary_title": "이 지점에서 컨텍스트 창이 컴팩션되었습니다",
   "compact_boundary_label": "컨텍스트 컴팩션됨",

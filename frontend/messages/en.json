@@ -388,6 +388,10 @@
       }
     }
   ],
+  "tool_block_image_alt": "Image from tool output",
+  "tool_block_image_open": "Show image at full size",
+  "tool_block_image_dialog": "Full-size image",
+  "tool_block_image_close": "Close full-size image",
   "thinking_block_label": "Thinking",
   "compact_boundary_title": "Context window compacted at this point",
   "compact_boundary_label": "Context compacted",

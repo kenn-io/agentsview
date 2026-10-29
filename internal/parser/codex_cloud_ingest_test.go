@@ -1,8 +1,10 @@
 package parser_test
 
 import (
+	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"image/color"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // prepareCodexCloud parses a mirror file built from items and runs it
@@ -137,6 +140,48 @@ func TestSessionTotalsCountEachIncreaseOnce(t *testing.T) {
 				outputs[i] = ev.OutputTokens
 			}
 			assert.Equal(t, tt.wantEvents, outputs, "a session event is floored, never clamped")
+		})
+	}
+}
+
+func TestCodexCloudGeneratedImageBecomesImageResult(t *testing.T) {
+	png := testjsonl.SolidPNGBase64(4, 3, color.RGBA{R: 200, G: 40, B: 90, A: 255})
+	text := base64.StdEncoding.EncodeToString([]byte("plain text, not an image"))
+	item := func(result string) string {
+		return `{"type":"imageGeneration","id":"g1","status":"completed","revisedPrompt":"A red square on white","result":"` + result + `"}`
+	}
+	tests := []struct {
+		name       string
+		item       string
+		wantInput  string
+		wantResult string
+	}{
+		{
+			name:       "png moves to the result",
+			item:       item(png),
+			wantInput:  `{"id":"g1","revisedPrompt":"A red square on white","status":"completed","type":"imageGeneration"}`,
+			wantResult: `[{"image_url":"data:image/png;base64,` + png + `","type":"input_image"}]`,
+		},
+		{
+			name:      "a payload that is not an image stays in the input",
+			item:      item(text),
+			wantInput: item(text),
+		},
+		{
+			name:      "a payload that is not base64 stays in the input",
+			item:      item("not base64!"),
+			wantInput: item("not base64!"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prepared := prepareCodexCloud(t, tt.item)
+			require.Len(t, prepared.Messages, 1)
+			require.Len(t, prepared.Messages[0].ToolCalls, 1)
+			call := prepared.Messages[0].ToolCalls[0]
+			assert.Equal(t, "image_generation", call.ToolName)
+			assert.Equal(t, tt.wantInput, call.InputJSON)
+			assert.Equal(t, tt.wantResult, call.ResultContent)
 		})
 	}
 }

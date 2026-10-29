@@ -4,6 +4,7 @@
   import { onDestroy } from "svelte";
   import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import SubagentInline from "./SubagentInline.svelte";
+  import ToolResultImages from "./ToolResultImages.svelte";
   import { bashCommandText, toolCopyText } from "../../utils/tool-params.js";
   import { parseToolInput, resolveToolInput, toolMetaTags } from "../../search/tool-input.js";
   import { searchBlock } from "../../search/session-block.svelte.js";
@@ -21,6 +22,8 @@
   import {
     displayFormattedToolResult,
     displayToolResult,
+    displayToolResultPreview,
+    toolResultImageSources,
   } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
 
@@ -90,8 +93,13 @@
     displayFormattedToolResult(toolCall?.result_content ?? ""),
   );
 
+  let imageSources = $derived(toolResultImageSources(toolCall?.result_content ?? ""));
+  // A generated image is the call's whole point, so it stays in view while
+  // the block is collapsed; other tools show their images when expanded.
+  let showImages = $derived(imageSources.length > 0
+    && (!collapsed || toolCall?.tool_name === "image_generation"));
   let outputPreviewLine = $derived.by(() => {
-    const rc = outputContent;
+    const rc = displayToolResultPreview(toolCall?.result_content ?? "");
     if (!rc) return "";
     const nl = rc.indexOf("\n");
     return (nl === -1 ? rc : rc.slice(0, nl)).slice(0, 100);
@@ -101,6 +109,10 @@
     return last ? `${last.status}: ${last.content.split("\n")[0]}`.slice(0, 100) : "";
   });
   let inputParams = $derived(parseToolInput(toolCall?.input_json).params);
+  let imageAlt = $derived.by(() => {
+    const prompt = inputParams?.revisedPrompt ?? inputParams?.revised_prompt;
+    return typeof prompt === "string" && prompt.trim() ? prompt : m.tool_block_image_alt();
+  });
   let structuredSummary = $derived(toolCall ? summarizeToolCall(toolCall) : null);
   let structuredSummaryTitle = $derived(toolCall ? summarizeToolCallPath(toolCall) : null);
   const outputModeOptions = $derived<SegmentedControlOption[]>([
@@ -201,6 +213,7 @@
         title={m.tool_block_copy_input()} copiedTitle={m.tool_block_copied_input()} onclick={handleInputCopy} />
     {/if}
   </div>
+  {#if showImages}<ToolResultImages sources={imageSources} alt={imageAlt} />{/if}
   {#if !collapsed}
     {#if metaTags}
       <div class="tool-meta">

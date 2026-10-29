@@ -376,6 +376,10 @@
       }
     }
   ],
+  "tool_block_image_alt": "工具輸出中的圖片",
+  "tool_block_image_open": "檢視原尺寸圖片",
+  "tool_block_image_dialog": "原尺寸圖片",
+  "tool_block_image_close": "關閉原尺寸圖片",
   "thinking_block_label": "思考",
   "compact_boundary_title": "上下文窗口在此處被壓縮",
   "compact_boundary_label": "上下文已壓縮",

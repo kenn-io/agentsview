@@ -608,6 +608,27 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Generated images (checked 2026-10-29 at
+  `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
+  [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
+  defines `ImageGenerationCall`, serialized as `image_generation_call` with an
+  optional `id`, `status`, an optional `revised_prompt`, and a string `result`.
+  The
+  [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
+  persists that response item in every history mode, and in legacy mode also
+  keeps an `image_generation_end` event that repeats `call_id`, `status`,
+  `revised_prompt`, and `result` and adds `saved_path`. A field-shape check of
+  local rollouts on 2026-10-29 matched both records; `result` held base64 PNG
+  data of about 2.7 MB. Agentsview reads only the response item. It stores the
+  item without `result` as the call input and the image as
+  one `input_image` block in the call's result, so the storage image policy
+  owns the payload and the session viewer shows the image. A `result` that is
+  not strict base64 of a PNG, JPEG, WebP, or GIF image stays in the input, and
+  an item with no `id` keeps no result. TraeX and Augure Code share this
+  parser. Data version 153 reparses these providers in place. Covered by
+  `TestCodexGeneratedImageStoredAsImageResult` and
+  `TestCodexGeneratedImageUpgradeReparsesUnchangedSource`.
+
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
   distinguishes message text, reasoning and tool operations. The existing
@@ -3492,6 +3513,14 @@ schemas keep their existing ordering behavior.
   these items empty. The parser keeps each one as a message because each marks
   a real turn. The transcript shows a run of consecutive empty messages as one
   collapsed row.
+- **Generated images (2026-10-29):** An `imageGeneration` item carries `id`,
+  `status`, `revisedPrompt`, and `result`, where `result` is base64 image data
+  (`no-public-source`; the shape came from a session the maintainer viewed).
+  Agentsview handles it like the local Codex `image_generation_call`: the item
+  without `result` becomes the call input, and the image becomes one
+  `input_image` result block. A `result` that is not a supported image stays in
+  the input. Data version 153 reparses Codex Cloud mirrors in place. Covered by
+  `TestCodexCloudGeneratedImageBecomesImageResult`.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
   limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).

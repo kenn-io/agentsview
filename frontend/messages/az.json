@@ -390,6 +390,10 @@
       }
     }
   ],
+  "tool_block_image_alt": "Alət çıxışından şəkil",
+  "tool_block_image_open": "Şəkli tam ölçüdə göstər",
+  "tool_block_image_dialog": "Tam ölçülü şəkil",
+  "tool_block_image_close": "Tam ölçülü şəkli bağla",
   "thinking_block_label": "Düşünmə",
   "compact_boundary_title": "Bu nöqtədə kontekst pəncərəsi sıxlaşdırılıb",
   "compact_boundary_label": "Kontekst sıxlaşdırılıb",

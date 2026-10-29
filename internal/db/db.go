@@ -618,7 +618,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (152: Codex cloud tool calls no longer copy the call into message text,
 // and each file of a change carries its own path and diff as input. Re-parse
 // Codex cloud sources in place; source and session identities are unchanged.)
-const dataVersion = 152
+// (153: show images Codex generates, in local rollouts and Codex Cloud, as
+// tool-result images. Re-parse Codex-format and Codex Cloud sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 153
 
 const archiveOnlyVersionBase = 1 << 20
 
