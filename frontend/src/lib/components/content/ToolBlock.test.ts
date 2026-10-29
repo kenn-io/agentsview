@@ -846,7 +846,7 @@ describe("ToolBlock result images", () => {
     await click('.tool-images button[aria-label="Show image at full size"]');
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog?.getAttribute("aria-label")).toBe("A teal circle");
-    expect(dialog?.querySelector(".kit-modal-title")).toBeNull();
+    expect(dialog?.querySelector(".kit-modal-header")).toBeNull();
     expect(dialog?.querySelector("img")?.getAttribute("src")).toBe(SMALL_PNG_DATA_URI);
     expect(dialog?.querySelector("img")?.getAttribute("alt")).toBe("A teal circle");
     expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("false");

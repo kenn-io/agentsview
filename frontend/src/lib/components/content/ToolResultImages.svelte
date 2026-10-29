@@ -63,15 +63,16 @@
 </div>
 {#if openSource !== null}
   <div {@attach attachToBody}>
-    <Modal
-      ariaLabel={alt}
-      closeLabel={m.tool_block_image_close()}
-      maxWidth="calc(100vw - 32px)"
-      onclose={close}
-    >
-      <div class="tool-image-full" use:loadAssetImages={openSource}>
+    <Modal ariaLabel={alt} closable={false} maxWidth="calc(100vw - 32px)" onclose={close}>
+      <button
+        type="button"
+        class="tool-image-full"
+        aria-label={m.tool_block_image_close()}
+        use:loadAssetImages={openSource}
+        onclick={close}
+      >
         <img src={openSource} {alt} />
-      </div>
+      </button>
     </Modal>
   </div>
 {/if}
@@ -112,6 +113,11 @@
   .tool-image-full {
     display: flex;
     justify-content: center;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: zoom-out;
   }
   /* Natural size, shrunk only to fit the viewport. */
   .tool-image-full img {
