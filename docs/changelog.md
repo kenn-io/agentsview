@@ -95,12 +95,9 @@ The latest release is
 
 **Bug fixes**
 
-- Successful rotation of an oversized `debug.log` saves up to its last
-  10 MB to `debug.log.1`, replacing the older backup before clearing the active
-  log. A busy lock or failed backup leaves the active log intact.
-  Writers wait during rotation, so their messages survive alongside the
-  retained tail to help investigate a stalled server. The backup starts at a
-  full line when one fits, and keeps the raw tail otherwise.
+- Oversized debug logs retain their last 10 MB in `debug.log.1` to help
+  investigate a stalled server. Successful rotation clears the active log;
+  a busy lock or failed backup leaves it intact.
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on

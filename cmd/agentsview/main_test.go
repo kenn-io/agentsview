@@ -723,11 +723,43 @@ func TestSetupLogFilePreservesOversizedLog(t *testing.T) {
 	dir := t.TempDir()
 	restoreTestLogOutput(t)
 	path := filepath.Join(dir, "debug.log")
-	writeTestFile(t, path, bytes.Repeat([]byte("x"), maxLogSize+1))
+	want := append(bytes.Repeat([]byte("x"), maxLogSize-18), []byte("recent diagnostic\n")...)
+	writeTestFile(t, path, append([]byte("discarded prefix\n"), want...))
 
 	setupLogFile(dir)
 
-	assert.FileExists(t, path+".1")
+	backup, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, want, backup)
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Empty(t, active)
+}
+
+func TestSetupDebugLogWriterDefersRotation(t *testing.T) {
+	dir := t.TempDir()
+	restoreTestLogOutput(t)
+	path := filepath.Join(dir, "debug.log")
+	content := bytes.Repeat([]byte("x"), maxLogSize+1)
+	writeTestFile(t, path, content)
+
+	setupDebugLogWriter(dir)
+	log.Print("early startup message")
+
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(active, content))
+	assert.Contains(t, string(active), "early startup message")
+	assert.NoFileExists(t, path+".1")
+
+	rotateLogFile(path, maxLogSize)
+
+	backup, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.Contains(t, string(backup), "early startup message")
+	active, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Empty(t, active)
 }
 
 func TestSetupLogFile(t *testing.T) {
@@ -817,9 +849,9 @@ func TestSetupLogFileOpenFailure(t *testing.T) {
 func TestSetupLogFileUnavailableLock(t *testing.T) {
 	dir := t.TempDir()
 	restoreTestLogOutput(t)
-	setupLogFile(dir)
 	path := filepath.Join(dir, "debug.log")
 	require.NoError(t, os.Mkdir(path+".rotate.lock", 0o700))
+	setupLogFile(dir)
 
 	log.Print("message without rotation lock")
 
@@ -857,7 +889,7 @@ func TestRotateLogFileTailAndMode(t *testing.T) {
 		openWriter bool
 	}{
 		{"at line boundary", "discarded prefix\nfirst retained line\nlast diagnostic\n", 36, "first retained line\nlast diagnostic\n", true},
-		{"within line", "discarded prefix\nfirst retained line\nlast diagnostic\n", 20, "last diagnostic\n", false},
+		{"within line", "discarded prefix\nfirst retained line\nlast diagnostic\n", 20, "ine\nlast diagnostic\n", false},
 		{"without complete line", "one oversized line\n", 8, "ed line\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -919,7 +951,7 @@ func TestRotateLogFileSymlink(t *testing.T) {
 	writeTestFile(t, target, big)
 	requireSymlinkOrSkip(t, target, link)
 
-	rotateLogFile(link, 8)
+	rotateLogFile(link, 512)
 
 	data, err := os.ReadFile(target)
 	require.NoError(t, err, "read target")
@@ -983,7 +1015,7 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 	requireSymlinkOrSkip(t, target, link)
 
 	// Truncate via symlink: should be a no-op.
-	truncateLogFile(link, 8)
+	truncateLogFile(link, 512)
 
 	data, err := os.ReadFile(target)
 	require.NoError(t, err, "read target")

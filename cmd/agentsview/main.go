@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -23,7 +22,6 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
@@ -160,6 +158,7 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
+	setupDebugLogWriter(cfg.DataDir)
 	archiveOnly, err := archiveModeAfterRecovery(ctx, cfg)
 	if err != nil {
 		fatal("reading archive mode: %v", err)
@@ -203,7 +202,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		return
 	}
 	defer releaseForegroundServeLaunch()
-	setupLogFile(cfg.DataDir)
+	rotateLogFile(filepath.Join(cfg.DataDir, "debug.log"), maxLogSize)
 
 	// Acquire the daemon start lock immediately after config setup,
 	// before opening the DB, so token-use never sees a window
@@ -1586,16 +1585,18 @@ func mustLoadConfig(cmd *cobra.Command) config.Config {
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
 
 func setupLogFile(dataDir string) {
-	logPath := filepath.Join(dataDir, "debug.log")
-	rotateLogFile(logPath, maxLogSize)
-	f, err := os.OpenFile(
-		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
-	)
-	if err != nil {
-		log.Printf("warning: cannot open log file: %v", err)
-		return
+	rotateLogFile(filepath.Join(dataDir, "debug.log"), maxLogSize)
+	setupDebugLogWriter(dataDir)
+}
+
+// setupDebugLogWriter captures startup messages without rotating an incumbent's log.
+func setupDebugLogWriter(dataDir string) {
+	path := filepath.Join(dataDir, "debug.log")
+	if f := openLogFile(path); f != nil {
+		// Keep the descriptor open across writes; flock.Unlock closes its descriptor.
+		lock, _ := os.OpenFile(logRotationLockPath(path), os.O_CREATE|os.O_RDWR, 0o600)
+		log.SetOutput(&lockedLogWriter{file: f, lock: lock})
 	}
-	log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(logPath))})
 }
 
 // setupLogFileNamed redirects the standard logger to the named file
@@ -1603,23 +1604,34 @@ func setupLogFile(dataDir string) {
 func setupLogFileNamed(dataDir, name string) {
 	logPath := filepath.Join(dataDir, name)
 	truncateLogFile(logPath, maxLogSize)
+	if f := openLogFile(logPath); f != nil {
+		log.SetOutput(f)
+	}
+}
+
+func openLogFile(path string) *os.File {
 	f, err := os.OpenFile(
-		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
+		path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
 	)
 	if err != nil {
 		log.Printf("warning: cannot open log file: %v", err)
-		return
 	}
-	log.SetOutput(f)
+	return f
 }
 
 // truncateLogFile clears oversized logs, skipping symlinks and ignoring errors.
 func truncateLogFile(path string, limit int64) {
+	if oversizedLogInfo(path, limit) != nil {
+		_ = os.Truncate(path, 0)
+	}
+}
+
+func oversizedLogInfo(path string, limit int64) os.FileInfo {
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
-		return
+		return nil
 	}
-	_ = os.Truncate(path, 0)
+	return info
 }
 
 func logRotationLockPath(path string) string {
@@ -1628,18 +1640,22 @@ func logRotationLockPath(path string) string {
 
 type lockedLogWriter struct {
 	file *os.File
-	lock *flock.Flock
+	lock *os.File
 }
 
 func (w *lockedLogWriter) Write(p []byte) (int, error) {
-	if err := w.lock.RLock(); err != nil {
+	// The standard logger serializes calls to Write.
+	if w.lock == nil || w.lockShared() != nil {
 		return w.file.Write(p)
 	}
 	n, err := w.file.Write(p)
-	return n, errors.Join(err, w.lock.Unlock())
+	return n, errors.Join(err, w.unlockShared())
 }
 
 func (w *lockedLogWriter) Close() error {
+	if w.lock == nil {
+		return w.file.Close()
+	}
 	return errors.Join(w.file.Close(), w.lock.Close())
 }
 
@@ -1647,8 +1663,7 @@ func (w *lockedLogWriter) Close() error {
 // Copying keeps existing writers on the active file. Symlinks are skipped.
 // Errors are best-effort; a failed backup leaves the active log intact.
 func rotateLogFile(path string, limit int64) {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
+	if oversizedLogInfo(path, limit) == nil {
 		return
 	}
 	lockPath := logRotationLockPath(path)
@@ -1657,8 +1672,8 @@ func rotateLogFile(path string, limit int64) {
 		return
 	}
 	defer lock.Close()
-	info, err = os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
+	info := oversizedLogInfo(path, limit)
+	if info == nil {
 		return
 	}
 	source, err := os.Open(path)
@@ -1666,13 +1681,7 @@ func rotateLogFile(path string, limit int64) {
 		return
 	}
 	defer source.Close()
-	// Include the preceding byte so a tail already on a line boundary stays intact.
-	tail := bufio.NewReader(io.NewSectionReader(source, info.Size()-limit-1, limit+1))
-	_, err = tail.ReadString('\n')
-	if _, peekErr := tail.Peek(1); err != nil || peekErr != nil {
-		// Without a usable line boundary, keep the raw bounded tail.
-		tail.Reset(io.NewSectionReader(source, info.Size()-limit, limit))
-	}
+	tail := io.NewSectionReader(source, info.Size()-limit, limit)
 	backup, err := atomicfile.Create(path+".1", atomicfile.WithPerm(info.Mode().Perm()))
 	if err != nil {
 		return
