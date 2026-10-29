@@ -25,7 +25,8 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 	}
 
 	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
-	reader := db.openReader(path)
+	reader := sql.OpenDB(&archiveReaderConnector{dsn: makeDSN(path, true), reads: &db.reads})
+	reader.SetMaxOpenConns(4)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
