@@ -813,7 +813,9 @@ func (b *codexSessionBuilder) handleFunctionCall(
 func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 	payload gjson.Result, ts time.Time,
 ) {
-	callID := payload.Get("id").Str
+	// The id is a slice of the whole line, image included; a copy keeps the
+	// stored call from holding the payload in memory.
+	callID := strings.Clone(payload.Get("id").Str)
 	inputJSON := payload.Raw
 	image, hasImage := generatedImageResult(payload.Get("result").Str)
 	// A result attaches to its call by id, so an item without one keeps the
