@@ -623,7 +623,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // source and session identities are unchanged.)
 // (154: repair growing VS Code-format replies. Re-parse VS Code Copilot and
 // Positron sources in place; source and session identities are unchanged.)
-const dataVersion = 154
+// (155: add the Fast billing identity to Codex-format messages. Re-parse Codex
+// sources in place; source and session identities are unchanged.)
+const dataVersion = 155
 
 const archiveOnlyVersionBase = 1 << 20
 

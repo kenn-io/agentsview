@@ -364,7 +364,7 @@ func TestSameProcessStartMarkerNeverReportsExternal(t *testing.T) {
 		UnmarkDaemonStarting(dir)
 	})
 
-	deadline := time.Now().Add(300 * time.Millisecond)
+	deadline := time.Now().Add(300 * time.Millisecond) //nolint:kennlint // deadlinetest: absence check; repeated lock probes must never classify this process as an external startup
 	for time.Now().Before(deadline) {
 		require.False(t, isExternalDaemonStarting(dir),
 			"same-process start marker reported as external")
@@ -1894,14 +1894,14 @@ func TestWaitForDaemonStartup_AlreadyRunning(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeLiveRuntime(t, dir, false, withRuntimeVersion("1.0.0"))
 
-	assert.True(t, WaitForDaemonStartup(dir, 100*time.Millisecond),
+	assert.True(t, WaitForDaemonStartup(dir, time.Second),
 		"expected true, server is running")
 }
 
 func TestWaitForDaemonStartup_LockClearsNoServer(t *testing.T) {
 	dir := runtimeTestDir(t)
 
-	assert.False(t, WaitForDaemonStartup(dir, 100*time.Millisecond),
+	assert.False(t, WaitForDaemonStartup(dir, time.Second),
 		"expected false, no start lock and no server")
 }
 

@@ -110,7 +110,7 @@ func (s *Store) init(ctx context.Context) error {
 	return nil
 }
 
-//nolint:kennlint // Shipped migration constraints must remain unchanged for historical upgrades.
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
 var versionOneSchemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS device_config (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -129,7 +129,7 @@ var versionOneSchemaStatements = []string{
 	)`,
 }
 
-//nolint:kennlint // Shipped migration constraints must remain unchanged for historical upgrades.
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
 var versionTwoMigrationStatements = []string{
 	`ALTER TABLE raw_sources ADD COLUMN latest_capture_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE TABLE outbox_config (
@@ -256,7 +256,7 @@ var versionTwoMigrationStatements = []string{
 	`CREATE INDEX outbox_objects_state_idx ON outbox_objects(state)`,
 }
 
-//nolint:kennlint // Shipped migration constraints must remain unchanged for historical upgrades.
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
 var versionThreeMigrationStatements = []string{
 	`ALTER TABLE outbox_generations
 		ADD COLUMN retry_at TEXT NOT NULL DEFAULT ''`,
@@ -336,21 +336,21 @@ var versionFiveMigrationStatements = []string{
 		FROM raw_coverage WHERE state = 'degraded'`,
 }
 
-//nolint:kennlint // Shipped migration constraints must remain unchanged for historical upgrades.
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
 var versionSixMigrationStatements = []string{
 	`ALTER TABLE outbox_config
 		ADD COLUMN max_outbox_bytes INTEGER NOT NULL DEFAULT 1073741824
 		CHECK (max_outbox_bytes > 0)`,
 }
 
-//nolint:kennlint // Shipped migration constraints must remain unchanged for historical upgrades.
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
 var versionSevenMigrationStatements = []string{
 	`ALTER TABLE outbox_generations
 		ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0
 		CHECK (attempt_count >= 0)`,
 }
 
-//nolint:kennlint // Shipped migration constraints must remain unchanged for historical upgrades.
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
 var versionEightMigrationStatements = []string{
 	`ALTER TABLE raw_sources
 		ADD COLUMN observation_revision INTEGER NOT NULL DEFAULT 0

@@ -57,7 +57,7 @@ type readOnlyInsightPersistStore struct {
 func fastInsightLogDrainTimeouts() server.Option {
 	return server.WithInsightLogDrainTimeouts(
 		20*time.Millisecond,
-		50*time.Millisecond,
+		50*time.Millisecond, //nolint:kennlint // deadlinetest: the blocked log writer forces the drain deadline to expire
 	)
 }
 
@@ -1999,7 +1999,7 @@ func TestGenerateInsight_LogDrainTimeoutForceUnblocksAndNoPostReturnWrites(t *te
 	select {
 	case <-w.PostReturnAttempted():
 		require.Fail(t, "expected no writes after handler return")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the handler has returned, so no write may follow
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the handler has returned, so no write may follow
 	}
 	require.Zero(t, w.PostReturnWrites(), "expected no writes after handler return")
 

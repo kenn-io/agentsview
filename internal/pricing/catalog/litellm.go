@@ -24,7 +24,11 @@ const (
 	litellmBaseURL     = "https://raw.githubusercontent.com/BerriAI/litellm/"
 	litellmPricingFile = "model_prices_and_context_window.json"
 	litellmURL         = litellmBaseURL + "main/" + litellmPricingFile
+	priorityTier       = "priority"
 )
+
+// PriorityPattern identifies a model's Fast pricing row.
+func PriorityPattern(pattern string) string { return pattern + "@" + priorityTier }
 
 // ModelPricing holds per-model token pricing in cost per million tokens.
 // CacheCreation1hPerMTok prices 1-hour-TTL cache writes; zero means the
@@ -51,6 +55,10 @@ type PricingBand struct {
 
 var inputThresholdRatePattern = regexp.MustCompile(
 	`^input_cost_per_token_above_([0-9]+)(k?)_tokens$`,
+)
+
+var priorityInputThresholdRatePattern = regexp.MustCompile(
+	`^input_cost_per_token_above_([0-9]+)(k?)_tokens_` + priorityTier + `$`,
 )
 
 // FetchLiteLLMPricingContext downloads the LiteLLM pricing JSON and binds the
@@ -151,31 +159,83 @@ func ParseLiteLLMPricing(
 			CacheCreation1hPerMTok: cacheCreation1h,
 			CacheReadPerMTok:       cacheRead,
 		}
-		p.Bands, err = parsePricingBands(model, fields, p)
+		p.Bands, err = parsePricingBands(model, fields, p, inputThresholdRatePattern, nil)
 		if err != nil {
 			return nil, err
 		}
 		prices = append(prices, p)
+		priority, present, err := parsePriorityPricing(model, fields, p)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			prices = append(prices, priority)
+		}
 	}
 	return prices, nil
 }
 
+func parsePriorityPricing(model string, fields map[string]jsontext.Value, p ModelPricing) (ModelPricing, bool, error) {
+	var provider string
+	openAI := json.Unmarshal(fields["litellm_provider"], &provider) == nil && provider == "openai"
+	if !openAI {
+		return ModelPricing{}, false, nil
+	}
+	input, present, err := parseOptionalRate(fields, "input_cost_per_token_"+priorityTier)
+	if err != nil {
+		return ModelPricing{}, false, fmt.Errorf("parsing %s %s input price: %w", model, priorityTier, err)
+	}
+	if !present {
+		return ModelPricing{}, false, nil
+	}
+	output, present, err := parseOptionalRate(fields, "output_cost_per_token_"+priorityTier)
+	if err != nil {
+		return ModelPricing{}, false, fmt.Errorf("parsing %s %s output price: %w", model, priorityTier, err)
+	}
+	tp := p
+	tp.ModelPattern = PriorityPattern(model)
+	tp.InputPerMTok = input
+	if present {
+		tp.OutputPerMTok = output
+	}
+	for field, dest := range map[string]*money.Money{
+		"cache_read_input_token_cost":     &tp.CacheReadPerMTok,
+		"cache_creation_input_token_cost": &tp.CacheCreationPerMTok,
+	} {
+		rate, present, err := parseOptionalRate(fields, field+"_"+priorityTier)
+		if err != nil {
+			return ModelPricing{}, false, fmt.Errorf("parsing %s %s: %w", tp.ModelPattern, field, err)
+		}
+		if present {
+			*dest = rate
+		}
+	}
+	tp.Bands, err = parsePricingBands(model, fields, tp,
+		priorityInputThresholdRatePattern, p.Bands)
+	if err != nil {
+		return ModelPricing{}, false, err
+	}
+	return tp, true, nil
+}
+
+// parsePricingBands fills unpublished tier thresholds from standard bands when
+// fallbackBands is provided; tier-specific companion rates still take priority.
 func parsePricingBands(
 	model string,
 	fields map[string]jsontext.Value,
 	base ModelPricing,
+	thresholdPattern *regexp.Regexp,
+	fallbackBands []PricingBand,
 ) ([]PricingBand, error) {
 	var bands []PricingBand
 	thresholds := make(map[int]struct{})
 	for key := range fields {
-		matches := inputThresholdRatePattern.FindStringSubmatch(key)
-		if matches == nil {
-			continue
-		}
-
-		threshold, err := parseThreshold(matches[1], matches[2] == "k")
+		threshold, matched, err := parsePricingThreshold(model, key, thresholdPattern)
 		if err != nil {
-			return nil, fmt.Errorf("parsing %s pricing threshold %q: %w", model, key, err)
+			return nil, err
+		}
+		if !matched {
+			continue
 		}
 		if _, exists := thresholds[threshold]; exists {
 			return nil, fmt.Errorf(
@@ -195,44 +255,112 @@ func parsePricingBands(
 		thresholds[threshold] = struct{}{}
 
 		suffix := strings.TrimPrefix(key, "input_cost_per_token")
-		band := PricingBand{
-			AboveInputTokens:       threshold,
-			InputPerMTok:           input,
-			OutputPerMTok:          base.OutputPerMTok,
-			CacheCreationPerMTok:   base.CacheCreationPerMTok,
-			CacheCreation1hPerMTok: base.CacheCreation1hPerMTok,
-			CacheReadPerMTok:       base.CacheReadPerMTok,
+		fallbackSuffix := strings.TrimSuffix(suffix, "_"+priorityTier)
+		suffixes := []string{suffix}
+		if fallbackSuffix != suffix {
+			suffixes = append(suffixes, fallbackSuffix)
 		}
-		companions := []struct {
-			prefix string
-			dest   *money.Money
-		}{
-			{prefix: "output_cost_per_token", dest: &band.OutputPerMTok},
-			{prefix: "cache_creation_input_token_cost", dest: &band.CacheCreationPerMTok},
-			{prefix: "cache_creation_input_token_cost_above_1hr", dest: &band.CacheCreation1hPerMTok},
-			{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
-		}
-		for _, companion := range companions {
-			rate, exists, err := parseOptionalRate(fields, companion.prefix+suffix)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"parsing %s %s: %w",
-					model,
-					companion.prefix+suffix,
-					err,
-				)
-			}
-			if exists {
-				*companion.dest = rate
-			}
+		band, err := parsePricingBand(model, fields, base, threshold, input, suffixes...)
+		if err != nil {
+			return nil, err
 		}
 		bands = append(bands, band)
+	}
+	if len(fallbackBands) > 0 {
+		standardByThreshold := make(map[int]PricingBand, len(fallbackBands))
+		for _, band := range fallbackBands {
+			standardByThreshold[band.AboveInputTokens] = band
+		}
+		for key := range fields {
+			threshold, matched, err := parsePricingThreshold(
+				model, key, inputThresholdRatePattern,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if !matched {
+				continue
+			}
+			if _, exists := thresholds[threshold]; exists {
+				continue
+			}
+			standard, exists := standardByThreshold[threshold]
+			if !exists {
+				continue
+			}
+			suffix := strings.TrimPrefix(key, "input_cost_per_token")
+			band, err := parsePricingBand(
+				model, fields, base, threshold, standard.InputPerMTok,
+				suffix+"_"+priorityTier, suffix,
+			)
+			if err != nil {
+				return nil, err
+			}
+			bands = append(bands, band)
+			thresholds[threshold] = struct{}{}
+		}
 	}
 
 	if err := NormalizePricingBands(model, bands); err != nil {
 		return nil, err
 	}
 	return bands, nil
+}
+
+func parsePricingThreshold(
+	model, key string,
+	pattern *regexp.Regexp,
+) (int, bool, error) {
+	matches := pattern.FindStringSubmatch(key)
+	if matches == nil {
+		return 0, false, nil
+	}
+	threshold, err := parseThreshold(matches[1], matches[2] == "k")
+	if err != nil {
+		return 0, true, fmt.Errorf("parsing %s pricing threshold %q: %w", model, key, err)
+	}
+	return threshold, true, nil
+}
+
+func parsePricingBand(
+	model string,
+	fields map[string]jsontext.Value,
+	base ModelPricing,
+	threshold int,
+	input money.Money,
+	suffixes ...string,
+) (PricingBand, error) {
+	band := PricingBand{
+		AboveInputTokens:       threshold,
+		InputPerMTok:           input,
+		OutputPerMTok:          base.OutputPerMTok,
+		CacheCreationPerMTok:   base.CacheCreationPerMTok,
+		CacheCreation1hPerMTok: base.CacheCreation1hPerMTok,
+		CacheReadPerMTok:       base.CacheReadPerMTok,
+	}
+	companions := []struct {
+		prefix string
+		dest   *money.Money
+	}{
+		{prefix: "output_cost_per_token", dest: &band.OutputPerMTok},
+		{prefix: "cache_creation_input_token_cost", dest: &band.CacheCreationPerMTok},
+		{prefix: "cache_creation_input_token_cost_above_1hr", dest: &band.CacheCreation1hPerMTok},
+		{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
+	}
+	for _, companion := range companions {
+		for _, suffix := range suffixes {
+			key := companion.prefix + suffix
+			rate, exists, err := parseOptionalRate(fields, key)
+			if err != nil {
+				return PricingBand{}, fmt.Errorf("parsing %s %s: %w", model, key, err)
+			}
+			if exists {
+				*companion.dest = rate
+				break
+			}
+		}
+	}
+	return band, nil
 }
 
 // NormalizePricingBands validates and sorts a model's complete request-pricing

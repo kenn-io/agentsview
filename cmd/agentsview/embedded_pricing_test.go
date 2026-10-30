@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // These costs are hand-calculated from the pinned LiteLLM standard rates.
@@ -60,6 +61,35 @@ input_microdollars_per_mtok = 1000000
 output_microdollars_per_mtok = 2000000
 `), 0o600))
 	assertEmbeddedCLIUsage(t, "gpt-6-astra", 292_001)
+}
+
+func TestEmbeddedCodexServiceTierPricingCLI(t *testing.T) {
+	// 90K uncached input, 10K cached input, and 10K output tokens.
+	dataDir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	root := t.TempDir()
+	const uuid = "019f0000-0000-7000-8000-00000000c001"
+	path := filepath.Join(root, "rollout-2026-10-01T10-00-00-"+uuid+".jsonl")
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", "2026-10-01T10:00:00Z"),
+		testjsonl.CodexTurnContextJSON("gpt-6.1-sol", "2026-10-01T10:00:01Z"),
+		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
+		testjsonl.CodexMsgJSON("user", "hello", "2026-10-01T10:00:01Z"),
+		testjsonl.CodexMsgJSON("assistant", "answer", "2026-10-01T10:00:05Z"),
+		testjsonl.CodexTokenCountJSON("2026-10-01T10:00:05Z", 100_000, 10_000, 10_000),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local",
+	})
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+	engine.Close()
+	seeded, err := database.HasModelPricingRows(t.Context())
+	require.NoError(t, err)
+	require.False(t, seeded, "fixture must reproduce an unseeded archive")
+	require.NoError(t, database.Close())
+	assertEmbeddedCLIUsage(t, "gpt-6.1-sol", 562_000)
 }
 
 func seedUnpricedPiSession(t *testing.T, model string, input, output, write, read, requests int) string {

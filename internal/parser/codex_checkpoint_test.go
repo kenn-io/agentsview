@@ -14,6 +14,7 @@ import (
 func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 	seed := codexCursorState{
 		model:                    "gpt-5.6-luna",
+		serviceTierProviderID:    "openai-priority",
 		cwd:                      "/workspace/project-a",
 		agentPath:                "codex/agents/a",
 		firstUserSeen:            true,
@@ -72,6 +73,7 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 		testjsonl.CodexSessionMetaJSON(
 			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
 		),
+		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
 		testjsonl.CodexMsgJSON("user", "run the command", tsEarlyS1),
 		testjsonl.CodexFunctionCallWithCallIDJSON(
 			"exec_command", callID, nil, tsEarlyS5,
@@ -97,10 +99,18 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	checkpoint := outcome.Results[0].Result.Checkpoint
 	require.NotEmpty(t, checkpoint,
 		"a full parse of a safe-offset transcript must produce a checkpoint")
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	concrete.cursorCache = newProductionCodexCursorCache()
 
-	tail := testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON(
-		callID, "done", "2026-08-02T09:00:03Z",
-	))
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			callID, "done", "2026-08-02T09:00:03Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "resumed answer", "2026-08-02T09:00:04Z",
+		),
+	)
 	appendCodexProviderContent(t, path, tail)
 
 	fingerprint, err = provider.Fingerprint(t.Context(), source)
@@ -117,7 +127,8 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, IncrementalApplied, status)
-	assert.Empty(t, incOutcome.Messages)
+	require.Len(t, incOutcome.Messages, 1)
+	assert.Equal(t, "openai-priority", incOutcome.Messages[0].ProviderID)
 	require.Len(t, incOutcome.ToolCallUpdates, 1)
 	assert.Equal(t, callID, incOutcome.ToolCallUpdates[0].ToolUseID)
 	assert.NotEmpty(t, incOutcome.NextCursor,

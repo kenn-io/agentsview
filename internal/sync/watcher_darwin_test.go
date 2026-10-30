@@ -430,7 +430,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			require.NoError(t, err)
 			var appendBatch WatchBatch
 			observedBeforeClose := false
-			observationTimer := time.NewTimer(750 * time.Millisecond) //nolint:kennlint // absence check; the window only records whether the open append surfaces before close, and either outcome passes
+			observationTimer := time.NewTimer(750 * time.Millisecond) //nolint:kennlint // deadlinetest: absence check; the window only records whether the open append surfaces before close, and either outcome passes
 		observeOpenAppend:
 			for {
 				select {
@@ -2322,7 +2322,8 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 		nativeSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
 		close(returned)
 	}()
-	requireReceiveWithin(t, returned, 100*time.Millisecond)
+	// Polling stays blocked until the native callback returns.
+	requireReceiveWithin(t, returned, time.Second)
 	requireReceiveWithin(t, pollingEntered, time.Second)
 	close(releasePolling)
 }

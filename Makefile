@@ -555,7 +555,7 @@ lint-sql:
 	go run go.kenn.io/kit/cmd/kennlint@v0.34.1 sql internal/db/schema.sql
 
 lint-config-check:
-	go run go.kenn.io/kit/cmd/kennlint@v0.34.1 config -check
+	go run go.kenn.io/kit/cmd/kennlint@v0.47.2 config -check
 
 # Build a custom golangci-lint binary with the kit and NilAway module plugins.
 # Strip every repo-local Git env var (GIT_DIR, GIT_INDEX_FILE,

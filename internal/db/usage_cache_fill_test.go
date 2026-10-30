@@ -1044,7 +1044,7 @@ func TestUsageCacheNotificationsCoalesceChangedSessions(t *testing.T) {
 	select {
 	case versions := <-batch:
 		require.Failf(t, "duplicate notification started another fill", "%#v", versions)
-	case <-time.After(3 * usageFillNotificationDebounce): //nolint:kennlint // absence check; the coalesced fill must not start a second batch
+	case <-time.After(3 * usageFillNotificationDebounce): //nolint:kennlint // deadlinetest: absence check; the coalesced fill must not start a second batch
 	}
 }
 
@@ -1099,7 +1099,7 @@ func TestUsageCacheNotificationObservesOnlyCommittedWrites(t *testing.T) {
 	select {
 	case value := <-observed:
 		require.Failf(t, "rolled-back message write emitted usage notification", "%s", value)
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the rolled-back write must never notify
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the rolled-back write must never notify
 	}
 }
 

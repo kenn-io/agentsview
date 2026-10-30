@@ -29,7 +29,7 @@ func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.
 			return nil, s.backend.ReadError(operation, err)
 		}
 	} else {
-		rows, err := s.backend.QueryContext(ctx, query, args...) //nolint:kennlint // ScanMessages checks rows.Err().
+		rows, err := s.backend.QueryContext(ctx, query, args...) //nolint:kennlint // rowserrcheck: ScanMessages checks rows.Err().
 		if err != nil {
 			return nil, s.backend.ReadError(operation, err)
 		}
@@ -46,7 +46,7 @@ func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.
 }
 
 func (s Sessions) GetAllMessages(ctx context.Context, sessionID string) ([]db.Message, error) {
-	rows, err := s.backend.QueryContext(ctx, s.backend.AllMessagesSQL(), sessionID) //nolint:kennlint // ScanMessages checks rows.Err().
+	rows, err := s.backend.QueryContext(ctx, s.backend.AllMessagesSQL(), sessionID) //nolint:kennlint // rowserrcheck: ScanMessages checks rows.Err().
 	if err != nil {
 		return nil, s.backend.ReadError(QueryAllMessages, err)
 	}

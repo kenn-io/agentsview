@@ -29,7 +29,7 @@ func TestWithTimeout(t *testing.T) {
 		{
 			name:      "timeout",
 			operation: "GET /test",
-			timeout:   10 * time.Millisecond,
+			timeout:   10 * time.Millisecond, //nolint:kennlint // deadlinetest: the case asserts deadline expiry inside its synctest bubble
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				<-r.Context().Done()
 				w.WriteHeader(http.StatusOK)
@@ -49,7 +49,7 @@ func TestWithTimeout(t *testing.T) {
 		{
 			name:      "success",
 			operation: "GET /test",
-			timeout:   100 * time.Millisecond,
+			timeout:   time.Second,
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("X-Custom", "value")
 				w.WriteHeader(http.StatusCreated)

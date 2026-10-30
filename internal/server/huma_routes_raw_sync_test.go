@@ -873,7 +873,7 @@ func TestRawSyncAuthenticationUsesWriteTimeout(t *testing.T) {
 		Port:         8080,
 		AuthToken:    "legacy-shared-token",
 		RequireAuth:  true,
-		WriteTimeout: 20 * time.Millisecond,
+		WriteTimeout: 20 * time.Millisecond, //nolint:kennlint // deadlinetest: the blocked authentication ends only when the write deadline expires
 	}, nil, nil, WithRawSyncServices(auth, new(rawSyncCustodyStub)))
 
 	started := time.Now()

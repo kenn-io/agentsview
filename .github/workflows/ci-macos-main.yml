@@ -14,6 +14,10 @@ on:
       - 'internal/**'
       - 'go.mod'
       - 'go.sum'
+      - '.custom-gcl.yml'
+      - '.golangci.yml'
+      - '.golangci.overlay.yml'
+      - 'Makefile'
       - '.github/workflows/ci-macos-main.yml'
   push:
     branches: [main]
@@ -23,6 +27,10 @@ on:
       - 'testdata/golden/**'
       - 'go.mod'
       - 'go.sum'
+      - '.custom-gcl.yml'
+      - '.golangci.yml'
+      - '.golangci.overlay.yml'
+      - 'Makefile'
       - '.github/workflows/ci-macos-main.yml'
 
 permissions:
@@ -32,10 +40,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   test-macos-fsevents:
     name: Go Test (macOS FSEvents)
     runs-on: macos-latest
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -54,6 +64,13 @@ jobs:
 
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+      - name: Run focused macOS FSEvents deadline linters
+        run: |
+          make lint-tools nilaway-golangci-build
+          ./custom-gcl run --enable-only kennlint,kennnolint,nolintlint ./internal/fsevents ./internal/sync
+        env:
+          CGO_ENABLED: "1"
 
       - name: Run focused macOS FSEvents tests
         if: github.event_name == 'push'

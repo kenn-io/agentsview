@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -155,34 +156,36 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 }
 
 func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
-	buildDone := make(chan struct{})
-	var completeOnce sync.Once
-	complete := func() { completeOnce.Do(func() { close(buildDone) }) }
-	defer complete()
-	fake := &fakeEmbeddingsManager{waitForBuild: buildDone}
-	idled := make(chan struct{}, 1)
-	tracker := NewIdleTracker(20*time.Millisecond, func() { idled <- struct{}{} })
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	s := testServer(t, 0, WithEmbeddingsManager(fake), WithIdleTracker(tracker))
-	tracker.Touch()
-	go tracker.Run(ctx)
+	synctest.Test(t, func(t *testing.T) {
+		buildDone := make(chan struct{})
+		var completeOnce sync.Once
+		complete := func() { completeOnce.Do(func() { close(buildDone) }) }
+		defer complete()
+		fake := &fakeEmbeddingsManager{waitForBuild: buildDone}
+		idled := make(chan struct{}, 1)
+		tracker := NewIdleTracker(20*time.Millisecond, func() { idled <- struct{}{} })
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		s := testServer(t, 0, WithEmbeddingsManager(fake), WithIdleTracker(tracker))
+		tracker.Touch()
+		go tracker.Run(ctx)
 
-	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
-		vector.BuildRequest{})
-	assertRecorderStatus(t, w, http.StatusAccepted)
+		w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
+			vector.BuildRequest{})
+		assertRecorderStatus(t, w, http.StatusAccepted)
 
-	select {
-	case <-idled:
-		require.Fail(t, "daemon idled while an API-started embedding build was active")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the active embedding build keeps the daemon from idling
-	}
-	complete()
-	select {
-	case <-idled:
-	case <-time.After(time.Second):
-		require.Fail(t, "daemon did not idle after the API-started build completed")
-	}
+		select {
+		case <-idled:
+			require.Fail(t, "daemon idled while an API-started embedding build was active")
+		case <-time.After(100 * time.Millisecond):
+		}
+		complete()
+		select {
+		case <-idled:
+		case <-time.After(time.Second):
+			require.Fail(t, "daemon did not idle after the API-started build completed")
+		}
+	})
 }
 
 func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {

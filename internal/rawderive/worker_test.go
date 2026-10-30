@@ -468,7 +468,7 @@ func TestWorkerAttemptTimeoutStopsRunawayPipelineAndRecordsDeadline(t *testing.T
 			return errors.New("unexpected projection after attempt deadline")
 		}),
 	)
-	worker.AttemptTimeout = 50 * time.Millisecond
+	worker.AttemptTimeout = 50 * time.Millisecond //nolint:kennlint // deadlinetest: the blocked parser returns only when the attempt deadline expires
 	worker.HeartbeatInterval = 10 * time.Millisecond
 	started := time.Now()
 
@@ -536,7 +536,7 @@ func TestWorkerStopsRenewingLeaseWhenStageBlocksPastAttemptDeadline(t *testing.T
 			return nil
 		}),
 	)
-	worker.AttemptTimeout = 250 * time.Millisecond
+	worker.AttemptTimeout = 250 * time.Millisecond //nolint:kennlint // deadlinetest: the held parser outlives its deadline so lease renewal must stop
 	worker.HeartbeatInterval = 10 * time.Millisecond
 	batchDone := make(chan BatchResult, 1)
 	batchErr := make(chan error, 1)

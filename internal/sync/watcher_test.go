@@ -80,7 +80,7 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	select {
 	case generation := <-gate.acknowledged:
 		require.Fail(t, "failed reconciliation acknowledged lifecycle", generation)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the failed reconciliation must not acknowledge the lifecycle
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the failed reconciliation must not acknowledge the lifecycle
 	}
 	second := requireReceiveWithin(t, calls, time.Second)
 	assert.Equal(t, []string{"/sync"}, second.ReconcileRoots)
@@ -207,7 +207,7 @@ func TestWatcherLifecycleStoppedRejectsCollectionAndDispatch(t *testing.T) {
 	select {
 	case batch := <-calls:
 		require.Fail(t, "stopped watcher dispatched a batch", "%+v", batch)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; a stopped watcher must never dispatch
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; a stopped watcher must never dispatch
 	}
 }
 
@@ -2167,7 +2167,7 @@ func TestWatcherStopCancelsPendingCallback(t *testing.T) {
 	select {
 	case batch := <-calls:
 		require.FailNowf(t, "test failed", "callback ran after Stop with batch %+v", batch)
-	case <-time.After(350 * time.Millisecond): //nolint:kennlint // absence check; a stopped watcher must never run the callback
+	case <-time.After(350 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; a stopped watcher must never run the callback
 	}
 }
 
@@ -2210,7 +2210,7 @@ func TestWatcherStopWaitsForRunningCallbackAndDiscardsPending(t *testing.T) {
 	select {
 	case <-stopped:
 		require.FailNow(t, "Stop returned before the running callback completed")
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the running callback keeps Stop waiting
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the running callback keeps Stop waiting
 	}
 
 	releaseCallback()
@@ -2448,7 +2448,7 @@ func TestWatcherIgnoresNonWriteCreate(t *testing.T) {
 	select {
 	case <-pathsCh:
 		require.FailNow(t, "onChange called for chmod event, expected it to be ignored")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; a chmod must never schedule a callback
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; a chmod must never schedule a callback
 		// Success
 	}
 }

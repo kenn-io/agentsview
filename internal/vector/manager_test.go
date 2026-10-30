@@ -267,7 +267,7 @@ func TestManagerWaitBlocksUntilAsyncBuildCompletes(t *testing.T) {
 	select {
 	case <-waited:
 		require.Fail(t, "Wait returned while the asynchronous build was active")
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the blocked build keeps Wait waiting
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the blocked build keeps Wait waiting
 	}
 	close(release)
 	select {

@@ -17,6 +17,7 @@ on:
     - cron: "0 9 * * 1"  # Every Monday at 09:00 UTC
   workflow_dispatch:
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   windows-update-check:
     name: MSYS2 Update Check (${{ matrix.name }})
@@ -25,26 +26,34 @@ jobs:
       matrix:
         include:
           - name: Other packages
+            timeout: 27
             package: ./...
           # Keep CLI filters aligned with the CLI entries in ci.yml.
           - name: CLI A-P
+            timeout: 27
             package: ./cmd/agentsview
             run: '^Test[A-P]'
           - name: CLI remaining
+            timeout: 27
             package: ./cmd/agentsview
             skip: '^Test[A-P]'
           - name: Capture, Database, Parser
+            timeout: 38
             package: ./internal/capture ./internal/db ./internal/parser
           - name: DuckDB
+            timeout: 27
             package: ./internal/duckdb
           # Match normal Windows CI; complementary filters cover every sync test.
           - name: Sync A-R
+            timeout: 27
             package: ./internal/sync
             run: '^Test[A-R]'
           - name: Sync remaining
+            timeout: 27
             package: ./internal/sync
             skip: '^Test[A-R]'
     runs-on: windows-latest
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:

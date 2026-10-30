@@ -148,6 +148,60 @@ func TestResolveBilledLeavesCustomModelRateUnchanged(t *testing.T) {
 	}
 }
 
+func TestResolveBilledCodexServiceTiers(t *testing.T) {
+	for _, tc := range []struct {
+		name, model, input, pattern, adjustment string
+		custom                                  bool
+		bandInput, bandOutput                   string
+	}{
+		{"missing tier", "standard-only", "5", "standard-only", "", false, "", ""},
+		{"custom", "gpt-6.1-sol", "2", "gpt-6.1-sol", "", true, "", ""},
+		{"prefixed", "openai/gpt-5.5", "12.5", "gpt-5.5@priority", "openai-priority", false, "", ""},
+		{"published tier band", "gpt-6.1-sol", "4", "gpt-6.1-sol@priority", "openai-priority", false, "9", "33"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := func(pattern, input string) EffectivePricingRow {
+				source := PricingRowSourceFetched
+				if tc.custom && pattern == tc.model {
+					source = PricingRowSourceCustom
+				}
+				rates := ModelRates{InputPerMTok: money.MustParseDollars(input), Source: source}
+				switch pattern {
+				case "gpt-6.1-sol":
+					rates.OutputPerMTok = money.MustParseDollars("10")
+					rates.Bands = []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("4"), OutputPerMTok: money.MustParseDollars("15")}}
+				case "gpt-6.1-sol@priority":
+					rates.OutputPerMTok = money.MustParseDollars("20")
+					rates.Bands = []PricingBand{{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("9"), OutputPerMTok: money.MustParseDollars("33")}}
+				}
+				return EffectivePricingRow{ModelPattern: pattern, Rates: rates}
+			}
+			resolver := NewPricingResolver([]EffectivePricingRow{
+				row("gpt-6.1-sol", "2"), row("gpt-6.1-sol@priority", "4"),
+				row("gpt-5.5", "5"), row("gpt-5.5@priority", "12.5"), row("standard-only", "5"),
+			})
+			_, lookup, err := resolver.ResolveBilledAt(
+				pricingpkg.OpenAIPriorityProviderID, tc.model, tc.model, time.Time{})
+			require.NoError(t, err)
+			require.True(t, lookup.OK)
+			assert.Equal(t, money.MustParseDollars(tc.input), lookup.Rates.InputPerMTok)
+			assert.Equal(t, tc.pattern, lookup.Pattern)
+			assert.Equal(t, tc.adjustment, lookup.Adjustment)
+			if tc.bandInput != "" {
+				require.Len(t, lookup.Rates.Bands, 1)
+				assert.Equal(t, money.MustParseDollars(tc.bandInput), lookup.Rates.Bands[0].InputPerMTok)
+				assert.Equal(t, money.MustParseDollars(tc.bandOutput), lookup.Rates.Bands[0].OutputPerMTok)
+				lookup.Rates.Bands[0].InputPerMTok = money.MustParseDollars("99")
+				_, next, err := resolver.ResolveBilledAt(
+					pricingpkg.OpenAIPriorityProviderID, tc.model, tc.model, time.Time{})
+				require.NoError(t, err)
+				require.Len(t, next.Rates.Bands, 1)
+				assert.Equal(t, money.MustParseDollars(tc.bandInput), next.Rates.Bands[0].InputPerMTok)
+			}
+		})
+	}
+}
+
 func TestResolveBilledSortsEqualRateRecordsByAdjustment(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "zero-model",

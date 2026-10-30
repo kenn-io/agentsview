@@ -129,7 +129,7 @@ func TestUsageNotificationHoldsIdleWorkAfterSync(t *testing.T) {
 	}}))
 	idled := make(chan struct{})
 	shutdown := make(chan error, 1)
-	tracker := server.NewIdleTracker(20*time.Millisecond, func() {
+	tracker := server.NewIdleTracker(20*time.Millisecond, func() { //nolint:kennlint // deadlinetest: absence check; the held cache write keeps notification work active beyond the idle deadline
 		close(idled)
 		shutdown <- database.Close()
 	})
@@ -801,17 +801,19 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 }
 
 func TestNewDaemonIdleTrackerUsesConfigTimeout(t *testing.T) {
-	t.Setenv(backgroundChildEnvVar, "1")
-	fired := make(chan struct{})
-	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 20 * time.Millisecond}, func() { close(fired) })
-	require.NotNil(t, tracker)
-	ctx := t.Context()
-	go tracker.Run(ctx)
-	select {
-	case <-fired:
-	case <-time.After(time.Second):
-		require.FailNow(t, "idle tracker did not fire")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		t.Setenv(backgroundChildEnvVar, "1")
+		fired := make(chan struct{})
+		tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 20 * time.Millisecond}, func() { close(fired) })
+		require.NotNil(t, tracker)
+		ctx := t.Context()
+		go tracker.Run(ctx)
+		select {
+		case <-fired:
+		case <-time.After(time.Second):
+			require.FailNow(t, "idle tracker did not fire")
+		}
+	})
 }
 
 func TestNewDaemonIdleTrackerConfigZeroDisables(t *testing.T) {
@@ -1032,7 +1034,7 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	select {
 	case <-exclusiveEntered:
 		assert.Fail(t, "exclusive operation overlapped scheduled remote sync")
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the held remote sync keeps the exclusive operation out
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held remote sync keeps the exclusive operation out
 	}
 
 	close(releaseRemote)
@@ -1238,50 +1240,52 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 }
 
 func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {
-	idleFired := make(chan struct{})
-	idleTracker := server.NewIdleTracker(20*time.Millisecond, func() {
-		close(idleFired)
-	})
-	ctx := t.Context()
+	synctest.Test(t, func(t *testing.T) {
+		idleFired := make(chan struct{})
+		idleTracker := server.NewIdleTracker(20*time.Millisecond, func() {
+			close(idleFired)
+		})
+		ctx := t.Context()
 
-	syncEntered := make(chan struct{}, 1)
-	releaseSync := make(chan struct{})
-	syncFn := func() (int, error) {
-		select {
-		case syncEntered <- struct{}{}:
-		default:
+		syncEntered := make(chan struct{}, 1)
+		releaseSync := make(chan struct{})
+		syncFn := func() (int, error) {
+			select {
+			case syncEntered <- struct{}{}:
+			default:
+			}
+			<-releaseSync
+			return 1, nil
 		}
-		<-releaseSync
-		return 1, nil
-	}
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	go func() {
-		runRemoteHostSyncLoop(ctx, "test-host", time.Millisecond, syncFn, nil, idleTracker, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		go func() {
+			runRemoteHostSyncLoop(ctx, "test-host", time.Millisecond, syncFn, nil, idleTracker, done)
+			close(exited)
+		}()
 
-	select {
-	case <-syncEntered:
-	case <-time.After(time.Second):
-		require.FailNow(t, "remote sync did not enter")
-	}
-	go idleTracker.Run(ctx)
+		select {
+		case <-syncEntered:
+		case <-time.After(time.Second):
+			require.FailNow(t, "remote sync did not enter")
+		}
+		go idleTracker.Run(ctx)
 
-	select {
-	case <-idleFired:
-		require.FailNow(t, "idle tracker fired while remote sync was active")
-	case <-time.After(80 * time.Millisecond): //nolint:kennlint // absence check; the held remote sync keeps the idle tracker from firing
-	}
+		select {
+		case <-idleFired:
+			require.FailNow(t, "idle tracker fired while remote sync was active")
+		case <-time.After(80 * time.Millisecond):
+		}
 
-	close(releaseSync)
-	close(done)
-	select {
-	case <-exited:
-	case <-time.After(time.Second):
-		require.FailNow(t, "remote sync loop did not exit")
-	}
+		close(releaseSync)
+		close(done)
+		select {
+		case <-exited:
+		case <-time.After(time.Second):
+			require.FailNow(t, "remote sync loop did not exit")
+		}
+	})
 }
 
 func TestStartRemoteHostSync_ExitsOnContextCancel(t *testing.T) {

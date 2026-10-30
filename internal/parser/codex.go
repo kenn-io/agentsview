@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 // Codex JSONL entry types.
@@ -412,6 +413,10 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 		}
 		b.handleResponseItem(ctx, payload, ts)
 	case codexTypeEventMsg:
+		if payload.Get("type").Str == "thread_settings_applied" {
+			b.applyThreadSettings(payload)
+			return false, nil
+		}
 		if b.suppresses(codexTypeEventMsg, payload) {
 			return false, nil
 		}
@@ -561,6 +566,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 	if role == string(RoleAssistant) {
 		msg.ReasoningEffort = b.reasoningEffort
+		msg.ProviderID = b.serviceTierProviderID
 	}
 	b.sink.AppendMessage(msg)
 }
@@ -591,6 +597,13 @@ func (b *codexSessionBuilder) handleAgentMessage(
 		ContentLength: len(content),
 		Model:         b.model,
 	})
+}
+
+func (b *codexSessionBuilder) applyThreadSettings(payload gjson.Result) {
+	b.serviceTierProviderID = ""
+	if payload.Get("thread_settings.model_provider_id").Str == "openai" && payload.Get("thread_settings.service_tier").Str == "priority" {
+		b.serviceTierProviderID = pricing.OpenAIPriorityProviderID
+	}
 }
 
 func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
@@ -787,6 +800,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		ContentLength:   len(content),
 		Model:           b.model,
 		ReasoningEffort: b.reasoningEffort,
+		ProviderID:      b.serviceTierProviderID,
 		ToolCalls:       toolCalls,
 	})
 	if callID != "" {
@@ -837,6 +851,7 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 		HasToolUse:      true,
 		ContentLength:   len(content),
 		Model:           b.model,
+		ProviderID:      b.serviceTierProviderID,
 		ReasoningEffort: b.reasoningEffort,
 		ToolCalls: []ParsedToolCall{{
 			ToolUseID: callID,

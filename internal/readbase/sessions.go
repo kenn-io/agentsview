@@ -95,7 +95,7 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
-	rows, err := s.backend.QueryContext(ctx, query, cursorArgs...) //nolint:kennlint // ScanSessions checks rows.Err().
+	rows, err := s.backend.QueryContext(ctx, query, cursorArgs...) //nolint:kennlint // rowserrcheck: ScanSessions checks rows.Err().
 	if err != nil {
 		return db.SessionPage{}, fmt.Errorf("querying %s sessions: %w", s.backend.MemoryBackendName(), err)
 	}
@@ -185,7 +185,7 @@ func (s Sessions) GetSessionFull(ctx context.Context, id string) (*db.Session, e
 }
 
 func (s Sessions) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
-	rows, err := s.backend.QueryContext(ctx, s.backend.TrashedSessionsSQL(s.backend.SessionColumns(false))) //nolint:kennlint // ScanSessions checks rows.Err().
+	rows, err := s.backend.QueryContext(ctx, s.backend.TrashedSessionsSQL(s.backend.SessionColumns(false))) //nolint:kennlint // rowserrcheck: ScanSessions checks rows.Err().
 	if err != nil {
 		return nil, fmt.Errorf("listing %s trash: %w", s.backend.MemoryBackendName(), err)
 	}
@@ -194,7 +194,7 @@ func (s Sessions) ListTrashedSessions(ctx context.Context) ([]db.Session, error)
 }
 
 func (s Sessions) GetChildSessions(ctx context.Context, parentID string) ([]db.Session, error) {
-	rows, err := s.backend.QueryContext(ctx, s.backend.ChildSessionsSQL(s.backend.SessionColumns(false)), parentID) //nolint:kennlint // ScanSessions checks rows.Err().
+	rows, err := s.backend.QueryContext(ctx, s.backend.ChildSessionsSQL(s.backend.SessionColumns(false)), parentID) //nolint:kennlint // rowserrcheck: ScanSessions checks rows.Err().
 	if err != nil {
 		return nil, fmt.Errorf("querying %s child sessions: %w", s.backend.MemoryBackendName(), err)
 	}

@@ -24,15 +24,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   build:
     name: Desktop Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: macOS (aarch64)
+            timeout: 31
             os: macos-26
             bundle: app
             target_triple: aarch64-apple-darwin
@@ -40,6 +43,7 @@ jobs:
             artifact_dir: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/
           - name: macOS (x86_64)
             # macOS 26 Intel runners hang: https://github.com/actions/runner-images/issues/13882
+            timeout: 79
             os: macos-15-intel
             bundle: app
             target_triple: x86_64-apple-darwin
