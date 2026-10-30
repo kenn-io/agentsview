@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   sibling-pins:
-    name: Sibling pins on main
+    name: ${{ github.event.action == 'edited' && !github.event.changes.base && 'PR metadata' || 'Sibling pins on main' }}
     if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     timeout-minutes: 10
