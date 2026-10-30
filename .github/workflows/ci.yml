@@ -24,14 +24,19 @@ concurrency:
 permissions:
   contents: read
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.linter == 'nilaway' && 30 || 19 }}
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
-        linter: [golangci, nilaway]
+        include:
+          - linter: golangci
+            timeout: 19
+          - linter: nilaway
+            timeout: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -856,13 +861,17 @@ jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.browser == 'chromium' && 42 || 24 }}
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, webkit]
+        include:
+          - browser: chromium
+            timeout: 42
+          - browser: webkit
+            timeout: 24
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

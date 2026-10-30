@@ -26,6 +26,7 @@ on:
         required: false
         default: "10m"
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   fuzz-budget:
     runs-on: ubuntu-latest
@@ -33,6 +34,15 @@ jobs:
     outputs:
       timeout-minutes: ${{ steps.budget.outputs.timeout-minutes }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: Calculate fuzz budget
         id: budget
         env:
@@ -44,7 +54,6 @@ jobs:
           import (
               "fmt"
               "os"
-              "strconv"
               "strings"
               "time"
           )
@@ -52,13 +61,7 @@ jobs:
           func main() {
               fuzztime := os.Getenv("FUZZTIME")
               minutes := int64(360)
-              if strings.HasSuffix(fuzztime, "x") {
-                  count, err := strconv.ParseInt(strings.TrimSuffix(fuzztime, "x"), 10, 64)
-                  if err != nil || count <= 0 {
-                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations with a 360-minute job cap")
-                      os.Exit(1)
-                  }
-              } else {
+              if !strings.HasSuffix(fuzztime, "x") {
                   duration, err := time.ParseDuration(fuzztime)
                   if err != nil || duration <= 0 || duration > 343*time.Minute {
                       fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations with a 360-minute job cap")
