@@ -95,7 +95,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: "26.12.1"
+          node-version: "26.13.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -153,7 +153,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: "26.12.1"
+          node-version: "26.13.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -178,7 +178,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
 
       - name: Install docs check tools
         run: |
@@ -870,7 +870,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: "26.12.1"
+          node-version: "26.13.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
