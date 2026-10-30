@@ -17,7 +17,7 @@ func TestPositAssistantEffortUpgradeReparsesInPlaceAndLeavesOtherAgents(t *testi
 		convID          = "22222222-2222-4222-8222-222222222222"
 		sessionID       = "posit-assistant:" + convID
 		gptmeID         = "gptme:2026-10-19-unaffected"
-		previousVersion = 151
+		previousVersion = 157
 	)
 	positRoot := t.TempDir()
 	convDir := filepath.Join(positRoot, "ws1", convID)
@@ -71,7 +71,7 @@ func TestPositAssistantEffortUpgradeReparsesInPlaceAndLeavesOtherAgents(t *testi
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET data_version = ? WHERE id = ?", previousVersion, sessionID)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 151")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 157")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 

@@ -4115,7 +4115,7 @@ schemas keep their existing ordering behavior.
   per-conversation and restructure settings" (#1081, commit `495f493cf`,
   2026-04-21), first shipped in the Positron release `v0.3.3` (2026-04-24).
   This is from a private repository, so the evidence level is unchanged. Data
-  version 152 reparses Posit Assistant archives to pick this up.
+  version 158 reparses Posit Assistant archives to pick this up.
 
 ## Z Code (`zcode`)
 
