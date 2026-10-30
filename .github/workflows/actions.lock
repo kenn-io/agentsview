@@ -16,6 +16,7 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'astral-sh/setup-uv@v10.3.2'
+        - 'kenn-io/actions@main'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/cjk-fts.yml':
@@ -62,11 +63,6 @@ dependencies:
         commit: 'sha1-55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         owner_id: 44036562
         repo_id: 215566462
-    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':
-        ref: 'v7.0.1'
-        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
-        owner_id: 44036562
-        repo_id: 197814629
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -77,11 +73,6 @@ dependencies:
         commit: 'sha1-9000827ccba6bdab643e8b6fd33ac0654aef8333'
         owner_id: 44036562
         repo_id: 192626254
-    'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e':
-        ref: 'v7.0.0'
-        commit: 'sha1-b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
-        owner_id: 44036562
-        repo_id: 192624594
     'actions/setup-go@v7.0.0':
         ref: 'v7.0.0'
         commit: 'sha1-b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
@@ -114,17 +105,23 @@ dependencies:
         repo_id: 260749683
     'kenn-io/actions@main':
         ref: 'main'
-        commit: 'sha1-dd712a31dea1a9573a033bc09c42fa00903e8c17'
+        commit: 'sha1-7ee5aec719084e1885f37b0c39a4da729f6a274f'
         owner_id: 259885253
         repo_id: 1427332808
         uses:
-            - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
-            - 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
+            - 'actions/checkout@v7.0.1'
+            - 'actions/setup-go@v7.0.0'
+            - 'step-security/paths-filter@v4.0.3'
     'msys2/setup-msys2@v2.33.0':
         ref: 'v2.33.0'
         commit: 'sha1-ec48f7c5447b3140e2b088413ae3a55687bccb6e'
         owner_id: 6759993
         repo_id: 213203501
+    'step-security/paths-filter@v4.0.3':
+        ref: 'v4.0.3'
+        commit: 'sha1-5f3d1a83daa17363d18b529d60375e1e36566799'
+        owner_id: 88700172
+        repo_id: 726295987
     'step-security/rust-cache@v2.9.2':
         ref: 'v2.9.2'
         commit: 'sha1-8871c8ba063416da7c32246932ea6ae08700453e'
