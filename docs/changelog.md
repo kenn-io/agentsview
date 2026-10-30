@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-27
+last_edited: 2026-10-30
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -86,6 +86,9 @@ The latest release is
 
 **Improvements**
 
+- The Recall corpus pane uses the shared page header for its title, description,
+  entry count, and refresh control. The title stays a second-level heading under
+  the Recall page title.
 - `pg push` saves download traffic when a session grows by comparing short
   hashes with PostgreSQL instead of downloading the session's old text.
   Sessions with rows written before control-character cleanup are rewritten once.
@@ -100,6 +103,9 @@ The latest release is
 
 **Bug fixes**
 
+- Oversized debug logs retain their last 10 MB in `debug.log.1` to help
+  investigate a stalled server. Successful rotation clears the active log;
+  a busy lock or failed backup leaves it intact.
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on

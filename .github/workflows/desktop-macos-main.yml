@@ -50,11 +50,11 @@ jobs:
             artifact_name: agentsview-desktop-macos-x86_64
             artifact_dir: desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/build-desktop-artifact
+      - uses: $/.github/actions/build-desktop-artifact
         with:
           bundle: ${{ matrix.bundle }}
           target_triple: ${{ matrix.target_triple }}

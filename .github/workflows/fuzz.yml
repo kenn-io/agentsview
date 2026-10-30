@@ -34,11 +34,11 @@ jobs:
     outputs:
       timeout-minutes: ${{ steps.budget.outputs.timeout-minutes }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -98,17 +98,17 @@ jobs:
           - FuzzExtractModelName
           - FuzzExtractTokenUsage
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -130,7 +130,7 @@ jobs:
 
       - name: Upload failing inputs
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: fuzz-failures-${{ matrix.target }}
           path: internal/parser/testdata/fuzz/

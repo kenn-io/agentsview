@@ -26,6 +26,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -718,22 +719,98 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 	assert.Equal(t, wantURL, rt.BrowserURL)
 }
 
-func TestSetupLogFile(t *testing.T) {
+func TestSetupLogFileRotatesOversizedLog(t *testing.T) {
 	dir := t.TempDir()
-	// Register after TempDir so LIFO cleanup closes the log file before
-	// TempDir removes the directory. On Windows, open files can't be deleted.
 	restoreTestLogOutput(t)
+	path := filepath.Join(dir, "debug.log")
+	writeTestFile(t, path, bytes.Repeat([]byte("x"), maxLogSize+1))
 
 	setupLogFile(dir)
 
-	// Log something and verify it reaches the file.
+	assert.FileExists(t, path+".1")
+}
+
+func TestSetupDebugLogWriterDefersRotation(t *testing.T) {
+	dir := t.TempDir()
+	restoreTestLogOutput(t)
+	path := filepath.Join(dir, "debug.log")
+	content := bytes.Repeat([]byte("x"), maxLogSize+1)
+	writeTestFile(t, path, content)
+
+	setupDebugLogWriter(dir)
+	log.Print("early startup message")
+
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(active, content))
+	assert.Contains(t, string(active), "early startup message")
+	assert.NoFileExists(t, path+".1")
+}
+
+func TestSetupDebugLogWriterWritesWithoutLock(t *testing.T) {
+	dir := t.TempDir()
+	// Close the logger before TempDir cleanup on Windows.
+	restoreTestLogOutput(t)
+	path := filepath.Join(dir, "debug.log")
+	require.NoError(t, os.Mkdir(path+".rotate.lock", 0o700))
+
+	setupDebugLogWriter(dir)
 	log.Print("test-log-message")
 
-	logPath := filepath.Join(dir, "debug.log")
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err, "reading log file")
-	assert.Contains(t, string(data), "test-log-message",
-		"log file missing message")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "test-log-message")
+}
+
+func TestSetupLogFileLiveWriterRotation(t *testing.T) {
+	dir := t.TempDir()
+	restoreTestLogOutput(t)
+	setupLogFile(dir)
+	path := filepath.Join(dir, "debug.log")
+	writeTestFile(t, path, bytes.Repeat([]byte("x\n"), maxLogSize/2+1))
+	ctx, cancel := context.WithCancel(t.Context())
+	first, done := make(chan struct{}), make(chan struct{})
+	var writeErr error
+	written := 0
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			writeErr = log.Output(1, fmt.Sprintf("rotation-message-%05d", written))
+			if written == 0 {
+				close(first)
+			}
+			if writeErr != nil {
+				return
+			}
+			written++
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	<-first
+	require.Eventually(t, func() bool {
+		rotateLogFile(path, maxLogSize)
+		_, err := os.Stat(path + ".1")
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond)
+	cancel()
+	<-done
+	require.NoError(t, writeErr)
+	backup, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	counts := make(map[string]int)
+	for line := range strings.SplitSeq(string(backup)+string(active), "\n") {
+		if _, message, ok := strings.Cut(line, "rotation-message-"); ok {
+			counts[message]++
+		}
+	}
+	for i := range written {
+		require.Equal(t, 1, counts[fmt.Sprintf("%05d", i)], "message %d must survive exactly once", i)
+	}
 }
 
 func TestSetupLogFileOpenFailure(t *testing.T) {
@@ -749,6 +826,76 @@ func TestSetupLogFileOpenFailure(t *testing.T) {
 
 	assert.Contains(t, buf.String(), "cannot open log file",
 		"expected warning about log file")
+}
+
+func TestRotateLogFileTailAndMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	writeTestFile(t, path, []byte("discarded prefix\nfirst retained line\nlast diagnostic\n"))
+	writeTestFile(t, path+".1", []byte("older log"))
+	require.NoError(t, os.Chmod(path, 0o640))
+	source, err := os.Stat(path)
+	require.NoError(t, err)
+
+	rotateLogFile(path, 36)
+
+	retained, err := os.ReadFile(path + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, "first retained line\nlast diagnostic\n", string(retained))
+	backup, err := os.Stat(path + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, source.Mode().Perm(), backup.Mode().Perm())
+	active, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Empty(t, active)
+}
+
+func TestRotateLogFileLeavesActiveLog(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		limit     int64
+		holdLock  bool
+		symlink   bool
+		backupDir bool
+	}{
+		{"held lock", 512, true, false, false},
+		{"at size limit", 1025, false, false, false},
+		{"symlink", 512, false, true, false},
+		{"backup failure", 512, false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "test.log")
+			content := bytes.Repeat([]byte("line\n"), 205)
+			writeTestFile(t, path, content)
+			rotationPath := path
+			if tc.symlink {
+				rotationPath = filepath.Join(dir, "link.log")
+				requireSymlinkOrSkip(t, path, rotationPath)
+			}
+			if tc.holdLock {
+				writeTestFile(t, path+".1", []byte("older log"))
+				lock := flock.New(path + ".rotate.lock")
+				require.NoError(t, lock.RLock())
+				t.Cleanup(func() { require.NoError(t, lock.Close()) })
+			}
+			if tc.backupDir {
+				require.NoError(t, os.Mkdir(path+".1", 0o755))
+			}
+
+			rotateLogFile(rotationPath, tc.limit)
+
+			active, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, content, active)
+			if tc.holdLock {
+				backup, err := os.ReadFile(path + ".1")
+				require.NoError(t, err)
+				assert.Equal(t, "older log", string(backup))
+			} else if !tc.backupDir {
+				assert.NoFileExists(t, rotationPath+".1")
+			}
+		})
+	}
 }
 
 func TestTruncateLogFile(t *testing.T) {

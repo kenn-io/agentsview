@@ -47,18 +47,18 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 32
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 

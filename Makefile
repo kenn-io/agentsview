@@ -776,3 +776,32 @@ help:
 	@echo "  release        - Release build for current platform"
 	@echo "  clean          - Remove build artifacts"
 	@echo "  install-hooks  - Install pre-commit and pre-push git hooks"
+
+# Workflow actions run at the commits in .github/workflows/actions.lock,
+# including actions that other actions call. The organization requires
+# SHA-pinned actions, and the lockfile is what satisfies that for nested refs.
+# The version comes from constraints.ghActionsLock in renovate.json.
+# Renovate uses the same version when it regenerates the lockfile after
+# bumping an action.
+GH_ACTIONS_LOCK_VERSION ?= $(shell sed -nE "s/^[[:space:]]*\"?ghActionsLock\"?:[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" renovate.json)
+
+.PHONY: gh-actions-lock-install actions-lock actions-lock-check-local actions-lock-check
+
+gh-actions-lock-install:
+	@test -n "$(GH_ACTIONS_LOCK_VERSION)" || { echo "constraints.ghActionsLock is missing from renovate.json" >&2; exit 1; }
+	@if [ "$$(gh actions-lock --version 2>/dev/null)" != "actions-lock version $(GH_ACTIONS_LOCK_VERSION)" ]; then \
+		gh extension remove actions-lock >/dev/null 2>&1 || true; \
+		gh extension install github/gh-actions-lock --pin $(GH_ACTIONS_LOCK_VERSION); \
+	fi
+
+# Lock every workflow action after adding or bumping a `uses:` line
+actions-lock: gh-actions-lock-install
+	gh actions-lock --no-interactive
+
+# Offline check that every workflow action has a lockfile entry
+actions-lock-check-local: gh-actions-lock-install
+	gh actions-lock --verify-local
+
+# Network check that the lockfile is complete and every locked commit is still valid
+actions-lock-check: gh-actions-lock-install
+	gh actions-lock --verify
