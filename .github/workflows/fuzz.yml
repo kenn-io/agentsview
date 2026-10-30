@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       fuzztime:
-        description: "Fuzz per target: positive Go duration up to 343m, or positive Nx iterations with a 27-minute job cap"
+        description: "Fuzz per target: positive Go duration up to 343m, or positive Nx iterations with a 360-minute job cap"
         required: false
         default: "10m"
 
@@ -51,17 +51,17 @@ jobs:
 
           func main() {
               fuzztime := os.Getenv("FUZZTIME")
-              minutes := int64(27)
+              minutes := int64(360)
               if strings.HasSuffix(fuzztime, "x") {
                   count, err := strconv.ParseInt(strings.TrimSuffix(fuzztime, "x"), 10, 64)
                   if err != nil || count <= 0 {
-                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations")
+                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations with a 360-minute job cap")
                       os.Exit(1)
                   }
               } else {
                   duration, err := time.ParseDuration(fuzztime)
                   if err != nil || duration <= 0 || duration > 343*time.Minute {
-                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations")
+                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations with a 360-minute job cap")
                       os.Exit(1)
                   }
                   // Keep the measured default's 17-minute allowance for setup, tests, and upload.
