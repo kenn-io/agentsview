@@ -50,7 +50,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/build-desktop-artifact
+      - uses: $/.github/actions/build-desktop-artifact
         with:
           bundle: ${{ matrix.bundle }}
           target_triple: ${{ matrix.target_triple }}

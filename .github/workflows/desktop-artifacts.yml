@@ -85,7 +85,7 @@ jobs:
           name: desktop-frontend
           path: frontend/dist
 
-      - uses: ./.github/actions/build-desktop-artifact
+      - uses: $/.github/actions/build-desktop-artifact
         with:
           frontend_prebuilt: 'true'
           bundle: ${{ matrix.bundle }}
