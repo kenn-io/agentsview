@@ -19,7 +19,7 @@ func (s *Store) loadWorktreeCandidateSessions(
 	err := pgQueryChunked(ids, func(chunk []string) error {
 		filter.IDs = chunk
 		filter.IDsExact = true
-		where, args := db.BuildSessionBaseFilterSQL(filter, db.PostgresQueryDialect())
+		where, args := db.BuildSessionBaseFilterSQL(filter, s.sessionDialect())
 		query := `
 			SELECT s.id, s.project, s.machine, s.cwd,
 				COALESCE(snap.source_session_id, ''), COALESCE(snap.project, ''),

@@ -10,7 +10,7 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 	}
 	preds := append([]string{q("message_count") + " > 0", RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, prefix), q("deleted_at") + " IS NULL"}, datePreds...)
 	if values := CSVFilterValues(f.Machine); len(values) > 0 {
-		preds = append(preds, inPredicate(q("machine"), values, b))
+		preds = append(preds, b.MachinePredicate(sessionID, q("machine"), values))
 	}
 	if f.Project != "" {
 		preds = append(preds, q("project")+" = "+b.Add(f.Project))

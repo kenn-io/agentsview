@@ -119,6 +119,7 @@ type SkinnySessionRow = {
   project: string;
   project_assigned?: boolean;
   machine: string;
+  source_machines?: string[];
   agent: string;
   agent_label?: string | null;
   entrypoint?: string | null;
@@ -572,6 +573,7 @@ describe("SessionsStore", () => {
             id: "team",
             project_assigned: true,
             is_teammate: true,
+            source_machines: ["raw-device:61", "raw-device:62"],
           }),
         ],
         total: 1,
@@ -588,6 +590,7 @@ describe("SessionsStore", () => {
         project_assigned: true,
         is_teammate: true,
         is_index_only: true,
+        source_machines: ["raw-device:61", "raw-device:62"],
       });
       expect(sessions.sessions[0]!.first_message).toBeNull();
     });
@@ -802,12 +805,13 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
     });
 
-    it("refreshes hydrated agent identity fields from the sidebar index", async () => {
+    it("refreshes hydrated agent and source identity fields from the sidebar index", async () => {
       mockSidebarIndex([
         makeSkinnyRow({
           id: "active",
           agent_label: "old-label",
           entrypoint: "old-entrypoint",
+          source_machines: ["raw-device:61"],
         }),
       ]);
       vi.mocked(api.getSession).mockResolvedValue(
@@ -816,6 +820,7 @@ describe("SessionsStore", () => {
           agent_label: "old-label",
           entrypoint: "old-entrypoint",
           first_message: "hydrated active detail",
+          source_machines: ["raw-device:61"],
         }),
       );
 
@@ -827,6 +832,7 @@ describe("SessionsStore", () => {
           id: "active",
           agent_label: "triage",
           entrypoint: "sdk-cli",
+          source_machines: ["raw-device:61", "raw-device:62"],
         }),
       ]);
       await sessions.load();
@@ -835,6 +841,7 @@ describe("SessionsStore", () => {
       expect(sessions.sessions[0]!.first_message).toBe("hydrated active detail");
       expect(sessions.sessions[0]!.agent_label).toBe("triage");
       expect(sessions.sessions[0]!.entrypoint).toBe("sdk-cli");
+      expect(sessions.sessions[0]!.source_machines).toEqual(["raw-device:61", "raw-device:62"]);
     });
 
     it("clears stale display names from hydrated rows when the index has none", async () => {
