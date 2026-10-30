@@ -9,6 +9,7 @@
   import RefreshControl from "../shared/RefreshControl.svelte";
   import FrictionHeadline from "./FrictionHeadline.svelte";
   import FrictionMarkdownPanel from "./FrictionMarkdownPanel.svelte";
+  import FrictionReviewSummaryPanel from "./FrictionReviewSummaryPanel.svelte";
   import FrictionSignalSection from "./FrictionSignalSection.svelte";
   import FrictionSummaryStrip from "./FrictionSummaryStrip.svelte";
   import { groupSignals } from "./frictionView.js";
@@ -206,6 +207,8 @@
           patterns={digest.patterns ?? []}
           sessions={digest.sessions}
         />
+
+        <FrictionReviewSummaryPanel date={digest.date} revision={digest.revision} />
 
         {#each sections as section (section.kind)}
           {#if section.signals.length > 0}

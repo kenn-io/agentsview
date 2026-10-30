@@ -8,7 +8,8 @@ export type CannedInsightKind =
   | "workflow_hygiene_review"
   | "tool_reliability_review"
   | "model_cost_review"
-  | "instruction_opportunity_review";
+  | "instruction_opportunity_review"
+  | "friction_review";
 
 /** Agent CLIs an insight request can name, mirroring the server set. */
 export const AGENT_NAMES = ["claude", "codex", "copilot", "gemini", "kiro"] as const;

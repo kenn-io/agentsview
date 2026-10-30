@@ -72,6 +72,11 @@ The latest release is
   the Friction Log from the terminal, and MCP clients can read digests and
   recurring patterns with `get_friction_digest` and `list_friction_patterns`.
 
+- The Friction Log page can add an optional model-written summary of a digest
+  using the configured insight generator. The summary is saved with the digest,
+  is labeled as model-written, and cannot change findings, digests, or
+  recurrence.
+
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
   Setting it together with `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup.
