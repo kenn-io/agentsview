@@ -12,8 +12,8 @@ on:
   merge_group:
     types: [checks_requested]
 
-# Text edits use a separate group and check name to preserve the required result.
-# Base changes still rerun the checker because they can change candidate pins.
+# Text edits skip sibling-pin work without cancelling code validation.
+# Base changes still rerun the check.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.action == 'edited' && !github.event.changes.base && github.run_id || (github.event_name == 'pull_request' && github.ref) || github.run_id }}
   cancel-in-progress: true
@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   sibling-pins:
-    name: ${{ github.event.action == 'edited' && !github.event.changes.base && 'PR metadata' || 'Sibling pins on main' }}
+    name: Sibling pins on main
     if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     timeout-minutes: 10
