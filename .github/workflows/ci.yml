@@ -108,7 +108,7 @@ jobs:
 
       - name: Run Go linters
         if: matrix.linter == 'golangci'
-        run: make lint-config-check lint-sql lint-golangci-ci
+        run: make lint-workflow-retries lint-config-check lint-sql lint-golangci-ci
 
       - name: Run NilAway
         if: matrix.linter == 'nilaway'
@@ -156,8 +156,10 @@ jobs:
       - name: Generate pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Format, lint, and type-check (fix formatting with npm run fmt)
@@ -198,8 +200,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Run frontend tests
@@ -222,13 +226,15 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.3.2
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install docs check tools
         run: |
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
             -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
             -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
+          kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update
+          kit-retry 3 5 sudo apt-get install -y ripgrep
 
       - name: Run docs check
         run: make docs-check
@@ -236,7 +242,6 @@ jobs:
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
-          bash scripts/retry_test.sh
           bash scripts/e2e-server_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
@@ -385,6 +390,8 @@ jobs:
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare Go linters (Windows)
         id: prepare_windows_linter
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
@@ -396,7 +403,7 @@ jobs:
           export PATH="$linter_dir:$PATH"
           if [ -f "$linter_dir/custom-gcl.exe" ]; then exit 0; fi
           mkdir -p "$linter_dir"
-          bash scripts/retry.sh 3 5 make lint-tools
+          kit-retry 3 5 make lint-tools
           make nilaway-golangci-build
           mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
         env:
@@ -948,8 +955,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Build frontend
@@ -981,7 +990,7 @@ jobs:
         run: |
           version=$(node -p 'require("./node_modules/@playwright/test/package.json").version')
           image="mcr.microsoft.com/playwright:v$version-noble"
-          if ! docker pull "$image"; then
+          if ! kit-retry 3 5 docker pull "$image"; then
             echo "::error::Could not pull $image. Microsoft may not have published the image for this @playwright/test version yet."
             exit 1
           fi
@@ -990,6 +999,7 @@ jobs:
             "$image" \
             node node_modules/@playwright/test/cli.js run-server \
             --port 3000 --host 127.0.0.1 --unsafe)
+          # workflowretry: allow Poll the local service for readiness.
           until curl -s http://127.0.0.1:3000/; do
             [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { docker logs "$cid"; exit 1; }
             sleep 1

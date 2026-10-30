@@ -71,12 +71,14 @@ runs:
         install: mingw-w64-x86_64-gcc
         path-type: inherit
 
+    - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
     - name: Install Linux system dependencies
       if: runner.os == 'Linux'
       shell: bash
       run: |
-        sudo apt-get update -q
-        sudo apt-get install -y \
+        kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update -q
+        kit-retry 3 5 sudo apt-get install -y \
           libwebkit2gtk-4.1-dev libgtk-3-dev \
           libappindicator3-dev librsvg2-dev \
           patchelf squashfs-tools xdg-utils
@@ -92,7 +94,7 @@ runs:
 
     - name: Install desktop dependencies
       shell: bash
-      run: npm ci
+      run: kit-retry 3 5 npm ci
       working-directory: desktop
 
     - name: Desktop sidecar smoke tests

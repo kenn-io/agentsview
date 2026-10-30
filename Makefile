@@ -529,7 +529,7 @@ vet: pricing-snapshot ensure-embed-dir
 	go vet -tags fts5 ./...
 
 # Lint Go code and auto-fix where possible (local development)
-lint: lint-config-check lint-sql lint-golangci nilaway
+lint: lint-config-check lint-sql lint-golangci nilaway lint-workflow-retries
 
 # Run golangci-lint with auto-fixes for local development.
 lint-golangci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
@@ -540,7 +540,7 @@ lint-golangci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	$(CUSTOM_GCL) run --fix ./...
 
 # Lint Go code without fixing (for CI)
-lint-ci: lint-config-check lint-sql lint-golangci-ci nilaway
+lint-ci: lint-config-check lint-sql lint-golangci-ci nilaway lint-workflow-retries
 
 # Run golangci-lint without auto-fixes for CI.
 lint-golangci-ci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
@@ -805,3 +805,7 @@ actions-lock-check-local: gh-actions-lock-install
 # Network check that the lockfile is complete and every locked commit is still valid
 actions-lock-check: gh-actions-lock-install
 	gh actions-lock --verify
+
+.PHONY: lint-workflow-retries
+lint-workflow-retries:
+	GOOS= GOARCH= go run go.kenn.io/kit/cmd/kennlint@v0.47.3 workflow-retries

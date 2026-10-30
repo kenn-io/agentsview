@@ -17,6 +17,7 @@ workflows:
         - 'actions/upload-artifact@v7.0.2'
         - 'astral-sh/setup-uv@v10.3.2'
         - 'kenn-io/actions@main'
+        - 'kenn-io/kit@v0.47.3'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/cjk-fts.yml':
@@ -32,6 +33,7 @@ workflows:
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'dtolnay/rust-toolchain@stable'
+        - 'kenn-io/kit@v0.47.3'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/desktop-macos-main.yml':
@@ -41,6 +43,7 @@ workflows:
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'dtolnay/rust-toolchain@stable'
+        - 'kenn-io/kit@v0.47.3'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/fuzz.yml':
@@ -112,6 +115,11 @@ dependencies:
             - 'actions/checkout@v7.0.1'
             - 'actions/setup-go@v7.0.0'
             - 'step-security/paths-filter@v4.0.3'
+    'kenn-io/kit@v0.47.3':
+        ref: 'v0.47.3'
+        commit: 'sha1-19ca4ee42e3452f57ba6d72cf07ce5963b26219b'
+        owner_id: 259885253
+        repo_id: 1238000987
     'msys2/setup-msys2@v2.33.0':
         ref: 'v2.33.0'
         commit: 'sha1-ec48f7c5447b3140e2b088413ae3a55687bccb6e'
