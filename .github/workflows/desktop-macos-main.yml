@@ -28,7 +28,7 @@ jobs:
   build:
     name: Desktop Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 52 || 19 }}
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 61 || 35 }}
     strategy:
       fail-fast: false
       matrix:

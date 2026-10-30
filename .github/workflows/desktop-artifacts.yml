@@ -54,25 +54,28 @@ jobs:
     name: Desktop Build (${{ matrix.name }})
     needs: frontend
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 18
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows
             os: windows-latest
+            timeout: 60
             bundle: nsis
             target_triple: ""
             artifact_name: agentsview-desktop-windows
             artifact_dir: desktop/src-tauri/target/release/bundle/nsis/
           - name: Linux
             os: ubuntu-latest
+            timeout: 60
             bundle: appimage
             target_triple: ""
             artifact_name: agentsview-desktop-linux
             artifact_dir: desktop/src-tauri/target/release/bundle/appimage/
           - name: Linux (arm64)
             os: ubuntu-22.04-arm
+            timeout: 25
             bundle: appimage
             target_triple: aarch64-unknown-linux-gnu
             artifact_name: agentsview-desktop-linux-arm64

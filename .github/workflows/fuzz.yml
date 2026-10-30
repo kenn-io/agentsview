@@ -36,7 +36,7 @@ jobs:
       - name: Calculate fuzz budget
         id: budget
         env:
-          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+          FUZZTIME: ${{ github.event.inputs.fuzztime || '10m' }}
         run: |
           cat > "$RUNNER_TEMP/fuzz-budget.go" <<'EOF'
           package main
@@ -44,6 +44,7 @@ jobs:
           import (
               "fmt"
               "os"
+              "strconv"
               "strings"
               "time"
           )
@@ -51,7 +52,13 @@ jobs:
           func main() {
               fuzztime := os.Getenv("FUZZTIME")
               minutes := int64(27)
-              if !strings.HasSuffix(fuzztime, "x") {
+              if strings.HasSuffix(fuzztime, "x") {
+                  count, err := strconv.ParseInt(strings.TrimSuffix(fuzztime, "x"), 10, 64)
+                  if err != nil || count <= 0 {
+                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 5h or positive Nx iterations")
+                      os.Exit(1)
+                  }
+              } else {
                   duration, err := time.ParseDuration(fuzztime)
                   if err != nil || duration <= 0 || duration > 5*time.Hour {
                       fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 5h or positive Nx iterations")
@@ -116,7 +123,7 @@ jobs:
         env:
           CGO_ENABLED: "1"
           TARGET: ${{ matrix.target }}
-          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+          FUZZTIME: ${{ github.event.inputs.fuzztime || '10m' }}
 
       - name: Upload failing inputs
         if: failure()
