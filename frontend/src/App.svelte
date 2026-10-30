@@ -923,11 +923,11 @@
     <RecentEditsPage />
   </div>
 {:else if router.route === "data"}
-  <div class="page-scroll data-page-host">
+  <div class="fixed-page-host">
     <DataPage />
   </div>
 {:else if router.route === "settings"}
-  <div class="page-scroll settings-page-host">
+  <div class="fixed-page-host settings-page-host">
     <SettingsPage />
   </div>
 {:else}
@@ -1037,14 +1037,17 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    /* Reserve the scrollbar's width up front so centered columns and
+       right-aligned controls do not shift when content first makes the page
+       scroll. */
+    scrollbar-gutter: stable;
   }
 
-  .settings-page-host {
-    display: flex;
-    overflow: hidden;
-  }
-
-  .data-page-host {
+  /* Settings and Data scroll inside their own panes. Keep these hosts apart from
+     .page-scroll because a stable gutter would also apply to hidden overflow. */
+  .fixed-page-host {
+    flex: 1;
+    min-height: 0;
     display: flex;
     overflow: hidden;
   }

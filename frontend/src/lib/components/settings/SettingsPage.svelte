@@ -284,6 +284,12 @@
     display: none;
   }
 
+  /* Reserve the scrollbar's width up front so the centered panel does not
+     shift when switching to a panel tall enough to scroll. */
+  .settings-page :global(.kit-settings__scroll) {
+    scrollbar-gutter: stable;
+  }
+
   .settings-page.settings-no-results :global(.kit-settings__nav),
   .settings-page.settings-no-results :global(.kit-settings__panel) {
     display: none;
