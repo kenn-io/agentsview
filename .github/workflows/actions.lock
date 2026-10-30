@@ -53,7 +53,7 @@ workflows:
         - 'actions/setup-go@v7.0.0'
         - 'msys2/setup-msys2@v2.33.0'
     '.github/workflows/sibling-pins.yml':
-        - 'kenn-io/actions@68ba2c6390aff0de4aced81a8c2af669514c7ac0'
+        - 'kenn-io/actions@main'
     '.github/workflows/workflow-validation.yml':
         - 'actions/checkout@v7.0.1'
 dependencies:
@@ -112,9 +112,9 @@ dependencies:
         commit: 'sha1-b725eda525362e7cf34af9a7243cac1e3f01a7ec'
         owner_id: 1940490
         repo_id: 260749683
-    'kenn-io/actions@68ba2c6390aff0de4aced81a8c2af669514c7ac0':
+    'kenn-io/actions@main':
         ref: 'main'
-        commit: 'sha1-68ba2c6390aff0de4aced81a8c2af669514c7ac0'
+        commit: 'sha1-dd712a31dea1a9573a033bc09c42fa00903e8c17'
         owner_id: 259885253
         repo_id: 1427332808
         uses:
