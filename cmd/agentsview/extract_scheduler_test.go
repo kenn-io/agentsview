@@ -248,9 +248,10 @@ func TestExtractSchedulerBackstopSupersedesCatchup(t *testing.T) {
 	}
 }
 
-// blockingPassManager signals when TryPass begins and blocks it until
-// releaseOnce is called, so tests can hold a pass in flight deliberately.
+// blockingPassManager completes the startup pass, then signals and blocks
+// later passes until releaseOnce is called.
 type blockingPassManager struct {
+	passes      int
 	startedOnce sync.Once
 	releasedFn  sync.Once
 	started     chan struct{}
@@ -260,6 +261,10 @@ type blockingPassManager struct {
 func (b *blockingPassManager) TryPass(
 	_ context.Context, _ extract.PassOptions,
 ) (bool, extract.PassResult, error) {
+	b.passes++
+	if b.passes == 1 {
+		return true, extract.PassResult{}, nil
+	}
 	b.startedOnce.Do(func() { close(b.started) })
 	<-b.release
 	return true, extract.PassResult{}, nil
@@ -282,6 +287,8 @@ func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
 		idled := make(chan struct{})
 		tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
 		s := newExtractScheduler(mgr, 5*time.Millisecond, 0, 0, tracker)
+		finished := make(chan struct{}, 2)
+		s.onPassFinished = func() { finished <- struct{}{} }
 		ctx := t.Context()
 		go tracker.Run(ctx)
 		go s.Run(ctx)
@@ -291,6 +298,8 @@ func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
 		// explicit release would deadlock the test.
 		defer mgr.releaseOnce()
 
+		<-finished
+		synctest.Wait() // Let Run release its startup lease before the next notification.
 		s.Notify()
 		<-mgr.started
 		select {

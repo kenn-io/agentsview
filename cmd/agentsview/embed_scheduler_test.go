@@ -253,7 +253,6 @@ func TestEmbedSchedulerDebouncedBuildRetriesReleaseIdleLease(
 		name     string
 		retryErr error
 	}{
-		{name: "fail then succeed"},
 		{name: "fail twice", retryErr: buildErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

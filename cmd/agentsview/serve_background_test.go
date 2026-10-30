@@ -1505,7 +1505,7 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		t.Context(), &cfg, time.Second, true,
+		t.Context(), &cfg, 50*time.Millisecond, true, //nolint:kennlint // deadlinetest: startup deadline expiry must report the incompatible daemon
 	)
 	require.Error(t, err)
 	assert.Nil(t, rt)
