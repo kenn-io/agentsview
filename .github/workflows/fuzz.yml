@@ -28,7 +28,7 @@ on:
 
 jobs:
   fuzz-budget:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       timeout-minutes: ${{ steps.budget.outputs.timeout-minutes }}
@@ -44,7 +44,6 @@ jobs:
           import (
               "fmt"
               "os"
-              "strconv"
               "strings"
               "time"
           )
@@ -52,13 +51,7 @@ jobs:
           func main() {
               fuzztime := os.Getenv("FUZZTIME")
               minutes := int64(27)
-              if strings.HasSuffix(fuzztime, "x") {
-                  count, err := strconv.ParseInt(strings.TrimSuffix(fuzztime, "x"), 10, 0)
-                  if err != nil || count <= 0 {
-                      fmt.Fprintln(os.Stderr, "fuzztime iteration count must be a positive integer followed by x")
-                      os.Exit(1)
-                  }
-              } else {
+              if !strings.HasSuffix(fuzztime, "x") {
                   duration, err := time.ParseDuration(fuzztime)
                   if err != nil || duration <= 0 || duration > 5*time.Hour {
                       fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 5h or positive Nx iterations")

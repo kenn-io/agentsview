@@ -204,7 +204,7 @@ jobs:
   test:
     name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.testSet == 'lint' && 21 || matrix.os == 'windows-latest' && 34 || matrix.testSet == 'other' && 32 || matrix.testSet == 'evalingest' && 16 || matrix.package == './internal/duckdb' && 28 || 29 }}
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
@@ -214,22 +214,29 @@ jobs:
           - os: ubuntu-latest
             name: ubuntu-latest, Sync
             package: ./internal/sync
+            timeout: 29
           - os: ubuntu-latest
             name: ubuntu-latest, DuckDB
             package: ./internal/duckdb
+            timeout: 28
           - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
+            timeout: 32
           - os: ubuntu-latest
             name: ubuntu-latest, Eval ingest
             testSet: evalingest
+            timeout: 16
           - os: windows-latest
             name: windows-latest
+            timeout: 34
           - os: windows-latest
             name: windows-latest
             testSet: lint
+            timeout: 21
           - os: macos-latest
             name: macos-latest
+            timeout: 29
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
