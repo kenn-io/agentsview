@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-26
+last_edited: 2026-10-30
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -218,6 +218,18 @@ without it they return a "not available" error. Exact `session_id`,
 `git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
 before the final limit. Limits default to 10 and go up to 50; a value outside
 that range falls back to the default.
+
+To find one past session that covered several ideas, pass `concepts` instead of
+`pattern`: two to five distinct natural-language strings. The mode defaults to
+`semantic`, and any other explicit mode is rejected. AgentsView searches each
+concept separately and keeps only sessions with evidence for all of them, even
+when different exchanges carry that evidence. Results rank by the mean of each
+concept's strongest score. Each match lists `concept_evidence` in request order:
+the concept, its snippet, score, ordinal, `ordinal_range`, and
+`transcript_revision`. Concept searches do not page, so `cursor` is rejected.
+`candidate_truncated` is true when a session may be missing, either because one
+concept's candidate search filled up or because more sessions matched than the
+limit allowed.
 
 A `terms` snippet shows about 60 characters of context around the first
 occurrence of each term. Terms that sit far apart in a long exchange produce

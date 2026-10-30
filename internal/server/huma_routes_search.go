@@ -37,7 +37,8 @@ type searchInput struct {
 }
 
 type contentSearchInput struct {
-	Pattern            string             `query:"pattern" required:"true" doc:"Pattern to search for"`
+	Pattern            string             `query:"pattern" doc:"Pattern to search for; mutually exclusive with concepts"`
+	Concepts           []string           `query:"concepts,explode" doc:"Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern"`
 	Mode               contentSearchMode  `query:"mode" enum:"substring,regex,fts,terms,semantic,hybrid" doc:"Search mode"`
 	Scope              contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"`
 	SearchIntent       string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
@@ -106,15 +107,26 @@ func (s *Server) humaSearchContent(
 	ctx context.Context,
 	in *contentSearchInput,
 ) (*jsonOutput[*service.ContentSearchResult], error) {
+	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
+		return nil, apiError(http.StatusBadRequest, "pattern or concepts required")
+	}
+	normalized, err := service.NormalizeContentSearchRequest(service.ContentSearchRequest{
+		Pattern: in.Pattern, Concepts: in.Concepts, Mode: string(in.Mode),
+		Limit: in.Limit, Cursor: in.Cursor,
+	})
+	if err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	mode := contentSearchMode(normalized.Mode)
 	if in.Reveal && !isLocalhostContext(ctx) {
 		return nil, apiError(http.StatusForbidden, "reveal is only permitted from localhost")
 	}
-	if requiresSemanticSearchIntent(in.Mode) &&
+	if requiresSemanticSearchIntent(mode) &&
 		in.SearchIntent != service.SemanticSearchIntentValue {
 		return nil, apiError(http.StatusForbidden,
 			"semantic and hybrid search require "+service.SemanticSearchIntentHeader)
 	}
-	if in.Scope != "" && !db.ContentSearchModeSupportsScope(string(in.Mode)) {
+	if in.Scope != "" && !db.ContentSearchModeSupportsScope(string(mode)) {
 		return nil, apiError(http.StatusBadRequest,
 			db.ContentSearchScopeUnsupportedMsg)
 	}
@@ -131,6 +143,7 @@ func (s *Server) humaSearchContent(
 	}
 	res, err := s.sessions.SearchContent(ctx, service.ContentSearchRequest{
 		Pattern:            in.Pattern,
+		Concepts:           in.Concepts,
 		Mode:               string(in.Mode),
 		Sources:            sources,
 		ExcludeSystem:      in.ExcludeSystem,

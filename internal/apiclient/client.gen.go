@@ -21015,8 +21015,11 @@ func (g GetAPIV1SearchQuery) Validate() error {
 }
 
 type GetAPIV1SearchContentQuery struct {
-	// Pattern Pattern to search for
-	Pattern string `json:"pattern" validate:"required"`
+	// Pattern Pattern to search for; mutually exclusive with concepts
+	Pattern *string `json:"pattern,omitempty"`
+
+	// Concepts Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern
+	Concepts []string `json:"concepts,omitempty"`
 
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
@@ -21096,9 +21099,6 @@ type GetAPIV1SearchContentQuery struct {
 
 func (g GetAPIV1SearchContentQuery) Validate() error {
 	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(g.Pattern, "required"); err != nil {
-		errors = errors.Append("Pattern", err)
-	}
 	if g.Mode != nil {
 		if v, ok := any(g.Mode).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -25163,12 +25163,45 @@ type DBCompactEstimate struct {
 
 type DBCompactResult = db.CompactResult
 
+type DBConceptEvidence struct {
+	Concept            string  `json:"concept" validate:"required"`
+	Ordinal            int64   `json:"ordinal"`
+	OrdinalRange       []int64 `json:"ordinal_range" validate:"required"`
+	Score              float64 `json:"score"`
+	Snippet            string  `json:"snippet" validate:"required"`
+	TranscriptRevision *string `json:"transcript_revision,omitempty"`
+}
+
+func (d DBConceptEvidence) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(d.Concept, "required"); err != nil {
+		errors = errors.Append("Concept", err)
+	}
+	if err := typesValidator.Var(d.OrdinalRange, "required"); err != nil {
+		errors = errors.Append("OrdinalRange", err)
+	}
+	if d.OrdinalRange != nil && len(d.OrdinalRange) < 2 {
+		errors = errors.Add("OrdinalRange", fmt.Sprintf("must have at least 2 items, got %d", len(d.OrdinalRange)))
+	}
+	if len(d.OrdinalRange) > 2 {
+		errors = errors.Add("OrdinalRange", fmt.Sprintf("must have at most 2 items, got %d", len(d.OrdinalRange)))
+	}
+	if err := typesValidator.Var(d.Snippet, "required"); err != nil {
+		errors = errors.Append("Snippet", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type DBContentMatch struct {
-	Agent         string      `json:"agent" validate:"required"`
-	ContextAfter  []DBMessage `json:"context_after,omitempty"`
-	ContextBefore []DBMessage `json:"context_before,omitempty"`
-	DisplayName   *string     `json:"display_name" validate:"required"`
-	IsSidechain   *bool       `json:"is_sidechain,omitempty"`
+	Agent           string              `json:"agent" validate:"required"`
+	ConceptEvidence []DBConceptEvidence `json:"concept_evidence,omitempty"`
+	ContextAfter    []DBMessage         `json:"context_after,omitempty"`
+	ContextBefore   []DBMessage         `json:"context_before,omitempty"`
+	DisplayName     *string             `json:"display_name" validate:"required"`
+	IsSidechain     *bool               `json:"is_sidechain,omitempty"`
 
 	// Location Where the match occurred: message, thinking, tool_input, or tool_result.
 	Location           string   `json:"location" validate:"required"`
@@ -25193,6 +25226,13 @@ func (d DBContentMatch) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(d.Agent, "required"); err != nil {
 		errors = errors.Append("Agent", err)
+	}
+	for i, item := range d.ConceptEvidence {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("ConceptEvidence[%d]", i), err)
+			}
+		}
 	}
 	for i, item := range d.ContextAfter {
 		if v, ok := any(item).(runtime.Validator); ok {

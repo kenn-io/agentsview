@@ -732,23 +732,24 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results."`
-	Mode             string `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
-	Scope            string `json:"scope,omitempty" jsonschema:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)."`
-	Project          string `json:"project,omitempty" jsonschema:"Restrict to one project."`
-	Agent            string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	SessionID        string `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
-	GitBranch        string `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
-	CurrentSessionID string `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
-	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
-	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Limit            int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
-	Cursor           int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
-	ActivityCutoff   string `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
-	IncludeActive    bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
-	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
-	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
-	Context          int    `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results. Mutually exclusive with concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
+	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
+	Scope            string   `json:"scope,omitempty" jsonschema:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)."`
+	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
+	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
+	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
+	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
+	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
+	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
+	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
+	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
+	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
+	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
+	Context          int      `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
 // contextMessage is a truncated view of a service-level db.Message, used
@@ -792,9 +793,10 @@ type contentMatch struct {
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
-	ContextBefore      []contextMessage `json:"context_before,omitempty"`
-	ContextAfter       []contextMessage `json:"context_after,omitempty"`
-	TranscriptRevision string           `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
+	ContextBefore      []contextMessage     `json:"context_before,omitempty"`
+	ContextAfter       []contextMessage     `json:"context_after,omitempty"`
+	TranscriptRevision string               `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
+	ConceptEvidence    []db.ConceptEvidence `json:"concept_evidence,omitempty" jsonschema:"With concepts: each concept's strongest match in this session, in request order. score is then the mean of these scores."`
 }
 
 type searchContentOut struct {
@@ -804,11 +806,12 @@ type searchContentOut struct {
 	ExcludedActive int            `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
-	EffectiveMode  string                  `json:"effective_mode"`
-	EffectiveScope string                  `json:"effective_scope,omitempty"`
-	Exclusions     searchContentExclusions `json:"exclusions"`
-	RevisionBound  bool                    `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
-	Coverage       service.MemoryCoverage  `json:"coverage" jsonschema:"Current lexical and semantic memory coverage from the same readiness provider as get_memory_status."`
+	EffectiveMode      string                  `json:"effective_mode"`
+	EffectiveScope     string                  `json:"effective_scope,omitempty"`
+	Exclusions         searchContentExclusions `json:"exclusions"`
+	RevisionBound      bool                    `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
+	Coverage           service.MemoryCoverage  `json:"coverage" jsonschema:"Current lexical and semantic memory coverage from the same readiness provider as get_memory_status."`
+	CandidateTruncated bool                    `json:"candidate_truncated,omitempty" jsonschema:"With concepts: true when a concept's candidate window filled or more sessions matched than limit, so some sessions may be missing."`
 }
 
 type memoryStatusIn struct{}
@@ -853,7 +856,19 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
-	if in.Scope != "" && !db.ContentSearchModeSupportsScope(in.Mode) {
+	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
+		return nil, searchContentOut{}, errors.New("pattern or concepts required")
+	}
+	limit := clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit)
+	normalized, err := service.NormalizeContentSearchRequest(service.ContentSearchRequest{
+		Pattern: in.Pattern, Concepts: in.Concepts, Mode: in.Mode,
+		Limit: limit, Cursor: in.Cursor,
+	})
+	if err != nil {
+		return nil, searchContentOut{}, err
+	}
+	mode := normalized.Mode
+	if in.Scope != "" && !db.ContentSearchModeSupportsScope(mode) {
 		return nil, searchContentOut{}, errors.New(db.ContentSearchScopeUnsupportedMsg)
 	}
 	if err := validateSearchDates(in.DateFrom, in.DateTo); err != nil {
@@ -861,7 +876,6 @@ func (t *toolset) searchContent(
 	}
 	var cutoffTime time.Time
 	if in.ActivityCutoff != "" {
-		var err error
 		cutoffTime, err = time.Parse(time.RFC3339, in.ActivityCutoff)
 		if err != nil {
 			return nil, searchContentOut{}, errors.New("invalid activity_cutoff: use RFC3339")
@@ -884,6 +898,7 @@ func (t *toolset) searchContent(
 	}
 	req := service.ContentSearchRequest{
 		Pattern:            in.Pattern,
+		Concepts:           in.Concepts,
 		Mode:               in.Mode,
 		Scope:              in.Scope,
 		Project:            in.Project,
@@ -892,7 +907,7 @@ func (t *toolset) searchContent(
 		GitBranchExact:     in.GitBranch,
 		DateFrom:           in.DateFrom,
 		DateTo:             in.DateTo,
-		Limit:              clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit),
+		Limit:              limit,
 		Cursor:             in.Cursor,
 		Context:            in.Context,
 		IncludeOneShot:     in.IncludeOneShot,
@@ -908,16 +923,17 @@ func (t *toolset) searchContent(
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
 		ActivityCutoff: cutoff,
-		EffectiveMode:  cmp.Or(in.Mode, "substring"),
+		EffectiveMode:  cmp.Or(mode, "substring"),
 		Exclusions: searchContentExclusions{
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,
 			OneShot:          !in.IncludeOneShot, Automated: !in.IncludeAutomated,
 		},
-		RevisionBound: res.RevisionBound,
-		Coverage:      service.NormalizeMemoryCoverage(res.Coverage),
+		RevisionBound:      res.RevisionBound,
+		Coverage:           service.NormalizeMemoryCoverage(res.Coverage),
+		CandidateTruncated: res.CandidateTruncated,
 	}
-	if db.ContentSearchModeSupportsScope(in.Mode) {
+	if db.ContentSearchModeSupportsScope(mode) {
 		out.EffectiveScope = cmp.Or(in.Scope, "all")
 	}
 	activity := make(map[string]string)
@@ -942,6 +958,7 @@ func (t *toolset) searchContent(
 			ContextBefore:      toContextMessages(m.ContextBefore),
 			ContextAfter:       toContextMessages(m.ContextAfter),
 			TranscriptRevision: m.TranscriptRevision,
+			ConceptEvidence:    m.ConceptEvidence,
 		})
 	}
 	if res.NextCursor > 0 && len(res.Matches) > 0 {

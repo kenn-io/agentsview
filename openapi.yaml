@@ -1223,11 +1223,44 @@ components:
         - reclaimed_bytes
         - duration_millis
       type: object
+    DbConceptEvidence:
+      additionalProperties: false
+      properties:
+        concept:
+          type: string
+        ordinal:
+          format: int64
+          type: integer
+        ordinal_range:
+          items:
+            format: int64
+            type: integer
+          maxItems: 2
+          minItems: 2
+          type: array
+        score:
+          format: double
+          type: number
+        snippet:
+          type: string
+        transcript_revision:
+          type: string
+      required:
+        - concept
+        - ordinal
+        - ordinal_range
+        - snippet
+        - score
+      type: object
     DbContentMatch:
       additionalProperties: false
       properties:
         agent:
           type: string
+        concept_evidence:
+          items:
+            $ref: "#/components/schemas/DbConceptEvidence"
+          type: array
         context_after:
           items:
             $ref: "#/components/schemas/DbMessage"
@@ -6657,6 +6690,8 @@ components:
       additionalProperties: false
       properties:
         active_filter_applied:
+          type: boolean
+        candidate_truncated:
           type: boolean
         coverage:
           $ref: "#/components/schemas/ServiceMemoryCoverage"
@@ -18295,14 +18330,22 @@ paths:
     get:
       operationId: get-api-v1-search-content
       parameters:
-        - description: Pattern to search for
+        - description: Pattern to search for; mutually exclusive with concepts
           explode: false
           in: query
           name: pattern
-          required: true
           schema:
-            description: Pattern to search for
+            description: Pattern to search for; mutually exclusive with concepts
             type: string
+        - description: Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern
+          explode: true
+          in: query
+          name: concepts
+          schema:
+            description: Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern
+            items:
+              type: string
+            type: array
         - description: Search mode
           explode: false
           in: query

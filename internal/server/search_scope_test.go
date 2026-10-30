@@ -209,3 +209,82 @@ func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 			"zero-valued lineage keys must be omitted from the wire")
 	}
 }
+
+// queryHitsVectorSearcher returns canned semantic hits per query text, so a
+// multi-concept search sees different evidence for each concept.
+type queryHitsVectorSearcher map[string][]db.VectorHit
+
+func (f queryHitsVectorSearcher) PrepareSemanticSearch(
+	_ context.Context, query string,
+) (db.VectorSearchPage, int, error) {
+	return func(context.Context, int) ([]db.VectorHit, bool, error) {
+		return f[query], true, nil
+	}, 0, nil
+}
+
+func (f queryHitsVectorSearcher) ResolveMessageUnits(
+	_ context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	return make([]db.UnitRef, len(refs)), nil
+}
+
+func TestSearchContentConceptsIntersectDifferentExchangesThroughHTTP(t *testing.T) {
+	te := setup(t)
+	for _, id := range []string{"both", "auth-only"} {
+		te.seedSession(t, id, "proj", 4)
+		te.seedMessages(t, id, 4, func(i int, m *db.Message) {
+			m.Content = "message"
+			if i%2 == 1 {
+				m.Role = "assistant"
+			}
+		})
+	}
+	te.db.SetVectorSearcher(queryHitsVectorSearcher{
+		"auth model": {
+			{SessionID: "auth-only", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 1, Score: 0.95},
+			{SessionID: "both", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 1, Score: 0.7},
+		},
+		"retry policy": {
+			{SessionID: "both", Ordinal: 2, OrdinalStart: 2, OrdinalEnd: 3, Score: 0.9},
+		},
+	})
+
+	w := te.wrappedRequest(http.MethodGet,
+		"/api/v1/search/content?concepts=auth+model&concepts=retry+policy&scope=top&limit=10",
+		withHeader("X-AgentsView-Search-Intent", "semantic"))
+	assertStatus(t, w, http.StatusOK)
+	res := decode[service.ContentSearchResult](t, w)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, "both", res.Matches[0].SessionID)
+	require.NotNil(t, res.Matches[0].Score)
+	assert.InDelta(t, 0.8, *res.Matches[0].Score, 0.0001)
+	require.Len(t, res.Matches[0].ConceptEvidence, 2)
+	assert.Equal(t, "auth model", res.Matches[0].ConceptEvidence[0].Concept)
+	assert.Equal(t, [2]int{0, 1}, res.Matches[0].ConceptEvidence[0].OrdinalRange)
+	assert.Equal(t, "retry policy", res.Matches[0].ConceptEvidence[1].Concept)
+	assert.Equal(t, [2]int{2, 3}, res.Matches[0].ConceptEvidence[1].OrdinalRange)
+}
+
+func TestSearchContentConceptsRejectedRequestsThroughHTTP(t *testing.T) {
+	te := setup(t)
+	intent := withHeader("X-AgentsView-Search-Intent", "semantic")
+	for _, tc := range []struct {
+		name   string
+		query  string
+		opts   []requestOpt
+		status int
+		want   string
+	}{
+		{"neither", "", []requestOpt{intent}, http.StatusBadRequest, "pattern or concepts required"},
+		{"both", "pattern=x&concepts=a&concepts=b", []requestOpt{intent}, http.StatusBadRequest, "mutually exclusive"},
+		{"one concept", "concepts=a", []requestOpt{intent}, http.StatusBadRequest, "between 2 and 5"},
+		{"lexical mode", "concepts=a&concepts=b&mode=substring", []requestOpt{intent}, http.StatusBadRequest, "mode must be semantic"},
+		{"no intent header", "concepts=a&concepts=b", nil, http.StatusForbidden, "X-AgentsView-Search-Intent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?"+tc.query, tc.opts...)
+			assertStatus(t, w, tc.status)
+			assert.Contains(t, w.Body.String(), tc.want)
+		})
+	}
+}

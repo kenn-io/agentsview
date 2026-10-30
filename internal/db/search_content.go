@@ -111,6 +111,23 @@ type ContentMatch struct {
 	// the storage query that produced this evidence. An empty value means the
 	// backend cannot provide revision-bound evidence for this result.
 	TranscriptRevision string `json:"transcript_revision,omitempty"`
+	// ConceptEvidence holds each requested concept's strongest match in this
+	// session, in request order. It is set only by multi-concept searches.
+	ConceptEvidence []ConceptEvidence `json:"concept_evidence,omitempty"`
+}
+
+// ConceptEvidence is one concept's strongest semantic match in a session
+// returned by a multi-concept search.
+type ConceptEvidence struct {
+	Concept      string  `json:"concept"`
+	Ordinal      int     `json:"ordinal"`
+	OrdinalRange [2]int  `json:"ordinal_range"`
+	Snippet      string  `json:"snippet"`
+	Score        float64 `json:"score"`
+	// TranscriptRevision is the revision this concept's search observed. Each
+	// concept is a separate query, so it can differ from the match's revision
+	// when the session changed between them.
+	TranscriptRevision string `json:"transcript_revision,omitempty"`
 }
 
 // ContentSearchPage is a page of matches with an optional next cursor.

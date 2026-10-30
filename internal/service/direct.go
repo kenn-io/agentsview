@@ -1137,9 +1137,12 @@ const maxContentSearchContext = 10
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
+	req, err := NormalizeContentSearchRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	var excludeActiveSince time.Time
 	if req.ExcludeActiveSince != "" {
-		var err error
 		excludeActiveSince, err = time.Parse(time.RFC3339, req.ExcludeActiveSince)
 		if err != nil || excludeActiveSince.IsZero() {
 			return nil, &db.SearchInputError{Msg: "search: invalid exclude_active_since: use RFC3339"}
@@ -1172,7 +1175,7 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
-	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
+	filter := db.ContentSearchFilter{
 		Pattern:            req.Pattern,
 		Mode:               req.Mode,
 		Sources:            req.Sources,
@@ -1201,13 +1204,20 @@ func (b *directBackend) SearchContent(
 		RevealSecrets: req.Reveal,
 		Limit:         req.Limit,
 		Cursor:        req.Cursor,
-	})
+	}
+	var page db.ContentSearchPage
+	candidateTruncated := false
+	if len(req.Concepts) > 0 {
+		page, candidateTruncated, err = b.searchContentConcepts(ctx, filter, req.Concepts)
+	} else {
+		page, err = b.db.SearchContent(ctx, filter)
+	}
 	if err != nil {
 		return nil, err
 	}
 	revisionBound := true
 	for i := range page.Matches {
-		if page.Matches[i].TranscriptRevision == "" {
+		if !matchRevisionBound(page.Matches[i]) {
 			revisionBound = false
 			break
 		}
@@ -1236,6 +1246,7 @@ func (b *directBackend) SearchContent(
 		NextCursor:          page.NextCursor,
 		RevisionBound:       revisionBound,
 		Coverage:            coverage,
+		CandidateTruncated:  candidateTruncated,
 	}, nil
 }
 

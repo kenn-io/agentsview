@@ -816,7 +816,10 @@ func (b *httpBackend) SearchContent(
 	ctx context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
 	q := &apiclient.GetAPIV1SearchContentQuery{}
-	q.Pattern = req.Pattern
+	if req.Pattern != "" {
+		q.Pattern = new(req.Pattern)
+	}
+	q.Concepts = req.Concepts
 	if req.Mode != "" {
 		q.Mode = new(apiclient.GetAPIV1SearchContentQueryMode(req.Mode))
 	}
@@ -915,7 +918,7 @@ func (b *httpBackend) SearchContent(
 		q.Context = new(int64(req.Context))
 	}
 	var editors []runtime.RequestEditorFn
-	if req.Mode == "semantic" || req.Mode == "hybrid" {
+	if req.Mode == "semantic" || req.Mode == "hybrid" || len(req.Concepts) > 0 {
 		editors = append(editors, func(_ context.Context, r *http.Request) error {
 			r.Header.Set(service.SemanticSearchIntentHeader, service.SemanticSearchIntentValue)
 			return nil
