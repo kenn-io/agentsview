@@ -178,7 +178,10 @@ type SessionSearchResult struct {
 
 // ContentSearchRequest is the transport-neutral content-search input.
 type ContentSearchRequest struct {
-	Pattern       string   `json:"pattern"`
+	Pattern string `json:"pattern"`
+	// Concepts runs one semantic search per concept and keeps only sessions
+	// with evidence for every one. See NormalizeContentSearchRequest.
+	Concepts      []string `json:"concepts,omitempty"`
 	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|terms|semantic|hybrid
 	Sources       []string `json:"sources,omitempty"`
 	ExcludeSystem bool     `json:"exclude_system,omitempty"`
@@ -212,6 +215,10 @@ type ContentSearchResult struct {
 	NextCursor          int               `json:"next_cursor,omitempty"`
 	RevisionBound       bool              `json:"revision_bound"`
 	Coverage            MemoryCoverage    `json:"coverage"`
+	// CandidateTruncated reports that a multi-concept search may have missed
+	// sessions: a concept's candidate window filled, or more sessions matched
+	// every concept than the limit allowed.
+	CandidateTruncated bool `json:"candidate_truncated,omitempty"`
 }
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.

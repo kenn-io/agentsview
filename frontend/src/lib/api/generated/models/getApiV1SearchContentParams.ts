@@ -6,9 +6,13 @@ import type { GetApiV1SearchContentScope } from "./getApiV1SearchContentScope.ts
 
 export type GetApiV1SearchContentParams = {
   /**
-   * Pattern to search for
+   * Pattern to search for; mutually exclusive with concepts
    */
-  pattern: string;
+  pattern?: string;
+  /**
+   * Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern
+   */
+  concepts?: string[];
   /**
    * Search mode
    */

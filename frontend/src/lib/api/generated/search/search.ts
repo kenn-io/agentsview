@@ -37,11 +37,11 @@ export const getApiV1Search = async (
   });
 };
 
-export const getGetApiV1SearchContentUrl = (params: GetApiV1SearchContentParams) => {
+export const getGetApiV1SearchContentUrl = (params?: GetApiV1SearchContentParams) => {
   const normalizedParams = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
-    const explodeParameters = ["exclude_session"];
+    const explodeParameters = ["concepts", "exclude_session"];
 
     if (Array.isArray(value) && explodeParameters.includes(key)) {
       value.forEach((v) => {
@@ -66,7 +66,7 @@ export const getGetApiV1SearchContentUrl = (params: GetApiV1SearchContentParams)
  * @summary Search session content
  */
 export const getApiV1SearchContent = async (
-  params: GetApiV1SearchContentParams,
+  params?: GetApiV1SearchContentParams,
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<ServiceContentSearchResult> => {
   return orvalFetch<ServiceContentSearchResult>(getGetApiV1SearchContentUrl(params), {

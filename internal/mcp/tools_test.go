@@ -1381,13 +1381,16 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.True(t, ok, name)
 		assert.Equal(t, "boolean", property["type"])
 	}
-	assert.NotContains(t, schema["required"], "include_one_shot")
-	assert.NotContains(t, schema["required"], "include_automated")
+	// pattern and concepts are each optional, so the schema may list no
+	// required fields at all.
+	required, _ := schema["required"].([]any)
+	assert.NotContains(t, required, "include_one_shot")
+	assert.NotContains(t, required, "include_automated")
 	for name, wantType := range map[string]string{"cursor": "integer", "activity_cutoff": "string"} {
 		property, ok := properties[name].(map[string]any)
 		require.True(t, ok, name)
 		assert.Equal(t, wantType, property["type"])
-		assert.NotContains(t, schema["required"], name)
+		assert.NotContains(t, required, name)
 	}
 	raw, err = json.Marshal(searchTool.OutputSchema)
 	require.NoError(t, err)
@@ -1543,6 +1546,58 @@ func TestSearchContent_RecallContractMapping(t *testing.T) {
 	require.NotNil(t, out.NextCursor)
 	assert.Equal(t, 50, *out.NextCursor)
 	require.Len(t, out.Matches, 1)
+}
+
+func TestSearchContent_ConceptsMapping(t *testing.T) {
+	evidence := []db.ConceptEvidence{
+		{Concept: "auth model", Ordinal: 4, OrdinalRange: [2]int{3, 5}, Score: 0.7},
+		{Concept: "retry policy", Ordinal: 12, OrdinalRange: [2]int{11, 13}, Score: 0.9},
+	}
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+		Matches: []db.ContentMatch{{
+			SessionID: "both", Location: "message", Ordinal: 4,
+			OrdinalRange: [2]int{3, 5}, Score: new(0.8), ConceptEvidence: evidence,
+		}},
+		CandidateTruncated: true,
+	}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Concepts: []string{"auth model", "retry policy"}, Scope: "top",
+		IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"auth model", "retry policy"}, fake.lastReq.Concepts)
+	assert.Equal(t, "top", fake.lastReq.Scope)
+	assert.Equal(t, "semantic", out.EffectiveMode)
+	assert.Equal(t, "top", out.EffectiveScope)
+	assert.True(t, out.CandidateTruncated)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, evidence, out.Matches[0].ConceptEvidence)
+}
+
+func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   searchContentIn
+		want string
+	}{
+		{"neither", searchContentIn{}, "pattern or concepts required"},
+		{"both", searchContentIn{Pattern: "x", Concepts: []string{"a", "b"}}, "mutually exclusive"},
+		{"lexical mode", searchContentIn{Concepts: []string{"a", "b"}, Mode: "regex"}, "mode must be semantic"},
+		{"cursor", searchContentIn{Concepts: []string{"a", "b"}, Cursor: 10}, "cursor is not supported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			tc.in.IncludeActive = true
+			_, _, err := ts.searchContent(t.Context(), nil, tc.in)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Empty(t, fake.lastReq.Concepts, "a rejected request must not reach the service")
+			assert.Empty(t, fake.lastReq.Pattern, "a rejected request must not reach the service")
+		})
+	}
 }
 
 func TestSearchContent_OutOfRangeLimitUsesDefault(t *testing.T) {

@@ -441,11 +441,11 @@ The index embeds **unit documents**, not individual messages:
 
 - Every embeddable user message (non-system, not system-prefixed) is its own
   document.
-- Assistant messages between those user messages are joined in order,
-  separated by blank lines, into **run** documents. A run closes after the
-  message that brings its joined text to `4 × max_input_chars` runes or more.
-  The next assistant message starts a new piece, so appending to a long
-  session only re-embeds its trailing piece.
+- Assistant messages between those user messages are joined in order, separated
+  by blank lines, into **run** documents. A run closes after the message that
+  brings its joined text to `4 × max_input_chars` runes or more. The next
+  assistant message starts a new piece, so appending to a long session only
+  re-embeds its trailing piece.
 
 This matters for both quality and cost. Most assistant messages are short,
 procedural narration that is meaningless as a standalone search hit; grouped
@@ -706,13 +706,13 @@ What the range *means* depends on the mode:
   vector index — the identity of the document that actually matched.
 - **Substring, regex, and FTS matches** (and hybrid hits whose message has no
   embedded unit) carry a **structurally derived** unit computed from the
-  archive's messages alone. It uses the index's user-message and
-  assistant-run boundaries but never applies the run size cap, so a derived
-  run spans the whole stretch of assistant messages. Lexical citations
-  therefore need no vector index and never change with index state. Derived
-  and embedded spans differ for assistant runs the index split into capped
-  pieces, sessions excluded from the build (`include_automated = false`), and
-  messages newer than the last index refresh.
+  archive's messages alone. It uses the index's user-message and assistant-run
+  boundaries but never applies the run size cap, so a derived run spans the
+  whole stretch of assistant messages. Lexical citations therefore need no
+  vector index and never change with index state. Derived and embedded spans
+  differ for assistant runs the index split into capped pieces, sessions
+  excluded from the build (`include_automated = false`), and messages newer
+  than the last index refresh.
 
 Lexical row cardinality is unchanged: substring/regex/FTS still return one row
 per matching source row, with the same snippets — the range and lineage fields
@@ -771,6 +771,27 @@ searchable. Limits default to 10 and go up to 50; a value outside that range
 falls back to the default. Responses state the effective mode and scope and
 which default exclusions applied; `next_cursor` is present when another page
 exists.
+
+### MCP multi-concept semantic search
+
+Pass `concepts` with two to five distinct natural-language ideas when recall
+must find one session that covers all of them. Do not also pass `pattern`.
+`mode` defaults to `semantic`; an explicit mode must also be `semantic`. The
+HTTP API takes the same list as repeated `concepts` query parameters and
+requires the `X-AgentsView-Search-Intent: semantic` header.
+
+AgentsView runs one semantic search per concept and keeps only the sessions
+every search found. The concepts may match different exchanges. A session's
+score is the mean of its best score for each concept; equal means keep the order
+of the per-concept rankings. Every result includes `concept_evidence` with the
+supporting snippet, score, and conversation-unit range for each concept.
+
+Project, branch, agent, session, date, scope, one-shot, automated-session, and
+current-session filters apply to every concept search before the intersection.
+Each concept search considers five times the limit, at most 250 candidates. A
+session that one concept ranks below that window is dropped from the
+intersection, so the response sets `candidate_truncated` whenever a window fills
+or more sessions match than the limit.
 
 ### Inline context: `--context N`
 
