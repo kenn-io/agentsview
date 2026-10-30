@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -329,6 +330,67 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	var sessions int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 	assert.Equal(t, 2, sessions, "the reparse must keep the existing session identities")
+}
+
+func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
+	version := db.CurrentDataVersion()
+	scope := db.ScopedDataVersionProviders(154, 155)
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}, scope)
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	sessionID := "codex:" + id
+	source := filepath.Join(root, "rollout-"+id+".jsonl")
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-10-08T12:00:00Z"),
+		`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model_provider_id":"openai","service_tier":"priority"}}}`,
+		testjsonl.CodexTurnContextJSON("gpt-5.3-chat-latest", "2026-10-08T12:00:01Z"),
+		testjsonl.CodexMsgJSON("assistant", "answer", "2026-10-08T12:00:02Z"),
+	)
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	_, found, err := database.GetProviderStatHash(ctx, parser.AgentCodex, source)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// Simulate an archive that does not yet have the billing identity.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"UPDATE messages SET provider_id=''; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needsSync)
+	assert.False(t, fullRebuild)
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, sessionID))
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	assert.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	after, err := database.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, version, after.DataVersion)
+	messages, err := database.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, pricing.OpenAIPriorityProviderID, messages[0].ProviderID)
+	needsSync, _, err = db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, needsSync)
 }
 
 func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {

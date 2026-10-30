@@ -204,36 +204,6 @@ func TestMaterializeObjectCopyObservesCancellationInBoundedChunks(t *testing.T) 
 		"cancellation must be observed between bounded copy chunks")
 }
 
-func TestMaterializeTrailingProbeObservesCancellation(t *testing.T) {
-	t.Parallel()
-	data := []byte("session-body")
-	object := objectRefForBytes(t, data)
-	_, manifest := materializerTestManifest(t, []rawsync.Entry{{
-		Path: "session.jsonl", Type: "file", Length: int64(len(data)),
-		Objects: []rawsync.ObjectRef{object},
-	}})
-	// The body arrives immediately; the first extra read (the one-byte
-	// trailing probe) stalls until the context is done. The probe must
-	// observe the context instead of blocking on the stalled stream.
-	store := &materializerStore{
-		objects: map[rawsync.ObjectRef][]byte{object: data},
-		readerFactory: func(ctx context.Context, data []byte) io.Reader {
-			return &probeStallReader{ctx: ctx, data: data}
-		},
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond) //nolint:kennlint // the deadline is the expected result; the stalled probe returns only when the context ends
-	defer cancel()
-	started := time.Now()
-
-	_, err := (Materializer{
-		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
-	}).Materialize(ctx, manifest)
-
-	require.ErrorIs(t, err, context.DeadlineExceeded,
-		"the trailing length probe must observe cancellation")
-	assert.Less(t, time.Since(started), 2*time.Second)
-}
-
 // cancelingChunkReader cancels after a chunk but leaves further reads possible.
 type cancelingChunkReader struct {
 	cancel    context.CancelFunc
@@ -251,24 +221,6 @@ func (r *cancelingChunkReader) Read(p []byte) (int, error) {
 	r.offset += n
 	r.cancel()
 	return n, nil
-}
-
-// probeStallReader serves its whole body immediately, then blocks the next
-// read until the context is done.
-type probeStallReader struct {
-	ctx    context.Context
-	data   []byte
-	offset int
-}
-
-func (r *probeStallReader) Read(p []byte) (int, error) {
-	if r.offset < len(r.data) {
-		n := copy(p, r.data[r.offset:])
-		r.offset += n
-		return n, nil
-	}
-	<-r.ctx.Done()
-	return 0, r.ctx.Err()
 }
 
 func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.T) {

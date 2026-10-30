@@ -2222,6 +2222,18 @@ with [`agentsview friction`](/docs/commands/#agentsview-friction), the
 builds missing days on demand. Findings are heuristics: check the session
 before acting on one.
 
+On the Friction Log page, **Generate summary** asks the configured `[insights]`
+endpoint or agent CLI for an optional model-written overview of one digest.
+Nothing generates summaries on a schedule. The model receives the digest counts,
+P0 alerts, and up to 20 pattern titles ranked by occurrences. Pattern titles can
+contain up to 80 characters of the text that triggered a correction, workaround,
+or deferral; frustration titles are withheld because they quote the user. The
+model does not receive finding text, evidence, or transcripts. The summary is
+labeled as model-written and cannot change findings, digests, or recurrence.
+Repeating a request returns the saved summary until the digest changes, and
+saved summaries also appear under **Recall → Generated insights** as **Friction
+Review**.
+
 Local days wait until their sessions have current findings; the wait does not
 expire. Other completed days can build while review catches up. PostgreSQL uses
 the findings pushed by each source, including other rules versions, and skips

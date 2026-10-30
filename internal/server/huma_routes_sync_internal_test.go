@@ -1579,7 +1579,7 @@ func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {
 
 func TestHumaSyncSessionRouteIsNotWriteTimeoutWrapped(t *testing.T) {
 	srv := testServer(
-		t, 10*time.Millisecond,
+		t, 10*time.Millisecond, //nolint:kennlint // deadlinetest: absence check; the unwrapped sync route must outlive the configured write deadline
 		withHandlerDelay(100*time.Millisecond),
 	)
 	w := serveJSON(t, srv.Handler(), http.MethodPost, "/api/v1/sessions/sync",
@@ -2035,7 +2035,7 @@ func TestRunRemoteSyncRequestSerializesNoSyncRemoteWrites(t *testing.T) {
 	select {
 	case <-exclusiveEntered:
 		assert.Fail(t, "exclusive operation overlapped remote sync")
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the held remote sync keeps the exclusive operation out
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held remote sync keeps the exclusive operation out
 	}
 
 	close(releaseRemote)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -185,4 +186,47 @@ func TestFetchLiteLLMPricingHonorsCanceledContext(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, requested.Load())
+}
+
+func TestParseLiteLLMPricingServiceTiers(t *testing.T) {
+	// Based on LiteLLM's 2026-10-26 catalog, with a sparse model added to
+	// exercise partial-rate fallback.
+	data, err := os.ReadFile("testdata/litellm_service_tiers.json")
+	require.NoError(t, err)
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	byModel := make(map[string]ModelPricing)
+	for _, price := range prices {
+		byModel[price.ModelPattern] = price
+	}
+	for _, tc := range []struct {
+		model, input, cached, output, creation          string
+		bandInput, bandCached, bandOutput, bandCreation string
+	}{
+		{"gpt-6.1-sol@priority", "4", "0.2", "20", "5", "8", "0.4", "30", "10"},
+		{"gpt-5.5@priority", "12.5", "1.25", "75", "0", "10", "1", "45", "0"},
+		{"gpt-5-nano@priority", "2.5", "0.005", "0.4", "0", "", "", "", ""},
+		{"gpt-6.1-sol-sparse@priority", "4", "0.2", "20", "0", "4", "0.2", "20", "0"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			price, ok := byModel[tc.model]
+			require.True(t, ok)
+			assert.Equal(t, money.MustParseDollars(tc.input), price.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.cached), price.CacheReadPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.output), price.OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.creation), price.CacheCreationPerMTok)
+			if tc.bandInput == "" {
+				assert.Empty(t, price.Bands)
+				return
+			}
+			require.Len(t, price.Bands, 1)
+			assert.Equal(t, 272_000, price.Bands[0].AboveInputTokens)
+			assert.Equal(t, money.MustParseDollars(tc.bandInput), price.Bands[0].InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.bandCached), price.Bands[0].CacheReadPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.bandOutput), price.Bands[0].OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tc.bandCreation), price.Bands[0].CacheCreationPerMTok)
+		})
+	}
+	assert.Contains(t, byModel, "azure/gpt-5.5")
+	assert.NotContains(t, byModel, "azure/gpt-5.5@priority")
 }

@@ -467,7 +467,7 @@ func TestCloseConnectionsStopsUsageCacheBackfill(t *testing.T) {
 	select {
 	case earlyErr = <-closed:
 		returnedEarly = true
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the blocked backfill keeps CloseConnections waiting
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the blocked backfill keeps CloseConnections waiting
 	}
 	close(release)
 	if returnedEarly {

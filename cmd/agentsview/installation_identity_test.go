@@ -176,7 +176,7 @@ func TestTelemetryCaptureHandlerScreenClaimsMigration(t *testing.T) {
 			require.FailNow(t, "capture reached the forwarding handler while screen claims were locked")
 		case <-captureDone:
 			require.FailNow(t, "capture returned while migration was locked")
-		case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows capture waits for migration to release the claims lock
+		case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: timer shows capture waits for migration to release the claims lock
 		}
 		require.NoError(t, lock.Unlock())
 		lockHeld = false
@@ -265,7 +265,7 @@ func TestTelemetryCaptureHandlerScreenClaimsMigration(t *testing.T) {
 			require.FailNow(t, "capture reached the forwarding handler while screen claims were locked")
 		case <-captureDone:
 			require.FailNow(t, "capture returned while migration was locked")
-		case <-time.After(100 * time.Millisecond): //nolint:kennlint // timer shows a live capture waits while the migration lock is held
+		case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: timer shows a live capture waits while the migration lock is held
 		}
 		cancel()
 		select {

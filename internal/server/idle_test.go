@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -158,42 +159,48 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 }
 
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
-	f := newIdleTrackerFixture(t, 20*time.Millisecond)
+	synctest.Test(t, func(t *testing.T) {
+		f := newIdleTrackerFixture(t, 20*time.Millisecond)
 
-	done := requireBeginWork(t, f.tracker)
-	f.run(t)
+		done := requireBeginWork(t, f.tracker)
+		f.run(t)
 
-	f.requireNotFiredWithin(t, 35*time.Millisecond,
-		"idle fired while internal work was active")
+		f.requireNotFiredWithin(t, 35*time.Millisecond,
+			"idle fired while internal work was active")
 
-	done()
-	f.requireFiredWithin(t, 80*time.Millisecond,
-		"idle did not fire after internal work ended")
+		done()
+		f.requireFiredWithin(t, 80*time.Millisecond,
+			"idle did not fire after internal work ended")
+	})
 }
 
 func TestIdleTrackerTouchResetsIdleBeforeRun(t *testing.T) {
-	f := newIdleTrackerFixture(t, 30*time.Millisecond)
-	f.tracker.lastExternal = time.Now().Add(-45 * time.Millisecond)
-	f.tracker.Touch()
+	synctest.Test(t, func(t *testing.T) {
+		f := newIdleTrackerFixture(t, 30*time.Millisecond)
+		f.tracker.lastExternal = time.Now().Add(-45 * time.Millisecond)
+		f.tracker.Touch()
 
-	f.run(t)
+		f.run(t)
 
-	f.requireNotFiredWithin(t, 15*time.Millisecond,
-		"idle fired immediately after touch")
-	f.requireFiredWithin(t, 80*time.Millisecond,
-		"idle did not fire after touched timeout elapsed")
+		f.requireNotFiredWithin(t, 15*time.Millisecond,
+			"idle fired immediately after touch")
+		f.requireFiredWithin(t, 80*time.Millisecond,
+			"idle did not fire after touched timeout elapsed")
+	})
 }
 
 func TestIdleTrackerRejectsRequestsAfterDrainStarts(t *testing.T) {
-	f := newIdleTrackerFixture(t, 1*time.Millisecond)
-	f.run(t)
+	synctest.Test(t, func(t *testing.T) {
+		f := newIdleTrackerFixture(t, 1*time.Millisecond)
+		f.run(t)
 
-	f.requireFiredWithin(t, time.Second, "idle did not fire after timeout")
+		f.requireFiredWithin(t, time.Second, "idle did not fire after timeout")
 
-	rec := serveWrappedNoContent(t, f.tracker)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		rec := serveWrappedNoContent(t, f.tracker)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	assertBeginWorkRejected(t, f.tracker)
+		assertBeginWorkRejected(t, f.tracker)
+	})
 }
 
 func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {

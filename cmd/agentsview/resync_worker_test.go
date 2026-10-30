@@ -168,7 +168,7 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 		syncAllReleasingStartupMaintenance(ctx, engine, nil)
 
 		maintenanceErr := make(chan error, 1)
-		blockedCtx, blockedCancel := context.WithTimeout( //nolint:kennlint // the deadline is the expected result; the closed gate keeps maintenance blocked until the context ends
+		blockedCtx, blockedCancel := context.WithTimeout( //nolint:kennlint // deadlinetest: the deadline is the expected result; the closed gate keeps maintenance blocked until the context ends
 			t.Context(), 100*time.Millisecond,
 		)
 		defer blockedCancel()

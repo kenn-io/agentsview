@@ -136,7 +136,7 @@ func TestRepositoryCloseWaitsForReaderAndIsIdempotent(t *testing.T) {
 	select {
 	case err := <-closeResult:
 		require.Fail(t, "repository close returned before reader close", "error: %v", err)
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the open reader keeps Close waiting
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the open reader keeps Close waiting
 	}
 
 	_, err = io.Copy(io.Discard, reader)

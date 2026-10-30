@@ -327,7 +327,7 @@ func TestPushLoop_BurstCoalesces(t *testing.T) {
 	select {
 	case <-pushed:
 		require.FailNow(t, "expected exactly one push for a burst")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the fake timer fired once, so no second push may follow
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the fake timer fired once, so no second push may follow
 	}
 }
 
@@ -399,7 +399,7 @@ func TestPushLoop_NotifyDirtyWithAckWaitsForSuccessfulRetry(t *testing.T) {
 	select {
 	case err := <-ack:
 		require.Fail(t, "failed push acknowledged dirty generation", "%v", err)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the failed push must never acknowledge the dirty generation
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the failed push must never acknowledge the dirty generation
 	}
 
 	// Failure retains the dirty generation and rearms debounce without a
@@ -492,7 +492,7 @@ func TestPushLoop_ShutdownFlushHonorsTimeout(t *testing.T) {
 		gotDeadline <- ok
 		return nil
 	})
-	l.flushTimeout = 50 * time.Millisecond
+	l.flushTimeout = time.Second
 	ctx, cancel := context.WithCancel(t.Context())
 	go l.Run(ctx)
 	cancel()

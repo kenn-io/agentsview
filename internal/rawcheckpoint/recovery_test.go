@@ -170,7 +170,7 @@ func TestRecoverWaitsForActiveObjectPublication(t *testing.T) {
 	select {
 	case err := <-result:
 		require.Failf(t, "recovery returned during publication", "error: %v", err)
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the active publication keeps recovery waiting
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the active publication keeps recovery waiting
 	}
 	finishPublication()
 

@@ -55,7 +55,7 @@ func TestDaemonWaitForLaunchContentionDoesNotAcceptRecordWhileLockHeld(t *testin
 		assert.Fail(t, "contender returned while mutating owner held lock",
 			"observation: %+v", observation)
 		return
-	case <-time.After(75 * time.Millisecond): //nolint:kennlint // absence check; the held launch lock keeps the contender waiting
+	case <-time.After(75 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held launch lock keeps the contender waiting
 	}
 
 	require.NoError(t, os.Remove(path), "simulated stop removes old writer")

@@ -3,6 +3,8 @@ run:
   build-tags:
     - fts5
 linters:
+  enable:
+    - kennnolint
   settings:
     forbidigo:
       forbid:
