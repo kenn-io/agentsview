@@ -487,7 +487,7 @@ func usageFactInstallFixture(tb testing.TB, count int, sessionIDs ...string) (*s
 	_, err = conn.ExecContext(tb.Context(), `ATTACH DATABASE ? AS usage_fill_spool`, spool.path)
 	require.NoError(tb, err)
 	tb.Cleanup(func() {
-		_, err := conn.ExecContext(context.Background(), `DETACH DATABASE usage_fill_spool`)
+		_, err := conn.ExecContext(context.WithoutCancel(tb.Context()), `DETACH DATABASE usage_fill_spool`)
 		require.NoError(tb, err)
 	})
 	installUsageFactFixture(tb, conn, sessionIDs...)
@@ -507,7 +507,7 @@ func installUsageFactFixture(tb testing.TB, conn *sql.Conn, sessionIDs ...string
 	require.NoError(tb, err)
 	_, err = installSpoolSessions(tb.Context(), conn, versions)
 	if err != nil {
-		_, rollbackErr := conn.ExecContext(context.Background(), `ROLLBACK`)
+		_, rollbackErr := conn.ExecContext(context.WithoutCancel(tb.Context()), `ROLLBACK`)
 		require.NoError(tb, rollbackErr)
 		require.NoError(tb, err)
 	}
