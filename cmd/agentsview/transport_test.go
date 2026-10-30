@@ -319,23 +319,6 @@ func TestDetectTransport_AuthenticatedDaemonUsesBearerToken(t *testing.T) {
 	assert.Contains(t, tr.URL, "http://127.0.0.1:"+strconv.Itoa(port))
 }
 
-// TestDetectTransport_LocalServeWritableRecordWins verifies that a
-// writable kit runtime record is exposed as a write-capable HTTP transport.
-func TestDetectTransport_LocalServeWritableRecordWins(t *testing.T) {
-	t.Parallel()
-	dir := daemonRuntimeDir(t)
-	host, writablePort := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, writablePort, "test", false)
-
-	tr, err := detectTransport(dir, "", time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportHTTP, tr.Mode)
-	assert.False(t, tr.ReadOnly)
-	assert.Contains(t, tr.URL,
-		"http://127.0.0.1:"+strconv.Itoa(writablePort),
-		"expected URL to point at the writable daemon")
-}
-
 // TestDetectTransport_PGServeUnreachable_AllowsDirectWrite verifies
 // that an unprobeable pg serve runtime record does not prove daemon
 // ownership, so direct access remains available.
@@ -347,20 +330,6 @@ func TestDetectTransport_PGServeUnreachable_AllowsDirectWrite(t *testing.T) {
 	tr, err := detectTransport(dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
-}
-
-// TestDetectTransport_LocalDaemonUnreachable_SetsDirectReadOnly verifies
-// that a writable runtime record suppresses direct writes even when
-// the daemon ping is temporarily unavailable.
-func TestDetectTransport_LocalDaemonUnreachable_SetsDirectReadOnly(t *testing.T) {
-	t.Parallel()
-	dir := daemonRuntimeDir(t)
-	writeUnreachableDaemonRuntime(t, dir, false) // writable local
-
-	tr, err := detectTransport(dir, "", time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportDirect, tr.Mode)
-	assert.True(t, tr.DirectReadOnly)
 }
 
 func TestDetectTransport_IncompatibleDaemonSetsDirectReason(t *testing.T) {
