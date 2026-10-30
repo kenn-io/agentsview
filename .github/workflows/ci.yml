@@ -33,11 +33,11 @@ jobs:
       matrix:
         linter: [golangci, nilaway]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -89,17 +89,17 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26.12.1"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -147,11 +147,11 @@ jobs:
   frontend-node-26:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26.12.1"
           cache: npm
@@ -169,16 +169,16 @@ jobs:
     name: Docs and scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install docs check tools
         run: |
@@ -227,7 +227,7 @@ jobs:
           - os: macos-latest
             name: macos-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -236,7 +236,7 @@ jobs:
       - name: Prepare Windows Go paths
         uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         id: setup_go
         with:
           go-version-file: go.mod
@@ -257,7 +257,7 @@ jobs:
         if: runner.os == 'Windows'
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -266,7 +266,7 @@ jobs:
 
       - name: Setup MinGW (Windows, retry on transient failure)
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -418,7 +418,7 @@ jobs:
             package: ./internal/sync
             skip: *sync-test-prefix
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -426,7 +426,7 @@ jobs:
       - name: Prepare Windows Go paths
         uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -439,7 +439,7 @@ jobs:
       - name: Setup MinGW
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -448,7 +448,7 @@ jobs:
 
       - name: Setup MinGW (retry on transient failure)
         if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -580,7 +580,7 @@ jobs:
 
       - name: Upload ${{ matrix.name }} test events
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
           path: go-test-events.jsonl
@@ -592,7 +592,7 @@ jobs:
     name: Go Test (windows-latest, DuckDB)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -600,7 +600,7 @@ jobs:
       - name: Prepare Windows Go paths
         uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -613,7 +613,7 @@ jobs:
       - name: Setup MinGW
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -622,7 +622,7 @@ jobs:
 
       - name: Setup MinGW (retry on transient failure)
         if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -667,12 +667,12 @@ jobs:
             runner: ubuntu-latest
             testSet: other
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -724,12 +724,12 @@ jobs:
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - name: Cache Rust dependencies
-        uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e  # v2.9.2
+        uses: step-security/rust-cache@v2.9.2
         with:
           workspaces: desktop/src-tauri -> target
           # Pull requests restore main's build without saving their own copy.
@@ -806,12 +806,12 @@ jobs:
           --health-timeout 5s
           --health-retries 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -847,12 +847,12 @@ jobs:
       matrix:
         browser: [chromium, webkit]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -868,7 +868,7 @@ jobs:
           make sqlite-vec-header
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26.12.1"
           cache: npm
