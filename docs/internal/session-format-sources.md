@@ -4052,6 +4052,26 @@ schemas keep their existing ordering behavior.
   newer sidecar timestamps extend the session end time. Data version 95 reparses
   existing archives so message and usage-event rows persist the row-level
   provider identity that drives the billing adjustment.
+- **Reasoning effort:** Assistant messages in `lm-messages.jsonl` store the
+  thinking effort the request used as
+  `message.providerOptions.providerMetadata.positai.thinkingEffort`. The field
+  is a plain string; the writer's current vocabulary is `off`, `minimal`,
+  `low`, `medium`, `high`, `xhigh`, and `max`, and model-specific levels such
+  as `adaptive` are also honored. Agentsview keeps whatever string was written
+  in `reasoning_effort`, including `off`. The value is resolved against the
+  selected model's supported levels before the request, so it reflects the
+  effective level, and it can change between messages. Only assistant messages
+  carry it; the field is omitted for models without thinking support and for
+  logs written before it existed, which leave `reasoning_effort` empty. There
+  is no fallback: `conversation.json` root `metadata.model.thinkingEffort`
+  holds only the latest preference for the whole conversation and has existed
+  only since the same change, so it would misdate mid-session changes. The
+  field was added to the Posit Assistant message metadata type in the
+  `posit-dev/databot` change "Make model preferences persistent
+  per-conversation and restructure settings" (#1081, commit `495f493cf`,
+  2026-04-21), first shipped in the Positron release `v0.3.3` (2026-04-24).
+  This is from a private repository, so the evidence level is unchanged. Data
+  version 158 reparses Posit Assistant archives to pick this up.
 
 ## Z Code (`zcode`)
 

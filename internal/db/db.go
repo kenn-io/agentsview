@@ -631,7 +631,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // unchanged.)
 // (157: capture Pi thinking level as reasoning effort. Re-parse Pi-format
 // sources in place; source and session identities are unchanged.)
-const dataVersion = 157
+// (158: record Posit Assistant per-message thinking effort as reasoning
+// effort. Re-parse Posit Assistant sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 158
 
 const archiveOnlyVersionBase = 1 << 20
 
