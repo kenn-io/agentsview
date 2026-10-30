@@ -246,6 +246,10 @@ describe("RecallCorpusPanel", () => {
       expect(document.body.textContent).toContain("Keep extraction passes bounded");
     });
     expect(document.querySelector('table[aria-label="Recall entries"]')).not.toBeNull();
+    expect(document.querySelector("h2")?.textContent).toBe("Recall");
+    expect(document.body.textContent).toContain(
+      "Browse distilled entries and extraction coverage.",
+    );
     expect(document.body.textContent).not.toContain(
       "Limit model-backed passes to an explicit session count.",
     );
