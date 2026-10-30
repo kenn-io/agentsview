@@ -36,6 +36,7 @@ jobs:
   test-macos-fsevents:
     name: Go Test (macOS FSEvents)
     runs-on: macos-latest
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

@@ -22,13 +22,14 @@ on:
   workflow_dispatch:
     inputs:
       fuzztime:
-        description: "Fuzz time per target (Go duration)"
+        description: "Fuzz time per target (Go duration, maximum 5h; job limit 6h)"
         required: false
         default: "10m"
 
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.fuzztime != '' && inputs.fuzztime != '10m' && 360 || 27 }}
     strategy:
       fail-fast: false
       matrix:

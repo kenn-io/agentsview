@@ -27,7 +27,7 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.linter == 'nilaway' && 30 || 10 }}
+    timeout-minutes: ${{ matrix.linter == 'nilaway' && 30 || 19 }}
     strategy:
       fail-fast: false
       matrix:
@@ -88,6 +88,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -146,6 +147,7 @@ jobs:
 
   frontend-node-26:
     runs-on: ubuntu-latest
+    timeout-minutes: 11
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -168,6 +170,7 @@ jobs:
   docs:
     name: Docs and scripts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -201,6 +204,7 @@ jobs:
   test:
     name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.testSet == 'lint' && 21 || matrix.os == 'windows-latest' && 34 || matrix.testSet == 'other' && 32 || matrix.testSet == 'evalingest' && 16 || matrix.package == './internal/duckdb' && 28 || 29 }}
     env:
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
@@ -396,6 +400,7 @@ jobs:
   test-isolated-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -591,6 +596,7 @@ jobs:
   test-duckdb-windows:
     name: Go Test (windows-latest, DuckDB)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -640,6 +646,7 @@ jobs:
   test-race:
     name: Go Test (race detector, ${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -723,6 +730,7 @@ jobs:
   desktop-windows-unit:
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -765,6 +773,7 @@ jobs:
   integration:
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 32
     strategy:
       fail-fast: false
       matrix:
@@ -840,6 +849,7 @@ jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.browser == 'chromium' && 42 || 24 }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
     strategy:
