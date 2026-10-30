@@ -31,7 +31,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
-      fuzztime: ${{ steps.budget.outputs.fuzztime }}
       timeout-minutes: ${{ steps.budget.outputs.timeout-minutes }}
     steps:
       - name: Calculate fuzz budget
@@ -67,7 +66,6 @@ jobs:
                   }
                   // Keep the measured default's 17-minute allowance for setup, tests, and upload.
                   minutes = int64((duration+time.Minute-1)/time.Minute) + 17
-                  fuzztime = duration.String()
               }
               output, err := os.OpenFile(os.Getenv("GITHUB_OUTPUT"), os.O_APPEND|os.O_WRONLY, 0)
               if err != nil {
@@ -75,7 +73,7 @@ jobs:
                   os.Exit(1)
               }
               defer output.Close()
-              if _, err := fmt.Fprintf(output, "fuzztime=%s\ntimeout-minutes=%d\n", fuzztime, minutes); err != nil {
+              if _, err := fmt.Fprintf(output, "timeout-minutes=%d\n", minutes); err != nil {
                   fmt.Fprintln(os.Stderr, err)
                   os.Exit(1)
               }
@@ -125,7 +123,7 @@ jobs:
         env:
           CGO_ENABLED: "1"
           TARGET: ${{ matrix.target }}
-          FUZZTIME: ${{ needs.fuzz-budget.outputs.fuzztime }}
+          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
 
       - name: Upload failing inputs
         if: failure()
