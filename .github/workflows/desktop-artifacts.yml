@@ -61,14 +61,14 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
-            timeout: 30
+            timeout: 29
             bundle: nsis
             target_triple: ""
             artifact_name: agentsview-desktop-windows
             artifact_dir: desktop/src-tauri/target/release/bundle/nsis/
           - name: Linux
             os: ubuntu-latest
-            timeout: 80
+            timeout: 74
             bundle: appimage
             target_triple: ""
             artifact_name: agentsview-desktop-linux
