@@ -1,8 +1,6 @@
 package postgres
 
 import (
-	"slices"
-
 	"go.kenn.io/agentsview/internal/rawparity"
 )
 
