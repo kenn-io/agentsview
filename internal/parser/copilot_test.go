@@ -1025,16 +1025,20 @@ func TestParseCopilotSession_UsageRecordsKeepUncoveredShutdown(t *testing.T) {
 
 func TestParseCopilotSession_UsageRecordReportedCost(t *testing.T) {
 	const receipt = `{"type":"session.usage_record","timestamp":"2026-09-01T12:01:00Z","data":{"usage":{"model":"gpt-5.4","inputTokens":100,"outputTokens":7}}}`
+	const emptyReceipt = `{"type":"session.usage_record","data":{"usage":{}}}`
 	const costOnly = `{"type":"session.shutdown","timestamp":"2026-09-01T12:02:00Z","data":{"totalNanoAiu":100000000}}`
 	const withMetrics = `{"type":"session.shutdown","timestamp":"2026-09-01T12:02:00Z","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`
 	for _, tc := range []struct {
-		name     string
-		lines    []string
-		wantCost bool
+		name       string
+		lines      []string
+		wantCost   bool
+		wantOutput int
+		wantRows   int
 	}{
-		{"stale cost", []string{costOnly, receipt}, false},
-		{"cost only covers receipt", []string{receipt, costOnly}, true},
-		{"metrics cover receipt", []string{receipt, withMetrics}, true},
+		{"stale cost", []string{costOnly, receipt}, false, 7, 1},
+		{"cost only covers receipt", []string{receipt, costOnly}, true, 7, 2},
+		{"metrics cover receipt", []string{receipt, withMetrics}, true, 7, 2},
+		{"empty receipt preserves shutdown metrics and cost", []string{receipt, costOnly, emptyReceipt, withMetrics, emptyReceipt}, true, 14, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lines := append([]string{
@@ -1044,18 +1048,22 @@ func TestParseCopilotSession_UsageRecordReportedCost(t *testing.T) {
 			sess, _, events, err := parseCopilotTestSession(t, writeCopilotJSONL(t, lines...), "local")
 			require.NoError(t, err)
 			require.NotNil(t, sess)
-			assert.Equal(t, 7, sess.TotalOutputTokens)
-			require.NotEmpty(t, events)
+			assert.Equal(t, tc.wantOutput, sess.TotalOutputTokens)
+			require.Len(t, events, tc.wantRows)
 			assert.Equal(t, "usage-record", events[0].Source)
+			if tc.wantRows == 3 {
+				assert.Equal(t, "shutdown", events[1].Source)
+				assert.Equal(t, 100, events[1].InputTokens)
+				assert.Equal(t, 7, events[1].OutputTokens)
+			}
 			if tc.wantCost {
-				require.Len(t, events, 2)
-				require.NotNil(t, events[1].Cost)
-				assert.Equal(t, money.MustParseDollars("0.001"), *events[1].Cost)
-				assert.Equal(t, copilotReportedCostSource, events[1].CostSource)
-				assert.Zero(t, events[1].InputTokens)
-				assert.Zero(t, events[1].OutputTokens)
+				costEvent := events[len(events)-1]
+				require.NotNil(t, costEvent.Cost)
+				assert.Equal(t, money.MustParseDollars("0.001"), *costEvent.Cost)
+				assert.Equal(t, copilotReportedCostSource, costEvent.CostSource)
+				assert.Zero(t, costEvent.InputTokens)
+				assert.Zero(t, costEvent.OutputTokens)
 			} else {
-				require.Len(t, events, 1)
 				assert.Nil(t, events[0].Cost)
 				assert.Empty(t, events[0].CostSource)
 			}
