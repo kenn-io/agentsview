@@ -50,3 +50,33 @@ func TestRawReconcileSurvivingGenerationFences(t *testing.T) {
 		}
 	}
 }
+
+func TestRawReconcileRepairsAgreeingTupleBelowRetainedGeneration(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device", "retained-fence", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("retained")))
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO raw_projection_generations(source_id,generation,manifest_id,processing_version) SELECT source_id,37,selected_manifest_id,processing_version FROM raw_source_projections`)
+	require.NoError(t, err)
+	before := rawAuthoritativeSnapshot(t, f)
+	dry, err := f.sink.ReconcileRawSources(t.Context(), false)
+	require.NoError(t, err)
+	require.Equal(t, 1, dry.Found)
+	require.Zero(t, dry.Repaired)
+	require.Zero(t, dry.Unrecoverable)
+	require.Equal(t, before, rawAuthoritativeSnapshot(t, f))
+
+	got, err := f.sink.ReconcileRawSources(t.Context(), true)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.Repaired)
+	require.Zero(t, got.Unrecoverable)
+	var generation int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT projection_generation FROM raw_source_projections WHERE source_id=$1`, rawSourceID(m)).Scan(&generation))
+	require.Equal(t, int64(38), generation)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT generation FROM raw_projection_generations WHERE source_id=$1 AND generation=38`, rawSourceID(m)).Scan(&generation))
+
+	after := rawAuthoritativeSnapshot(t, f)
+	again, err := f.sink.ReconcileRawSources(t.Context(), true)
+	require.NoError(t, err)
+	require.Zero(t, again.Repaired)
+	require.Equal(t, after, rawAuthoritativeSnapshot(t, f))
+}

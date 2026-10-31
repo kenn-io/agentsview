@@ -137,15 +137,23 @@ func (s *RawProjectionStore) recoverRawSourceTx(ctx context.Context, tx *sql.Tx,
 	}
 	source := rawSourceID(m)
 	var version string
+	var selectedGeneration int64
 	var agrees bool
 	err = tx.QueryRowContext(ctx, `SELECT p.processing_version,
- p.projection_generation>0 AND p.selected_manifest_id=$3 AND p.device_id=$4 AND p.provider=$5 AND p.configured_root_id=$6 AND p.source_key_sha256=$7 AND EXISTS(SELECT 1 FROM raw_ingest_jobs j WHERE j.tenant_id=p.tenant_id AND j.id=p.selected_job_id AND j.manifest_id=p.selected_manifest_id AND j.stage='parse' AND j.processing_version=p.processing_version AND j.projection_generation=p.projection_generation AND j.projection_selected)
- FROM raw_source_projections p WHERE p.tenant_id=$1 AND p.source_id=$2 FOR UPDATE`, s.options.Tenant, source, m.ManifestID, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey)).Scan(&version, &agrees)
+ p.projection_generation,p.projection_generation>0 AND p.selected_manifest_id=$3 AND p.device_id=$4 AND p.provider=$5 AND p.configured_root_id=$6 AND p.source_key_sha256=$7 AND EXISTS(SELECT 1 FROM raw_ingest_jobs j WHERE j.tenant_id=p.tenant_id AND j.id=p.selected_job_id AND j.manifest_id=p.selected_manifest_id AND j.stage='parse' AND j.processing_version=p.processing_version AND j.projection_generation=p.projection_generation AND j.projection_selected)
+ FROM raw_source_projections p WHERE p.tenant_id=$1 AND p.source_id=$2 FOR UPDATE`, s.options.Tenant, source, m.ManifestID, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey)).Scan(&version, &selectedGeneration, &agrees)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return
 	}
+	var generation int64
 	if agrees {
-		return false, false, false, nil
+		generation, err = s.survivingRawGenerationTx(ctx, tx, source, m)
+		if err != nil {
+			return
+		}
+		if selectedGeneration >= generation {
+			return false, false, false, nil
+		}
 	}
 	found = true
 	if errors.Is(err, sql.ErrNoRows) {
@@ -162,19 +170,11 @@ func (s *RawProjectionStore) recoverRawSourceTx(ctx context.Context, tx *sql.Tx,
 	if validateRawIngestProcessingVersion(version) != nil {
 		return true, false, true, nil //nolint:nilerr // invalid evidence is a finding, not a command error
 	}
-	// Include every surviving fence, even if the projection row itself was
-	// restored from an older backup. Never reuse a published generation.
-	var generation int64
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(g),0) FROM (
- SELECT projection_generation g FROM raw_source_projections WHERE tenant_id=$1 AND source_id=$2
- UNION ALL SELECT generation FROM raw_projection_generations WHERE tenant_id=$1 AND source_id=$2
- UNION ALL SELECT j.projection_generation FROM raw_ingest_jobs j JOIN raw_manifests m ON m.tenant_id=j.tenant_id AND m.manifest_id=j.manifest_id WHERE m.tenant_id=$1 AND m.device_id=$3 AND m.provider=$4 AND m.configured_root_id=$5 AND m.source_key_sha256=$6
- UNION ALL SELECT projection_generation FROM raw_session_branches WHERE tenant_id=$1 AND source_id=$2
- UNION ALL SELECT projection_generation FROM session_sources WHERE tenant_id=$1 AND source_id=$2
- UNION ALL SELECT c.projection_generation FROM raw_source_contributions c JOIN raw_session_branches b ON b.tenant_id=c.tenant_id AND b.branch_id=c.branch_id WHERE b.tenant_id=$1 AND b.source_id=$2
- ) fences`, s.options.Tenant, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey)).Scan(&generation)
-	if err != nil {
-		return
+	if !agrees {
+		generation, err = s.survivingRawGenerationTx(ctx, tx, source, m)
+		if err != nil {
+			return
+		}
 	}
 	if generation == math.MaxInt64 {
 		return true, false, true, nil
@@ -211,4 +211,20 @@ func (s *RawProjectionStore) recoverRawSourceTx(ctx context.Context, tx *sql.Tx,
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO raw_corpus_state(singleton,selection_revision) VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET selection_revision=raw_corpus_state.selection_revision+1`)
 	return true, err == nil, false, err
+}
+
+// survivingRawGenerationTx includes every surviving projection fence, even one
+// restored from an older backup, so repair never reuses a published generation.
+
+func (s *RawProjectionStore) survivingRawGenerationTx(ctx context.Context, tx *sql.Tx, source string, m rawsync.CanonicalManifest) (int64, error) {
+	var generation int64
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(g),0) FROM (
+ SELECT projection_generation g FROM raw_source_projections WHERE tenant_id=$1 AND source_id=$2
+ UNION ALL SELECT generation FROM raw_projection_generations WHERE tenant_id=$1 AND source_id=$2
+ UNION ALL SELECT j.projection_generation FROM raw_ingest_jobs j JOIN raw_manifests m ON m.tenant_id=j.tenant_id AND m.manifest_id=j.manifest_id WHERE m.tenant_id=$1 AND m.device_id=$3 AND m.provider=$4 AND m.configured_root_id=$5 AND m.source_key_sha256=$6
+ UNION ALL SELECT projection_generation FROM raw_session_branches WHERE tenant_id=$1 AND source_id=$2
+ UNION ALL SELECT projection_generation FROM session_sources WHERE tenant_id=$1 AND source_id=$2
+ UNION ALL SELECT c.projection_generation FROM raw_source_contributions c JOIN raw_session_branches b ON b.tenant_id=c.tenant_id AND b.branch_id=c.branch_id WHERE b.tenant_id=$1 AND b.source_id=$2
+ ) fences`, s.options.Tenant, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey)).Scan(&generation)
+	return generation, err
 }
