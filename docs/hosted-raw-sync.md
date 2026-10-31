@@ -671,8 +671,7 @@ when no failure timestamp is available.
 at least `stale_after_seconds` ago with no completed parse job for a selected
 processing version. It includes pending tombstones but excludes successfully
 parsed idle sessions. Rows expose `accepted_at`, the time used for this
-threshold. All
-response timestamps use UTC.
+threshold. All response timestamps use UTC.
 
 Use the same device credential and server settings as `server-status` to read
 health from the CLI. Both threshold flags are required:
