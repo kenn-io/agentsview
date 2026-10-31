@@ -55,14 +55,20 @@ func testRawRolloutRetry(t *testing.T, code, operation string) {
 	require.Equal(t, before.identity+identityDelta, after.identity)
 	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	require.Equal(t, RawIdentityUnique, resolved.State)
-	messages, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	require.Equal(t, "retained", messages[0].Content)
-	require.Equal(t, "checking", messages[1].Content)
-	require.Len(t, messages[1].ToolCalls, 1)
-	require.Equal(t, "Bash", messages[1].ToolCalls[0].ToolName)
+	wantIdentity := RawIdentityUnique
+	if operation == "scope" {
+		wantIdentity = RawIdentityGone
+	}
+	require.Equal(t, wantIdentity, resolved.State)
+	if operation != "scope" {
+		messages, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		require.Equal(t, "retained", messages[0].Content)
+		require.Equal(t, "checking", messages[1].Content)
+		require.Len(t, messages[1].ToolCalls, 1)
+		require.Equal(t, "Bash", messages[1].ToolCalls[0].ToolName)
+	}
 	var revisions int
 	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_content_revisions`).Scan(&revisions))
 	require.Equal(t, 1, revisions, "a failed attempt must not leave a content revision")
