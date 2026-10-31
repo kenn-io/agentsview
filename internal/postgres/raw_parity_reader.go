@@ -37,16 +37,15 @@ func (r RawParityReader) Candidates(ctx context.Context) ([]rawparity.Candidate,
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var c rawparity.Candidate
 		if err = rows.Scan(&c.ID, &c.Agent, &c.Machine, &c.Group, &c.PublicID, &c.SourceLocal, &c.Aliases, &c.Devices); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		out = append(out, c)
 	}
 	err = rows.Err()
-	rows.Close()
 	if err != nil {
 		return nil, err
 	}
