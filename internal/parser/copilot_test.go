@@ -1008,6 +1008,8 @@ func TestParseCopilotSession_UsageRecordsKeepUncoveredShutdown(t *testing.T) {
 			require.NotNil(t, sess)
 			assert.True(t, sess.HasTotalOutputTokens)
 			assert.Equal(t, tc.wantOutput, sess.TotalOutputTokens)
+			assert.True(t, sess.HasPeakContextTokens)
+			assert.Equal(t, 100, sess.PeakContextTokens)
 			require.Len(t, events, tc.wantRows)
 			assert.Equal(t, "usage-record", events[0].Source)
 			assert.Equal(t, 7, events[0].OutputTokens)
