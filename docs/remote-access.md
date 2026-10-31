@@ -132,10 +132,10 @@ connection refusal usually means the daemon is not running, is still bound to
 loopback, or the URL port is wrong; DNS and timeout messages point back to the
 configured `url`.
 
-A bare `agentsview sync` treats offline, unreachable, and timed-out configured
+A bare `agentsview source sync` treats offline, unreachable, and timed-out configured
 HTTP hosts as absent fleet members. It prints a skipped-host progress line,
 continues with local and reachable remote sources, and exits successfully unless
-another error occurs. `agentsview sync --host X` remains strict and reports an
+another error occurs. `agentsview source sync --host X` remains strict and reports an
 unavailable explicitly selected host as an error.
 
 For always-available fleet nodes launched with `agentsview daemon start`, set:
@@ -149,10 +149,10 @@ That setting controls detached writable daemons, including config-driven and
 Docker, or a foreground shell never create the idle tracker and already stay
 alive until their supervisor stops them.
 
-Run `agentsview sync` on the collector to sync local sessions and every
+Run `agentsview source sync` on the collector to sync local sessions and every
 configured host. Set `interval` on a `[[remote_hosts]]` entry when a running
 collector daemon should sync that host periodically; omit it or set it to `0s`
-for manual sync only. See [`agentsview sync`](/docs/commands/#agentsview-sync) for
+for manual sync only. See [`agentsview source sync`](/docs/commands/#agentsview-sync) for
 single-host selection and failure behavior.
 
 ## SSH Remote Sync
@@ -186,7 +186,7 @@ without asking for a password or passphrase. Check it first:
 ssh -o BatchMode=yes user@devbox.example.com true
 ```
 
-Then run `agentsview sync --host devbox`. A bare `agentsview sync`, the daemon's
+Then run `agentsview source sync --host devbox`. A bare `agentsview source sync`, the daemon's
 periodic `interval` sync, and full rebuilds also include SSH hosts. Sessions get
 the same IDs, machine name, and paths as HTTP hosts. Mirrors, manifests, and
 delta transfers work as described in [Incremental Sync](#incremental-sync).
@@ -248,8 +248,8 @@ to sync from a release build.
 
 ### Offline Hosts
 
-A bare `agentsview sync` skips an SSH host that the network cannot reach, the
-same as an offline HTTP host. `agentsview sync --host devbox` reports it as an
+A bare `agentsview source sync` skips an SSH host that the network cannot reach, the
+same as an offline HTTP host. `agentsview source sync --host devbox` reports it as an
 error. `ssh` must exit with status 255 and print one of these OpenSSH messages:
 
 - `Could not resolve hostname`
@@ -356,7 +356,7 @@ atomic swap. A preparation, parser, batch-write, or FTS failure leaves the
 active archive unchanged.
 
 Remote-only syncs, including
-`agentsview sync --host <configured-http-host> --full`, continue to import into
+`agentsview source sync --host <configured-http-host> --full`, continue to import into
 the active archive and do not use the combined rebuild path.
 
 If no directory-scoped files changed, the collector skips the archive request
@@ -643,7 +643,7 @@ on both the local SQLite server and the PostgreSQL read server:
 agentsview serve --write-timeout 120s
 
 # PostgreSQL-backed read server (the multi-tenant / large-dataset case)
-agentsview pg serve --write-timeout 120s
+agentsview replica pg serve --write-timeout 120s
 ```
 
 Set it to `0` to disable the deadline entirely. If aggregates are slow enough to

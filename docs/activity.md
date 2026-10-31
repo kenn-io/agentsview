@@ -50,7 +50,7 @@ The summary cards show:
 
 The report counts subagent sessions (for example Claude Code Task-tool agents)
 and fork sessions (rewound conversation branches) alongside their parent
-sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
+sessions, so **Total Cost** lines up with `agentsview report usage daily` for the same
 day and timezone. Usage rows that recur across related sessions are deduplicated
 before totaling, the same rule the Usage page applies.
 
@@ -211,13 +211,13 @@ GET /api/v1/activity/report
 The same report is available from the CLI:
 
 ```bash
-agentsview activity report --preset day --date 2026-06-20
-agentsview activity report --preset week --date 2026-06-20 --json
-agentsview activity report --preset custom \
+agentsview report activity --preset day --date 2026-06-20
+agentsview report activity --preset week --date 2026-06-20 --json
+agentsview report activity --preset custom \
   --from 2026-06-20T14:00:00Z \
   --to 2026-06-20T18:00:00Z \
   --bucket 15m
-agentsview activity report --preset month --date 2026-07-01 --json \
+agentsview report activity --preset month --date 2026-07-01 --json \
   --sessions-limit 200 --sessions-sort cost --sessions-direction desc
 ```
 
@@ -235,7 +235,7 @@ See [CLI Reference](/docs/commands/#agentsview-activity-report) and
 
 ### JSON Contract
 
-`agentsview activity report --json` and `/api/v1/activity/report` emit schema
+`agentsview report activity --json` and `/api/v1/activity/report` emit schema
 version 8. The report contains a bounded first page of sessions,
 `sessions_total`, `sessions_next_cursor`, and a signed `report_id` that keeps
 later pages tied to the report. It does not include the old `intervals` array.
@@ -295,7 +295,7 @@ ordering—agent-minutes descending, untimed sessions last, session ID ascending
 as the final tie-break—so their five-row human summary remains compatible. They
 cannot request later pages or consume progress.
 
-The activity report JSON, `agentsview usage daily --json`, and
+The activity report JSON, `agentsview report usage daily --json`, and
 `agentsview export sessions --format json|ndjson` are separate versioned
 surfaces. Usage and activity already emitted `schema_version: 1` before 0.38,
 and the session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and

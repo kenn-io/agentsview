@@ -16,7 +16,7 @@ func runAgentsCommand(t *testing.T, args ...string) (string, error) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs(append([]string{"agents"}, args...))
+	root.SetArgs(append([]string{"source", "list"}, args...))
 	err := root.Execute()
 	return out.String(), err
 }
@@ -88,7 +88,7 @@ func TestAgentsCommandHumanOutput(t *testing.T) {
 	assert.Contains(t, out, "  sessions: ~/.claude/projects\n")
 	assert.Contains(t, out, "  override: CLAUDE_PROJECTS_DIR\n")
 	assert.Regexp(t, `(?m)^  reads: first_message, .*tool_calls`, out)
-	assert.Contains(t, out, "sessions: imported with `agentsview import`")
+	assert.Contains(t, out, "sessions: imported with `agentsview source import`")
 }
 
 func TestAgentsCommandRejectsUnknownAgent(t *testing.T) {

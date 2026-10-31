@@ -3,8 +3,8 @@ title: ClickHouse Sync
 description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
 ---
 
-AgentsView stores sessions locally in SQLite. `agentsview clickhouse push`
-copies those sessions into ClickHouse. `agentsview clickhouse serve` runs the
+AgentsView stores sessions locally in SQLite. `agentsview replica clickhouse push`
+copies those sessions into ClickHouse. `agentsview replica clickhouse serve` runs the
 web UI by querying that copy. Keep the copy current with `push --watch` or
 `clickhouse service`.
 
@@ -67,7 +67,7 @@ legacy `[clickhouse]` field names `url`, `database`, `machine_name`,
 ### 2. Push Sessions
 
 ```bash
-agentsview clickhouse push
+agentsview replica clickhouse push
 ```
 
 This one-shot command syncs all local sessions, messages, and tool calls to
@@ -76,19 +76,19 @@ ClickHouse. The schema is created automatically on first push.
 To keep ClickHouse current automatically, run the foreground watcher:
 
 ```bash
-agentsview clickhouse push --watch
+agentsview replica clickhouse push --watch
 ```
 
 Or install it as a per-user background service on macOS or Linux:
 
 ```bash
-agentsview clickhouse service install
+agentsview replica clickhouse service install
 ```
 
 ### 3. Serve the Dashboard
 
 ```bash
-agentsview clickhouse serve
+agentsview replica clickhouse serve
 ```
 
 Opens the read-only web UI at `http://127.0.0.1:8080`, backed entirely by
@@ -99,12 +99,14 @@ ______________________________________________________________________
 
 ## Commands
 
-### `agentsview clickhouse push`
+<a id="agentsview-clickhouse-push"></a>
+
+### `agentsview replica clickhouse push`
 
 Sync sessions from the local SQLite database to ClickHouse.
 
 ```bash
-agentsview clickhouse push [target] [flags]
+agentsview replica clickhouse push [target] [flags]
 ```
 
 | Flag                 | Default | Description                                                               |
@@ -169,13 +171,13 @@ otherwise.
 
 #### Automatic Push Watcher
 
-`agentsview clickhouse push --watch` runs a long-lived auto-push daemon in the
+`agentsview replica clickhouse push --watch` runs a long-lived auto-push daemon in the
 foreground:
 
 ```bash
-agentsview clickhouse push --watch
-agentsview clickhouse push --watch --debounce 1m
-agentsview clickhouse push --watch --interval 5m
+agentsview replica clickhouse push --watch
+agentsview replica clickhouse push --watch --debounce 1m
+agentsview replica clickhouse push --watch --interval 5m
 ```
 
 The watcher performs one initial local sync plus ClickHouse push, then pushes
@@ -205,13 +207,13 @@ subset:
 
 ```bash
 # Push only these projects
-agentsview clickhouse push --projects alpha,beta
+agentsview replica clickhouse push --projects alpha,beta
 
 # Push everything except this project
-agentsview clickhouse push --exclude-projects scratch
+agentsview replica clickhouse push --exclude-projects scratch
 
 # Ignore config-file filters for this run
-agentsview clickhouse push --all-projects
+agentsview replica clickhouse push --all-projects
 ```
 
 `--projects` and `--exclude-projects` are mutually exclusive. `--all-projects`
@@ -227,7 +229,7 @@ projects = ["alpha", "beta"]
 ```
 
 CLI flags override config values. Use
-[`agentsview projects`](/docs/commands/#agentsview-projects) to list available
+[`agentsview project list`](/docs/commands/#agentsview-projects) to list available
 project names.
 
 #### Push Batch Size
@@ -292,8 +294,8 @@ local download in the CLI before running builds unattended.
    exists:
 
     ```bash
-    agentsview embeddings build
-    agentsview embeddings list
+    agentsview index embeddings build --yes
+    agentsview index embeddings list
     ```
 
     `embeddings list` prints one row per generation with a `STATE` column; the
@@ -303,7 +305,7 @@ local download in the CLI before running builds unattended.
 1. Push to ClickHouse and confirm the vector phase ran:
 
     ```bash
-    agentsview clickhouse push
+    agentsview replica clickhouse push
     ```
 
     The summary ends with
@@ -319,7 +321,7 @@ local download in the CLI before running builds unattended.
    queries are embedded at search time.
 
     ```bash
-    agentsview clickhouse serve --no-browser
+    agentsview replica clickhouse serve --no-browser
     ```
 
     The startup log contains
@@ -342,20 +344,22 @@ local download in the CLI before running builds unattended.
 Keeping vectors current is two jobs. Embedding new sessions happens locally: the
 `agentsview` daemon does it after each sync while `[vector.embed]`
 `run_after_sync` is on (the default), and without a running daemon you run
-`agentsview embeddings build --yes` before each push. Replicating the result is
+`agentsview index embeddings build --yes` before each push. Replicating the result is
 the vector phase inside every `clickhouse push`, so the same watcher or service
 as the session push (`clickhouse push --watch` or `clickhouse service install`)
 carries new vectors once they exist locally. There is no separate vector command
 to schedule, and the watcher never generates embeddings itself.
 
-### `agentsview clickhouse status`
+<a id="agentsview-clickhouse-status"></a>
+
+### `agentsview replica clickhouse status`
 
 Show the current sync state.
 
 ```bash
-agentsview clickhouse status [target] [flags]
-agentsview clickhouse status --all
-agentsview clickhouse status --projects alpha,beta
+agentsview replica clickhouse status [target] [flags]
+agentsview replica clickhouse status --all
+agentsview replica clickhouse status --projects alpha,beta
 ```
 
 Without a target name, `clickhouse status` uses the effective default target.
@@ -375,7 +379,7 @@ To alert on a stalled watcher, run status from a timer or monitor with
 `--max-stale`:
 
 ```bash
-agentsview clickhouse status --max-stale 10m
+agentsview replica clickhouse status --max-stale 10m
 ```
 
 The command exits non-zero, and names the cause, in any of these cases:
@@ -411,18 +415,20 @@ interval apart.
 reports what pushes did. It also fails when the record was written before the
 target's URL or schema changed, until a watcher using the new settings starts.
 
-### `agentsview clickhouse service`
+<a id="agentsview-clickhouse-service"></a>
+
+### `agentsview replica clickhouse service`
 
 Install and manage the [`clickhouse push --watch`](#automatic-push-watcher)
 auto-push daemon as a per-user OS service.
 
 ```bash
-agentsview clickhouse service install
-agentsview clickhouse service status
-agentsview clickhouse service logs -f
-agentsview clickhouse service stop
-agentsview clickhouse service start
-agentsview clickhouse service uninstall
+agentsview replica clickhouse service install
+agentsview replica clickhouse service status
+agentsview replica clickhouse service logs -f
+agentsview replica clickhouse service stop
+agentsview replica clickhouse service start
+agentsview replica clickhouse service uninstall
 ```
 
 Supported service managers:
@@ -432,13 +438,13 @@ Supported service managers:
 | macOS    | launchd LaunchAgent |
 | Linux    | `systemd --user`    |
 
-The generated unit runs `agentsview clickhouse push --watch`, pins
+The generated unit keeps the compatible `agentsview clickhouse push --watch` launch path, pins
 `AGENTSVIEW_DATA_DIR` to the data directory used at install time, and writes
 logs to `~/.agentsview/clickhouse-watch.log` unless you changed the data
 directory.
 
 If you run your own collector service, use
-`agentsview clickhouse service install --no-start-daemon`. The push service
+`agentsview replica clickhouse service install --no-start-daemon`. The push service
 exits if no writable daemon is running, and the service manager restarts it
 until the collector answers. It retries pushes while the collector restarts,
 without starting a daemon or opening the archive directly. Reinstalling restarts
@@ -457,12 +463,14 @@ start at boot unless user lingering is enabled. If lingering is disabled,
 `install` prints the exact `loginctl enable-linger "$USER"` command and offers
 to run it.
 
-### `agentsview clickhouse serve`
+<a id="agentsview-clickhouse-serve"></a>
+
+### `agentsview replica clickhouse serve`
 
 Start a read-only web UI backed by ClickHouse.
 
 ```bash
-agentsview clickhouse serve [flags]
+agentsview replica clickhouse serve [flags]
 ```
 
 Accepts the same serve flags as [`pg serve`](/docs/pg-sync/#agentsview-pg-serve)
@@ -480,11 +488,11 @@ Activity report reads these instead of parsing usage JSON and scanning tool
 events on every request. The fill runs once per mirror, keeps the source tables
 unchanged, and resumes from the start if interrupted. Until it completes, a
 read-only serve role fails the compatibility check with a message naming the
-missing fill; run `agentsview clickhouse push` with a role that can create
+missing fill; run `agentsview replica clickhouse push` with a role that can create
 tables to finish it.
 
 If `clickhouse serve` runs with a read-only role, upgrade the machine that
-pushes first, run `agentsview clickhouse push` once, then upgrade the machines
+pushes first, run `agentsview replica clickhouse push` once, then upgrade the machines
 that serve. This release adds the `session_plan_usage` table, which holds Codex
 Cloud plan usage, and a read-only role cannot create it. Until a push creates
 it, an upgraded `clickhouse serve` with that role fails to start with

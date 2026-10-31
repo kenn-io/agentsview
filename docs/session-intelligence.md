@@ -25,7 +25,7 @@ Session intelligence shows up in four places:
 - **Programmatic session surface** — `agentsview session get` and
     `agentsview session list` expose health and outcome fields, plus filters
     such as `--health-grade`, `--outcome`, and `--min-tool-failures`.
-- **CLI health view** — `agentsview health` shows either a recent session list
+- **CLI health view** — `agentsview session health` shows either a recent session list
     with grade and outcome columns, or detailed signals for a single session.
 
 For elapsed turn time and measured tool execution, open **Analysis** in a
@@ -151,7 +151,7 @@ result, and **Open** or **Unknown** means the trace does not establish a
 resolved ending. A recovered tool sequence does not prove the overall task
 succeeded.
 
-On ClickHouse, run `agentsview clickhouse push` with the new version before
+On ClickHouse, run `agentsview replica clickhouse push` with the new version before
 serving the mirror. The first push refreshes every session once, and tool
 sequences remain unavailable for sessions that push has not reached.
 
@@ -211,15 +211,17 @@ scored or unscored signal-bearing sessions.
 
 ## CLI And API Surfaces
 
-### `agentsview health`
+<a id="agentsview-health"></a>
 
-`agentsview health` is the human-first CLI for quick inspection.
+### `agentsview session health`
+
+`agentsview session health` is the human-first CLI for quick inspection.
 
 ```bash
-agentsview health
-agentsview health --limit 50
-agentsview health <session-id>
-agentsview health <session-id> --json
+agentsview session health
+agentsview session health --limit 50
+agentsview session health <session-id>
+agentsview session health <session-id> --json
 ```
 
 Without a session ID it lists recent sessions with grade and
@@ -242,12 +244,14 @@ agentsview session list --min-tool-failures 0
 `health_score_basis` and `health_penalties`. `session list`
 exposes health and outcome filters for automation-friendly scans.
 
-## Relationship To `agentsview stats`
+<a id="relationship-to-agentsview-stats"></a>
+
+## Relationship To `agentsview report stats`
 
 Session intelligence is **per-session** and powers the session UI,
 the session API, and the dashboard health section.
 
-[`agentsview stats`](/docs/stats/) is different: it is an
+[`agentsview report stats`](/docs/stats/) is different: it is an
 **aggregate reporting** command that summarizes windows of session
 activity, git activity, tool mix, model mix, and outcome metrics
 across the whole workspace.

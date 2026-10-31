@@ -24,7 +24,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Activity](https://agentsview.io/docs/activity.md): Activity, concurrency, and session-time reporting.
 - [Token Usage & Costs](https://agentsview.io/docs/token-usage.md): Token and cost reports, model aliases, selectable cost breakdowns, Hermes cron jobs, and cloud plan usage.
 - [One-shot CI Capture](https://agentsview.io/docs/one-shot-capture.md): Capture exact usage from one supported non-interactive agent execution.
-- [Stats](https://agentsview.io/docs/stats.md): Experimental workspace analytics via agentsview stats.
+- [Stats](https://agentsview.io/docs/stats.md): Experimental workspace analytics via agentsview report stats.
 - [Reporting Export](https://agentsview.io/docs/reporting-export.md): Canonical hourly activity and usage exports for reporting integrations.
 
 ## Understand
