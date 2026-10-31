@@ -118,10 +118,7 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 			if mode == "removed" {
 				next, _ := f.acceptScoped(t, "device-a", "removed", accepted.Receipt, parser.AgentCodex, "root-a", "own.jsonl")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, linkChildOutcome()))
-			} else if mode == "hidden" {
-				_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=true WHERE id IN (SELECT session_id FROM messages WHERE content='exact parent')`)
-				require.NoError(t, err)
-			} else {
+			} else if mode == "excluded" {
 				require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "trashed", true))
 				removed, err := f.sink.ExcludeTrashedSession(t.Context(), "codex:portable")
 				require.NoError(t, err)
@@ -135,6 +132,12 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 			p.Outcome.Results[0].Result.Session.SourceSessionID = "alternate-key"
 			p.Outcome.Results[0].Result.Session.StartedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, alternate), alternate, p))
+			if mode == "hidden" {
+				// Stage the read fixture after publication, which recomputes the
+				// connected groups' eligibility from their rollout scopes.
+				_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=true WHERE id IN (SELECT session_id FROM messages WHERE content='exact parent')`)
+				require.NoError(t, err)
+			}
 			h, err := newHostedAdapter(f.runtime, f.tenant)
 			require.NoError(t, err)
 			got, err := h.GetSessionFull(t.Context(), "codex:child")
