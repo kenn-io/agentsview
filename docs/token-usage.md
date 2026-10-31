@@ -623,11 +623,11 @@ When available, per-call usage from `session-store.db` supplies input, output,
 cache, and reasoning counts for sessions starting June 1, 2026 or later.
 Otherwise, `session.usage_record` receipts supply those counts at each request's
 own timestamp, including for sessions without a shutdown summary. Store rows
-replace all `session.shutdown.modelMetrics` rollups. Receipts replace a
-shutdown's token rows only when receipts precede it since the previous shutdown.
-A shutdown with no receipts in that segment keeps its token rows alongside
-later receipts. Appending a shutdown that covers receipts leaves their totals
-unchanged. Without either per-call source, AgentsView uses shutdown metrics,
+replace all `session.shutdown.modelMetrics` rollups. With receipts, AgentsView
+keeps shutdown token rows only from before the first usable receipt, preserving
+older-CLI usage. Every later shutdown's token rows are dropped because its
+cumulative metrics can repeat receipt usage after a resume without new calls.
+Without either per-call source, AgentsView uses shutdown metrics,
 then known `assistant.message.outputTokens`.
 The message-only fallback cannot report input, cache, reasoning, or Copilot AI
 Credit totals. Fresh input tokens are computed as total input minus cache reads
