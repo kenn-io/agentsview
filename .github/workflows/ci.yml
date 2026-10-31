@@ -101,9 +101,11 @@ jobs:
           make sqlite-vec-header
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install lint tools
         run: |
-          make lint-tools
+          kit-retry 3 5 make lint-tools
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run Go linters
@@ -235,6 +237,9 @@ jobs:
             -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
           kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update
           kit-retry 3 5 sudo apt-get install -y ripgrep
+
+      - name: Install documentation dependencies
+        run: kit-retry 3 5 uv sync --project docs --frozen
 
       - name: Run docs check
         run: make docs-check
@@ -391,6 +396,7 @@ jobs:
           extra-path: ${{ runner.temp }}/golangci-lint
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+        if: runner.os == 'macOS' || (runner.os == 'Windows' && matrix.testSet == 'lint')
 
       - name: Prepare Go linters (Windows)
         id: prepare_windows_linter
@@ -438,7 +444,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -count=1 -timeout=10m
-          make lint-tools nilaway-golangci-build
+          kit-retry 3 5 make lint-tools
+          make nilaway-golangci-build
           ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
         env:
           CGO_ENABLED: "1"
@@ -816,19 +823,11 @@ jobs:
           New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
           New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Fetch Windows desktop Rust dependencies
-        shell: pwsh
-        run: |
-          for ($attempt = 1; $attempt -le 3; $attempt++) {
-            cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
-            if ($LASTEXITCODE -eq 0) {
-              break
-            }
-            if ($attempt -eq 3) {
-              exit $LASTEXITCODE
-            }
-            Start-Sleep -Seconds (10 * $attempt)
-          }
+        shell: bash
+        run: kit-retry 3 10 cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
 
       - name: Run Windows desktop unit tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib

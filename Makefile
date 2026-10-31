@@ -1,3 +1,6 @@
+# CI can retry acquisition commands inside mixed build/test recipes.
+DOWNLOAD_RETRY ?=
+
 .DEFAULT_GOAL := help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -164,7 +167,7 @@ install-cjk-fts: install simple-fts
 
 # Build frontend SPA and copy into embed directory
 frontend:
-	cd frontend && npm ci && npm run build
+	cd frontend && $(DOWNLOAD_RETRY) npm ci && npm run build
 	rm -rf internal/web/dist
 	cp -r frontend/dist internal/web/dist
 	printf '%s\n' \

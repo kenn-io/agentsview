@@ -89,7 +89,7 @@ runs:
         AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
       run: |
         if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
-          rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
+          kit-retry 3 5 rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
         fi
 
     - name: Install desktop dependencies
@@ -104,6 +104,7 @@ runs:
     - name: Build desktop bundle
       shell: bash
       env:
+        DOWNLOAD_RETRY: kit-retry 3 5
         AGENTSVIEW_FRONTEND_PREBUILT: ${{ inputs.frontend_prebuilt }}
         AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
         ARTIFACT_DIR: ${{ inputs.artifact_dir }}
