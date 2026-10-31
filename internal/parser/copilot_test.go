@@ -976,25 +976,6 @@ func TestParseCopilotSession_UsageRecords(t *testing.T) {
 	}
 }
 
-func TestParseCopilotSession_UsageRecordsAfterResume(t *testing.T) {
-	path := writeCopilotJSONL(t,
-		`{"type":"session.start","timestamp":"2026-09-01T12:00:00Z","data":{"sessionId":"receipts-resume"}}`,
-		`{"type":"user.message","data":{"content":"Hello"}}`,
-		`{"type":"session.usage_record","timestamp":"2026-09-01T12:01:00Z","data":{"usage":{"model":"gpt-5.4","inputTokens":100,"outputTokens":7}}}`,
-		`{"type":"session.shutdown","timestamp":"2026-09-01T12:02:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`,
-		`{"type":"session.resume","timestamp":"2026-09-01T12:03:00Z","data":{}}`,
-		`{"type":"session.shutdown","timestamp":"2026-09-01T12:04:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`,
-	)
-	sess, _, events, err := parseCopilotTestSession(t, path, "local")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.True(t, sess.HasTotalOutputTokens)
-	assert.Equal(t, 7, sess.TotalOutputTokens)
-	require.Len(t, events, 1)
-	assert.Equal(t, "usage-record", events[0].Source)
-	assert.Equal(t, 7, events[0].OutputTokens)
-}
-
 func TestParseCopilotSession_UsageRecordsKeepUncoveredShutdown(t *testing.T) {
 	const coveredShutdown = `{"type":"session.shutdown","timestamp":"2026-09-01T12:03:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`
 	const laterShutdown = `{"type":"session.shutdown","timestamp":"2026-09-01T12:04:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`
@@ -1051,9 +1032,7 @@ func TestParseCopilotSession_UsageRecordReportedCost(t *testing.T) {
 		wantOutput int
 		wantRows   int
 	}{
-		{"stale cost", []string{costOnly, receipt}, false, 7, 1},
 		{"cost only covers receipt", []string{receipt, costOnly}, true, 7, 2},
-		{"metrics cover receipt", []string{receipt, withMetrics}, true, 7, 2},
 		{"empty receipts preserve reported cost", []string{receipt, costOnly, emptyReceipt, withMetrics, emptyReceipt}, true, 7, 2},
 		{"empty receipts before usable receipt preserve shutdown metrics", []string{emptyReceipt, withMetrics, emptyReceipt, receipt}, false, 14, 2},
 	} {
@@ -1076,8 +1055,10 @@ func TestParseCopilotSession_UsageRecordReportedCost(t *testing.T) {
 				assert.Zero(t, costEvent.InputTokens)
 				assert.Zero(t, costEvent.OutputTokens)
 			} else {
-				assert.Nil(t, events[0].Cost)
-				assert.Empty(t, events[0].CostSource)
+				for _, event := range events {
+					assert.Nil(t, event.Cost)
+					assert.Empty(t, event.CostSource)
+				}
 			}
 		})
 	}

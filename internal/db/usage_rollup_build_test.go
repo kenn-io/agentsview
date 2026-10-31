@@ -435,7 +435,7 @@ func rollupGeneralFact(
 	}
 }
 
-func TestPriceCopilotStoreRequestsWithoutMessageOrdinal(t *testing.T) {
+func TestPriceCopilotRequestsWithoutMessageOrdinal(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "gpt-5.4",
 		Rates: export.ModelRates{
