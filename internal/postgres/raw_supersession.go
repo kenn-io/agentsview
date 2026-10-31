@@ -50,7 +50,10 @@ func rawLogicalSupersessions(rows []rawparity.Candidate, served map[string]bool,
 	return out
 }
 
+//nolint:unused // consumed by the later production activation slice
 type rawSupersessionChange struct{ Legacy, Before, After string }
+
+//nolint:unused // consumed by the later production activation slice
 type rawLegacyVisibility struct {
 	Legacy string
 	Hidden bool
@@ -61,12 +64,15 @@ type rawLegacyVisibility struct {
 // writes are separate: legacy UPDATE triggers publish corpus immediately.
 // IdentityChanged must reach the caller's publication even if its ordinary
 // materializer reported no content change. No exact revision count is promised.
+//
+//nolint:unused // consumed by the later production activation slice
 type rawSupersessionPlan struct {
 	Changes         []rawSupersessionChange
 	Visibility      []rawLegacyVisibility
 	IdentityChanged bool
 }
 
+//nolint:unused // called by the later production activation slice
 func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]bool) (rawSupersessionPlan, error) {
 	var plan rawSupersessionPlan
 	candidates, err := loadRawParityCandidates(ctx, tx)
@@ -78,6 +84,7 @@ func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]
 	if err != nil {
 		return plan, err
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var legacy, group string
 		if err = rows.Scan(&legacy, &group); err != nil {
@@ -88,7 +95,6 @@ func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]
 	if err == nil {
 		err = rows.Err()
 	}
-	rows.Close()
 	if err != nil {
 		return plan, err
 	}
@@ -107,14 +113,15 @@ func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]
 			plan.Changes = append(plan.Changes, rawSupersessionChange{legacy, previous[legacy], next[legacy]})
 		}
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT id,rollout_hidden FROM sessions WHERE provenance_kind='legacy' AND id=ANY($1) ORDER BY id`, ids)
+	visibilityRows, err := tx.QueryContext(ctx, `SELECT id,rollout_hidden FROM sessions WHERE provenance_kind='legacy' AND id=ANY($1) ORDER BY id`, ids)
 	if err != nil {
 		return plan, err
 	}
-	for rows.Next() {
+	defer visibilityRows.Close()
+	for visibilityRows.Next() {
 		var id string
 		var hidden bool
-		if err = rows.Scan(&id, &hidden); err != nil {
+		if err = visibilityRows.Scan(&id, &hidden); err != nil {
 			break
 		}
 		if want := next[id] != ""; want != hidden {
@@ -122,9 +129,8 @@ func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]
 		}
 	}
 	if err == nil {
-		err = rows.Err()
+		err = visibilityRows.Err()
 	}
-	rows.Close()
 	plan.IdentityChanged = len(plan.Changes) > 0 || len(plan.Visibility) > 0
 	return plan, err
 }
@@ -132,6 +138,8 @@ func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]
 // writeRawSupersessionCache requires the caller's rollout/alias/group/session
 // and child/FK locks. It neither acquires corpus nor publishes. Absent keys are
 // protected by those writer guards, not by a SELECT of existing cache rows.
+//
+//nolint:unused // called by the later production activation slice
 func writeRawSupersessionCache(ctx context.Context, tx *sql.Tx, plan rawSupersessionPlan) error {
 	for _, c := range plan.Changes {
 		if c.Before != "" {
@@ -160,6 +168,8 @@ func writeRawSupersessionCache(ctx context.Context, tx *sql.Tx, plan rawSuperses
 // inside a per-group materialization loop. The caller retains its publication
 // fences through commit and accounts for the trigger's identity/corpus bumps.
 // Only derived visibility changes; original legacy content/curation survives.
+//
+//nolint:unused // called by the later production activation slice
 func applyRawLegacyVisibility(ctx context.Context, tx *sql.Tx, plan rawSupersessionPlan) error {
 	for _, v := range plan.Visibility {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET rollout_hidden=$2 WHERE id=$1 AND provenance_kind='legacy' AND rollout_hidden IS DISTINCT FROM $2`, v.Legacy, v.Hidden); err != nil {
