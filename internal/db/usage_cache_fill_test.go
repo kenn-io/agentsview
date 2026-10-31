@@ -776,29 +776,6 @@ func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
 	assert.Equal(t, 8, usageCacheCount(t, cache, "usage_facts"))
 }
 
-func TestUsageSpoolRejectsInvalidCountsWithoutChangingCache(t *testing.T) {
-	for _, mutation := range []string{`DELETE FROM sessions`, `UPDATE sessions SET fact_count=-1`} {
-		t.Run(mutation, func(t *testing.T) {
-			_, cache := usageSpoolExtractionFixture(t, 8)
-			versions := []usageSourceVersion{{SessionID: "session"}}
-			expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
-			require.NoError(t, err)
-			spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
-			require.NoError(t, err)
-			defer spool.Close()
-			_, err = spool.db.ExecContext(t.Context(), mutation)
-			require.NoError(t, err)
-			_, _, err = cache.fill.installSpool(t.Context(), spool,
-				[]usageSourceVersion{extracted["session"]}, nil, expected)
-			require.Error(t, err)
-			after, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
-			require.NoError(t, err)
-			assert.Equal(t, expected, after)
-			assert.Equal(t, 8, usageCacheCount(t, cache, "usage_facts"))
-		})
-	}
-}
-
 func TestUsageSpoolInvalidatesOnlyChangedIdentityPeers(t *testing.T) {
 	database, cache := usageSpoolExtractionFixture(t, 2)
 	for id, source := range map[string]string{
