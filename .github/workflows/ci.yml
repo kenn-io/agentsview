@@ -107,7 +107,7 @@ jobs:
 
       - name: Install lint tools
         run: |
-          kit-retry 3 5 make lint-tools
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run Go linters
@@ -345,8 +345,7 @@ jobs:
           path-type: inherit
 
       - name: Restore pricing snapshot
-        shell: bash
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
@@ -416,8 +415,7 @@ jobs:
           export PATH="$linter_dir:$PATH"
           if [ -f "$linter_dir/custom-gcl.exe" ]; then exit 0; fi
           mkdir -p "$linter_dir"
-          kit-retry 3 5 make lint-tools
-          make nilaway-golangci-build
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
         env:
           CGO_ENABLED: "1"
@@ -451,8 +449,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -count=1 -timeout=10m
-          kit-retry 3 5 make lint-tools
-          make nilaway-golangci-build
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
         env:
           CGO_ENABLED: "1"
@@ -531,11 +528,8 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-
       - name: Restore pricing snapshot
-        shell: bash
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # The Windows system tree and the runner's data volume have parent
       # permissions that capture deliberately rejects. Use a private directory
@@ -711,11 +705,8 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-
       - name: Restore pricing snapshot
-        shell: bash
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run DuckDB tests
         run: go test -tags "fts5" ./internal/duckdb -count=1 -timeout=20m
@@ -781,7 +772,7 @@ jobs:
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
       - name: Restore pricing snapshot
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # Keep exclusions aligned with the explicit race matrix packages.
       # DuckDB runs without -race in its Linux shard. Limit package fan-out
@@ -916,7 +907,7 @@ jobs:
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - name: Restore pricing snapshot
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
         run: make ${{ matrix.postgres-target }}
@@ -994,7 +985,7 @@ jobs:
           cp -r frontend/dist internal/web/dist
 
       - name: Restore pricing snapshot
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Pre-build Go binaries
         run: |

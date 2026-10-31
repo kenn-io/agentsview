@@ -68,7 +68,7 @@ jobs:
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - name: Restore pricing snapshot
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Build pinned simple and cppjieba sidecar
         run: kit-retry 3 5 bash scripts/build-simple-fts.sh dist/agentsview-simple

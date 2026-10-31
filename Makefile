@@ -85,7 +85,7 @@ sqlite-vec-header:
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.
 pricing-snapshot: sqlite-vec-header
-	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
+	go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
@@ -575,7 +575,7 @@ nilaway-golangci-build:
 	fi; \
 	unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
 	env $$unset_args GOFLAGS=-buildvcs=false \
-		$(DOWNLOAD_RETRY) golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
+		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
 # Run NilAway through the custom golangci-lint module plugin.
 #

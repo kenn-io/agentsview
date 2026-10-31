@@ -73,11 +73,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-
       - name: Restore pricing snapshot
-        shell: bash
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Setup MinGW (with updates)
         uses: msys2/setup-msys2@v2.33.0
