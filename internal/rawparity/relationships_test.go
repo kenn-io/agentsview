@@ -141,16 +141,16 @@ func TestCompareResolvedRejectsInvalidCoordinates(t *testing.T) {
 		{Kind: "event", Ordinal: 3, CallIndex: 2, EventIndex: 9},
 	} {
 		_, err := CompareResolved(s, s, []Link{link}, nil)
-		assert.Error(t, err, link)
+		require.Error(t, err, link)
 	}
 	link := Link{Kind: "call", Ordinal: 3, CallIndex: 2, Targets: []string{"physical"}}
 	_, err := CompareResolved(s, s, []Link{link, link}, map[string]string{"physical": "target"})
-	assert.ErrorContains(t, err, "duplicate")
+	require.ErrorContains(t, err, "duplicate")
 	conflicting := link
 	conflicting.EventIndex = 99 // call edges have no event coordinate
 	conflicting.Missing = true
 	_, err = CompareResolved(s, s, []Link{conflicting, link}, map[string]string{"physical": "target"})
-	assert.ErrorContains(t, err, "duplicate")
+	require.ErrorContains(t, err, "duplicate")
 }
 
 func TestCompareResolvedCoordinatesProperty(t *testing.T) {
