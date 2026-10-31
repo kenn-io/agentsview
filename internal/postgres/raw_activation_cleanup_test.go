@@ -76,12 +76,14 @@ func (c *activationCleanupConn) Close() error { c.closed = true; c.guard = false
 func (c *activationCleanupConn) Begin() (driver.Tx, error) {
 	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
+
 func (c *activationCleanupConn) BeginTx(_ context.Context, options driver.TxOptions) (driver.Tx, error) {
 	if options.ReadOnly || options.Isolation != driver.IsolationLevel(sql.LevelRepeatableRead) {
 		return nil, errors.New("activation did not request RR read/write")
 	}
 	return &activationCleanupTx{c}, nil
 }
+
 func (c *activationCleanupConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	switch query {
 	case `SELECT pg_advisory_lock(hashtextextended($1,0))`:
@@ -102,6 +104,7 @@ func (c *activationCleanupConn) ExecContext(_ context.Context, query string, arg
 		return nil, errors.New("unexpected activation statement: " + query)
 	}
 }
+
 func (*activationCleanupConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	if strings.HasPrefix(query, `SELECT n.nspowner=`) {
 		return nil, errors.New("owner query unavailable")
