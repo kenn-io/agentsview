@@ -100,9 +100,9 @@ func (b *copilotSessionBuilder) processLine(line string) {
 			event.Model = normalizeCopilotModel(data.Get("usage.model").Str)
 			event.OccurredAt = timeString(ts, b.startedAt)
 			b.usageRecords = append(b.usageRecords, event)
+			b.receiptAfterReportedCost = true
+			b.receiptSinceShutdown = true
 		}
-		b.receiptAfterReportedCost = true
-		b.receiptSinceShutdown = true
 	case copilotEventSessionShutdown:
 		b.handleShutdown(data, ts)
 	}

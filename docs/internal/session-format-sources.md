@@ -1438,14 +1438,14 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Usage and cost:** Per-call store rows take precedence over
   `session.usage_record` receipts and replace all shutdown token rollups.
-  Receipts replace a shutdown's token rows only when receipts precede it
+  Receipts replace a shutdown's token rows only when usable receipts precede it
   since the previous shutdown. A shutdown with no receipts in that segment
   keeps its token rows alongside later receipts. Receipts preserve each
   request's timestamp, input, output, cache-read, cache-write, and reasoning
   tokens. Without per-call usage, shutdown metrics supply totals, then known
   per-message output is the fallback. Known-model tokens use catalog estimates.
-  A receipt after the latest reported-cost shutdown clears that stale cost
-  only when receipts supply the per-call usage.
+  A usable receipt after the latest reported-cost shutdown clears that stale
+  cost only when receipts supply the per-call usage.
 
 - **Receipt schema:** Reverified 2026-10-31 against the published
   [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
