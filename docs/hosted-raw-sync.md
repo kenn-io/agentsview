@@ -700,6 +700,8 @@ Hosted status and health include a `recovery` object:
   failures. Counts cover the current hour and previous 23 hours; each recorded
   transition prunes older buckets in its transaction. Historical failures are
   not backfilled. Use these counts to calculate rates for the reported window.
+  Outcome writes run at transaction end, after domain writes, and serialize
+  bucket updates and pruning per hosted schema.
 
 Ages are `null` when no matching timestamp is known. Ordinary raw custody mode
 omits `recovery`. After upgrading an existing hosted schema, rerun owner
