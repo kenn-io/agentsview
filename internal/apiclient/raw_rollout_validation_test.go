@@ -1,7 +1,7 @@
 package apiclient
 
 import (
-	"encoding/json/v2"
+	"encoding/json"
 	"fmt"
 	"testing"
 
