@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -245,7 +244,7 @@ SELECT
 			source_key_sha256, manifest_id)::text
 		FROM stale_capped
 	), '[]'),
-	dead_letters.job_count, dead_letters.oldest_failed_at
+	dead_letters.job_count, dead_letters.oldest_failed_at%[1]s
 FROM snapshot CROSS JOIN (
  SELECT count(*) AS job_count, min(failed_at) AS oldest_failed_at
  FROM raw_ingest_jobs WHERE tenant_id=$1 AND stage='parse' AND state='failed'
@@ -279,7 +278,7 @@ func rawJobHealth(
 	if err != nil {
 		return rawsync.JobHealthReport{}, err
 	}
-	statement := strings.TrimSuffix(rawJobHealthSQL, "FROM snapshot") + ", " + expression + " FROM snapshot"
+	statement := fmt.Sprintf(rawJobHealthSQL, ","+expression)
 	var recoveryJSON *string
 	var (
 		deadLetters            rawsync.DeadLetterHealth
