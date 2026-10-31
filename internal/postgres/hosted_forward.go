@@ -26,6 +26,10 @@ func (h *HostedStore) GetAgents(ctx context.Context, excludeOneShot, excludeAuto
 	return h.physical.GetAgents(ctx, excludeOneShot, excludeAutomated)
 }
 
+func (h *HostedStore) GetMachineAliases(ctx context.Context) (map[string]string, error) {
+	return h.physical.GetMachineAliases(ctx)
+}
+
 func (h *HostedStore) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
 	return h.physical.GetBranches(ctx, excludeOneShot, excludeAutomated)
 }

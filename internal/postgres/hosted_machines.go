@@ -12,16 +12,7 @@ var hostedMachineCatalogSQL = hostedMachineRowsSQL("(SELECT * FROM sessions WHER
 func (h *HostedStore) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
 	query := `SELECT DISTINCT m.machine FROM (` + hostedMachineCatalogSQL + `) m
  JOIN sessions s ON s.id=m.session_id WHERE s.deleted_at IS NULL`
-	if excludeOneShot {
-		if excludeAutomated {
-			query += " AND s.user_message_count > 1"
-		} else {
-			query += " AND (s.user_message_count > 1 OR s.is_automated = TRUE)"
-		}
-	}
-	if excludeAutomated {
-		query += " AND s.is_automated = FALSE"
-	}
+	query += machineVisibilitySQL("s.", excludeOneShot, excludeAutomated)
 	query += " ORDER BY m.machine"
 	return h.machineIDs(ctx, query, h.tenant)
 }
@@ -34,7 +25,7 @@ func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []st
 	// Old hosted URLs used the physical "hosted" key. Keep exact selectors
 	// working without advertising that compatibility key as a source device.
 	return h.machineIDs(ctx, `SELECT DISTINCT machine FROM (
- `+hostedMachineCatalogSQL+` UNION ALL SELECT id,project,machine FROM sessions WHERE provenance_kind='raw') m
+ `+hostedMachineCatalogSQL+` UNION ALL SELECT id,project,machine FROM sessions WHERE provenance_kind='raw' AND tenant_id=$1) m
  WHERE machine=ANY($2) ORDER BY machine`, h.tenant, candidates)
 }
 
@@ -119,10 +110,4 @@ func (r *hostedRefs) mapSourceMachines(ctx context.Context, h *HostedStore) erro
 		}
 	}
 	return rows.Err()
-}
-
-// Machine aliases describe proven former archive identities. Device display
-// names are labels, so duplicate names must never become implicit aliases.
-func (h *HostedStore) GetMachineAliases(ctx context.Context) (map[string]string, error) {
-	return h.physical.GetMachineAliases(ctx)
 }
