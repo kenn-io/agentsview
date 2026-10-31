@@ -16,6 +16,7 @@ func TestRawSyncServerHealth(t *testing.T) {
 		invalid    bool
 	}{
 		{"complete", `{"observed_at":"2026-10-23T00:00:00Z","max_attempts":7,"stale_after_seconds":900,"dead_letters":{"count":0,"oldest_failed_at":null},"failed_job_count":3,"orphaned_manifests":[],"orphaned_manifest_count":0,"expired_leases":[],"expired_lease_count":0,"failed_jobs_by_error_class":[],"retrying_near_limit":[],"retrying_near_limit_count":0,"stale_source_heads":[],"stale_source_head_count":0}`, false},
+		{"missing dead letters", `{"observed_at":"2026-10-23T00:00:00Z","max_attempts":7,"stale_after_seconds":900,"failed_job_count":3,"orphaned_manifests":[],"orphaned_manifest_count":0,"expired_leases":[],"expired_lease_count":0,"failed_jobs_by_error_class":[],"retrying_near_limit":[],"retrying_near_limit_count":0,"stale_source_heads":[],"stale_source_head_count":0}`, true},
 		{"incomplete", `{"observed_at":"2026-10-23T00:00:00Z","max_attempts":7,"stale_after_seconds":900}`, true},
 		{"null", `null`, true},
 	} {
