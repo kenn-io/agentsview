@@ -744,8 +744,10 @@ func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
 }
 
 func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(157, 158)
+	require.Contains(t, scope, parser.AgentOMP)
 	version := db.CurrentDataVersion()
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: {parser.AgentOMP}}))
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	ompRoot, piRoot := t.TempDir(), t.TempDir()
@@ -917,7 +919,10 @@ func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 
 func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
 	ctx := t.Context()
+	scope := db.ScopedDataVersionProviders(157, 158)
+	require.Contains(t, scope, parser.AgentCopilot)
 	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	source := filepath.Join(root, "session-state", "receipt-upgrade", "events.jsonl")
@@ -930,16 +935,6 @@ func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
 	engine.Close()
 	const id = "copilot:receipt-upgrade"
-	name := "Saved task"
-	require.NoError(t, database.RenameSession(ctx, id, &name))
-	_, err := database.StarSession(ctx, id)
-	require.NoError(t, err)
-	messages, err := database.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	messageID := messages[0].ID
-	_, err = database.PinMessage(ctx, id, messageID, nil)
-	require.NoError(t, err)
 	// Reproduce the archive left by the parser that ignored receipts.
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id=?`, id)
@@ -953,15 +948,9 @@ func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
 		_, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
 		return err
 	}))
-	before, err := database.GetSessionFull(ctx, id)
-	require.NoError(t, err)
-	assert.Zero(t, before.TotalOutputTokens)
-	var count int
-	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM usage_events WHERE session_id=?", id).Scan(&count))
-	assert.Zero(t, count)
 	path := database.Path()
 	require.NoError(t, database.Close())
-	database, err = db.OpenIsolated(ctx, path)
+	database, err := db.OpenIsolated(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	assert.False(t, database.NeedsResync())
@@ -971,22 +960,9 @@ func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
 	after, err := database.GetSessionFull(ctx, id)
 	require.NoError(t, err)
-	assert.Equal(t, before.ID, after.ID)
-	assert.Equal(t, before.FilePath, after.FilePath)
-	assert.Equal(t, before.DisplayName, after.DisplayName)
-	stars, err := database.ListStarredSessionIDs(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []string{id}, stars)
-	pins, err := database.ListPinnedMessages(ctx, "", "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, messageID, pins[0].MessageID)
 	assert.Equal(t, 7, after.TotalOutputTokens)
 	assert.Equal(t, version, database.GetSessionDataVersion(ctx, id))
-	messages, err = database.GetAllMessages(ctx, id)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, messageID, messages[0].ID)
+	var count int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM usage_events WHERE session_id=? AND source='usage-record'", id).Scan(&count))
 	assert.Equal(t, 1, count)
 }

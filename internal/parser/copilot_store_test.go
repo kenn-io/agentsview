@@ -33,7 +33,7 @@ func TestCopilotStoreGapRetainsOnlyAggregateOutputRemainder(t *testing.T) {
 		name          string
 		source        string
 		firstModel    string
-		storeOutput   int
+		requestOutput int
 		wantTotal     int
 		wantRemainder int
 	}{
@@ -51,7 +51,7 @@ func TestCopilotStoreGapRetainsOnlyAggregateOutputRemainder(t *testing.T) {
 				store := createCopilotUsageStore(t, root)
 				_, err := store.ExecContext(t.Context(), `INSERT INTO sessions VALUES ('gap');
 INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)
-VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
+VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.requestOutput)
 				require.NoError(t, err)
 			}
 			lines := []string{
@@ -60,7 +60,7 @@ VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
 				`{"type":"assistant.message","timestamp":"2026-09-08T12:00:02Z","data":{"content":"Later","model":"gpt-5.4","outputTokens":7}}`,
 			}
 			if tc.source == "usage-record" {
-				lines = append(lines, `{"type":"session.usage_record","timestamp":"2026-09-08T12:00:03Z","data":{"usage":{"model":"gpt-5.4","outputTokens":7}}}`)
+				lines = append(lines, fmt.Sprintf(`{"type":"session.usage_record","timestamp":"2026-09-08T12:00:03Z","data":{"usage":{"model":"gpt-5.4","outputTokens":%d}}}`, tc.requestOutput))
 			}
 			path := writeCopilotJSONL(t, lines...)
 			sess, msgs, events, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(), path, "local", filepath.Join(root, "session-store.db"))
@@ -72,7 +72,7 @@ VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
 			}
 			require.NotEmpty(t, events)
 			assert.Equal(t, tc.source, events[0].Source)
-			assert.Equal(t, tc.storeOutput, events[0].OutputTokens)
+			assert.Equal(t, tc.requestOutput, events[0].OutputTokens)
 			if tc.wantRemainder == 0 {
 				require.Len(t, events, 1)
 			} else {
