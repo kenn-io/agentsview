@@ -616,6 +616,117 @@ func TestOMPProviderDiscoversNestedSubagents(t *testing.T) {
 	assert.Equal(t, "DeepScout", deep.SessionName)
 }
 
+func TestOMPProviderDiscoversPathParentSubagentTree(t *testing.T) {
+	tests := []struct {
+		name                string
+		parentReference     string
+		grandchildReference string
+		nativeAbsolute      bool
+	}{
+		{
+			name:                "raw header IDs",
+			parentReference:     "root-header-id",
+			grandchildReference: "worker-header-id",
+		},
+		{
+			name:           "native absolute paths",
+			nativeAbsolute: true,
+		},
+		{
+			name:                "native relative paths",
+			parentReference:     "../2026-10-01T10-00-00-000Z_export.jsonl",
+			grandchildReference: "../Worker.jsonl",
+		},
+		{
+			name:                "relocated POSIX paths",
+			parentReference:     "/previous/sessions/2026-10-01T10-00-00-000Z_export.jsonl",
+			grandchildReference: "/previous/sessions/2026-10-01T10-00-00-000Z_export/Worker.jsonl",
+		},
+		{
+			name:                "relocated foreign paths",
+			parentReference:     `R:\previous\sessions\2026-10-01T10-00-00-000Z_export.jsonl`,
+			grandchildReference: `R:\previous\sessions\2026-10-01T10-00-00-000Z_export\Worker.jsonl`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			projectDir := filepath.Join(root, "project")
+			stem := "2026-10-01T10-00-00-000Z_export"
+			mainPath := filepath.Join(projectDir, stem+".jsonl")
+			childPath := filepath.Join(projectDir, stem, "Worker.jsonl")
+			grandchildPath := filepath.Join(projectDir, stem, "Worker", "Nested.jsonl")
+			parentReference := tt.parentReference
+			grandchildReference := tt.grandchildReference
+			if tt.nativeAbsolute {
+				parentReference = mainPath
+				grandchildReference = childPath
+			}
+			parentJSON, err := json.Marshal(parentReference)
+			require.NoError(t, err)
+			grandchildJSON, err := json.Marshal(grandchildReference)
+			require.NoError(t, err)
+			writeSourceFile(t, mainPath, strings.Join([]string{
+				`{"type":"title","v":1,"title":"Main task","pad":"   "}`,
+				`{"type":"session","version":3,"id":"root-header-id","cwd":"/repos/example"}`,
+				`{"type":"message","id":"root-message","message":{"role":"user","content":"root prompt"}}`,
+				"",
+			}, "\n"))
+			writeSourceFile(t, childPath, strings.Join([]string{
+				`{"type":"title","v":1,"title":"","pad":"   "}`,
+				`{"type":"session","version":3,"id":"worker-header-id","cwd":"/repos/example","parentSession":` + string(parentJSON) + `}`,
+				`{"type":"message","id":"worker-message","message":{"role":"user","content":"child prompt"}}`,
+				"",
+			}, "\n"))
+			writeSourceFile(t, grandchildPath, strings.Join([]string{
+				`{"type":"title","v":1,"title":"","pad":"   "}`,
+				`{"type":"session","version":3,"id":"nested-header-id","cwd":"/repos/example","parentSession":` + string(grandchildJSON) + `}`,
+				`{"type":"message","id":"nested-message","message":{"role":"user","content":"leaf prompt"}}`,
+				"",
+			}, "\n"))
+
+			provider, ok := NewProvider(AgentOMP, ProviderConfig{
+				Roots:   []string{root},
+				Machine: "devbox",
+			})
+			require.True(t, ok)
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			paths := make([]string, len(discovered))
+			byPath := make(map[string]ParsedSession, len(discovered))
+			for i, source := range discovered {
+				paths[i] = source.DisplayPath
+				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+				require.NoError(t, err)
+				require.True(t, outcome.ResultSetComplete)
+				require.Len(t, outcome.Results, 1)
+				byPath[source.DisplayPath] = outcome.Results[0].Result.Session
+			}
+			assert.ElementsMatch(t, []string{mainPath, childPath, grandchildPath}, paths)
+
+			main := byPath[mainPath]
+			assert.Equal(t, "omp:root-header-id", main.ID)
+			assert.Empty(t, main.ParentSessionID)
+			assert.Empty(t, main.RelationshipType)
+			assert.Equal(t, "Main task", main.SessionName)
+
+			child := byPath[childPath]
+			assert.Equal(t, "omp:worker-header-id", child.ID)
+			assert.Equal(t, "omp:root-header-id", child.ParentSessionID)
+			assert.Equal(t, RelSubagent, child.RelationshipType)
+			assert.Equal(t, "Worker", child.SessionName)
+			assert.Equal(t, "child prompt", child.FirstMessage)
+
+			grandchild := byPath[grandchildPath]
+			assert.Equal(t, "omp:nested-header-id", grandchild.ID)
+			assert.Equal(t, "omp:worker-header-id", grandchild.ParentSessionID)
+			assert.Equal(t, RelSubagent, grandchild.RelationshipType)
+			assert.Equal(t, "Nested", grandchild.SessionName)
+			assert.Equal(t, "leaf prompt", grandchild.FirstMessage)
+		})
+	}
+}
+
 func TestOMPProviderFindSourceByNestedSubagentRawID(t *testing.T) {
 	root := t.TempDir()
 	proj := filepath.Join(root, "-repos-x")

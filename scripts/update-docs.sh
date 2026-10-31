@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Regenerate generated docs assets, verify the docs build, and deploy to Vercel.
+# Publish reviewed docs assets, verify the docs build, and deploy to Vercel.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 dry_run=false
+source_dir=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--dry-run]
+Usage: $(basename "$0") --source DIRECTORY [--dry-run]
 
-Regenerate and push docs-generated-assets, hydrate docs assets, build and
+Import reviewed capture assets and push docs-generated-assets, hydrate assets, build and
 check the docs, then deploy the current committed workspace to production
 Vercel.
 
@@ -20,6 +21,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      source_dir="$2"
+      shift 2
+      ;;
     --dry-run)
       dry_run=true
       shift
@@ -35,6 +41,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$source_dir" || ! -d "$source_dir" ]]; then
+  printf 'ERROR: --source must name a reviewed capture asset directory\n' >&2
+  exit 2
+fi
+source_dir="$(cd "$source_dir" && pwd)"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -73,8 +85,7 @@ if [[ "$dry_run" == false ]]; then
 fi
 
 run make docs-install
-run rm -rf docs/assets/generated
-run bash docs/screenshots/update-generated-assets-branch.sh --push
+run bash docs/screenshots/update-generated-assets-branch.sh --source "$source_dir" --push
 run rm -rf docs/assets/static docs/assets/generated
 run bash docs/assets/hydrate-assets.sh
 run make docs-build

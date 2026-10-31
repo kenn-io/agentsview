@@ -742,3 +742,177 @@ func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 	assert.Equal(t, 2, sessions)
 }
+
+func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(157, 158)
+	require.Equal(t, []parser.AgentType{parser.AgentOMP}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	ompRoot, piRoot := t.TempDir(), t.TempDir()
+	project := filepath.Join(ompRoot, "synthetic-project")
+	rootStem := "2026-09-20T10-00-00-000Z_root-file-token"
+	parentSource := filepath.Join(project, rootStem+".jsonl")
+	childSource := filepath.Join(project, rootStem, "Worker.jsonl")
+	grandchildSource := filepath.Join(project, rootStem, "Worker", "Reviewer.jsonl")
+	unavailableSource := filepath.Join(project, "unavailable-file-token.jsonl")
+	piSource := filepath.Join(piRoot, "synthetic-project", "unaffected.jsonl")
+	writeOMP := func(source, id, parent, prompt string) {
+		t.Helper()
+		body := fmt.Sprintf(`{"type":"title","v":1,"title":"","pad":"   "}
+{"type":"session","version":3,"id":%q,"timestamp":"2026-09-20T10:00:00Z","cwd":"/synthetic/project","parentSession":%q}
+{"type":"message","id":"user-message","timestamp":"2026-09-20T10:00:01Z","message":{"role":"user","content":%q}}
+`, id, parent, prompt)
+		dbtest.WriteTestFile(t, source, []byte(body))
+	}
+	writeOMP(parentSource, "parent-header-id", "", "Synthetic parent task")
+	writeOMP(childSource, "child-header-id", parentSource, "Synthetic worker task")
+	writeOMP(grandchildSource, "grandchild-header-id", childSource, "Synthetic review task")
+	writeOMP(unavailableSource, "unavailable-header-id", "", "Synthetic retained task")
+	dbtest.WriteTestFile(t, piSource, []byte(`{"type":"session","version":3,"id":"unaffected-pi-id","timestamp":"2026-09-20T10:00:00Z","cwd":"/synthetic/project"}
+{"type":"message","id":"pi-user-message","timestamp":"2026-09-20T10:00:01Z","message":{"role":"user","content":"Synthetic Pi task"}}
+`))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{
+		parser.AgentOMP: {ompRoot}, parser.AgentPi: {piRoot},
+	}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 5, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	const childID = "omp:child-header-id"
+	displayName, note := "Saved worker task", "Keep this worker prompt"
+	require.NoError(t, database.RenameSession(ctx, childID, &displayName))
+	starred, err := database.StarSession(ctx, childID)
+	require.NoError(t, err)
+	require.True(t, starred)
+	childMessages, err := database.GetAllMessages(ctx, childID)
+	require.NoError(t, err)
+	require.Len(t, childMessages, 1)
+	pinnedMessageID := childMessages[0].ID
+	pinID, err := database.PinMessage(ctx, childID, pinnedMessageID, &note)
+	require.NoError(t, err)
+	require.NotZero(t, pinID)
+
+	// Pi shares the parser, but its archived output must not be invalidated by
+	// this OMP-only upgrade. A reparse would replace this stored sentinel.
+	piMessages, err := database.GetAllMessages(ctx, "pi:unaffected-pi-id")
+	require.NoError(t, err)
+	require.Len(t, piMessages, 1)
+	piMessages[0].Content = "Retained Pi archive output"
+	piMessages[0].ContentLength = len(piMessages[0].Content)
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "pi:unaffected-pi-id", piMessages))
+
+	expected := []struct {
+		id, source, parent, name, content string
+		wantVersion                       int
+	}{
+		{"omp:parent-header-id", parentSource, "", "", "Synthetic parent task", version},
+		{childID, childSource, "omp:parent-header-id", "Worker", "Synthetic worker task", version},
+		{"omp:grandchild-header-id", grandchildSource, childID, "Reviewer", "Synthetic review task", version},
+		{"omp:unavailable-header-id", unavailableSource, "", "", "Synthetic retained task", version - 1},
+		{"pi:unaffected-pi-id", piSource, "", "", "Retained Pi archive output", version},
+	}
+	before := make(map[string]*db.Session, len(expected))
+	for _, want := range expected {
+		session, err := database.GetSessionFull(ctx, want.id)
+		require.NoError(t, err)
+		require.NotNil(t, session, want.id)
+		before[want.id] = session
+	}
+	require.NoError(t, os.Remove(unavailableSource))
+
+	// Reproduce the old parser's verbatim path parents and missing subagent
+	// classifications without touching source bytes or source identities.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		for _, old := range []struct{ id, parentSource string }{
+			{childID, parentSource},
+			{"omp:grandchild-header-id", childSource},
+		} {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions
+				SET parent_session_id=?, parser_parent_session_id=?,
+				    relationship_type='', parser_relationship_type='', session_name=NULL
+				WHERE id=?`, "omp:"+old.parentSource, "omp:"+old.parentSource, old.id); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version=?", version-1); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.False(t, database.NeedsResync(), "the OMP repair must upgrade in place")
+	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needsSync)
+	assert.False(t, fullRebuild)
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, childID))
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, "pi:unaffected-pi-id"))
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(ctx, nil)
+	assert.Equal(t, 3, stats.Synced, "only the available OMP sources need reparsing")
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, stats.Failed)
+	assert.False(t, stats.Aborted)
+	for _, want := range expected {
+		t.Run(want.id, func(t *testing.T) {
+			after, err := database.GetSessionFull(ctx, want.id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before[want.id].ID, after.ID)
+			require.NotNil(t, after.FilePath)
+			assert.Equal(t, want.source, *after.FilePath)
+			assert.Equal(t, before[want.id].FileHash, after.FileHash)
+			assert.Equal(t, before[want.id].SourceSessionID, after.SourceSessionID)
+			assert.Equal(t, want.wantVersion, after.DataVersion)
+			var parserRelationship string
+			require.NoError(t, database.Reader().QueryRow(ctx,
+				"SELECT COALESCE(parser_relationship_type, '') FROM sessions WHERE id=?", want.id,
+			).Scan(&parserRelationship))
+			if want.parent == "" {
+				assert.Nil(t, after.ParentSessionID)
+				assert.Nil(t, after.ParserParentSessionID)
+				assert.Empty(t, after.RelationshipType)
+				assert.Empty(t, parserRelationship)
+			} else {
+				assert.Equal(t, &want.parent, after.ParentSessionID)
+				assert.Equal(t, &want.parent, after.ParserParentSessionID)
+				assert.Equal(t, "subagent", after.RelationshipType)
+				assert.Equal(t, "subagent", parserRelationship)
+				assert.Equal(t, &want.name, after.SessionName)
+			}
+			messages, err := database.GetAllMessages(ctx, want.id)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, want.content, messages[0].Content)
+		})
+	}
+
+	child, err := database.GetSessionFull(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, &displayName, child.DisplayName)
+	stars, err := database.ListStarredSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{childID}, stars)
+	// The all-pins view includes the joined message content.
+	pins, err := database.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, childID, pins[0].SessionID)
+	assert.Equal(t, pinnedMessageID, pins[0].MessageID)
+	assert.Equal(t, &note, pins[0].Note)
+	assert.Equal(t, &childMessages[0].Content, pins[0].Content)
+	var count int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&count))
+	assert.Equal(t, 5, count, "the upgrade must not replace or duplicate session identities")
+}

@@ -103,6 +103,10 @@ The latest release is
 
 **Bug fixes**
 
+- Oh My Pi subagent runs now appear under the correct parent, including runs
+  started by other subagents. Newer OMP transcripts that record parent file paths
+  are supported alongside older transcripts. Available OMP sources are
+  reprocessed on upgrade to repair existing links.
 - Oversized debug logs retain their last 10 MB in `debug.log.1` to help
   investigate a stalled server. Successful rotation clears the active log;
   a busy lock or failed backup leaves it intact.

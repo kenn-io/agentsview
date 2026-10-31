@@ -89,34 +89,33 @@ func parsePiLikeSession(
 		project = ExtractProjectFromCwd(cwd)
 	}
 
-	// Branch lineage. Pi records persisted parents as file paths in
-	// branchedFrom or parentSession. OMP records a raw ID in parentSession,
-	// while Prime Agent and native Pi may need to resolve a persisted path
-	// against a sibling. branchedFrom wins when present.
+	// OMP's directory layout identifies subagents independently of whether
+	// their headers also carry lineage.
+	var ompParentID string
+	if agent == AgentOMP {
+		ompParentID = ompParentHeaderSessionID(path)
+	}
+	isOMPSubagent := ompParentID != ""
+
+	// branchedFrom keeps its existing filename identity and precedence.
+	// OMP parentSession may be an opaque raw ID or a transcript path;
+	// other Pi-family providers retain their existing path resolution.
 	var parentSessionID string
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
 		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent ||
 			agent == AgentOMO || agent == AgentStepCode) {
-		if agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO ||
-			agent == AgentStepCode {
-			parentSession = primeParentSessionID(path, parentSession)
+		if agent == AgentOMP {
+			if parentID := ompParentSessionID(path, parentSession, sessionID, ompParentID); parentID != "" {
+				parentSessionID = idPrefix + parentID
+			}
+		} else {
+			parentSessionID = idPrefix + primeParentSessionID(path, parentSession)
 		}
-		parentSessionID = idPrefix + parentSession
-	}
-
-	// OMP writes subagent transcripts inside a directory named after the
-	// parent's transcript file: <project>/<parent>.jsonl sits alongside
-	// <project>/<parent>/<agent>.jsonl. A subagent header carries neither
-	// branchedFrom nor parentSession, so lineage is recovered from the
-	// sibling parent transcript. This nests to arbitrary depth.
-	var isOMPSubagent bool
-	if agent == AgentOMP && parentSessionID == "" {
-		if parentID := ompParentHeaderSessionID(path); parentID != "" {
-			parentSessionID = idPrefix + parentID
-			isOMPSubagent = true
-		}
+	} else if ompParentID != "" {
+		// Older OMP children omit parentSession entirely.
+		parentSessionID = idPrefix + ompParentID
 	}
 
 	// The pi-subagents extension writes a fresh child to
@@ -819,14 +818,61 @@ func piTimestamp(line string) time.Time {
 	return time.Time{}
 }
 
-// ompParentHeaderSessionID returns the parent OMP session's stored raw ID for a
-// nested subagent transcript, or "" when childPath is not a nested subagent.
-// OMP stores subagents in a directory named after the parent transcript (minus
-// the .jsonl extension), so the parent transcript is the containing directory
-// plus ".jsonl". The ID resolution mirrors parent parsing: prefer the header
-// id, but support V1 parent transcripts by falling back to the parent filename.
+// ompParentSessionID preserves raw parent IDs and resolves path references
+// through transcript headers. A stale path can use a matching local structural
+// parent or sibling, but must not borrow an unrelated directory parent.
+func ompParentSessionID(childPath, parentReference, childID, structuralParentID string) string {
+	if !strings.ContainsAny(parentReference, `/\`) &&
+		!strings.HasSuffix(parentReference, ".jsonl") {
+		return parentReference
+	}
+	if childID == "" {
+		childID = strings.TrimSuffix(filepath.Base(childPath), ".jsonl")
+	}
+
+	parentPath := filepath.FromSlash(strings.ReplaceAll(parentReference, `\`, "/"))
+	if !filepath.IsAbs(parentPath) {
+		parentPath = filepath.Join(filepath.Dir(childPath), parentPath)
+	}
+	structuralParentPath := filepath.Dir(childPath) + ".jsonl"
+	if filepath.Clean(parentPath) != filepath.Clean(structuralParentPath) {
+		if parentID := ompTranscriptSessionID(parentPath); parentID != "" && parentID != childID {
+			return parentID
+		}
+	}
+
+	base := piPersistedPathBase(parentReference)
+	if structuralParentID != "" && structuralParentID != childID &&
+		base == filepath.Base(structuralParentPath) {
+		return structuralParentID
+	}
+	localSibling := filepath.Join(filepath.Dir(childPath), base)
+	if filepath.Clean(localSibling) != filepath.Clean(parentPath) &&
+		filepath.Clean(localSibling) != filepath.Clean(structuralParentPath) {
+		if parentID := ompTranscriptSessionID(localSibling); parentID != "" && parentID != childID {
+			return parentID
+		}
+	}
+	return ""
+}
+
+// ompParentHeaderSessionID resolves the structural parent at
+// <containing-directory>.jsonl, including legacy V1 transcript identities.
 func ompParentHeaderSessionID(childPath string) string {
-	return parentTranscriptSessionID(filepath.Dir(childPath) + ".jsonl")
+	return ompTranscriptSessionID(filepath.Dir(childPath) + ".jsonl")
+}
+
+// ompTranscriptSessionID rejects malformed parent hints without changing the
+// existing header-reading semantics of other Pi-family providers.
+func ompTranscriptSessionID(path string) string {
+	header, ok := piSessionHeader(path)
+	if !ok || !gjson.Valid(header) {
+		return ""
+	}
+	if id := gjson.Get(header, "id").Str; id != "" {
+		return id
+	}
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
 // piSubagentParentSessionID returns the parent Pi session's stored raw ID for a
@@ -877,6 +923,11 @@ func parentTranscriptSessionID(parent string) string {
 // title slot line. The boolean reports whether the file has a valid pi session
 // header. os.Open intentionally follows symlinks to supported transcripts.
 func piSessionHeaderID(path string) (string, bool) {
+	header, ok := piSessionHeader(path)
+	return gjson.Get(header, "id").Str, ok
+}
+
+func piSessionHeader(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
@@ -895,7 +946,7 @@ func piSessionHeaderID(path string) (string, bool) {
 		if gjson.Get(line, "type").Str != "session" {
 			return "", false
 		}
-		return gjson.Get(line, "id").Str, true
+		return line, true
 	}
 	return "", false
 }

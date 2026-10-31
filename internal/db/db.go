@@ -631,7 +631,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // unchanged.)
 // (157: capture Pi thinking level as reasoning effort. Re-parse Pi-format
 // sources in place; source and session identities are unchanged.)
-const dataVersion = 157
+// (158: repair OMP path-based parent links and structural subagent classification.
+// Re-parse OMP sources in place; source and session identities are unchanged.)
+const dataVersion = 158
 
 const archiveOnlyVersionBase = 1 << 20
 

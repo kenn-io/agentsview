@@ -506,6 +506,12 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 			wantPSI: "omp:parent-abc",
 		},
 		{
+			name:    "OMP raw ID punctuation remains opaque",
+			agent:   AgentOMP,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","parentSession":"opaque.parent:fork-2"}`,
+			wantPSI: "omp:opaque.parent:fork-2",
+		},
+		{
 			name:    "OMP branchedFrom wins over parentSession",
 			agent:   AgentOMP,
 			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","branchedFrom":"/data/2026-07-03T06-00-00-000Z_parent-file.jsonl","parentSession":"parent-abc"}`,
@@ -557,6 +563,10 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 			}, "\n")
 			sess, _ := parsePiLikeTestSession(t, tt.agent, content)
 			assert.Equal(t, tt.wantPSI, sess.ParentSessionID)
+			if tt.agent == AgentOMP {
+				assert.Empty(t, sess.RelationshipType,
+					"non-nested OMP lineage does not imply a relationship type")
+			}
 		})
 	}
 }
@@ -700,6 +710,287 @@ func TestPiProviderOMPSubagentFollowsSymlinkedParent(t *testing.T) {
 	assert.Equal(t, "omp:child-def", child.ID)
 	assert.Equal(t, "omp:real-parent-id", child.ParentSessionID)
 	assert.Equal(t, RelSubagent, child.RelationshipType)
+}
+
+func TestPiProviderOMPPathParentsUseTranscriptIdentity(t *testing.T) {
+	tests := []struct {
+		name            string
+		parentDir       string
+		parentReference string
+		v1              bool
+		wantParent      string
+	}{
+		{
+			name:       "native absolute path",
+			parentDir:  "parents",
+			wantParent: "omp:stored-parent-id",
+		},
+		{
+			name:            "native relative path",
+			parentDir:       "parents",
+			parentReference: "../parents/arbitrary-parent.jsonl",
+			wantParent:      "omp:stored-parent-id",
+		},
+		{
+			name:            "bare transcript filename",
+			parentDir:       "project",
+			parentReference: "arbitrary-parent.jsonl",
+			wantParent:      "omp:stored-parent-id",
+		},
+		{
+			name:            "relocated POSIX sibling",
+			parentDir:       "project",
+			parentReference: "/previous/sessions/arbitrary-parent.jsonl",
+			wantParent:      "omp:stored-parent-id",
+		},
+		{
+			name:            "relocated foreign sibling",
+			parentDir:       "project",
+			parentReference: `R:\previous\sessions\arbitrary-parent.jsonl`,
+			wantParent:      "omp:stored-parent-id",
+		},
+		{
+			name:            "foreign relative separators",
+			parentDir:       "parents",
+			parentReference: `..\parents\arbitrary-parent.jsonl`,
+			wantParent:      "omp:stored-parent-id",
+		},
+		{
+			name:       "V1 parent uses its parsed filename identity",
+			parentDir:  "parents",
+			v1:         true,
+			wantParent: "omp:arbitrary-parent",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			parentPath := filepath.Join(root, tt.parentDir, "arbitrary-parent.jsonl")
+			childPath := filepath.Join(root, "project", "child.jsonl")
+			parentHeader := `{"type":"session","version":3,"id":"stored-parent-id","cwd":"/repos/example"}`
+			if tt.v1 {
+				parentHeader = `{"type":"session","version":1,"cwd":"/repos/example"}`
+			}
+			writeSourceFile(t, parentPath, strings.Join([]string{
+				"",
+				`{"type":"title","v":1,"title":"Parent title","pad":"   "}`,
+				parentHeader,
+				`{"type":"message","message":{"role":"user","content":"parent prompt"}}`,
+				"",
+			}, "\n"))
+			parentReference := tt.parentReference
+			if parentReference == "" {
+				parentReference = parentPath
+			}
+			parentJSON, err := json.Marshal(parentReference)
+			require.NoError(t, err)
+			writeSourceFile(t, childPath, strings.Join([]string{
+				`{"type":"session","version":3,"id":"child-id","cwd":"/repos/example","parentSession":` + string(parentJSON) + `}`,
+				`{"type":"message","id":"child-message","message":{"role":"user","content":"child prompt"}}`,
+				"",
+			}, "\n"))
+
+			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			require.NoError(t, err)
+			require.NotNil(t, child)
+			assert.Equal(t, "omp:child-id", child.ID)
+			assert.Equal(t, tt.wantParent, child.ParentSessionID)
+			assert.Empty(t, child.RelationshipType,
+				"a path parent outside a structural subagent directory is not classified")
+			require.Len(t, messages, 1)
+			assert.Equal(t, "child prompt", messages[0].Content)
+		})
+	}
+}
+
+func TestPiProviderOMPStructuralLineageHonorsExplicitParents(t *testing.T) {
+	tests := []struct {
+		name            string
+		parentReference string
+		branchedFrom    string
+		wantParent      string
+	}{
+		{
+			name:       "legacy child without header lineage",
+			wantParent: "omp:structural-id",
+		},
+		{
+			name:            "opaque raw ID wins over directory",
+			parentReference: "explicit.parent-id",
+			wantParent:      "omp:explicit.parent-id",
+		},
+		{
+			name:            "valid explicit path wins over directory",
+			parentReference: "../alternate.jsonl",
+			wantParent:      "omp:alternate-header-id",
+		},
+		{
+			name:            "valid explicit path wins even with matching directory filename",
+			parentReference: "../../elsewhere/structural-parent.jsonl",
+			wantParent:      "omp:referenced-header-id",
+		},
+		{
+			name:            "matching relocated structural parent",
+			parentReference: "/previous/project/structural-parent.jsonl",
+			wantParent:      "omp:structural-id",
+		},
+		{
+			name:            "matching foreign structural parent",
+			parentReference: `R:\previous\project\structural-parent.jsonl`,
+			wantParent:      "omp:structural-id",
+		},
+		{
+			name:            "failed conflicting hint stays unresolved",
+			parentReference: "/previous/project/unrelated-parent.jsonl",
+		},
+		{
+			name:            "self path does not borrow directory lineage",
+			parentReference: "Worker.jsonl",
+		},
+		{
+			name:            "branchedFrom wins over path and directory",
+			parentReference: "../alternate.jsonl",
+			branchedFrom:    "/previous/project/branch-source.jsonl",
+			wantParent:      "omp:branch-source",
+		},
+		{
+			name:            "branchedFrom wins over raw ID and directory",
+			parentReference: "explicit.parent-id",
+			branchedFrom:    "/previous/project/branch-source.jsonl",
+			wantParent:      "omp:branch-source",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			projectDir := filepath.Join(root, "project")
+			childPath := filepath.Join(projectDir, "structural-parent", "Worker.jsonl")
+			writeSourceFile(t, filepath.Join(projectDir, "structural-parent.jsonl"),
+				`{"type":"session","version":3,"id":"structural-id","cwd":"/repos/example"}`+"\n")
+			writeSourceFile(t, filepath.Join(projectDir, "alternate.jsonl"), strings.Join([]string{
+				`{"type":"title","v":1,"title":"Alternate","pad":"   "}`,
+				`{"type":"session","version":3,"id":"alternate-header-id","cwd":"/repos/example"}`,
+				"",
+			}, "\n"))
+			writeSourceFile(t, filepath.Join(root, "elsewhere", "structural-parent.jsonl"),
+				`{"type":"session","version":3,"id":"referenced-header-id","cwd":"/repos/example"}`+"\n")
+			var lineage string
+			if tt.parentReference != "" {
+				parentJSON, err := json.Marshal(tt.parentReference)
+				require.NoError(t, err)
+				lineage += `,"parentSession":` + string(parentJSON)
+			}
+			if tt.branchedFrom != "" {
+				branchJSON, err := json.Marshal(tt.branchedFrom)
+				require.NoError(t, err)
+				lineage += `,"branchedFrom":` + string(branchJSON)
+			}
+			writeSourceFile(t, childPath, strings.Join([]string{
+				`{"type":"title","v":1,"title":"","pad":"   "}`,
+				`{"type":"session","version":3,"id":"child-id","cwd":"/repos/example"` + lineage + `}`,
+				`{"type":"message","id":"child-message","message":{"role":"user","content":"child prompt"}}`,
+				"",
+			}, "\n"))
+
+			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			require.NoError(t, err)
+			require.NotNil(t, child)
+			assert.Equal(t, "omp:child-id", child.ID)
+			assert.Equal(t, tt.wantParent, child.ParentSessionID)
+			assert.Equal(t, RelSubagent, child.RelationshipType,
+				"structural subagent classification is independent of header lineage")
+			assert.Equal(t, "Worker", child.SessionName)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "child prompt", messages[0].Content)
+		})
+	}
+}
+
+func TestPiProviderOMPInvalidParentTargetsKeepChildAvailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		missing bool
+	}{
+		{name: "missing transcript", missing: true},
+		{name: "empty transcript"},
+		{name: "malformed session JSON", content: `{"type":"session","id":"invalid-parent"`},
+		{name: "session with trailing garbage", content: `{"type":"session","id":"invalid-parent"}trailing`},
+		{name: "non-session JSON", content: `{"type":"message","id":"not-a-session"}`},
+		{name: "title slot without session", content: `{"type":"title","v":1,"title":"Orphan title"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			parentPath := filepath.Join(root, "project", "parent-target.jsonl")
+			childPath := filepath.Join(root, "project", "parent-target", "Worker.jsonl")
+			if !tt.missing {
+				writeSourceFile(t, parentPath, tt.content+"\n")
+			}
+			parentJSON, err := json.Marshal(parentPath)
+			require.NoError(t, err)
+			writeSourceFile(t, childPath, strings.Join([]string{
+				`{"type":"session","version":3,"id":"child-id","cwd":"/repos/example","parentSession":` + string(parentJSON) + `}`,
+				`{"type":"message","id":"child-message","message":{"role":"user","content":"child remains readable"}}`,
+				"",
+			}, "\n"))
+
+			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			require.NoError(t, err)
+			require.NotNil(t, child)
+			assert.Equal(t, "omp:child-id", child.ID)
+			assert.Empty(t, child.ParentSessionID,
+				"an invalid target must not fabricate a filename-based parent ID")
+			assert.Empty(t, child.RelationshipType)
+			assert.Empty(t, child.SessionName)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "child remains readable", messages[0].Content)
+		})
+	}
+}
+
+func TestPiProviderOMPPathParentDoesNotLinkToChild(t *testing.T) {
+	tests := []struct {
+		name      string
+		reference string
+		v1        bool
+		wantID    string
+	}{
+		{name: "absolute self path", wantID: "omp:child-id"},
+		{name: "relative self path", reference: "./Child.jsonl", wantID: "omp:child-id"},
+		{name: "bare self filename", reference: "Child.jsonl", wantID: "omp:child-id"},
+		{name: "foreign self separators", reference: `.\Child.jsonl`, wantID: "omp:child-id"},
+		{name: "V1 self path", v1: true, wantID: "omp:Child"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			childPath := filepath.Join(t.TempDir(), "project", "Child.jsonl")
+			reference := tt.reference
+			if reference == "" {
+				reference = childPath
+			}
+			parentJSON, err := json.Marshal(reference)
+			require.NoError(t, err)
+			idField := `,"id":"child-id"`
+			if tt.v1 {
+				idField = ""
+			}
+			writeSourceFile(t, childPath, strings.Join([]string{
+				`{"type":"session","cwd":"/repos/example","parentSession":` + string(parentJSON) + idField + `}`,
+				`{"type":"message","message":{"role":"user","content":"child prompt"}}`,
+				"",
+			}, "\n"))
+
+			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			require.NoError(t, err)
+			require.NotNil(t, child)
+			assert.Equal(t, tt.wantID, child.ID)
+			assert.Empty(t, child.ParentSessionID)
+			assert.Empty(t, child.RelationshipType)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "child prompt", messages[0].Content)
+		})
+	}
 }
 
 func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
