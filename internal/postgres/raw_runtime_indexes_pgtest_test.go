@@ -36,7 +36,7 @@ func TestHostedRuntimeIdleAndMaintenanceQueriesStayBounded(t *testing.T) {
 		require.NoError(t, err)
 		_, err = f.admin.Exec(`ANALYZE sessions;ANALYZE raw_ingest_jobs;ANALYZE raw_manifests;ANALYZE raw_source_heads;ANALYZE raw_source_projections`)
 		require.NoError(t, err)
-		query, args := jobs.rawParseClaimStatement("idle", 1, time.Minute)
+		query, args := jobs.rawParseClaimStatement("idle", 1, time.Minute, 5)
 		for _, tc := range []struct {
 			name, query string
 			args        []any
@@ -87,7 +87,7 @@ func TestHostedRuntimeIdleAndMaintenanceQueriesStayBounded(t *testing.T) {
 				t.Logf("size=%d %s shared buffers=%.0f", size, name, buffers)
 			}
 		}
-		leases, err := jobs.ClaimRawParseJobs(t.Context(), "idle", 1, time.Minute)
+		leases, err := jobs.ClaimRawParseJobs(t.Context(), "idle", 1, time.Minute, 5)
 		require.NoError(t, err)
 		assert.Empty(t, leases)
 		var generation int

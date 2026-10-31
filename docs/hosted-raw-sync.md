@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-23
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -130,6 +130,8 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts
   TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
+GRANT SELECT, INSERT, UPDATE ON hosted_sessions.raw_maintenance_state
+  TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
   TO hosted_runtime;
 
@@ -148,9 +150,10 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
 ```
 
 For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+apply the `raw_maintenance_state`, `raw_message_dialogue`, and
+`UPDATE (dialogue_text)` grants above as the owner. `ON ALL TABLES` grants cover
+only tables that existed when they ran. The runtime fails startup until
+provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.
@@ -225,8 +228,28 @@ remain retained but cannot be projected by this worker. Accepted source bytes
 are untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
-unresolved members and retry finitely. Exhausted jobs remain failed until new
-source or processing-version selection provides new work.
+unresolved members and retry finitely. Expired leases consume the same attempt
+budget as recorded failures. Once the budget is exhausted, the next claim
+marks the job failed: `lease:expired` for an expired lease, or
+`attempts:exhausted` for queued work above a lowered limit.
+Each claim fails at most its requested batch size of exhausted jobs. Every
+claim and replay advances a monotonic lease epoch, so a delayed worker cannot
+act after replay.
+Exhausted jobs remain failed until an operator replays them or a new source or
+processing-version selection provides new work.
+
+Use `agentsview pg raw-jobs list [target]` to see counts by state and stored
+error class, with each group's oldest failure timestamp. Replay one batch with
+`agentsview pg raw-jobs retry [target] --error-class parse`,
+`--manifest ID`, or `--all`; exactly one filter is required. Replay handles at
+most 64 failed jobs per invocation to keep source-head locks short. Repeat
+until both reported counts are zero. It resets attempts for the source's
+durable selected parser version; obsolete failures become superseded.
+Concurrent invocations reset each failure at most once.
+
+Upgrades add `lease_epoch` and `failed_at` through `pg hosted-provision`.
+Existing failed jobs use their stored `updated_at` as the initial failure
+timestamp; new failures record their transition time.
 
 Equivalent content from several devices coalesces when it shares a stable
 provider session identity. Piebald's numeric database IDs stay scoped to their
@@ -278,6 +301,42 @@ The maintenance pass examines at most 64 indexed pending signal rows with a
 10-second timeout. It does not scan the archive during idle polling. Shutdown
 cancels and joins worker, materializer and parser work before closing custody
 and PostgreSQL.
+
+## Repair raw selections
+
+Use `agentsview pg raw-reconcile [target]` to inspect one batch of up to 64
+source heads. Add `--repair` to restore damaged head, projection and job
+selections. Repeat repair until `wrapped=true` to finish a sweep. A dry run
+checks the next repair batch without saving its cursor. `busy=true` means
+another maintenance invocation holds the tenant lock; retry later.
+
+Repair keeps the stored processing version. Without a projection row, it uses
+only unambiguous job evidence at the head's highest surviving generation.
+Missing or contradictory evidence increments `unrecoverable` and leaves that
+source unchanged. An exhausted maximum `BIGINT` generation is also reported
+as unrecoverable without changing the source. Repair allocates a generation
+above surviving source fences.
+It restores a nonfailed job's attempt budget and advances its lease epoch;
+failed jobs remain dead letters for `pg raw-jobs retry`. A matching selection
+stays unchanged. This does not inspect or rebuild materialized session rows.
+
+Owner provisioning adds `raw_maintenance_state`.
+Apply the runtime grants above after upgrading. Maintenance checkpoints and
+repair counters commit with each batch; cancellation rolls the batch back.
+
+Repair requires the runtime catalog checks to pass. If an owner restore leaves
+an invalid or missing foreign key, the owner must first restore referential
+integrity, explicitly recreate any missing constraint, and validate it before
+running owner provisioning and starting the runtime. Provisioning installs
+protections for new tables; it does not repair protections removed from an
+existing table.
+
+For a missing selected job, recreate the job with its stored version and
+reconnect the selection. If `hosted_fk_2` was removed, the owner must recreate
+it on `raw_source_projections(tenant_id,selected_job_id)`, referencing
+`raw_ingest_jobs(tenant_id,id)` with `ON DELETE RESTRICT ON UPDATE NO ACTION`,
+then run `VALIDATE CONSTRAINT hosted_fk_2` on the projection table. The CLI does
+not bypass catalog protections.
 
 ## Reparse and rollback
 
@@ -600,7 +659,10 @@ without parse jobs, expired leased parse jobs, failed parse jobs grouped by
 their stored error class, and retrying jobs at or above
 `greatest(1, max_attempts - 1)`. These counts include only current source heads
 and selected processing versions, so replacing a manifest or parser version
-clears obsolete job warnings.
+clears obsolete job warnings. The separate `dead_letters` object reports
+`count` and `oldest_failed_at` for all failed parse jobs in the tenant, including
+historical selections, until replay or supersession. Its timestamp is null
+when no failure timestamp is available.
 
 `stale_source_heads` reports parse lag: current manifests accepted at least
 `stale_after_seconds` ago with no completed parse job for a selected processing
