@@ -61,6 +61,9 @@ func TestRawOutcomeBucketsProperty(t *testing.T) {
 			}
 			previous = state
 		}
+		// Observe the transaction-end outcome phase, then roll back the case.
+		_, err = tx.ExecContext(t.Context(), `SET CONSTRAINTS raw_job_outcome IMMEDIATE`)
+		require.NoError(ht, err)
 		rows, err := tx.QueryContext(t.Context(), `SELECT outcome,sum(count) FROM raw_job_outcome_buckets WHERE stage=$1 GROUP BY outcome`, stage)
 		require.NoError(ht, err)
 		got := map[string]int64{}
@@ -104,6 +107,8 @@ func TestRawOutcomeRetentionProperty(t *testing.T) {
 		require.NoError(ht, err)
 		_, err = tx.ExecContext(t.Context(), `UPDATE raw_ingest_jobs SET stage=$1,state='complete' WHERE id=$2`, transitionStage, lease.ID)
 		require.NoError(ht, err)
+		_, err = tx.ExecContext(t.Context(), `SET CONSTRAINTS raw_job_outcome IMMEDIATE`)
+		require.NoError(ht, err)
 		var bucket time.Time
 		require.NoError(ht, tx.QueryRowContext(t.Context(), `SELECT bucket_start FROM raw_job_outcome_buckets WHERE outcome='complete' AND count<>4 AND stage=$1`, transitionStage).Scan(&bucket))
 		assert.Equal(ht, bucket.UTC().Truncate(time.Hour), bucket.UTC())
@@ -117,11 +122,21 @@ func TestRawOutcomeRetentionProperty(t *testing.T) {
 }
 
 func TestRawOutcomeTriggerRequiredAtStartup(t *testing.T) {
-	f := newProjectionFixture(t)
-	_, err := f.admin.ExecContext(t.Context(), `ALTER TABLE raw_ingest_jobs DISABLE TRIGGER raw_job_outcome`)
-	require.NoError(t, err)
-	_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
-	require.ErrorContains(t, err, "outcome protection is missing or altered")
+	for _, tc := range []struct{ name, alter string }{
+		{"disabled", `ALTER TABLE raw_ingest_jobs DISABLE TRIGGER raw_job_outcome`},
+		{"immediate", `DROP TRIGGER raw_job_outcome ON raw_ingest_jobs;
+ CREATE TRIGGER raw_job_outcome AFTER UPDATE ON raw_ingest_jobs FOR EACH ROW EXECUTE FUNCTION raw_record_job_outcome()`},
+		{"initially immediate", `DROP TRIGGER raw_job_outcome ON raw_ingest_jobs;
+ CREATE CONSTRAINT TRIGGER raw_job_outcome AFTER UPDATE ON raw_ingest_jobs DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION raw_record_job_outcome()`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			_, err := f.admin.ExecContext(t.Context(), tc.alter)
+			require.NoError(t, err)
+			_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+			require.ErrorContains(t, err, "outcome protection is missing or altered")
+		})
+	}
 }
 
 func TestRawOutcomePrivilegesRequiredAtStartup(t *testing.T) {

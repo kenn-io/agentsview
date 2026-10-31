@@ -336,8 +336,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			return err
 		}
 	}
-	// The job row is already locked, so completing it cannot wait. Checking the
-	// lease after the corpus row wait keeps an expired lease from committing.
+	// The job row is already locked. Outcome aggregation is deferred until commit,
+	// after every domain write; it never acquires a corpus or domain lock.
+	// Checking the lease after the corpus wait rejects an expired lease.
 	outcome, err := completeProjectionJob(ctx, tx, lease, complete, s.options.RetryPolicy)
 	if err != nil {
 		return err
