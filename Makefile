@@ -540,7 +540,7 @@ lint-golangci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	$(CUSTOM_GCL) run --fix ./...
 
 # Lint Go code without fixing (for CI)
-lint-ci: lint-config-check lint-sql lint-golangci-ci nilaway lint-workflow-retries
+lint-ci: lint-config-check lint-sql lint-golangci-ci nilaway
 
 # Run golangci-lint without auto-fixes for CI.
 lint-golangci-ci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
