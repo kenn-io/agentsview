@@ -39,7 +39,7 @@ func activationObservedPool(t *testing.T, f projectionFixture, owner bool) (*sql
 	}
 	cfg, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
-	cfg.RuntimeParams["search_path"] = `"` + f.schema + `"`
+	cfg.RuntimeParams["search_path"] = `"` + f.schema + `", pg_temp`
 	cfg.RuntimeParams["agentsview.tenant_id"] = f.tenant
 	probe := &activationConnectionProbe{Connector: stdlib.GetConnector(*cfg), rows: map[string]int{}}
 	pool := sql.OpenDB(probe)
