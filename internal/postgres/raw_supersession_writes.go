@@ -13,22 +13,19 @@ import (
 // maps and collision groups. It does not take every tenant group lock on each
 // projection. Discovery and matching both stay within this complete closure.
 //
-//nolint:unused // production writers call this closure in a later slice
+
 type rawDerivedLocks struct{ Groups, Aliases, Legacy []string }
 
-//nolint:unused // production writers call this helper in a later slice
 func canonicalRawStrings(values []string) []string {
 	values = append([]string{}, values...)
 	slices.Sort(values)
 	return slices.Compact(values)
 }
 
-//nolint:unused // production writers call this helper in a later slice
 func rawDerivedRetry() error {
 	return &pgconn.PgError{Code: "40001", Message: "raw derived identity changed during preparation; retry transaction"}
 }
 
-//nolint:unused // production writers call this helper in a later slice
 func discoverRawDerived(ctx context.Context, tx *sql.Tx, groups, aliases []string) (rawDerivedLocks, error) {
 	p := rawDerivedLocks{Groups: canonicalRawStrings(groups), Aliases: canonicalRawStrings(aliases), Legacy: []string{}}
 	for {
@@ -62,7 +59,7 @@ func discoverRawDerived(ctx context.Context, tx *sql.Tx, groups, aliases []strin
 // expose a new closure in RC; abort rather than acquiring additional buckets in
 // a different order. A complete retry discovers the enlarged set from scratch.
 //
-//nolint:unused // production writers call this helper in a later slice
+
 func lockRawDerivedAliases(ctx context.Context, tx *sql.Tx, groups, aliases []string) (rawDerivedLocks, error) {
 	p, err := discoverRawDerived(ctx, tx, groups, aliases)
 	if err != nil {
@@ -81,13 +78,11 @@ func lockRawDerivedAliases(ctx context.Context, tx *sql.Tx, groups, aliases []st
 	return p, nil
 }
 
-//nolint:unused // production writers call this helper in a later slice
 func (p rawDerivedLocks) lockGroups(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `SELECT group_id FROM raw_session_groups WHERE group_id=ANY($1) ORDER BY group_id FOR UPDATE`, p.Groups)
 	return err
 }
 
-//nolint:unused // production writers call this helper in a later slice
 func (p rawDerivedLocks) lockSessions(ctx context.Context, tx *sql.Tx) error {
 	// Sessions are FK parents for carried/cache/pin rows. Their UPDATE locks also
 	// exclude competing inserts into absent children, while group locks serialize
@@ -100,7 +95,7 @@ func (p rawDerivedLocks) lockSessions(ctx context.Context, tx *sql.Tx) error {
 // It stages cache/carry first and returns visibility for the caller's final
 // publication phase. No visibility UPDATE is hidden inside materializeGroup.
 //
-//nolint:unused // production writers call this helper in a later slice
+
 func (s *RawProjectionStore) prepareRawDerivedWrites(ctx context.Context, tx *sql.Tx, locks rawDerivedLocks) (rawSupersessionPlan, error) {
 	var out rawSupersessionPlan
 	scopes, err := loadRawRolloutScopes(ctx, tx)
