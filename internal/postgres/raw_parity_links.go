@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+
 	"go.kenn.io/agentsview/internal/rawparity"
 )
 

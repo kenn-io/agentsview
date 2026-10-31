@@ -3,8 +3,9 @@ package rawparity
 import (
 	"encoding/json/v2"
 	"errors"
-	"go.kenn.io/agentsview/internal/db"
 	"slices"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Link is one raw relationship coordinate resolved from source-owned physical
