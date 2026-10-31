@@ -28,6 +28,7 @@ type Store interface {
 	DecodeCursor(s string) (SessionCursor, error)
 
 	// Sessions.
+	CommitLinks(ctx context.Context, shas []string, sessionID string) ([]CommitLink, error)
 	ListSessions(ctx context.Context, f SessionFilter) (SessionPage, error)
 	GetSidebarSessionIndex(ctx context.Context, f SessionFilter) (SidebarSessionIndex, error)
 	GetSession(ctx context.Context, id string) (*Session, error)

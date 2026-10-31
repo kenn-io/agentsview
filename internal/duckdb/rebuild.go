@@ -544,6 +544,9 @@ func buildMirrorInto(
 	if err != nil {
 		return result, err
 	}
+	if err := storage.PublishCommitLinksSQL(ctx, s.duck, db.DuckDBQueryDialect(), s.local, s.projects, s.excludeProjects); err != nil {
+		return result, err
+	}
 	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	if err := s.writeRebuildMetadata(
 		ctx, scope, snapshot, identityRevision, mappingRevision,

@@ -73,6 +73,7 @@ client will see these tools:
 
 | Tool                     | Purpose                                                                  |
 | ------------------------ | ------------------------------------------------------------------------ |
+| `commit_sessions` | Look up stored commit-session evidence and writing prompts for up to 200 SHAs |
 | `search_sessions`        | Full-text search across recorded sessions                                |
 | `list_sessions`          | List recent or filtered sessions                                         |
 | `get_session_overview`   | Fetch metadata and a compact message preview                             |
@@ -501,3 +502,9 @@ project names, and usage totals. Treat it like access to your session archive.
 
 For every flag, see [`agentsview mcp`](/docs/commands/#agentsview-mcp) in the
 CLI reference.
+
+`commit_sessions` accepts `{"shas":["abcdef0"]}` and returns the same keyed
+`commits` envelope as the [commit-session HTTP lookup](/docs/session-api/#commit-session-links).
+It is part of the full profile. Its lookup never synchronizes sources, starts a
+daemon, or runs Git. Unknown sessions and unresolved prefixes retain explicit
+gone/ambiguity markers.

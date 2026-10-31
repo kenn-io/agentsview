@@ -601,6 +601,8 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"friction_digests":                                true,
 		"friction_digest_sessions":                        true,
 		"friction_patterns":                               true,
+		"commit_session_links":                            true,
+		"commit_link_publications":                        true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -645,6 +647,8 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"friction_digests":                                true,
 		"friction_digest_sessions":                        true,
 		"friction_patterns":                               true,
+		"commit_session_links":                            true,
+		"commit_link_publications":                        true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -1213,4 +1217,11 @@ func TestServeSchemaErrorAsksForARebuildWhenColumnsAreMissing(t *testing.T) {
 		&pgconn.PgError{Code: "42703", Message: `column "credits" does not exist`})
 
 	assert.Contains(t, serveSchemaError(missing, "agentsview").Error(), "Drop and recreate the PG schema")
+}
+
+func TestCommitLookupRequiresIndexUpgrade(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{contains: "commit_session_links", err: &pgconn.PgError{Code: "42P01", Message: "relation does not exist"}}}
+	_, err := (&Store{pg: pg}).CommitLinks(t.Context(), []string{"abcdef0"}, "")
+	assert.ErrorIs(t, err, localdb.ErrCommitIndexUnavailable)
 }

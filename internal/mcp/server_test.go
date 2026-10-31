@@ -16,7 +16,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -46,7 +45,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersNineteenReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
@@ -57,7 +56,7 @@ func TestNewServer_RegistersNineteenReadOnlyTools(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 19)
+	require.Len(t, tools.Tools, 20)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -150,7 +149,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 18)
+	require.Len(t, tools.Tools, 19)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}

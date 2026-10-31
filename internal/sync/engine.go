@@ -9089,6 +9089,9 @@ func (e *Engine) recordSyncFinished(ctx context.Context) {
 	if e.ephemeral {
 		return
 	}
+	if _, err := e.BackfillCommitProvenance(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("commit provenance maintenance deferred: %v", err)
+	}
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := e.db.SetSyncState(ctx, syncStateFinishedAt, ts); err != nil {
 		log.Printf("persist sync finish time: %v", err)
@@ -19115,6 +19118,7 @@ type localGitIdentity struct {
 	rootPath       string
 	repositoryPath string
 	gitDir         string
+	commonDir      string
 	remotes        map[string]string
 	worktreeKind   export.WorktreeRelationship
 }
@@ -19708,6 +19712,7 @@ func discoverLocalGitIdentity(
 		rootPath:       root,
 		repositoryPath: repositoryPathForGitContext(root, commonDir, mayProbe),
 		gitDir:         gitDir,
+		commonDir:      commonDir,
 		worktreeKind:   relationship,
 	}
 	// The common directory comes from gitfile contents and can point

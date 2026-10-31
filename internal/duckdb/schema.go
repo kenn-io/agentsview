@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
@@ -25,7 +27,8 @@ import (
 // and labels. v20 adds codex-cloud plan usage and capture coverage
 // (session_plan_usage).
 // v21 adds messages.dialogue_text.
-const SchemaVersion = 21
+// v22 adds source-owned commit-session evidence.
+const SchemaVersion = 22
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -848,6 +851,9 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 // version does not match is rejected by CheckSchemaCompat and must be
 // rebuilt with 'agentsview duckdb push --full' rather than patched here.
 func createSchema(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, storage.CommitLinksDDL); err != nil {
+		return err
+	}
 	for _, table := range mirrorTables {
 		if _, err := db.ExecContext(ctx, table.create); err != nil {
 			return fmt.Errorf("creating duckdb table %s: %w", table.name, err)

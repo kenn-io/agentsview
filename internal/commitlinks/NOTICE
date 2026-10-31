@@ -1,0 +1,8 @@
+Pando
+Copyright 2026 the Pando authors
+
+The writing-turn heuristic in turn.go adapts turnThatWrote from
+Pando worker/src/understand/lookups.ts (https://github.com/backnotprop/pando),
+licensed under Apache License 2.0. AgentsView adds bounded input, secret
+redaction, path-boundary checks, and stricter timestamp handling.
+See LICENSE.pando for the license text.

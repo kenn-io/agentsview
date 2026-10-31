@@ -15,7 +15,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -600,6 +600,12 @@ func EnsureSchema(ctx context.Context, t Target) error {
 // EnsureSchemaOn creates missing tables and columns on an open mirror
 // connection and records SchemaVersion.
 func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
+	if _, err := conn.ExecContext(ctx, commitLinksDDL); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, commitPublicationsDDL); err != nil {
+		return err
+	}
 	existing, err := readColumns(ctx, conn)
 	if err != nil {
 		return err
@@ -689,7 +695,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
-	for _, table := range []string{"usage_messages", "terminal_event_snapshots"} {
+	for _, table := range []string{"usage_messages", "terminal_event_snapshots", "commit_session_links", "commit_link_publications"} {
 		if _, has := existing[table]; !has {
 			missing = append(missing, table)
 		}

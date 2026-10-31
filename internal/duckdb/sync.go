@@ -451,6 +451,11 @@ func (s *Sync) runIncrementalPush(
 		)
 	}
 
+	if result.Errors == 0 {
+		if err := storage.PublishCommitLinksSQL(ctx, s.duck, db.DuckDBQueryDialect(), s.local, s.projects, s.excludeProjects); err != nil {
+			return result, err
+		}
+	}
 	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 {
 		if err := s.checkpointAfterMutatingPush(ctx); err != nil {
 			return result, err
