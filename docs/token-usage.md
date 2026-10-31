@@ -619,24 +619,26 @@ doesn't keep historical Fast prices.
 ### Copilot CLI Token Metrics
 
 As of 0.32.0, Copilot CLI sessions contribute to usage and cost reports.
-AgentsView reads per-message assistant output tokens from
-`assistant.message.outputTokens`, then reads model-level session totals from
-`session.shutdown.modelMetrics`. When Copilot has not written a usable shutdown
-summary, known per-message output tokens still appear in usage reports. That
-partial fallback cannot report input, cache, reasoning, or Copilot AI Credit
-totals. Fresh input tokens are computed as total input minus cache reads and
-cache writes; cache writes map to cache-creation tokens, and cache reads map to
+When available, per-call usage from `session-store.db` supplies input, output,
+cache, and reasoning counts for sessions starting June 1, 2026 or later.
+Otherwise, `session.usage_record` receipts supply those counts at each request's
+own timestamp, including for sessions without a shutdown summary. Either
+per-call source replaces `session.shutdown.modelMetrics` rollups, so appending
+a shutdown leaves receipt totals unchanged. Without either per-call source,
+AgentsView uses shutdown metrics, then known `assistant.message.outputTokens`.
+The message-only fallback cannot report input, cache, reasoning, or Copilot AI
+Credit totals. Fresh input tokens are computed as total input minus cache reads
+and cache writes; cache writes map to cache-creation tokens, and cache reads map to
 cache-read tokens. Copilot's Claude model IDs use dotted version numbers, so the
 parser normalizes names such as `claude-sonnet-4.6` to `claude-sonnet-4-6`
 before pricing lookup.
 
-For sessions starting June 1, 2026 or later, available per-call usage from
-`session-store.db` supplies input, output, cache, and reasoning counts before
-shutdown. Store updates refresh the affected sessions without rereading
-unchanged transcripts. Overlapping transcript output contributes only its
-positive per-model difference from store totals; missing input cannot be
-reconstructed. Store tokens use catalog estimates, while the latest shutdown
-reported cost retains the treatment described below.
+Store updates refresh the affected sessions without rereading unchanged
+transcripts. Overlapping transcript output contributes only its positive
+per-model difference from the selected per-call totals; missing input cannot be
+reconstructed. Per-call tokens use request-level catalog estimates. The latest
+shutdown reported cost retains the treatment described below, unless a later
+receipt makes that total stale and receipts are the selected source.
 
 Upgrading to 0.32.0 bumps the parser data version so existing Copilot CLI
 sessions are re-indexed with the new usage rows.

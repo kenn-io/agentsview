@@ -643,7 +643,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (162: repair Codex-format forks that missed a parent page in their cached
 // directory inventory. Re-parse sources in place, preserving source and
 // session identities.)
-const dataVersion = 162
+// (163: count Copilot CLI usage receipts. Re-parse Copilot sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 163
 
 const archiveOnlyVersionBase = 1 << 20
 

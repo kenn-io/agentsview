@@ -99,6 +99,7 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
 		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
 		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+		`{"type":"session.usage_record","timestamp":"2026-09-04T17:00:04Z","data":{"usage":{"model":"gpt-5.6-sol","inputTokens":20,"outputTokens":9}}}`,
 	)
 
 	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(),
