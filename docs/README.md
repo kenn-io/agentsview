@@ -40,14 +40,19 @@ not download screenshots and other large media.
   the legacy-URL redirect table.
 - `zensical-docs.sh`: builds from a temporary public-docs copy so maintainer
   files are excluded, then assembles the website tier, Markdown twins,
-  `llms.txt`, and root sitemap into `site/`.
+  `llms.txt`, and root sitemap into `site/`. It then runs
+  `scripts/first_paint.py`, which embeds the fonts in the site's stylesheets
+  and inlines `scripts/hold-first-paint.js` in every page, so no page paints
+  text in a fallback face.
 - `assets/hydrate-assets.sh`: hydrates ignored local assets from orphan
   branches.
 - `assets/update-static-assets-branch.sh`: updates curated static assets.
 - `screenshots/`: Docker/Playwright screenshot generator and generated asset
   branch updater.
 - `scripts/check_built_site.py` and `scripts/check_vercel_redirects.py`:
-  post-build validation.
+  post-build validation. CI also runs the shared
+  [first-paint check](https://github.com/kenn-io/actions/tree/main/first-paint)
+  on `site/`.
 
 `docs/assets/static/`, `docs/assets/generated/`, `docs/site/`, `docs/.venv/`,
 and `docs/zensical-public-docs.*` are ignored local outputs.

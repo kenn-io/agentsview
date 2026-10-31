@@ -50,6 +50,8 @@ homepage = "/"
 [project.theme]
 variant = "modern"
 custom_dir = "overrides"
+# stylesheets/extra.css declares the self-hosted faces; the build embeds them.
+font = false
 features = [
   "navigation.instant",
   "navigation.instant.progress",

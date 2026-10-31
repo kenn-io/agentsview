@@ -233,6 +233,22 @@ jobs:
       - name: Run docs check
         run: make docs-check
 
+      - name: Check that docs pages paint with their stylesheets and fonts
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
+        with:
+          dist: docs/site
+
+      - name: Collect the static app pages for the first-paint check
+        run: |
+          mkdir -p "$RUNNER_TEMP/app-pages"
+          cp -R desktop/ui "$RUNNER_TEMP/app-pages/desktop"
+          cp -R internal/web/fallback "$RUNNER_TEMP/app-pages/fallback"
+
+      - name: Check that static app pages paint with their stylesheets and fonts
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
+        with:
+          dist: ${{ runner.temp }}/app-pages
+
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
@@ -975,6 +991,38 @@ jobs:
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"
+
+      # The first-paint check reads the pages the binary serves from its
+      # embedded build: the root and a client route, which takes the SPA
+      # fallback.
+      - name: Start the server for the first-paint check
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 2
+        run: |
+          AGENTSVIEW_E2E_PORT=8095 bash scripts/e2e-server.sh > "$RUNNER_TEMP/first-paint-server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/first-paint-server.pid"
+          until curl -sf http://127.0.0.1:8095/ > /dev/null; do
+            kill -0 "$!" 2> /dev/null || { cat "$RUNNER_TEMP/first-paint-server.log"; exit 1; }
+            sleep 1
+          done
+        env:
+          E2E_PREBUILT_FIXTURE: /tmp/testfixture
+          E2E_PREBUILT_SERVER: /tmp/agentsview
+
+      - name: Check that pages paint with their stylesheets and fonts
+        if: matrix.browser == 'chromium'
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
+        with:
+          urls: |
+            http://127.0.0.1:8095/
+            http://127.0.0.1:8095/sessions/test-session-large-1500
+
+      - name: Stop the first-paint server
+        if: always() && matrix.browser == 'chromium'
+        run: |
+          if [ -f "$RUNNER_TEMP/first-paint-server.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/first-paint-server.pid")" || true
+          fi
 
       - name: Start Playwright browser server
         id: browser_server
