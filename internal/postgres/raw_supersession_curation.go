@@ -91,6 +91,10 @@ func prepareRawLegacyCarry(ctx context.Context, tx *sql.Tx, legacy, group string
 	slices.Sort(ids)
 	var targets []rawCarryMessage
 	for _, id := range ids {
+		cohort := members[id]
+		if len(cohort) == 0 {
+			continue
+		}
 		exists, err := rawPhysicalExists(ctx, tx, id)
 		if err != nil {
 			return carry, err
@@ -98,7 +102,7 @@ func prepareRawLegacyCarry(ctx context.Context, tx *sql.Tx, legacy, group string
 		if !exists {
 			continue
 		}
-		carry.Cohorts = append(carry.Cohorts, rawCurationCohort{id, members[id]})
+		carry.Cohorts = append(carry.Cohorts, rawCurationCohort{id, cohort})
 		physical, err := loadRawParitySnapshot(ctx, tx, id)
 		if err != nil {
 			return carry, err
@@ -120,7 +124,7 @@ func prepareRawLegacyCarry(ctx context.Context, tx *sql.Tx, legacy, group string
 			if err != nil {
 				return carry, err
 			}
-			targets = append(targets, rawCarryMessage{stored, key, members[id][0].Revision})
+			targets = append(targets, rawCarryMessage{stored, key, cohort[0].Revision})
 		}
 	}
 	snapshot, err := loadRawParitySnapshot(ctx, tx, legacy)
