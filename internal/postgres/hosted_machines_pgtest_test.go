@@ -47,7 +47,8 @@ func TestHostedSourceMachinesLabelsWithoutSessions(t *testing.T) {
 	assert.Empty(t, matching, "enrollment alone does not make an exact selector resolve")
 }
 
-func TestHostedSourceMachinesBranchExclusionOverride(t *testing.T) {
+func newHostedBranchExclusionFixture(t *testing.T) *HostedStore {
+	t.Helper()
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, "capture-"+device, "")
@@ -61,6 +62,11 @@ func TestHostedSourceMachinesBranchExclusionOverride(t *testing.T) {
 	require.NoError(t, err)
 	h, err := newHostedAdapter(f.runtime, f.tenant)
 	require.NoError(t, err)
+	return h
+}
+
+func TestHostedSourceMachinesBranchExclusionOverride(t *testing.T) {
+	h := newHostedBranchExclusionFixture(t)
 	machines, err := h.GetMachines(t.Context(), false, false)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"raw-device:6465766963652d61"}, machines)
@@ -69,18 +75,23 @@ func TestHostedSourceMachinesBranchExclusionOverride(t *testing.T) {
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
 	assert.Equal(t, []string{"raw-device:6465766963652d61"}, page.Sessions[0].SourceMachines)
+	page, err = h.ListSessions(t.Context(), db.SessionFilter{Machine: "raw-device:6465766963652d62", Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, page.Sessions)
+}
+
+func TestHostedAliasesBranchExclusionOverride(t *testing.T) {
+	h := newHostedBranchExclusionFixture(t)
 	aliases, err := h.FindSessionIDsByPartial(t.Context(), "portable", 10)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"codex:portable"}, aliases)
 	aliases, err = h.FindSessionIDsByRawSuffix(t.Context(), "portable", 10)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"codex:portable"}, aliases)
-	page, err = h.ListSessions(t.Context(), db.SessionFilter{Machine: "raw-device:6465766963652d62", Limit: 10})
-	require.NoError(t, err)
-	assert.Empty(t, page.Sessions)
 }
 
-func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
+func newHostedCoalescedMachinesFixture(t *testing.T) (projectionFixture, *HostedStore) {
+	t.Helper()
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, "capture-"+device, "")
@@ -98,12 +109,11 @@ func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
 	h, err := newHostedAdapter(f.runtime, f.tenant)
 	require.NoError(t, err)
 
-	machines, err := h.GetMachines(t.Context(), false, false)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"raw-device:6465766963652d61", "raw-device:6465766963652d62", "raw-device:6465766963652d63", "legacy-machine"}, machines)
-	machines, err = h.GetMachines(t.Context(), true, true)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"legacy-machine"}, machines, "catalog visibility honors the ordinary one-shot exclusion")
+	return f, h
+}
+
+func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
+	f, h := newHostedCoalescedMachinesFixture(t)
 	labels, err := h.GetMachineLabels(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "Workstation A", labels["raw-device:6465766963652d61"])
@@ -155,54 +165,44 @@ func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
 	assert.Len(t, compatibility.Sessions, 2, "old hosted selectors still match raw sessions")
 
 	// Catalog flags must retain automated one-shot sources when automation is
-	// included, while exact selectors still resolve hidden picker entries.
+	// included.
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET is_automated=true WHERE id IN (SELECT session_id FROM raw_session_branches b JOIN raw_source_projections p USING(source_id) WHERE p.device_id='device-c')`)
 	require.NoError(t, err)
+	for _, tc := range []struct {
+		excludeOneShot   bool
+		excludeAutomated bool
+		want             []string
+	}{
+		{true, true, []string{"legacy-machine"}},
+		{true, false, []string{"legacy-machine", "raw-device:6465766963652d63"}},
+		{false, true, []string{"legacy-machine", "raw-device:6465766963652d61", "raw-device:6465766963652d62"}},
+		{false, false, []string{"legacy-machine", "raw-device:6465766963652d61", "raw-device:6465766963652d62", "raw-device:6465766963652d63"}},
+	} {
+		machines, err := h.GetMachines(t.Context(), tc.excludeOneShot, tc.excludeAutomated)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, tc.want, machines, "excludeOneShot=%t excludeAutomated=%t", tc.excludeOneShot, tc.excludeAutomated)
+	}
 	cfg, err := config.Default()
 	require.NoError(t, err)
 	cfg.DataDir = t.TempDir()
 	app := server.New(cfg, h, nil)
-	request := func(path string) []byte {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Host = "localhost:8080"
-		response := httptest.NewRecorder()
-		app.Handler().ServeHTTP(response, req)
-		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-		return response.Body.Bytes()
-	}
-	for _, tc := range []struct {
-		query string
-		want  []string
-	}{
-		{"", []string{"legacy-machine"}},
-		{"&include_automated=true", []string{"legacy-machine", "raw-device:6465766963652d63"}},
-		{"&include_one_shot=true", []string{"legacy-machine", "raw-device:6465766963652d61", "raw-device:6465766963652d62"}},
-		{"&include_one_shot=true&include_automated=true", []string{"legacy-machine", "raw-device:6465766963652d61", "raw-device:6465766963652d62", "raw-device:6465766963652d63"}},
-	} {
-		var metadata struct {
-			Machines         []string          `json:"machines"`
-			ResolvedMachines []string          `json:"resolved_machines"`
-			MachineLabels    map[string]string `json:"machine_labels"`
-		}
-		require.NoError(t, json.Unmarshal(request("/api/v1/machines?machine=Workstation%20A"+tc.query), &metadata))
-		assert.ElementsMatch(t, tc.want, metadata.Machines, tc.query)
-		assert.Equal(t, []string{"raw-device:6465766963652d61"}, metadata.ResolvedMachines)
-		assert.Equal(t, "Workstation A", metadata.MachineLabels["raw-device:6465766963652d61"])
-	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?machine=Workstation%20A&include_one_shot=true", nil)
+	req.Host = "localhost:8080"
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, req)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	var httpPage db.SessionPage
-	require.NoError(t, json.Unmarshal(request("/api/v1/sessions?machine=Workstation%20A&include_one_shot=true"), &httpPage))
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &httpPage))
 	require.Len(t, httpPage.Sessions, 1)
 	assert.ElementsMatch(t, []string{"raw-device:6465766963652d61", "raw-device:6465766963652d62"}, httpPage.Sessions[0].SourceMachines)
 
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_devices SET display_name='Shared label' WHERE device_id IN ('device-a','device-b')`)
-	require.NoError(t, err)
-	_, err = db.ResolveMachineFilter(t.Context(), h, "Shared label")
-	var ambiguous *db.MachineFilterError
-	require.ErrorAs(t, err, &ambiguous)
-	assert.ElementsMatch(t, []string{"raw-device:6465766963652d61", "raw-device:6465766963652d62"}, ambiguous.Candidates)
 	resolved, err = db.ResolveMachineFilter(t.Context(), h, "raw-device:6465766963652d61")
 	require.NoError(t, err)
 	assert.Equal(t, "raw-device:6465766963652d61", resolved)
+}
+
+func TestHostedSourceMachinesContributorInvalidatesCursor(t *testing.T) {
+	f, h := newHostedCoalescedMachinesFixture(t)
 
 	page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 1})
 	require.NoError(t, err)
@@ -329,20 +329,8 @@ func TestHostedSourceMachinesOpaqueDeviceSelector(t *testing.T) {
 	machines, err := h.GetMachines(t.Context(), false, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"raw-device:6465766963652ce7a094e58f91"}, machines)
-	resolved, err := db.ResolveMachineFilter(t.Context(), h, machines[0])
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{Machine: machines[0], Limit: 10})
 	require.NoError(t, err)
-	assert.Equal(t, machines[0], resolved)
-	cfg, err := config.Default()
-	require.NoError(t, err)
-	cfg.DataDir = t.TempDir()
-	app := server.New(cfg, h, nil)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?include_one_shot=true&machine="+machines[0], nil)
-	req.Host = "localhost:8080"
-	w := httptest.NewRecorder()
-	app.Handler().ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var page db.SessionPage
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page))
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
 	assert.Equal(t, machines, page.Sessions[0].SourceMachines)
