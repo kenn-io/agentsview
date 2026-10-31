@@ -46,8 +46,15 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	if err := readRawSyncStatusUploads(ctx, tx, identity.TenantID, &status); err != nil {
 		return rawsync.Status{}, err
 	}
-	// Only an explicitly tenant-bound hosted store has rollout tables.
+	// Tenant fencing is also supported on custody-only schemas. A hosted
+	// binding, rather than the tenant option alone, establishes rollout support.
+	var hosted bool
 	if s.tenant != "" {
+		if err := tx.QueryRowContext(ctx, `SELECT to_regclass(format('%I.hosted_tenant_binding',current_schema())) IS NOT NULL`).Scan(&hosted); err != nil {
+			return rawsync.Status{}, fmt.Errorf("checking hosted raw sync status capability: %w", err)
+		}
+	}
+	if hosted {
 		scopes, err := loadRawRolloutDiagnostics(ctx, tx, "", "")
 		if err != nil {
 			return rawsync.Status{}, err
