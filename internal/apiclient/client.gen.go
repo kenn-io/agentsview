@@ -27003,15 +27003,11 @@ type RawsyncRolloutScopeStatus struct {
 
 func (r RawsyncRolloutScopeStatus) Validate() error {
 	var errors runtime.ValidationErrors
-	if v, ok := any(r.DeviceID).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("DeviceID", err)
-		}
+	if err := typesValidator.Var(r.DeviceID, "required"); err != nil {
+		errors = errors.Append("DeviceID", err)
 	}
-	if v, ok := any(r.Provider).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Provider", err)
-		}
+	if err := typesValidator.Var(r.Provider, "required"); err != nil {
+		errors = errors.Append("Provider", err)
 	}
 	if err := typesValidator.Var(r.State, "required"); err != nil {
 		errors = errors.Append("State", err)
