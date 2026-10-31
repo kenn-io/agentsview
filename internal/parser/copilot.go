@@ -772,9 +772,11 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	if usesRequestUsage {
 		// Request output and uncovered message output replace the transcript total,
 		// including when the requests contain no positive output tokens.
-		sess.TotalOutputTokens = 0
-		sess.HasTotalOutputTokens = false
-		applyUsageEventTokenTotals(sess, b.usageEvents)
+		contextEvents := slices.DeleteFunc(slices.Clone(b.usageEvents), func(event ParsedUsageEvent) bool {
+			return event.Source == "shutdown"
+		})
+		applyUsageEventTokenTotals(sess, contextEvents)
+		sess.TotalOutputTokens, sess.HasTotalOutputTokens, _, _ = UsageEventTokenAggregate(b.usageEvents)
 		if b.hasFallbackOutput {
 			sess.HasTotalOutputTokens = true
 			sess.TotalOutputTokens += b.fallbackOutput
