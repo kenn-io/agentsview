@@ -121,9 +121,9 @@ func TestKataStatusRouteWaitsForSlowUnavailableProbe(t *testing.T) {
 	const probeTimeout = 250 * time.Millisecond
 	c := kata.NewConn(kata.Config{
 		Enabled: true, Hub: true, Endpoint: s.Endpoint(), Project: "agentsview",
-		Timeout: probeTimeout,
+		Timeout: probeTimeout, //nolint:kennlint // deadlinetest: the asserted result is the probe timing out
 		HTTPClient: &http.Client{
-			Timeout:   probeTimeout,
+			Timeout:   probeTimeout, //nolint:kennlint // deadlinetest: the asserted result is the probe timing out
 			Transport: delayedKataTransport{next: http.DefaultTransport, delay: 500 * time.Millisecond},
 		},
 	})
