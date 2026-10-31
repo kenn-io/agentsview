@@ -29,8 +29,8 @@ func TestRawRolloutWildcardValidation(t *testing.T) {
 					assert.NoError(t, row.Validate())
 					assert.NoError(t, status.Validate())
 				} else {
-					assert.Error(t, row.Validate(), "missing %s", missing)
-					assert.Error(t, status.Validate(), "missing %s in nested rollout", missing)
+					require.Error(t, row.Validate(), "missing %s", missing)
+					require.Error(t, status.Validate(), "missing %s in nested rollout", missing)
 				}
 			}
 		})
