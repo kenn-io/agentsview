@@ -50,10 +50,8 @@ func rawLogicalSupersessions(rows []rawparity.Candidate, served map[string]bool,
 	return out
 }
 
-//nolint:unused // consumed by the later production activation slice
 type rawSupersessionChange struct{ Legacy, Before, After string }
 
-//nolint:unused // consumed by the later production activation slice
 type rawLegacyVisibility struct {
 	Legacy string
 	Hidden bool
@@ -65,19 +63,17 @@ type rawLegacyVisibility struct {
 // IdentityChanged must reach the caller's publication even if its ordinary
 // materializer reported no content change. No exact revision count is promised.
 //
-//nolint:unused // consumed by the later production activation slice
+
 type rawSupersessionPlan struct {
 	Changes         []rawSupersessionChange
 	Visibility      []rawLegacyVisibility
 	IdentityChanged bool
 }
 
-//nolint:unused // called by the later production activation slice
 func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]bool) (rawSupersessionPlan, error) {
 	return prepareRawSupersessionsWithin(ctx, tx, served, nil, nil)
 }
 
-//nolint:unused // production activation integration lands in a later slice
 func prepareRawSupersessionsWithin(ctx context.Context, tx *sql.Tx, served map[string]bool, groups, legacyIDs []string) (rawSupersessionPlan, error) {
 	var plan rawSupersessionPlan
 	candidates, err := loadRawParityCandidatesWithin(ctx, tx, groups, legacyIDs)
@@ -150,7 +146,7 @@ func prepareRawSupersessionsWithin(ctx context.Context, tx *sql.Tx, served map[s
 // and child/FK locks. It neither acquires corpus nor publishes. Absent keys are
 // protected by those writer guards, not by a SELECT of existing cache rows.
 //
-//nolint:unused // called by the later production activation slice
+
 func writeRawSupersessionCache(ctx context.Context, tx *sql.Tx, plan rawSupersessionPlan) error {
 	for _, c := range plan.Changes {
 		if c.Before != "" {
@@ -180,7 +176,7 @@ func writeRawSupersessionCache(ctx context.Context, tx *sql.Tx, plan rawSuperses
 // fences through commit and accounts for the trigger's identity/corpus bumps.
 // Only derived visibility changes; original legacy content/curation survives.
 //
-//nolint:unused // called by the later production activation slice
+
 func applyRawLegacyVisibility(ctx context.Context, tx *sql.Tx, plan rawSupersessionPlan) error {
 	for _, v := range plan.Visibility {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET rollout_hidden=$2 WHERE id=$1 AND provenance_kind='legacy' AND rollout_hidden IS DISTINCT FROM $2`, v.Legacy, v.Hidden); err != nil {
