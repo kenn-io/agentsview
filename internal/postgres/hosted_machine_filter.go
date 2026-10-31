@@ -26,15 +26,17 @@ var hostedRawMachineSourceSQL = `SELECT machine_branch.tenant_id,
 // source identities separately so multiple contributors never multiply totals.
 // filtered_sessions supplies id, tenant_id, project, machine and provenance_kind.
 var hostedFilteredMachinesCTESQL = `,
- filtered_source_machines AS (
-   SELECT filtered.project, ` + hostedRawMachineKeySQL + ` AS machine
-   FROM filtered_sessions filtered
+ filtered_source_machines AS (` + hostedMachineRowsSQL("filtered_sessions") + `)`
+
+func hostedMachineRowsSQL(eligibleSessions string) string {
+	return `SELECT filtered.id AS session_id, filtered.project, ` + hostedRawMachineKeySQL + ` AS machine
+   FROM ` + eligibleSessions + ` filtered
    JOIN (` + hostedRawMachineSourceSQL + `) raw_machine_source
      ON raw_machine_source.tenant_id=filtered.tenant_id AND raw_machine_source.session_id=filtered.id
    WHERE filtered.provenance_kind='raw'
    UNION ALL
-   SELECT project,machine FROM filtered_sessions WHERE provenance_kind='legacy'
- )`
+   SELECT id AS session_id,project,machine FROM ` + eligibleSessions + ` WHERE provenance_kind='legacy'`
+}
 
 func hostedMachinePredicate(sessionIDExpr, machineExpr string, placeholders []string) string {
 	values := "(" + strings.Join(placeholders, ", ") + ")"

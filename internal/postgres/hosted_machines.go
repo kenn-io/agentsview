@@ -7,16 +7,10 @@ import (
 
 // A raw session can have several contributing devices. Keep that relation at
 // read time instead of assigning the shared transcript to an arbitrary device.
-var hostedMachineRowsSQL = `SELECT id AS session_id, machine
- FROM sessions WHERE provenance_kind='legacy'
- UNION ALL
- SELECT raw_machine_source.session_id, ` + hostedRawMachineKeySQL + `
- FROM (` + hostedRawMachineSourceSQL + `) raw_machine_source
- JOIN sessions s ON s.id=raw_machine_source.session_id AND s.provenance_kind='raw'
- WHERE raw_machine_source.tenant_id=$1`
+var hostedMachineCatalogSQL = hostedMachineRowsSQL("(SELECT * FROM sessions WHERE tenant_id=$1)")
 
 func (h *HostedStore) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
-	query := `SELECT DISTINCT m.machine FROM (` + hostedMachineRowsSQL + `) m
+	query := `SELECT DISTINCT m.machine FROM (` + hostedMachineCatalogSQL + `) m
  JOIN sessions s ON s.id=m.session_id WHERE s.deleted_at IS NULL`
 	if excludeOneShot {
 		if excludeAutomated {
@@ -40,7 +34,7 @@ func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []st
 	// Old hosted URLs used the physical "hosted" key. Keep exact selectors
 	// working without advertising that compatibility key as a source device.
 	return h.machineIDs(ctx, `SELECT DISTINCT machine FROM (
- `+hostedMachineRowsSQL+` UNION ALL SELECT id,machine FROM sessions WHERE provenance_kind='raw') m
+ `+hostedMachineCatalogSQL+` UNION ALL SELECT id,project,machine FROM sessions WHERE provenance_kind='raw') m
  WHERE machine=ANY($2) ORDER BY machine`, h.tenant, candidates)
 }
 

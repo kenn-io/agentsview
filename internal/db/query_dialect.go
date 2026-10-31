@@ -734,11 +734,11 @@ func (d QueryDialect) WithMachinePredicate(predicate func(string, string, []stri
 // MachinePredicate renders a machine filter for one session. The session ID
 // expression lets a backend match several contributing sources with EXISTS.
 func (b *QueryBuilder) MachinePredicate(sessionIDExpr, machineExpr string, values []string) string {
-	if len(values) == 0 {
-		return "1 = 0"
-	}
 	if b.dialect.machinePredicate == nil {
 		return inPredicate(machineExpr, values, b)
+	}
+	if len(values) == 0 {
+		return "1 = 0"
 	}
 	placeholders := make([]string, len(values))
 	for i, value := range values {
