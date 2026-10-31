@@ -132,6 +132,8 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE ON hosted_sessions.raw_maintenance_state
   TO hosted_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_job_outcome_buckets
+  TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
   TO hosted_runtime;
 
@@ -150,7 +152,8 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
 ```
 
 For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_maintenance_state`, `raw_message_dialogue`, and
+apply the `raw_maintenance_state`, `raw_job_outcome_buckets`,
+`raw_message_dialogue`, and
 `UPDATE (dialogue_text)` grants above as the owner. `ON ALL TABLES` grants cover
 only tables that existed when they ran. The runtime fails startup until
 provisioning and these grants are complete.
