@@ -41,7 +41,7 @@ func TestRawRolloutActivationConfigPrerequisite(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
 	t.Setenv("AGENTSVIEW_PG_URL", "")
 	t.Setenv("AGENTSVIEW_PG_SCHEMA", "")
-	body := fmt.Sprintf("[pg.provision]\nurl = %q\nschema = %q\nraw_tenant = %q\n[pg.runtime]\nurl = %q\nschema = %q\nraw_tenant = %q\n", os.Getenv("TEST_PG_URL"), cfg.PG.Schema, cfg.PG.RawTenant, cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant)
+	body := fmt.Sprintf("default_pg = \"provision\"\n[pg.provision]\nurl = %q\nschema = %q\nraw_tenant = %q\n[pg.runtime]\nurl = %q\nschema = %q\nraw_tenant = %q\n", os.Getenv("TEST_PG_URL"), cfg.PG.Schema, cfg.PG.RawTenant, cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(body), 0600))
 	_, err := executeCommand(newPGRawRolloutCommand(), "activate", "provision", "--accept-differences")
 	require.ErrorContains(t, err, "unknown")
