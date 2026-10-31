@@ -44,7 +44,6 @@ type copilotSessionBuilder struct {
 	usageEvents              []ParsedUsageEvent
 	usageRecords             []ParsedUsageEvent
 	uncoveredShutdownUsage   []ParsedUsageEvent
-	receiptSinceShutdown     bool
 	receiptAfterReportedCost bool
 	firstMessage             string
 	startedAt                time.Time
@@ -101,7 +100,6 @@ func (b *copilotSessionBuilder) processLine(line string) {
 			event.OccurredAt = timeString(ts, b.startedAt)
 			b.usageRecords = append(b.usageRecords, event)
 			b.receiptAfterReportedCost = true
-			b.receiptSinceShutdown = true
 		}
 	case copilotEventSessionShutdown:
 		b.handleShutdown(data, ts)
@@ -377,12 +375,11 @@ func (b *copilotSessionBuilder) handleShutdown(
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
 	})
-	// Receipts replace only the shutdown for the segment they cover.
-	// Save uncovered tokens before attaching the separate reported cost.
-	if !b.receiptSinceShutdown {
+	// Keep older-CLI shutdown tokens only before the first usable receipt.
+	// Later shutdowns are cumulative snapshots of receipt usage.
+	if len(b.usageRecords) == 0 {
 		b.uncoveredShutdownUsage = append(b.uncoveredShutdownUsage, events...)
 	}
-	b.receiptSinceShutdown = false
 
 	if hasReportedCost {
 		if len(events) == 0 {

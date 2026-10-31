@@ -1438,9 +1438,10 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Usage and cost:** Per-call store rows take precedence over
   `session.usage_record` receipts and replace all shutdown token rollups.
-  Receipts replace a shutdown's token rows only when usable receipts precede it
-  since the previous shutdown. A shutdown with no receipts in that segment
-  keeps its token rows alongside later receipts. Receipts preserve each
+  With receipts, only shutdowns before the first usable receipt keep their
+  token rows, preserving older-CLI usage. Later shutdown token rows are dropped
+  because `modelMetrics` are cumulative snapshots restored on resume, including
+  when no new calls occur. Receipts preserve each
   request's timestamp, input, output, cache-read, cache-write, and reasoning
   tokens. Without per-call usage, shutdown metrics supply totals, then known
   per-message output is the fallback. Known-model tokens use catalog estimates.
