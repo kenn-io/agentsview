@@ -301,13 +301,14 @@ func TestRawExclusionRowRemovalDoesNotHoldCorpusRevisionAgainstOtherSources(t *t
 
 			assert.Equal(t, len(want), removed)
 			now := f.revisions(t)
-			assert.Equal(t, before.identity+int64(len(want)), now.identity)
-			assert.Equal(t, before.corpus+int64(len(want)), now.corpus)
+			// All selected groups publish atomically in one corpus revision.
+			assert.Equal(t, before.identity+1, now.identity)
+			assert.Equal(t, before.corpus+1, now.corpus)
 			var wantEvents []embeddingEvent
-			for i, identity := range want {
+			for _, identity := range want {
 				wantEvents = append(wantEvents, embeddingEvent{
 					session: identity.SessionID, content: identity.ContentRevision, action: "remove",
-					selection: now.selection, corpus: before.corpus + int64(i) + 1,
+					selection: now.selection, corpus: before.corpus + 1,
 				})
 			}
 			assert.Equal(t, wantEvents, f.embeddingEvents(t, "remove"))
