@@ -1685,6 +1685,23 @@ func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) 
 	return apiclient.NewHTTPClient(b.baseURL, b.token, client)
 }
 
+// HTTPErrorDetails exposes response status and its readable error field for
+// CLI presentation. It does not change the original error or its cause. Raw
+// bodies and request paths are deliberately excluded from the message.
+func HTTPErrorDetails(err error) (status int, message string, ok bool) {
+	statusErr, ok := errors.AsType[*httpStatusError](err)
+	if !ok {
+		return 0, "", false
+	}
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(statusErr.body, &payload) == nil {
+		message = payload.Error
+	}
+	return statusErr.statusCode, message, true
+}
+
 // IsRequestRejected reports whether err is a daemon's 4xx answer to a request.
 // Such an answer shows the daemon is reachable and serving, unlike a
 // connection failure, a timeout, or a 5xx error.

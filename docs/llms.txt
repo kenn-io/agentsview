@@ -17,7 +17,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Quick Start](https://agentsview.io/docs/quickstart.md): Get AgentsView running in under a minute.
 - [Configuration](https://agentsview.io/docs/configuration.md): Config file, default paths, and runtime settings.
 - [Usage Guide](https://agentsview.io/docs/usage.md): Browse and resume sessions, filter by label or linked pull request, search transcripts, and inspect tool-rate evidence.
-- [CLI Reference](https://agentsview.io/docs/commands.md): All AgentsView commands, flags, and environment variables.
+- [CLI Reference](https://agentsview.io/docs/commands.md): Commands, flags, environment variables, recovery hints, JSON stderr diagnostics, and command-specific exit codes.
 
 ## Monitor and Account
 

@@ -39,6 +39,8 @@ type ActivityReportConfig struct {
 	NoSync              bool
 	Offline             bool
 	ProgressWriter      io.Writer
+	OutputWriter        io.Writer
+	ErrorWriter         io.Writer
 	SessionsLimit       int
 	SessionsReportID    string
 	SessionsCursor      string
@@ -51,8 +53,23 @@ type ActivityReportConfig struct {
 var activityReportNow = time.Now
 
 // runActivityReport syncs, resolves the range, runs the report, and prints it.
-func runActivityReport(cfg ActivityReportConfig) {
-	cfg.ProgressWriter = os.Stderr
+func runActivityReport(cfg ActivityReportConfig) error {
+	if cfg.ProgressWriter == nil {
+		cfg.ProgressWriter = cfg.ErrorWriter
+		if cfg.ProgressWriter == nil {
+			cfg.ProgressWriter = os.Stderr
+		}
+	}
+	if _, err := activitySessionPageOptions(cfg, nil); err != nil {
+		return cliValidationError(err,
+			"Set --sessions-bucket-start and --sessions-bucket-end together; check --sessions-limit, --sessions-sort, and --sessions-direction with `agentsview activity report --help`.")
+	}
+	if cfg.SessionsCursor == "" && cfg.SessionsReportID == "" {
+		if _, _, err := resolveCLIActivitySelection(cfg); err != nil {
+			return cliValidationError(err,
+				"Use --date YYYY-MM-DD, or --preset custom with --from/--to RFC3339; use an IANA --timezone and --bucket 5m, 15m, 1h, 1d, or 1w. Run `agentsview activity report --help` for details.")
+		}
+	}
 	ctx := cfg.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -64,30 +81,31 @@ func runActivityReport(cfg ActivityReportConfig) {
 		DirectReadOnlyAction: "query activity directly",
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	r, err := backend.ActivityReport(ctx, cfg)
 	closeArchiveQueryBackend(cleanup)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	writeActivityReport(r, cfg.JSON)
+	output := cfg.OutputWriter
+	if output == nil {
+		output = os.Stdout
+	}
+	return writeActivityReport(output, r, cfg.JSON)
 }
 
-func writeActivityReport(r activity.Report, jsonOutput bool) {
+func writeActivityReport(w io.Writer, r activity.Report, jsonOutput bool) error {
 	if jsonOutput {
-		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
-		if err := json.MarshalEncode(enc, r); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		return
+		enc := jsontext.NewEncoder(w, jsontext.WithIndent("  "))
+		return json.MarshalEncode(enc, r)
 	}
 
-	printActivityReport(r)
+	var report strings.Builder
+	printActivityReportTo(&report, r)
+	_, err := io.WriteString(w, report.String())
+	return err
 }
 
 func fetchHTTPActivityReport(
@@ -562,33 +580,37 @@ func todayIn(tz string) string {
 // peak concurrency, top breakdowns, and top sessions. It deliberately omits
 // the dense per-bucket timeline, which only the --json output exposes.
 func printActivityReport(r activity.Report) {
+	printActivityReportTo(os.Stdout, r)
+}
+
+func printActivityReportTo(w io.Writer, r activity.Report) {
 	loc, err := time.LoadLocation(r.Timezone)
 	if err != nil {
 		loc = time.UTC
 	}
-	fmt.Printf(
+	fmt.Fprintf(w,
 		"Activity %s to %s (%s, %s buckets)\n",
 		fmtRangeBound(r.RangeStart, loc), fmtRangeBound(r.RangeEnd, loc),
 		r.Timezone, r.BucketUnit,
 	)
 	if r.Partial {
-		fmt.Printf("Partial range, data as of %s\n", fmtInstant(r.AsOf, loc))
+		fmt.Fprintf(w, "Partial range, data as of %s\n", fmtInstant(r.AsOf, loc))
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 
-	printActivityTotals(r.Totals)
-	fmt.Println()
-	printActivityPeak(r.Peak, loc)
-	fmt.Println()
-	printKeyMinutes("By project", r.ByProject)
-	printKeyMinutes("By model", r.ByModel)
-	printKeyMinutes("By agent", r.ByAgent)
-	printActivitySessions(r.BySession)
+	printActivityTotals(w, r.Totals)
+	fmt.Fprintln(w)
+	printActivityPeak(w, r.Peak, loc)
+	fmt.Fprintln(w)
+	printKeyMinutes(w, "By project", r.ByProject)
+	printKeyMinutes(w, "By model", r.ByModel)
+	printKeyMinutes(w, "By agent", r.ByAgent)
+	printActivitySessions(w, r.BySession)
 }
 
 // printActivityTotals prints the totals block via a tabwriter.
-func printActivityTotals(t activity.Totals) {
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+func printActivityTotals(writer io.Writer, t activity.Totals) {
+	w := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "Active minutes\t%.1f\n", t.ActiveMinutes)
 	fmt.Fprintf(w, "Idle minutes\t%.1f\n", t.IdleMinutes)
 	fmt.Fprintf(w, "Agent minutes\t%.1f\n", t.AgentMinutes)
@@ -601,36 +623,36 @@ func printActivityTotals(t activity.Totals) {
 }
 
 // printActivityPeak prints peak concurrency and when it occurred, in loc.
-func printActivityPeak(p activity.Peak, loc *time.Location) {
-	fmt.Printf("Peak concurrency: %d agents at %s\n",
+func printActivityPeak(w io.Writer, p activity.Peak, loc *time.Location) {
+	fmt.Fprintf(w, "Peak concurrency: %d agents at %s\n",
 		p.Agents, fmtInstant(p.At, loc))
 }
 
 // printKeyMinutes prints the top 5 rows of a key/agent-minutes breakdown.
-func printKeyMinutes(label string, rows []activity.KeyMinutes) {
-	fmt.Printf("%s (top 5):\n", label)
+func printKeyMinutes(writer io.Writer, label string, rows []activity.KeyMinutes) {
+	fmt.Fprintf(writer, "%s (top 5):\n", label)
 	if len(rows) == 0 {
-		fmt.Println("  (none)")
-		fmt.Println()
+		fmt.Fprintln(writer, "  (none)")
+		fmt.Fprintln(writer)
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	for _, row := range topKeyMinutes(rows, 5) {
 		fmt.Fprintf(w, "  %s\t%.1f min\n",
 			sanitizeTerminal(row.Key), row.AgentMinutes)
 	}
 	w.Flush()
-	fmt.Println()
+	fmt.Fprintln(writer)
 }
 
 // printActivitySessions prints the top 5 sessions by appearance order.
-func printActivitySessions(rows []activity.SessionRow) {
-	fmt.Println("Top sessions (top 5):")
+func printActivitySessions(writer io.Writer, rows []activity.SessionRow) {
+	fmt.Fprintln(writer, "Top sessions (top 5):")
 	if len(rows) == 0 {
-		fmt.Println("  (none)")
+		fmt.Fprintln(writer, "  (none)")
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "  TITLE\tPROJECT\tAGENT\tMINUTES\tCOST")
 	limit := min(len(rows), 5)
 	for _, s := range rows[:limit] {

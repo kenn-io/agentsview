@@ -46,8 +46,8 @@ func newSessionUsageCommand() *cobra.Command {
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
-		Run: func(cmd *cobra.Command, args []string) {
-			runSessionUsage(cmd, args[0], outputFormat(cmd))
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
 	cmd.Flags().Bool("no-sync", false,
@@ -58,30 +58,41 @@ func newSessionUsageCommand() *cobra.Command {
 }
 
 // runSessionUsage computes usage for one session and renders it,
-// exiting with the shared usage exit code (0 = token data or cost,
-// 2 = not found, 3 = neither). Uses Run + os.Exit (not RunE) so the
-// 2/3 codes survive — cobra RunE errors collapse to exit 1.
-func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
+// returning the shared usage exit code (0 = token data or cost,
+// 2 = not found, 3 = neither) through the CLI error boundary.
+func runSessionUsage(cmd *cobra.Command, sessionID, format string) error {
 	out, code, err := sessionUsageDataForCommand(cmd, sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(tokenUseExitErr)
+		return withExitCode(err, tokenUseExitErr)
 	}
 	if out != nil {
 		if format == "json" {
-			enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+			enc := jsontext.NewEncoder(cmd.OutOrStdout(), jsontext.WithIndent("  "))
 			if encErr := json.MarshalEncode(enc, out); encErr != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", encErr)
-				os.Exit(tokenUseExitErr)
+				return withExitCode(encErr, tokenUseExitErr)
 			}
 		} else if rerr := renderSessionUsageHuman(
-			os.Stdout, out,
+			cmd.OutOrStdout(), out,
 		); rerr != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", rerr)
-			os.Exit(tokenUseExitErr)
+			return withExitCode(rerr, tokenUseExitErr)
 		}
 	}
-	os.Exit(code)
+	return sessionUsageExitError(sessionID, code)
+}
+
+func sessionUsageExitError(sessionID string, code int) error {
+	switch code {
+	case tokenUseExitOK:
+		return nil
+	case tokenUseExitNotFound:
+		return withCLIHint(withExitCode(
+			fmt.Errorf("%w: %s", errSessionNotFound, sessionID), code,
+		), "Run `agentsview session list --json` to find a session ID, then retry `agentsview session usage <id>`.")
+	default:
+		// A successfully rendered report carries no error diagnostic, even when
+		// it contains no token, cost, or plan figures.
+		return withSilentExitCode(errors.New("session has no usage data"), code)
+	}
 }
 
 func sessionUsageDataForCommand(
@@ -92,11 +103,7 @@ func sessionUsageDataForCommand(
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	out, code, err := read(sessionID)
-	if err == nil && code == tokenUseExitNotFound {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-	}
-	return out, code, err
+	return read(sessionID)
 }
 
 // resolveSessionUsageReader selects and opens one backend for all requested IDs.

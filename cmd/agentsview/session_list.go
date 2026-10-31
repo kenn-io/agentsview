@@ -58,12 +58,6 @@ func newSessionListCommand() *cobra.Command {
 			}
 			activeSince = resolvedActiveSince
 
-			svc, cleanup, err := resolveService(cmd)
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-
 			f := service.ListFilter{
 				Project:            project,
 				ExcludeProject:     excludeProject,
@@ -112,7 +106,7 @@ func newSessionListCommand() *cobra.Command {
 			// captures the ordering.
 			keys, err := db.ParseSortSpec(sort)
 			if err != nil {
-				return fmt.Errorf("invalid sort %q: %w", sort, err)
+				return cliValidationError(fmt.Errorf("invalid sort %q: %w", sort, err), "choose --sort keys listed by `agentsview session list --help` (each accepts :asc or :desc)")
 			}
 			// An empty spec means the implicit default; materialize it so
 			// --reverse has a term to flip instead of silently no-opping.
@@ -128,6 +122,12 @@ func newSessionListCommand() *cobra.Command {
 				}
 			}
 			f.OrderBy = db.FormatSortSpec(keys)
+
+			svc, cleanup, err := resolveService(cmd)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
 
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {

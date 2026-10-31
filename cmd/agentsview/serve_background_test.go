@@ -2462,7 +2462,7 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 	assert.False(t, launched, "process-creation failure must not report a launch")
 }
 
-func TestRunServeBackgroundLaunchErrorPreservesLegacyFatalOutput(t *testing.T) {
+func TestRunServeBackgroundLaunchErrorIncludesServeHelpHint(t *testing.T) {
 	dir := runtimeTestDir(t)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	logPath := filepath.Join(dir, "serve.log")
@@ -2481,16 +2481,15 @@ func TestRunServeBackgroundLaunchErrorPreservesLegacyFatalOutput(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 1, exitErr.ExitCode())
-	assert.Equal(t,
-		"fatal: serve background: starting server: fork failed\n",
-		string(out),
-	)
+	assert.Contains(t, string(out), "fatal: serve background: starting server: fork failed\n")
+	assert.Contains(t, string(out), "\nhint: run `agentsview serve --help` for flags and examples\n")
 }
 
 func TestRunServeBackgroundLaunchErrorHelper(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_HELPER") != "1" {
 		return
 	}
+	os.Args = append([]string{os.Args[0]}, "serve", "--background")
 	dir := os.Getenv("AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_DIR")
 	logPath := os.Getenv("AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_LOG")
 	require.NotEmpty(t, dir)
@@ -2508,7 +2507,7 @@ func TestRunServeBackgroundLaunchErrorHelper(t *testing.T) {
 	)
 }
 
-func TestRunServeBackgroundReadinessErrorRetainsLegacyLogsOutput(t *testing.T) {
+func TestRunServeBackgroundReadinessErrorIncludesServeHelpHint(t *testing.T) {
 	dir := runtimeTestDir(t)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	logPath := filepath.Join(dir, "serve.log")
@@ -2527,17 +2526,15 @@ func TestRunServeBackgroundReadinessErrorRetainsLegacyLogsOutput(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 1, exitErr.ExitCode())
-	assert.Equal(t,
-		"fatal: serve background: server exited before becoming ready: "+
-			"server process exited\nLogs: "+logPath+"\n",
-		string(out),
-	)
+	assert.Contains(t, string(out), "fatal: serve background: server exited before becoming ready: server process exited\n")
+	assert.Contains(t, string(out), "fatal: serve background: server exited before becoming ready: server process exited\nLogs: "+logPath+"\nhint: run `agentsview serve --help` for flags and examples\n")
 }
 
 func TestRunServeBackgroundReadinessErrorHelper(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_BACKGROUND_READINESS_ERROR_HELPER") != "1" {
 		return
 	}
+	os.Args = append([]string{os.Args[0]}, "serve", "--background")
 	dir := os.Getenv("AGENTSVIEW_BACKGROUND_READINESS_ERROR_DIR")
 	logPath := os.Getenv("AGENTSVIEW_BACKGROUND_READINESS_ERROR_LOG")
 	require.NotEmpty(t, dir)

@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -22,7 +21,7 @@ var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 func runProjects(ctx context.Context, jsonOutput bool) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", err)
 	}
 
 	tr, err := ensureTransport(&appCfg, transportIntentRead, 0)

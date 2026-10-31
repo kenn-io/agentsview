@@ -342,12 +342,12 @@ func ensureTransportContext(
 	}
 	if intent == transportIntentRead {
 		if autostartDisabled {
-			return transport{}, errors.New(
-				"daemon autostart is disabled; direct SQLite reads are " +
-					"not supported for this command. Start a daemon with " +
-					"`agentsview daemon start` or unset " +
+			return transport{}, cliUnavailableError(errors.New(
+				"daemon autostart is disabled; direct SQLite reads are "+
+					"not supported for this command. Start a daemon with "+
+					"`agentsview daemon start` or unset "+
 					"AGENTSVIEW_NO_DAEMON",
-			)
+			), "run `agentsview daemon start`, then retry; unset AGENTSVIEW_NO_DAEMON only if this command should start a daemon automatically")
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
