@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-26
+last_edited: 2026-10-29
 ---
 
 # Session Format Source Inventory
@@ -57,6 +57,16 @@ generated bundle records both immutable refs as `source_ref` and
 `retained_source_ref`. This keeps older archived usage priceable without
 replacing current rates with stale ones.
 
+The embedded catalog includes LiteLLM's service-tier rows. For `gpt-6.1-sol`,
+priority costs $4 input, $0.20 cache read, and $20 output per million tokens.
+Reverified 2026-10-27 against the pinned
+[`get_cost_per_unit` calculator](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/litellm/litellm_core_utils/llm_cost_calc/utils.py#L804-L842):
+each missing tier field uses its standard counterpart; within a published tier
+band, missing fields try the standard rate at the same threshold before the base
+rate. At request thresholds, a published priority band wins and a standard band
+fills a missing priority band. Fast base rates stay flat only when neither row
+publishes bands.
+
 The current catalog prices plain `gpt-6-astra` at $10 input, $50 output,
 $12.50 cache write, and $1 cache read per million tokens. Above 272k request
 input tokens those rates become $20, $75, $25, and $2. `gpt-6-sol` uses $2, $10,
@@ -84,9 +94,14 @@ catalog: `claude-fable-5` publishes `cache_creation_input_token_cost` 1.25e-05
 and `cache_creation_input_token_cost_above_1hr` 2e-05 per token.
 
 A band applies only when whole-request input is strictly greater than its
-threshold; when several bands exist, the highest eligible threshold wins.
-Additional suffixes for Batch, Flex, Priority, regional, or other service tiers
-are deliberately excluded because stored usage does not identify those variants.
+threshold; when several bands exist, the highest eligible threshold wins. Batch,
+Flex, and regional suffixes are excluded because stored usage does not identify
+those variants. For entries whose `litellm_provider` is `openai`, Agentsview
+imports `_priority` fields and their `_above_272k_tokens` bands as
+`<model>@priority` rows for Codex Fast billing. The billing resolver keeps
+standard thresholds where LiteLLM has no matching priority band. Data version
+155 reparses Codex, TraeX, and Augure Code sources in place to add the billing
+identity.
 
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this
@@ -157,6 +172,14 @@ evidence; they do not establish whether a tool helped the task.
   response. It is stored as a hidden system row that keeps its usage; a blank
   record with all-zero usage is still skipped. Data version 150 reparses
   Claude-format sources in place.
+- **Screenshot intake (checked 2026-10-24):** A frozen native-file selection
+  retained JSONL envelopes, message and tool identifiers, subagent
+  transcripts, and companion text files. Decoded-string sanitization followed
+  by ordinary sync into a fresh archive retained thinking, tool-result events,
+  and parent relationships. This is local parser evidence, not a new producer
+  format. The [corpus guide](../screenshots/corpus.md) owns the sanitization
+  procedure.
+
 - **Channel messages (2026-10-23):** Reverified against the synthetic Claude
   Code 2.1.305 Telegram transcript in
   [#2400](https://github.com/kenn-io/agentsview/issues/2400), kept in
@@ -164,6 +187,7 @@ evidence; they do not establish whether a tool helped the task.
   questions are `user` entries with `isMeta: true` and `origin.kind: channel`.
   They remain user turns; other `isMeta` entries stay hidden. Transcript text
   retains the `<channel>` envelope, while session previews show its body.
+
 - **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
   and ingest fixtures. Text blocks retain literal thinking and tool markers;
   separate thinking blocks remain available as reasoning. Cowork, iCodeMate
@@ -171,6 +195,7 @@ evidence; they do not establish whether a tool helped the task.
   extraction. Hosted changes to dialogue derivation alone preserve session
   identity and content revisions. Parser changes to other fields, such as Pi
   reasoning text, still produce a new revision.
+
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
@@ -611,23 +636,44 @@ fixtures retain this field; missing identities remain source-local.
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
-  defines `ImageGenerationCall`, serialized as `image_generation_call` with an
-  optional `id`, `status`, an optional `revised_prompt`, and a string `result`.
-  The
+  defines `ImageGenerationCall`, serialized as `image_generation_call` with
+  an optional `id`, `status`, an optional `revised_prompt`, and a string
+  `result`. The
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists that response item in every history mode, and in legacy mode also
   keeps an `image_generation_end` event that repeats `call_id`, `status`,
   `revised_prompt`, and `result` and adds `saved_path`. A field-shape check of
   local rollouts on 2026-10-29 matched both records; `result` held base64 PNG
   data of about 2.7 MB. Agentsview reads only the response item. It stores the
-  item without `result` as the call input and the image as
-  one `input_image` block in the call's result, so the storage image policy
-  owns the payload and the session viewer shows the image. A `result` that is
-  not strict base64 of a PNG, JPEG, WebP, or GIF image stays in the input, and
-  an item with no `id` keeps no result. TraeX and Augure Code share this
-  parser. Data version 153 reparses these providers in place. Covered by
+  item without `result` as the call input and the image as one `input_image`
+  block in the call's result, so the storage image policy owns the payload and
+  the session viewer shows the image. A `result` that is not strict base64 of
+  a PNG, JPEG, WebP, or GIF image stays in the input, and an item with no `id`
+  keeps no result. TraeX and Augure Code share this parser. Data version 153
+  reparses these providers in place. Covered by
   `TestCodexGeneratedImageStoredAsImageResult` and
   `TestCodexGeneratedImageUpgradeReparsesUnchangedSource`.
+
+- **Service-tier billing (checked 2026-10-27):** Rollouts record the tier in
+  `event_msg` / `thread_settings_applied` / `thread_settings.service_tier`
+  (observed `default`, `priority`, `ultrafast`), per the pinned
+  [snapshot schema](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/protocol.rs#L2418-L2433).
+  Forks append the child's snapshot after replayed history
+  ([fork persistence](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/core/src/session/mod.rs#L1783-L1810)).
+  `turn_context` carries no tier. Codex
+  [filters unsupported tiers before sending a request](https://github.com/openai/codex/blob/36021e1ad500d328471aae26573d1fa0c872b335/codex-rs/protocol/src/openai_models.rs#L1040-L1044).
+  Agentsview estimates Fast when the latest settings record
+  `model_provider_id` as `openai` and `service_tier` as `priority`; Codex can
+  omit that selected tier from requests for models that do not advertise
+  support.
+- **Screenshot intake (checked 2026-10-24):** Ordinary sync accepted sanitized
+  native JSONL with `encrypted_content` explicitly omitted. The local parser's
+  `extractCodexInboundAgentMessage` also accepts plaintext under that field
+  and distinguishes opaque Fernet envelopes. Omitting the field therefore
+  removes readable agent content as well as opaque values; retain the recipe
+  and review that loss when curating a screenshot generation. The corpus
+  procedure does not change the parser or claim complete conversation
+  retention.
 
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
@@ -2601,21 +2647,21 @@ schemas keep their existing ordering behavior.
   call per `toolCallId`, preferring a visible invocation over a hidden one.
 - **Growing responses (2026-10-29):** A request's response can grow through
   successive `kind: 2` pushes after its first sync, as reported in
-  [agentsview#2455](https://github.com/kenn-io/agentsview/issues/2455). Reverified against
-  `requestSchema.response` in the pinned
+  [agentsview#2455](https://github.com/kenn-io/agentsview/issues/2455).
+  Reverified against `requestSchema.response` in the pinned
   [chatSessionOperationLog.ts](https://github.com/microsoft/vscode/blob/693614c9f239b49f6d13d55da7f1a851d5b82c36/src/vs/workbench/contrib/chat/common/model/chatSessionOperationLog.ts),
   which tracks the response array's mutations. VS Code Copilot and Positron
-  sync replace existing messages; data version 154 reparses their sources
-  in place to repair replies already stored before completion.
-  Nonempty native `requestId` values identify user and assistant messages with
-  distinct provider and role prefixes, so pins survive changing tool summaries.
-  Older replies gain that pin identity only when the unchanged user prompt and
+  sync replace existing messages; data version 154 reparses their sources in
+  place to repair replies already stored before completion. Nonempty native
+  `requestId` values identify user and assistant messages with distinct
+  provider and role prefixes, so pins survive changing tool summaries. Older
+  replies gain that pin identity only when the unchanged user prompt and
   nonzero request timestamp identify one request in both transcripts and the
-  incoming assistant ID is unique. Ordinary sync, full rebuilds, and PostgreSQL
-  pushes share that guarded conversion. PostgreSQL pushes match remote pins
-  against the incoming publication snapshot, preserving remote-only pins and
-  their notes. Windsurf's synthesized request IDs remain excluded from message
-  identity.
+  incoming assistant ID is unique. Ordinary sync, full rebuilds, and
+  PostgreSQL pushes share that guarded conversion. PostgreSQL pushes match
+  remote pins against the incoming publication snapshot, preserving
+  remote-only pins and their notes. Windsurf's synthesized request IDs remain
+  excluded from message identity.
 - **Session names (2026-09-30):** The session's `customTitle` holds both a name
   set with `/rename` and the title VS Code generates after the first request;
   nothing marks which one it is. See `setSessionTitle` and
@@ -2716,6 +2762,19 @@ schemas keep their existing ordering behavior.
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
   `cacheWrite` spelling.
+- **Reasoning effort:** Assistant messages store the Pi thinking level as
+  `message.thinkingLevel`, written since Pi v0.99.0 (2026-09-29, upstream
+  commit `540e174c72`, "Virtual models"). Older logs carry only
+  `thinking_level_change` entries (`thinkingLevel`), which Pi has written
+  since its first releases and appends on every effective change, including
+  model switches. Pi types the stored value as a plain string, so Agentsview
+  keeps whatever string Pi wrote (`off` through `max` today) in
+  `reasoning_effort`. The inline value wins. Otherwise the latest
+  `thinking_level_change` value applies, which backfills older logs; logs with
+  neither leave it empty. Only assistant messages carry it. OMP writes the same
+  entry type but may add a `configured` selector and a null `thinkingLevel`;
+  null is ignored. Data version 151 reparses Pi-family archives to pick this
+  up.
 - **Directory configuration:** Reverified 2026-09-09 against
   [config.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/config.ts)
   and
@@ -2733,14 +2792,27 @@ schemas keep their existing ordering behavior.
   `getSubagentSessionRoot` puts a child session under the parent transcript's
   stem (`<project>/<parent>/<runId>/run-N/session.jsonl`), forked children
   land one level over in `<parent>/forks/`, and a delegated child repeats the
-  same shape below its own `session.jsonl`. Fresh children carry no
-  `parentSession` header; forked children record the parent path as usual.
+  same shape below its own `session.jsonl`. Releases through v0.70.1 write
+  fresh children with no `parentSession` header; forked children record the
+  parent path as usual. Reverified 2026-10-29 against v0.77.0 at
+  `1ac9b964eb9cda1662507c52f5277764637daccc`
+  (`src/runs/shared/child-session.ts`, `parentSessionFile`): fresh children
+  now record the launching session's file as `parentSession`, the same field
+  Pi uses for forks, so the header alone cannot tell a subagent from a fork.
   Agentsview indexes a transcript at any depth. It links a fresh child at
   `<parent>/<runId>/run-N/session.jsonl` to `<parent>.jsonl` as a subagent
-  when that parent is a Pi transcript, and an explicit `sessionDir` with no
-  parent transcript above the run stays unlinked. Checked 2026-09-23 against
-  two local pi-subagents runs: the parent's `subagent` tool result records
-  each child's path in `details.results[].sessionFile`, matching that layout.
+  when that parent is a Pi transcript, whether or not the header names a
+  parent. The header's parent wins when both are present, and the run directory
+  decides the type. A `parentSession` header outside that layout, such as a
+  `/fork` or a run under an explicit `sessionDir` with no parent transcript
+  above it, stays a fork or unlinked. A delegated child's own header names the
+  child's `session.jsonl`, so the parent lookup ignores a sibling that is the
+  child's own file. Checked 2026-09-23 against two local pi-subagents runs:
+  the parent's `subagent` tool result records each child's path in
+  `details.results[].sessionFile`, matching that layout. Checked 2026-10-29
+  against 133 local run directories, with and without the header: all type as
+  subagents with a parent, none resolve to themselves, and the other Pi
+  sessions keep their fork type. Data version 156 reparses Pi-format archives.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -2861,6 +2933,30 @@ schemas keep their existing ordering behavior.
     [skill protocol](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/internal-urls/skill-protocol.ts)
     and
     [shell URL resolver](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/tools/bash-skill-urls.ts).
+
+- **Parent format (2026-10-29):** Reverified against the producer change at
+  [the source commit](https://github.com/can1357/oh-my-pi/commit/ababe481f1d3137b681b5c61f89f67541628507b).
+  The change was merged in
+  [the mainline commit](https://github.com/can1357/oh-my-pi/commit/34f8df5103ecbb63838b0af7aaf5b0818383f7a8).
+  It shipped in
+  [v18.2.1](https://github.com/can1357/oh-my-pi/releases/tag/v18.2.1).
+  Ordinary task children previously omitted `parentSession`; fresh children
+  with a persisted parent now store the parent transcript's path. Reopening a
+  child preserves its existing header. The session format stays at version 3.
+  Other fork and context-copy paths can store a raw parent ID, as shown by the
+  pinned
+  [session manager](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-manager.ts).
+
+- **Lineage resolution:** Agentsview preserves raw parent IDs and resolves
+  path-valued parents through valid transcript headers, including leading
+  title slots and V1 filename identities. Matching local parents can resolve
+  stale paths after a session tree moves. Nested transcripts with a valid
+  structural parent are classified as subagents whether their header supplies
+  a parent or not; explicit lineage takes precedence over directory evidence.
+  Missing, malformed, or non-session path targets stay unresolved instead of
+  becoming filename-derived IDs, and the child transcript is retained. Data
+  version 158 reparses available OMP sources in place without changing session
+  or source identities. Sources that are unavailable stay preserved.
 
 - **Usage and cost:** Pi-family usage persists input, output, cache-read, and
   cache-write tokens with a model. Agentsview derives monetary cost from the
@@ -3462,9 +3558,9 @@ schemas keep their existing ordering behavior.
   never imports it, so its delegated threads show as top-level sessions whose
   parent is not in the archive.
 - **Tool items:** A read-only survey of the maintainer's mirror files on
-  2026-10-29 found every `commandExecution` item's `command` is one string, such
-  as `/bin/bash -lc "..."`, next to a `cwd` string. Each `fileChange` entry in
-  `changes` is `{path, kind, diff}`, where `kind` is `{type}` or
+  2026-10-29 found every `commandExecution` item's `command` is one string,
+  such as `/bin/bash -lc "..."`, next to a `cwd` string. Each `fileChange`
+  entry in `changes` is `{path, kind, diff}`, where `kind` is `{type}` or
   `{type, move_path}`. Every `update` diff starts with a `@@` hunk header; no
   `add` diff does. The parser stores each entry as its file's call input. Each
   tool item's message text is the codex parser's tool marker, such as `[Bash]`
@@ -3521,8 +3617,8 @@ schemas keep their existing ordering behavior.
   login found it answers `thread/goal/get`: both chats it listed returned
   `{"goal": null}`. AgentsView assumes the hosted resume runs the same idle
   step.
-- **Items with no text:** A read-only survey of the maintainer's mirror files
-  on 2026-10-29 found `agentMessage` items with `phase: "final_answer"` and an
+- **Items with no text:** A read-only survey of the maintainer's mirror files on
+  2026-10-29 found `agentMessage` items with `phase: "final_answer"` and an
   empty `text`. Four of the five ended a turn whose last tool item was
   `imageGeneration`. It also found one `userMessage` whose only content part
   was `{"type": "text", "text": "", "text_elements": []}`, with no image part.
@@ -3535,9 +3631,9 @@ schemas keep their existing ordering behavior.
   (`no-public-source`; the shape came from a session the maintainer viewed).
   Agentsview handles it like the local Codex `image_generation_call`: the item
   without `result` becomes the call input, and the image becomes one
-  `input_image` result block. A `result` that is not a supported image stays in
-  the input. Data version 153 reparses Codex Cloud mirrors in place. Covered by
-  `TestCodexCloudGeneratedImageBecomesImageResult`.
+  `input_image` result block. A `result` that is not a supported image stays
+  in the input. Data version 153 reparses Codex Cloud mirrors in place.
+  Covered by `TestCodexCloudGeneratedImageBecomesImageResult`.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design,
   limits, and open probes: [codex-cloud-source.md](codex-cloud-source.md).

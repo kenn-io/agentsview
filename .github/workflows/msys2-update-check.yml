@@ -17,6 +17,7 @@ on:
     - cron: "0 9 * * 1"  # Every Monday at 09:00 UTC
   workflow_dispatch:
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   windows-update-check:
     name: MSYS2 Update Check (${{ matrix.name }})
@@ -25,42 +26,50 @@ jobs:
       matrix:
         include:
           - name: Other packages
+            timeout: 27
             package: ./...
           # Keep CLI filters aligned with the CLI entries in ci.yml.
           - name: CLI A-P
+            timeout: 27
             package: ./cmd/agentsview
             run: '^Test[A-P]'
           - name: CLI remaining
+            timeout: 27
             package: ./cmd/agentsview
             skip: '^Test[A-P]'
           - name: Capture, Database, Parser
+            timeout: 38
             package: ./internal/capture ./internal/db ./internal/parser
           - name: DuckDB
+            timeout: 27
             package: ./internal/duckdb
           # Match normal Windows CI; complementary filters cover every sync test.
           - name: Sync A-R
+            timeout: 27
             package: ./internal/sync
             run: '^Test[A-R]'
           - name: Sync remaining
+            timeout: 27
             package: ./internal/sync
             skip: '^Test[A-R]'
     runs-on: windows-latest
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Prepare Windows Go paths
-        uses: ./.github/actions/windows-go-paths
+        uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -68,7 +77,7 @@ jobs:
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Setup MinGW (with updates)
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: true

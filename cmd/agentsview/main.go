@@ -22,6 +22,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
@@ -38,6 +39,7 @@ import (
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/telemetry"
+	"go.kenn.io/kit/atomicfile"
 )
 
 var (
@@ -157,6 +159,7 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
+	setupDebugLogWriter(cfg.DataDir)
 	archiveOnly, err := archiveModeAfterRecovery(ctx, cfg)
 	if err != nil {
 		fatal("reading archive mode: %v", err)
@@ -165,7 +168,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		cfg.NoSync = true
 	}
 	start := time.Now()
-	setupLogFile(cfg.DataDir)
 	applyServeMemoryLimit()
 	applyServeMallocTuning()
 
@@ -201,6 +203,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		return
 	}
 	defer releaseForegroundServeLaunch()
+	rotateLogFile(filepath.Join(cfg.DataDir, "debug.log"), maxLogSize)
 
 	// Acquire the daemon start lock immediately after config setup,
 	// before opening the DB, so token-use never sees a window
@@ -1579,11 +1582,20 @@ func mustLoadConfig(cmd *cobra.Command) config.Config {
 }
 
 // maxLogSize is the threshold at which the debug log file is
-// truncated on startup to prevent unbounded growth.
+// rotated when opened to preserve recent diagnostic messages.
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
 
 func setupLogFile(dataDir string) {
-	setupLogFileNamed(dataDir, "debug.log")
+	rotateLogFile(filepath.Join(dataDir, "debug.log"), maxLogSize)
+	setupDebugLogWriter(dataDir)
+}
+
+// setupDebugLogWriter captures startup messages without rotating an incumbent's log.
+func setupDebugLogWriter(dataDir string) {
+	path := filepath.Join(dataDir, "debug.log")
+	if f := openLogFile(path); f != nil {
+		log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(path))})
+	}
 }
 
 // setupLogFileNamed redirects the standard logger to the named file
@@ -1591,26 +1603,90 @@ func setupLogFile(dataDir string) {
 func setupLogFileNamed(dataDir, name string) {
 	logPath := filepath.Join(dataDir, name)
 	truncateLogFile(logPath, maxLogSize)
+	if f := openLogFile(logPath); f != nil {
+		log.SetOutput(f)
+	}
+}
+
+func openLogFile(path string) *os.File {
 	f, err := os.OpenFile(
-		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
+		path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
 	)
 	if err != nil {
 		log.Printf("warning: cannot open log file: %v", err)
-		return
 	}
-	log.SetOutput(f)
+	return f
 }
 
-// truncateLogFile truncates the log file if it exceeds limit
-// bytes. Symlinks are skipped to avoid truncating unrelated
-// files. Errors are silently ignored since logging is
-// best-effort.
+// truncateLogFile clears oversized logs, skipping symlinks and ignoring errors.
 func truncateLogFile(path string, limit int64) {
+	if oversizedLogInfo(path, limit) != nil {
+		_ = os.Truncate(path, 0)
+	}
+}
+
+func oversizedLogInfo(path string, limit int64) os.FileInfo {
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Size() <= limit {
+		return nil
+	}
+	return info
+}
+
+func logRotationLockPath(path string) string {
+	return path + ".rotate.lock"
+}
+
+type lockedLogWriter struct {
+	file *os.File
+	lock *flock.Flock
+}
+
+func (w *lockedLogWriter) Write(p []byte) (int, error) {
+	// The standard logger serializes calls to Write.
+	if err := w.lock.RLock(); err != nil {
+		return w.file.Write(p)
+	}
+	n, err := w.file.Write(p)
+	return n, errors.Join(err, w.lock.Unlock())
+}
+
+func (w *lockedLogWriter) Close() error {
+	return errors.Join(w.file.Close(), w.lock.Close())
+}
+
+// rotateLogFile saves the tail of an oversized log to path+".1" before clearing it.
+// Copying keeps existing writers on the active file. Symlinks are skipped.
+// Errors are best-effort; a failed backup leaves the active log intact.
+func rotateLogFile(path string, limit int64) {
+	if oversizedLogInfo(path, limit) == nil {
 		return
 	}
-	if info.Size() <= limit {
+	lockPath := logRotationLockPath(path)
+	lock, err := tryAcquireNamedLock(filepath.Dir(lockPath), filepath.Base(lockPath))
+	if err != nil {
+		return
+	}
+	defer lock.Close()
+	info := oversizedLogInfo(path, limit)
+	if info == nil {
+		return
+	}
+	source, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer source.Close()
+	tail := io.NewSectionReader(source, info.Size()-limit, limit)
+	backup, err := atomicfile.Create(path+".1", atomicfile.WithPerm(info.Mode().Perm()))
+	if err != nil {
+		return
+	}
+	defer func() { _ = backup.Abort() }()
+	if _, err := backup.ReadFrom(tail); err != nil {
+		return
+	}
+	if err := backup.Commit(); err != nil {
 		return
 	}
 	_ = os.Truncate(path, 0)

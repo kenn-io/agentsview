@@ -337,7 +337,7 @@ func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 // route rejects a remote Quack URL as bad request: push writes the local
 // mirror only, so a configured [duckdb].url is never a valid push target.
 func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
-	s := testServer(t, 30)
+	s := testServer(t, 30*time.Second)
 
 	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
@@ -423,7 +423,7 @@ func TestDuckDBPushConfigPinsServerMirrorPath(t *testing.T) {
 // twin of TestDuckDBPushConfigPinsServerMirrorPath: the route surfaces the
 // path mismatch as a 400 instead of writing anywhere.
 func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
-	s := testServer(t, 30)
+	s := testServer(t, 30*time.Second)
 	s.cfg.DuckDB = config.DuckDBConfig{
 		Path:        filepath.Join(t.TempDir(), "server.duckdb"),
 		MachineName: "daemon",
@@ -456,7 +456,7 @@ func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
 }
 
 func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
-	s := testServer(t, 30)
+	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/claude-ai/sync")
 	require.Contains(t, op.Responses, "200")
@@ -465,7 +465,7 @@ func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
 }
 
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {
-	s := testServer(t, 30)
+	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/sync/remotes")
 	require.Contains(t, op.Responses, "200")
@@ -476,7 +476,7 @@ func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 // CLI's daemon-delegated push renders the streamed progress) while still
 // declaring a plain JSON response for non-streaming clients.
 func TestPushRoutesAreStreaming(t *testing.T) {
-	s := testServer(t, 30)
+	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
 		op := requireOpenAPIOperation(t, spec, "post", path)

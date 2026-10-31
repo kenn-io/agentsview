@@ -25,7 +25,7 @@ func TestBulkReadWaitDiagnostics(t *testing.T) {
 	}{
 		{"admitted wait", false, 2 * time.Second, true, false},
 		{"canceled wait", true, 2 * time.Second, true, false},
-		{"below threshold", true, 500 * time.Millisecond, false, false},
+		{"below threshold", true, 500 * time.Millisecond, false, false}, //nolint:kennlint // deadlinetest: the case advances only the synctest clock to check absence of a wait diagnostic
 		{"admitted wait crosses tick", false, 2 * time.Second, true, true},
 		{"canceled wait crosses tick", true, 2 * time.Second, true, true},
 	} {

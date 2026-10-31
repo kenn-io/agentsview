@@ -22,13 +22,72 @@ on:
   workflow_dispatch:
     inputs:
       fuzztime:
-        description: "Fuzz time per target (Go duration)"
+        description: "Fuzz per target: positive Go duration up to 343m, or positive Nx iterations with a 360-minute job cap"
         required: false
         default: "10m"
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
-  fuzz:
+  fuzz-budget:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      timeout-minutes: ${{ steps.budget.outputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Calculate fuzz budget
+        id: budget
+        env:
+          FUZZTIME: ${{ github.event.inputs.fuzztime || '10m' }}
+        run: |
+          cat > "$RUNNER_TEMP/fuzz-budget.go" <<'EOF'
+          package main
+
+          import (
+              "fmt"
+              "os"
+              "strings"
+              "time"
+          )
+
+          func main() {
+              fuzztime := os.Getenv("FUZZTIME")
+              minutes := int64(360)
+              if !strings.HasSuffix(fuzztime, "x") {
+                  duration, err := time.ParseDuration(fuzztime)
+                  if err != nil || duration <= 0 || duration > 343*time.Minute {
+                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations with a 360-minute job cap")
+                      os.Exit(1)
+                  }
+                  // Keep the measured default's 17-minute allowance for setup, tests, and upload.
+                  minutes = int64((duration+time.Minute-1)/time.Minute) + 17
+              }
+              output, err := os.OpenFile(os.Getenv("GITHUB_OUTPUT"), os.O_APPEND|os.O_WRONLY, 0)
+              if err != nil {
+                  fmt.Fprintln(os.Stderr, err)
+                  os.Exit(1)
+              }
+              defer output.Close()
+              if _, err := fmt.Fprintf(output, "timeout-minutes=%d\n", minutes); err != nil {
+                  fmt.Fprintln(os.Stderr, err)
+                  os.Exit(1)
+              }
+          }
+          EOF
+          go run "$RUNNER_TEMP/fuzz-budget.go"
+
+  fuzz:
+    needs: fuzz-budget
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.fuzz-budget.outputs.timeout-minutes) }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,17 +98,17 @@ jobs:
           - FuzzExtractModelName
           - FuzzExtractTokenUsage
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -71,7 +130,7 @@ jobs:
 
       - name: Upload failing inputs
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: fuzz-failures-${{ matrix.target }}
           path: internal/parser/testdata/fuzz/

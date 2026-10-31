@@ -279,7 +279,7 @@ func TestUsageRollupCompletionWaitsForCallRemoval(t *testing.T) {
 		select {
 		case <-done:
 			require.FailNow(t, "a completed request must be removed before its caller can request another rollup")
-		case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the held rollup mutex keeps call removal and completion waiting
+		case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held rollup mutex keeps call removal and completion waiting
 		}
 	}()
 	require.NoError(t, <-done)

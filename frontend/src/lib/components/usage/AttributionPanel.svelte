@@ -10,6 +10,7 @@
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
+  import { TREEMAP_LABEL_SCALES, type TreemapLabelScale } from "./treemapLabelSize.js";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { formatTokenCount } from "../../utils/format.js";
@@ -37,6 +38,7 @@
   const groupBy = $derived(usage.toggles.attribution.groupBy);
   const hasSelection = $derived(usage.hasSelection(groupBy));
   const view = $derived(usage.toggles.attribution.view);
+  const labelScale = $derived(usage.toggles.attribution.labelScale);
   const isTokenMode = $derived(usage.mode === "token");
 
   interface Row {
@@ -229,6 +231,12 @@
   function handleViewChange(v: AttributionView) {
     usage.setAttributionView(v);
   }
+
+  const labelScaleNames: Record<TreemapLabelScale, () => string> = {
+    linear: m.usage_label_scale_linear,
+    sqrt: m.usage_label_scale_sqrt,
+    log: m.usage_label_scale_log,
+  };
 </script>
 
 <svelte:window onkeydown={handleBackKey} />
@@ -293,6 +301,20 @@
           {m.usage_attribution_list()}
         </button>
       </div>
+      {#if view === "treemap"}
+        <div class="segment-toggle" role="group" aria-label={m.usage_label_scale_title()} title={m.usage_label_scale_title()}>
+          {#each TREEMAP_LABEL_SCALES as scale (scale)}
+            <button
+              class="toggle-btn"
+              class:active={labelScale === scale}
+              aria-pressed={labelScale === scale}
+              onclick={() => usage.setAttributionLabelScale(scale)}
+            >
+              {labelScaleNames[scale]()}
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
   {#if zoomedProject && usage.errors.zoom}
@@ -312,6 +334,7 @@
             onSelect={zoomedProject ? undefined : handleSelect}
             onOpen={!zoomedProject && groupBy === "project" ? handleOpen : undefined}
             formatValue={isTokenMode ? formatTokenCount : undefined}
+            {labelScale}
           />
         </div>
         <div class="side-rail">

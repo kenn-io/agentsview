@@ -117,7 +117,7 @@ func restoreTestLogOutput(t *testing.T) {
 	t.Helper()
 	orig := log.Writer()
 	t.Cleanup(func() {
-		if closer, ok := log.Writer().(io.Closer); ok {
+		if closer, ok := log.Writer().(io.Closer); ok && log.Writer() != orig {
 			_ = closer.Close()
 		}
 		log.SetOutput(orig)

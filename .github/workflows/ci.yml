@@ -24,26 +24,61 @@ concurrency:
 permissions:
   contents: read
 
+# Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
-  lint:
+  changes:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.linter == 'nilaway' && 30 || 10 }}
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      groups: ${{ steps.changes.outputs.groups }}
+      all: ${{ steps.changes.outputs.all }}
+    steps:
+      - uses: kenn-io/actions/changes@main
+        id: changes
+        with:
+          filters: |
+            go:
+              - '!{frontend/**,desktop/**,*.md,docs/{README,changelog,contributing}.md,docs/agents/**/*.md,docs/internal/**/!(session-format-sources).md,docs/website/**/*.md}'
+              - 'desktop/src-tauri/icons/**'
+              - 'desktop/scripts/prepare-sidecar.sh'
+            frontend:
+              - '!{*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
+            node:
+              - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
+              - 'internal/importer/claude_ai_requests.txt'
+            desktop:
+              - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,frontend/**}'
+              - 'frontend/chrome-extension/claude_fetch.js'
+              - 'internal/importer/claude_ai_requests.txt'
+
+  lint:
+    needs: changes
+    if: &go-lane ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
-        linter: [golangci, nilaway]
+        include:
+          - linter: golangci
+            timeout: 19
+          - linter: nilaway
+            timeout: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: lint-${{ matrix.linter }}
           extra-path: ~/.cache/golangci-lint
@@ -84,28 +119,31 @@ jobs:
         run: go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./...
 
       - name: Save Go caches
-        uses: ./.github/actions/go-cache-save
+        uses: $/.github/actions/go-cache-save
 
   frontend:
+    needs: changes
+    if: &frontend-lane ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go') || contains(fromJSON(needs.changes.outputs.groups), 'frontend')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26.12.1"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -145,13 +183,16 @@ jobs:
         working-directory: frontend
 
   frontend-node-26:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 11
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26.12.1"
           cache: npm
@@ -168,17 +209,18 @@ jobs:
   docs:
     name: Docs and scripts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install docs check tools
         run: |
@@ -199,8 +241,11 @@ jobs:
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   test:
+    needs: changes
+    if: *go-lane
     name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
@@ -210,40 +255,47 @@ jobs:
           - os: ubuntu-latest
             name: ubuntu-latest, Sync
             package: ./internal/sync
+            timeout: 29
           - os: ubuntu-latest
             name: ubuntu-latest, DuckDB
             package: ./internal/duckdb
+            timeout: 28
           - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
+            timeout: 32
           - os: ubuntu-latest
             name: ubuntu-latest, Eval ingest
             testSet: evalingest
+            timeout: 16
           - os: windows-latest
             name: windows-latest
+            timeout: 34
           - os: windows-latest
             name: windows-latest
             testSet: lint
+            timeout: 21
           - os: macos-latest
             name: macos-latest
+            timeout: 29
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       # Set cache paths before setup-go and the Go cache restore.
       - name: Prepare Windows Go paths
-        uses: ./.github/actions/windows-go-paths
+        uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         id: setup_go
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -257,7 +309,7 @@ jobs:
         if: runner.os == 'Windows'
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -266,7 +318,7 @@ jobs:
 
       - name: Setup MinGW (Windows, retry on transient failure)
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -327,7 +379,7 @@ jobs:
 
       - name: Restore Windows linter cache
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.windows_linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
@@ -367,7 +419,7 @@ jobs:
       - name: Save Windows linter cache
         if: ${{ !cancelled() && runner.os == 'Windows' && matrix.testSet == 'lint' && steps.prepare_windows_linter.outcome == 'success' }}
         continue-on-error: true
-        uses: ./.github/actions/go-cache-save
+        uses: $/.github/actions/go-cache-save
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
@@ -390,12 +442,15 @@ jobs:
 
       - name: Save Go caches
         if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
-        uses: ./.github/actions/go-cache-save
+        uses: $/.github/actions/go-cache-save
 
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
   test-isolated-packages-windows:
+    needs: changes
+    if: *go-lane
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -418,28 +473,28 @@ jobs:
             package: ./internal/sync
             skip: *sync-test-prefix
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Prepare Windows Go paths
-        uses: ./.github/actions/windows-go-paths
+        uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
       - name: Setup MinGW
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -448,7 +503,7 @@ jobs:
 
       - name: Setup MinGW (retry on transient failure)
         if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -487,8 +542,18 @@ jobs:
         shell: pwsh
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
 
+      - name: Upload ${{ matrix.name }} test events
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
+          path: go-test-events.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Summarize ${{ matrix.name }} test timing
         if: always()
+        timeout-minutes: 2
         shell: pwsh
         run: |
           $eventsPath = "go-test-events.jsonl"
@@ -578,42 +643,36 @@ jobs:
           $summary | Write-Output
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-      - name: Upload ${{ matrix.name }} test events
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
-          path: go-test-events.jsonl
-          if-no-files-found: warn
-          retention-days: 7
-
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
+    needs: changes
+    if: *go-lane
     name: Go Test (windows-latest, DuckDB)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Prepare Windows Go paths
-        uses: ./.github/actions/windows-go-paths
+        uses: $/.github/actions/windows-go-paths
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
       - name: Setup MinGW
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -622,7 +681,7 @@ jobs:
 
       - name: Setup MinGW (retry on transient failure)
         if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
+        uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -638,8 +697,11 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
+    needs: changes
+    if: *go-lane
     name: Go Test (race detector, ${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -667,18 +729,18 @@ jobs:
             runner: ubuntu-latest
             testSet: other
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: race-linux
 
@@ -717,19 +779,22 @@ jobs:
 
       - name: Save Go caches
         if: matrix.testSet == 'other'
-        uses: ./.github/actions/go-cache-save
+        uses: $/.github/actions/go-cache-save
 
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2
+        uses: step-security/rust-cache@v2.9.2
         with:
           workspaces: desktop/src-tauri -> target
           # Pull requests restore main's build without saving their own copy.
@@ -763,8 +828,11 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
+    needs: changes
+    if: *go-lane
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 32
     strategy:
       fail-fast: false
       matrix:
@@ -806,18 +874,18 @@ jobs:
           --health-timeout 5s
           --health-retries 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -838,27 +906,34 @@ jobs:
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
   e2e:
+    needs: changes
+    if: *frontend-lane
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, webkit]
+        include:
+          - browser: chromium
+            timeout: 42
+          - browser: webkit
+            timeout: 24
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go caches
-        uses: ./.github/actions/go-cache-restore
+        uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
@@ -868,7 +943,7 @@ jobs:
           make sqlite-vec-header
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26.12.1"
           cache: npm

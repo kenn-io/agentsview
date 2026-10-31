@@ -103,7 +103,7 @@ func TestMiddlewareTimeout(t *testing.T) {
 	t.Parallel()
 
 	srv := testServer(
-		t, 10*time.Millisecond,
+		t, 10*time.Millisecond, //nolint:kennlint // deadlinetest: the delayed wrapped handlers must return the timeout response
 		withHandlerDelay(100*time.Millisecond),
 	)
 	// Use a real listener to discover the bound port, then

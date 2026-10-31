@@ -1,21 +1,24 @@
 import { test, expect, Page, Locator } from '@playwright/test';
 import { join } from 'path';
+import { readFileSync } from 'fs';
 
-const DIR = process.env.SCREENSHOT_DIR || join(
-  __dirname, '..', '..', 'assets', 'generated', 'screenshots'
-);
-
+const DIR = process.env.SCREENSHOT_DIR;
+const manifestPath = process.env.SCREENSHOT_MANIFEST;
+if (!DIR || !manifestPath || !process.env.SCREENSHOT_NOW) {
+  throw new Error('Capture requires an output directory, corpus manifest, and clock');
+}
+const CORPUS = JSON.parse(readFileSync(manifestPath, 'utf8'));
+const CAPTURE_NOW = new Date(process.env.SCREENSHOT_NOW);
+if (!Number.isFinite(CAPTURE_NOW.getTime())) throw new Error('Invalid capture clock');
 const FULL = { width: 1440, height: 900 };
-// Imported session IDs can contain original machine names.
-const CAPTURE_STYLE = '.session-id { visibility: hidden !important; }';
-
-// PG serve instance for pg-sync screenshots (machine labels, etc.)
+// Query latency is measured with performance.now(), independently of the fixed clock.
+const CAPTURE_STYLE = `
+  .session-id, .kit-refresh-control__text { visibility: hidden !important; }
+`;
 const PG_BASE_URL = process.env.PG_BASE_URL || '';
 
 test.beforeEach(async ({ page }) => {
-  if (process.env.SCREENSHOT_NOW) {
-    await page.clock.setFixedTime(new Date(process.env.SCREENSHOT_NOW));
-  }
+  await page.clock.setFixedTime(CAPTURE_NOW);
 });
 
 async function snap(page: Page, name: string) {
@@ -93,14 +96,8 @@ async function selectFirstSession(page: Page) {
   await page.waitForTimeout(1000);
 }
 
-// Find a session likely to have thinking/tool content
-// by looking for ones with higher message counts
 async function selectRichSession(page: Page) {
-  const items = page.locator('.session-item');
-  const count = await items.count();
-  // Try the 3rd session (index 2) for variety, fall back to first
-  const idx = Math.min(2, count - 1);
-  await items.nth(idx).click();
+  await page.goto('/sessions/' + encodeURIComponent(CORPUS.targets.rich.session_id));
   await page.waitForSelector('.message', { timeout: 10_000 });
   await page.waitForTimeout(1000);
 }
@@ -439,18 +436,11 @@ test.describe('Dashboard', () => {
 
 test.describe('Activity dashboard', () => {
   async function navigateToActivity(page: Page, path = '/activity') {
-    // Anchor the range to the fixture, so a release run never captures an empty today.
-    const response = await page.request.get('/api/v1/sessions?limit=1');
-    const latest = (await response.json()).sessions[0];
-    const timestamp = new Date(
-      latest.ended_at || latest.started_at || latest.created_at
-    );
-    expect(
-      timestamp.getTime(), 'latest session must have a valid activity date'
-    ).not.toBeNaN();
+    // Use the completed previous week. The current week's report is clamped
+    // to the server's wall clock, independently of the browser's fixed clock.
     const date = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Chicago',
-    }).format(timestamp);
+      timeZone: CORPUS.timezone,
+    }).format(new Date(CAPTURE_NOW.getTime() - 7 * 86_400_000));
     await page.goto(`${path}${path.includes('?') ? '&' : '?'}date=${date}`);
     await page.waitForSelector('.activity-page', { timeout: 10_000 });
     await expect(
@@ -1028,6 +1018,7 @@ test.describe('Message viewer', () => {
     });
     await page.goto(`/sessions/${encodeURIComponent(remote.id)}`);
     await expect(page.locator('.message').first()).toBeVisible();
+    await expect(page.locator('.cost-badge')).toBeVisible();
     await page.locator('.resume-btn').click();
     const menu = page.locator('.open-menu');
     await expect(menu.getByRole('button', { name: 'Copy command', exact: true })).toBeVisible();
@@ -1036,18 +1027,9 @@ test.describe('Message viewer', () => {
   });
 
   test('thinking blocks', async ({ page }) => {
-    // Sessions with thinking blocks are rare and never recent, so run.sh
-    // resolves one session id and passes it in; navigate straight there.
-    // Fall back to a rich session when the id is absent (e.g. local runs).
-    const thinkingId = process.env.SCREENSHOT_THINKING_SESSION_ID;
-    if (thinkingId) {
-      await page.goto('/sessions/' + encodeURIComponent(thinkingId));
-      await page.waitForSelector('.message', { timeout: 15_000 });
-      await page.waitForTimeout(500);
-    } else {
-      await selectRichSession(page);
-      await page.waitForTimeout(500);
-    }
+    await page.goto('/sessions/' + encodeURIComponent(CORPUS.targets.thinking.session_id));
+    await page.waitForSelector('.message', { timeout: 15_000 });
+    await page.waitForTimeout(500);
 
     // Surface a thinking block, scrolling the virtualized transcript if needed.
     let thinking = page.locator('.thinking-block').first();
@@ -1108,30 +1090,10 @@ test.describe('Message viewer', () => {
   });
 
   test('formatted tool output', async ({ page }) => {
-    const toolOutputId = process.env.SCREENSHOT_TOOL_OUTPUT_SESSION_ID;
-    const toolOutputOrdinal =
-      process.env.SCREENSHOT_TOOL_OUTPUT_MESSAGE_ORDINAL;
-    let toolScope: Page | Locator = page;
-    if (toolOutputId || toolOutputOrdinal) {
-      if (!toolOutputId || toolOutputOrdinal === undefined) {
-        throw new Error(
-          'tool-output screenshot requires both session id and message ordinal'
-        );
-      }
-      const ordinal = Number(toolOutputOrdinal);
-      if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
-        throw new Error('tool-output screenshot ordinal must be non-negative');
-      }
-      await page.goto(
-        '/sessions/' + encodeURIComponent(toolOutputId) +
-          '?msg=' + encodeURIComponent(String(ordinal))
-      );
-      const selectedRow = page.locator('.virtual-row.selected');
-      await expect(selectedRow).toBeVisible({ timeout: 15_000 });
-      toolScope = selectedRow;
-    } else {
-      await selectRichSession(page);
-    }
+    const target = CORPUS.targets.tool_output;
+    await page.goto('/sessions/' + encodeURIComponent(target.session_id) + '?msg=' + target.message_ordinal);
+    const toolScope = page.locator('.virtual-row.selected');
+    await expect(toolScope).toBeVisible({ timeout: 15_000 });
 
     const tool = await findVisibleToolBlockWithOutput(toolScope);
 
@@ -1272,37 +1234,9 @@ test.describe('Message viewer', () => {
   });
 
   test('copy button on code block', async ({ page }) => {
-    const codeBlockId = process.env.SCREENSHOT_CODE_BLOCK_SESSION_ID;
-    if (codeBlockId) {
-      await page.goto('/sessions/' + encodeURIComponent(codeBlockId));
-      await page.waitForSelector('.code-block', { timeout: 15_000 });
-      await page.waitForTimeout(500);
-    }
-
-    // Walk sessions until we find one with at least one fenced
-    // code block. We scan more aggressively than selectRichSession
-    // because most sessions have only inline code or no code at
-    // all, and we need a `.code-block` (CodeBlock.svelte:34) for
-    // this test to be meaningful.
-    if (!codeBlockId) {
-      const items = page.locator('.session-item');
-      const total = await items.count();
-      const max = Math.min(40, total);
-      let found = false;
-      for (let i = 0; i < max; i++) {
-        await items.nth(i).click();
-        await page.waitForSelector('.message', { timeout: 10_000 });
-        await page.waitForTimeout(400);
-        if (await page.locator('.code-block').first().count() > 0) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        test.skip(true,
-          `No .code-block found in the first ${max} sessions`);
-      }
-    }
+    await page.goto('/sessions/' + encodeURIComponent(CORPUS.targets.code_block.session_id));
+    await page.waitForSelector('.code-block', { timeout: 15_000 });
+    await page.waitForTimeout(500);
 
     // Capture just the top of a code block where the copy
     // button lives (CopyButton is absolutely positioned at
@@ -1805,12 +1739,10 @@ test.describe('Settings', () => {
   });
 
   test('settings embedding build progress', async ({ page }) => {
-    let statusPolls = 0;
-    const startedAt = new Date(Date.now() - 65_000).toISOString();
+    const startedAt = new Date(CAPTURE_NOW.getTime() - 65_000).toISOString();
 
     await page.route('**/api/v1/embeddings/status', async (route) => {
-      statusPolls += 1;
-      const done = 240 + statusPolls * 120;
+      const done = 360;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -2122,7 +2054,7 @@ test.describe('Focused transcript mode', () => {
 
 test.describe('Machine labels', () => {
   test('machine labels on session items', async ({ page }) => {
-    test.skip(!PG_BASE_URL, 'PG_BASE_URL not set');
+    expect(PG_BASE_URL, 'PG_BASE_URL is required').not.toBe('');
 
     await page.setViewportSize(FULL);
     await page.goto(PG_BASE_URL);

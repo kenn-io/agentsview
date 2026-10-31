@@ -756,7 +756,7 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		t.Context(), &cfg, 100*time.Millisecond, true,
+		t.Context(), &cfg, time.Second, true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
@@ -836,7 +836,7 @@ func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {
 	}()
 	defer func() { cancel(); <-done }()
 	output := captureStderr(t, func() {
-		_, waited, err := waitForExternalServeStartup(ctx, dir, "", 500*time.Millisecond)
+		_, waited, err := waitForExternalServeStartup(ctx, dir, "", 500*time.Millisecond) //nolint:kennlint // deadlinetest: absence check; continuing startup progress must keep the inactivity deadline from ending the wait
 		assert.True(t, waited)
 		assert.ErrorIs(t, err, context.DeadlineExceeded, "active work must outlive the inactivity limit")
 	})
@@ -1136,7 +1136,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	errCh := make(chan error, 1)
 	go func() {
 		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
-			t.Context(), dir, "", waitCh, 20*time.Millisecond,
+			t.Context(), dir, "", waitCh, 20*time.Millisecond, //nolint:kennlint // deadlinetest: absence check; attached startup must outlast the legacy deadline while the runtime record is missing
 			backgroundServeReadyWaitPolicy{
 				Attached: true,
 				Observe: func(st *startupState, _ time.Duration) {
@@ -1163,7 +1163,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	select {
 	case err := <-errCh:
 		require.FailNowf(t, "attached readiness wait returned at legacy timeout", "%v", err)
-	case <-time.After(40 * time.Millisecond): //nolint:kennlint // absence check; the attached wait must outlast its 20ms legacy timeout while no runtime file exists
+	case <-time.After(40 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the attached wait must outlast its 20ms legacy timeout while no runtime file exists
 	}
 
 	host, port := testPingServer(t)
@@ -1264,7 +1264,7 @@ func TestWaitForBackgroundServeReadyReprobesRuntimeAtTimeout(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	rt, err := waitForBackgroundServeReadyWithPolicy(
-		t.Context(), dir, "", make(chan error), 20*time.Millisecond,
+		t.Context(), dir, "", make(chan error), 20*time.Millisecond, //nolint:kennlint // deadlinetest: the deadline triggers the final runtime probe after the observer publishes the record
 		backgroundServeReadyWaitPolicy{
 			Observe: func(*startupState, time.Duration) {
 				_, writeErr := WriteDaemonRuntime(dir, host, port, version, false)
@@ -1286,7 +1286,7 @@ func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.
 		waitCh <- errors.New("exit status 7")
 		rt, err := waitForBackgroundServeReadyWithPolicy(
 			t.Context(), runtimeTestDir(t), "", waitCh,
-			20*time.Millisecond, backgroundServeReadyWaitPolicy{Attached: true},
+			time.Second, backgroundServeReadyWaitPolicy{Attached: true},
 		)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "exit status 7")
@@ -1298,7 +1298,7 @@ func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.
 		cancel()
 		rt, err := waitForBackgroundServeReadyWithPolicy(
 			ctx, runtimeTestDir(t), "", make(chan error),
-			20*time.Millisecond, backgroundServeReadyWaitPolicy{Attached: true},
+			time.Second, backgroundServeReadyWaitPolicy{Attached: true},
 		)
 		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, rt)
@@ -1438,7 +1438,7 @@ func TestEnsureBackgroundServeSameVersionIncompatibleDaemonReturnsError(t *testi
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		t.Context(), &cfg, 100*time.Millisecond, true,
+		t.Context(), &cfg, time.Second, true,
 	)
 	require.Error(t, err)
 	assert.Nil(t, rt)
@@ -1505,7 +1505,7 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		t.Context(), &cfg, 50*time.Millisecond, true,
+		t.Context(), &cfg, 50*time.Millisecond, true, //nolint:kennlint // deadlinetest: startup deadline expiry must report the incompatible daemon
 	)
 	require.Error(t, err)
 	assert.Nil(t, rt)
@@ -1877,7 +1877,7 @@ func TestEnsureBackgroundServeRejectsMultipleWritableDaemons(t *testing.T) {
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		t.Context(), &cfg, 25*time.Millisecond, true,
+		t.Context(), &cfg, time.Second, true,
 	)
 
 	require.Error(t, err)
@@ -2777,7 +2777,7 @@ func TestEnsureTransportArchiveWriteRecoversStaleBackgroundRuntime(t *testing.T)
 	t.Cleanup(func() { startBackgroundServeForTransport = oldStart })
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(&cfg, transportIntentArchiveWrite, 100*time.Millisecond)
+	tr, err := ensureTransport(&cfg, transportIntentArchiveWrite, time.Second)
 	require.NoError(t, err)
 	assert.True(t, started)
 	assert.Equal(t, transportHTTP, tr.Mode)

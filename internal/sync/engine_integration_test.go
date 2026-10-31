@@ -4047,7 +4047,7 @@ func TestRunExclusiveSerializesWorktreeReclassification(t *testing.T) {
 	select {
 	case applyErr := <-applyDone:
 		require.Failf(t, "apply overlapped exclusive work", "error: %v", applyErr)
-	case <-time.After(25 * time.Millisecond): //nolint:kennlint // absence check; the held exclusive work keeps the apply waiting
+	case <-time.After(25 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held exclusive work keeps the apply waiting
 	}
 	close(release)
 	require.NoError(t, <-firstDone)
@@ -10574,7 +10574,7 @@ func TestSyncEngineConcurrentSerialization(t *testing.T) {
 		require.FailNow(t,
 			"ResyncAll entered while SyncAll held mutex",
 		)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the held SyncAll mutex keeps ResyncAll out
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held SyncAll mutex keeps ResyncAll out
 		// Expected: ResyncAll is blocked.
 	}
 

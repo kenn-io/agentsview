@@ -4,6 +4,7 @@
     Card,
     EmptyState,
     Modal,
+    PageHeader,
     SearchInput,
     SegmentedControl,
     Table,
@@ -558,30 +559,32 @@
 {/snippet}
 
 <div class="recall-corpus-panel">
-  <header class="recall-page-header">
-    <div>
-      <h2>{m.recall_page_title()}</h2>
-      <p>{m.recall_page_subtitle()}</p>
-    </div>
-    <div class="header-actions">
-      {#if !entriesLoading && !entriesFailed}
-        <span class="entry-count">
-          {m.recall_page_entries_shown({
-            countLabel: entries.length.toLocaleString(),
-          })}
-        </span>
-      {/if}
-      <RefreshControl
-        {lastUpdatedAt}
-        {queryDurationMs}
-        {querySteps}
-        {liveQuery}
-        busy={entriesLoading || statusLoading || progressLoading}
-        onRefresh={refreshRecall}
-        label={m.shared_refresh()}
-      />
-    </div>
-  </header>
+  <div class="recall-corpus-heading">
+    <PageHeader
+      title={m.recall_page_title()}
+      description={m.recall_page_subtitle()}
+      level={2}
+    >
+      {#snippet actions()}
+        {#if !entriesLoading && !entriesFailed}
+          <span class="entry-count">
+            {m.recall_page_entries_shown({
+              countLabel: entries.length.toLocaleString(),
+            })}
+          </span>
+        {/if}
+        <RefreshControl
+          {lastUpdatedAt}
+          {queryDurationMs}
+          {querySteps}
+          {liveQuery}
+          busy={entriesLoading || statusLoading || progressLoading}
+          onRefresh={refreshRecall}
+          label={m.shared_refresh()}
+        />
+      {/snippet}
+    </PageHeader>
+  </div>
 
   <Card level="default" padding="none" class="extraction-card">
     <div class="extraction-content">
@@ -1085,42 +1088,19 @@
     padding: 48px 40px 56px;
   }
 
-  .recall-page-header {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--space-6);
+  .recall-corpus-heading {
     margin-bottom: var(--space-6);
   }
 
-  h2,
   h3,
   p {
     margin: 0;
-  }
-
-  .recall-page-header h2 {
-    color: var(--text-primary);
-    font-size: 20px;
-    font-weight: 600;
-  }
-
-  .recall-page-header p {
-    margin-top: var(--space-2);
-    color: var(--text-muted);
-    font-size: 12px;
   }
 
   .entry-count {
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 10px;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
   }
 
   .extraction-content {
@@ -1528,11 +1508,6 @@
   @media (max-width: 640px) {
     .recall-corpus-panel {
       padding: 28px 16px 40px;
-    }
-
-    .recall-page-header {
-      align-items: flex-start;
-      flex-direction: column;
     }
 
     .recall-toolbar {

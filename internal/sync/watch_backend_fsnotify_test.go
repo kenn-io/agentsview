@@ -1097,7 +1097,7 @@ func TestFSNotifyBackendConcurrentAddWaitsForRemoveOwnershipDecision(t *testing.
 	select {
 	case <-barrier.addCalled:
 		addReachedWhileRemoveBlocked = true
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // absence check; the held Remove barrier keeps the native Add waiting
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held Remove barrier keeps the native Add waiting
 	}
 	close(barrier.allowRemove)
 	require.NoError(t, <-removeErr)

@@ -1067,7 +1067,7 @@ func TestRunClaudeReportingFailuresAreDistinctAndWriteResults(t *testing.T) {
 			name: "finalization timeout", mode: "claude-final",
 			limits: func() Limits {
 				limits := testLimits()
-				limits.FinalizationWait = 40 * time.Millisecond
+				limits.FinalizationWait = 40 * time.Millisecond //nolint:kennlint // deadlinetest: the producer leaves the source incomplete until finalization expires
 				limits.Quiescence = 20 * time.Millisecond
 				return limits
 			}(),
@@ -1850,7 +1850,7 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 	secondWorkDir := t.TempDir()
 	var secondOutput bytes.Buffer
 	secondLimits := testLimits()
-	secondLimits.FinalizationWait = 200 * time.Millisecond
+	secondLimits.FinalizationWait = time.Second
 	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "reserved-second",
 		ProviderSessionID: sessionID,

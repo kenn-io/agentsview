@@ -1362,6 +1362,8 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			fetched("kimi-x", "3"),
 			fetched("kimi-y:cloud", "6"),
 			fetched("kimi-y", "3"),
+			fetched("gpt-5.6-luna", "0.2"),
+			fetched("gpt-5.6-luna@priority", "0.4"),
 			custom("genai-gamma", "7"),
 		}
 	}
@@ -1377,6 +1379,7 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 		"genai-alpha":       {reported: "genai-alpha", canonical: "genai-alpha"},
 		"genai-alpha:cloud": {reported: "genai-alpha:cloud", canonical: "genai-alpha:cloud"},
 		"genai-gamma":       {reported: "genai-gamma", canonical: "genai-gamma"},
+		"priority":          {provider: pricingpkg.OpenAIPriorityProviderID, reported: "gpt-5.6-luna", canonical: "gpt-5.6-luna"},
 	}
 	usesModelA := []string{"model-a", "alias-a", "billed", "tier"}
 
@@ -1469,6 +1472,14 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			rows[genAIIndex].GenAI = genAIDocument("2", "2", "3")
 			return rows
 		}, nil},
+		{"priority rate", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			index := slices.IndexFunc(rows, func(row EffectivePricingRow) bool {
+				return row.ModelPattern == "gpt-5.6-luna@priority"
+			})
+			require.NotEqual(t, -1, index, "the priority row belongs to this fixture")
+			rows[index].Rates.InputPerMTok = money.MustParseDollars("0.6")
+			return rows
+		}, []string{"priority"}},
 		{"custom rate removed exposes genai", func(rows []EffectivePricingRow) []EffectivePricingRow {
 			return rows[:len(rows)-1]
 		}, []string{"genai-gamma"}},

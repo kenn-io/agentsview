@@ -8,123 +8,18 @@ repo_root="$(cd "$docs_root/.." && pwd)"
 assets_branch="${AGENTSVIEW_DOCS_GENERATED_ASSETS_BRANCH:-docs-generated-assets}"
 source_dir=""
 push=false
-generate=true
 
-expected_assets=(
-  "screenshots/about-dialog.png"
-  "screenshots/import-claude-sync.png"
-  "screenshots/session-label-filters.png"
-  "screenshots/tool-rate-evidence.png"
-  "screenshots/tool-effectiveness-action.png"
-  "screenshots/tool-effectiveness-report.png"
-  "screenshots/usage-attribution-selected.png"
-  "screenshots/activity-message-frequency.png"
-  "screenshots/analytics-message-roles.png"
-  "screenshots/cost-chart-bars.png"
-  "screenshots/tool-sequences.png"
-  "screenshots/recall-review.png"
-  "screenshots/settings-spanish.png"
-  "screenshots/activity-breakdowns.png"
-  "screenshots/activity-concurrency.png"
-  "screenshots/activity-insight.png"
-  "screenshots/activity-page.png"
-  "screenshots/activity-sessions.png"
-  "screenshots/activity-timeline.png"
-  "screenshots/activity-week.png"
-  "screenshots/agent-comparison.png"
-  "screenshots/analytics-model-filter.png"
-  "screenshots/block-filter.png"
-  "screenshots/code-block-copy-btn.png"
-  "screenshots/command-palette.png"
-  "screenshots/data-inventory.png"
-  "screenshots/data-workspace.png"
-  "screenshots/dashboard.png"
-  "screenshots/dashboard-outcomes.png"
-  "screenshots/date-range.png"
-  "screenshots/focused-transcript.png"
-  "screenshots/follow-latest-toggle.png"
-  "screenshots/grade-badge.png"
-  "screenshots/heatmap-filtered.png"
-  "screenshots/heatmap.png"
-  "screenshots/hour-of-week.png"
-  "screenshots/import-button.png"
-  "screenshots/import-modal-chatgpt.png"
-  "screenshots/import-modal-claude.png"
-  "screenshots/in-session-search.png"
-  "screenshots/in-session-search-results.png"
-  "screenshots/quality.png"
-  "screenshots/layout-compact.png"
-  "screenshots/layout-stream.png"
-  "screenshots/machine-labels.png"
-  "screenshots/message-copy-btn.png"
-  "screenshots/message-viewer.png"
-  "screenshots/open-session.png"
-  "screenshots/project-breakdown.png"
-  "screenshots/project-mapping-bulk.png"
-  "screenshots/publish-modal.png"
-  "screenshots/recall-corpus.png"
-  "screenshots/recall-generated-insights.png"
-  "screenshots/recent-edits.png"
-  "screenshots/resync-modal.png"
-  "screenshots/remote-resume-command.png"
-  "screenshots/search-grouped.png"
-  "screenshots/search-filters.png"
-  "screenshots/search-results.png"
-  "screenshots/semantic-search-setup.png"
-  "screenshots/session-filtered.png"
-  "screenshots/session-filters-active.png"
-  "screenshots/session-filters.png"
-  "screenshots/session-health.png"
-  "screenshots/session-insight-action.png"
-  "screenshots/session-list.png"
-  "screenshots/session-resume-menu.png"
-  "screenshots/session-shape.png"
-  "screenshots/session-vital-signs.png"
-  "screenshots/settings-embeddings.png"
-  "screenshots/settings-chart-colors.png"
-  "screenshots/settings-agent-homes.png"
-  "screenshots/settings-remote.png"
-  "screenshots/settings-image-cleanup.png"
-  "screenshots/settings.png"
-  "screenshots/settings-archive-content.png"
-  "screenshots/shortcuts-modal.png"
-  "screenshots/signal-panel.png"
-  "screenshots/skill-trends.png"
-  "screenshots/starred-session.png"
-  "screenshots/subagent-tree.png"
-  "screenshots/summary-cards.png"
-  "screenshots/theme-dark.png"
-  "screenshots/theme-light.png"
-  "screenshots/thinking-blocks.png"
-  "screenshots/token-usage.png"
-  "screenshots/tool-block-copy-btn.png"
-  "screenshots/tool-blocks.png"
-  "screenshots/tool-groups.png"
-  "screenshots/tool-output-formatted.png"
-  "screenshots/tool-usage.png"
-  "screenshots/top-sessions.png"
-  "screenshots/top-skills.png"
-  "screenshots/trends.png"
-  "screenshots/usage-attribution.png"
-  "screenshots/usage-cache-efficiency.png"
-  "screenshots/usage-cost-trend.png"
-  "screenshots/usage-filter-dropdown.png"
-  "screenshots/usage-page.png"
-  "screenshots/usage-summary-cards.png"
-  "screenshots/usage-toolbar.png"
-  "screenshots/usage-top-sessions.png"
-  "screenshots/velocity.png"
-  "screenshots/vital-signs-panel.png"
-  "screenshots/worktree-mappings.png"
-)
+expected_assets=()
+while IFS= read -r asset; do
+  expected_assets+=("$asset")
+done < "$script_dir/expected-assets.txt"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--source DIR] [--skip-generate] [--push]
+Usage: $(basename "$0") --source DIR [--push]
 
 Update the local $assets_branch branch to a single orphan commit containing
-generated UI screenshots. By default this regenerates screenshots first.
-Pass --source DIR to import existing screenshots instead.
+generated UI screenshots from a completed capture job.
 EOF
 }
 
@@ -133,12 +28,7 @@ while [[ $# -gt 0 ]]; do
     --source)
       [[ $# -ge 2 ]] || { printf 'ERROR: --source requires a directory\n' >&2; exit 2; }
       source_dir="$2"
-      generate=false
       shift 2
-      ;;
-    --skip-generate)
-      generate=false
-      shift
       ;;
     --push)
       push=true
@@ -156,13 +46,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$generate" == true ]]; then
-  rm -rf "$docs_root/assets/generated"
-  "$script_dir/run.sh"
-fi
-
 if [[ -z "$source_dir" ]]; then
-  source_dir="$docs_root/assets/generated"
+  printf 'ERROR: --source must name the assets directory from a completed capture job\n' >&2
+  exit 2
 fi
 
 source_dir="$(cd "$source_dir" 2>/dev/null && pwd)" || {

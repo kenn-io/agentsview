@@ -7,6 +7,7 @@
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { seriesPaint } from "../../utils/seriesPaint.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
+  import { treemapLabelSize, type TreemapLabelScale } from "./treemapLabelSize.js";
 
   interface TreemapItem {
     id: string;
@@ -25,6 +26,7 @@
     onSelect?: (id: string) => void;
     onOpen?: (id: string) => void;
     formatValue?: (value: number) => string;
+    labelScale?: TreemapLabelScale;
   }
 
   const uid = $props.id();
@@ -39,6 +41,7 @@
     onSelect,
     onOpen,
     formatValue = formatCost,
+    labelScale = "sqrt",
   }: Props = $props();
 
   const root = $derived.by(() =>
@@ -46,6 +49,8 @@
       .sum((item) => item.value ?? 0)
       .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
   );
+
+  const total = $derived(root.value ?? 0);
 
   let measuredWidth = $state(0);
   const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
@@ -98,10 +103,11 @@
                   fill={seriesPaint(uid, tile.style)}
                 />
                 {#if large}
-                  <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
-                  <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                  {@const fontSize = treemapLabelSize(tile.value, total, tileHeight, labelScale)}
+                  <Text value={tile.label} x={6} y={fontSize + 5} width={tileWidth - 12} truncate class="tile-label" style={`font-size: ${fontSize}px`} />
+                  <Text value={formatValue(tile.value)} x={6} y={fontSize + 19} width={tileWidth - 12} truncate class="tile-value" />
                   {#if tile.meta}
-                    <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                    <Text value={tile.meta} x={6} y={fontSize + 31} width={tileWidth - 12} truncate class="tile-meta" />
                   {/if}
                 {:else if medium}
                   <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-27
+last_edited: 2026-10-30
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -86,6 +86,9 @@ The latest release is
 
 **Improvements**
 
+- The Recall corpus pane uses the shared page header for its title, description,
+  entry count, and refresh control. The title stays a second-level heading under
+  the Recall page title.
 - `pg push` saves download traffic when a session grows by comparing short
   hashes with PostgreSQL instead of downloading the session's old text.
   Sessions with rows written before control-character cleanup are rewritten once.
@@ -100,12 +103,24 @@ The latest release is
 
 **Bug fixes**
 
+- Oh My Pi subagent runs now appear under the correct parent, including runs
+  started by other subagents. Newer OMP transcripts that record parent file paths
+  are supported alongside older transcripts. Available OMP sources are
+  reprocessed on upgrade to repair existing links.
+- Oversized debug logs retain their last 10 MB in `debug.log.1` to help
+  investigate a stalled server. Successful rotation clears the active log;
+  a busy lock or failed backup leaves it intact.
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on
   upgrade to recover it.
 - Links with bare session UUIDs from Pi, OMP, Codex and other tools now open
   matching sessions. Ambiguous IDs still require the full session ID.
+- Codex Fast usage estimates now use LiteLLM's matching Fast prices.
+  Run `agentsview sync` after an upgrade to reparse available rollouts before
+  using offline reports. Older rollouts without a tier record keep standard
+  rates. Ultrafast and other non-Fast tiers keep standard rates. Codex can omit
+  priority for unsupported models, so those estimates can exceed billed costs.
 - When an upgrade leaves the archive needing a full rebuild, the **Sync**
   button now runs that rebuild on every server, and the status bar shows when a
   sync fails instead of staying silent. A rebuild that does not finish is
@@ -154,6 +169,11 @@ The latest release is
 - A forked Codex session now appears as a fork of the session it came from, the
   way forks from other agents already do. Before, it showed up as an unrelated
   top-level session. Existing Codex, TraeX, and Augure Code sessions are
+  reprocessed on upgrade.
+- Pi subagent runs started by pi-subagents 0.77.0 or later now show as
+  subagents instead of forks, so subagent filters and usage rollups include
+  them. Nested subagent runs also link to the run that started them rather than
+  to themselves. Existing Pi, OMO, Prime Agent, and StepCode sessions are
   reprocessed on upgrade.
 
 ## 0.46.1

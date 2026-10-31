@@ -152,7 +152,7 @@ func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 	select {
 	case <-maintenanceRan:
 		require.FailNow(t, "startup maintenance must wait for the deferred gap reconciliation")
-	case <-time.After(150 * time.Millisecond): //nolint:kennlint // absence check; the deferred gap reconciliation keeps maintenance waiting
+	case <-time.After(150 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the deferred gap reconciliation keeps maintenance waiting
 	}
 
 	gapErr := engine.ReconcileWatchRoots(t.Context(), reconcileRootPaths(cfg), true)

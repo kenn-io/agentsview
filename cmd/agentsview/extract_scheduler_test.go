@@ -248,9 +248,10 @@ func TestExtractSchedulerBackstopSupersedesCatchup(t *testing.T) {
 	}
 }
 
-// blockingPassManager signals when TryPass begins and blocks it until
-// releaseOnce is called, so tests can hold a pass in flight deliberately.
+// blockingPassManager completes the startup pass, then signals and blocks
+// later passes until releaseOnce is called.
 type blockingPassManager struct {
+	passes      int
 	startedOnce sync.Once
 	releasedFn  sync.Once
 	started     chan struct{}
@@ -260,6 +261,10 @@ type blockingPassManager struct {
 func (b *blockingPassManager) TryPass(
 	_ context.Context, _ extract.PassOptions,
 ) (bool, extract.PassResult, error) {
+	b.passes++
+	if b.passes == 1 {
+		return true, extract.PassResult{}, nil
+	}
 	b.startedOnce.Do(func() { close(b.started) })
 	<-b.release
 	return true, extract.PassResult{}, nil
@@ -274,35 +279,41 @@ func (b *blockingPassManager) releaseOnce() {
 // cancels the shared context under a long model-backed extraction, so large
 // backlogs could never complete.
 func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
-	mgr := &blockingPassManager{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	idled := make(chan struct{})
-	tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
-	s := newExtractScheduler(mgr, 5*time.Millisecond, 0, 0, tracker)
-	ctx := t.Context()
-	go tracker.Run(ctx)
-	go s.Run(ctx)
-	defer s.Stop()
-	// Registered after s.Stop so it runs first: Stop waits for Run, and Run
-	// waits inside the blocked TryPass, so a failure exiting before the
-	// explicit release would deadlock the test.
-	defer mgr.releaseOnce()
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &blockingPassManager{
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		idled := make(chan struct{})
+		tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
+		s := newExtractScheduler(mgr, 5*time.Millisecond, 0, 0, tracker)
+		finished := make(chan struct{}, 2)
+		s.onPassFinished = func() { finished <- struct{}{} }
+		ctx := t.Context()
+		go tracker.Run(ctx)
+		go s.Run(ctx)
+		defer s.Stop()
+		// Registered after s.Stop so it runs first: Stop waits for Run, and Run
+		// waits inside the blocked TryPass, so a failure exiting before the
+		// explicit release would deadlock the test.
+		defer mgr.releaseOnce()
 
-	s.Notify()
-	<-mgr.started
-	select {
-	case <-idled:
-		require.FailNow(t, "daemon idled out while an extraction pass was in flight")
-	case <-time.After(200 * time.Millisecond): //nolint:kennlint // absence check; the blocked extraction pass keeps the daemon from idling
-	}
-	mgr.releaseOnce()
-	select {
-	case <-idled:
-	case <-time.After(2 * time.Second):
-		require.FailNow(t, "daemon never idled once the pass completed")
-	}
+		<-finished
+		synctest.Wait() // Let Run release its startup lease before the next notification.
+		s.Notify()
+		<-mgr.started
+		select {
+		case <-idled:
+			require.FailNow(t, "daemon idled out while an extraction pass was in flight")
+		case <-time.After(200 * time.Millisecond):
+		}
+		mgr.releaseOnce()
+		select {
+		case <-idled:
+		case <-time.After(2 * time.Second):
+			require.FailNow(t, "daemon never idled once the pass completed")
+		}
+	})
 }
 
 // TestExtractSchedulerStartsNoPassAfterDraining pins the other half of the
@@ -336,23 +347,25 @@ func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
 // shorter than the debounce would otherwise reap itself before the
 // lifetime's first pass, every lifetime, and extraction would never run.
 func TestExtractSchedulerStartupPassSurvivesShortIdleTimeout(t *testing.T) {
-	mgr := &fakePassManager{}
-	idled := make(chan struct{})
-	tracker := server.NewIdleTracker(20*time.Millisecond, func() { close(idled) })
-	s := newExtractScheduler(mgr, 100*time.Millisecond, 0, 0, tracker)
-	ctx := t.Context()
-	go tracker.Run(ctx)
-	go s.Run(ctx)
-	defer s.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		idled := make(chan struct{})
+		tracker := server.NewIdleTracker(20*time.Millisecond, func() { close(idled) })
+		s := newExtractScheduler(mgr, 100*time.Millisecond, 0, 0, tracker)
+		ctx := t.Context()
+		go tracker.Run(ctx)
+		go s.Run(ctx)
+		defer s.Stop()
 
-	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 1 },
-		"startup pass never ran: the daemon idled out before the "+
-			"startup debounce elapsed")
-	select {
-	case <-idled:
-	case <-time.After(2 * time.Second):
-		require.FailNow(t, "daemon never idled once the startup pass completed")
-	}
+		waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 1 },
+			"startup pass never ran: the daemon idled out before the "+
+				"startup debounce elapsed")
+		select {
+		case <-idled:
+		case <-time.After(2 * time.Second):
+			require.FailNow(t, "daemon never idled once the startup pass completed")
+		}
+	})
 }
 
 // TestExtractSchedulerCatchupCarriesFailedStartupFullPass pins that a failed

@@ -59,7 +59,7 @@ func TestFetchHTTPProjectsTimesOutStalledDaemon(t *testing.T) {
 	defer ts.Close()
 
 	oldClient := projectsHTTPClient
-	projectsHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	projectsHTTPClient = &http.Client{Timeout: 20 * time.Millisecond} //nolint:kennlint // deadlinetest: the stalled daemon returns only when the client deadline expires
 	t.Cleanup(func() { projectsHTTPClient = oldClient })
 
 	_, err := fetchHTTPProjects(

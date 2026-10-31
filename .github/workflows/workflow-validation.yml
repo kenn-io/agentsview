@@ -1,0 +1,31 @@
+name: Workflow validation
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The organization requires SHA-pinned actions. actions.lock pins every
+  # action, including ones that other actions call, so a stale lockfile fails
+  # jobs at setup.
+  actions-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the workflow action lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make actions-lock-check

@@ -3069,7 +3069,7 @@ func TestHTTPSyncHoldsMirrorLockDuringManifestFetch(t *testing.T) {
 	remote.onManifest = func() {
 		// assert, not require: this runs on the server goroutine, where
 		// FailNow must not be called.
-		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond) //nolint:kennlint // the deadline is the expected result; the sync holds the mirror lock, so only the context ends the acquire
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond) //nolint:kennlint // deadlinetest: the deadline is the expected result; the sync holds the mirror lock, so only the context ends the acquire
 		defer cancel()
 		lock, err := AcquireMirrorLock(ctx, mirrorRoot)
 		if lock != nil {
@@ -4619,7 +4619,7 @@ func setPortableTempDir(t *testing.T, dir string) {
 
 func assertMirrorLocked(t *testing.T, mirrorRoot string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond) //nolint:kennlint // the deadline is the expected result; the caller holds the mirror lock, so only the context ends the acquire
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond) //nolint:kennlint // deadlinetest: the deadline is the expected result; the caller holds the mirror lock, so only the context ends the acquire
 	defer cancel()
 	lock, err := AcquireMirrorLock(ctx, mirrorRoot)
 	if lock != nil {

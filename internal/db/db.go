@@ -623,7 +623,17 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // source and session identities are unchanged.)
 // (154: repair growing VS Code-format replies. Re-parse VS Code Copilot and
 // Positron sources in place; source and session identities are unchanged.)
-const dataVersion = 154
+// (155: add the Fast billing identity to Codex-format messages. Re-parse Codex
+// sources in place; source and session identities are unchanged.)
+// (156: type pi-subagents runs whose header records parentSession as
+// subagents instead of forks, and stop a nested run from resolving to itself.
+// Re-parse Pi-format sources in place; source and session identities are
+// unchanged.)
+// (157: capture Pi thinking level as reasoning effort. Re-parse Pi-format
+// sources in place; source and session identities are unchanged.)
+// (158: repair OMP path-based parent links and structural subagent classification.
+// Re-parse OMP sources in place; source and session identities are unchanged.)
+const dataVersion = 158
 
 const archiveOnlyVersionBase = 1 << 20
 

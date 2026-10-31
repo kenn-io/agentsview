@@ -699,8 +699,9 @@ type sessionUsageBreakdownResponse struct {
 }
 
 type sessionUsageErrorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string   `json:"code"`
+	Message    string   `json:"message"`
+	Candidates []string `json:"candidates,omitempty"`
 }
 
 type sessionUsageError struct {
@@ -767,13 +768,60 @@ func (s *Server) humaSessionUsage(
 	ctx context.Context,
 	in *sessionUsageInput,
 ) (*jsonOutput[sessionUsageResponse], error) {
+	response, err := s.exactSessionUsage(ctx, in)
+	usageErr, ok := errors.AsType[*sessionUsageError](err)
+	if !ok || (usageErr.Body.Code != "session_not_found" && usageErr.Body.Code != "ambiguous_session_id") {
+		return response, err
+	}
+	if strings.Contains(in.ID, "~") {
+		return nil, err
+	}
+	if agent, ok := parser.AgentByPrefix(in.ID); ok && agent.IDPrefix != "" {
+		return nil, err
+	}
+	candidates, resolveErr := s.sessions.FindSessionIDsByRawSuffix(ctx, in.ID, 5)
+	if resolveErr != nil {
+		return nil, sessionUsageQueryError(resolveErr)
+	}
+	switch len(candidates) {
+	case 0:
+		return nil, &sessionUsageError{Status: http.StatusNotFound, Body: sessionUsageErrorBody{
+			Code: "session_not_found", Message: "session not found",
+		}}
+	case 1:
+		resolved := *in
+		resolved.ID = candidates[0]
+		return s.exactSessionUsage(ctx, &resolved)
+	default:
+		return nil, &sessionUsageError{Status: http.StatusConflict, Body: sessionUsageErrorBody{
+			Code: "ambiguous_session_id", Message: "multiple sessions match; retry with a canonical candidate ID", Candidates: candidates,
+		}}
+	}
+}
+
+func sessionUsageQueryError(err error) error {
+	if handled := handleHumaContextError(err); handled != nil {
+		return handled
+	}
+	if identity, ok := errors.AsType[*db.SessionIdentityError](err); ok && identity.State == "ambiguous" {
+		return &sessionUsageError{Status: http.StatusConflict, Body: sessionUsageErrorBody{
+			Code: "ambiguous_session_id", Message: "multiple sessions match; retry with a canonical candidate ID",
+			Candidates: identity.Variants[:min(len(identity.Variants), 5)],
+		}}
+	}
+	return &sessionUsageError{Status: http.StatusInternalServerError, Body: sessionUsageErrorBody{
+		Code: "usage_query_failed", Message: "failed to query session usage",
+	}}
+}
+
+func (s *Server) exactSessionUsage(
+	ctx context.Context,
+	in *sessionUsageInput,
+) (*jsonOutput[sessionUsageResponse], error) {
 	if in.Rollup {
 		rollup, err := service.GetSessionUsageRollup(ctx, s.db, in.ID, in.Breakdown)
 		if err != nil {
-			if handled := handleHumaContextError(err); handled != nil {
-				return nil, handled
-			}
-			return nil, &sessionUsageError{Status: http.StatusInternalServerError, Body: sessionUsageErrorBody{Code: "usage_query_failed", Message: "failed to query session usage"}}
+			return nil, sessionUsageQueryError(err)
 		}
 		if rollup == nil {
 			return nil, &sessionUsageError{Status: http.StatusNotFound, Body: sessionUsageErrorBody{Code: "session_not_found", Message: "session not found"}}
@@ -800,16 +848,7 @@ func (s *Server) humaSessionUsage(
 		usage, err = s.db.GetSessionUsage(ctx, in.ID, in.Breakdown)
 	}
 	if err != nil {
-		if handled := handleHumaContextError(err); handled != nil {
-			return nil, handled
-		}
-		return nil, &sessionUsageError{
-			Status: http.StatusInternalServerError,
-			Body: sessionUsageErrorBody{
-				Code:    "usage_query_failed",
-				Message: "failed to query session usage",
-			},
-		}
+		return nil, sessionUsageQueryError(err)
 	}
 	if usage == nil {
 		return nil, &sessionUsageError{

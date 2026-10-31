@@ -474,8 +474,8 @@ off.
 
 LiteLLM's standard whole-request 200K and 272K token rates are preserved in both
 fetched and embedded catalogs. Processing variants such as Batch, Flex,
-Priority, regional, and one-hour cache pricing are not inferred when the stored
-usage does not identify that service tier.
+regional, Ultrafast, and one-hour cache pricing are not inferred when the stored
+usage does not identify that service tier. Codex Fast is the exception; see below.
 
 ### Anthropic Web Search Fee
 
@@ -595,6 +595,26 @@ adjustment. Rows with empty or other provider IDs — including observed
 
 Custom pricing overrides are not adjusted. Explicit reported costs remain
 authoritative, and fixed web-search fees remain at their published face value.
+
+### Codex Fast Billing
+
+Codex messages whose latest `thread_settings_applied` event records provider
+`openai` and service tier `priority` are estimated at LiteLLM's `_priority`
+prices. This records the selected tier, not the tier Codex sent with every
+request. Codex may omit priority for a model that does not advertise support,
+so the estimate can exceed the billed cost. Fast bands take precedence at
+matching thresholds. A standard input threshold fills a gap; its published
+companion rates fill fields missing from that Fast band, while other fields use
+the Fast base rate. If neither row publishes bands, Fast base rates apply at
+every request size.
+Ultrafast and other recorded tiers use standard rates. Rollouts without a tier
+record also use standard rates. Forks can inherit the parent's last recorded
+tier through replay until the child records a new setting. The embedded catalog
+includes tier prices for offline use. A model without a price for its tier,
+and any custom override, keeps its standard rates.
+
+LiteLLM's current Fast prices apply to every session date because the catalog
+doesn't keep historical Fast prices.
 
 ### Copilot CLI Token Metrics
 

@@ -14,6 +14,10 @@ import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
+import {
+  isTreemapLabelScale,
+  type TreemapLabelScale,
+} from "../components/usage/treemapLabelSize.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
@@ -65,7 +69,7 @@ export type AttributionView = "treemap" | "list" | "bars";
 
 interface Toggles {
   timeSeries: { groupBy: GroupBy; view: TimeSeriesView };
-  attribution: { groupBy: GroupBy; view: AttributionView };
+  attribution: { groupBy: GroupBy; view: AttributionView; labelScale: TreemapLabelScale };
 }
 
 const TOGGLES_KEY = "usage-toggles";
@@ -73,7 +77,7 @@ const TOGGLES_KEY = "usage-toggles";
 function defaultToggles(): Toggles {
   return {
     timeSeries: { groupBy: "project", view: "smooth" },
-    attribution: { groupBy: "project", view: "treemap" },
+    attribution: { groupBy: "project", view: "treemap", labelScale: "sqrt" },
   };
 }
 
@@ -113,6 +117,9 @@ function loadToggles(): Toggles {
         attribution: {
           groupBy: sharedGroupBy,
           view: parsed.attribution?.view ?? defaults.attribution.view,
+          labelScale: isTreemapLabelScale(parsed.attribution?.labelScale)
+            ? parsed.attribution.labelScale
+            : defaults.attribution.labelScale,
         },
       };
     }
@@ -969,6 +976,11 @@ class UsageStore {
 
   setAttributionView(v: AttributionView) {
     this.toggles.attribution.view = v;
+    saveToggles(this.toggles);
+  }
+
+  setAttributionLabelScale(scale: TreemapLabelScale) {
+    this.toggles.attribution.labelScale = scale;
     saveToggles(this.toggles);
   }
 

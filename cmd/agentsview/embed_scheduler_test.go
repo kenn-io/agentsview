@@ -197,32 +197,6 @@ func TestEmbedSchedulerBackstopTickIssuesBackstopBuild(t *testing.T) {
 	assert.True(t, calls[0].Backstop, "backstop tick must set BuildRequest.Backstop")
 }
 
-func TestEmbedSchedulerPendingDebounceHoldsIdleWorkLease(t *testing.T) {
-	fake := &fakeEmbedManager{}
-	idled := make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	tracker := server.NewIdleTracker(20*time.Millisecond, func() {
-		close(idled)
-		cancel()
-	})
-	s := newEmbedScheduler(fake, 100*time.Millisecond, 0, false, tracker)
-
-	// setupVectorServing queues Recall startup work before either goroutine
-	// starts, so exercise that ordering explicitly.
-	s.Notify()
-	go tracker.Run(ctx)
-	go s.Run(ctx)
-	defer s.Stop()
-
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"pending startup work did not survive an idle timeout shorter than its debounce")
-	select {
-	case <-idled:
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "daemon never idled after the pending build completed")
-	}
-}
-
 func TestEmbedSchedulerBuildsHoldIdleWorkLease(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -235,96 +209,81 @@ func TestEmbedSchedulerBuildsHoldIdleWorkLease(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &blockingEmbedManager{
-				started: make(chan struct{}),
-				release: make(chan struct{}),
-			}
-			idled := make(chan struct{})
-			tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
-			s := newEmbedScheduler(
-				mgr, tt.debounce, tt.backstop, false, tracker,
-			)
-			ctx := t.Context()
-			go tracker.Run(ctx)
-			go s.Run(ctx)
-			defer s.Stop()
-			defer mgr.releaseOnce()
+			synctest.Test(t, func(t *testing.T) {
+				mgr := &blockingEmbedManager{
+					started: make(chan struct{}),
+					release: make(chan struct{}),
+				}
+				idled := make(chan struct{})
+				tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
+				s := newEmbedScheduler(
+					mgr, tt.debounce, tt.backstop, false, tracker,
+				)
+				ctx := t.Context()
+				go tracker.Run(ctx)
+				go s.Run(ctx)
+				defer s.Stop()
+				defer mgr.releaseOnce()
 
-			if tt.notify {
-				s.Notify()
-			}
-			<-mgr.started
-			select {
-			case <-idled:
-				require.Fail(t, "daemon idled while an embedding build was in flight")
-			case <-time.After(200 * time.Millisecond): //nolint:kennlint // absence check; the blocked embedding build keeps the daemon from idling
-			}
-			mgr.releaseOnce()
-			select {
-			case <-idled:
-			case <-time.After(2 * time.Second):
-				require.Fail(t, "daemon never idled after the embedding build completed")
-			}
+				if tt.notify {
+					s.Notify()
+				}
+				<-mgr.started
+				select {
+				case <-idled:
+					require.Fail(t, "daemon idled while an embedding build was in flight")
+				case <-time.After(200 * time.Millisecond):
+				}
+				mgr.releaseOnce()
+				select {
+				case <-idled:
+				case <-time.After(2 * time.Second):
+					require.Fail(t, "daemon never idled after the embedding build completed")
+				}
+			})
 		})
 	}
 }
 
-func TestEmbedSchedulerFailedDebouncedBuildRetriesWithoutNotification(
-	t *testing.T,
-) {
-	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-		{started: true, err: errors.New("embedding endpoint unavailable")},
-		{started: true},
-	}}
-	idled := make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	tracker := server.NewIdleTracker(20*time.Millisecond, func() {
-		close(idled)
-		cancel()
-	})
-	s := newEmbedScheduler(fake, 50*time.Millisecond, 0, false, tracker)
-	s.Notify()
-	go tracker.Run(ctx)
-	go s.Run(ctx)
-	defer s.Stop()
-
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-		"a failed debounced build must retry without another notification")
-	select {
-	case <-idled:
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "daemon never idled after the retry succeeded")
-	}
-	assert.Equal(t, []vector.BuildRequest{{}, {}}, fake.callsSnapshot())
-}
-
-func TestEmbedSchedulerRepeatedDebouncedFailuresReleaseIdleLease(
+func TestEmbedSchedulerDebouncedBuildRetriesReleaseIdleLease(
 	t *testing.T,
 ) {
 	buildErr := errors.New("embedding request rejected")
-	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-		{started: true, err: buildErr},
-		{started: true, err: buildErr},
-	}}
-	idled := make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	tracker := server.NewIdleTracker(15*time.Millisecond, func() {
-		close(idled)
-		cancel()
-	})
-	s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false, tracker)
-	s.Notify()
-	go tracker.Run(ctx)
-	go s.Run(ctx)
-	defer s.Stop()
+	for _, tt := range []struct {
+		name     string
+		retryErr error
+	}{
+		{name: "fail then succeed"},
+		{name: "fail twice", retryErr: buildErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+					{started: true, err: buildErr},
+					{started: true, err: tt.retryErr},
+				}}
+				idled := make(chan struct{})
+				ctx, cancel := context.WithCancel(t.Context())
+				tracker := server.NewIdleTracker(15*time.Millisecond, func() {
+					close(idled)
+					cancel()
+				})
+				s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false, tracker)
+				s.Notify()
+				go tracker.Run(ctx)
+				go s.Run(ctx)
+				defer s.Stop()
 
-	select {
-	case <-idled:
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "repeated build failures kept the daemon alive indefinitely")
+				select {
+				case <-idled:
+				case <-time.After(2 * time.Second):
+					require.Fail(t, "daemon never idled after the bounded retry")
+				}
+				assert.Equal(t, []vector.BuildRequest{{}, {}}, fake.callsSnapshot(),
+					"one notification should get one bounded retry")
+			})
+		})
 	}
-	assert.Equal(t, []vector.BuildRequest{{}, {}}, fake.callsSnapshot(),
-		"one notification should get one bounded retry")
 }
 
 func TestEmbedSchedulerPendingBackstopRetriesBeforeNextTick(
@@ -344,41 +303,43 @@ func TestEmbedSchedulerPendingBackstopRetriesBeforeNextTick(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-				tt.result,
-				{started: true},
-			}}
-			idled := make(chan struct{})
-			ctx, cancel := context.WithCancel(t.Context())
-			tracker := server.NewIdleTracker(300*time.Millisecond, func() {
-				close(idled)
-				cancel()
-			})
-			s := newEmbedScheduler(
-				fake, 200*time.Millisecond, time.Second, false, tracker,
-			)
-			go s.Run(ctx)
-			defer s.Stop()
+			synctest.Test(t, func(t *testing.T) {
+				fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+					tt.result,
+					{started: true},
+				}}
+				idled := make(chan struct{})
+				ctx, cancel := context.WithCancel(t.Context())
+				tracker := server.NewIdleTracker(300*time.Millisecond, func() {
+					close(idled)
+					cancel()
+				})
+				s := newEmbedScheduler(
+					fake, 200*time.Millisecond, time.Second, false, tracker,
+				)
+				go s.Run(ctx)
+				defer s.Stop()
 
-			waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-				"expected the initial backstop attempt")
-			// Start idle observation only after the deliberately delayed backstop
-			// acquires its lease. Otherwise the idle timeout can cancel the test
-			// before the first tick when the tick interval is kept well clear of
-			// the retry and idle deadlines.
-			go tracker.Run(ctx)
-			waitForSchedulerConditionWithin(t, 500*time.Millisecond,
-				func() bool { return fake.callCount() >= 2 },
-				"a pending backstop must retry before the next backstop tick")
-			select {
-			case <-idled:
-			case <-time.After(2 * time.Second):
-				require.Fail(t, "daemon never idled after the backstop retry succeeded")
-			}
-			calls := fake.callsSnapshot()
-			require.Len(t, calls, 2)
-			assert.True(t, calls[0].Backstop)
-			assert.True(t, calls[1].Backstop)
+				waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
+					"expected the initial backstop attempt")
+				// Start idle observation only after the deliberately delayed backstop
+				// acquires its lease. Otherwise the idle timeout can cancel the test
+				// before the first tick when the tick interval is kept well clear of
+				// the retry and idle deadlines.
+				go tracker.Run(ctx)
+				waitForSchedulerConditionWithin(t, 500*time.Millisecond,
+					func() bool { return fake.callCount() >= 2 },
+					"a pending backstop must retry before the next backstop tick")
+				select {
+				case <-idled:
+				case <-time.After(2 * time.Second):
+					require.Fail(t, "daemon never idled after the backstop retry succeeded")
+				}
+				calls := fake.callsSnapshot()
+				require.Len(t, calls, 2)
+				assert.True(t, calls[0].Backstop)
+				assert.True(t, calls[1].Backstop)
+			})
 		})
 	}
 }

@@ -557,6 +557,33 @@ describe("UsageStore group-by linking", () => {
   });
 });
 
+describe("UsageStore treemap label scale", () => {
+  beforeEach(() => {
+    installStorage();
+    localStorage.removeItem(TOGGLES_KEY);
+  });
+
+  it("defaults to sqrt and ignores an unknown saved scale", async () => {
+    localStorage.setItem(
+      TOGGLES_KEY,
+      JSON.stringify({ attribution: { groupBy: "project", view: "treemap", labelScale: "cubic" } }),
+    );
+
+    const { usage } = await loadStore();
+
+    expect(usage.toggles.attribution.labelScale).toBe("sqrt");
+  });
+
+  it("remembers the chosen scale across reloads", async () => {
+    const first = await loadStore();
+    first.usage.setAttributionLabelScale("log");
+
+    const { usage } = await loadStore();
+
+    expect(usage.toggles.attribution.labelScale).toBe("log");
+  });
+});
+
 describe("UsageStore session filter params", () => {
   beforeEach(() => {
     installStorage();

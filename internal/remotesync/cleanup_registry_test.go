@@ -150,7 +150,7 @@ func TestCleanupRegistrySerializesConcurrentWork(t *testing.T) {
 	select {
 	case <-secondStarted:
 		require.FailNow(t, "concurrent work entered before the active run completed")
-	case <-time.After(20 * time.Millisecond): //nolint:kennlint // absence check; the held first run keeps the second out
+	case <-time.After(20 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the held first run keeps the second out
 	}
 	close(releaseFirst)
 	wg.Wait()

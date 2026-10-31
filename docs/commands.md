@@ -1567,6 +1567,9 @@ create or migrate config files; it loads the current config read-only, inspects
 the SQLite archive, checks configured agent roots, and prints recent
 sync-related `debug.log` lines.
 
+If startup has rotated the log, inspect `debug.log.1` in the data directory for
+the previous tail.
+
 ```bash
 agentsview doctor sync
 ```

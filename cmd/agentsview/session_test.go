@@ -2082,7 +2082,7 @@ func TestSessionUsage_ServerTokenFileExpandsHome(t *testing.T) {
 
 func TestSessionUsage_ServerHTTPClientHasTimeout(t *testing.T) {
 	oldClient := sessionUsageHTTPClient
-	sessionUsageHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	sessionUsageHTTPClient = &http.Client{Timeout: 20 * time.Millisecond} //nolint:kennlint // deadlinetest: the held usage response ends only when the client deadline expires
 	t.Cleanup(func() { sessionUsageHTTPClient = oldClient })
 
 	newAgentDataDir(t)

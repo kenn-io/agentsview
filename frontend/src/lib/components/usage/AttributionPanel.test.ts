@@ -413,6 +413,40 @@ describe("AttributionPanel colors", () => {
     unmount(component);
   });
 
+  it("offers the label scale only in treemap view and applies the choice", async () => {
+    usage.summary = summaryWithAgents(["claude", "codex"]);
+    usage.mode = "cost";
+    usage.toggles.attribution.groupBy = "agent";
+    usage.toggles.attribution.view = "treemap";
+    usage.setAttributionLabelScale("linear");
+
+    const component = mountPanel();
+    await tick();
+    const scaleGroup = () =>
+      document.querySelector<HTMLElement>('[role="group"][aria-label="Label size scale"]');
+    const labelSizes = () =>
+      [...document.querySelectorAll<SVGTextElement>(".tile-label")].map(
+        (label) => label.style.fontSize,
+      );
+    const linearSizes = labelSizes();
+
+    const log = [...scaleGroup()!.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Log",
+    )!;
+    log.click();
+    await tick();
+
+    expect(usage.toggles.attribution.labelScale).toBe("log");
+    expect(log.getAttribute("aria-pressed")).toBe("true");
+    expect(labelSizes()).not.toEqual(linearSizes);
+
+    usage.setAttributionView("list");
+    await tick();
+    expect(scaleGroup()).toBeNull();
+    usage.setAttributionLabelScale("sqrt");
+    unmount(component);
+  });
+
   it("attributes only output tokens when Output is selected", async () => {
     const summary = summaryWithAgents(["codex"]);
     summary.agentTotals[0]!.inputTokens = 750_000;

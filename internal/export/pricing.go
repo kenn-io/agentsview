@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
 type PricingRowSource string
@@ -262,8 +263,14 @@ func (r *PricingResolver) ResolveBilled(providerID, reportedModel, canonicalMode
 // timestamp before applying one exact provider adjustment.
 func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalModel string, timestamp time.Time) (string, PricingLookup, error) {
 	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, timestamp)
+	if r == nil || !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+		return pricedModel, lookup, nil
+	}
+	if providerID == pricingpkg.OpenAIPriorityProviderID {
+		return pricedModel, r.withPriorityTier(lookup, pricedModel), nil
+	}
 	policy, ok := pricingpkg.BillingPolicyFor(providerID)
-	if !ok || !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+	if !ok {
 		return pricedModel, lookup, nil
 	}
 	rates, err := scaleModelRates(lookup.Rates, policy.Numerator, policy.Denominator)
@@ -273,6 +280,28 @@ func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalMo
 	lookup.Rates = rates
 	lookup.Adjustment = policy.Service + "@" + policy.Version
 	return pricedModel, lookup, nil
+}
+
+func (r *PricingResolver) withPriorityTier(lookup PricingLookup, pricedModel string) PricingLookup {
+	pattern, rates, ok := r.priorityRow(pricedModel)
+	if !ok {
+		return lookup
+	}
+	lookup.Rates = rates
+	lookup.Rates.Bands = slices.Clone(rates.Bands)
+	lookup.Pattern = pattern
+	lookup.Adjustment = pricingpkg.OpenAIPriorityProviderID
+	return lookup
+}
+
+// priorityRow returns the LiteLLM priority row and rates for a model.
+func (r *PricingResolver) priorityRow(model string) (string, ModelRates, bool) {
+	base := r.Lookup(model)
+	pattern := catalog.PriorityPattern(base.Pattern)
+	if rates, ok := r.byModel[pattern]; base.OK && ok {
+		return pattern, rates, true
+	}
+	return "", ModelRates{}, false
 }
 
 func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {

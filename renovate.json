@@ -1,6 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "schedule:weekly"],
+  "timezone": "America/New_York",
   "dependencyDashboard": true,
   "enabledManagers": ["github-actions", "gomod", "npm"],
   "osvVulnerabilityAlerts": true,
@@ -8,9 +9,13 @@
   "minimumReleaseAgeBehaviour": "timestamp-required",
   "prCreation": "not-pending",
   "internalChecksFilter": "strict",
+  "constraints": {
+    "ghActionsLock": "v0.3.0"
+  },
   "vulnerabilityAlerts": {
     "minimumReleaseAge": null,
-    "prCreation": "immediate"
+    "prCreation": "immediate",
+    "schedule": ["at any time"]
   },
   "packageRules": [
     {
@@ -74,6 +79,14 @@
       "matchManagers": ["gomod"],
       "matchPackageNames": ["modernc.org/libc"],
       "allowedVersions": "<2"
+    },
+    {
+      "description": ["kenn-io releases open right away: no release-age wait and no weekly window."],
+      "matchPackageNames": ["kenn-io/**", "github.com/kenn-io/**", "go.kenn.io/**", "@kenn-io/**"],
+      "groupName": "kenn-io dependencies",
+      "groupSlug": "kenn-io-dependencies",
+      "minimumReleaseAge": null,
+      "schedule": ["at any time"]
     }
   ]
 }

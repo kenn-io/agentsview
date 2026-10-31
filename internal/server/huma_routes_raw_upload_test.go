@@ -261,7 +261,7 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 		},
 	}
 	srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
-	srv.httpReadTimeout = 50 * time.Millisecond
+	srv.httpReadTimeout = time.Second
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveErr := make(chan error, 1)

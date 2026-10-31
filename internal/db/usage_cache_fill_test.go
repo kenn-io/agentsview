@@ -453,6 +453,191 @@ func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 	assert.Equal(t, []int{maxSQLVars, 5}, runner.queryArgCounts)
 }
 
+func usageFactInstallFixture(tb testing.TB, count int, sessionIDs ...string) (*sql.Conn, *usageFactSpool) {
+	tb.Helper()
+	if len(sessionIDs) == 0 {
+		sessionIDs = []string{"session"}
+	}
+	database := testDB(tb)
+	snapshot, err := database.captureUsageQuery(tb.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(tb, err)
+	defer snapshot.Close()
+	cache, err := database.usageCache.Generation(tb.Context(), snapshot.DatabaseID)
+	require.NoError(tb, err)
+	spool, err := newUsageFactSpool(tb.Context())
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, spool.Close()) })
+	tx, err := spool.db.BeginTx(tb.Context(), nil)
+	require.NoError(tb, err)
+	writer := usageFactSpoolWriter{ctx: tb.Context(), tx: tx}
+	for _, id := range sessionIDs {
+		for i := range count {
+			require.NoError(tb, writer.Add(id, i, usagefacts.Fact{
+				Source: "message", MessageOrdinal: &i, Model: "model",
+				InputTokens: 10, TokenEligible: true, ActivityEligible: true,
+				SourceUUID: fmt.Sprintf("message-%d", i),
+			}))
+		}
+	}
+	require.NoError(tb, writer.Flush())
+	require.NoError(tb, tx.Commit())
+	conn, err := cache.db.Conn(tb.Context())
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, conn.Close()) })
+	_, err = conn.ExecContext(tb.Context(), `ATTACH DATABASE ? AS usage_fill_spool`, spool.path)
+	require.NoError(tb, err)
+	tb.Cleanup(func() {
+		_, err := conn.ExecContext(context.WithoutCancel(tb.Context()), `DETACH DATABASE usage_fill_spool`)
+		require.NoError(tb, err)
+	})
+	installUsageFactFixture(tb, conn, sessionIDs...)
+	return conn, spool
+}
+
+func installUsageFactFixture(tb testing.TB, conn *sql.Conn, sessionIDs ...string) {
+	tb.Helper()
+	if len(sessionIDs) == 0 {
+		sessionIDs = []string{"session"}
+	}
+	versions := make([]usageSourceVersion, len(sessionIDs))
+	for i, id := range sessionIDs {
+		versions[i].SessionID = id
+	}
+	_, err := conn.ExecContext(tb.Context(), `BEGIN IMMEDIATE`)
+	require.NoError(tb, err)
+	_, err = installSpoolSessions(tb.Context(), conn, versions)
+	if err != nil {
+		_, rollbackErr := conn.ExecContext(context.WithoutCancel(tb.Context()), `ROLLBACK`)
+		require.NoError(tb, rollbackErr)
+		require.NoError(tb, err)
+	}
+	_, err = conn.ExecContext(tb.Context(), `COMMIT`)
+	require.NoError(tb, err)
+}
+
+func TestUsageFactInstallPreservesUnchangedRows(t *testing.T) {
+	for _, count := range []int{8, 2048} {
+		t.Run(fmt.Sprintf("facts=%d", count), func(t *testing.T) {
+			conn, spool := usageFactInstallFixture(t, count)
+			_, err := conn.ExecContext(t.Context(), `
+				CREATE TABLE fact_writes(operation TEXT);
+				CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('insert'); END;
+				CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('update'); END;
+				CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('delete'); END;`)
+			require.NoError(t, err)
+			for _, step := range []struct {
+				name, mutation                    string
+				insert, update, delete, remaining int
+			}{
+				{"unchanged with nulls", "", 0, 0, 0, count},
+				{"append", `INSERT INTO facts(session_id, fact_index, source,
+					raw_timestamp, uses_session_start, model, provider_id,
+					input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
+					cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
+					cost_source, request_scoped, claude_message_id, claude_request_id,
+					source_uuid, usage_dedup_key, token_eligible, activity_eligible)
+					SELECT session_id, fact_index+1, source,
+						raw_timestamp, uses_session_start, model, provider_id,
+						input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
+						cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
+						cost_source, request_scoped, claude_message_id, claude_request_id,
+						'new-message', usage_dedup_key, token_eligible, activity_eligible
+					FROM facts ORDER BY fact_index DESC LIMIT 1`, 1, 0, 0, count + 1},
+				{"replace nullable and identity fields", `UPDATE facts SET
+					reported_cost_microdollars=42, source_uuid='replacement',
+					input_tokens=99 WHERE fact_index=0`, 0, 1, 0, count + 1},
+				{"shift first ordinals", `UPDATE facts SET
+					message_ordinal=1-message_ordinal WHERE fact_index<2`, 0, 2, 0, count + 1},
+				{"remove tail", `DELETE FROM facts
+					WHERE fact_index=(SELECT MAX(fact_index) FROM facts)`, 0, 0, 1, count},
+				{"clear", `DELETE FROM facts`, 0, 0, count, 0},
+			} {
+				if step.mutation != "" {
+					_, err := spool.db.ExecContext(t.Context(), step.mutation)
+					require.NoError(t, err)
+				}
+				_, err := conn.ExecContext(t.Context(), `DELETE FROM fact_writes`)
+				require.NoError(t, err)
+				installUsageFactFixture(t, conn)
+				for operation, want := range map[string]int{
+					"insert": step.insert, "update": step.update, "delete": step.delete,
+				} {
+					var got int
+					require.NoError(t, conn.QueryRowContext(t.Context(),
+						`SELECT COUNT(*) FROM fact_writes WHERE operation=?`, operation).Scan(&got))
+					assert.Equal(t, want, got, "%s: %s", step.name, operation)
+				}
+				var remaining, different int
+				require.NoError(t, conn.QueryRowContext(t.Context(),
+					`SELECT COUNT(*) FROM usage_facts`).Scan(&remaining))
+				assert.Equal(t, step.remaining, remaining, step.name)
+				require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM (
+					SELECT fact_index, message_ordinal, source_uuid, input_tokens,
+						reported_cost_microdollars FROM usage_facts
+					EXCEPT SELECT fact_index, message_ordinal, source_uuid, input_tokens,
+						reported_cost_microdollars FROM usage_fill_spool.facts
+				)`).Scan(&different))
+				assert.Zero(t, different, step.name)
+			}
+		})
+	}
+}
+
+func TestUsageFactInstallScopesChangesToBatch(t *testing.T) {
+	conn, spool := usageFactInstallFixture(t, 3, "session", "batch-peer", "outside")
+	var outsideRevision int64
+	require.NoError(t, conn.QueryRowContext(t.Context(), `
+		SELECT install_revision FROM usage_cached_sessions
+		WHERE session_id='outside'`).Scan(&outsideRevision))
+	_, err := spool.db.ExecContext(t.Context(), `
+		UPDATE facts SET session_id='spool-only' WHERE session_id='outside';
+		DELETE FROM facts WHERE session_id='session' AND fact_index>0`)
+	require.NoError(t, err)
+	installUsageFactFixture(t, conn, "session", "batch-peer")
+	rows, err := conn.QueryContext(t.Context(), `
+		SELECT cached.session_id, COUNT(facts.fact_index) FROM usage_cached_sessions cached
+		LEFT JOIN usage_facts facts ON cached.id=facts.cached_session_id
+		GROUP BY cached.session_id`)
+	require.NoError(t, err)
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		var id string
+		var count int
+		require.NoError(t, rows.Scan(&id, &count))
+		counts[id] = count
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, map[string]int{"session": 1, "batch-peer": 3, "outside": 3}, counts)
+	var afterRevision int64
+	require.NoError(t, conn.QueryRowContext(t.Context(), `
+		SELECT install_revision FROM usage_cached_sessions
+		WHERE session_id='outside'`).Scan(&afterRevision))
+	assert.Equal(t, outsideRevision, afterRevision)
+}
+
+func BenchmarkUsageFactInstallSmallChange(b *testing.B) {
+	for _, count := range []int{8, 2048} {
+		b.Run(fmt.Sprintf("facts=%d", count), func(b *testing.B) {
+			conn, _ := usageFactInstallFixture(b, count)
+			var before, after int64
+			require.NoError(b, conn.QueryRowContext(b.Context(), `SELECT total_changes()`).Scan(&before))
+			for b.Loop() {
+				_, err := conn.ExecContext(b.Context(), `UPDATE usage_fill_spool.facts
+					SET output_tokens=output_tokens+1 WHERE session_id='session' AND fact_index=0`)
+				require.NoError(b, err)
+				installUsageFactFixture(b, conn)
+			}
+			require.NoError(b, conn.QueryRowContext(b.Context(), `SELECT total_changes()`).Scan(&after))
+			b.ReportMetric(float64(after-before)/float64(b.N), "rows/op")
+		})
+	}
+}
+
 func TestUsageFillEnsureRefillsOnlyChangedSessions(t *testing.T) {
 	database := testDB(t)
 	database.SetUsageCacheNotificationWork(func() (func(), bool) {
@@ -1044,7 +1229,7 @@ func TestUsageCacheNotificationsCoalesceChangedSessions(t *testing.T) {
 	select {
 	case versions := <-batch:
 		require.Failf(t, "duplicate notification started another fill", "%#v", versions)
-	case <-time.After(3 * usageFillNotificationDebounce): //nolint:kennlint // absence check; the coalesced fill must not start a second batch
+	case <-time.After(3 * usageFillNotificationDebounce): //nolint:kennlint // deadlinetest: absence check; the coalesced fill must not start a second batch
 	}
 }
 
@@ -1099,7 +1284,7 @@ func TestUsageCacheNotificationObservesOnlyCommittedWrites(t *testing.T) {
 	select {
 	case value := <-observed:
 		require.Failf(t, "rolled-back message write emitted usage notification", "%s", value)
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // absence check; the rolled-back write must never notify
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the rolled-back write must never notify
 	}
 }
 
