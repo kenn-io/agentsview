@@ -137,6 +137,7 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 		if err != nil {
 			return err
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var legacy, target string
 			if err = rows.Scan(&legacy, &target); err != nil {
@@ -148,7 +149,6 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 		if err == nil {
 			err = rows.Err()
 		}
-		rows.Close()
 		if err != nil {
 			return err
 		}
