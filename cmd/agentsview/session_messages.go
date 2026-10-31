@@ -82,13 +82,13 @@ func messagesFilterFromFlags(cmd *cobra.Command) (service.MessageFilter, error) 
 		return service.MessageFilter{}, err
 	}
 	if direction != "asc" && direction != "desc" {
-		return service.MessageFilter{}, fmt.Errorf(
+		return service.MessageFilter{}, cliValidationError(fmt.Errorf(
 			"invalid --direction %q: must be asc or desc", direction,
-		)
+		), "use --direction asc or --direction desc")
 	}
 	aroundSet := flags.Changed("around")
 	if !aroundSet && (flags.Changed("before") || flags.Changed("after")) {
-		return service.MessageFilter{}, errors.New("--before/--after require --around")
+		return service.MessageFilter{}, cliUsageError(errors.New("--before/--after require --around"), "add --around N to center the window, for example --around 40 --before 5 --after 5")
 	}
 
 	limit, err := flags.GetInt("limit")

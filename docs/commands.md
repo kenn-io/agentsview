@@ -1,8 +1,64 @@
 ---
-last_edited: 2026-10-27
+last_edited: 2026-10-31
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
+
+## Recover from CLI errors
+
+On `main` (unreleased), failed commands print `fatal: <message>` followed by
+`hint: <next step>` on stderr. The hint names CLI commands, flags, or settings.
+Unknown commands and flags point to the relevant command's `--help`.
+
+Commands that accept `--json` or `--format json` write one JSON diagnostic line
+to stderr instead:
+
+```json
+{"error":"usage","message":"unknown flag: --bogus","hint":"run `agentsview session list --help` for flags and examples"}
+```
+
+The `error` value identifies the category: `usage`, `validation`, `unavailable`,
+`authentication`, `forbidden`, `conflict`, `not_found`, or the general `error`.
+A true `--json` takes precedence over `--format`; repeated flags use their final
+valid values. Rejections on fixed-stream commands also honor the requested
+JSON error format. Existing warnings can precede the diagnostic on stderr. Success
+reports, transcript streams, and API response formats keep their existing
+formats on stdout.
+
+If a session is missing, copy a canonical ID from
+`agentsview session list --json`. For a new session, run `agentsview sync` on
+the archive host. If autostart is disabled with `AGENTSVIEW_NO_DAEMON=1`, run
+`agentsview daemon start` before retrying a daemon read. An explicit remote
+`--server` needs that host's URL and token, supplied through
+`--server-token-file` or `AGENTSVIEW_SERVER_TOKEN`.
+
+### Exit codes
+
+Existing command-specific outcomes take precedence over the general error
+classes. Read the process status separately from stdout: a usage report can
+be present with exit 3.
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success. An empty result can still succeed. |
+| 1 | General error, authentication or policy rejection, a server conflict, or an existing command-specific failure. |
+| 2 | Session not found for `session usage` / `token-use`; `raw-sync backfill` also uses 2 for failure. |
+| 3 | `session usage` / `token-use` found no usage figures, or `serve --check-data-version` found a newer database format. |
+| 4 | Export cursor reset or conversation reconciliation required. |
+| 5 | An exported conversation revision changed. |
+| 64 | Command syntax, unknown flags, missing arguments, or incompatible CLI flags. |
+| 65 | Malformed flag values or invalid values checked by the CLI. |
+| 69 | A daemon, server, or semantic search index is unavailable. |
+| 70 | `capture report` failed. |
+
+`capture run` preserves the captured command's exit status. `session usage`
+keeps exit 3 silent after writing its normal report. `session usage-batch`
+keeps per-session exit codes in its result document and succeeds when the batch
+itself completes. Export cursor/revision errors retain their existing flat
+JSON documents on stderr. Hidden worker and browser-host protocols keep their
+existing diagnostics. `parse-diff --fail-on-change` retains its normal report
+and exit 1 when changes or parse failures are found. Remote sync failures keep
+their per-host summary and add recovery advice.
 
 ## Commands
 
