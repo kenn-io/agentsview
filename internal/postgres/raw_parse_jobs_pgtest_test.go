@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -14,72 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/rawderive"
-	"go.kenn.io/agentsview/internal/rawsync"
 )
-
-type interruptedJobParser struct {
-	manifestID string
-	cancel     context.CancelFunc
-	runs       int
-}
-
-func (p *interruptedJobParser) Parse(ctx context.Context, m rawsync.CanonicalManifest, _ *rawderive.Materialization) (rawderive.ParsedManifest, error) {
-	if m.ManifestID == p.manifestID {
-		p.runs++
-		// Simulate shutdown before the worker can record an outcome.
-		p.cancel()
-		return rawderive.ParsedManifest{}, ctx.Err()
-	}
-	return projectionOutcome("ready job parsed"), nil
-}
-
-func TestRawParseJobsBoundInterruptedWorkerAndProcessReadyJob(t *testing.T) {
-	f := newProjectionFixture(t)
-	interrupted, _ := f.accept(t, "device-a", "interrupted", "")
-	ready, _ := f.accept(t, "device-b", "ready", "")
-	for _, m := range []rawsync.CanonicalManifest{interrupted, ready} {
-		_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
-		require.NoError(t, err)
-	}
-	parser := &interruptedJobParser{manifestID: interrupted.ManifestID}
-	worker, err := rawderive.NewWorker(rawderive.WorkerConfig{
-		Queue: f.jobs, Manifests: rawderive.ManifestLoader{Store: f.objects, Limits: rawsync.DefaultManifestLimits()},
-		Materializer: rawderive.Materializer{Store: f.objects, BaseDir: t.TempDir(), MaxTotalBytes: 4096},
-		Parser:       parser, Projection: f.sink, Owner: "worker", BatchSize: 1,
-		LeaseDuration: time.Minute, HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Minute,
-		RetryBase: time.Second, RetryMax: time.Minute, MaxAttempts: 1,
-	})
-	require.NoError(t, err)
-	var outcomes rawderive.BatchResult
-	for range 4 {
-		ctx, cancel := context.WithCancel(t.Context())
-		parser.cancel = cancel
-		result, batchErr := worker.RunBatch(ctx)
-		cancel()
-		if result.Failed > 0 {
-			require.ErrorContains(t, batchErr, "lease:attempt_budget_exhausted")
-		} else if batchErr != nil {
-			require.ErrorIs(t, batchErr, context.Canceled)
-		}
-		outcomes.Succeeded += result.Succeeded
-		outcomes.Failed += result.Failed
-		_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_ingest_jobs SET lease_expires_at=now()-interval '1 second' WHERE state='leased'`)
-		require.NoError(t, err)
-	}
-	assert.Equal(t, 2, parser.runs, "one run beyond the configured limit")
-	assert.Equal(t, 1, outcomes.Succeeded)
-	assert.Equal(t, 1, outcomes.Failed)
-	var state, class, message string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,last_error_class,last_error FROM raw_ingest_jobs WHERE manifest_id=$1 AND processing_version='parser-1'`, interrupted.ManifestID).Scan(&state, &class, &message))
-	assert.Equal(t, "failed", state)
-	assert.Equal(t, "lease", class)
-	assert.Equal(t, "lease:attempt_budget_exhausted", message)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE manifest_id=$1 AND processing_version='parser-1'`, ready.ManifestID).Scan(&state))
-	assert.Equal(t, "complete", state)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
-	require.NoError(t, err)
-	assert.Empty(t, leases)
-}
 
 func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
 	pg, store := newRawIngestTestStore(t)

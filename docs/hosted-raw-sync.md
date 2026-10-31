@@ -211,7 +211,7 @@ thread creation. No external sandbox helper is required.
 | Worker concurrency                           | One sequential job per instance                 |
 | Poll interval                                | Default 5 seconds; maximum 60                   |
 | Whole attempt wall time                      | Default 60 seconds; maximum 300                 |
-| Attempts per selected generation             | Default 5; maximum 10                           |
+| Attempts per selected generation             | Default 5; maximum 10; 6 / 11 after interruption |
 | Retry backoff                                | Exponential from 1 second, capped at 60 seconds |
 | Lease / heartbeat                            | 60 seconds / 10 seconds                         |
 | Materialized source bytes                    | 512 MiB                                         |
