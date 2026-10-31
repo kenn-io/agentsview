@@ -288,6 +288,8 @@ func (c *emptyTrashProbeConn) ExecContext(
 	defer c.state.mu.Unlock()
 
 	switch {
+	case strings.Contains(normalized, "pg_advisory_xact_lock_shared"):
+		return driver.RowsAffected(0), nil
 	case strings.Contains(normalized, "set deleted_at = deleted_at"):
 		return driver.RowsAffected(c.state.trashedCountLocked()), nil
 	case strings.Contains(normalized, "insert into excluded_sessions"):
@@ -309,6 +311,10 @@ func (c *emptyTrashProbeConn) QueryContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
+	if strings.Contains(normalized, "from sessions s left join session_aliases a") &&
+		strings.Contains(normalized, "s.rollout_hidden") {
+		return &emptyTrashProbeRows{}, nil
+	}
 	if !strings.Contains(normalized, "left join session_aliases") ||
 		!strings.Contains(normalized, "for update of s") {
 		return nil, errors.New("unexpected empty-trash query")
