@@ -632,9 +632,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (157: capture Pi thinking level as reasoning effort. Re-parse Pi-format
 // sources in place; source and session identities are unchanged.)
 // (158: repair OMP path-based parent links and structural subagent classification.
-// Capture Copilot per-request usage receipts. Re-parse OMP and Copilot sources
-// in place; source and session identities are unchanged.)
-const dataVersion = 158
+// Re-parse OMP sources in place; source and session identities are unchanged.)
+// (159: count Copilot CLI usage receipts. Re-parse Copilot sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 159
 
 const archiveOnlyVersionBase = 1 << 20
 

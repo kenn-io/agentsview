@@ -1458,7 +1458,8 @@ fixtures retain this field; missing identities remain source-local.
   under `data.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`,
   `cacheWriteTokens`, and `reasoningTokens`. Fresh input subtracts cache reads
   and writes. Receipts use request pricing and their event timestamp without a
-  message ordinal.
+  message ordinal. Data version 159 reparses available Copilot CLI sources in
+  place without changing session or source identities.
 
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
