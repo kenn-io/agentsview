@@ -129,6 +129,8 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
+	root.AddCommand(newCommitsCommand())
+	root.AddCommand(newWhyCommand())
 	root.AddCommand(newCaptureCommand())
 	root.AddCommand(newMCPCommand())
 	root.AddCommand(newRecallCommand())

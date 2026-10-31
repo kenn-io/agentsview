@@ -99,6 +99,9 @@ func (s *Sync) PushWithOptions(
 	onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
 	result, err := s.pushWithOptions(ctx, opts, onProgress)
+	if err == nil && result.Errors == 0 {
+		err = s.publishCommitLinks(ctx)
+	}
 	run := s.fullRun
 	s.fullRun = nil
 	switch {

@@ -1264,6 +1264,9 @@ func TestServer_EndToEnd(t *testing.T) {
 		t.Skip("FTS not available")
 	}
 	seedFTSSession(t, d, "s1", "proj", "unique end-to-end marker", "2024-01-01T10:00:00Z")
+	require.NoError(t, d.StoreCommitLinks(t.Context(), []db.CommitLink{{SessionID: "missing", CommitSHA: "abcdef0", Source: "trailer", Subject: "fixture"}}))
+	_, err := d.BackfillCommitLinks(t.Context(), 100)
+	require.NoError(t, err)
 
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
@@ -1280,12 +1283,21 @@ func TestServer_EndToEnd(t *testing.T) {
 		names = append(names, tl.Name)
 	}
 	assert.ElementsMatch(t, []string{
-		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
+		ToolCommitSessions, ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
 		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
 		ToolGetFrictionDigest, ToolListFrictionPatterns,
 	}, names)
+
+	commitResult, err := ct.CallTool(ctx, callParams(ToolCommitSessions, map[string]any{
+		"shas": []string{"ABCDEF0", "0000000"},
+	}))
+	require.NoError(t, err)
+	commitOut := decodeStructured[service.CommitSessionsResponse](t, commitResult)
+	require.Len(t, commitOut.Commits["ABCDEF0"], 1)
+	assert.True(t, commitOut.Commits["ABCDEF0"][0].Gone)
+	assert.Equal(t, []service.CommitSessionLink{}, commitOut.Commits["0000000"])
 
 	res, err := ct.CallTool(ctx, callParams("search_sessions", map[string]any{
 		"query": "marker",

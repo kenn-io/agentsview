@@ -309,6 +309,10 @@ func (c *emptyTrashProbeConn) QueryContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
+	if strings.Contains(normalized, "information_schema.tables") {
+		return &emptyTrashProbeRows{columns: []string{"exists"}}, nil
+	}
+
 	if !strings.Contains(normalized, "left join session_aliases") ||
 		!strings.Contains(normalized, "for update of s") {
 		return nil, errors.New("unexpected empty-trash query")

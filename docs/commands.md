@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-27
+last_edited: 2026-10-31
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -1813,6 +1813,49 @@ Validate your chosen `schema_version` and content digest before accepting a
 document. Refresh saved digests when changing versions.
 
 ______________________________________________________________________
+
+### `agentsview why`
+
+Available on `main` after the latest release. Find archived agent sessions
+associated with a local file's lines or a commit, without a model call:
+
+```bash
+agentsview why internal/db/git/log.go:41-71
+agentsview why internal/db/git/log.go --rev HEAD~1
+agentsview why --commit abc1234 --format json --no-sync
+agentsview why --literal-path 'notes:12'
+```
+
+Run inside the Git checkout. Without `--rev`, blame uses the working tree;
+changed lines without a commit are marked as not committed yet. A numeric
+colon suffix selects one line or a range. Use `--literal-path` when that
+suffix belongs to the filename. Files are limited to 4 MiB and questions to
+400 lines; for a longer file, select a range.
+Git helpers such as content filters, textconv and filesystem monitors are
+not run. Configured ignored-revision files are cleared for this query, and
+missing objects are not fetched. Attribution can therefore differ from a
+customized interactive `git blame`.
+
+The result includes up to six commits, chosen by selected line coverage,
+then commit time, and up to three sessions per commit. It shows stored
+prompt context and named issue/document references. A recorded commit call
+identifies the session that recorded the commit. It does not prove who
+wrote every staged change. Trailer-only context is labelled as a heuristic;
+unavailable sessions and ambiguous links are shown explicitly.
+
+Why always reads stored records. It never requests sync, starts a daemon,
+or replaces one. `--no-sync` is accepted for compatibility and is optional.
+It uses a running daemon or opens SQLite read-only. Use `--server URL`
+(with optional `--server-token-file PATH`) or `--pg` for a remote archive.
+Those two selections are mutually exclusive. Update the archive's commit
+index separately if the command reports it unavailable.
+
+`--format json` (or `--json`) returns the question, blamed lines, deduplicated
+refs, lookup steps, excluded line coverage and an `explained` boolean.
+`explained` means an available, unambiguous session record was retained; its
+prompt can still be unavailable. No matching record is a successful empty
+answer. Invalid input, missing Git objects, unreachable archives, oversized
+results and unsupported archive versions return an error.
 
 ### `agentsview session`
 
