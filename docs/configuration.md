@@ -1,7 +1,15 @@
 ---
+last_edited: 2026-10-31
 title: Configuration
 description: Config file, default paths, and runtime settings
 ---
+
+## Git commit session trailers
+
+Optional Git hooks can attach the current agent session ID to commits. Nothing
+is installed by default. See [Git hook commands](commands.md#agentsview-git-hook)
+for installation, the `[git_trailer]` configuration, session variables and
+removal instructions.
 
 ## Data Directory
 

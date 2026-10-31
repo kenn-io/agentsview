@@ -73,6 +73,9 @@ const (
 )
 
 func main() {
+	if dispatchGitTrailer(os.Args[1:], os.Stderr) {
+		return
+	}
 	if handled, code := rawderive.RunParserChild(os.Args[1:]); handled {
 		os.Exit(code)
 	}
@@ -82,7 +85,11 @@ func main() {
 	// production scans would suppress) can assert positive rule paths;
 	// the binary always wants the filter on.
 	secrets.EnableFixtureDeny()
-	ensureUsableTempDir(os.Stderr)
+	if len(os.Args) < 2 || os.Args[1] != "git-hook" {
+		// Hook management must not redirect temp files into the application
+		// data directory as a side effect.
+		ensureUsableTempDir(os.Stderr)
+	}
 
 	if err := executeCLI(); err != nil {
 		os.Exit(reportCLIError(err, os.Stderr))
