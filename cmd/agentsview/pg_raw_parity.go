@@ -15,7 +15,6 @@ import (
 
 func newPGRawParityCommand() *cobra.Command {
 	var scope rawparity.Scope
-	var asJSON bool
 	cmd := &cobra.Command{Use: "raw-parity [target]", Short: "Compare hosted raw projections with retained pushed sessions", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
@@ -51,11 +50,11 @@ func newPGRawParityCommand() *cobra.Command {
 		if err = tx.Commit(); err != nil {
 			return err
 		}
-		return writeRawParityReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), report, asJSON)
+		return writeRawParityReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), report, outputFormat(cmd) == "json")
 	}}
 	cmd.Flags().StringVar(&scope.Device, "device", "", "Select a source device ID")
 	cmd.Flags().StringVar(&scope.Provider, "provider", "", "Select a provider")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "Print the complete report as JSON; summary goes to stderr")
+	registerFormatFlags(cmd.Flags())
 	return cmd
 }
 
