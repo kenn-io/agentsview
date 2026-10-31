@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"hegel.dev/go/hegel"
 )
@@ -317,10 +318,11 @@ func TestRawMaintenanceUpgradeAndPrivileges(t *testing.T) {
 	require.Error(t, err)
 	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
 	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-	require.Error(t, checkHostedTablePrivileges(t.Context(), f.runtime, f.schema, "raw_maintenance_state", "SELECT,INSERT,UPDATE"))
+	err = CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull)
+	require.ErrorContains(t, err, "raw_maintenance_state")
 	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,UPDATE ON raw_maintenance_state TO "`+f.role+`"`)
 	require.NoError(t, err)
-	require.NoError(t, checkHostedTablePrivileges(t.Context(), f.runtime, f.schema, "raw_maintenance_state", "SELECT,INSERT,UPDATE"))
+	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.NoError(t, err)
 	var unsafe int
