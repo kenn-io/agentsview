@@ -62,10 +62,10 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
-
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
+      - name: Restore pricing snapshot
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run focused macOS FSEvents deadline linters
         run: |

@@ -85,7 +85,7 @@ sqlite-vec-header:
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.
 pricing-snapshot: sqlite-vec-header
-	go run ./internal/pricing/cmd/litellm-snapshot -restore
+	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend

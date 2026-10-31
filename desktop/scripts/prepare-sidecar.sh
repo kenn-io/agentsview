@@ -123,7 +123,7 @@ patch_tauri_version() {
 restore_pricing_snapshot() {
   (
     cd "$REPO_ROOT"
-    go run ./internal/pricing/cmd/litellm-snapshot -restore
+    ${DOWNLOAD_RETRY:-} go run ./internal/pricing/cmd/litellm-snapshot -restore
   )
 }
 
