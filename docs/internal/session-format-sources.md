@@ -231,6 +231,13 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
+- **Watcher fixture check (2026-10-05):**
+  `internal/sync/source_scan_qualification_linux_test.go` uses the same
+  builder with linked user UUIDs and parent UUIDs. Actual archived message
+  counts and contents verify append, replacement, and reported-loss recovery.
+  These short synthetic chains test Agentsview's ingestion, not producer
+  conformance.
+
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
@@ -971,6 +978,13 @@ fixtures retain this field; missing identities remain source-local.
   `cmd/perfsim` generates dated rollouts with session metadata, turn context,
   response items and token-count events through the shared fixture builder.
   Its integration test checks parsed messages and aggregate output tokens.
+
+- **Watcher fixture check (2026-10-05):**
+  `internal/sync/source_scan_qualification_linux_test.go` uses the shared
+  builder for session metadata and user/assistant response items, plus the
+  documented session-index rename fields below. Actual archived messages and
+  display names verify ingestion. Grouped scratch directories test recursive
+  discovery rather than the producer's calendar-directory layout.
 
 - **Format:** Rollout JSONL files, with a separate JSONL session index for
   thread names. Current releases keep thread metadata in SQLite and still
