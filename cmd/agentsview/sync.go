@@ -56,7 +56,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	}
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", err)
 	}
 	archiveOnly, err := archiveModeAfterRecovery(context.Background(), appCfg)
 	if err != nil {
@@ -85,7 +85,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	}
 
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		fatal("creating data dir: %v", err)
 	}
 
 	setupLogFile(appCfg.DataDir)
@@ -596,6 +596,7 @@ func reportRemoteFailures(failures []remoteHostFailure) {
 		fmt.Fprintf(os.Stderr, "  %s: %s\n",
 			f.Host.Host, summary)
 	}
+	fmt.Fprintln(os.Stderr, "hint: check the failed hosts in [[remote_hosts]] in config.toml; run `agentsview sync --help` before retrying")
 }
 
 // runConfiguredLocalAndRemotes coordinates a direct local sync with every

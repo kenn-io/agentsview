@@ -69,10 +69,10 @@ type DuckDBQuackServeConfig struct {
 func runDuckDBPush(cfg DuckDBPushConfig) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		fatal("creating data dir: %v", err)
 	}
 	setupLogFile(appCfg.DataDir)
 
@@ -266,10 +266,10 @@ func duckDBLongRunningSignals() []os.Signal {
 func runDuckDBStatus() {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		fatal("creating data dir: %v", err)
 	}
 	setupLogFile(appCfg.DataDir)
 
@@ -533,10 +533,10 @@ func duckDBMirrorProbeFailureReason(probe duckdbsync.MirrorProbe) string {
 func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		fatal("creating data dir: %v", err)
 	}
 	setupLogFile(appCfg.DataDir)
 

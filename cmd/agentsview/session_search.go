@@ -142,13 +142,13 @@ func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
 		return nil
 	}
 	if !useSemantic && !useHybrid {
-		return errors.New("--scope requires --semantic or --hybrid")
+		return cliUsageError(errors.New("--scope requires --semantic or --hybrid"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 	}
 	switch scope {
 	case "top", "all", "subordinate":
 		return nil
 	}
-	return fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope)
+	return cliValidationError(fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope), "use --scope top, all, or subordinate with --semantic or --hybrid")
 }
 
 // resolveContentSearchMode picks the search mode from the mutually exclusive
@@ -165,7 +165,7 @@ func resolveContentSearchMode(
 		}
 	}
 	if modes > 1 {
-		return "", errors.New("--regex, --fts, --semantic and --hybrid are mutually exclusive")
+		return "", cliUsageError(errors.New("--regex, --fts, --semantic and --hybrid are mutually exclusive"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 	}
 	mode := "substring"
 	switch {
@@ -181,15 +181,15 @@ func resolveContentSearchMode(
 	if useFTS {
 		for _, s := range sources {
 			if s != "messages" {
-				return "", errors.New("--fts searches messages only; drop --in or --fts")
+				return "", cliUsageError(errors.New("--fts searches messages only; drop --in or --fts"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 			}
 		}
 	}
 	if useSemantic || useHybrid {
 		for _, s := range sources {
 			if s != "messages" {
-				return "", fmt.Errorf(
-					"--%s searches messages only; drop --in", mode)
+				return "", cliUsageError(fmt.Errorf(
+					"--%s searches messages only; drop --in", mode), "omit --in or use --in messages with --semantic / --hybrid")
 			}
 		}
 	}
