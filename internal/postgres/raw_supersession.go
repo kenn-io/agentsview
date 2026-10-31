@@ -77,6 +77,7 @@ func prepareRawSupersessions(ctx context.Context, tx *sql.Tx, served map[string]
 	return prepareRawSupersessionsWithin(ctx, tx, served, nil, nil)
 }
 
+//nolint:unused // production activation integration lands in a later slice
 func prepareRawSupersessionsWithin(ctx context.Context, tx *sql.Tx, served map[string]bool, groups, legacyIDs []string) (rawSupersessionPlan, error) {
 	var plan rawSupersessionPlan
 	candidates, err := loadRawParityCandidatesWithin(ctx, tx, groups, legacyIDs)

@@ -23,7 +23,7 @@ func TestRawActivationRetryClassification(t *testing.T) {
 		{rawActivationNowait(&pgconn.PgError{Code: "55P03"}), 5},
 		{&pgconn.PgError{Code: "55P03"}, 1},
 		{errors.New("commit outcome unknown"), 1},
-		{&rawActivationUncertain{&pgconn.PgError{Code: "40001"}}, 1},
+		{&rawActivationUncertainError{&pgconn.PgError{Code: "40001"}}, 1},
 		{errors.New("parity refused"), 1},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
