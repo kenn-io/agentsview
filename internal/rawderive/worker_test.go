@@ -112,16 +112,20 @@ func TestWorkerClassifiesParseFailureAndRetriesAfterCleanup(t *testing.T) {
 func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name     string
-		attempt  int
-		failErr  error
-		want     BatchResult
-		wantRuns int
-		wantErr  string
+		name        string
+		maxAttempts int
+		attempt     int
+		failErr     error
+		want        BatchResult
+		wantRuns    int
+		wantErr     string
 	}{
-		{"grace run", 4, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1, ""},
-		{"exhausted", 5, nil, BatchResult{Claimed: 1, Failed: 1}, 0, "raw parse job 1: lease:attempt_budget_exhausted"},
-		{"lost lease", 5, ErrLeaseLost, BatchResult{Claimed: 1, LeaseLost: 1}, 0, ""},
+		{"single attempt grace run", 1, 2, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1, ""},
+		{"single attempt exhausted", 1, 3, nil, BatchResult{Claimed: 1, Failed: 1}, 0, "raw parse job 1: lease:attempt_budget_exhausted"},
+		{"grace run at max plus one", 3, 4, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1, ""},
+		{"exhausted", 3, 5, nil, BatchResult{Claimed: 1, Failed: 1}, 0, "raw parse job 1: lease:attempt_budget_exhausted"},
+		{"lost lease", 3, 5, ErrLeaseLost, BatchResult{Claimed: 1, LeaseLost: 1}, 0, ""},
+		{"storage error", 3, 5, errors.New("storage detail"), BatchResult{Claimed: 1}, 0, "recording terminal failure: fail:internal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lease := workerTestLease()
@@ -146,6 +150,7 @@ func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
 					return nil
 				}),
 			)
+			worker.MaxAttempts = tc.maxAttempts
 			result, err := worker.RunBatch(t.Context())
 			if tc.wantErr != "" {
 				assert.EqualError(t, err, tc.wantErr)
