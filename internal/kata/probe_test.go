@@ -281,7 +281,7 @@ func TestResolveEndpointChildHoldingStdoutIsBounded(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	// The asserted result is this deadline expiring while a background child
 	// still holds the locate command's stdout.
-	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond) //nolint:kennlint // asserts the deadline expiring
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond) //nolint:kennlint // deadlinetest: the asserted result is this deadline expiring
 	defer cancel()
 	start := time.Now()
 	_, err := resolveEndpoint(ctx, "")
