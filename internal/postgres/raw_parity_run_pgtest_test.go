@@ -27,7 +27,7 @@ func TestRawParityAdoptedPushProviders(t *testing.T) {
 			id := string(agent) + ":portable"
 			local := testDB(t)
 			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: id, Agent: string(agent), Project: "synthetic", Machine: "archive", StartedAt: new("2026-01-01T00:00:00Z"), MessageCount: 1, UserMessageCount: 1}))
-			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5}}))
+			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5, Timestamp: "2026-01-01T00:00:00Z"}}))
 			f := newProjectionFixture(t, func(pg *sql.DB) {
 				var schema string
 				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
@@ -42,6 +42,7 @@ func TestRawParityAdoptedPushProviders(t *testing.T) {
 			r := &out.Outcome.Results[0].Result
 			r.Session.ID, r.Session.Agent = id, agent
 			r.Messages, r.UsageEvents = r.Messages[:1], nil
+			r.Messages[0].Timestamp, r.Messages[0].ContentLength = r.Session.StartedAt, len(r.Messages[0].Content)
 			m, _ := f.accept(t, "device-a", "capture", "", agent)
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, out))
 			require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
