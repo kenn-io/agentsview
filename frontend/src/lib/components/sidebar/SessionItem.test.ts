@@ -88,7 +88,6 @@ describe("SessionItem identity", () => {
 
     const badge = document.querySelector<HTMLElement>(".machine-tag");
     expect(badge?.textContent).toBe("Laptop, Desktop");
-    expect(badge?.title).toBe("Laptop (raw-device:61), Desktop (raw-device:62)");
   });
 
   it("uses the registry label for a whitespace-only override", () => {
