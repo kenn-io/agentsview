@@ -133,8 +133,8 @@ func TestHTTPFrictionCapabilityFollowsServerStore(t *testing.T) {
 		name, version string
 		want          bool
 	}{
-		{"friction_store", `{"api_version":13,"data_version":1,"friction_readable":true}`, true},
-		{"mirror_without_friction_tables", `{"api_version":13,"data_version":1}`, false},
+		{"friction_store", `{"api_version":14,"data_version":1,"friction_readable":true}`, true},
+		{"mirror_without_friction_tables", `{"api_version":14,"data_version":1}`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

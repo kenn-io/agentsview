@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
@@ -53,6 +55,7 @@ func (pgReplica) serveOptions(
 	if frictionRunner != nil {
 		opts = append(opts, server.WithFriction(frictionRunner, frictionExcl))
 	}
+	opts = append(opts, pgKataConn(appCfg))
 	closeAll := func() error {
 		waitFriction()
 		if closeRawSync != nil {
@@ -61,4 +64,12 @@ func (pgReplica) serveOptions(
 		return nil
 	}
 	return opts, closeAll, nil
+}
+
+// pgKataConn connects pg serve to Kata. A PostgreSQL hub holds the combined
+// archive, so it is the host eligible to file.
+func pgKataConn(appCfg config.Config) server.Option {
+	return server.WithKataConn(kata.NewConn(kata.ConfigFrom(
+		appCfg.Kata, filing.EligibleHost(true, false),
+	)))
 }
