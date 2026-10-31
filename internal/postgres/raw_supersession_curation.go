@@ -14,6 +14,8 @@ type rawCarryMessage struct {
 	Message       db.Message
 	Key, Revision string
 }
+
+//nolint:unused // materialized by the later production activation slice
 type rawCurationCohort struct {
 	ID      string
 	Members []rawBranch
@@ -22,6 +24,8 @@ type rawCurationCohort struct {
 // The caller prepares under its identity guards, locks all listed cohorts and
 // legacy pin/message inputs before any corpus fence, and revalidates the set.
 // No helper owns a transaction, publishes or performs general materialization.
+//
+//nolint:unused // carried into raw overlays by the later activation slice
 type rawLegacyCarry struct {
 	Legacy, Group    string
 	Starred, Trashed bool
@@ -59,6 +63,7 @@ func matchRawLegacyPin(source db.Message, targets []rawCarryMessage) (RawPinRefe
 	return RawPinReference{}, nil
 }
 
+//nolint:unused // called by the later production activation slice
 func prepareRawLegacyCarry(ctx context.Context, tx *sql.Tx, legacy, group string) (rawLegacyCarry, error) {
 	carry := rawLegacyCarry{Legacy: legacy, Group: group}
 	err := tx.QueryRowContext(ctx, `SELECT display_name,deleted_at IS NOT NULL,EXISTS(SELECT 1 FROM starred_sessions WHERE session_id=s.id) FROM sessions s WHERE id=$1 AND provenance_kind='legacy'`, legacy).Scan(&carry.DisplayName, &carry.Trashed, &carry.Starred)
@@ -159,6 +164,8 @@ func prepareRawLegacyCarry(ctx context.Context, tx *sql.Tx, legacy, group string
 // applyRawLegacyCarry inserts only absent base values. Explicit false/null,
 // unpins and every branch override survive. The caller publishes curation even
 // when no immutable content or identity changed; legacy rows are never edited.
+//
+//nolint:unused // first production caller arrives with reversible activation
 func (s *RawProjectionStore) applyRawLegacyCarry(ctx context.Context, tx *sql.Tx, carry rawLegacyCarry) error {
 	for _, field := range []struct {
 		name  string
@@ -183,6 +190,8 @@ func (s *RawProjectionStore) applyRawLegacyCarry(ctx context.Context, tx *sql.Tx
 // materializeRawCurationOnly operates on the prepared physical cohorts. Unlike
 // materializeGroup it cannot reconcile prefixes, replace content, change source
 // proofs or discover more session targets after a future activation fence.
+//
+//nolint:unused // called by applyRawLegacyCarry in the later activation slice
 func (s *RawProjectionStore) materializeRawCurationOnly(ctx context.Context, tx *sql.Tx, group string, cohorts []rawCurationCohort) error {
 	for _, c := range cohorts {
 		if err := s.materializeCuration(ctx, tx, group, c.ID, c.Members); err != nil {
