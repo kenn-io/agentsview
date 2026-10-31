@@ -128,20 +128,26 @@ func TestKataStatusCommandLocalProbeDoesNotStartDaemon(t *testing.T) {
 	assert.Contains(t, out, "State:    ready\n")
 }
 
+// A pg serve daemon is read-only, so transport detection does not treat it as
+// the local owner. It still owns this data directory's Kata status.
 func TestKataStatusCommandUnreachableOwnerDoesNotProbeLocally(t *testing.T) {
-	fake := katatest.New(t)
-	dataDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(
-		"[kata]\nenabled = true\nendpoint = \""+fake.Endpoint()+"\"\n"), 0o600))
-	writeUnreachableDaemonRuntime(t, dataDir, false)
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	t.Setenv("AGENTSVIEW_PG_URL", "")
+	for _, readOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("read_only=%t", readOnly), func(t *testing.T) {
+			fake := katatest.New(t)
+			dataDir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(
+				"[kata]\nenabled = true\nendpoint = \""+fake.Endpoint()+"\"\n"), 0o600))
+			writeUnreachableDaemonRuntime(t, dataDir, readOnly)
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+			t.Setenv("AGENTSVIEW_PG_URL", "")
 
-	out, err := runKataCommand(t, "kata", "status")
-	require.ErrorIs(t, err, errLocalDaemonUnreachable)
-	assert.Empty(t, out)
-	assert.Empty(t, fake.Requests(), "local config must not replace the owning daemon's status")
+			out, err := runKataCommand(t, "kata", "status")
+			require.ErrorIs(t, err, errLocalDaemonUnreachable)
+			assert.Empty(t, out)
+			assert.Empty(t, fake.Requests(), "local config must not replace the owning daemon's status")
+		})
+	}
 }
 
 func TestKataStatusCommandIncompatibleOwnerReportsVersionsWithoutLocalProbe(t *testing.T) {
@@ -156,6 +162,19 @@ func TestKataStatusCommandIncompatibleOwnerReportsVersionsWithoutLocalProbe(t *t
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				writeIncompatibleDaemonRuntime(t, dir, host, port, "old", false)
+			},
+			wantReason: fmt.Sprintf("daemon API version 0 is incompatible with client API version %d", daemonAPIVersion),
+			wantHint:   "CLI: run `agentsview daemon restart`",
+		},
+		{
+			name: "older read-only pg serve API",
+			writeRuntime: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
+				rec := incompatibleRuntimeRecord(host, port, "old", false)
+				rec.Metadata[runtimeReadOnly] = "true"
+				_, err := writeRuntimeRecordForTest(dir, rec)
+				require.NoError(t, err)
+				t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 			},
 			wantReason: fmt.Sprintf("daemon API version 0 is incompatible with client API version %d", daemonAPIVersion),
 			wantHint:   "CLI: run `agentsview daemon restart`",
