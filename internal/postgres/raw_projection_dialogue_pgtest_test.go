@@ -61,7 +61,7 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 		processingVersion := "parser-2/" + stage
 		_, err := f.sink.SelectSourceGeneration(t.Context(), m, processingVersion)
 		require.NoError(t, err)
-		leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "dialogue-worker", 1, time.Minute)
+		leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "dialogue-worker", 1, time.Minute, 5)
 		require.NoError(t, err)
 		require.Len(t, leases, 1)
 		var derivedXmin, messageXmin, sessionXmin, dialogueXmin string
@@ -142,7 +142,7 @@ func TestRawProjectionDialogueUpgradeRefreshesRetainedRevision(t *testing.T) {
 	short.Outcome.Results[0].Result.Messages[0].DialogueText = new("")
 	_, err = f.sink.SelectSourceGeneration(t.Context(), a, "parser-2")
 	require.NoError(t, err)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, short))

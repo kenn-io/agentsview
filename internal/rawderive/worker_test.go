@@ -1011,6 +1011,7 @@ func (q *workerQueueFixture) ClaimRawParseJobs(
 	string,
 	int,
 	time.Duration,
+	int,
 ) ([]JobLease, error) {
 	return append([]JobLease(nil), q.leases...), nil
 }

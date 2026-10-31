@@ -35,6 +35,7 @@ type JobLease struct {
 	ManifestID           string
 	ProcessingVersion    string
 	ProjectionGeneration int64
+	LeaseEpoch           int64
 	Attempt              int
 	Owner                string
 	ExpiresAt            time.Time

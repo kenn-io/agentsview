@@ -347,7 +347,7 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 		CapturedAt: time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC),
 	}, rawsync.ManifestSnapshot)
 
-	leases, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
+	leases, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	lease := leases[0]
@@ -403,7 +403,7 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 		ctx, lease, time.Now().Add(time.Minute), "retry", "stale lease",
 	), rawderive.ErrLeaseLost)
 	assert.ErrorIs(t, metadata.FailRawParseJob(ctx, lease, "failed", "stale lease"), rawderive.ErrLeaseLost)
-	shortClaim, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
+	shortClaim, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	assert.Empty(t, shortClaim)
 	var terminalCompletion time.Time
@@ -431,7 +431,7 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 	head = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
 	assert.Equal(t, int64(2), head.Generation)
 	assert.Nil(t, head.LastParseCompletedAt)
-	leases, err = metadata.ClaimRawParseJobs(ctx, "status-worker", 2, time.Minute)
+	leases, err = metadata.ClaimRawParseJobs(ctx, "status-worker", 2, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.NoError(t, metadata.CompleteRawParseJob(ctx, leases[0]))

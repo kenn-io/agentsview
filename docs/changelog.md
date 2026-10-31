@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- Hosted raw parse jobs now stop after their retry budget even when a worker
+  loses its lease. `pg raw-jobs list` shows dead letters by state and error
+  class, and `pg raw-jobs retry` safely requeues one bounded batch without
+  letting a delayed old worker act on the replayed job.
+
 - `agentsview agents` lists every supported agent, where AgentsView looks for its
   sessions, and which session details it reads, such as tool calls, thinking,
   subagents, and token usage. Add `--json` for scripts. It works without a
