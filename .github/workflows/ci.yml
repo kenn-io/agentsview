@@ -220,6 +220,8 @@ jobs:
     name: Docs and scripts
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     steps:
       - uses: actions/checkout@v7.0.1
         with:
