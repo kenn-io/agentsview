@@ -105,16 +105,18 @@ func (c *activationObservedConn) QueryContext(ctx context.Context, query string,
 		}
 		return nil, io.ErrUnexpectedEOF
 	}
-	return &activationObservedRows{Rows: rows, probe: c.probe}, nil
+	return &activationObservedRows{Rows: rows.(*stdlib.Rows), probe: c.probe}, nil
 }
 
 type activationObservedRows struct {
-	driver.Rows
+	*stdlib.Rows
 	probe *activationConnectionProbe
 }
 
-func (r *activationObservedRows) Next(values []driver.Value) error {
-	err := r.Rows.Next(values)
+// Preserve pgx's column scanner so the observer sees the same typed array
+// transport as production connections on Go 1.27.
+func (r *activationObservedRows) NextRow() error {
+	err := r.Rows.NextRow()
 	if err != nil {
 		return err
 	}
@@ -167,7 +169,11 @@ func TestRawActivationCommittedResponseLossNeverReplays(t *testing.T) {
 			probe.loseCommit = boundary == "commit response"
 			probe.loseUnlock = boundary == "unlock response"
 			audit, err := ActivateRawRollout(t.Context(), pool, f.schema, f.tenant, "", "", activationOptions())
-			require.Error(t, err)
+			if boundary == "commit response" {
+				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			} else {
+				require.ErrorContains(t, err, "session guard cleanup failed")
+			}
 			assert.Equal(t, 1, probe.acquisitions, "no replay after a committed outcome")
 			assert.Equal(t, 1, probe.commits, "real PostgreSQL commit completed once")
 			require.Len(t, probe.connections, 1)
