@@ -1343,12 +1343,12 @@ snapshot, including trashed rows. Requires the selected target's restricted
 runtime connection and `raw_tenant`; owner connections are refused.
 
 ```bash
-agentsview pg raw-parity [target] [--device ID] [--provider P] [--json]
+agentsview pg raw-parity [target] [--device ID] [--provider P] [--format human|json]
 ```
 
-Without `--json`, prints one summary line. With `--json`, stdout contains the
-complete report and stderr contains the summary. Exit status is 0 even when
-`pass` is false. Use `pass` in scripts. See
+Without JSON output, prints one summary line. With `--format json` or `--json`,
+stdout contains the complete report and stderr contains the summary. Exit
+status is 0 even when `pass` is false. Use `pass` in scripts. See
 [Compare before cutover](/docs/hosted-raw-sync/#compare-before-cutover-unreleased)
 for matching, classes, scope counts and the readiness gate.
 
@@ -1381,6 +1381,29 @@ from pgvector — see
 [Semantic Search — PostgreSQL](/docs/semantic-search/#postgresql).
 
 ______________________________________________________________________
+
+### `agentsview pg raw-rollout`
+
+Inspect or change hosted session rollout scopes through an owner target:
+
+```bash
+agentsview pg raw-rollout list [target] [--device ID] [--provider P]
+agentsview pg raw-rollout shadow [target] [--device ID] [--provider P]
+agentsview pg raw-rollout clear [target] [--device ID] [--provider P]
+agentsview pg raw-rollout activate [target] [--device ID] [--provider P] [--accept-differences]
+```
+
+The tenant scope must exist before narrower scopes and can be cleared only
+when no narrower scopes remain. List output includes physical served, shadow,
+superseded and unresolved-pin counts, plus the last stored parity audit.
+`activate` is an owner-only, transactional parity gate. Its optional waiver
+accepts only content differences and preserves their counts in the audit.
+
+This build refuses activation until it can verify the selected target's embedding
+configuration. Configured embeddings also require the coverage gate. Missing
+configuration or tables never count as disabled. See
+[rollout scopes](/docs/hosted-raw-sync/#rollout-scopes) for prerequisites, the
+activation sequence and returning to shadow.
 
 ### `agentsview pg service`
 
