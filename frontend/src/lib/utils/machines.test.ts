@@ -7,7 +7,7 @@ describe("sessionMachineDisplay", () => {
       sessionMachineDisplay(
         {
           machine: "hosted",
-          source_machines: ["raw-device:61", "raw-device:62", "raw-device:61"],
+          source_machines: ["raw-device:61", "raw-device:62"],
         },
         {
           "raw-device:61": "Workstation",

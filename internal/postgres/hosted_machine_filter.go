@@ -43,11 +43,6 @@ const hostedFilteredMachinesCTESQL = `,
  )`
 
 func hostedMachinePredicate(sessionIDExpr, machineExpr string, placeholders []string) string {
-	// Shared list builders use unqualified columns. Qualify the correlated outer
-	// ID so the source relation cannot capture its own session_id or future id.
-	if sessionIDExpr == "id" {
-		sessionIDExpr = "sessions.id"
-	}
 	values := "(" + strings.Join(placeholders, ", ") + ")"
 	return "(" + machineExpr + " IN " + values +
 		" OR EXISTS (SELECT 1 FROM (" + hostedRawMachineSourceSQL +

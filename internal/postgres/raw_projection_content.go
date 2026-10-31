@@ -73,7 +73,6 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	s := &p.Session
 	s.ID = ""
 	s.Machine = ""
-	s.SourceMachines = nil
 	s.DisplayName = nil
 	s.CreatedAt = ""
 	s.LocalModifiedAt = nil

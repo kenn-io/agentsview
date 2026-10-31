@@ -8,8 +8,8 @@ export function sessionMachineDisplay(
   session: SessionMachines,
   labels: Record<string, string>,
 ): { ids: string[]; label: string; title: string } {
-  const sources = session.source_machines?.filter(Boolean) ?? [];
-  const ids = [...new Set(sources.length ? sources : session.machine ? [session.machine] : [])];
+  const sources = session.source_machines ?? [];
+  const ids = sources.length ? sources : session.machine ? [session.machine] : [];
   return {
     ids,
     label: ids.map((id) => labels[id] ?? id).join(", "),
