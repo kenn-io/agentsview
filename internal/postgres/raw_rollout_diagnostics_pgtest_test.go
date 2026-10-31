@@ -43,7 +43,7 @@ func TestRawRolloutOwnerAndRuntimeDiagnosticsAgree(t *testing.T) {
 	assert.Zero(t, scopes[0].UnresolvedPins)
 }
 
-// Construction supplies the hosted capability; missing control tables remain
+// The schema binding supplies the hosted capability; missing control tables remain
 // errors rather than being mistaken for an ordinary custody-only installation.
 func TestRawRolloutStatusHostedCapability(t *testing.T) {
 	f := newProjectionFixture(t)
