@@ -300,8 +300,8 @@ func TestHostedRolloutProjectMetadataAndCandidates(t *testing.T) {
 	h, err := newHostedAdapter(f.runtime, f.tenant)
 	require.NoError(t, err)
 	_, err = f.runtime.Exec(`INSERT INTO source_archives(source_archive_id,source_archive_salt) VALUES('archive','synthetic-salt');
- INSERT INTO source_project_identity_observations(source_archive_id,source_archive_salt,project,machine,root_path,observed_at) VALUES
- ('archive','synthetic-salt','p','m','/workspace/p','2026-01-01'),('archive','synthetic-salt','hidden-only','m','/workspace/hidden','2026-01-01');
+ INSERT INTO source_project_identity_observations(source_archive_id,source_archive_salt,project,machine,root_path,repository_path,observed_at) VALUES
+ ('archive','synthetic-salt','p','m','/workspace/p','/workspace/p','2026-01-01'),('archive','synthetic-salt','hidden-only','m','/workspace/hidden','/workspace/hidden','2026-01-01');
  INSERT INTO sessions(id,source_archive_id,project,machine,agent,cwd,message_count,user_message_count) VALUES
  ('visible','archive','p','m','claude','/workspace/p',1,2),('shadow','archive','p','m','claude','/workspace/p',1,2),
  ('hidden-only','archive','hidden-only','m','claude','/workspace/hidden',1,2);
