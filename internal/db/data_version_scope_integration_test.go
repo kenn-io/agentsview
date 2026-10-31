@@ -848,7 +848,7 @@ func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
 
 func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(157, 158)
-	require.Contains(t, scope, parser.AgentOMP)
+	require.Equal(t, []parser.AgentType{parser.AgentOMP}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
@@ -1022,7 +1022,7 @@ func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 
 func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
 	ctx := t.Context()
-	scope := db.ScopedDataVersionProviders(157, 158)
+	scope := db.ScopedDataVersionProviders(162, 163)
 	require.Contains(t, scope, parser.AgentCopilot)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
