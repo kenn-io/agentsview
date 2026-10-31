@@ -60,6 +60,7 @@ func (s *RawProjectionStore) ReconcileRawSources(ctx context.Context, repair boo
 	if err != nil {
 		return result, err
 	}
+	defer rows.Close()
 	type head struct {
 		key  [4]string
 		id   string
@@ -69,13 +70,11 @@ func (s *RawProjectionStore) ReconcileRawSources(ctx context.Context, repair boo
 	for rows.Next() {
 		var h head
 		if err = rows.Scan(&h.key[0], &h.key[1], &h.key[2], &h.key[3], &h.id, &h.data); err != nil {
-			rows.Close()
 			return result, err
 		}
 		heads = append(heads, h)
 	}
 	err = rows.Err()
-	rows.Close()
 	if err != nil {
 		return result, err
 	}
@@ -159,8 +158,9 @@ func (s *RawProjectionStore) recoverRawSourceTx(ctx context.Context, tx *sql.Tx,
 			return true, false, true, nil
 		}
 	}
+	// An invalid durable version is an unrecoverable finding, not a command error.
 	if validateRawIngestProcessingVersion(version) != nil {
-		return true, false, true, nil
+		return true, false, true, nil //nolint:nilerr // invalid evidence is a finding, not a command error
 	}
 	// Include every surviving fence, even if the projection row itself was
 	// restored from an older backup. Never reuse a published generation.
