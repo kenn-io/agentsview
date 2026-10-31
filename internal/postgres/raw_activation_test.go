@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,9 +31,7 @@ func TestRawActivationGateModel(t *testing.T) {
 		mode := []RawEmbeddingMode{RawEmbeddingsUnknown, RawEmbeddingsDisabled, RawEmbeddingsConfigured}[hegel.Draw(ht, hegel.Integers(0, 2))]
 		report := rawparity.Report{Counts: counts, Readiness: []rawparity.Readiness{ready}, Pass: hegel.Draw(ht, hegel.Booleans())}
 		before := map[string]int{}
-		for k, v := range counts {
-			before[k] = v
-		}
+		maps.Copy(before, counts)
 		want := mode == RawEmbeddingsDisabled && ready.Projected > 0 && ready.Pending == 0 && ready.Failed == 0 && ready.Unsupported == 0 && counts["ambiguous"] == 0 && counts["unmatchable"] == 0 && (accept || counts["differs"] == 0)
 		err := checkRawActivationGate(report, accept, mode)
 		require.Equal(ht, want, err == nil)

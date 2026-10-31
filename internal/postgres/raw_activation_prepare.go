@@ -11,6 +11,8 @@ import (
 // compatible with other ordinary writers. Parity/input tables need ACCESS SHARE.
 // FK parents are already in the write set. The tenant-led keys and indexes are
 // protected by these relation locks and the rollout/alias/group/session guards.
+//
+//nolint:unused // production activation integration lands in a later slice
 func lockRawActivationRelations(ctx context.Context, tx *sql.Tx) error {
 	for _, entry := range []struct{ tables, mode string }{
 		{`pinned_messages,raw_corpus_state,raw_curation,raw_legacy_supersessions,raw_pins,raw_rollout_scopes,raw_session_groups,sessions,starred_sessions`, "ROW EXCLUSIVE"},
@@ -23,6 +25,7 @@ func lockRawActivationRelations(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+//nolint:unused // production activation integration lands in a later slice
 type rawPreparedActivation struct {
 	unscoped      bool
 	groups        []string
@@ -35,10 +38,13 @@ type rawPreparedActivation struct {
 // It locks the whole discovered closure, including aliases/collision groups and
 // old map owners outside the requested selector. Scope filtering is gate input,
 // never permission to hide global identity ambiguity or skip trigger targets.
+//
+//nolint:unused // production activation integration lands in a later slice
 func prepareRawActivation(ctx context.Context, tx *sql.Tx, device, provider string) (rawPreparedActivation, error) {
 	return prepareRawScopeChange(ctx, tx, device, provider, "active")
 }
 
+//nolint:unused // production activation integration lands in a later slice
 func prepareRawScopeChange(ctx context.Context, tx *sql.Tx, device, provider, state string) (rawPreparedActivation, error) {
 	var p rawPreparedActivation
 	if err := lockRawActivationRelations(ctx, tx); err != nil {
@@ -126,9 +132,10 @@ func prepareRawScopeChange(ctx context.Context, tx *sql.Tx, device, provider, st
 	return p, nil
 }
 
+//nolint:unused // production activation integration lands in a later slice
 func (p rawPreparedActivation) apply(ctx context.Context, tx *sql.Tx) error {
 	for _, group := range p.groups {
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET rollout_hidden=$2 WHERE provenance_kind='raw' AND raw_group_id=$1 AND rollout_hidden IS DISTINCT FROM $2`, group, !(p.unscoped || p.served[group])); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET rollout_hidden=$2 WHERE provenance_kind='raw' AND raw_group_id=$1 AND rollout_hidden IS DISTINCT FROM $2`, group, !p.unscoped && !p.served[group]); err != nil {
 			return err
 		}
 	}
@@ -147,6 +154,8 @@ func (p rawPreparedActivation) apply(ctx context.Context, tx *sql.Tx) error {
 
 // prospectiveRawScopes enforces first/last tenant rules without writing control
 // state before acceptance. Clear inherits the remaining narrower/broader rules.
+//
+//nolint:unused // production activation integration lands in a later slice
 func prospectiveRawScopes(scopes []RawRolloutScope, device, provider, state string) ([]RawRolloutScope, error) {
 	tenantExists := false
 	for _, s := range scopes {
@@ -170,6 +179,7 @@ func prospectiveRawScopes(scopes []RawRolloutScope, device, provider, state stri
 	return out, nil
 }
 
+//nolint:unused // production activation integration lands in a later slice
 func rawStringRows(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -189,6 +199,8 @@ func rawStringRows(ctx context.Context, tx *sql.Tx, query string, args ...any) (
 
 // A nonempty policy is the explicit authority for supersession. User trash is
 // deliberately absent: it does not withdraw the logical group. Exclusion does.
+//
+//nolint:unused // production activation integration lands in a later slice
 func rawServedGroups(ctx context.Context, tx *sql.Tx, scopes []RawRolloutScope) (map[string]bool, error) {
 	return rawServedGroupsWithin(ctx, tx, scopes, nil)
 }
