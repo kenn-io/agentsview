@@ -187,6 +187,10 @@ func TestRawReconcileMakesMissingProjectionClaimable(t *testing.T) {
 	require.Greater(t, leases[0].LeaseEpoch, old.LeaseEpoch)
 	require.Equal(t, old.ID, leases[0].ID)
 	require.Equal(t, old.Attempt, leases[0].Attempt)
+	var selectedAt time.Time
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selected_at FROM raw_source_projections`).Scan(&selectedAt))
+	require.False(t, selectedAt.IsZero())
+
 	before = rawAuthoritativeSnapshot(t, f)
 	require.ErrorIs(t, hosted.HeartbeatRawParseJob(t.Context(), old, time.Minute), rawderive.ErrLeaseLost)
 	require.ErrorIs(t, hosted.CompleteRawParseJob(t.Context(), old), rawderive.ErrLeaseLost)

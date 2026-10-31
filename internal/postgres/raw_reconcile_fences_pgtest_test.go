@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +58,9 @@ func TestRawReconcileRepairsAgreeingTupleBelowRetainedGeneration(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("retained")))
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO raw_projection_generations(source_id,generation,manifest_id,processing_version) SELECT source_id,37,selected_manifest_id,processing_version FROM raw_source_projections`)
 	require.NoError(t, err)
+	var oldSelectedAt time.Time
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selected_at FROM raw_source_projections`).Scan(&oldSelectedAt))
+	require.False(t, oldSelectedAt.IsZero())
 	before := rawAuthoritativeSnapshot(t, f)
 	dry, err := f.sink.ReconcileRawSources(t.Context(), false)
 	require.NoError(t, err)
@@ -73,6 +77,9 @@ func TestRawReconcileRepairsAgreeingTupleBelowRetainedGeneration(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT projection_generation FROM raw_source_projections WHERE source_id=$1`, rawSourceID(m)).Scan(&generation))
 	require.Equal(t, int64(38), generation)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT generation FROM raw_projection_generations WHERE source_id=$1 AND generation=38`, rawSourceID(m)).Scan(&generation))
+	var selectedAt time.Time
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selected_at FROM raw_source_projections`).Scan(&selectedAt))
+	require.True(t, selectedAt.After(oldSelectedAt))
 
 	after := rawAuthoritativeSnapshot(t, f)
 	again, err := f.sink.ReconcileRawSources(t.Context(), true)

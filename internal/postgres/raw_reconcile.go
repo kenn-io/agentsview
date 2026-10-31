@@ -200,8 +200,8 @@ func (s *RawProjectionStore) recoverRawSourceTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO raw_source_projections(source_id,device_id,provider,configured_root_id,source_key_sha256,selected_manifest_id,processing_version,projection_generation,selected_job_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
- ON CONFLICT(source_id) DO UPDATE SET device_id=EXCLUDED.device_id,provider=EXCLUDED.provider,configured_root_id=EXCLUDED.configured_root_id,source_key_sha256=EXCLUDED.source_key_sha256,selected_manifest_id=EXCLUDED.selected_manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,selected_job_id=EXCLUDED.selected_job_id`, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey), m.ManifestID, version, generation, job)
+	_, err = tx.ExecContext(ctx, `INSERT INTO raw_source_projections(source_id,device_id,provider,configured_root_id,source_key_sha256,selected_manifest_id,processing_version,projection_generation,selected_job_id,selected_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp())
+ ON CONFLICT(source_id) DO UPDATE SET device_id=EXCLUDED.device_id,provider=EXCLUDED.provider,configured_root_id=EXCLUDED.configured_root_id,source_key_sha256=EXCLUDED.source_key_sha256,selected_manifest_id=EXCLUDED.selected_manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,selected_job_id=EXCLUDED.selected_job_id,selected_at=clock_timestamp()`, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey), m.ManifestID, version, generation, job)
 	if err != nil {
 		return
 	}
