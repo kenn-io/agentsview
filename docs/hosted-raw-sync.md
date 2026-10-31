@@ -149,8 +149,9 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
 ```
 
 For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
+apply the `raw_maintenance_state`, `raw_message_dialogue`, and
+`UPDATE (dialogue_text)` grants above as the owner. `ON ALL TABLES` grants cover
+only tables that existed when they ran.
 The runtime fails startup until provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
