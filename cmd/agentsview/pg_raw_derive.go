@@ -190,7 +190,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		return fail(err)
 	}
 	closeUploads = closeUploadStore
-	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption}
+	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption, pgKataConn(app)}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))
 	}
