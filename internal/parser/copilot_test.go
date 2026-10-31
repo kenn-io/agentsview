@@ -702,6 +702,8 @@ func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
 	assert.Equal(t, "exact", u.CostStatus)
 	assert.Equal(t, copilotReportedCostSource, u.CostSource)
 	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6:0", u.DedupKey)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 7150, sess.TotalOutputTokens)
 }
 
 func TestParseCopilotSession_ReportedCostPricingCutoff(t *testing.T) {
@@ -946,4 +948,61 @@ func TestCopilotResumedOutputAfterShutdown(t *testing.T) {
 	assert.Equal(t, 3, usage[0].OutputTokens)
 	assert.Empty(t, msgs[0].TokenUsage)
 	assert.JSONEq(t, `{"output_tokens":7}`, string(msgs[1].TokenUsage))
+}
+
+func TestParseCopilotSession_UsageRecordsWithoutShutdown(t *testing.T) {
+	rec := func(at string, in, out int) string {
+		return `{"type":"session.usage_record","data":{"usage":{"model":"gpt-6.1-sol","inputTokens":` +
+			fmt.Sprint(in) + `,"outputTokens":` + fmt.Sprint(out) +
+			`,"cacheReadTokens":60,"cacheWriteTokens":10,"reasoningTokens":5}},"timestamp":"` + at + `"}`
+	}
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"crashed","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-10-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-10-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-10-15T10:00:02Z"}`,
+		rec("2026-10-15T10:00:03Z", 100, 20),
+		rec("2026-10-15T10:00:04Z", 200, 30),
+	)
+
+	sess, _, usage := parseCopilotFull(t, path, "m")
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+	assert.Equal(t, "usage-record", usage[0].Source)
+	assert.Equal(t, "gpt-6.1-sol", usage[0].Model)
+	assert.Equal(t, 50, usage[0].OutputTokens)
+	assert.Equal(t, 30+130, usage[0].InputTokens)
+	assert.Equal(t, 120, usage[0].CacheReadInputTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 50, sess.TotalOutputTokens)
+}
+
+func TestParseCopilotSession_UsageRecordsAfterShutdownOnly(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"resumed","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-10-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-10-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-10-15T10:00:02Z"}`,
+		`{"type":"session.usage_record","data":{"usage":{"model":"gpt-6.1-sol","inputTokens":100,"outputTokens":20}},"timestamp":"2026-10-15T10:00:03Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-6.1-sol":{"usage":{"inputTokens":100,"outputTokens":20}}}},"timestamp":"2026-10-15T10:01:00Z"}`,
+		`{"type":"session.usage_record","data":{"usage":{"model":"gpt-6.1-sol","inputTokens":50,"outputTokens":7}},"timestamp":"2026-10-15T10:02:00Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	require.Len(t, usage, 2)
+	assert.Equal(t, "shutdown", usage[0].Source)
+	assert.Equal(t, 20, usage[0].OutputTokens)
+	assert.Equal(t, "usage-record", usage[1].Source)
+	assert.Equal(t, 7, usage[1].OutputTokens)
+}
+
+func TestParseCopilotSession_UsageRecordsDoNotDoubleCountMessageTokens(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"legacy","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-10-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-10-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-6.1-sol","outputTokens":20},"timestamp":"2026-10-15T10:00:02Z"}`,
+		`{"type":"session.usage_record","data":{"usage":{"model":"gpt-6.1-sol","inputTokens":100,"outputTokens":20}},"timestamp":"2026-10-15T10:00:03Z"}`,
+	)
+
+	sess, _, _ := parseCopilotFull(t, path, "m")
+	require.NotNil(t, sess)
+	assert.Equal(t, 20, sess.TotalOutputTokens)
 }
