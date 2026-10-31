@@ -127,7 +127,7 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_heads, hosted_sessions.raw_ingest_jobs,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
   hosted_sessions.raw_content_revisions, hosted_sessions.raw_session_branches,
-  hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts,
+  hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts
   TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE ON hosted_sessions.raw_maintenance_state
@@ -152,8 +152,8 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
 For an existing deployment, run `agentsview pg hosted-provision provision`, then
 apply the `raw_maintenance_state`, `raw_message_dialogue`, and
 `UPDATE (dialogue_text)` grants above as the owner. `ON ALL TABLES` grants cover
-only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+only tables that existed when they ran. The runtime fails startup until
+provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.
