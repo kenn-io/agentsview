@@ -28,6 +28,7 @@ func loadRawRolloutDiagnostics(ctx context.Context, tx *sql.Tx, device, provider
 		if err != nil {
 			return nil, err
 		}
+		defer rows.Close()
 		type mapping struct {
 			legacy, group string
 			pins          bool
@@ -43,7 +44,6 @@ func loadRawRolloutDiagnostics(ctx context.Context, tx *sql.Tx, device, provider
 		if err == nil {
 			err = rows.Err()
 		}
-		rows.Close()
 		if err != nil {
 			return nil, err
 		}
