@@ -72,7 +72,7 @@ func reportableJobError(id int64, stage string, err error) error {
 
 // JobQueue owns fenced parse-job leasing and retry state.
 type JobQueue interface {
-	ClaimRawParseJobs(context.Context, string, int, time.Duration) ([]JobLease, error)
+	ClaimRawParseJobs(context.Context, string, int, time.Duration, int) ([]JobLease, error)
 	HeartbeatRawParseJob(context.Context, JobLease, time.Duration) error
 	RetryRawParseJob(context.Context, JobLease, time.Time, string, string) error
 	FailRawParseJob(context.Context, JobLease, string, string) error
@@ -199,7 +199,7 @@ func (w *Worker) RunBatch(ctx context.Context) (BatchResult, error) {
 		return BatchResult{}, fmt.Errorf("%w: raw parse worker is missing", rawsync.ErrInvalid)
 	}
 	leasing, err := w.Queue.ClaimRawParseJobs(
-		ctx, w.Owner, w.BatchSize, w.LeaseDuration,
+		ctx, w.Owner, w.BatchSize, w.LeaseDuration, w.MaxAttempts,
 	)
 	if err != nil {
 		return BatchResult{}, fmt.Errorf("claiming raw parse jobs: %w", err)

@@ -1165,6 +1165,59 @@ func (o *PostAPIV1PushPgRequestOptions) GetHeader() (map[string]string, error) {
 	return nil, nil
 }
 
+// GetAPIV1RawSyncHealthRequestOptions is the options needed to make a request to GetAPIV1RawSyncHealth.
+type GetAPIV1RawSyncHealthRequestOptions struct {
+	Query  *GetAPIV1RawSyncHealthQuery
+	Header *GetAPIV1RawSyncHealthHeaders
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1RawSyncHealthRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+
+	if o.Header != nil {
+		if v, ok := any(o.Header).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Header", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1RawSyncHealthRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1RawSyncHealthRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1RawSyncHealthRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1RawSyncHealthRequestOptions) GetHeader() (map[string]string, error) {
+	return runtime.AsMap[string](o.Header)
+}
+
 // PostAPIV1RawSyncManifestsRequestOptions is the options needed to make a request to PostAPIV1RawSyncManifests.
 type PostAPIV1RawSyncManifestsRequestOptions struct {
 	Body   *PostAPIV1RawSyncManifestsBody
@@ -5462,6 +5515,7 @@ type ClientInterface interface {
 	PostAPIV1PushDuckdbStreamWithResponse(ctx context.Context, options *PostAPIV1PushDuckdbRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushDuckdbResp, error)
 	PostAPIV1PushPgWithResponse(ctx context.Context, options *PostAPIV1PushPgRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushPgResp, error)
 	PostAPIV1PushPgStreamWithResponse(ctx context.Context, options *PostAPIV1PushPgRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushPgResp, error)
+	GetAPIV1RawSyncHealthWithResponse(ctx context.Context, options *GetAPIV1RawSyncHealthRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RawSyncHealthResp, error)
 	PostAPIV1RawSyncManifestsWithResponse(ctx context.Context, options *PostAPIV1RawSyncManifestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncManifestsResp, error)
 	PostAPIV1RawSyncObjectsMissingWithResponse(ctx context.Context, options *PostAPIV1RawSyncObjectsMissingRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncObjectsMissingResp, error)
 	GetAPIV1RawSyncStatusWithResponse(ctx context.Context, options *GetAPIV1RawSyncStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RawSyncStatusResp, error)
@@ -11332,6 +11386,229 @@ func (c *Client) PostAPIV1PushPgWithResponse(ctx context.Context, options *PostA
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1PushPgErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1RawSyncHealth Report raw parse-job health
+func (c *Client) GetAPIV1RawSyncHealthWithResponse(ctx context.Context, options *GetAPIV1RawSyncHealthRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RawSyncHealthResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/raw-sync/health",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/raw-sync/health")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1RawSyncHealthResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1RawSyncHealthResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1RawSyncHealthErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1RawSyncHealthErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1RawSyncHealthErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1RawSyncHealthErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1RawSyncHealthErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1RawSyncHealthErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1RawSyncHealthErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1RawSyncHealthErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1RawSyncHealthErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1RawSyncHealthErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1RawSyncHealthErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncHealthErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -20131,6 +20408,10 @@ func (g GetStartupProbeHeaders) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
+type GetAPIV1RawSyncHealthHeaders struct {
+	Authorization *string `json:"Authorization,omitempty"`
+}
+
 type PostAPIV1RawSyncManifestsHeaders struct {
 	Authorization *string `json:"Authorization,omitempty"`
 }
@@ -20901,6 +21182,15 @@ type GetAPIV1ProjectsQuery struct {
 
 	// IncludeAutomated Include automated sessions
 	IncludeAutomated *bool `json:"include_automated,omitempty"`
+}
+
+type GetAPIV1RawSyncHealthQuery struct {
+	MaxAttempts       int32 `json:"max_attempts" validate:"gte=1,lte=2147483647"`
+	StaleAfterSeconds int32 `json:"stale_after_seconds" validate:"gte=1,lte=2147483647"`
+}
+
+func (g GetAPIV1RawSyncHealthQuery) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
 type GetAPIV1RecallEntriesQuery struct {
@@ -22474,6 +22764,30 @@ type PostAPIV1PushPgErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1PushPgErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1RawSyncHealthResponse = RawsyncJobHealthReport
+
+type GetAPIV1RawSyncHealthErrorResponse = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1RawSyncHealthErrorResponseJSON504 = APIErrorResponse
+
 type PostAPIV1RawSyncManifestsResponse = RawSyncManifestResponse
 
 type PostAPIV1RawSyncManifestsErrorResponse = APIErrorResponse
@@ -23919,6 +24233,24 @@ type PostAPIV1PushPgResp struct {
 	JSON502      *PostAPIV1PushPgErrorResponseJSON502
 	JSON503      *PostAPIV1PushPgErrorResponseJSON503
 	JSON504      *PostAPIV1PushPgErrorResponseJSON504
+}
+
+type GetAPIV1RawSyncHealthResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1RawSyncHealthResponse
+	JSON400      *GetAPIV1RawSyncHealthErrorResponse
+	JSON401      *GetAPIV1RawSyncHealthErrorResponseJSON
+	JSON403      *GetAPIV1RawSyncHealthErrorResponseJSON403
+	JSON404      *GetAPIV1RawSyncHealthErrorResponseJSON404
+	JSON409      *GetAPIV1RawSyncHealthErrorResponseJSON409
+	JSON422      *GetAPIV1RawSyncHealthErrorResponseJSON422
+	JSON500      *GetAPIV1RawSyncHealthErrorResponseJSON500
+	JSON501      *GetAPIV1RawSyncHealthErrorResponseJSON501
+	JSON502      *GetAPIV1RawSyncHealthErrorResponseJSON502
+	JSON503      *GetAPIV1RawSyncHealthErrorResponseJSON503
+	JSON504      *GetAPIV1RawSyncHealthErrorResponseJSON504
 }
 
 type PostAPIV1RawSyncManifestsResp struct {
@@ -26928,6 +27260,22 @@ func (r RawSyncUploadStartInputBody) Validate() error {
 	return errors
 }
 
+type RawsyncDeadLetterHealth struct {
+	Count          int64      `json:"count"`
+	OldestFailedAt *time.Time `json:"oldest_failed_at" validate:"required"`
+}
+
+func (r RawsyncDeadLetterHealth) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
+type RawsyncDegradedSources struct {
+	FailedWithoutProjection int64 `json:"failed_without_projection"`
+	IncompleteMembership    int64 `json:"incomplete_membership"`
+	ServingOlderProjection  int64 `json:"serving_older_projection"`
+	Unknown                 int64 `json:"unknown"`
+}
+
 type RawsyncDeviceStatus struct {
 	DeviceID   string     `json:"device_id" validate:"required"`
 	LastSeenAt *time.Time `json:"last_seen_at" validate:"required"`
@@ -26969,6 +27317,153 @@ func (r RawsyncEntry) Validate() error {
 	return errors
 }
 
+type RawsyncExpiredLease struct {
+	AttemptCount      int64     `json:"attempt_count"`
+	ConfiguredRootID  string    `json:"configured_root_id" validate:"required"`
+	DeviceID          string    `json:"device_id" validate:"required"`
+	JobID             int64     `json:"job_id"`
+	LeaseExpiresAt    time.Time `json:"lease_expires_at" validate:"required"`
+	ManifestID        string    `json:"manifest_id" validate:"required"`
+	ProcessingVersion string    `json:"processing_version" validate:"required"`
+	Provider          string    `json:"provider" validate:"required"`
+	SourceKeySha256   string    `json:"source_key_sha256" validate:"required"`
+	UpdatedAt         time.Time `json:"updated_at" validate:"required"`
+}
+
+func (r RawsyncExpiredLease) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
+type RawsyncJobAttemptWarning struct {
+	AttemptCount      int64     `json:"attempt_count"`
+	AvailableAt       time.Time `json:"available_at" validate:"required"`
+	ConfiguredRootID  string    `json:"configured_root_id" validate:"required"`
+	DeviceID          string    `json:"device_id" validate:"required"`
+	JobID             int64     `json:"job_id"`
+	LastErrorClass    string    `json:"last_error_class" validate:"required"`
+	ManifestID        string    `json:"manifest_id" validate:"required"`
+	ProcessingVersion string    `json:"processing_version" validate:"required"`
+	Provider          string    `json:"provider" validate:"required"`
+	SourceKeySha256   string    `json:"source_key_sha256" validate:"required"`
+	UpdatedAt         time.Time `json:"updated_at" validate:"required"`
+}
+
+func (r RawsyncJobAttemptWarning) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
+type RawsyncJobFailureClass struct {
+	ErrorClass      string    `json:"error_class" validate:"required"`
+	JobCount        int64     `json:"job_count"`
+	LatestFailureAt time.Time `json:"latest_failure_at" validate:"required"`
+}
+
+func (r RawsyncJobFailureClass) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
+type RawsyncJobHealthReport struct {
+	DeadLetters            RawsyncDeadLetterHealth    `json:"dead_letters"`
+	ExpiredLeaseCount      int64                      `json:"expired_lease_count"`
+	ExpiredLeases          []RawsyncExpiredLease      `json:"expired_leases" validate:"required"`
+	FailedJobCount         int64                      `json:"failed_job_count"`
+	FailedJobsByErrorClass []RawsyncJobFailureClass   `json:"failed_jobs_by_error_class" validate:"required"`
+	MaxAttempts            int32                      `json:"max_attempts"`
+	ObservedAt             time.Time                  `json:"observed_at" validate:"required"`
+	OrphanedManifestCount  int64                      `json:"orphaned_manifest_count"`
+	OrphanedManifests      []RawsyncOrphanedManifest  `json:"orphaned_manifests" validate:"required"`
+	Recovery               *RawsyncRecoveryMetrics    `json:"recovery,omitempty"`
+	RetryingNearLimit      []RawsyncJobAttemptWarning `json:"retrying_near_limit" validate:"required"`
+	RetryingNearLimitCount int64                      `json:"retrying_near_limit_count"`
+	StaleAfterSeconds      int32                      `json:"stale_after_seconds"`
+	StaleSourceHeadCount   int64                      `json:"stale_source_head_count"`
+	StaleSourceHeads       []RawsyncStaleSourceHead   `json:"stale_source_heads" validate:"required"`
+}
+
+func (r RawsyncJobHealthReport) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(r.DeadLetters).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("DeadLetters", err)
+		}
+	}
+	if err := typesValidator.Var(r.ExpiredLeases, "required"); err != nil {
+		errors = errors.Append("ExpiredLeases", err)
+	}
+	for i, item := range r.ExpiredLeases {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("ExpiredLeases[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(r.FailedJobsByErrorClass, "required"); err != nil {
+		errors = errors.Append("FailedJobsByErrorClass", err)
+	}
+	for i, item := range r.FailedJobsByErrorClass {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("FailedJobsByErrorClass[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(r.ObservedAt, "required"); err != nil {
+		errors = errors.Append("ObservedAt", err)
+	}
+	if err := typesValidator.Var(r.OrphanedManifests, "required"); err != nil {
+		errors = errors.Append("OrphanedManifests", err)
+	}
+	for i, item := range r.OrphanedManifests {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("OrphanedManifests[%d]", i), err)
+			}
+		}
+	}
+	if r.Recovery != nil {
+		if v, ok := any(r.Recovery).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Recovery", err)
+			}
+		}
+	}
+	if err := typesValidator.Var(r.RetryingNearLimit, "required"); err != nil {
+		errors = errors.Append("RetryingNearLimit", err)
+	}
+	for i, item := range r.RetryingNearLimit {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("RetryingNearLimit[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(r.StaleSourceHeads, "required"); err != nil {
+		errors = errors.Append("StaleSourceHeads", err)
+	}
+	for i, item := range r.StaleSourceHeads {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("StaleSourceHeads[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type RawsyncJobOutcomeBucket struct {
+	BucketStart time.Time `json:"bucket_start" validate:"required"`
+	Count       int64     `json:"count"`
+	Outcome     string    `json:"outcome" validate:"required"`
+	Stage       string    `json:"stage" validate:"required"`
+}
+
+func (r RawsyncJobOutcomeBucket) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
 type RawsyncManifest = rawsync.Manifest
 
 type RawsyncObjectRef = rawsync.ObjectRef
@@ -26982,6 +27477,21 @@ func (r RawsyncOpenUploadStatus) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(r))
 }
 
+type RawsyncOrphanedManifest struct {
+	AcceptedAt       time.Time `json:"accepted_at" validate:"required"`
+	ConfiguredRootID string    `json:"configured_root_id" validate:"required"`
+	DeviceID         string    `json:"device_id" validate:"required"`
+	Generation       int64     `json:"generation"`
+	Kind             string    `json:"kind" validate:"required"`
+	ManifestID       string    `json:"manifest_id" validate:"required"`
+	Provider         string    `json:"provider" validate:"required"`
+	SourceKeySha256  string    `json:"source_key_sha256" validate:"required"`
+}
+
+func (r RawsyncOrphanedManifest) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
 type RawsyncParseJobCounts struct {
 	Complete   int64 `json:"complete"`
 	Failed     int64 `json:"failed"`
@@ -26989,6 +27499,40 @@ type RawsyncParseJobCounts struct {
 	Ready      int64 `json:"ready"`
 	Retrying   int64 `json:"retrying"`
 	Superseded int64 `json:"superseded"`
+}
+
+type RawsyncRecoveryMetrics struct {
+	DegradedSources               RawsyncDegradedSources    `json:"degraded_sources"`
+	OldestOpenUploadAgeSeconds    *float64                  `json:"oldest_open_upload_age_seconds"`
+	OldestPendingSourceAgeSeconds *float64                  `json:"oldest_pending_source_age_seconds"`
+	OldestReadyAgeSeconds         *float64                  `json:"oldest_ready_age_seconds"`
+	OldestRetryingAgeSeconds      *float64                  `json:"oldest_retrying_age_seconds"`
+	OutcomeBuckets                []RawsyncJobOutcomeBucket `json:"outcome_buckets" validate:"required"`
+	ParseLagSeconds               *float64                  `json:"parse_lag_seconds"`
+	QueuedBytes                   int64                     `json:"queued_bytes"`
+}
+
+func (r RawsyncRecoveryMetrics) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(r.DegradedSources).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("DegradedSources", err)
+		}
+	}
+	if err := typesValidator.Var(r.OutcomeBuckets, "required"); err != nil {
+		errors = errors.Append("OutcomeBuckets", err)
+	}
+	for i, item := range r.OutcomeBuckets {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("OutcomeBuckets[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type RawsyncSourceHeadStatus struct {
@@ -27008,10 +27552,26 @@ func (r RawsyncSourceHeadStatus) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(r))
 }
 
+type RawsyncStaleSourceHead struct {
+	AcceptedAt       time.Time `json:"accepted_at" validate:"required"`
+	ConfiguredRootID string    `json:"configured_root_id" validate:"required"`
+	DeviceID         string    `json:"device_id" validate:"required"`
+	Generation       int64     `json:"generation"`
+	Kind             string    `json:"kind" validate:"required"`
+	ManifestID       string    `json:"manifest_id" validate:"required"`
+	Provider         string    `json:"provider" validate:"required"`
+	SourceKeySha256  string    `json:"source_key_sha256" validate:"required"`
+}
+
+func (r RawsyncStaleSourceHead) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
 type RawsyncStatus struct {
 	ActiveDeviceCount int64                      `json:"active_device_count"`
 	Devices           []RawsyncDeviceStatus      `json:"devices" validate:"required"`
 	ParseJobs         RawsyncParseJobCounts      `json:"parse_jobs"`
+	Recovery          *RawsyncRecoveryMetrics    `json:"recovery,omitempty"`
 	SourceHeads       []RawsyncSourceHeadStatus  `json:"source_heads" validate:"required"`
 	Uploads           RawsyncUploadStatusSummary `json:"uploads"`
 }
@@ -27031,6 +27591,13 @@ func (r RawsyncStatus) Validate() error {
 	if v, ok := any(r.ParseJobs).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("ParseJobs", err)
+		}
+	}
+	if r.Recovery != nil {
+		if v, ok := any(r.Recovery).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Recovery", err)
+			}
 		}
 	}
 	if err := typesValidator.Var(r.SourceHeads, "required"); err != nil {

@@ -3,6 +3,7 @@
  */
 import type { RawsyncDeviceStatus } from "./rawsyncDeviceStatus.ts";
 import type { RawsyncParseJobCounts } from "./rawsyncParseJobCounts.ts";
+import type { RawsyncRecoveryMetrics } from "./rawsyncRecoveryMetrics.ts";
 import type { RawsyncSourceHeadStatus } from "./rawsyncSourceHeadStatus.ts";
 import type { RawsyncUploadStatusSummary } from "./rawsyncUploadStatusSummary.ts";
 
@@ -10,6 +11,7 @@ export interface RawsyncStatus {
   active_device_count: number;
   devices: RawsyncDeviceStatus[];
   parse_jobs: RawsyncParseJobCounts;
+  recovery?: RawsyncRecoveryMetrics;
   source_heads: RawsyncSourceHeadStatus[];
   uploads: RawsyncUploadStatusSummary;
 }

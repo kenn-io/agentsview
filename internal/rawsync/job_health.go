@@ -27,9 +27,10 @@ func (q JobHealthQuery) Validate() error {
 
 // JobHealthReport contains tenant-scoped raw parse-job observations.
 type JobHealthReport struct {
-	ObservedAt        time.Time `json:"observed_at"`
-	MaxAttempts       int32     `json:"max_attempts"`
-	StaleAfterSeconds int32     `json:"stale_after_seconds"`
+	Recovery          *RecoveryMetrics `json:"recovery,omitempty"`
+	ObservedAt        time.Time        `json:"observed_at"`
+	MaxAttempts       int32            `json:"max_attempts"`
+	StaleAfterSeconds int32            `json:"stale_after_seconds"`
 
 	OrphanedManifests      []OrphanedManifest  `json:"orphaned_manifests"`
 	OrphanedManifestCount  int64               `json:"orphaned_manifest_count"`
@@ -37,6 +38,7 @@ type JobHealthReport struct {
 	ExpiredLeaseCount      int64               `json:"expired_lease_count"`
 	FailedJobsByErrorClass []JobFailureClass   `json:"failed_jobs_by_error_class"`
 	FailedJobCount         int64               `json:"failed_job_count"`
+	DeadLetters            DeadLetterHealth    `json:"dead_letters"`
 	RetryingNearLimit      []JobAttemptWarning `json:"retrying_near_limit"`
 	RetryingNearLimitCount int64               `json:"retrying_near_limit_count"`
 	StaleSourceHeads       []StaleSourceHead   `json:"stale_source_heads"`
@@ -102,4 +104,10 @@ type StaleSourceHead struct {
 	Generation       int64            `json:"generation"`
 	Kind             ManifestKind     `json:"kind"`
 	AcceptedAt       time.Time        `json:"accepted_at"`
+}
+
+// DeadLetterHealth counts all failed parse jobs, including historical selections.
+type DeadLetterHealth struct {
+	Count          int64      `json:"count"`
+	OldestFailedAt *time.Time `json:"oldest_failed_at"`
 }

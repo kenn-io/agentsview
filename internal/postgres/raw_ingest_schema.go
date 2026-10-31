@@ -154,6 +154,8 @@ CREATE TABLE IF NOT EXISTS raw_ingest_jobs (
     projection_selected BOOLEAN NOT NULL DEFAULT true,
     state TEXT NOT NULL DEFAULT 'ready',
     attempt_count INTEGER NOT NULL DEFAULT 0,
+    lease_epoch BIGINT NOT NULL DEFAULT 0,
+    failed_at TIMESTAMPTZ,
     available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     lease_owner TEXT NOT NULL DEFAULT '',
     lease_expires_at TIMESTAMPTZ,
@@ -392,14 +394,14 @@ func ensureRawProjectionJobColumns(ctx context.Context, q interface {
 },
 ) error {
 	var current bool
-	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='raw_ingest_jobs'::regclass AND attnum>0 AND NOT attisdropped AND attname IN ('projection_generation','projection_selected') GROUP BY attrelid HAVING count(*)=2)`).Scan(&current)
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='raw_ingest_jobs'::regclass AND attnum>0 AND NOT attisdropped AND attname IN ('projection_generation','projection_selected','lease_epoch','failed_at') GROUP BY attrelid HAVING count(*)=4)`).Scan(&current)
 	if err != nil {
 		return fmt.Errorf("probing raw projection job columns: %w", err)
 	}
 	if current {
 		return nil
 	}
-	_, err = q.ExecContext(ctx, `ALTER TABLE raw_ingest_jobs ADD COLUMN IF NOT EXISTS projection_generation BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS projection_selected BOOLEAN NOT NULL DEFAULT true`)
+	_, err = q.ExecContext(ctx, `ALTER TABLE raw_ingest_jobs ADD COLUMN IF NOT EXISTS projection_generation BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS projection_selected BOOLEAN NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS lease_epoch BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ; UPDATE raw_ingest_jobs SET failed_at=updated_at WHERE state='failed' AND failed_at IS NULL`)
 	return err
 }
 

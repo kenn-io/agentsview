@@ -41,7 +41,8 @@ type rawEmbeddingChange struct{ session, revision, action string }
 // publishRawRevision issues the corpus revision for rows the caller has already
 // written and queues their embedding work under it. It locks the corpus row,
 // which manifest acceptance and every other publication also update, so
-// nothing after it in the transaction may wait on another transaction's lock.
+// no later domain write may wait on another transaction's lock. Deferred
+// outcome aggregation runs last and takes only its separate schema/bucket locks.
 // The outbox rows record the selection revision read under that lock, which is
 // the one the transaction commits with.
 func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, changes []rawEmbeddingChange) error {

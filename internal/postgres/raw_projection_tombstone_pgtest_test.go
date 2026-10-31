@@ -210,7 +210,7 @@ func TestRawProjectionTombstoneReparseRetainsSession(t *testing.T) {
 	scheduled, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 10)
 	require.NoError(t, err)
 	require.Equal(t, 1, scheduled.Selected)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "rollout-worker", 1, time.Minute)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "rollout-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.Equal(t, tomb.ManifestID, leases[0].ManifestID)

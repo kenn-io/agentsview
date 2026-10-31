@@ -45,7 +45,16 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	if err := readRawSyncStatusUploads(ctx, tx, identity.TenantID, &status); err != nil {
 		return rawsync.Status{}, err
 	}
-	return status, nil
+	expression, err := rawRecoveryExpression(ctx, tx)
+	if err != nil {
+		return rawsync.Status{}, err
+	}
+	var recoveryJSON *string
+	if err := tx.QueryRowContext(ctx, "SELECT "+expression+" FROM (SELECT CURRENT_TIMESTAMP observed_at, $1::text tenant_id) snapshot", identity.TenantID).Scan(&recoveryJSON); err != nil {
+		return rawsync.Status{}, err
+	}
+	status.Recovery, err = decodeRawRecovery(recoveryJSON)
+	return status, err
 }
 
 func readRawSyncStatusHeads(
