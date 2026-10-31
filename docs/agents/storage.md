@@ -646,6 +646,14 @@ of a few seconds is expected and intended. Do not reintroduce a whole-snapshot
 recheck against the archive: validating a snapshot against a source that changes
 one session at a time livelocks the request.
 
+Refills still extract complete session histories, but compare facts in bounded
+batches against one read-only cache snapshot and spool only changed or new
+rows. Comparison requires the expected install revision; installation checks
+that revision again. Complete per-session fact counts remove obsolete tails,
+and identity invalidation compares the complete cache before and after install.
+An append can still shift later activity or event indexes and spool those rows.
+This reduces temporary writes; it does not make source extraction incremental.
+
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but
 keeps immutable coordinator pointers and the cache database alive until active
