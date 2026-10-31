@@ -151,7 +151,7 @@ func TestRawLegacyPinMatchesUUIDAndNormalizedContent(t *testing.T) {
 // to the exact target message and includes its ordinal.
 func TestRawLegacyPinTargetKeyProperty(t *testing.T) {
 	hegel.Test(t, func(ht *hegel.T) {
-		ordinal := int(hegel.Draw(ht, hegel.Integers(0, math.MaxInt32)))
+		ordinal := hegel.Draw(ht, hegel.Integers(0, math.MaxInt32))
 		source := db.Message{Ordinal: 0, Role: "user", Content: hegel.Draw(ht, hegel.Text()), SourceUUID: "uuid:" + hegel.Draw(ht, hegel.Text())}
 		target := source
 		target.Ordinal = ordinal
