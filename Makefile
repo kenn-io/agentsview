@@ -76,7 +76,7 @@ ensure-embed-dir:
 # Chained from pricing-snapshot so every Go-compiling target stages it
 # without lengthening each prerequisite list.
 sqlite-vec-header:
-	@go mod download github.com/mattn/go-sqlite3
+	@$(DOWNLOAD_RETRY) go mod download github.com/mattn/go-sqlite3
 	@mkdir -p $(SQLITE_INCLUDE_DIR)
 	@install -m 0644 \
 		"$$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)/sqlite3-binding.h" \
@@ -85,7 +85,7 @@ sqlite-vec-header:
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.
 pricing-snapshot: sqlite-vec-header
-	go run ./internal/pricing/cmd/litellm-snapshot -restore
+	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
@@ -164,7 +164,7 @@ install-cjk-fts: install simple-fts
 
 # Build frontend SPA and copy into embed directory
 frontend:
-	cd frontend && npm ci && npm run build
+	cd frontend && $(DOWNLOAD_RETRY) npm ci && npm run build
 	rm -rf internal/web/dist
 	cp -r frontend/dist internal/web/dist
 	printf '%s\n' \
@@ -805,3 +805,7 @@ actions-lock-check-local: gh-actions-lock-install
 # Network check that the lockfile is complete and every locked commit is still valid
 actions-lock-check: gh-actions-lock-install
 	gh actions-lock --verify
+
+.PHONY: lint-workflow-retries
+lint-workflow-retries:
+	GOOS= GOARCH= go run go.kenn.io/kit/cmd/kennlint@v0.47.3 workflow-retries

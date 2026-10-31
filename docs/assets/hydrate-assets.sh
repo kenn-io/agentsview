@@ -46,7 +46,7 @@ resolve_asset_ref() {
     fi
   fi
 
-  if ! git -C "$repo_root" fetch --force --depth=1 origin \
+  if ! ${DOWNLOAD_RETRY:-} git -C "$repo_root" fetch --force --depth=1 origin \
     "+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null; then
     printf 'docs assets not hydrated: failed to fetch origin/%s\n' "$branch" >&2
     return 1
