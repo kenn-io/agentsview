@@ -314,6 +314,8 @@ func TestHostedTenantAuthAndJobFences(t *testing.T) {
 	require.NoError(t, err)
 	status, err := bound.ReadRawSyncStatus(t.Context(), first.Identity)
 	require.NoError(t, err)
+	assert.NotNil(t, status.Rollout)
+	assert.Empty(t, status.Rollout, "tenant fencing also works on custody-only schemas")
 	require.Len(t, status.Devices, 1)
 	assert.Equal(t, first.Identity.DeviceID, status.Devices[0].DeviceID)
 	status, err = bound.ReadRawSyncStatus(t.Context(), second.Identity)
