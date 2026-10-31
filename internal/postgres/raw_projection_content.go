@@ -48,7 +48,6 @@ func rawBaseAlias(m rawsync.CanonicalManifest, s db.Session) string {
 }
 
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
-	p.Session.SourceMachines = nil
 	// Dialogue belongs to mutable derived state, outside immutable content.
 	p.Messages = slices.Clone(p.Messages)
 	for i := range p.Messages {

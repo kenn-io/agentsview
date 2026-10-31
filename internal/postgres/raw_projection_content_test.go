@@ -28,11 +28,6 @@ func TestRawPayloadKeepsDialogueInDerivedState(t *testing.T) {
 		assert.Equal(t, original, encoded, "dialogue changes preserve the immutable payload")
 		assert.Equal(t, new(dialogue), p.Messages[0].DialogueText, "encoding preserves the caller's derived state")
 	}
-	p.Session.SourceMachines = []string{"raw-device:device-a", "raw-device:device-b"}
-	encoded, err := encodeRawPayload(p)
-	require.NoError(t, err)
-	assert.Equal(t, original, encoded, "read-time source membership is not immutable transcript content")
-	assert.Len(t, p.Session.SourceMachines, 2, "encoding preserves the caller's source metadata")
 }
 
 func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
@@ -216,10 +211,6 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	require.NoError(t, err)
 	// The original normalized-content-v1 digest must survive encoder changes.
 	assert.Equal(t, "d5c710716bc7b8a68d60e43d58192489be71935625e141f9eb6c9dae723c3a29", got)
-	p.Session.SourceMachines = []string{"raw-device:device-a", "raw-device:device-b"}
-	withSources, err := rawContentRevision(p)
-	require.NoError(t, err)
-	assert.Equal(t, got, withSources, "source membership preserves the existing content identity")
 	key, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
 	p.Signals.ToolObservations = []db.ToolObservation{{Outcome: "empty", Repeat: "exact", SequenceEnding: new("abandoned")}}

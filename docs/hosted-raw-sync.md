@@ -244,6 +244,8 @@ responses include the contributing IDs in `source_machines`; `machine` stays
 `hosted` for compatibility. The session browser displays the source names,
 including all contributors to a shared session. Retained contributions remain
 selectable when their source file has left the device.
+Usage machine breakdowns and top-session rows still report hosted sessions under
+the `hosted` machine.
 
 A shorter transcript shares the longer copy's displayed session when every
 retained message and usage event matches its prefix and the source metadata
