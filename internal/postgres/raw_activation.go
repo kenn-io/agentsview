@@ -56,6 +56,7 @@ func checkRawActivationEmbeddingMode(mode RawEmbeddingMode) error {
 		return errors.New("raw-rollout embedding configuration is unknown; integrate the embedding-aware selected-target configuration before activation")
 	}
 }
+
 func checkRawActivationGate(r rawparity.Report, accept bool, mode RawEmbeddingMode) error {
 	if err := checkRawActivationEmbeddingMode(mode); err != nil {
 		return err
@@ -73,21 +74,21 @@ func checkRawActivationGate(r rawparity.Report, accept bool, mode RawEmbeddingMo
 	return nil
 }
 
-type rawActivationLockConflict struct{ error }
+type rawActivationLockConflictError struct{ error }
 
-func (e *rawActivationLockConflict) Unwrap() error { return e.error }
+func (e *rawActivationLockConflictError) Unwrap() error { return e.error }
 
 func rawActivationNowait(err error) error {
 	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "55P03" {
-		return &rawActivationLockConflict{err}
+		return &rawActivationLockConflictError{err}
 	}
 	return err
 }
 
 // An uncertain successful commit/cleanup must never be replayed.
-type rawActivationUncertain struct{ error }
+type rawActivationUncertainError struct{ error }
 
-func (e *rawActivationUncertain) Unwrap() error { return e.error }
+func (e *rawActivationUncertainError) Unwrap() error { return e.error }
 
 func retryRawActivation(ctx context.Context, operation func() (RawActivationAudit, error)) (RawActivationAudit, error) {
 	policy := backoff.NewExponentialBackOff()
@@ -99,9 +100,9 @@ func retryRawActivation(ctx context.Context, operation func() (RawActivationAudi
 			return value, nil
 		}
 		pg, ok := errors.AsType[*pgconn.PgError](err)
-		_, uncertain := errors.AsType[*rawActivationUncertain](err)
-		_, nowait := errors.AsType[*rawActivationLockConflict](err)
-		if uncertain || !ok || (pg.Code != "40001" && pg.Code != "40P01" && !(nowait && pg.Code == "55P03")) {
+		_, uncertain := errors.AsType[*rawActivationUncertainError](err)
+		_, nowait := errors.AsType[*rawActivationLockConflictError](err)
+		if uncertain || !ok || (pg.Code != "40001" && pg.Code != "40P01" && (!nowait || pg.Code != "55P03")) {
 			return value, backoff.Permanent(err)
 		}
 		return value, err
@@ -112,6 +113,7 @@ func retryRawActivation(ctx context.Context, operation func() (RawActivationAudi
 	return value, nil
 }
 
+//nolint:unused // used by the later fenced activation engine
 func discardRawActivationConnection(conn *sql.Conn) {
 	// Returning ErrBadConn through Raw tells database/sql to close the physical
 	// driver connection. Conn.Close alone would return a session guard to the pool.
