@@ -55,6 +55,8 @@ jobs:
               - 'internal/importer/claude_ai_requests.txt'
 
   lint:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: &go-lane ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go')) }}
     runs-on: ubuntu-latest
@@ -83,25 +85,25 @@ jobs:
           group: lint-${{ matrix.linter }}
           extra-path: ~/.cache/golangci-lint
 
-      - name: Prepare SQLite header
-        if: runner.os == 'Linux'
-        run: |
-          make sqlite-vec-header
-          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
-
-      - name: Prepare SQLite header
-        if: runner.os == 'Linux'
-        run: |
-          make sqlite-vec-header
-          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
-
-      - name: Prepare SQLite header
-        if: runner.os == 'Linux'
-        run: |
-          make sqlite-vec-header
-          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
-
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
+      - name: Prepare SQLite header
+        if: runner.os == 'Linux'
+        run: |
+          make sqlite-vec-header
+          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
+
+      - name: Prepare SQLite header
+        if: runner.os == 'Linux'
+        run: |
+          make sqlite-vec-header
+          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
+
+      - name: Prepare SQLite header
+        if: runner.os == 'Linux'
+        run: |
+          make sqlite-vec-header
+          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
       - name: Install lint tools
         run: |
@@ -124,6 +126,8 @@ jobs:
         uses: $/.github/actions/go-cache-save
 
   frontend:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: &frontend-lane ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go') || contains(fromJSON(needs.changes.outputs.groups), 'frontend')) }}
     runs-on: ubuntu-latest
@@ -149,6 +153,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -157,8 +163,6 @@ jobs:
 
       - name: Generate pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot
-
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - name: Install frontend dependencies
         run: kit-retry 3 5 npm ci
@@ -257,6 +261,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     env:
+      DOWNLOAD_RETRY: kit-retry 3 5
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
       fail-fast: false
@@ -308,6 +313,9 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
+
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+        if: runner.os != 'Windows' || matrix.testSet == 'lint'
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -394,9 +402,6 @@ jobs:
           group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.windows_linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
-
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-        if: runner.os == 'macOS' || (runner.os == 'Windows' && matrix.testSet == 'lint')
 
       - name: Prepare Go linters (Windows)
         id: prepare_windows_linter
@@ -710,6 +715,8 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: *go-lane
     name: Go Test (race detector, ${{ matrix.name }})
@@ -756,6 +763,8 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: race-linux
+
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -833,6 +842,8 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: *go-lane
     name: Integration (${{ matrix.name }})
@@ -894,6 +905,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
@@ -918,6 +931,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
+      DOWNLOAD_RETRY: kit-retry 3 5
     strategy:
       fail-fast: false
       matrix:
@@ -942,6 +956,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -953,8 +969,6 @@ jobs:
           node-version: "26.12.1"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - name: Install frontend dependencies
         run: kit-retry 3 5 npm ci
