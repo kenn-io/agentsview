@@ -48,6 +48,7 @@ func (w *parityFailWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
 func TestRawParityWriterFailures(t *testing.T) {
 	for _, tc := range []struct {
 		json                 bool

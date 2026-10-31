@@ -30,11 +30,14 @@ type Reader interface {
 	Links(context.Context, string) ([]Link, error)
 }
 
-type Counts map[string]int
-type LegacyRef struct {
-	ID      string `json:"id"`
-	Machine string `json:"machine"`
-}
+type (
+	Counts    map[string]int
+	LegacyRef struct {
+		ID      string `json:"id"`
+		Machine string `json:"machine"`
+	}
+)
+
 type Entry struct {
 	Class     string      `json:"class"`
 	RawIDs    []string    `json:"raw_ids,omitempty"`

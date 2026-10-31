@@ -46,7 +46,8 @@ func TestRunRelationshipsAndSharedTotals(t *testing.T) {
 	rows := []Candidate{
 		{ID: "raw-parent", PublicID: "parent", Agent: "claude", Group: "p", Aliases: []string{"parent"}, Devices: []string{"a", "b"}},
 		{ID: "raw-child", PublicID: "child", Agent: "claude", Group: "c", Aliases: []string{"child"}, Devices: []string{"a"}},
-		{ID: "parent", PublicID: "parent", Agent: "claude"}, {ID: "child", PublicID: "child", Agent: "claude"},
+		{ID: "parent", PublicID: "parent", Agent: "claude"},
+		{ID: "child", PublicID: "child", Agent: "claude"},
 	}
 	reader := memoryReader{rows: rows, links: map[string][]Link{"raw-child": {{Kind: "parent", Targets: []string{"raw-parent"}}}}, snapshots: map[string]Snapshot{
 		"raw-parent": {Session: db.Session{Agent: "claude"}}, "parent": {Session: db.Session{Agent: "claude"}},
@@ -117,6 +118,7 @@ func (r memoryReader) Candidates(context.Context) ([]Candidate, error) { return 
 func (r memoryReader) Readiness(context.Context, Scope) ([]Readiness, error) {
 	return []Readiness{{Projected: 1}}, r.err
 }
+
 func (r memoryReader) Snapshots(_ context.Context, ids []string) (map[string]Snapshot, error) {
 	out := map[string]Snapshot{}
 	for _, id := range ids {
@@ -126,9 +128,10 @@ func (r memoryReader) Snapshots(_ context.Context, ids []string) (map[string]Sna
 	}
 	return out, r.err
 }
+
 func TestRunFailsClosedOnStorageError(t *testing.T) {
 	_, err := Run(t.Context(), memoryReader{err: errors.New("read failed")}, Scope{})
-	assert.ErrorContains(t, err, "read failed")
+	require.ErrorContains(t, err, "read failed")
 	_, err = Run(t.Context(), memoryReader{rows: []Candidate{{ID: "raw", Group: "g", Aliases: []string{"legacy"}}, {ID: "legacy"}}}, Scope{})
-	assert.Error(t, err, "missing rows must not normalize as two empty sessions")
+	require.Error(t, err, "missing rows must not normalize as two empty sessions")
 }
