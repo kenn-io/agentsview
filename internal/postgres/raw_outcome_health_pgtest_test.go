@@ -29,7 +29,7 @@ func TestRawOutcomeFailureSurvivesReplay(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO raw_job_outcome_buckets(bucket_start,stage,outcome,count) VALUES(now()-interval '24 hours','parse','complete',99)`)
 	require.NoError(t, err)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "new-worker", 1, time.Minute)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "new-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.NoError(t, f.jobs.CompleteRawParseJob(t.Context(), leases[0]))
