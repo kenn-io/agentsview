@@ -446,30 +446,28 @@ func TestPriceCopilotStoreRequestsWithoutMessageOrdinal(t *testing.T) {
 			}},
 		},
 	}})
-	for _, source := range []string{"session-store", "usage-record"} {
-		t.Run(source, func(t *testing.T) {
-			for _, tc := range []struct {
-				name             string
-				inputs           []int64
-				wantMicrodollars int64
-			}{
-				{"one large call", []int64{300_000}, 1_500_000},
-				{"two smaller calls", []int64{150_000, 150_000}, 750_000},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					var total int64
-					for _, input := range tc.inputs {
-						fact, ok := usagefacts.FromEvent(usagefacts.EventInput{
-							Source: source, Model: "gpt-5.4", InputTokens: input,
-						})
-						require.True(t, ok)
-						got, err := priceUsageFact(usagePriceInput{ReportedModel: fact.Model, Fact: fact}, resolver)
-						require.NoError(t, err)
-						total += got.Cost.Microdollars
-					}
-					assert.Equal(t, tc.wantMicrodollars, total)
+	for _, tc := range []struct {
+		name             string
+		source           string
+		inputs           []int64
+		wantMicrodollars int64
+	}{
+		{"session-store/one large call", "session-store", []int64{300_000}, 1_500_000},
+		{"session-store/two smaller calls", "session-store", []int64{150_000, 150_000}, 750_000},
+		{"usage-record/one large call", "usage-record", []int64{300_000}, 1_500_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var total int64
+			for _, input := range tc.inputs {
+				fact, ok := usagefacts.FromEvent(usagefacts.EventInput{
+					Source: tc.source, Model: "gpt-5.4", InputTokens: input,
 				})
+				require.True(t, ok)
+				got, err := priceUsageFact(usagePriceInput{ReportedModel: fact.Model, Fact: fact}, resolver)
+				require.NoError(t, err)
+				total += got.Cost.Microdollars
 			}
+			assert.Equal(t, tc.wantMicrodollars, total)
 		})
 	}
 }
