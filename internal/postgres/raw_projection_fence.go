@@ -55,9 +55,12 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if err := CheckSchemaCompat(ctx, database); err != nil {
 		return nil, fmt.Errorf("hosted schema requires owner provisioning: %w", err)
 	}
-	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,c.recency_state FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c LIMIT 0`)
+	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,j.lease_epoch,j.failed_at,c.recency_state,p.selected_at,p.successful_processing_version,p.successful_projection_generation,b.count FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c CROSS JOIN raw_source_projections p CROSS JOIN raw_job_outcome_buckets b LIMIT 0`)
 	if err != nil {
 		return nil, fmt.Errorf("raw projection schema requires owner provisioning: %w", err)
+	}
+	if _, err := database.ExecContext(ctx, `SELECT check_name,cursor,last_run_at,found,repaired,unrecoverable FROM raw_maintenance_state LIMIT 0`); err != nil {
+		return nil, fmt.Errorf("raw maintenance schema requires owner provisioning: %w", err)
 	}
 	if err := CheckDataVersionCompat(ctx, database); err != nil {
 		return nil, err
@@ -115,7 +118,7 @@ func selectRawSourceGenerationTx(ctx context.Context, tx *sql.Tx, m rawsync.Cano
 	generation++
 	var jobID int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO raw_ingest_jobs(tenant_id,manifest_id,stage,processing_version,projection_generation) VALUES($1,$2,'parse',$3,$4)
- ON CONFLICT(tenant_id,manifest_id,stage,processing_version) DO UPDATE SET projection_generation=EXCLUDED.projection_generation,projection_selected=true,attempt_count=0,state='ready',available_at=clock_timestamp(),lease_owner='',lease_expires_at=NULL RETURNING id`, m.Identity.TenantID, m.ManifestID, version, generation).Scan(&jobID)
+ ON CONFLICT(tenant_id,manifest_id,stage,processing_version) DO UPDATE SET projection_generation=EXCLUDED.projection_generation,projection_selected=true,attempt_count=0,state='ready',failed_at=NULL,available_at=clock_timestamp(),lease_owner='',lease_expires_at=NULL RETURNING id`, m.Identity.TenantID, m.ManifestID, version, generation).Scan(&jobID)
 	if err != nil {
 		return 0, err
 	}
@@ -126,8 +129,8 @@ func selectRawSourceGenerationTx(ctx context.Context, tx *sql.Tx, m rawsync.Cano
 			return 0, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO raw_source_projections(source_id,device_id,provider,configured_root_id,source_key_sha256,selected_manifest_id,processing_version,projection_generation,selected_job_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
- ON CONFLICT(source_id) DO UPDATE SET selected_manifest_id=EXCLUDED.selected_manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,selected_job_id=EXCLUDED.selected_job_id`, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey), m.ManifestID, version, generation, jobID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO raw_source_projections(source_id,device_id,provider,configured_root_id,source_key_sha256,selected_manifest_id,processing_version,projection_generation,selected_job_id,selected_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp())
+ ON CONFLICT(source_id) DO UPDATE SET selected_manifest_id=EXCLUDED.selected_manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,selected_job_id=EXCLUDED.selected_job_id,selected_at=EXCLUDED.selected_at`, source, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, rawIngestKeyDigest(m.Manifest.SourceKey), m.ManifestID, version, generation, jobID)
 	if err != nil {
 		return 0, err
 	}
@@ -176,8 +179,8 @@ func (s *RawProjectionStore) lockLease(ctx context.Context, tx *sql.Tx, m rawsyn
 		return rawderive.ErrLeaseLost
 	}
 	var valid bool
-	err := tx.QueryRowContext(ctx, `SELECT job.state='leased' AND job.lease_owner=$3 AND job.attempt_count=$4 AND job.lease_expires_at>clock_timestamp() AND job.manifest_id=$5 AND job.processing_version=$6 AND job.projection_generation=$7 AND selected.selected_job_id=job.id AND selected.projection_generation=job.projection_generation AND selected.selected_manifest_id=job.manifest_id AND selected.processing_version=job.processing_version
- FROM raw_ingest_jobs job JOIN raw_source_projections selected ON selected.tenant_id=job.tenant_id AND selected.source_id=$8 WHERE job.tenant_id=$1 AND job.id=$2 AND job.stage='parse' FOR UPDATE OF job`, s.options.Tenant, l.ID, l.Owner, l.Attempt, l.ManifestID, l.ProcessingVersion, l.ProjectionGeneration, rawSourceID(m)).Scan(&valid)
+	err := tx.QueryRowContext(ctx, `SELECT job.lease_epoch=$9 AND job.state='leased' AND job.lease_owner=$3 AND job.attempt_count=$4 AND job.lease_expires_at>clock_timestamp() AND job.manifest_id=$5 AND job.processing_version=$6 AND job.projection_generation=$7 AND selected.selected_job_id=job.id AND selected.projection_generation=job.projection_generation AND selected.selected_manifest_id=job.manifest_id AND selected.processing_version=job.processing_version
+ FROM raw_ingest_jobs job JOIN raw_source_projections selected ON selected.tenant_id=job.tenant_id AND selected.source_id=$8 WHERE job.tenant_id=$1 AND job.id=$2 AND job.stage='parse' FOR UPDATE OF job`, s.options.Tenant, l.ID, l.Owner, l.Attempt, l.ManifestID, l.ProcessingVersion, l.ProjectionGeneration, rawSourceID(m), l.LeaseEpoch).Scan(&valid)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !valid {
 		return rawderive.ErrLeaseLost
 	}
@@ -200,7 +203,7 @@ func completeProjectionJob(ctx context.Context, tx *sql.Tx, l rawderive.JobLease
 			outcome = rawderive.ErrProjectionFailed
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE raw_ingest_jobs SET state=$8,lease_owner='',lease_expires_at=NULL,available_at=clock_timestamp()+($9 * interval '1 microsecond'),last_error_class=CASE WHEN $10='' THEN '' ELSE 'projection' END,last_error=$10,updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2 AND manifest_id=$3 AND processing_version=$4 AND projection_generation=$5 AND lease_owner=$6 AND attempt_count=$7 AND state='leased' AND lease_expires_at>clock_timestamp()`, l.Identity.TenantID, l.ID, l.ManifestID, l.ProcessingVersion, l.ProjectionGeneration, l.Owner, l.Attempt, state, delay.Microseconds(), diagnostic)
+	result, err := tx.ExecContext(ctx, `UPDATE raw_ingest_jobs SET state=$8,failed_at=CASE WHEN $8='failed' THEN clock_timestamp() ELSE NULL END,lease_owner='',lease_expires_at=NULL,available_at=clock_timestamp()+($9 * interval '1 microsecond'),last_error_class=CASE WHEN $10='' THEN '' ELSE 'projection' END,last_error=$10,updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2 AND manifest_id=$3 AND processing_version=$4 AND projection_generation=$5 AND lease_owner=$6 AND attempt_count=$7 AND lease_epoch=$11 AND state='leased' AND lease_expires_at>clock_timestamp()`, l.Identity.TenantID, l.ID, l.ManifestID, l.ProcessingVersion, l.ProjectionGeneration, l.Owner, l.Attempt, state, delay.Microseconds(), diagnostic, l.LeaseEpoch)
 	if err != nil {
 		return 0, err
 	}

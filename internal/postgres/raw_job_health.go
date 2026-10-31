@@ -243,8 +243,12 @@ SELECT
 		) ORDER BY accepted_at, device_id, provider, configured_root_id,
 			source_key_sha256, manifest_id)::text
 		FROM stale_capped
-	), '[]')
-FROM snapshot`
+	), '[]'),
+	dead_letters.job_count, dead_letters.oldest_failed_at
+FROM snapshot CROSS JOIN (
+ SELECT count(*) AS job_count, min(failed_at) AS oldest_failed_at
+ FROM raw_ingest_jobs WHERE tenant_id=$1 AND stage='parse' AND state='failed'
+) dead_letters`
 
 // RawJobHealth returns one tenant-scoped, read-only raw-sync observation.
 func (s *RawIngestStore) RawJobHealth(
@@ -271,6 +275,7 @@ func rawJobHealth(
 	}
 
 	var (
+		deadLetters            rawsync.DeadLetterHealth
 		observedAt             time.Time
 		orphanedManifestCount  int64
 		orphanedManifestsJSON  string
@@ -294,11 +299,13 @@ func rawJobHealth(
 		&failedJobCount, &failedJobsByClassJSON,
 		&retryingNearLimitCount, &retryingNearLimitJSON,
 		&staleSourceHeadCount, &staleSourceHeadsJSON,
+		&deadLetters.Count, &deadLetters.OldestFailedAt,
 	); err != nil {
 		return rawsync.JobHealthReport{}, fmt.Errorf("reading raw job health: %w", err)
 	}
 
 	report := rawsync.JobHealthReport{
+		DeadLetters:            deadLetters,
 		ObservedAt:             observedAt.UTC(),
 		MaxAttempts:            query.MaxAttempts,
 		StaleAfterSeconds:      query.StaleAfterSeconds,
@@ -312,6 +319,9 @@ func rawJobHealth(
 		RetryingNearLimitCount: retryingNearLimitCount,
 		StaleSourceHeads:       make([]rawsync.StaleSourceHead, 0),
 		StaleSourceHeadCount:   staleSourceHeadCount,
+	}
+	if stamp := report.DeadLetters.OldestFailedAt; stamp != nil {
+		*stamp = stamp.UTC()
 	}
 	if err := json.Unmarshal([]byte(orphanedManifestsJSON), &report.OrphanedManifests); err != nil {
 		return rawsync.JobHealthReport{}, fmt.Errorf("decoding orphaned raw manifests: %w", err)

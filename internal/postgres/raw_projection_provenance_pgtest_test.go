@@ -303,7 +303,7 @@ func TestRawProjectionReprocessedCronPublishesGroup(t *testing.T) {
 	assert.Empty(t, key)
 	_, err = f.sink.SelectSourceGeneration(t.Context(), manifest, "parser-2")
 	require.NoError(t, err)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "reprocess-worker", 1, time.Minute)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "reprocess-worker", 1, time.Minute, 5)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	session.GroupKey = "digest"

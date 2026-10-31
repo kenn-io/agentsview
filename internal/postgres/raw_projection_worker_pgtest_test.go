@@ -71,15 +71,18 @@ func TestRawProjectionWorkerReportsCommittedPartialOutcomes(t *testing.T) {
 			assert.Zero(t, queue.failures.Load())
 			var state string
 			var delay float64
-			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,extract(epoch FROM available_at-clock_timestamp()) FROM raw_ingest_jobs WHERE manifest_id=$1`, m.ManifestID).Scan(&state, &delay))
+			var failedAt *time.Time
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,extract(epoch FROM available_at-clock_timestamp()),failed_at FROM raw_ingest_jobs WHERE manifest_id=$1`, m.ManifestID).Scan(&state, &delay, &failedAt))
 			if maximum == 1 {
 				assert.Equal(t, 1, result.Failed)
 				assert.Zero(t, result.Retried)
 				assert.Equal(t, "failed", state)
+				assert.NotNil(t, failedAt)
 			} else {
 				assert.Equal(t, 1, result.Retried)
 				assert.Zero(t, result.Failed)
 				assert.Equal(t, "retrying", state)
+				assert.Nil(t, failedAt)
 				assert.Greater(t, delay, 1.0)
 				assert.LessOrEqual(t, delay, 2.0)
 			}
