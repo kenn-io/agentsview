@@ -117,10 +117,11 @@ func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
 		failErr  error
 		want     BatchResult
 		wantRuns int
+		wantErr  string
 	}{
-		{"grace run", 4, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1},
-		{"exhausted", 5, nil, BatchResult{Claimed: 1, Failed: 1}, 0},
-		{"lost lease", 5, ErrLeaseLost, BatchResult{Claimed: 1, LeaseLost: 1}, 0},
+		{"grace run", 4, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1, ""},
+		{"exhausted", 5, nil, BatchResult{Claimed: 1, Failed: 1}, 0, "raw parse job 1: lease:attempt_budget_exhausted"},
+		{"lost lease", 5, ErrLeaseLost, BatchResult{Claimed: 1, LeaseLost: 1}, 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lease := workerTestLease()
@@ -146,14 +147,18 @@ func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
 				}),
 			)
 			result, err := worker.RunBatch(t.Context())
-			assert.ErrorIs(t, err, tc.failErr)
+			if tc.wantErr != "" {
+				assert.EqualError(t, err, tc.wantErr)
+			} else {
+				assert.ErrorIs(t, err, tc.failErr)
+			}
 			assert.Equal(t, tc.want, result)
 			assert.Equal(t, tc.wantRuns, runs)
 			assert.Equal(t, tc.wantRuns, projections)
 			assert.Empty(t, queue.retries)
 			if tc.wantRuns == 0 {
 				require.Len(t, queue.failures, 1)
-				assert.Equal(t, workerFailure{lease: lease, class: "lease", message: "lease:expired"}, queue.failures[0])
+				assert.Equal(t, workerFailure{lease: lease, class: "lease", message: "lease:attempt_budget_exhausted"}, queue.failures[0])
 			} else {
 				assert.Empty(t, queue.failures)
 			}

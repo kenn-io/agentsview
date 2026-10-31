@@ -9,6 +9,8 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
+var errAttemptBudgetExhausted = errors.New("raw parse attempt budget exhausted")
+
 // jobErrorCode maps an arbitrary pipeline error onto a fixed allowlisted
 // code. Provider and materializer errors can embed client source paths or raw
 // content, so only these codes may be persisted or returned to callers;
@@ -19,6 +21,8 @@ func jobErrorCode(err error) string {
 		return ""
 	case errors.Is(err, ErrLeaseLost):
 		return "lease_lost"
+	case errors.Is(err, errAttemptBudgetExhausted):
+		return "attempt_budget_exhausted"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -241,7 +245,7 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 	result := leaseResult{id: lease.ID}
 	// Allow one extra run when a restart interrupts the final attempt.
 	if lease.Attempt > w.MaxAttempts+1 {
-		err := w.Queue.FailRawParseJob(parent, lease, "lease", "lease:expired")
+		err := w.Queue.FailRawParseJob(parent, lease, "lease", jobErrorDiagnostic("lease", errAttemptBudgetExhausted))
 		switch {
 		case errors.Is(err, ErrLeaseLost):
 			result.leaseLost = 1
@@ -250,6 +254,7 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 			result.err = fmt.Errorf("recording terminal failure: %s", jobErrorDiagnostic("fail", err))
 		default:
 			result.failed = 1
+			result.err = reportableJobError(lease.ID, "lease", errAttemptBudgetExhausted)
 		}
 		return result
 	}

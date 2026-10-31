@@ -56,7 +56,9 @@ func TestRawParseJobsBoundInterruptedWorkerAndProcessReadyJob(t *testing.T) {
 		parser.cancel = cancel
 		result, batchErr := worker.RunBatch(ctx)
 		cancel()
-		if batchErr != nil {
+		if result.Failed > 0 {
+			require.ErrorContains(t, batchErr, "lease:attempt_budget_exhausted")
+		} else if batchErr != nil {
 			require.ErrorIs(t, batchErr, context.Canceled)
 		}
 		outcomes.Succeeded += result.Succeeded
@@ -71,7 +73,7 @@ func TestRawParseJobsBoundInterruptedWorkerAndProcessReadyJob(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,last_error_class,last_error FROM raw_ingest_jobs WHERE manifest_id=$1 AND processing_version='parser-1'`, interrupted.ManifestID).Scan(&state, &class, &message))
 	assert.Equal(t, "failed", state)
 	assert.Equal(t, "lease", class)
-	assert.Equal(t, "lease:expired", message)
+	assert.Equal(t, "lease:attempt_budget_exhausted", message)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE manifest_id=$1 AND processing_version='parser-1'`, ready.ManifestID).Scan(&state))
 	assert.Equal(t, "complete", state)
 	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
