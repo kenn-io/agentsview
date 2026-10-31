@@ -162,6 +162,7 @@ evidence; they do not establish whether a tool helped the task.
   through directory symlinks. `TestSkillInferenceSkipsProtectedPaths` covers
   this with synthetic files, the explicit opt-in, and ordinary unprotected
   paths. No producer format changed.
+
 - **Blank thinking usage (2026-10-27):** Reverified against the synthetic
   transcript in [#2469](https://github.com/kenn-io/agentsview/issues/2469),
   kept in `internal/parser/testdata/claude/blank_thinking_usage.jsonl`. An
@@ -172,6 +173,7 @@ evidence; they do not establish whether a tool helped the task.
   response. It is stored as a hidden system row that keeps its usage; a blank
   record with all-zero usage is still skipped. Data version 150 reparses
   Claude-format sources in place.
+
 - **Screenshot intake (checked 2026-10-24):** A frozen native-file selection
   retained JSONL envelopes, message and tool identifiers, subagent
   transcripts, and companion text files. Decoded-string sanitization followed
@@ -666,6 +668,7 @@ fixtures retain this field; missing identities remain source-local.
   `model_provider_id` as `openai` and `service_tier` as `priority`; Codex can
   omit that selected tier from requests for models that do not advertise
   support.
+
 - **Screenshot intake (checked 2026-10-24):** Ordinary sync accepted sanitized
   native JSONL with `encrypted_content` explicitly omitted. The local parser's
   `extractCodexInboundAgentMessage` also accepts plaintext under that field
@@ -1436,12 +1439,23 @@ fixtures retain this field; missing identities remain source-local.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
 
-- **Usage and cost:** Assistant messages can persist model identity and output
-  tokens. Shutdown metrics can persist input, output, cache-read, cache-write,
-  and reasoning totals. When both shutdown and store usage are absent,
-  Agentsview records only known per-message output tokens; it does not infer
-  input, cache, reasoning, or credit totals. Known-model tokens use catalog
-  estimates; the existing shutdown reported-cost treatment is unchanged.
+- **Usage and cost:** Per-call store rows take precedence over
+  `session.usage_record` receipts; either source replaces shutdown token
+  rollups. Receipts preserve each request's timestamp, input, output,
+  cache-read, cache-write, and reasoning tokens. Without per-call usage,
+  shutdown metrics supply totals, then known per-message output is the
+  fallback. Known-model tokens use catalog estimates. A receipt after the
+  latest reported-cost shutdown clears that stale cost only when receipts
+  supply the per-call usage.
+
+- **Receipt schema:** Reverified 2026-10-31 against the published
+  [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
+  (SHA1 `43322d0817b8564afcfe00f3929c00b033bca116`). The embedded schema
+  defines `session.usage_record` with `data.usage.model` and token fields
+  under `data.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`,
+  `cacheWriteTokens`, and `reasoningTokens`. Fresh input subtracts cache reads
+  and writes. Receipts use request pricing and their event timestamp without a
+  message ordinal.
 
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local

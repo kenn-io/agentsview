@@ -745,7 +745,7 @@ func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
 
 func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(157, 158)
-	require.Equal(t, []parser.AgentType{parser.AgentOMP}, scope)
+	require.Equal(t, []parser.AgentType{parser.AgentCopilot, parser.AgentOMP}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
@@ -915,4 +915,81 @@ func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 	var count int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&count))
 	assert.Equal(t, 5, count, "the upgrade must not replace or duplicate session identities")
+}
+
+func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
+	ctx := t.Context()
+	version := db.CurrentDataVersion()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	source := filepath.Join(root, "session-state", "receipt-upgrade", "events.jsonl")
+	dbtest.WriteTestFile(t, source, []byte(`{"type":"session.start","timestamp":"2026-09-01T12:00:00Z","data":{"sessionId":"receipt-upgrade"}}
+{"type":"user.message","timestamp":"2026-09-01T12:00:01Z","data":{"content":"Synthetic task"}}
+{"type":"session.usage_record","timestamp":"2026-09-01T12:00:02Z","data":{"usage":{"model":"gpt-5.4","inputTokens":100,"outputTokens":7}}}
+`))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "copilot:receipt-upgrade"
+	name := "Saved task"
+	require.NoError(t, database.RenameSession(ctx, id, &name))
+	_, err := database.StarSession(ctx, id)
+	require.NoError(t, err)
+	messages, err := database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	messageID := messages[0].ID
+	_, err = database.PinMessage(ctx, id, messageID, nil)
+	require.NoError(t, err)
+	// Reproduce the archive left by the parser that ignored receipts.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id=?`, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET total_output_tokens=0, has_total_output_tokens=0, peak_context_tokens=0, has_peak_context_tokens=0, data_version=? WHERE id=?`, version-1, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	before, err := database.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	assert.Zero(t, before.TotalOutputTokens)
+	var count int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM usage_events WHERE session_id=?", id).Scan(&count))
+	assert.Zero(t, count)
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync())
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, id))
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	after, err := database.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, before.ID, after.ID)
+	assert.Equal(t, before.FilePath, after.FilePath)
+	assert.Equal(t, before.DisplayName, after.DisplayName)
+	stars, err := database.ListStarredSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{id}, stars)
+	pins, err := database.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, messageID, pins[0].MessageID)
+	assert.Equal(t, 7, after.TotalOutputTokens)
+	assert.Equal(t, 100, after.PeakContextTokens)
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, id))
+	messages, err = database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, messageID, messages[0].ID)
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM usage_events WHERE session_id=? AND source='usage-record' AND input_tokens=100 AND output_tokens=7", id).Scan(&count))
+	assert.Equal(t, 1, count)
 }
