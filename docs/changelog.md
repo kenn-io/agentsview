@@ -77,6 +77,11 @@ The latest release is
   is labeled as model-written, and cannot change findings, digests, or
   recurrence.
 
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
+  not available yet. See [Kata](/docs/kata/).
+
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
   Setting it together with `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup.

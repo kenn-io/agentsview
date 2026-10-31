@@ -983,6 +983,7 @@ type Config struct {
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
+	Kata                 KataConfig                  `json:"-" toml:"kata"`
 	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
@@ -1385,6 +1386,7 @@ func Default() (Config, error) {
 			},
 		},
 		Friction: FrictionConfig{BackfillDays: DefaultFrictionBackfillDays},
+		Kata:     defaultKataConfig(),
 	}, nil
 }
 
@@ -1814,6 +1816,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
+		Kata                           KataConfig             `toml:"kata"`
 		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
@@ -2123,6 +2126,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.DefaultAgent = strings.ToLower(
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
+	}
+	if meta.IsDefined("kata") {
+		mergeKataTOML(&c.Kata, file.Kata, meta)
 	}
 	if meta.IsDefined("friction", "enabled") {
 		c.Friction.Enabled = file.Friction.Enabled
