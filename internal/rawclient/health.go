@@ -30,7 +30,7 @@ func (c *Client) Health(ctx context.Context, query rawsync.JobHealthQuery) (raws
 	if _, err := statusObject(response.Body, "",
 		"observed_at", "max_attempts", "stale_after_seconds",
 		"orphaned_manifests", "orphaned_manifest_count", "expired_leases", "expired_lease_count",
-		"failed_jobs_by_error_class", "failed_job_count", "retrying_near_limit", "retrying_near_limit_count",
+		"dead_letters", "failed_jobs_by_error_class", "failed_job_count", "retrying_near_limit", "retrying_near_limit_count",
 		"stale_source_heads", "stale_source_head_count",
 	); err != nil {
 		return rawsync.JobHealthReport{}, fmt.Errorf("rawclient: invalid health response: %w", err)
