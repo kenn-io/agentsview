@@ -239,6 +239,20 @@ type leaseResult struct {
 
 func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResult {
 	result := leaseResult{id: lease.ID}
+	// Allow one extra run when a restart interrupts the final attempt.
+	if lease.Attempt > w.MaxAttempts+1 {
+		err := w.Queue.FailRawParseJob(parent, lease, "lease", "lease:expired")
+		switch {
+		case errors.Is(err, ErrLeaseLost):
+			result.leaseLost = 1
+			result.err = reportableJobError(lease.ID, "lease", err)
+		case err != nil:
+			result.err = fmt.Errorf("recording terminal failure: %s", jobErrorDiagnostic("fail", err))
+		default:
+			result.failed = 1
+		}
+		return result
+	}
 	timeoutCtx, cancelTimeout := context.WithTimeout(parent, w.AttemptTimeout)
 	workCtx, cancelWork := context.WithCancelCause(timeoutCtx)
 	stopHeartbeat := w.startHeartbeat(workCtx, cancelWork, lease)

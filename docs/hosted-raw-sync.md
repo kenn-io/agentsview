@@ -225,7 +225,9 @@ remain retained but cannot be projected by this worker. Accepted source bytes
 are untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
-unresolved members and retry finitely. Exhausted jobs remain failed until new
+unresolved members and retry finitely. Attempts that end without an outcome
+count toward `raw_max_attempts`; after one run past that limit, another claim
+fails the job with error class `lease`. Exhausted jobs remain failed until new
 source or processing-version selection provides new work.
 
 Equivalent content from several devices coalesces when it shares a stable
