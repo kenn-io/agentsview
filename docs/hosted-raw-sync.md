@@ -128,9 +128,10 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
   hosted_sessions.raw_content_revisions, hosted_sessions.raw_session_branches,
   hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts,
-  hosted_sessions.raw_maintenance_state
   TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
+GRANT SELECT, INSERT, UPDATE ON hosted_sessions.raw_maintenance_state
+  TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
   TO hosted_runtime;
 
