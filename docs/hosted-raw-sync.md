@@ -128,7 +128,7 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
   hosted_sessions.raw_content_revisions, hosted_sessions.raw_session_branches,
   hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts,
-  hosted_sessions.raw_maintenance_state, hosted_sessions.raw_custody_findings
+  hosted_sessions.raw_maintenance_state
   TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
@@ -318,7 +318,7 @@ It restores a nonfailed job's attempt budget and advances its lease epoch;
 failed jobs remain dead letters for `pg raw-jobs retry`. A matching selection
 stays unchanged. This does not inspect or rebuild materialized session rows.
 
-Owner provisioning adds `raw_maintenance_state` and `raw_custody_findings`.
+Owner provisioning adds `raw_maintenance_state`.
 Apply the runtime grants above after upgrading. Maintenance checkpoints and
 repair counters commit with each batch; cancellation rolls the batch back.
 
@@ -335,22 +335,6 @@ it on `raw_source_projections(tenant_id,selected_job_id)`, referencing
 `raw_ingest_jobs(tenant_id,id)` with `ON DELETE RESTRICT ON UPDATE NO ACTION`,
 then run `VALIDATE CONSTRAINT hosted_fk_2` on the projection table. The CLI does
 not bypass catalog protections.
-
-The in-process custody-audit primitive checks one complete accepted manifest
-per call, including retained snapshots below tombstones or failed heads. Its
-object budget is the manifest limit of 16,384 references. It checks the canonical
-manifest artifact and referenced objects through the repository's public
-streaming API. The bounded canonical manifest is read to verified EOF and then
-closed. Raw object probes check authorized physical availability and headers;
-they do not hash whole payloads or establish whole-object integrity. Both probes
-close sequentially and retain I/O errors. Only classified durable missing or
-corrupt content is rechecked and recorded; cancellation, transient I/O and
-unclassified errors roll the batch back. A saved finding and its cursor commit
-together without changing jobs. The CLI prints `historical_custody_findings`
-and never opens the repository. Findings remain historical evidence after
-restore; a nonzero count requests investigation and does not establish current
-byte loss. Periodic runtime scheduling and health reporting are follow-up
-work; this slice does not start an automatic audit.
 
 ## Reparse and rollback
 

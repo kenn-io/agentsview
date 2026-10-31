@@ -40,14 +40,7 @@ func newPGRawReconcileCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		var findings int64
-		if err = store.DB().QueryRowContext(cmd.Context(), `SELECT count(*) FROM raw_custody_findings WHERE tenant_id=$1`, pg.RawTenant).Scan(&findings); err != nil {
-			return err
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "scanned=%d found=%d repaired=%d unrecoverable=%d wrapped=%t busy=%t historical_custody_findings=%d\n", result.Scanned, result.Found, result.Repaired, result.Unrecoverable, result.Wrapped, result.Busy, findings)
-		if findings > 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "Historical custody findings require investigation; restored bytes may already be available.")
-		}
+		fmt.Fprintf(cmd.OutOrStdout(), "scanned=%d found=%d repaired=%d unrecoverable=%d wrapped=%t busy=%t\n", result.Scanned, result.Found, result.Repaired, result.Unrecoverable, result.Wrapped, result.Busy)
 		return nil
 	}}
 	cmd.Flags().BoolVar(&repair, "repair", false, "Repair selections using durable parser-version evidence")

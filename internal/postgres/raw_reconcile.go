@@ -24,7 +24,7 @@ type RawReconcileBatch struct {
 
 // ReconcileRawSources checks one keyset batch. Repair never selects the running
 // binary's version. A dry run reports damage without changing selection or the
-// repair cursor; custody audit is available only inside the serving process.
+// repair cursor.
 func (s *RawProjectionStore) ReconcileRawSources(ctx context.Context, repair bool) (RawReconcileBatch, error) {
 	var result RawReconcileBatch
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -118,8 +118,8 @@ func (s *RawProjectionStore) ReconcileRawSources(ctx context.Context, repair boo
 	return result, tx.Commit()
 }
 
-// lockRawMaintenanceTx is shared by CLI repair and in-process audit. Scope the
-// lock to both schema and tenant, including installations in the same database.
+// lockRawMaintenanceTx serializes repair invocations. Scope the lock to both
+// schema and tenant, including installations in the same database.
 func (s *RawProjectionStore) lockRawMaintenanceTx(ctx context.Context, tx *sql.Tx) (bool, error) {
 	var locked bool
 	err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('raw-reconcile:'||current_schema()||':'||$1,0))`, s.options.Tenant).Scan(&locked)

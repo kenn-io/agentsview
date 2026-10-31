@@ -43,7 +43,6 @@ var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"raw_session_links", "SELECT,INSERT,DELETE"},
 	{"raw_projection_rollouts", "SELECT,INSERT,UPDATE"},
 	{"raw_maintenance_state", "SELECT,INSERT,UPDATE"},
-	{"raw_custody_findings", "SELECT,INSERT,UPDATE"},
 }
 
 // CheckHostedRuntimeWritable is a read-only preflight, never provisioning.

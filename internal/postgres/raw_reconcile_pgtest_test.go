@@ -201,7 +201,7 @@ func rawAuthoritativeSnapshot(t *testing.T, f projectionFixture) string {
 }
 func rawMaintenanceSnapshot(t *testing.T, f projectionFixture) string {
 	t.Helper()
-	return rawAuthoritativeSnapshot(t, f) + rawTableSnapshot(t, f, []string{"raw_maintenance_state", "raw_custody_findings"})
+	return rawAuthoritativeSnapshot(t, f) + rawTableSnapshot(t, f, []string{"raw_maintenance_state"})
 }
 func rawTableSnapshot(t *testing.T, f projectionFixture, tables []string) string {
 	t.Helper()
@@ -311,21 +311,19 @@ func TestRawReconcileCancellationAfterMutation(t *testing.T) {
 
 func TestRawMaintenanceUpgradeAndPrivileges(t *testing.T) {
 	f := newProjectionFixture(t)
-	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE raw_custody_findings,raw_maintenance_state`)
+	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE raw_maintenance_state`)
 	require.NoError(t, err)
 	_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.Error(t, err)
 	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
 	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-	for _, table := range []string{"raw_maintenance_state", "raw_custody_findings"} {
-		require.Error(t, checkHostedTablePrivileges(t.Context(), f.runtime, f.schema, table, "SELECT,INSERT,UPDATE"))
-		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,UPDATE ON "`+table+`" TO "`+f.role+`"`)
-		require.NoError(t, err)
-		require.NoError(t, checkHostedTablePrivileges(t.Context(), f.runtime, f.schema, table, "SELECT,INSERT,UPDATE"))
-	}
+	require.Error(t, checkHostedTablePrivileges(t.Context(), f.runtime, f.schema, "raw_maintenance_state", "SELECT,INSERT,UPDATE"))
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,UPDATE ON raw_maintenance_state TO "`+f.role+`"`)
+	require.NoError(t, err)
+	require.NoError(t, checkHostedTablePrivileges(t.Context(), f.runtime, f.schema, "raw_maintenance_state", "SELECT,INSERT,UPDATE"))
 	_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.NoError(t, err)
 	var unsafe int
-	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname IN('raw_maintenance_state','raw_custody_findings') AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)`, f.schema).Scan(&unsafe))
+	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='raw_maintenance_state' AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)`, f.schema).Scan(&unsafe))
 	require.Zero(t, unsafe)
 }
