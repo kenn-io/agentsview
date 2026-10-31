@@ -59,6 +59,9 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if err != nil {
 		return nil, fmt.Errorf("raw projection schema requires owner provisioning: %w", err)
 	}
+	if _, err := database.ExecContext(ctx, `SELECT m.check_name,m.cursor,m.last_run_at,m.found,m.repaired,m.unrecoverable,c.manifest_id,c.kind,c.key,c.size,c.first_seen,c.last_seen FROM raw_maintenance_state m CROSS JOIN raw_custody_findings c LIMIT 0`); err != nil {
+		return nil, fmt.Errorf("raw maintenance schema requires owner provisioning: %w", err)
+	}
 	if err := CheckDataVersionCompat(ctx, database); err != nil {
 		return nil, err
 	}

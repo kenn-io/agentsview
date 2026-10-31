@@ -8,6 +8,17 @@ import (
 // Projection metadata is durable independently of disposable physical payloads.
 // Ordinary schema setup never creates these hosted-only relations.
 const rawProjectionDDL = `
+CREATE TABLE IF NOT EXISTS raw_maintenance_state (
+ check_name TEXT PRIMARY KEY, cursor JSONB NOT NULL DEFAULT '["","","",""]',
+ last_run_at TIMESTAMPTZ, found BIGINT NOT NULL DEFAULT 0,
+ repaired BIGINT NOT NULL DEFAULT 0, unrecoverable BIGINT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS raw_custody_findings (
+ manifest_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, size BIGINT NOT NULL,
+ first_seen TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ last_seen TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(manifest_id,kind,key,size)
+);
 CREATE TABLE IF NOT EXISTS raw_projection_rollouts (
  run_id TEXT PRIMARY KEY, processing_version TEXT NOT NULL,
  device_id TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '',
@@ -97,6 +108,8 @@ CREATE INDEX IF NOT EXISTS raw_session_sources_physical ON session_sources(tenan
 `
 
 var rawProjectionTables = []HostedTable{
+	{Name: "raw_maintenance_state", Key: []string{"check_name"}},
+	{Name: "raw_custody_findings", Key: []string{"manifest_id", "kind", "key", "size"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
 	{Name: "raw_projection_rollouts", Key: []string{"run_id"}},
 	{Name: "raw_session_links", Key: []string{"branch_id", "kind", "ordinal", "call_index", "event_index"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"branch_id"}, Table: "raw_session_branches", References: []string{"branch_id"}, Delete: "RESTRICT"}}},
 	{Name: "raw_source_projections", Key: []string{"source_id"}, ForeignKeys: []HostedForeignKey{

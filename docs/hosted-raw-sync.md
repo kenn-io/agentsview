@@ -127,7 +127,8 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_heads, hosted_sessions.raw_ingest_jobs,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
   hosted_sessions.raw_content_revisions, hosted_sessions.raw_session_branches,
-  hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts
+  hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts,
+  hosted_sessions.raw_maintenance_state, hosted_sessions.raw_custody_findings
   TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
@@ -298,6 +299,58 @@ The maintenance pass examines at most 64 indexed pending signal rows with a
 10-second timeout. It does not scan the archive during idle polling. Shutdown
 cancels and joins worker, materializer and parser work before closing custody
 and PostgreSQL.
+
+## Repair raw selections
+
+Use `agentsview pg raw-reconcile [target]` to inspect one batch of up to 64
+source heads. Add `--repair` to restore damaged head, projection and job
+selections. Repeat repair until `wrapped=true` to finish a sweep. A dry run
+checks the next repair batch without saving its cursor. `busy=true` means
+another maintenance invocation holds the tenant lock; retry later.
+
+Repair keeps the stored processing version. Without a projection row, it uses
+only unambiguous job evidence at the head's highest surviving generation.
+Missing or contradictory evidence increments `unrecoverable` and leaves that
+source unchanged. An exhausted maximum `BIGINT` generation is also reported
+as unrecoverable without changing the source. Repair allocates a generation
+above surviving source fences.
+It restores a nonfailed job's attempt budget and advances its lease epoch;
+failed jobs remain dead letters for `pg raw-jobs retry`. A matching selection
+stays unchanged. This does not inspect or rebuild materialized session rows.
+
+Owner provisioning adds `raw_maintenance_state` and `raw_custody_findings`.
+Apply the runtime grants above after upgrading. Maintenance checkpoints and
+repair counters commit with each batch; cancellation rolls the batch back.
+
+Repair requires the runtime catalog checks to pass. If an owner restore leaves
+an invalid or missing foreign key, the owner must first restore referential
+integrity, explicitly recreate any missing constraint, and validate it before
+running owner provisioning and starting the runtime. Provisioning installs
+protections for new tables; it does not repair protections removed from an
+existing table.
+
+For a missing selected job, recreate the job with its stored version and
+reconnect the selection. If `hosted_fk_2` was removed, the owner must recreate
+it on `raw_source_projections(tenant_id,selected_job_id)`, referencing
+`raw_ingest_jobs(tenant_id,id)` with `ON DELETE RESTRICT ON UPDATE NO ACTION`,
+then run `VALIDATE CONSTRAINT hosted_fk_2` on the projection table. The CLI does
+not bypass catalog protections.
+
+The in-process custody-audit primitive checks one complete accepted manifest
+per call, including retained snapshots below tombstones or failed heads. Its
+object budget is the manifest limit of 16,384 references. It checks the canonical
+manifest artifact and referenced objects through the repository's public
+streaming API. The bounded canonical manifest is read to verified EOF and then
+closed. Raw object probes check authorized physical availability and headers;
+they do not hash whole payloads or establish whole-object integrity. Both probes
+close sequentially and retain I/O errors. Only classified durable missing or
+corrupt content is rechecked and recorded; cancellation, transient I/O and
+unclassified errors roll the batch back. A saved finding and its cursor commit
+together without changing jobs. The CLI prints `historical_custody_findings`
+and never opens the repository. Findings remain historical evidence after
+restore; a nonzero count requests investigation and does not establish current
+byte loss. Periodic runtime scheduling and health reporting are follow-up
+work; this slice does not start an automatic audit.
 
 ## Reparse and rollback
 
