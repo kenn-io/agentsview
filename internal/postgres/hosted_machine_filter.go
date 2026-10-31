@@ -13,25 +13,19 @@ const hostedRawMachineKeySQL = `'` + hostedRawMachinePrefix + `' || encode(conve
 // Membership follows the currently selected content cohort, including retained
 // contributions, rather than every historical capture. Effective exclusions must
 // match materializeGroup so an excluded branch cannot supply visible metadata.
-const hostedRawMachineSourceSQL = `SELECT machine_branch.tenant_id,
+var hostedRawMachineSourceSQL = `SELECT machine_branch.tenant_id,
  machine_branch.session_id, machine_source.device_id
  FROM raw_session_branches machine_branch
  JOIN raw_source_projections machine_source
    ON machine_source.tenant_id=machine_branch.tenant_id
   AND machine_source.source_id=machine_branch.source_id
  WHERE machine_branch.active
- AND NOT COALESCE((SELECT machine_curation.value::boolean
-   FROM raw_curation machine_curation
-   WHERE machine_curation.tenant_id=machine_branch.tenant_id
-     AND machine_curation.group_id=machine_branch.group_id
-     AND machine_curation.field='excluded'
-     AND machine_curation.branch_id IN ('',machine_branch.branch_id)
-   ORDER BY machine_curation.branch_id DESC LIMIT 1),false)`
+ AND NOT COALESCE(` + rawBranchExclusionSQL("machine_branch", "c.tenant_id=machine_branch.tenant_id AND ") + `,false)`
 
 // Both aggregate readers materialize their eligible sessions once, then count
 // source identities separately so multiple contributors never multiply totals.
 // filtered_sessions supplies id, tenant_id, project, machine and provenance_kind.
-const hostedFilteredMachinesCTESQL = `,
+var hostedFilteredMachinesCTESQL = `,
  filtered_source_machines AS (
    SELECT filtered.project, ` + hostedRawMachineKeySQL + ` AS machine
    FROM filtered_sessions filtered

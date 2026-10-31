@@ -29,6 +29,57 @@ func hostedMachineOutcome(content string) rawderive.ParsedManifest {
 	return p
 }
 
+func TestHostedSourceMachinesLabelsWithoutSessions(t *testing.T) {
+	f := newProjectionFixture(t)
+	f.accept(t, "device-a", "unprojected", "")
+	_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_devices SET display_name='Workstation A' WHERE device_id='device-a'`)
+	require.NoError(t, err)
+	h, err := newHostedAdapter(f.runtime, f.tenant)
+	require.NoError(t, err)
+	labels, err := h.GetMachineLabels(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "Workstation A", labels["raw-device:6465766963652d61"])
+	machines, err := h.GetMachines(t.Context(), false, false)
+	require.NoError(t, err)
+	assert.Empty(t, machines, "enrollment alone does not add a picker entry")
+	matching, err := h.GetMatchingMachineIDs(t.Context(), []string{"raw-device:6465766963652d61"})
+	require.NoError(t, err)
+	assert.Empty(t, matching, "enrollment alone does not make an exact selector resolve")
+}
+
+func TestHostedSourceMachinesBranchExclusionOverride(t *testing.T) {
+	f := newProjectionFixture(t)
+	for _, device := range []string{"device-a", "device-b"} {
+		m, _ := f.accept(t, device, "capture-"+device, "")
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, hostedMachineOutcome("shared needle")))
+	}
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO raw_curation(group_id,branch_id,field,value)
+ SELECT DISTINCT group_id,'','excluded','true'::jsonb FROM raw_session_branches
+ UNION ALL
+ SELECT b.group_id,b.branch_id,'excluded','false'::jsonb FROM raw_session_branches b
+ JOIN raw_source_projections p ON p.source_id=b.source_id WHERE p.device_id='device-a'`)
+	require.NoError(t, err)
+	h, err := newHostedAdapter(f.runtime, f.tenant)
+	require.NoError(t, err)
+	machines, err := h.GetMachines(t.Context(), false, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"raw-device:6465766963652d61"}, machines)
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{IDs: []string{"codex:portable"}, Machine: "raw-device:6465766963652d61", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
+	assert.Equal(t, []string{"raw-device:6465766963652d61"}, page.Sessions[0].SourceMachines)
+	aliases, err := h.FindSessionIDsByPartial(t.Context(), "portable", 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"codex:portable"}, aliases)
+	aliases, err = h.FindSessionIDsByRawSuffix(t.Context(), "portable", 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"codex:portable"}, aliases)
+	page, err = h.ListSessions(t.Context(), db.SessionFilter{Machine: "raw-device:6465766963652d62", Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, page.Sessions)
+}
+
 func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {

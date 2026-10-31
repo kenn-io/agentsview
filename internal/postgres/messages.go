@@ -375,7 +375,7 @@ func (s *Store) Search(
 		argIdx++
 	}
 
-	dateBuilder := db.NewQueryBuilder(s.sessionDialect(), argIdx-1)
+	dateBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), argIdx-1)
 	var msgProjectClauseSb402 strings.Builder
 	var nameProjectClauseSb402 strings.Builder
 	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {

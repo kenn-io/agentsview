@@ -7,7 +7,7 @@ import (
 
 // A raw session can have several contributing devices. Keep that relation at
 // read time instead of assigning the shared transcript to an arbitrary device.
-const hostedMachineRowsSQL = `SELECT id AS session_id, machine
+var hostedMachineRowsSQL = `SELECT id AS session_id, machine
  FROM sessions WHERE provenance_kind='legacy'
  UNION ALL
  SELECT raw_machine_source.session_id, ` + hostedRawMachineKeySQL + `
@@ -40,7 +40,7 @@ func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []st
 	// Old hosted URLs used the physical "hosted" key. Keep exact selectors
 	// working without advertising that compatibility key as a source device.
 	return h.machineIDs(ctx, `SELECT DISTINCT machine FROM (
- `+hostedMachineRowsSQL+` UNION ALL SELECT id,machine FROM sessions) m
+ `+hostedMachineRowsSQL+` UNION ALL SELECT id,machine FROM sessions WHERE provenance_kind='raw') m
  WHERE machine=ANY($2) ORDER BY machine`, h.tenant, candidates)
 }
 
@@ -66,9 +66,8 @@ func (h *HostedStore) GetMachineLabels(ctx context.Context) (map[string]string, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT m.machine,raw_machine_source.display_name
- FROM (`+hostedMachineRowsSQL+`) m JOIN raw_devices raw_machine_source
- ON m.machine=`+hostedRawMachineKeySQL+` WHERE raw_machine_source.tenant_id=$1`, h.tenant)
+	rows, err := h.physical.pg.QueryContext(ctx, `SELECT `+hostedRawMachineKeySQL+`,raw_machine_source.display_name
+ FROM raw_devices raw_machine_source WHERE raw_machine_source.tenant_id=$1`, h.tenant)
 	if err != nil {
 		return nil, fmt.Errorf("reading hosted machine labels: %w", err)
 	}

@@ -355,7 +355,7 @@ func (s *Store) ListSessions(
 
 	where, args := db.BuildSessionFilterSQL(f, s.sessionDialect())
 
-	dialect := s.sessionDialect()
+	dialect := db.PostgresQueryDialect()
 	rs := db.ResolveSort(f)
 
 	var total int
@@ -562,7 +562,7 @@ func (s *Store) getSidebarSessionIndexPage(
 		}
 	}
 
-	pageBuilder := db.NewQueryBuilder(s.sessionDialect(), len(rootArgs))
+	pageBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), len(rootArgs))
 	cursorWhere := ""
 	if f.Cursor != "" {
 		cursorWhere = "WHERE (activity, id) < (" +
@@ -643,7 +643,7 @@ func (s *Store) getSidebarSessionIndexPage(
 		})
 	}
 
-	page := db.NewQueryBuilder(s.sessionDialect(), 0)
+	page := db.NewQueryBuilder(db.PostgresQueryDialect(), 0)
 	cteParts := make([]string, 0, len(selected))
 	treeArgs := make([]any, 0, len(selected)*2)
 	for i, root := range selected {
