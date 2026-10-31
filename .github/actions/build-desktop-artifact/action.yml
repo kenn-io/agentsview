@@ -119,11 +119,7 @@ runs:
         fi
         build_cmd+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
 
-        if ! "${build_cmd[@]}"; then
-          echo "::warning::Desktop bundle failed; retrying once"
-          sleep 10
-          "${build_cmd[@]}"
-        fi
+        kit-retry 2 10 "${build_cmd[@]}"
         if [ "$BUNDLE" = "appimage" ]; then
           bash scripts/repair-appimage-diricon.sh \
             "../${ARTIFACT_DIR}"/*.AppImage

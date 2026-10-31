@@ -317,7 +317,6 @@ jobs:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-        if: runner.os != 'Windows' || matrix.testSet == 'lint'
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -346,7 +345,8 @@ jobs:
           path-type: inherit
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        shell: bash
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
@@ -531,8 +531,11 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        shell: bash
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # The Windows system tree and the runner's data volume have parent
       # permissions that capture deliberately rejects. Use a private directory
@@ -708,8 +711,11 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        shell: bash
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run DuckDB tests
         run: go test -tags "fts5" ./internal/duckdb -count=1 -timeout=20m
@@ -775,7 +781,7 @@ jobs:
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # Keep exclusions aligned with the explicit race matrix packages.
       # DuckDB runs without -race in its Linux shard. Limit package fan-out
@@ -910,7 +916,7 @@ jobs:
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
         run: make ${{ matrix.postgres-target }}
@@ -988,7 +994,7 @@ jobs:
           cp -r frontend/dist internal/web/dist
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Pre-build Go binaries
         run: |

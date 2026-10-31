@@ -128,8 +128,6 @@ restore_pricing_snapshot() {
 }
 
 install_frontend_deps() {
-  # The CI command prefix applies only to acquisition.
-  # shellcheck disable=SC2086
   ${DOWNLOAD_RETRY:-} npm ci
 }
 

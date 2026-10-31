@@ -1,6 +1,3 @@
-# CI can retry acquisition commands inside mixed build/test recipes.
-DOWNLOAD_RETRY ?=
-
 .DEFAULT_GOAL := help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -88,7 +85,7 @@ sqlite-vec-header:
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.
 pricing-snapshot: sqlite-vec-header
-	go run ./internal/pricing/cmd/litellm-snapshot -restore
+	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
@@ -532,7 +529,7 @@ vet: pricing-snapshot ensure-embed-dir
 	go vet -tags fts5 ./...
 
 # Lint Go code and auto-fix where possible (local development)
-lint: lint-config-check lint-sql lint-golangci nilaway lint-workflow-retries
+lint: lint-config-check lint-sql lint-golangci nilaway
 
 # Run golangci-lint with auto-fixes for local development.
 lint-golangci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
@@ -578,7 +575,7 @@ nilaway-golangci-build:
 	fi; \
 	unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
 	env $$unset_args GOFLAGS=-buildvcs=false \
-		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
+		$(DOWNLOAD_RETRY) golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
 # Run NilAway through the custom golangci-lint module plugin.
 #
