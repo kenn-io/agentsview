@@ -50,22 +50,25 @@ func TestHostedSourceMachinesLabelsWithoutSessions(t *testing.T) {
 func newHostedBranchExclusionFixture(t *testing.T) *HostedStore {
 	t.Helper()
 	f := newProjectionFixture(t)
-	for _, device := range []string{"device-a", "device-b"} {
-		m, _ := f.accept(t, device, "capture-"+device, "")
-		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, hostedMachineOutcome("shared needle")))
-	}
-	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO raw_curation(group_id,branch_id,field,value)
- SELECT DISTINCT group_id,'','excluded','true'::jsonb FROM raw_session_branches
- UNION ALL
- SELECT b.group_id,b.branch_id,'excluded','false'::jsonb FROM raw_session_branches b
- JOIN raw_source_projections p ON p.source_id=b.source_id WHERE p.device_id='device-a'`)
+	a, _ := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, hostedMachineOutcome("shared needle")))
+	b, accepted := f.accept(t, "device-b", "capture-b", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, hostedMachineOutcome("different needle")))
+	alias := f.alias(t, b)
+	require.NoError(t, f.sink.SetCuration(t.Context(), alias, "trashed", true))
+	removed, err := f.sink.ExcludeTrashedSession(t.Context(), alias)
 	require.NoError(t, err)
+	require.True(t, removed)
+
+	// Exclusion must survive a reparse that matches the visible device's content.
+	b, _ = f.accept(t, "device-b", "matching-b", accepted.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, hostedMachineOutcome("shared needle")))
 	h, err := newHostedAdapter(f.runtime, f.tenant)
 	require.NoError(t, err)
 	return h
 }
 
-func TestHostedSourceMachinesBranchExclusionOverride(t *testing.T) {
+func TestHostedSourceMachinesExcludedBranch(t *testing.T) {
 	h := newHostedBranchExclusionFixture(t)
 	machines, err := h.GetMachines(t.Context(), false, false)
 	require.NoError(t, err)
