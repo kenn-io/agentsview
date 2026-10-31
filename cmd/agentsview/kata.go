@@ -104,7 +104,9 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 		return fetchKataStatus(ctx, tr.URL, cfg.AuthToken, kataStatusRequestBudget(cfg.Kata.Timeout))
 	}
 	if !tr.DirectReadOnly {
-		tr = unavailableReadOnlyDaemon(cfg.DataDir, cfg.AuthToken, tr)
+		if err := unavailableReadOnlyDaemonError(cfg.DataDir, cfg.AuthToken); err != nil {
+			return kata.Status{}, fmt.Errorf("kata status request failed: %w", err)
+		}
 	}
 	if tr.DirectReadOnly {
 		if tr.DirectIncompatible {
@@ -120,26 +122,29 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 	return st, nil
 }
 
-// unavailableReadOnlyDaemon reports a running read-only daemon, such as
+// unavailableReadOnlyDaemonError reports a running read-only daemon, such as
 // pg serve, that cannot answer. Transport detection treats only a writable
 // daemon as the local owner, but pg serve owns this data directory's Kata
 // status too: probing locally instead would report not_hub with exit 0.
 // A reachable compatible daemon already returned an HTTP transport.
-func unavailableReadOnlyDaemon(dataDir, token string, tr transport) transport {
+func unavailableReadOnlyDaemonError(dataDir, token string) error {
 	if rt, err := FindIncompatibleDaemonRuntime(dataDir, token); rt != nil && rt.ReadOnly && err != nil {
-		return transport{
-			Mode: transportDirect, DirectReadOnly: true, DirectIncompatible: true,
-			DirectDaemonAhead: daemonRuntimeAhead(rt), DirectReason: err.Error(), DirectError: err,
+		if daemonRuntimeAhead(rt) {
+			return fmt.Errorf("%w\n\n%s", err, staleClientUpgradeHint())
 		}
+		return fmt.Errorf("%w\n\n%s", err, readOnlyServerUpgradeHint)
 	}
 	if hasLiveDaemonRuntime(dataDir, token) {
-		return transport{
-			Mode: transportDirect, DirectReadOnly: true,
-			DirectReason: errLocalDaemonUnreachable.Error(), DirectError: errLocalDaemonUnreachable,
-		}
+		return errLocalDaemonUnreachable
 	}
-	return tr
+	return nil
 }
+
+// readOnlyServerUpgradeHint replaces the writable daemon's restart advice:
+// `agentsview daemon restart` leaves read-only servers running.
+const readOnlyServerUpgradeHint = "The running read-only server, such as `pg serve`, " +
+	"is older than this agentsview binary. Upgrade the agentsview install it runs " +
+	"from, then restart that server process."
 
 func fetchKataStatus(ctx context.Context, baseURL, token string, budget time.Duration) (kata.Status, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, budget)

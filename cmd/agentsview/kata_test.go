@@ -156,6 +156,8 @@ func TestKataStatusCommandIncompatibleOwnerReportsVersionsWithoutLocalProbe(t *t
 		writeRuntime func(t *testing.T, dir, host string, port int)
 		wantReason   string
 		wantHint     string
+		// A read-only pg serve survives `agentsview daemon restart`.
+		notHint string
 	}{
 		{
 			name: "older daemon API",
@@ -177,7 +179,8 @@ func TestKataStatusCommandIncompatibleOwnerReportsVersionsWithoutLocalProbe(t *t
 				t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 			},
 			wantReason: fmt.Sprintf("daemon API version 0 is incompatible with client API version %d", daemonAPIVersion),
-			wantHint:   "CLI: run `agentsview daemon restart`",
+			wantHint:   "restart that server process",
+			notHint:    "agentsview daemon restart",
 		},
 		{
 			name: "newer daemon data",
@@ -206,6 +209,9 @@ func TestKataStatusCommandIncompatibleOwnerReportsVersionsWithoutLocalProbe(t *t
 			assert.Empty(t, out)
 			assert.Contains(t, err.Error(), tt.wantReason)
 			assert.Contains(t, err.Error(), tt.wantHint)
+			if tt.notHint != "" {
+				assert.NotContains(t, err.Error(), tt.notHint)
+			}
 			assert.Empty(t, fake.Requests(), "incompatible daemon must not trigger a local Kata probe")
 		})
 	}
