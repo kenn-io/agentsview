@@ -128,8 +128,10 @@ The latest release is
   newly accepted raw captures are waiting for processing. Changes to published
   content or public identities still cause reads to retry.
 - Copilot CLI sessions show per-request tokens and estimated cost before
-  shutdown, including after a crash. Receipt totals stay the same when a
-  shutdown summary arrives, and store usage still takes precedence.
+  shutdown, including after a crash. Receipts replace a shutdown's token rows
+  only when receipts precede it since the previous shutdown. Segments without
+  receipts keep their shutdown tokens alongside later receipts. Store usage
+  still takes precedence.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are

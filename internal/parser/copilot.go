@@ -43,6 +43,8 @@ type copilotSessionBuilder struct {
 	messages                 []ParsedMessage
 	usageEvents              []ParsedUsageEvent
 	usageRecords             []ParsedUsageEvent
+	uncoveredShutdownUsage   []ParsedUsageEvent
+	receiptSinceShutdown     bool
 	receiptAfterReportedCost bool
 	firstMessage             string
 	startedAt                time.Time
@@ -100,6 +102,7 @@ func (b *copilotSessionBuilder) processLine(line string) {
 			b.usageRecords = append(b.usageRecords, event)
 		}
 		b.receiptAfterReportedCost = true
+		b.receiptSinceShutdown = true
 	case copilotEventSessionShutdown:
 		b.handleShutdown(data, ts)
 	}
@@ -374,6 +377,12 @@ func (b *copilotSessionBuilder) handleShutdown(
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
 	})
+	// Receipts replace only the shutdown for the segment they cover.
+	// Save uncovered tokens before attaching the separate reported cost.
+	if !b.receiptSinceShutdown {
+		b.uncoveredShutdownUsage = append(b.uncoveredShutdownUsage, events...)
+	}
+	b.receiptSinceShutdown = false
 
 	if hasReportedCost {
 		if len(events) == 0 {
@@ -406,7 +415,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 func (b *copilotSessionBuilder) retainStoreOutputRemainder() {
 	storeOutput := make(map[string]int)
 	for _, event := range b.usageEvents {
-		if event.Source == "session-store" || event.Source == "usage-record" {
+		if event.Source == "session-store" || event.Source == "usage-record" || event.Source == "shutdown" {
 			storeOutput[event.Model] += event.OutputTokens
 		}
 	}
@@ -692,6 +701,9 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 		storeUsage = b.usageRecords
 		if len(storeUsage) > 0 && b.receiptAfterReportedCost {
 			b.clearReportedCost()
+		}
+		if len(storeUsage) > 0 {
+			storeUsage = append(storeUsage, b.uncoveredShutdownUsage...)
 		}
 	}
 	if len(storeUsage) > 0 {
