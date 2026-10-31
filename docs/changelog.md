@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- `pg raw-reconcile` checks damaged hosted raw selections and, with `--repair`,
+  restores missing head, projection, and parse-job links in bounded batches. It
+  keeps the stored parser version, reports evidence it cannot recover, and
+  leaves failed jobs for `pg raw-jobs retry`.
+
 - Hosted raw parse jobs now stop after their retry budget even when a worker
   loses its lease. `pg raw-jobs list` shows dead letters by state and error
   class, and `pg raw-jobs retry` safely requeues one bounded batch without
