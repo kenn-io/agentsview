@@ -18,9 +18,9 @@ func TestRawOutcomeFailureSurvivesReplay(t *testing.T) {
 	m, _ := f.accept(t, "device-a", "failure", "")
 	lease := f.lease(t, m)
 	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), lease, "parse", "private diagnostic"))
-	// Model the replay transition independently of PR 1's command.
-	_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_ingest_jobs SET state='ready',attempt_count=0 WHERE id=$1`, lease.ID)
+	replayed, err := f.sink.RetryFailedRawJobs(t.Context(), RawJobRetryFilter{ManifestID: m.ManifestID})
 	require.NoError(t, err)
+	require.Equal(t, int64(1), replayed.Replayed)
 	var count int64
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count FROM raw_job_outcome_buckets WHERE stage='parse' AND outcome='failed'`).Scan(&count))
 	assert.Equal(t, int64(1), count)
