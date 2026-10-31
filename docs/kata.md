@@ -44,10 +44,11 @@ The command reports `disabled`, `not_hub`, `unavailable`, `incompatible`,
 schema is older than 0.21.0. A non-ready state is information, so the command
 still succeeds. The same status object is available at
 `GET /api/v1/kata/status`; `/api/v1/version` reports `kata_available`. The
-command uses the AgentsView daemon that owns the data directory. It does not
-start one. When no daemon owns the directory, it probes from the local config.
-If the owning daemon is unreachable, it returns an error. Use `--format json` or
-its `--json` alias for machine-readable output.
+command uses the AgentsView daemon that owns the data directory, including a
+running `pg serve`. It does not start one. When no daemon owns the directory, it
+probes from the local config. If the owning daemon is unreachable or needs an
+upgrade, the command returns an error instead of probing locally. Use
+`--format json` or its `--json` alias for machine-readable output.
 
 Use `--server URL` to ask an explicit AgentsView daemon. Supply its credential
 with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH`.

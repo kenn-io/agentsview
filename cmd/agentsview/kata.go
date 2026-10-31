@@ -103,6 +103,9 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 	if tr.Mode == transportHTTP {
 		return fetchKataStatus(ctx, tr.URL, cfg.AuthToken, kataStatusRequestBudget(cfg.Kata.Timeout))
 	}
+	if !tr.DirectReadOnly {
+		tr = unavailableReadOnlyDaemon(cfg.DataDir, cfg.AuthToken, tr)
+	}
 	if tr.DirectReadOnly {
 		if tr.DirectIncompatible {
 			return kata.Status{}, fmt.Errorf("kata status request failed: %w", directIncompatibleDaemonError(tr))
@@ -115,6 +118,27 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 	hub := filing.EligibleHost(false, cfg.HasPGPushTarget())
 	st, _ := kata.Probe(ctx, kata.ConfigFrom(cfg.Kata, hub))
 	return st, nil
+}
+
+// unavailableReadOnlyDaemon reports a running read-only daemon, such as
+// pg serve, that cannot answer. Transport detection treats only a writable
+// daemon as the local owner, but pg serve owns this data directory's Kata
+// status too: probing locally instead would report not_hub with exit 0.
+// A reachable compatible daemon already returned an HTTP transport.
+func unavailableReadOnlyDaemon(dataDir, token string, tr transport) transport {
+	if rt, err := FindIncompatibleDaemonRuntime(dataDir, token); rt != nil && rt.ReadOnly && err != nil {
+		return transport{
+			Mode: transportDirect, DirectReadOnly: true, DirectIncompatible: true,
+			DirectDaemonAhead: daemonRuntimeAhead(rt), DirectReason: err.Error(), DirectError: err,
+		}
+	}
+	if hasLiveDaemonRuntime(dataDir, token) {
+		return transport{
+			Mode: transportDirect, DirectReadOnly: true,
+			DirectReason: errLocalDaemonUnreachable.Error(), DirectError: errLocalDaemonUnreachable,
+		}
+	}
+	return tr
 }
 
 func fetchKataStatus(ctx context.Context, baseURL, token string, budget time.Duration) (kata.Status, error) {
