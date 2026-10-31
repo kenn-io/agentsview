@@ -13,6 +13,13 @@ import (
 	"hegel.dev/go/hegel"
 )
 
+func localEditTimestamp(t *testing.T, value string) string {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	require.NoError(t, err)
+	return parsed.Local().Format(time.RFC3339)
+}
+
 // Filtering after ranking would still leak counts, timestamps and pagination.
 func TestHostedRolloutRecentEdits(t *testing.T) {
 	f := newHostedFixture(t, "tenant-edits")
@@ -33,10 +40,10 @@ func TestHostedRolloutRecentEdits(t *testing.T) {
 	edit := func(id, call, tool, ts string, ordinal int) db.RecentEdit {
 		return db.RecentEdit{SessionID: id, Ordinal: ordinal, ToolUseID: call, ToolName: tool, Category: tool, Timestamp: ts}
 	}
-	v0 := edit("visible", "v0", "Edit", "2026-01-01T00:01:00Z", 0)
-	v1 := edit("visible", "v1", "Write", "2026-01-01T00:02:00Z", 1)
-	h0 := edit("shadow", "h0", "Edit", "2026-01-01T00:03:00Z", 0)
-	h1 := edit("shadow", "h1", "Write", "2026-01-01T00:04:00Z", 1)
+	v0 := edit("visible", "v0", "Edit", localEditTimestamp(t, "2026-01-01T00:01:00Z"), 0)
+	v1 := edit("visible", "v1", "Write", localEditTimestamp(t, "2026-01-01T00:02:00Z"), 1)
+	h0 := edit("shadow", "h0", "Edit", localEditTimestamp(t, "2026-01-01T00:03:00Z"), 0)
+	h1 := edit("shadow", "h1", "Write", localEditTimestamp(t, "2026-01-01T00:04:00Z"), 1)
 	file := func(path string, count int, edits ...db.RecentEdit) db.RecentEditFile {
 		return db.RecentEditFile{Project: "p", FilePath: path, EditCount: count, LastEditedAt: edits[0].Timestamp, LastSessionID: edits[0].SessionID, Edits: edits}
 	}
