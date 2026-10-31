@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- `raw-sync server-health` reports hosted parse lag, pending queue age, open
+  upload lag, the last 24 hours of parse outcomes, degraded sources, and dead
+  letters. Hosted status and health return the same recovery details in their
+  `recovery` object, with successful parser versions and generations retained
+  as provenance for each source.
+
 - `pg raw-reconcile` checks damaged hosted raw selections and, with `--repair`,
   restores missing head, projection, and parse-job links in bounded batches. It
   keeps the stored parser version, reports evidence it cannot recover, and
