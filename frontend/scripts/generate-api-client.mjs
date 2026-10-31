@@ -142,6 +142,25 @@ function preserveToolSequenceCallFields(model) {
     "required SessionToolSequenceCall string checks",
   );
 }
+
+// The generator asks pointer fields whether they implement Validator instead of
+// checking required pointers, so absent rollout wildcards passed validation.
+function requireRolloutWildcardFields(model) {
+  model = replaceCounted(
+    model,
+    /\tif v, ok := any\(r\.DeviceID\)\.\(runtime\.Validator\); ok \{\n\t\tif err := v\.Validate\(\); err != nil \{\n\t\t\terrors = errors\.Append\("DeviceID", err\)\n\t\t\}\n\t\}\n/,
+    '\tif err := typesValidator.Var(r.DeviceID, "required"); err != nil {\n\t\terrors = errors.Append("DeviceID", err)\n\t}\n',
+    1,
+    "required rollout device pointer checks",
+  );
+  return replaceCounted(
+    model,
+    /\tif v, ok := any\(r\.Provider\)\.\(runtime\.Validator\); ok \{\n\t\tif err := v\.Validate\(\); err != nil \{\n\t\t\terrors = errors\.Append\("Provider", err\)\n\t\t\}\n\t\}\n/,
+    '\tif err := typesValidator.Var(r.Provider, "required"); err != nil {\n\t\terrors = errors.Append("Provider", err)\n\t}\n',
+    1,
+    "required rollout provider pointer checks",
+  );
+}
 writeFileSync(
   goClientPath,
   replaceCounted(
@@ -150,6 +169,16 @@ writeFileSync(
     preserveToolSequenceCallFields,
     1,
     "SessionToolSequenceCall models",
+  ),
+);
+writeFileSync(
+  goClientPath,
+  replaceCounted(
+    readFileSync(goClientPath, "utf8"),
+    /type RawsyncRolloutScopeStatus struct \{[\s\S]*?(?=\ntype )/g,
+    requireRolloutWildcardFields,
+    1,
+    "RawsyncRolloutScopeStatus models",
   ),
 );
 
