@@ -23,9 +23,13 @@ func activateFixture(t require.TestingT, ctx context.Context, f projectionFixtur
 }
 func assertActivationGuardFree(t *testing.T, f projectionFixture) {
 	t.Helper()
-	var held int
-	require.NoError(t, f.admin.QueryRow(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted AND classid=((hashtextextended($1,0)>>32)&4294967295)::oid AND objid=(hashtextextended($1,0)&4294967295)::oid`, "agentsview-rollout:"+f.schema).Scan(&held))
-	require.Zero(t, held, "no pooled connection may retain the session guard")
+	// pgx returns cancellation before its asynchronous physical connection
+	// cleanup finishes. A leaked pooled guard must still fail this bounded wait.
+	require.Eventually(t, func() bool {
+		var held int
+		err := f.admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted AND classid=((hashtextextended($1,0)>>32)&4294967295)::oid AND objid=(hashtextextended($1,0)&4294967295)::oid`, "agentsview-rollout:"+f.schema).Scan(&held)
+		return err == nil && held == 0
+	}, 20*time.Second, 10*time.Millisecond, "no pooled connection may retain the session guard")
 }
 
 func TestRawActivationRefusalIsAtomic(t *testing.T) {
