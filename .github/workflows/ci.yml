@@ -55,6 +55,8 @@ jobs:
               - 'internal/importer/claude_ai_requests.txt'
 
   lint:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: &go-lane ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go')) }}
     runs-on: ubuntu-latest
@@ -83,6 +85,8 @@ jobs:
           group: lint-${{ matrix.linter }}
           extra-path: ~/.cache/golangci-lint
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -103,12 +107,16 @@ jobs:
 
       - name: Install lint tools
         run: |
-          make lint-tools
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch Go checkers
+        if: matrix.linter == 'golangci'
+        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql
 
       - name: Run Go linters
         if: matrix.linter == 'golangci'
-        run: make lint-config-check lint-sql lint-golangci-ci
+        run: make lint-workflow-retries lint-config-check lint-sql lint-golangci-ci
 
       - name: Run NilAway
         if: matrix.linter == 'nilaway'
@@ -116,12 +124,17 @@ jobs:
 
       - name: Check Huma API contract
         if: matrix.linter == 'golangci'
-        run: go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./...
+        run: |
+          huma=go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b
+          kit-retry 3 5 go run -n "$huma"
+          go run "$huma" -fix=false ./...
 
       - name: Save Go caches
         uses: $/.github/actions/go-cache-save
 
   frontend:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: &frontend-lane ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go') || contains(fromJSON(needs.changes.outputs.groups), 'frontend')) }}
     runs-on: ubuntu-latest
@@ -147,6 +160,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -154,10 +169,10 @@ jobs:
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
       - name: Generate pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Format, lint, and type-check (fix formatting with npm run fmt)
@@ -198,8 +213,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Run frontend tests
@@ -210,6 +227,8 @@ jobs:
     name: Docs and scripts
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -222,13 +241,18 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.3.2
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Install docs check tools
         run: |
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
             -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
             -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
+          kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update
+          kit-retry 3 5 sudo apt-get install -y ripgrep
+
+      - name: Install documentation dependencies
+        run: kit-retry 3 5 uv sync --project docs --frozen
 
       - name: Run docs check
         run: make docs-check
@@ -236,7 +260,6 @@ jobs:
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
-          bash scripts/retry_test.sh
           bash scripts/e2e-server_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
@@ -247,6 +270,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     env:
+      DOWNLOAD_RETRY: kit-retry 3 5
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
       fail-fast: false
@@ -299,6 +323,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -326,7 +352,8 @@ jobs:
           path-type: inherit
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        shell: bash
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
@@ -396,8 +423,7 @@ jobs:
           export PATH="$linter_dir:$PATH"
           if [ -f "$linter_dir/custom-gcl.exe" ]; then exit 0; fi
           mkdir -p "$linter_dir"
-          bash scripts/retry.sh 3 5 make lint-tools
-          make nilaway-golangci-build
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           mv custom-gcl.exe "$linter_dir/custom-gcl.exe"
         env:
           CGO_ENABLED: "1"
@@ -431,7 +457,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -count=1 -timeout=10m
-          make lint-tools nilaway-golangci-build
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
         env:
           CGO_ENABLED: "1"
@@ -510,8 +536,11 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        shell: bash
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # The Windows system tree and the runner's data volume have parent
       # permissions that capture deliberately rejects. Use a private directory
@@ -544,7 +573,7 @@ jobs:
 
       - name: Upload ${{ matrix.name }} test events
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
           path: go-test-events.jsonl
@@ -688,8 +717,11 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        shell: bash
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run DuckDB tests
         run: go test -tags "fts5" ./internal/duckdb -count=1 -timeout=20m
@@ -697,6 +729,8 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: *go-lane
     name: Go Test (race detector, ${{ matrix.name }})
@@ -744,6 +778,8 @@ jobs:
         with:
           group: race-linux
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -751,7 +787,7 @@ jobs:
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # Keep exclusions aligned with the explicit race matrix packages.
       # DuckDB runs without -race in its Linux shard. Limit package fan-out
@@ -810,24 +846,18 @@ jobs:
           New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
           New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Fetch Windows desktop Rust dependencies
-        shell: pwsh
-        run: |
-          for ($attempt = 1; $attempt -le 3; $attempt++) {
-            cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
-            if ($LASTEXITCODE -eq 0) {
-              break
-            }
-            if ($attempt -eq 3) {
-              exit $LASTEXITCODE
-            }
-            Start-Sleep -Seconds (10 * $attempt)
-          }
+        shell: bash
+        run: kit-retry 3 10 cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
 
       - name: Run Windows desktop unit tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
     if: *go-lane
     name: Integration (${{ matrix.name }})
@@ -889,8 +919,10 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
         run: make ${{ matrix.postgres-target }}
@@ -913,6 +945,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
+      DOWNLOAD_RETRY: kit-retry 3 5
     strategy:
       fail-fast: false
       matrix:
@@ -937,6 +970,8 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
         run: |
@@ -950,7 +985,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Build frontend
@@ -965,7 +1000,7 @@ jobs:
           cp -r frontend/dist internal/web/dist
 
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Pre-build Go binaries
         run: |
@@ -982,7 +1017,7 @@ jobs:
         run: |
           version=$(node -p 'require("./node_modules/@playwright/test/package.json").version')
           image="mcr.microsoft.com/playwright:v$version-noble"
-          if ! docker pull "$image"; then
+          if ! kit-retry 3 5 docker pull "$image"; then
             echo "::error::Could not pull $image. Microsoft may not have published the image for this @playwright/test version yet."
             exit 1
           fi
@@ -991,6 +1026,7 @@ jobs:
             "$image" \
             node node_modules/@playwright/test/cli.js run-server \
             --port 3000 --host 127.0.0.1 --unsafe)
+          # workflowretry: allow Poll the local service for readiness.
           until curl -s http://127.0.0.1:3000/; do
             [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { docker logs "$cid"; exit 1; }
             sleep 1
