@@ -1374,7 +1374,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL+commitLinksMigratedTriggerSQL)
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
@@ -2883,6 +2883,10 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS trg_commit_links_session_update"); err != nil {
+		return fmt.Errorf("dropping commit session update trigger: %w", err)
+	}
+
 	if _, err := tx.ExecContext(ctx, provider_freshnessDDL); err != nil {
 		return fmt.Errorf(
 			"creating provider_freshness side-table: %w", err)
@@ -2898,7 +2902,7 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL+commitLinksMigratedTriggerSQL); err != nil {
 		return fmt.Errorf("installing classification journal trigger: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

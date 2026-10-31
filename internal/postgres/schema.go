@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const (
@@ -1041,6 +1042,9 @@ func EnsureSchema(
 	step = time.Now()
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
 		return fmt.Errorf("creating pg tables: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, storage.CommitLinksDDL); err != nil {
+		return fmt.Errorf("creating commit provenance tables: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, frictionDDL); err != nil {
 		return fmt.Errorf("creating pg friction tables: %w", err)
@@ -2477,7 +2481,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	if err := checkPushSchemaCompat(ctx, db); err != nil {
 		return false
 	}
-	if !pgHasTable(ctx, db, "model_pricing") ||
+	if !pgHasTable(ctx, db, "commit_session_links") || !pgHasTable(ctx, db, "commit_link_publications") || !pgHasTable(ctx, db, "model_pricing") ||
 		!pgHasTable(ctx, db, "model_pricing_bands") ||
 		!pgHasTable(ctx, db, "genai_pricing") ||
 		!pgHasTable(ctx, db, "source_archives") ||

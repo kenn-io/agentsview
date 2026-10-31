@@ -719,6 +719,9 @@ func deletePGTrashedSessionRows(
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	if err := clearDeletedCommitSessionsPG(ctx, tx, ids); err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM sessions
 		 WHERE id = ANY($1)`,
