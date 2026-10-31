@@ -129,7 +129,6 @@ func retryRawActivation(ctx context.Context, operation func() (RawActivationAudi
 	return value, nil
 }
 
-//nolint:unused // used by the later fenced activation engine
 func discardRawActivationConnection(conn *sql.Conn) {
 	// Returning ErrBadConn through Raw tells database/sql to close the physical
 	// driver connection. Conn.Close alone would return a session guard to the pool.
@@ -162,7 +161,7 @@ func activateRawRolloutOnce(ctx context.Context, database *sql.DB, schema, tenan
 			discardRawActivationConnection(conn)
 			cleanupErr := errors.New("raw-rollout session guard cleanup failed; physical connection discarded")
 			if committed {
-				resultErr = &rawActivationUncertain{cleanupErr}
+				resultErr = &rawActivationUncertainError{cleanupErr}
 			} else {
 				resultErr = errors.Join(resultErr, cleanupErr)
 			}
@@ -239,7 +238,7 @@ func activateRawRolloutOnce(ctx context.Context, database *sql.DB, schema, tenan
 		// error can hide an accepted commit: never replay it or reuse its session.
 		if _, known := errors.AsType[*pgconn.PgError](err); !known {
 			commitUncertain = true
-			return audit, &rawActivationUncertain{err}
+			return audit, &rawActivationUncertainError{err}
 		}
 		return audit, err
 	}
