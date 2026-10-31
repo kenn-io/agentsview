@@ -36,9 +36,9 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/thlib/go-timezone-local v0.0.9
 	github.com/tidwall/gjson v1.20.0
-	github.com/yuin/goldmark/v2 v2.1.9
+	github.com/yuin/goldmark/v2 v2.1.11
 	go.kenn.io/docbank v0.16.0
-	go.kenn.io/kit v0.47.2
+	go.kenn.io/kit v0.47.3
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0
@@ -138,7 +138,7 @@ require (
 	github.com/pdfcpu/pdfcpu v0.15.0 // indirect
 	github.com/philhofer/fwd v1.2.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
-	github.com/posthog/posthog-go v1.38.0 // indirect
+	github.com/posthog/posthog-go v1.39.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
