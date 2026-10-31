@@ -103,11 +103,8 @@ The latest release is
 
 **Bug fixes**
 
-- Copilot CLI sessions show per-request tokens and estimated cost before
-  shutdown, including after a crash. Shutdown token rows from before the first
-  usable receipt preserve older-CLI usage. Later shutdowns keep receipt totals
-  unchanged, including after resuming without new calls. Store usage still takes
-  precedence.
+- Crashed or still-running Copilot CLI sessions now show tokens and estimated
+  cost.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are

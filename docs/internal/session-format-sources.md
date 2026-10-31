@@ -1438,10 +1438,10 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Usage and cost:** Per-call store rows take precedence over
   `session.usage_record` receipts and replace all shutdown token rollups.
-  With receipts, only shutdowns before the first usable receipt keep their
-  token rows, preserving older-CLI usage. Later shutdown token rows are dropped
-  because `modelMetrics` are cumulative snapshots restored on resume, including
-  when no new calls occur. Receipts preserve each
+  Shutdown token rows before the first usable receipt are summed, just as in
+  sessions without receipts. Shutdowns written after that receipt are cumulative
+  snapshots of what receipts already record, so their token rows are dropped.
+  See the published schema evidence below. Receipts preserve each
   request's timestamp, input, output, cache-read, cache-write, and reasoning
   tokens. Without per-call usage, shutdown metrics supply totals, then known
   per-message output is the fallback. Known-model tokens use catalog estimates.
@@ -1451,7 +1451,10 @@ fixtures retain this field; missing identities remain source-local.
 - **Receipt schema:** Reverified 2026-10-31 against the published
   [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
   (SHA1 `43322d0817b8564afcfe00f3929c00b033bca116`). The embedded schema
-  defines `session.usage_record` with `data.usage.model` and token fields
+  describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated" and
+  `accountingSnapshot` as "captured atomically with receipt watermarks". It defines
+  `session.usage_checkpoint` for "reconstructing aggregate accounting on resume".
+  It defines `session.usage_record` with `data.usage.model` and token fields
   under `data.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`,
   `cacheWriteTokens`, and `reasoningTokens`. Fresh input subtracts cache reads
   and writes. Receipts use request pricing and their event timestamp without a

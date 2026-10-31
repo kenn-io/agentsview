@@ -624,10 +624,15 @@ cache, and reasoning counts for sessions starting June 1, 2026 or later.
 Otherwise, `session.usage_record` receipts supply those counts at each request's
 own timestamp, including for sessions without a shutdown summary. Store rows
 replace all `session.shutdown.modelMetrics` rollups. With receipts, AgentsView
-keeps shutdown token rows only from before the first usable receipt, preserving
-older-CLI usage. Every later shutdown's token rows are dropped because its
-cumulative metrics can repeat receipt usage after a resume without new calls.
-Without either per-call source, AgentsView uses shutdown metrics,
+sums shutdown token rows from before the first usable receipt, just as it does
+for sessions without receipts. Shutdowns written after that receipt are cumulative
+snapshots of what receipts already record, so AgentsView drops those token rows.
+The published
+[Copilot CLI 1.0.105 schema](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
+describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated" and
+`accountingSnapshot` as "captured atomically with receipt watermarks". It defines
+`session.usage_checkpoint` for "reconstructing aggregate accounting on resume".
+Without either per-call source, AgentsView sums shutdown token metrics,
 then known `assistant.message.outputTokens`.
 The message-only fallback cannot report input, cache, reasoning, or Copilot AI
 Credit totals. Fresh input tokens are computed as total input minus cache reads

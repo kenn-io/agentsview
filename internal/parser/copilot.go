@@ -375,8 +375,9 @@ func (b *copilotSessionBuilder) handleShutdown(
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
 	})
-	// Keep older-CLI shutdown tokens only before the first usable receipt.
-	// Later shutdowns are cumulative snapshots of receipt usage.
+	// Sum shutdown tokens before the first usable receipt, as in receipt-free sessions.
+	// After that receipt, shutdowns are cumulative snapshots of usage receipts already record.
+	// See the Copilot CLI 1.0.105 schema evidence in docs/internal/session-format-sources.md.
 	if len(b.usageRecords) == 0 {
 		b.uncoveredShutdownUsage = append(b.uncoveredShutdownUsage, events...)
 	}
