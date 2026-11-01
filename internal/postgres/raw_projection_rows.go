@@ -62,7 +62,7 @@ func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, c
 
 // materializeGroup requires the caller to hold the group's row lock. It
 // returns the embedding changes for the caller to pass to publishRawRevision.
-func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string) ([]rawEmbeddingChange, error) {
+func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string][]byte) ([]rawEmbeddingChange, error) {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
 		return nil, err
 	}
@@ -121,7 +121,11 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 			action = "remove"
 		} else {
 			if !exists {
-				payload, err := loadRawPayload(ctx, tx, c.id)
+				// Prefix reconciliation may select a retained revision instead of
+				// the new capture. Reuse only the selected, freshly inserted row.
+				encoded := fresh[c.id]
+				delete(fresh, c.id)
+				payload, err := loadRawPayloadBytes(ctx, tx, c.id, encoded)
 				if err != nil {
 					return nil, err
 				}
