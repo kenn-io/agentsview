@@ -510,6 +510,9 @@ func (s *Store) getSidebarSessionIndexPage(
 		parentEdges := hostedSidebarParentEdgesSQL()
 		recursivePrefix += parentEdges + ", "
 		countPrefix = "WITH " + parentEdges + " "
+		dialect = dialect.WithParentRelation(func(child, parent string) string {
+			return "EXISTS (SELECT 1 FROM sidebar_parent_edges pe WHERE pe.child_id=" + child + ".id AND pe.parent_id=" + parent + ".id)"
+		})
 		dialect = dialect.WithOrphanPredicate(func(sessionAlias, _ string) string {
 			return "NOT EXISTS (SELECT 1 FROM sidebar_parent_edges pe WHERE pe.child_id=" + sessionAlias + ".id)"
 		})
