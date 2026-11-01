@@ -155,6 +155,21 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Hook success attachments (checked 2026-11-02):** A bounded decoder reads the
+  `hook_success` attachment shape reported in
+  [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`, and
+  in two first-hand reports with `stdout` and `stderr`:
+  [claude-code#88086](https://github.com/anthropics/claude-code/issues/88086),
+  [claude-code#85951](https://github.com/anthropics/claude-code/issues/85951).
+  It accepts only a JSON object whose `type` is `attachment` and whose
+  `attachment.type` is `hook_success`, reads the optional `hookName`,
+  `hookEvent`, `content`, `stdout`, and `stderr` string members, and keeps each
+  channel's text as written. These are reported transcript shapes, not a public
+  producer source or an authoritative persistence schema. The
+  [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
+  protocol's stdout and stderr, not transcript persistence. Only payload
+  decoding is in place, with synthetic coverage: full and incremental import,
+  archive storage, and the transcript view stay unimplemented here.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies
