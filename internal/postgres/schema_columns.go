@@ -7,6 +7,7 @@ func schemaColumnMigrations() []columnMigration {
 		{"tool_calls", "observed_repeat", `observed_repeat TEXT`, "adding tool_calls.observed_repeat"},
 		{"tool_calls", "sequence_ending", `sequence_ending TEXT`, "adding tool_calls.sequence_ending"},
 
+		{"sessions", "rollout_hidden", `rollout_hidden BOOLEAN NOT NULL DEFAULT false`, "adding sessions.rollout_hidden"},
 		{"sessions", "provenance_kind", `provenance_kind TEXT NOT NULL DEFAULT 'legacy'`, "adding sessions.provenance_kind"},
 		{"sessions", "raw_group_id", `raw_group_id TEXT NOT NULL DEFAULT ''`, "adding sessions.raw_group_id"},
 		{"sessions", "raw_content_revision", `raw_content_revision TEXT NOT NULL DEFAULT ''`, "adding sessions.raw_content_revision"},

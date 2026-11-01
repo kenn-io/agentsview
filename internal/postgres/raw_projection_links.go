@@ -59,7 +59,7 @@ func writeRawLinks(ctx context.Context, tx *sql.Tx, branch string, p ingest.Prep
 // equal proofs coalesce, while independently proven plural parents survive.
 const hostedLinkFromSQL = ` FROM raw_session_links e
  JOIN raw_session_branches owner ON owner.branch_id=e.branch_id AND owner.active
- JOIN sessions own_session ON own_session.id=owner.session_id
+ JOIN sessions own_session ON own_session.id=owner.session_id AND NOT own_session.rollout_hidden
  JOIN raw_source_projections owner_source ON owner_source.source_id=owner.source_id
  JOIN LATERAL (
    SELECT EXISTS (
@@ -76,7 +76,7 @@ const hostedLinkFromSQL = ` FROM raw_session_links e
      JOIN raw_session_branches b ON b.group_id=a.group_id AND b.active
        AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id)
      JOIN raw_source_projections target_source ON target_source.source_id=b.source_id
-     JOIN sessions materialized ON materialized.id=b.session_id
+     JOIN sessions materialized ON materialized.id=b.session_id AND NOT materialized.rollout_hidden
      WHERE a.alias_id=e.target_alias
        AND (b.source_id=owner.source_id OR (NOT authority.exact
          AND target_source.tenant_id=owner_source.tenant_id
@@ -97,6 +97,6 @@ func (s *Store) sessionDialect() db.QueryDialect {
 		return d
 	}
 	return d.WithParentRelation(func(child, parent string) string {
-		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
+		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id AND EXISTS(SELECT 1 FROM sessions eligible_parent WHERE eligible_parent.id=" + parent + ".id AND NOT eligible_parent.rollout_hidden)) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
 	})
 }

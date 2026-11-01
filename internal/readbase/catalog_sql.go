@@ -8,9 +8,13 @@ func VisibleArchivesSQL() string {
 		WHERE deleted_at IS NULL AND source_archive_id != ''`
 }
 
-func MachinesSQL() string {
+func MachinesSQL(dialects ...db.QueryDialect) string {
+	where := "deleted_at IS NULL"
+	if len(dialects) > 0 {
+		where = dialects[0].SessionLivePredicate("")
+	}
 	return `SELECT machine FROM (
-		SELECT machine FROM sessions WHERE deleted_at IS NULL AND machine != ''
+		SELECT machine FROM sessions WHERE ` + where + ` AND machine != ''
 		UNION DISTINCT
 		SELECT machine FROM source_worktree_project_mappings WHERE machine != ''
 		) machines ORDER BY machine`
@@ -38,7 +42,7 @@ func MappingsSQL(machine *string, dialect db.QueryDialect) (string, []any) {
 func CandidateRowsSQL(machine *string, dialect db.QueryDialect) (string, []any) {
 	query := `SELECT id, machine, project, cwd, COALESCE(file_path, ''),
 		project_assigned, source_archive_id
-		FROM sessions WHERE deleted_at IS NULL AND source_archive_id != ''`
+		FROM sessions WHERE ` + dialect.SessionLivePredicate("") + ` AND source_archive_id != ''`
 	b := db.NewQueryBuilder(dialect, 0)
 	if machine != nil {
 		query += ` AND machine = ` + b.Add(*machine)
