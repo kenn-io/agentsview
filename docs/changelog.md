@@ -110,6 +110,9 @@ The latest release is
 - Hosted transcript jobs whose workers keep stopping now fail with error class
   `lease` after one run past `raw_max_attempts`, instead of retrying forever.
   Workers from an older processing generation can no longer change a newer lease.
+- Hosted PostgreSQL searches and session reads no longer fail solely because
+  newly accepted raw captures are waiting for processing. Changes to published
+  content or public identities still cause reads to retry.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are
