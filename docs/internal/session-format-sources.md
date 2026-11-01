@@ -4311,7 +4311,8 @@ schemas keep their existing ordering behavior.
   SQLite, and sidecar messages; sidecar fixtures establish consumer behavior,
   rather than an observed producer emission. Raw history, system rows, literal
   tags, incomplete envelopes, and empty requests retain their text. Evidence
-  remains `no-public-source`.
+  remains `no-public-source`. Ordinary sync repairs existing CLI messages and
+  titles in place, even when source files are unchanged.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
