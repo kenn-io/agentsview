@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func tracedHostedReader(t *testing.T, f projectionFixture, argument string) (*HostedStore, *hostedPendingSelectionTracer) {
@@ -180,4 +182,39 @@ func TestHostedCanceledReadReleasesConnection(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	assert.Equal(t, "codex:portable", page.Results[0].SessionID)
+}
+
+func TestHostedReadViewRetainsTransactionOwnership(t *testing.T) {
+	f := newHostedFixture(t, "tenant-read-owner")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	tx, err := f.runtime.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	owner := &Store{pg: f.runtime}
+	view := owner.readView(tx)
+	for _, operation := range []struct {
+		name string
+		run  func() error
+	}{
+		{"schema preparation", func() error { return prepareServeStore(ctx, view, f.schema) }},
+		{"vector generations", func() error {
+			_, err := (Backend{}).VectorGenerations(ctx, view)
+			return err
+		}},
+		{"vector searcher", func() error {
+			_, _, err := (Backend{}).OpenVectorSearcher(ctx, view, storage.VectorGenerationInfo{}, 0, nil)
+			return err
+		}},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			require.ErrorIs(t, operation.run(), db.ErrReadOnly)
+		})
+	}
+	require.NoError(t, view.Close())
+	var one int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT 1`).Scan(&one))
+	require.Equal(t, 1, one, "the view must not close its borrowed transaction")
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, owner.DB().PingContext(ctx), "the view must not close its owner's pool")
 }
