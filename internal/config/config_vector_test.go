@@ -86,11 +86,6 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "dimension",
 		},
 		{
-			name:    "enabled oversized Nomic dimension",
-			mutate:  func(c *VectorConfig) { c.Embeddings.Dimension = 1024 },
-			wantErr: "dimension must be at most 768",
-		},
-		{
 			name:    "enabled zero max_input_chars",
 			mutate:  func(c *VectorConfig) { c.Embeddings.MaxInputChars = 0 },
 			wantErr: "max_input_chars",

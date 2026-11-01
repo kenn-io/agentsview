@@ -147,9 +147,9 @@ Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`
 `query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
-What varies per server is transport and capacity: `endpoint`, `local`, `api_key_env`,
-`timeout`, `max_retries`, `batch_size`, `max_batch_tokens`, `concurrency`, and
-`ollama_cpu_fallback`.
+What varies per server is transport and capacity: `endpoint`, `local`,
+`api_key_env`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
+`concurrency`, and `ollama_cpu_fallback`.
 
 When `model_context_tokens` and a server's `max_batch_tokens` are both set,
 builds cap that server's effective batch size at
