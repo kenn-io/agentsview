@@ -19,18 +19,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAntigravityCLIHistoryPreservesLiteralRequestTags(t *testing.T) {
+	const prompt = "Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed."
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	for _, withBrain := range []bool{false, true} {
+		name := "history only"
+		if withBrain {
+			name = "wrapped brain and raw history"
+		}
+		t.Run(name, func(t *testing.T) {
+			history, err := json.Marshal(map[string]any{"conversationId": id, "display": prompt, "timestamp": 1793357626000})
+			require.NoError(t, err)
+			fixture := antigravityCLIBrainFixture{pb: true, history: string(history) + "\n"}
+			if withBrain {
+				line, err := json.Marshal(map[string]any{
+					"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+					"content": "<USER_REQUEST>\n" + prompt + "\n</USER_REQUEST><METADATA>context</METADATA>",
+				})
+				require.NoError(t, err)
+				fixture.transcript = string(line) + "\n"
+			}
+			path := fixture.write(t, id)
+			session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, prompt, messages[0].Content)
+			assert.Equal(t, prompt, session.FirstMessage)
+		})
+	}
+}
+
 func TestAntigravityCLIUserRequestContent(t *testing.T) {
 	tests := []struct {
 		name, content, want string
-		assistant           bool
+		assistant, system   bool
 	}{
 		{name: "plain", content: "  Keep my spacing\n", want: "  Keep my spacing\n"},
 		{name: "missing closing tag", content: "<USER_REQUEST>unfinished", want: "<USER_REQUEST>unfinished"},
 		{name: "missing opening tag", content: "unfinished</USER_REQUEST>", want: "unfinished</USER_REQUEST>"},
 		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST>", want: "First line\nSecond line"},
 		{name: "literal closing tag", content: "<USER_REQUEST>Explain the </USER_REQUEST> tag.</USER_REQUEST>", want: "Explain the </USER_REQUEST> tag."},
-		{name: "surrounding blocks", content: "<UNKNOWN>context</UNKNOWN><USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>", want: "Prompt"},
+		{name: "trailing metadata", content: " \n<USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>", want: "Prompt"},
+		{name: "mid-text literal tags", content: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags.", want: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags."},
 		{name: "assistant", content: "<USER_REQUEST>quoted prompt</USER_REQUEST>", want: "<USER_REQUEST>quoted prompt</USER_REQUEST>", assistant: true},
+		{name: "system", content: "<USER_REQUEST>system context</USER_REQUEST>", want: "<USER_REQUEST>system context</USER_REQUEST>", system: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,6 +71,9 @@ func TestAntigravityCLIUserRequestContent(t *testing.T) {
 			if tc.assistant {
 				source, kind = "MODEL", "PLANNER_RESPONSE"
 				wantRole = RoleAssistant
+			} else if tc.system {
+				source, kind = "SYSTEM", "SYSTEM_MESSAGE"
+				wantRole = RoleSystem
 			}
 			line, err := json.Marshal(map[string]any{
 				"step_index": 0, "source": source, "type": kind, "content": tc.content,
@@ -53,7 +88,7 @@ func TestAntigravityCLIUserRequestContent(t *testing.T) {
 			assert.Equal(t, wantRole, messages[0].Role)
 			assert.Equal(t, tc.want, messages[0].Content)
 			assert.Equal(t, len(tc.want), messages[0].ContentLength)
-			if tc.assistant {
+			if tc.assistant || tc.system {
 				assert.Empty(t, session.FirstMessage)
 			}
 		})

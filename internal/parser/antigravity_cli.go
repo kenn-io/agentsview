@@ -129,8 +129,15 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		return nil, nil, nil, status, brainTranscriptErr
 	}
 	brainTranscriptMsgs := make([]ParsedMessage, len(brainTranscriptSteps))
-	for i, s := range brainTranscriptSteps {
-		brainTranscriptMsgs[i] = s.msg
+	for i := range brainTranscriptSteps {
+		msg := &brainTranscriptSteps[i].msg
+		if msg.Role == RoleUser {
+			if content := extractAntigravityCLIUserRequest(msg.Content); content != msg.Content {
+				msg.Content = content
+				msg.ContentLength = len(content)
+			}
+		}
+		brainTranscriptMsgs[i] = *msg
 	}
 	brainTranscriptOK := hasDisplayableAntigravityCLITrajectoryMessage(
 		brainTranscriptMsgs,
@@ -343,13 +350,8 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	var firstMessage string
 	var userCount int
 	var startedAt, endedAt time.Time
-	for i := range messages {
-		m := &messages[i]
+	for _, m := range messages {
 		if m.Role == RoleUser {
-			if content := extractAntigravityCLIUserRequest(m.Content); content != m.Content {
-				m.Content = content
-				m.ContentLength = len(content)
-			}
 			userCount++
 			if firstMessage == "" && m.Content != "" {
 				firstMessage = truncate(
@@ -677,13 +679,13 @@ func appendMissingAntigravityHistoryMessages(
 }
 
 func normalizedAntigravityPrompt(s string) string {
-	return strings.Join(strings.Fields(extractAntigravityCLIUserRequest(s)), " ")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // extractAntigravityCLIUserRequest drops the context injected around CLI prompts.
 // Keep incomplete envelopes unchanged so a truncated source loses no text.
 func extractAntigravityCLIUserRequest(s string) string {
-	_, request, ok := strings.Cut(s, "<USER_REQUEST>")
+	request, ok := strings.CutPrefix(strings.TrimSpace(s), "<USER_REQUEST>")
 	if !ok {
 		return s
 	}
