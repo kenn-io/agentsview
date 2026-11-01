@@ -827,11 +827,16 @@ fixtures retain this field; missing identities remain source-local.
   Reverified the pinned archival producer and inventory regressions on
   2026-11-01: Linux reads native directory-name notifications synchronously,
   sharing one descriptor across the factory's cached roots. Only notified
-  directories refresh their filenames; overflow or watch failures keep forks
-  eligible for retry and rebuild the notification instance. Invalidation,
-  eviction and runtime cleanup release descriptors. Stable source snapshots
+  directories refresh their filenames. Overflow rebuilds the notification
+  instance; notification or registration failures keep forks eligible for
+  retry. Invalidation, eviction and runtime cleanup release descriptors. Stable source snapshots
   enumerate once per parse without notifications, including inside the
   read-only hosted parser sandbox.
+  Data version 161 reparses Codex, TraeX and Augure Code sources in place to
+  repair already-current forks that missed a parent page. The persisted archive
+  upgrade regression keeps child bytes and their saved stat digest unchanged,
+  and verifies repaired messages, stable session and source identities, and
+  retained answer pins.
   Reverified on 2026-10-11 with 10 and 1,000 unrelated files and dated
   directories, page discovery across batches, and parent edits and removal
   within a batch. On Windows, directory metadata comes from one open handle,

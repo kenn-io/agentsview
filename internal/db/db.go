@@ -637,7 +637,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // repair; source and session identities are unchanged.)
 // (160: remove injected Antigravity CLI prompt envelopes from stored user
 // messages and titles. Re-parse unchanged CLI sources in place.)
-const dataVersion = 160
+// (161: repair Codex-format forks that missed a parent page in their cached
+// directory inventory. Re-parse sources in place, preserving source and
+// session identities.)
+const dataVersion = 161
 
 const archiveOnlyVersionBase = 1 << 20
 
