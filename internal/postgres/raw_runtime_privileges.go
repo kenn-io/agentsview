@@ -15,6 +15,7 @@ import (
 // sessions foreign key. Row locks on raw_session_groups require UPDATE even
 // though its immutable group identity is never rewritten.
 var hostedProjectionPrivileges = []struct{ table, privileges string }{
+	{"raw_rollout_scopes", "SELECT"},
 	{"sessions", "SELECT,INSERT,UPDATE,DELETE"},
 	{"messages", "SELECT,INSERT"},
 	{"tool_calls", "SELECT,INSERT"},

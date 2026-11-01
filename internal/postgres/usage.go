@@ -21,7 +21,7 @@ const pgUsageMessageEligibility = `
 	m.token_usage != ''
 	AND m.model != ''
 	AND m.model != '<synthetic>'
-	AND s.deleted_at IS NULL`
+	AND s.deleted_at IS NULL AND NOT s.rollout_hidden`
 
 const pgUsageMessageSourceEligibility = `
 	m.token_usage != ''
@@ -31,7 +31,7 @@ const pgUsageMessageSourceEligibility = `
 const pgUsageMatchingMessageEligibility = `
 	m.role = 'assistant'
 	AND m.model != '<synthetic>'
-	AND s.deleted_at IS NULL`
+	AND s.deleted_at IS NULL AND NOT s.rollout_hidden`
 
 const pgUsageMatchingMessageSourceEligibility = `
 	m.role = 'assistant'
@@ -39,12 +39,12 @@ const pgUsageMatchingMessageSourceEligibility = `
 
 const pgUsageEventEligibility = `
 	ue.model != ''
-	AND s.deleted_at IS NULL`
+	AND s.deleted_at IS NULL AND NOT s.rollout_hidden`
 
 const pgUsageEventSourceEligibility = `
 	ue.model != ''`
 
-const pgUsageSessionEligibility = `s.deleted_at IS NULL`
+const pgUsageSessionEligibility = `s.deleted_at IS NULL AND NOT s.rollout_hidden`
 
 func appendPGUsageBranchFilterClauses(
 	where string, pb *paramBuilder, f db.UsageFilter, modelCol string,
