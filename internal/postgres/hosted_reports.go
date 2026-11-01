@@ -295,7 +295,7 @@ func (h *HostedStore) BuildActivityReportArtifacts(ctx context.Context, f db.Ana
 }
 
 func (h *HostedStore) ActivityReportSourceProbe(ctx context.Context) (activity.SourceProbe, error) {
-	return hostedRead(ctx, h, func(rev hostedRevision) (activity.SourceProbe, error) {
+	return hostedReadWithScope(ctx, h, hostedAllRevisionsRead, func(rev hostedRevision) (activity.SourceProbe, error) {
 		p, err := h.physical.ActivityReportSourceProbe(ctx)
 		p.HostedIdentityRevision = rev.Identity
 		p.HostedSelectionRevision = rev.Selection

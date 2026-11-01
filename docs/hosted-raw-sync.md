@@ -264,6 +264,10 @@ retry their transaction on serialization failure (`SQLSTATE 40001`) if
 publication or curation holds a conflicting identity lock. Ordinary legacy
 content and curation writes do not take those identity locks.
 
+Search and session reads use the published sessions while new raw captures wait
+for processing. Reads retry if published content or public identities change
+during the read.
+
 Selecting a parser job does not expire browsing cursors. Publishing changed
 identities does; the sidebar and activity report reload when their next page
 uses an expired cursor. The API returns a bad-request response for invalid or
