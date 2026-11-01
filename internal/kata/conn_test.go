@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -28,7 +27,7 @@ func TestConnCachesStatus(t *testing.T) {
 	assert.Len(t, s.RequestsMatching(http.MethodGet, "/api/v1/health"), 2, "fresh bypasses the cache")
 }
 
-func TestConnVersionReadyDoesNotWaitForStatusProbe(t *testing.T) {
+func TestConnLastReadyDoesNotWaitForStatusProbe(t *testing.T) {
 	c := NewConn(readyConfig("http://127.0.0.1:1"))
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -51,9 +50,8 @@ func TestConnVersionReadyDoesNotWaitForStatusProbe(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "status probe did not start")
 	}
-	startedAt := time.Now()
-	assert.False(t, c.VersionReady(t.Context()))
-	assert.Less(t, time.Since(startedAt), time.Second, "version must not wait behind a status probe")
+	// Returning at all proves LastReady did not wait for the probe's lock.
+	assert.False(t, c.LastReady(), "no check has completed yet")
 	close(release)
 	select {
 	case st := <-done:
@@ -61,31 +59,30 @@ func TestConnVersionReadyDoesNotWaitForStatusProbe(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "status probe did not finish")
 	}
+	assert.True(t, c.LastReady())
 }
 
-func TestConnVersionReadyReprobesWhenTokenAppears(t *testing.T) {
+func TestConnLastReadyReflectsChecksWithoutProbing(t *testing.T) {
 	const tokenEnv = "AGENTSVIEW_TEST_KATA_VERSION_TOKEN"
-	t.Setenv(tokenEnv, "")
+	t.Setenv(tokenEnv, "synthetic-token")
 	s := katatest.New(t)
 	s.SetToken("synthetic-token")
 	c := NewConn(ConfigFrom(config.KataConfig{
 		Enabled: true, Endpoint: s.Endpoint(), Project: "agentsview", TokenEnv: tokenEnv,
 	}, true))
-	assert.False(t, c.VersionReady(t.Context()))
-	assert.Empty(t, s.Requests())
+	assert.False(t, c.LastReady())
+	assert.Empty(t, s.Requests(), "LastReady never contacts Kata")
 
+	require.True(t, c.Ready(t.Context()))
+	assert.True(t, c.LastReady())
+
+	t.Setenv(tokenEnv, "")
+	assert.False(t, c.LastReady(), "a removed token cannot be ready")
 	t.Setenv(tokenEnv, "synthetic-token")
-	assert.True(t, c.VersionReady(t.Context()))
-	assert.Len(t, s.RequestsMatching(http.MethodGet, "/api/v1/health"), 1)
-}
+	assert.True(t, c.LastReady())
 
-func TestConnVersionReadyCanceledCallerDoesNotCacheFailure(t *testing.T) {
-	s := katatest.New(t)
-	c := NewConn(readyConfig(s.Endpoint()))
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	assert.False(t, c.VersionReady(ctx))
-	assert.True(t, c.VersionReady(t.Context()))
+	_ = c.observe(ErrUnavailable)
+	assert.False(t, c.LastReady(), "a failed Kata call clears readiness")
 	assert.Len(t, s.RequestsMatching(http.MethodGet, "/api/v1/health"), 1)
 }
 
@@ -99,12 +96,14 @@ func TestConnCanceledFreshStatusDoesNotCacheUnavailable(t *testing.T) {
 		}
 		return Status{State: StateReady}, nil
 	}
+	require.True(t, c.Ready(t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	assert.Equal(t, StateUnavailable, c.Status(ctx, true).State)
-	assert.True(t, c.VersionReady(t.Context()), "a canceled status request cannot hide a healthy Kata")
-	assert.True(t, c.VersionReady(t.Context()), "a successful version probe uses the normal cache")
-	assert.Equal(t, 2, calls)
+	assert.True(t, c.LastReady(), "a canceled status request cannot hide a healthy Kata")
+	assert.True(t, c.Ready(t.Context()), "the next check probes again")
+	assert.True(t, c.Ready(t.Context()), "and a ready result uses the normal cache")
+	assert.Equal(t, 3, calls)
 }
 
 func TestConnCanceledFreshStatusKeepsTerminalStatesCached(t *testing.T) {
@@ -127,7 +126,7 @@ func TestConnCanceledFreshStatusKeepsTerminalStatesCached(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 			assert.Equal(t, tt.want, c.Status(ctx, true).State)
-			assert.False(t, c.VersionReady(t.Context()))
+			assert.False(t, c.LastReady())
 			assert.Equal(t, 1, calls)
 		})
 	}
@@ -336,26 +335,4 @@ func TestConnFreshStatusDoesNotShareACanceledProbe(t *testing.T) {
 	c.mu.Unlock()
 	assert.Equal(t, StateReady, st.State, "the live caller probes for itself")
 	assert.Equal(t, 2, probes)
-}
-
-func TestConnVersionReadyLeavesTimeForTheResponse(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		c := NewConn(readyConfig("http://127.0.0.1:1"))
-		probes := 0
-		c.probe = func(ctx context.Context, _ Config) (Status, *Client) {
-			probes++
-			if probes == 1 {
-				<-ctx.Done()
-			}
-			return Status{State: StateUnavailable}, nil
-		}
-		ctx, cancel := context.WithTimeout(t.Context(), 400*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		assert.False(t, c.VersionReady(ctx))
-		assert.Equal(t, 200*time.Millisecond, time.Since(start), "the probe takes half the remaining deadline")
-		require.NoError(t, ctx.Err(), "the version response still has time to finish")
-		synctest.Wait()
-		assert.Equal(t, 2, probes, "a detached follow-up probe still runs")
-	})
 }

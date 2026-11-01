@@ -30,6 +30,8 @@ timeout = "10s"
 - HTTPS endpoints need `token_env`. Use a dedicated token for AgentsView so its
   writes are attributed to the integration. Under Kata identity mode, the
   token decides attribution and `actor` is ignored.
+- `actor` names AgentsView on the issues it files. It takes effect once issue
+  filing arrives; the connection check does not use it.
 - Plain `http://` works only for loopback hosts unless `allow_insecure = true`.
 - The project must already exist in Kata. AgentsView never creates it.
 
@@ -43,8 +45,9 @@ The command reports `disabled`, `not_hub`, `unavailable`, `incompatible`,
 `unauthenticated`, `wrong_project`, or `ready`. `incompatible` means Kata's API
 schema is older than 0.21.0. A non-ready state is information, so the command
 still succeeds. The same status object is available at
-`GET /api/v1/kata/status`; `/api/v1/version` reports `kata_available`. The
-command uses the AgentsView daemon that owns the data directory, including a
+`GET /api/v1/kata/status`. `/api/v1/version` reports `kata_available`, which is
+true when the most recent check found Kata ready; it never contacts Kata itself.
+The command uses the AgentsView daemon that owns the data directory, including a
 running `pg serve`. It does not start one. When no daemon owns the directory, it
 probes from the local config. If the owning daemon is unreachable or needs an
 upgrade, the command returns an error instead of probing locally. Use

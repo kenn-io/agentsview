@@ -214,7 +214,7 @@ func (s *Server) humaGetVersion(
 		version.FrictionReadable = false
 		version.FrictionBuildAllowed = false
 	} else {
-		version.KataAvailable = s.kataConn().VersionReady(ctx)
+		version.KataAvailable = s.kataConn().LastReady()
 	}
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }

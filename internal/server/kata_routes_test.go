@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"log"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -188,32 +187,22 @@ func TestKataStatusRouteReprobes(t *testing.T) {
 	assert.Len(t, s.RequestsMatching(http.MethodGet, "/api/v1/health"), 2)
 }
 
-func TestKataVersionRouteProbesOnFirstRequest(t *testing.T) {
+// The version route is requested constantly, so it reports the last check
+// instead of probing. A probe can start a Kata daemon through discovery.
+func TestKataVersionRouteReportsLastCheckWithoutProbing(t *testing.T) {
 	s := katatest.New(t)
 	te := setupWithServerOpts(t, []server.Option{server.WithKataConn(kata.NewConn(kata.Config{
 		Enabled: true, Hub: true, Endpoint: s.Endpoint(), Project: "agentsview",
 	}))})
 	w := te.get(t, "/api/v1/version")
 	assertStatus(t, w, http.StatusOK)
+	assert.False(t, decode[server.VersionInfo](t, w).KataAvailable)
+	assert.Empty(t, s.Requests(), "version never contacts Kata")
+
+	require.Equal(t, kata.StateReady, decode[kata.Status](t, te.get(t, "/api/v1/kata/status")).State)
+	w = te.get(t, "/api/v1/version")
 	assert.True(t, decode[server.VersionInfo](t, w).KataAvailable)
 	assert.Len(t, s.RequestsMatching(http.MethodGet, "/api/v1/health"), 1)
-}
-
-func TestKataVersionRouteBoundsSlowProbe(t *testing.T) {
-	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	t.Cleanup(slow.Close)
-	te := setupWithServerOpts(t, []server.Option{server.WithKataConn(kata.NewConn(kata.Config{
-		Enabled: true, Hub: true, Endpoint: slow.URL, Project: "agentsview", Timeout: 4 * time.Second,
-	}))})
-
-	started := time.Now()
-	w := te.get(t, "/api/v1/version")
-	elapsed := time.Since(started)
-	assertStatus(t, w, http.StatusOK)
-	assert.False(t, decode[server.VersionInfo](t, w).KataAvailable)
-	assert.Less(t, elapsed, 3*time.Second, "version should not wait for the Kata request timeout")
 }
 
 type delayedKataTransport struct {
@@ -230,23 +219,4 @@ func (d delayedKataTransport) RoundTrip(r *http.Request) (*http.Response, error)
 		return nil, r.Context().Err()
 	}
 	return d.next.RoundTrip(r)
-}
-
-func TestKataVersionRouteEventuallyReportsSlowHealthyKata(t *testing.T) {
-	s := katatest.New(t)
-	c := kata.NewConn(kata.Config{
-		Enabled: true, Hub: true, Endpoint: s.Endpoint(), Project: "agentsview", Timeout: 5 * time.Second,
-		HTTPClient: &http.Client{Transport: delayedKataTransport{next: http.DefaultTransport, delay: 600 * time.Millisecond}},
-	})
-	te := setupWithServerOpts(t, []server.Option{server.WithKataConn(c)})
-	started := time.Now()
-	w := te.get(t, "/api/v1/version")
-	assertStatus(t, w, http.StatusOK)
-	assert.False(t, decode[server.VersionInfo](t, w).KataAvailable)
-	assert.Less(t, time.Since(started), 3*time.Second)
-
-	require.Eventually(t, func() bool { return c.VersionReady(t.Context()) }, 6*time.Second, 100*time.Millisecond)
-	w = te.get(t, "/api/v1/version")
-	assertStatus(t, w, http.StatusOK)
-	assert.True(t, decode[server.VersionInfo](t, w).KataAvailable)
 }

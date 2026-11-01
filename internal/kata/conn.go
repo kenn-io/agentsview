@@ -11,11 +11,7 @@ import (
 	"time"
 )
 
-const (
-	connTTL            = 30 * time.Second
-	versionProbeBudget = time.Second
-	discoveryAllowance = 5 * time.Second
-)
+const connTTL = 30 * time.Second
 
 // Conn shares one cached probe between the status route, the version
 // capability, the CLI and the filer. A delegated call that fails with a
@@ -25,16 +21,18 @@ type Conn struct {
 	probe func(context.Context, Config) (Status, *Client)
 	now   func() time.Time
 
-	mu                  sync.Mutex
-	status              Status
-	client              *Client
-	checked             time.Time
-	tokenSet            bool
-	located             string
-	versionProbeRunning bool
+	mu       sync.Mutex
+	status   Status
+	client   *Client
+	checked  time.Time
+	tokenSet bool
+	located  string
 	// probes counts stored probe results; a caller that waited compares it
 	// with the count it saw before waiting.
 	probes atomic.Uint64
+	// lastReady records whether the last completed check found Kata ready,
+	// so LastReady never waits behind a probe that holds mu.
+	lastReady atomic.Bool
 }
 
 func NewConn(cfg Config) *Conn {
@@ -60,61 +58,15 @@ func (c *Conn) statusAfter(ctx context.Context, fresh bool, seen uint64) Status 
 	return c.statusLocked(ctx, fresh)
 }
 
-// VersionReady keeps the version endpoint responsive while still probing on
-// its first request. A concurrent status probe owns the connection and the
-// capability is conservatively unavailable until it finishes.
-func (c *Conn) VersionReady(requestCtx context.Context) bool {
-	if !c.mu.TryLock() {
+// LastReady reports whether the most recent completed check found Kata
+// ready. It never probes: /api/v1/version calls it on every request, and a
+// probe can run `kata daemon locate`, which may start a Kata daemon. Status
+// checks refresh it and a failed Kata call clears it.
+func (c *Conn) LastReady() bool {
+	if c.cfg.TokenEnv != "" && c.cfg.currentToken() == "" {
 		return false
 	}
-	defer c.mu.Unlock()
-	if !c.checked.IsZero() && c.now().Sub(c.checked) < connTTL &&
-		(c.cfg.TokenEnv == "" || (c.cfg.currentToken() != "") == c.tokenSet) {
-		return c.status.State == StateReady
-	}
-	if c.versionProbeRunning || requestCtx.Err() != nil {
-		return false
-	}
-	// Leave the version response half of its deadline so a slow Kata cannot
-	// use up a short server write timeout.
-	budget := versionProbeBudget
-	if deadline, ok := requestCtx.Deadline(); ok {
-		budget = min(budget, time.Until(deadline)/2)
-	}
-	probeCtx, cancel := context.WithTimeout(requestCtx, budget)
-	defer cancel()
-	st := c.statusLocked(probeCtx, false)
-	if st.State != StateReady && probeCtx.Err() != nil {
-		// A canceled request or a short version deadline cannot establish
-		// unavailability. Keep the next status probe eligible to refresh it.
-		c.checked = time.Time{}
-		if requestCtx.Err() == nil {
-			c.startVersionFollowupLocked()
-		}
-	}
-	return st.State == StateReady
-}
-
-// startVersionFollowupLocked makes slow but healthy Kata instances visible
-// without holding a version response open. At most one detached probe runs,
-// and its context bounds discovery plus all HTTP requests together.
-func (c *Conn) startVersionFollowupLocked() {
-	if c.versionProbeRunning {
-		return
-	}
-	c.versionProbeRunning = true
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), versionFollowupTimeout(c.cfg.Timeout))
-		defer cancel()
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		defer func() { c.versionProbeRunning = false }()
-		c.statusLocked(ctx, false)
-	}()
-}
-
-func versionFollowupTimeout(perRequest time.Duration) time.Duration {
-	return ProbeBudget(perRequest, discoveryAllowance)
+	return c.lastReady.Load()
 }
 
 // statusLocked probes as needed while the caller holds mu.
@@ -160,9 +112,11 @@ func (c *Conn) storeStatus(ctx context.Context, st Status, client *Client) Statu
 	c.probes.Add(1)
 	if st.State == StateUnavailable && ctx.Err() != nil {
 		// A canceled probe cannot establish that Kata is unavailable. Let
-		// the next version request check again instead of caching this state.
+		// the next check probe again, and keep the last known readiness.
 		c.checked = time.Time{}
+		return st
 	}
+	c.lastReady.Store(st.State == StateReady)
 	return st
 }
 
@@ -186,6 +140,7 @@ func (c *Conn) observe(err error) error {
 		c.mu.Lock()
 		c.checked = time.Time{}
 		c.client = nil
+		c.lastReady.Store(false)
 		c.mu.Unlock()
 	}
 	return err
