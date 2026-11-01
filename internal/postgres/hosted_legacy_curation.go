@@ -53,7 +53,7 @@ func (h *HostedStore) legacyWrite(ctx context.Context, alias, id string, write f
 }
 
 func (h *HostedStore) legacyWriteOnce(ctx context.Context, alias, id string, write func(*sql.Tx, string) (int64, error)) (int64, error) {
-	tx, err := h.physical.pg.BeginTx(ctx, nil)
+	tx, err := h.physical.beginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}

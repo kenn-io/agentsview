@@ -35,7 +35,7 @@ func NewStore(
 		}
 		return nil, err
 	}
-	return &Store{pg: pg}, nil
+	return &Store{pg: pg, ownedDB: pg}, nil
 }
 
 // NewHostedStore opens the read adapter with the same fixed tenant boundary as
@@ -55,25 +55,38 @@ func NewHostedStore(pgURL, schema, tenant string, allowInsecure bool) (*HostedSt
 
 // DB returns the underlying *sql.DB for operations that need
 // direct access (e.g. schema compatibility checks).
-func (s *Store) DB() *sql.DB { return s.pg }
+func (s *Store) DB() *sql.DB {
+	if s.readTx != nil {
+		return nil
+	}
+	if s.ownedDB != nil {
+		return s.ownedDB
+	}
+	// Preserve directly constructed stores used by internal callers and tests.
+	pool, _ := s.pg.(*sql.DB)
+	return pool
+}
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
-	return s.pg.Close()
+	if pool := s.DB(); pool != nil {
+		return pool.Close()
+	}
+	return nil
 }
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
-	s.pricingMu.Lock()
-	defer s.pricingMu.Unlock()
-	s.customPricing = p
+	s.runtimeState().pricingMu.Lock()
+	defer s.runtimeState().pricingMu.Unlock()
+	s.runtimeState().customPricing = p
 	s.forgetPricingLoad()
 }
 
 // SetCursorSecret sets the HMAC key used for cursor signing.
 func (s *Store) SetCursorSecret(secret []byte) {
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	s.cursorSecret = append([]byte(nil), secret...)
+	s.runtimeState().cursorMu.Lock()
+	defer s.runtimeState().cursorMu.Unlock()
+	s.runtimeState().cursorSecret = append([]byte(nil), secret...)
 }
 
 // ReadOnly returns true because PG serve still treats the remote
@@ -84,15 +97,15 @@ func (s *Store) ReadOnly() bool { return true }
 // InsightGenerationAvailable reports whether startup proved this PG role can
 // persist generated insights.
 func (s *Store) InsightGenerationAvailable() bool {
-	s.insightCapabilityMu.RLock()
-	defer s.insightCapabilityMu.RUnlock()
-	return s.insightGenerationAvailable
+	s.runtimeState().insightCapabilityMu.RLock()
+	defer s.runtimeState().insightCapabilityMu.RUnlock()
+	return s.runtimeState().insightGenerationAvailable
 }
 
 func (s *Store) setInsightGenerationAvailable(available bool) {
-	s.insightCapabilityMu.Lock()
-	defer s.insightCapabilityMu.Unlock()
-	s.insightGenerationAvailable = available
+	s.runtimeState().insightCapabilityMu.Lock()
+	defer s.runtimeState().insightCapabilityMu.Unlock()
+	s.runtimeState().insightGenerationAvailable = available
 }
 
 // DetectInsightGenerationAvailability probes whether this PG connection can
@@ -101,7 +114,7 @@ func (s *Store) setInsightGenerationAvailable(available bool) {
 func (s *Store) DetectInsightGenerationAvailability(
 	ctx context.Context,
 ) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf(
 			"beginning insight generation capability probe: %w",
@@ -434,7 +447,7 @@ func (s *Store) RestoreSession(ctx context.Context, id string) (int64, error) {
 }
 
 func (s *Store) restoreSession(ctx context.Context, id string) (int64, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return 0, mapPGWriteError("begin restore transaction", err)
 	}
@@ -490,7 +503,7 @@ func (s *Store) DeleteSessionIfTrashed(ctx context.Context,
 }
 
 func (s *Store) deleteSessionIfTrashed(ctx context.Context, id string) (int64, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return 0, mapPGWriteError(
 			"begin delete-if-trashed tx for "+id,
@@ -567,7 +580,7 @@ func (s *Store) emptyTrash(ctx context.Context, legacyOnly bool) (int, error) {
 }
 
 func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return 0, mapPGWriteError("begin empty-trash tx", err)
 	}

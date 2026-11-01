@@ -41,7 +41,7 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 						require.Zero(t, shared, "fixture aliases must not serialize the requests before row locks")
 					} else {
 						_, _, store := newCodexTrashMirror(t)
-						observer, writer = store.pg, store.pg
+						observer, writer = store.DB(), store.DB()
 						require.NoError(t, observer.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema))
 						dsn = testPGURL(t)
 					}
