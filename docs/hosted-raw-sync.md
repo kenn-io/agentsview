@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-23
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -147,10 +147,25 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   TO hosted_runtime;
 ```
 
-For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+### Upgrade an existing deployment
+
+Run `agentsview pg hosted-provision provision`, then reapply
+`GRANT SELECT ON ALL TABLES IN SCHEMA hosted_sessions TO hosted_runtime` as the
+owner, along with the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants
+above. The SELECT grant includes the new `raw_rollout_scopes` table.
+`ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
+fails startup until provisioning and these grants are complete.
+
+The hosted schema reserves `raw_rollout_scopes` for owner-managed cutover policy.
+Runtime roles need `SELECT` and must have no table or column write grants on it.
+Provisioning adds `sessions.rollout_hidden` while preserving existing rows,
+visibility and user trash. Use the rollout commands below to inspect or change
+policy.
+
+Projection and curation acquire the tenant rollout lock before source, lease or
+group row locks. They retry the whole transaction after a serialization conflict
+or deadlock, so retries cannot publish only part of a projection or curation
+change.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.
@@ -279,6 +294,38 @@ The maintenance pass examines at most 64 indexed pending signal rows with a
 cancels and joins worker, materializer and parser work before closing custody
 and PostgreSQL.
 
+## Rollout scopes
+
+Operators can record rollout policy with an owner target:
+
+```bash
+agentsview pg raw-rollout shadow provision
+agentsview pg raw-rollout shadow provision --device device-a --provider codex
+agentsview pg raw-rollout list provision
+agentsview pg raw-rollout clear provision --device device-a --provider codex
+agentsview pg raw-rollout clear provision
+```
+
+Create the tenant scope (no selectors) before narrower scopes. Clear narrower
+scopes before clearing the tenant scope. With no scopes, all raw groups retain
+the previous visibility policy. Precedence is device plus provider, device,
+provider, then tenant. A group shared by several sources is eligible when any
+source is active, even if another device is in shadow.
+
+This stage records `sessions.rollout_hidden` independently of user trash and
+keeps projection and curation consistent with scope changes. Public-read
+filtering, activation with a parity gate, and legacy supersession arrive in
+later cutover stages; **shadow is not yet a public-read isolation boundary**.
+`list` counts physical raw rows as served or shadow according to that column,
+including user trash, and prints the scope's stored parity report. Superseded
+counts remain zero until legacy supersession is implemented.
+
+Follow [the existing-deployment upgrade recipe](#upgrade-an-existing-deployment)
+after upgrading. The runtime needs `SELECT` on `raw_rollout_scopes`, and must
+have no insert, update or delete privileges on it. Scope changes use the schema
+owner connection. Scope writes, projection and curation serialize through a
+tenant advisory lock; changes never delete sessions or change their trash state.
+
 ## Reparse and rollback
 
 After an executable upgrade changes the parser data version or the Friction Log
@@ -309,6 +356,68 @@ Keep PostgreSQL metadata and the immutable raw repository together in backups.
 Automated retention and garbage collection of accepted generations, disaster
 rebuilds, enrollment UX, embedding consumption and migration cutover tooling
 remain outside this release.
+
+### Compare before cutover (unreleased)
+
+Cutover tooling can read complete physical PostgreSQL sessions through the
+tenant runtime role, including trashed rows. These reads use one caller-owned
+`REPEATABLE READ READ ONLY` transaction for the entire comparison and source
+readiness report. They apply no public transcript limits or visibility filters.
+Run `agentsview pg raw-parity hosted --json` with the selected target's
+restricted tenant runtime connection and `raw_tenant`. The existing
+`CheckHostedTenant` gate applies; owner connections are refused. Add `--device
+ID` or `--provider P` to inspect a source scope. The command does not open a
+local archive, parse sources or change server state.
+
+JSON stdout contains `pass`, complete `counts`, readiness, per-device/provider
+counts and every non-equal candidate component in `sessions`. The one-line
+summary goes to stderr with `--json`, or stdout without it. Exit status is 0
+whether parity passes or fails; scripts must read `pass`.
+
+Classes are `equal`, `differs`, `raw_only`, `legacy_only`, `ambiguous` and
+`unmatchable`. Differences name only the affected parts, never transcript
+content. Raw IDs use explicit branch aliases; legacy IDs use their public
+legacy aliases and include `machine`. Counts deduplicate candidate components
+across devices; per-device counts may overlap for shared sessions. A device
+filter keeps tenant legacy-only history because legacy machines are not device
+IDs. Identity ambiguity is checked across all devices before filtering.
+
+Matching requires equal agents and an exact recorded parser ID. Codex thread
+and page IDs stay distinct, and variants keep their own prefixes. Piebald and
+sessions without a stable source ID are `unmatchable` when a legacy candidate
+exists, or `raw_only` otherwise. Host-prefixed and multi-machine legacy IDs
+remain `legacy_only` history. No automatic prefix stripping or operator mapping
+is performed.
+
+`pass` requires at least one projected source, no pending, failed or unsupported
+sources, and no `differs`, `ambiguous` or `unmatchable` components. `raw_only`
+and `legacy_only` do not prevent a pass. An empty scope does not pass.
+
+Relationship comparison resolves parent, tool-call subagent and result-event
+subagent links from physical source-owned evidence in the same snapshot.
+Hidden and trashed targets remain evidence; excluded or missing targets do
+not. Historical exact-source authority prevents fallback to a different source
+after removal or exclusion. Without exact authority, only one physical target
+in the same tenant, device, provider and configured root is admissible. Each
+source's asserted edge is checked before shared owners are combined. Equal
+literal aliases cannot hide a missing or ambiguous target. Legacy targets are
+compared through globally unique identity matches.
+
+The stored-content comparison uses this field matrix:
+
+| Class | Fields |
+| --- | --- |
+| Compared | Session agent, project, cwd, first message, start/end and message counts; persisted messages including model and accounting; tool calls, target paths and result events; usage accounting; secret and friction findings; parent and subagent relationship meaning through a match map |
+| Normalized | Physical identity through a match map, UTC microsecond timestamps, JSON object key order and row order with explicit coordinates preserved |
+| Masked | Machine, custody file coordinates, publication clocks and versions, provenance, deletion and rollout state, names, stars, pins, derived signals, dialogue search text, friction titles and fingerprints |
+
+Readiness counts current source heads by device and provider. A source is
+`projected` only when its selected job has completely published the current
+head at the requested processing version. Current terminal failures are
+`failed`; older versions, unselected heads and partial publication are
+`pending`. Providers without raw capture support in the running binary are
+`unsupported`. Devices sharing a physical session each retain their own source
+counts. These counts describe source readiness, independently of content parity.
 
 ## Backfill existing laptop sources
 

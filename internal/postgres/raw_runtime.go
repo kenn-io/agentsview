@@ -18,6 +18,10 @@ const pendingRawSignalsSQL = `SELECT id,raw_group_id FROM sessions WHERE tenant_
 // physical raw revisions. Group locks serialize removal, replacement and
 // curation; it never acquires a source-head lock after a group lock.
 func (s *RawProjectionStore) SettlePendingSignals(ctx context.Context, limit int) (int, error) {
+	return retryPGCuration(ctx, func() (int, error) { return s.settlePendingSignalsOnce(ctx, limit) })
+}
+
+func (s *RawProjectionStore) settlePendingSignalsOnce(ctx context.Context, limit int) (int, error) {
 	if limit < 1 || limit > 256 {
 		return 0, rawsync.ErrInvalid
 	}
@@ -27,6 +31,9 @@ func (s *RawProjectionStore) SettlePendingSignals(ctx context.Context, limit int
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = lockRawRolloutShared(ctx, tx); err != nil {
+		return 0, err
+	}
 	rows, err := tx.QueryContext(ctx, pendingRawSignalsSQL, s.options.Tenant, now.Add(-signals.RecencyWindow), limit)
 	if err != nil {
 		return 0, err

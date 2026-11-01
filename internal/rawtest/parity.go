@@ -5,10 +5,8 @@ package rawtest
 import (
 	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawparity"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -57,7 +56,25 @@ func EqualStored(t *testing.T, ctx context.Context, want *db.DB, got db.Store, i
 		require.NoError(t, err)
 		bm, err := got.GetAllMessages(ctx, id)
 		require.NoError(t, err)
-		assert.Equal(t, normalizeMessages(t, am), normalizeMessages(t, bm), "messages %s", id)
+		equalContent(t, rawparity.Snapshot{Session: *a, Messages: am}, rawparity.Snapshot{Session: *b, Messages: bm})
+		// Public ownership, reader order and derived tool signals remain part
+		// of this stricter check beyond the normalized parity content matrix.
+		require.Len(t, bm, len(am))
+		for i, message := range am {
+			assert.Equal(t, id, bm[i].SessionID, "message owner %s/%d", id, i)
+			assert.Equal(t, message.Ordinal, bm[i].Ordinal, "message order %s/%d", id, i)
+			require.Len(t, bm[i].ToolCalls, len(message.ToolCalls))
+			for j, call := range message.ToolCalls {
+				other := bm[i].ToolCalls[j]
+				assert.Equal(t, id, other.SessionID, "tool owner %s/%d/%d", id, message.Ordinal, j)
+				assert.Equal(t, call.CallIndex, other.CallIndex, "tool order %s/%d/%d", id, message.Ordinal, j)
+				require.Len(t, other.ResultEvents, len(call.ResultEvents))
+				for k, event := range call.ResultEvents {
+					assert.Equal(t, event.EventIndex, other.ResultEvents[k].EventIndex, "result order %s/%d/%d/%d", id, message.Ordinal, call.CallIndex, k)
+				}
+				assert.Equal(t, []*string{call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding}, []*string{other.ObservedOutcome, other.ObservedRepeat, other.SequenceEnding}, "tool signals %s/%d/%d", id, message.Ordinal, call.CallIndex)
+			}
+		}
 		au, err := want.GetSessionUsage(ctx, id, true)
 		require.NoError(t, err)
 		bu, err := got.GetSessionUsage(ctx, id, true)
@@ -102,50 +119,13 @@ func normalizeSession(s db.Session) db.Session {
 	return s
 }
 
-func normalizeMessages(t *testing.T, messages []db.Message) []db.Message {
+func equalContent(t *testing.T, a, b rawparity.Snapshot) {
 	t.Helper()
-	// Empty SQL result sets differ only in nil versus allocated slice transport.
-	if len(messages) == 0 {
-		return nil
-	}
-	for i := range messages {
-		m := &messages[i]
-		m.ID = 0
-		// DialogueText is a SQLite-only search projection, not captured source content.
-		m.DialogueText = nil
-		// PostgreSQL JSONB changes key order/whitespace, never the usage values.
-		if len(m.TokenUsage) > 0 {
-			var v any
-			require.NoError(t, json.Unmarshal(m.TokenUsage, &v))
-			b, err := json.Marshal(v, json.Deterministic(true))
-			require.NoError(t, err)
-			m.TokenUsage = b
-		}
-		m.Timestamp = normalizeTime(m.Timestamp)
-		for j := range m.ToolCalls {
-			c := &m.ToolCalls[j]
-			c.MessageID = 0
-			for k := range c.ResultEvents {
-				e := &c.ResultEvents[k]
-				e.Timestamp = normalizeTime(e.Timestamp)
-				// SQLite-only late-result reconciliation state is deliberately not mirrored.
-				e.RawContentDigest = nil
-				e.SummaryParticipates = nil
-			}
-		}
-	}
-	return messages
+	comparison, err := rawparity.Compare(a, b)
+	require.NoError(t, err)
+	assert.Empty(t, comparison.Differing, "stored content parts differ")
 }
 
-func normalizeTime(s string) string {
-	if v, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return v.UTC().Format(time.RFC3339Nano)
-	}
-	return s
-}
-
-// EqualUsageEvents preserves the complete normalized accounting rows, including
-// nullable money/message links, provider/source keys and deduplication identity.
 // EqualFriction compares the friction summary, whose hash covers every
 // finding, between the local oracle and the hosted session row.
 func EqualFriction(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB, publicID, physicalID string) {
@@ -159,6 +139,8 @@ func EqualFriction(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB,
 	assert.Equal(t, []any{want.FrictionCount, want.FrictionRulesVersion, want.FrictionHash}, []any{count, version, hash}, "friction %s", publicID)
 }
 
+// EqualUsageEvents preserves the complete normalized accounting rows, including
+// nullable money/message links, provider/source keys and deduplication identity.
 func EqualUsageEvents(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB, publicID, physicalID string) {
 	t.Helper()
 	want, err := oracle.GetUsageEvents(ctx, publicID)
@@ -176,15 +158,10 @@ func EqualUsageEvents(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.
 			e.Cost = &money.Money{Microdollars: *cost}
 		}
 		if occurred != nil {
-			e.OccurredAt = normalizeTime(*occurred)
+			e.OccurredAt = *occurred
 		}
-		e.SessionID = publicID
 		got = append(got, e)
 	}
 	require.NoError(t, rows.Err())
-	for i := range want {
-		want[i].ID = 0
-		want[i].OccurredAt = normalizeTime(want[i].OccurredAt)
-	}
-	assert.Equal(t, want, got, "complete usage events for %s", publicID)
+	equalContent(t, rawparity.Snapshot{Usage: want}, rawparity.Snapshot{Usage: got})
 }
