@@ -100,3 +100,17 @@ func (s *Store) sessionDialect() db.QueryDialect {
 		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
 	})
 }
+
+// Resolve the same contextual parent relation once, before sidebar root and
+// recursive lookups. The edge set includes only parents that still materialize.
+func hostedSidebarParentEdgesSQL() string {
+	return `sidebar_parent_edges(child_id,parent_id) AS MATERIALIZED (
+		SELECT own_session.id,target.session_id ` + hostedLinkFromSQL + `
+		  AND e.kind='parent' AND own_session.provenance_kind='raw'
+		UNION
+		SELECT child.id,parent.id
+		FROM sessions child
+		JOIN sessions parent ON parent.id=child.parent_session_id
+		WHERE child.provenance_kind='legacy'
+	)`
+}
