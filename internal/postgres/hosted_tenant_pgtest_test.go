@@ -25,7 +25,7 @@ type hostedFixture struct {
 	schema, role, tenant, dsn string
 }
 
-func newHostedFixture(t *testing.T, tenant string) hostedFixture {
+func newHostedFixture(t *testing.T, tenant string, beforeAdoption ...func(*sql.DB)) hostedFixture {
 	t.Helper()
 	schema := fmt.Sprintf("hosted_test_%x", rand.Uint64())
 	role := schema + "_runtime"
@@ -38,6 +38,12 @@ func newHostedFixture(t *testing.T, tenant string) hostedFixture {
 		assert.NoError(t, err)
 		assert.NoError(t, admin.Close())
 	})
+	if len(beforeAdoption) > 0 {
+		require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+	}
+	for _, seed := range beforeAdoption {
+		seed(admin)
+	}
 	require.NoError(t, EnsureHostedTenant(t.Context(), admin, schema, tenant))
 	_, err = admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`)
 	require.NoError(t, err)

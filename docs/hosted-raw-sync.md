@@ -310,6 +310,68 @@ Automated retention and garbage collection of accepted generations, disaster
 rebuilds, enrollment UX, embedding consumption and migration cutover tooling
 remain outside this release.
 
+### Compare before cutover (unreleased)
+
+Cutover tooling can read complete physical PostgreSQL sessions through the
+tenant runtime role, including trashed rows. These reads use one caller-owned
+`REPEATABLE READ READ ONLY` transaction for the entire comparison and source
+readiness report. They apply no public transcript limits or visibility filters.
+Run `agentsview pg raw-parity hosted --json` with the selected target's
+restricted tenant runtime connection and `raw_tenant`. The existing
+`CheckHostedTenant` gate applies; owner connections are refused. Add `--device
+ID` or `--provider P` to inspect a source scope. The command does not open a
+local archive, parse sources or change server state.
+
+JSON stdout contains `pass`, complete `counts`, readiness, per-device/provider
+counts and every non-equal candidate component in `sessions`. The one-line
+summary goes to stderr with `--json`, or stdout without it. Exit status is 0
+whether parity passes or fails; scripts must read `pass`.
+
+Classes are `equal`, `differs`, `raw_only`, `legacy_only`, `ambiguous` and
+`unmatchable`. Differences name only the affected parts, never transcript
+content. Raw IDs use explicit branch aliases; legacy IDs use their public
+legacy aliases and include `machine`. Counts deduplicate candidate components
+across devices; per-device counts may overlap for shared sessions. A device
+filter keeps tenant legacy-only history because legacy machines are not device
+IDs. Identity ambiguity is checked across all devices before filtering.
+
+Matching requires equal agents and an exact recorded parser ID. Codex thread
+and page IDs stay distinct, and variants keep their own prefixes. Piebald and
+sessions without a stable source ID are `unmatchable` when a legacy candidate
+exists, or `raw_only` otherwise. Host-prefixed and multi-machine legacy IDs
+remain `legacy_only` history. No automatic prefix stripping or operator mapping
+is performed.
+
+`pass` requires at least one projected source, no pending, failed or unsupported
+sources, and no `differs`, `ambiguous` or `unmatchable` components. `raw_only`
+and `legacy_only` do not prevent a pass. An empty scope does not pass.
+
+Relationship comparison resolves parent, tool-call subagent and result-event
+subagent links from physical source-owned evidence in the same snapshot.
+Hidden and trashed targets remain evidence; excluded or missing targets do
+not. Historical exact-source authority prevents fallback to a different source
+after removal or exclusion. Without exact authority, only one physical target
+in the same tenant, device, provider and configured root is admissible. Each
+source's asserted edge is checked before shared owners are combined. Equal
+literal aliases cannot hide a missing or ambiguous target. Legacy targets are
+compared through globally unique identity matches.
+
+The stored-content comparison uses this field matrix:
+
+| Class | Fields |
+| --- | --- |
+| Compared | Session agent, project, cwd, first message, start/end and message counts; persisted messages including model and accounting; tool calls, target paths and result events; usage accounting; secret and friction findings; parent and subagent relationship meaning through a match map |
+| Normalized | Physical identity through a match map, UTC microsecond timestamps, JSON object key order and row order with explicit coordinates preserved |
+| Masked | Machine, custody file coordinates, publication clocks and versions, provenance, deletion and rollout state, names, stars, pins, derived signals, dialogue search text, friction titles and fingerprints |
+
+Readiness counts current source heads by device and provider. A source is
+`projected` only when its selected job has completely published the current
+head at the requested processing version. Current terminal failures are
+`failed`; older versions, unselected heads and partial publication are
+`pending`. Providers without raw capture support in the running binary are
+`unsupported`. Devices sharing a physical session each retain their own source
+counts. These counts describe source readiness, independently of content parity.
+
 ## Backfill existing laptop sources
 
 Run a finite backfill before starting the watcher on a laptop that already has
