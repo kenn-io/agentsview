@@ -142,12 +142,16 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	historyMsgs := collectAntigravityHistoryMessages(
 		filepath.Join(root, "history.jsonl"), id,
 	)
+	historyPrompts := make(map[string]struct{}, len(historyMsgs))
+	for _, msg := range historyMsgs {
+		historyPrompts[msg.Content] = struct{}{}
+	}
 	var dbErr error
 	if ext == ".db" {
 		var dbResult antigravityStepLoadResult
 		dbResult, dbErr = loadAntigravityCLIDBSteps(ctx, path)
 		for i := range dbResult.messages {
-			normalizeAntigravityCLIUserMessage(&dbResult.messages[i], historyMsgs)
+			normalizeAntigravityCLIUserMessage(&dbResult.messages[i], historyPrompts)
 		}
 		sourceVersion = dbResult.sourceVersion
 		hasGenMetadata = dbResult.hasGenMetadata
@@ -180,7 +184,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			sidecarPath, dbResult.executors,
 		)
 		for i := range tRes.messages {
-			normalizeAntigravityCLIUserMessage(&tRes.messages[i], historyMsgs)
+			normalizeAntigravityCLIUserMessage(&tRes.messages[i], historyPrompts)
 		}
 		if tErr == nil {
 			parentCascadeID = tRes.parentCascadeID
@@ -249,7 +253,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			sidecarPath, nil,
 		); err == nil {
 			for i := range tRes.messages {
-				normalizeAntigravityCLIUserMessage(&tRes.messages[i], historyMsgs)
+				normalizeAntigravityCLIUserMessage(&tRes.messages[i], historyPrompts)
 			}
 			parentCascadeID = tRes.parentCascadeID
 			// Usage events flow whenever the sidecar parses, even when
@@ -687,14 +691,12 @@ func normalizedAntigravityPrompt(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func normalizeAntigravityCLIUserMessage(msg *ParsedMessage, history []ParsedMessage) {
+func normalizeAntigravityCLIUserMessage(msg *ParsedMessage, history map[string]struct{}) {
 	if msg.Role != RoleUser || msg.IsSystem {
 		return
 	}
-	for _, prompt := range history {
-		if prompt.Content == msg.Content {
-			return
-		}
+	if _, authored := history[msg.Content]; authored {
+		return
 	}
 	msg.Content = extractAntigravityCLIUserRequest(msg.Content)
 	msg.ContentLength = len(msg.Content)
