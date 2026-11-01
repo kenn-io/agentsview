@@ -9,6 +9,10 @@ import (
 // ExcludeTrashedSession retains accepted custody and source proof, but durably
 // excludes the resolved group/cohort from every physical read inventory.
 func (s *RawProjectionStore) ExcludeTrashedSession(ctx context.Context, alias string) (bool, error) {
+	return retryPGCuration(ctx, func() (bool, error) { return s.excludeTrashedSessionOnce(ctx, alias) })
+}
+
+func (s *RawProjectionStore) excludeTrashedSessionOnce(ctx context.Context, alias string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -54,12 +58,19 @@ func (s *RawProjectionStore) ExcludeTrashedSession(ctx context.Context, alias st
 // EmptyTrash selects only fully trashed current cohorts under sorted group
 // locks. An invisible branch in an otherwise visible cohort is not selected.
 func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
+	return retryPGCuration(ctx, func() (int, error) { return s.emptyTrashOnce(ctx) })
+}
+
+func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE EXISTS(SELECT 1 FROM sessions s WHERE s.raw_group_id=g.group_id AND s.deleted_at IS NOT NULL) ORDER BY g.group_id FOR UPDATE OF g`)
+	if err = lockRawRolloutShared(ctx, tx); err != nil {
+		return 0, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g WHERE EXISTS(SELECT 1 FROM sessions s WHERE s.raw_group_id=g.group_id AND s.deleted_at IS NOT NULL AND NOT s.rollout_hidden) ORDER BY g.group_id FOR UPDATE OF g`)
 	if err != nil {
 		return 0, err
 	}
@@ -82,7 +93,7 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 	var excluded [][]rawEmbeddingChange
 	for _, group := range groups {
 		ids, err := func() ([]string, error) {
-			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' AND deleted_at IS NOT NULL ORDER BY id`, group)
+			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' AND deleted_at IS NOT NULL AND NOT rollout_hidden ORDER BY id`, group)
 			if err != nil {
 				return nil, err
 			}

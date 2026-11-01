@@ -106,6 +106,16 @@ func (d QueryDialect) FalseLiteral() string {
 	return d.falseLiteral
 }
 
+// SessionLivePredicate excludes user trash and, on PostgreSQL, rollout shadows.
+// Other backends have no rollout state. Physical maintenance readers do not use it.
+func (d QueryDialect) SessionLivePredicate(prefix string) string {
+	pred := prefix + "deleted_at IS NULL"
+	if d.name == "postgres" {
+		pred += " AND NOT " + prefix + "rollout_hidden"
+	}
+	return pred
+}
+
 func (d QueryDialect) recursiveUnionSQL() string {
 	if d.recursiveUnion == "" {
 		return "UNION"
@@ -672,7 +682,7 @@ func BuildSessionBaseFilterSQL(
 	b := NewQueryBuilder(dialect, 0)
 	preds := []string{
 		"message_count > 0",
-		"deleted_at IS NULL",
+		dialect.SessionLivePredicate(""),
 	}
 	if f.IncludeEmpty {
 		preds = preds[1:]
@@ -765,12 +775,12 @@ func buildSessionFilterWithBuilder(
 			preds = append(preds, oneShot)
 		}
 		preds = append(preds, annotationPredicates(f, b, q)...)
-		return strings.Join(append([]string{q("deleted_at") + " IS NULL"}, preds...), " AND ")
+		return strings.Join(append([]string{b.dialect.SessionLivePredicate(q(""))}, preds...), " AND ")
 	}
 
 	basePreds := []string{
 		q("message_count") + " > 0",
-		q("deleted_at") + " IS NULL",
+		b.dialect.SessionLivePredicate(q("")),
 	}
 	if f.IncludeEmpty {
 		basePreds = basePreds[1:]
@@ -823,7 +833,7 @@ func buildSessionFilterWithBuilder(
 	cte := "WITH RECURSIVE tree(id) AS (" +
 		"SELECT root_session.id FROM sessions root_session" +
 		" WHERE root_session.message_count > 0" +
-		" AND root_session.deleted_at IS NULL AND " +
+		" AND " + b.dialect.SessionLivePredicate("root_session.") + " AND " +
 		rootMatch +
 		" " + b.dialect.recursiveUnionSQL() + " " +
 		"SELECT s.id FROM sessions s" +
@@ -842,7 +852,7 @@ func SessionTreeMemberPredicate(
 	f SessionFilter, dialect QueryDialect, sessionAlias string,
 ) string {
 	f = f.withAnnotationSelection()
-	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
+	pred := sessionAlias + ".message_count > 0 AND " + dialect.SessionLivePredicate(sessionAlias+".")
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
 		pred += " AND " + scope
 	}
