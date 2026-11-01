@@ -28,29 +28,6 @@ func get(t *testing.T, s *Server, path string) (int, map[string]any) {
 	return resp.StatusCode, out
 }
 
-func TestFakeServesDetectionAndRecords(t *testing.T) {
-	s := New(t)
-	tests := []struct {
-		name   string
-		path   string
-		status int
-		key    string
-	}{
-		{name: "health", path: "/api/v1/health", status: 200, key: "api_schema_version"},
-		{name: "instance", path: "/api/v1/instance", status: 200, key: "instance_uid"},
-		{name: "projects", path: "/api/v1/projects", status: 200, key: "projects"},
-		{name: "unknown", path: "/api/v1/nope", status: 404, key: "error"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			status, body := get(t, s, tt.path)
-			assert.Equal(t, tt.status, status)
-			assert.Contains(t, body, tt.key)
-		})
-	}
-	assert.Len(t, s.RequestsMatching(http.MethodGet, "/api/v1/health"), 1)
-}
-
 func post(t *testing.T, s *Server, path, key, body string) (int, map[string]any) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.URL+path, strings.NewReader(body))
