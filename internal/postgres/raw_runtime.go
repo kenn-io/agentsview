@@ -107,16 +107,20 @@ func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version strin
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Lock eligible failures in rollout's head order before limiting the batch.
-	// A job repaired while we wait must yield its slot to the next failure.
-	rows, err := tx.QueryContext(ctx, `SELECT device_id,manifest_id,canonical_json,id FROM (
- SELECT h.device_id,m.manifest_id,m.canonical_json,j.id,j.updated_at
+	// Serialize repairs, then lock only this batch's heads in rollout's head order.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "agentsview-raw-repair:"+s.options.Tenant); err != nil {
+		return 0, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT c.device_id,c.manifest_id,c.canonical_json,c.id FROM (
+ SELECT h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,m.manifest_id,m.canonical_json,j.id
  FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id
  JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
  JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
  WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2
- ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 FOR UPDATE OF h, j
- ) eligible ORDER BY updated_at,id LIMIT $3`, s.options.Tenant, version, limit)
+ ORDER BY j.updated_at,j.id LIMIT $3
+ ) c JOIN raw_source_heads h ON h.tenant_id=$1 AND (h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,h.manifest_id)=(c.device_id,c.provider,c.configured_root_id,c.source_key_sha256,c.manifest_id)
+ JOIN raw_ingest_jobs j ON j.tenant_id=$1 AND j.id=c.id AND j.state='failed'
+ ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 FOR UPDATE OF h, j`, s.options.Tenant, version, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -130,14 +134,11 @@ func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version strin
 	for rows.Next() {
 		var h head
 		if err = rows.Scan(&h.device, &h.id, &h.data, &h.job); err != nil {
-			rows.Close()
 			return 0, err
 		}
 		heads = append(heads, h)
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if err = rows.Err(); err != nil {
 		return 0, err
 	}
 	for _, h := range heads {
@@ -145,8 +146,7 @@ func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version strin
 		if err != nil {
 			return 0, err
 		}
-		// Read after acquiring the head lock: a repair that committed while
-		// this batch waited may have advanced the selection generation.
+		// Read after the head lock: a commit we waited on may have advanced it.
 		var generation int64
 		if err = tx.QueryRowContext(ctx, `SELECT projection_generation FROM raw_source_projections WHERE tenant_id=$1 AND source_id=$2`, s.options.Tenant, rawSourceID(m)).Scan(&generation); err != nil {
 			return 0, err
