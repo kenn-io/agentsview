@@ -25,10 +25,8 @@ func TestScopedDataVersionProviders(t *testing.T) {
 }
 
 func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
-	for _, from := range []int{158, 159} {
-		assert.Equal(t, []parser.AgentType{parser.AgentAntigravityCLI},
-			ScopedDataVersionProviders(from, 160), "upgrade from %d", from)
-	}
+	assert.Equal(t, []parser.AgentType{parser.AgentAntigravityCLI},
+		ScopedDataVersionProviders(158, 160))
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.

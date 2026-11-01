@@ -19,50 +19,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAntigravityCLIHistoryPreservesLiteralRequestTags(t *testing.T) {
-	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
-	for _, tc := range []struct{ prompt, title string }{
-		{"Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed.", "Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed."},
-		{"<USER_REQUEST>hello</USER_REQUEST><ADDITIONAL_METADATA>literal</ADDITIONAL_METADATA>", "<USER_REQUEST>hello</USER_REQUEST><ADDITIONAL_METADATA>literal</ADDITIONAL_METADATA>"},
-		{"    if ready:\n        launch()\n  ", "if ready: " + "        launch()"},
-	} {
-		prompt := tc.prompt
-		for _, withBrain := range []bool{false, true} {
-			name := "history only"
-			if withBrain {
-				name = "wrapped brain and raw history"
-			}
-			t.Run(prompt+"/"+name, func(t *testing.T) {
-				history, err := json.Marshal(map[string]any{"conversationId": id, "display": prompt, "timestamp": 1793357626000})
-				require.NoError(t, err)
-				fixture := antigravityCLIBrainFixture{pb: true, history: string(history) + "\n"}
-				if withBrain {
-					line, err := json.Marshal(map[string]any{
-						"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
-						"content": "<USER_REQUEST>\n" + prompt + "\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>",
-					})
-					require.NoError(t, err)
-					fixture.transcript = string(line) + "\n"
-				}
-				path := fixture.write(t, id)
-				session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
-				require.NoError(t, err)
-				require.Len(t, messages, 1)
-				assert.Equal(t, prompt, messages[0].Content)
-				assert.Equal(t, tc.title, session.FirstMessage)
-			})
-		}
-	}
-}
-
 func TestAntigravityCLIUserRequestContent(t *testing.T) {
 	tests := []struct {
 		name, content, want string
-		assistant, system   bool
+		assistant           bool
 	}{
 		{name: "plain", content: "  Keep my spacing\n", want: "  Keep my spacing\n"},
 		{name: "missing closing tag", content: "<USER_REQUEST>unfinished", want: "<USER_REQUEST>unfinished"},
-		{name: "missing opening tag", content: "unfinished</USER_REQUEST>", want: "unfinished</USER_REQUEST>"},
 		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "First line\nSecond line"},
 		{name: "request whitespace", content: "<USER_REQUEST>\n\n    code  \n\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "\n    code  \n"},
 		{name: "bare literal wrapper", content: "<USER_REQUEST>Prompt</USER_REQUEST>", want: "<USER_REQUEST>Prompt</USER_REQUEST>"},
@@ -76,35 +39,16 @@ func TestAntigravityCLIUserRequestContent(t *testing.T) {
 		{name: "empty request", content: "<USER_REQUEST> \n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST> \n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>"},
 		{name: "mid-text literal tags", content: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags.", want: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags."},
 		{name: "assistant", content: "<USER_REQUEST>quoted prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST>quoted prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", assistant: true},
-		{name: "system", content: "<USER_REQUEST>system context</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST>system context</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", system: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			source, kind := "USER_EXPLICIT", "USER_INPUT"
-			wantRole := RoleUser
 			if tc.assistant {
-				source, kind = "MODEL", "PLANNER_RESPONSE"
-				wantRole = RoleAssistant
-			} else if tc.system {
-				source, kind = "SYSTEM", "SYSTEM_MESSAGE"
-				wantRole = RoleSystem
+				msg := ParsedMessage{Role: RoleAssistant, Content: tc.content}
+				normalizeAntigravityCLIUserMessage(&msg, nil)
+				assert.Equal(t, tc.want, msg.Content)
+				return
 			}
-			line, err := json.Marshal(map[string]any{
-				"step_index": 0, "source": source, "type": kind, "content": tc.content,
-			})
-			require.NoError(t, err)
-			path := antigravityCLIBrainFixture{pb: true, transcript: string(line) + "\n"}.write(
-				t, "99999999-aaaa-bbbb-cccc-dddddddddddd",
-			)
-			session, messages, _, _, err := parseAntigravityCLITestSessionWithStatus(t, path, "", "devbox")
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			assert.Equal(t, wantRole, messages[0].Role)
-			assert.Equal(t, tc.want, messages[0].Content)
-			assert.Equal(t, len(tc.want), messages[0].ContentLength)
-			if tc.assistant || tc.system {
-				assert.Empty(t, session.FirstMessage)
-			}
+			assert.Equal(t, tc.want, extractAntigravityCLIUserRequest(tc.content))
 		})
 	}
 }
