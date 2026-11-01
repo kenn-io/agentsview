@@ -108,6 +108,8 @@ The latest release is
   and parser output remain bounded at 1 GiB and 512 MiB. Byte-limit rejections
   fail immediately with a `size_limit` diagnostic. After upgrading, operators
   explicitly schedule retained sources with `pg raw-reparse` under a new run ID.
+- Hosted imports and session curation skip transcript reads when no effective
+  pins need them, and validate pinned content only at the referenced ordinals.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are

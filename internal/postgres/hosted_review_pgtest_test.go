@@ -191,6 +191,14 @@ func TestHostedPinInventorySkipsFalseHistoricalPayloads(t *testing.T) {
 	pins, err := h.ListPinnedMessages(t.Context(), "", "")
 	require.NoError(t, err)
 	assert.Empty(t, pins)
+	refs, err := f.sink.PinReferences(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	assert.Empty(t, refs)
+	require.NoError(t, h.RenameSession(t.Context(), "codex:portable", new("renamed without pins")))
+	session, err := h.GetSessionFull(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, new("renamed without pins"), session.DisplayName)
 }
 
 func TestHostedPinPageBoundsHydrationAndOrdersUnresolved(t *testing.T) {
