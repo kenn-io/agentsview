@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-29
+last_edited: 2026-11-01
 ---
 
 # Session Format Source Inventory
@@ -632,6 +632,16 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Hosted capacity (reverified 2026-11-01):** The pinned
+  [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
+  stores text strings in response items; the
+  [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
+  persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
+  this existing shape synthetically through native capture, materialization
+  and the isolated parser, with one large string and many smaller messages.
+  It verifies lossless outcomes above the former transport ceiling, not a
+  producer size limit or a new provider format.
 
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned

@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -121,29 +122,54 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 	f := newProjectionFixture(t)
 	a, _ := f.accept(t, "device-a", "a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("retained")))
+	// Only the execution runtime changes; provider and friction versions stay
+	// fixed. A failed replacement must leave the published transcript intact.
+	const previous = "parser-data-153+friction-v1/runtime-0"
+	next := fmt.Sprintf("parser-data-153+friction-v1/runtime-%d", rawderive.ParserRuntimeVersion)
+	_, err := f.sink.SelectSourceGeneration(t.Context(), a, previous)
+	require.NoError(t, err)
+	oldLeases, err := f.jobs.ClaimRawParseJobs(t.Context(), "old-runtime", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, oldLeases, 1)
+	failed := oldLeases[0]
+	assert.Equal(t, previous, failed.ProcessingVersion)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), failed, "parse", "parse:size_limit"))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	retained, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, retained, 2)
+	assert.Equal(t, "retained", retained[0].Content)
 	f.accept(t, "device-b", "b", "")
-	first, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 1)
+	first, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", next, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.Selected)
-	second, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 1)
+	second, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", next, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, second.Selected)
-	end, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 1)
+	end, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", next, 1)
 	require.NoError(t, err)
 	assert.True(t, end.Done)
 	assert.Zero(t, end.Selected)
-	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-2")
+	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, next)
 	require.NoError(t, err)
 	leases, err := jobs.ClaimRawParseJobs(t.Context(), "runtime", 1, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.Equal(t, a.ManifestID, leases[0].ManifestID)
+	assert.Equal(t, 1, leases[0].Attempt)
+	assert.Greater(t, leases[0].ProjectionGeneration, failed.ProjectionGeneration)
+	assert.Equal(t, next, leases[0].ProcessingVersion)
 	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, projectionOutcome("hello")))
-	_, err = f.sink.ScheduleCurrentHeads(t.Context(), "repeat", "parser-2", 10)
+	_, err = f.sink.ScheduleCurrentHeads(t.Context(), "repeat", next, 10)
 	require.NoError(t, err)
 	var state string
 	require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&state))
 	assert.Equal(t, "complete", state)
+	var attempts int
+	require.NoError(t, f.runtime.QueryRow(`SELECT attempt_count FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&attempts))
+	assert.Equal(t, 1, attempts, "same-version replay does not reset a completed job")
 }
 
 func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
