@@ -23,7 +23,11 @@ type rawBranch struct {
 }
 
 func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg string) ([]rawBranch, error) {
-	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches WHERE `+where+`=$1 ORDER BY branch_id`, arg)
+	return loadRawBranchRows(ctx, q, where+`=$1`, arg)
+}
+
+func loadRawBranchRows(ctx context.Context, q hostedQuerier, predicate, arg string) ([]rawBranch, error) {
+	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches b WHERE `+predicate+` ORDER BY branch_id`, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +44,11 @@ func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg str
 }
 
 func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLease, m rawsync.CanonicalManifest, parsed rawderive.ParsedManifest) error {
+	_, err := retryPGCuration(ctx, func() (struct{}, error) { return struct{}{}, s.projectOnce(ctx, lease, m, parsed) })
+	return err
+}
+
+func (s *RawProjectionStore) projectOnce(ctx context.Context, lease rawderive.JobLease, m rawsync.CanonicalManifest, parsed rawderive.ParsedManifest) error {
 	if err := s.validateManifest(m); err != nil {
 		return err
 	}
@@ -54,6 +63,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = lockRawRolloutShared(ctx, tx); err != nil {
+		return err
+	}
 	if err = s.lockHead(ctx, tx, m); err != nil {
 		return err
 	}
