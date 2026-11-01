@@ -33,6 +33,7 @@ const (
 type QueryDialect struct {
 	position           func(haystack, needle string) string
 	parentRelation     func(childAlias, parentAlias string) string
+	machinePredicate   func(sessionIDExpr, machineExpr string, placeholders []string) string
 	name               string
 	placeholderStyle   placeholderStyle
 	trueLiteral        string
@@ -723,6 +724,29 @@ func (d QueryDialect) WithParentRelation(relation func(string, string) string) Q
 	return d
 }
 
+// WithMachinePredicate overrides machine membership without multiplying session
+// rows. Ordinary archives and replicas compare the scalar machine column.
+func (d QueryDialect) WithMachinePredicate(predicate func(string, string, []string) string) QueryDialect {
+	d.machinePredicate = predicate
+	return d
+}
+
+// MachinePredicate renders a machine filter for one session. The session ID
+// expression lets a backend match several contributing sources with EXISTS.
+func (b *QueryBuilder) MachinePredicate(sessionIDExpr, machineExpr string, values []string) string {
+	if b.dialect.machinePredicate == nil {
+		return inPredicate(machineExpr, values, b)
+	}
+	if len(values) == 0 {
+		return "1 = 0"
+	}
+	placeholders := make([]string, len(values))
+	for i, value := range values {
+		placeholders[i] = b.Add(value)
+	}
+	return b.dialect.machinePredicate(sessionIDExpr, machineExpr, placeholders)
+}
+
 func (d QueryDialect) ParentRelation(child, parent string) string {
 	if d.parentRelation != nil {
 		return d.parentRelation(child, parent)
@@ -886,7 +910,7 @@ func sessionFilterPredicates(
 	}
 	if f.Machine != "" {
 		preds = append(preds,
-			inPredicate(q("machine"), splitCSV(f.Machine), b))
+			b.MachinePredicate(q("id"), q("machine"), splitCSV(f.Machine)))
 	}
 	if f.GitBranch != "" {
 		preds = append(preds, BranchPairPredicate(

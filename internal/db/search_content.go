@@ -70,18 +70,19 @@ type ContentSearchFilter struct {
 // window). The CLI sanitizes it for terminal display.
 type ContentMatch struct {
 	// WebURL is a client-derived browser link, never persisted.
-	WebURL      string  `json:"web_url,omitempty"`
-	SessionID   string  `json:"session_id"`
-	Project     string  `json:"project"`
-	Agent       string  `json:"agent"`
-	Machine     string  `json:"machine"`
-	DisplayName *string `json:"display_name"`
-	Location    string  `json:"location" doc:"Where the match occurred: message, thinking, tool_input, or tool_result."`
-	Role        string  `json:"role"`
-	ToolName    string  `json:"tool_name,omitempty"`
-	Ordinal     int     `json:"ordinal"`
-	Timestamp   string  `json:"timestamp"`
-	Snippet     string  `json:"snippet"`
+	WebURL         string   `json:"web_url,omitempty"`
+	SessionID      string   `json:"session_id"`
+	Project        string   `json:"project"`
+	Agent          string   `json:"agent"`
+	Machine        string   `json:"machine"`
+	SourceMachines []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
+	DisplayName    *string  `json:"display_name"`
+	Location       string   `json:"location" doc:"Where the match occurred: message, thinking, tool_input, or tool_result."`
+	Role           string   `json:"role"`
+	ToolName       string   `json:"tool_name,omitempty"`
+	Ordinal        int      `json:"ordinal"`
+	Timestamp      string   `json:"timestamp"`
+	Snippet        string   `json:"snippet"`
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`

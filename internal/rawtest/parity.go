@@ -74,6 +74,7 @@ func EqualStored(t *testing.T, ctx context.Context, want *db.DB, got db.Store, i
 func normalizeSession(s db.Session) db.Session {
 	// Machine and file coordinates identify the custody transport, not content.
 	s.Machine = ""
+	s.SourceMachines = nil
 	s.FilePath = nil
 	s.FileSize = nil
 	s.FileMtime = nil

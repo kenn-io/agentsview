@@ -255,9 +255,9 @@ const pgRootSessionFilter = `message_count > 0
 	AND deleted_at IS NULL`
 
 func buildPGSessionBaseFilter(
-	f db.SessionFilter,
+	f db.SessionFilter, dialect db.QueryDialect,
 ) (string, []any) {
-	return db.BuildSessionBaseFilterSQL(f, db.PostgresQueryDialect())
+	return db.BuildSessionBaseFilterSQL(f, dialect)
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor.
@@ -562,9 +562,7 @@ func (s *Store) getSidebarSessionIndexPage(
 		}
 	}
 
-	pageBuilder := db.NewQueryBuilder(
-		db.PostgresQueryDialect(), len(rootArgs),
-	)
+	pageBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), len(rootArgs))
 	cursorWhere := ""
 	if f.Cursor != "" {
 		cursorWhere = "WHERE (activity, id) < (" +
@@ -913,6 +911,18 @@ func (s *Store) GetStats(
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
 		MIN(COALESCE(started_at, created_at))
 		FROM sessions WHERE ` + filter
+	if s.hostedRelations {
+		query = `WITH filtered_sessions AS MATERIALIZED (
+			SELECT id,tenant_id,project,machine,provenance_kind,
+			       message_count,started_at,created_at
+			FROM sessions WHERE ` + filter + `
+		)` + hostedFilteredMachinesCTESQL + `
+		SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+		       COUNT(DISTINCT project),
+		       (SELECT COUNT(DISTINCT machine) FROM filtered_source_machines),
+		       MIN(COALESCE(started_at, created_at))
+		FROM filtered_sessions`
+	}
 
 	var st db.Stats
 	var earliest *time.Time
@@ -1044,6 +1054,21 @@ func (s *Store) GetAgents(
 	return agents, rows.Err()
 }
 
+func machineVisibilitySQL(prefix string, excludeOneShot, excludeAutomated bool) string {
+	var clauses string
+	if excludeOneShot {
+		if excludeAutomated {
+			clauses += " AND " + prefix + "user_message_count > 1"
+		} else {
+			clauses += " AND (" + prefix + "user_message_count > 1 OR " + prefix + "is_automated = TRUE)"
+		}
+	}
+	if excludeAutomated {
+		clauses += " AND " + prefix + "is_automated = FALSE"
+	}
+	return clauses
+}
+
 // GetMachines returns distinct machine names.
 func (s *Store) GetMachines(
 	ctx context.Context,
@@ -1051,16 +1076,7 @@ func (s *Store) GetMachines(
 ) ([]string, error) {
 	q := `SELECT DISTINCT machine FROM sessions
 		WHERE deleted_at IS NULL`
-	if excludeOneShot {
-		if !excludeAutomated {
-			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
-		} else {
-			q += " AND user_message_count > 1"
-		}
-	}
-	if excludeAutomated {
-		q += " AND is_automated = FALSE"
-	}
+	q += machineVisibilitySQL("", excludeOneShot, excludeAutomated)
 	q += " ORDER BY machine"
 	rows, err := s.pg.QueryContext(ctx, q)
 	if err != nil {

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-29
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -232,6 +232,20 @@ Equivalent content from several devices coalesces when it shares a stable
 provider session identity. Piebald's numeric database IDs stay scoped to their
 source, so unrelated chats on different devices do not merge. Without a stable
 provider identity, sources remain separate even when their content matches.
+
+Device machine filters are available on `main` after v0.46.1. The Machine filter
+lists contributing devices by their enrollment display names. Its stable
+selector is `raw-device:<hex-encoded-device-id>`, using the lowercase hexadecimal
+UTF-8 representation of the enrolled device ID. Display names need not be
+unique. Selecting several devices matches sessions supplied by any of them and
+counts each shared session once in the result. This selects whole sessions,
+rather than allocating their tokens or cost between devices. Session and search
+responses include the contributing IDs in `source_machines`; `machine` stays
+`hosted` for compatibility. The session browser displays the source names,
+including all contributors to a shared session. Retained contributions remain
+selectable when their source file has left the device.
+Usage machine breakdowns and top-session rows still report hosted sessions under
+the `hosted` machine.
 
 A shorter transcript shares the longer copy's displayed session when every
 retained message and usage event matches its prefix and the source metadata

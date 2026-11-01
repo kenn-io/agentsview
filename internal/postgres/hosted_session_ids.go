@@ -69,8 +69,9 @@ type hostedLink struct {
 	plural       *[]string
 }
 type hostedRefs struct {
-	fields []*string
-	links  []hostedLink
+	fields   []*string
+	links    []hostedLink
+	machines []hostedMachineRef
 }
 
 func (r *hostedRefs) link(owner string, p *string) {
@@ -92,6 +93,9 @@ func (r *hostedRefs) add(p *string) {
 }
 
 func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
+	if err := r.mapSourceMachines(ctx, h); err != nil {
+		return err
+	}
 	edges := map[string][]string{}
 	owners := make([]string, 0, len(r.links))
 	for _, l := range r.links {
@@ -137,7 +141,7 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
  WITH targets AS (SELECT id,provenance_kind,raw_group_id FROM sessions WHERE id=ANY($1)),
  groups AS (SELECT DISTINCT raw_group_id AS group_id FROM targets WHERE raw_group_id<>''),
  cohorts AS (SELECT s.raw_group_id AS group_id,count(*) AS n FROM sessions s JOIN groups g ON g.group_id=s.raw_group_id GROUP BY s.raw_group_id),
- representatives AS (SELECT b.session_id,min(b.branch_id) AS branch FROM raw_session_branches b JOIN groups g ON g.group_id=b.group_id WHERE b.active AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) GROUP BY b.session_id)
+ representatives AS (SELECT b.session_id,min(b.branch_id) AS branch FROM raw_session_branches b JOIN groups g ON g.group_id=b.group_id WHERE b.active AND NOT COALESCE(`+rawBranchExclusionSQL("b", "")+`,false) GROUP BY b.session_id)
  SELECT t.id,t.provenance_kind, CASE WHEN t.provenance_kind='legacy' THEN
   CASE WHEN EXISTS(SELECT 1 FROM raw_session_groups g JOIN sessions s ON s.raw_group_id=g.group_id WHERE g.base_alias=t.id) THEN hosted_legacy_alias(t.id) ELSE t.id END
  ELSE CASE WHEN c.n>1 OR EXISTS(SELECT 1 FROM sessions l WHERE l.id=g.base_alias AND l.provenance_kind='legacy') OR (SELECT count(DISTINCT a.group_id) FROM raw_session_public_aliases a JOIN sessions s ON s.raw_group_id=a.group_id WHERE a.alias_id=g.base_alias)>1 THEN g.base_alias||'~'||r.branch ELSE g.base_alias END END
@@ -203,6 +207,7 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 }
 
 func (r *hostedRefs) session(s *db.Session) {
+	r.sourceMachines(s.ID, &s.SourceMachines)
 	r.add(&s.ID)
 	r.parent(s.ID, &s.ParentSessionID, &s.ParentSessionIDs)
 	s.ParserParentSessionID = nil
@@ -233,7 +238,7 @@ func (h *HostedStore) resolveBatch(ctx context.Context, aliases []string, exclud
 	if len(aliases) == 0 {
 		return nil, nil
 	}
-	rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT a.alias_id,b.session_id FROM raw_session_public_aliases a JOIN raw_session_branches b ON b.group_id=a.group_id AND b.active AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id) JOIN sessions s ON s.id=b.session_id WHERE a.alias_id=ANY($1) AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false)
+	rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT a.alias_id,b.session_id FROM raw_session_public_aliases a JOIN raw_session_branches b ON b.group_id=a.group_id AND b.active AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id) JOIN sessions s ON s.id=b.session_id WHERE a.alias_id=ANY($1) AND NOT COALESCE(`+rawBranchExclusionSQL("b", "")+`,false)
  UNION SELECT requested.alias,id FROM unnest($1::text[]) requested(alias) JOIN sessions s ON (s.id=requested.alias OR hosted_legacy_alias(s.id)=requested.alias) WHERE s.provenance_kind='legacy'`, aliases)
 	if err != nil {
 		return nil, err
