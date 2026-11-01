@@ -9,6 +9,8 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
+var errAttemptBudgetExhausted = errors.New("raw parse attempt budget exhausted")
+
 // jobErrorCode maps an arbitrary pipeline error onto a fixed allowlisted
 // code. Provider and materializer errors can embed client source paths or raw
 // content, so only these codes may be persisted or returned to callers;
@@ -19,6 +21,8 @@ func jobErrorCode(err error) string {
 		return ""
 	case errors.Is(err, ErrLeaseLost):
 		return "lease_lost"
+	case errors.Is(err, errAttemptBudgetExhausted):
+		return "attempt_budget_exhausted"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -241,6 +245,14 @@ type leaseResult struct {
 
 func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResult {
 	result := leaseResult{id: lease.ID}
+	// Allow one extra run when a restart interrupts the final attempt.
+	if lease.Attempt > w.MaxAttempts+1 {
+		result = w.failLease(parent, lease, "lease", errAttemptBudgetExhausted)
+		if result.failed == 1 {
+			result.err = reportableJobError(lease.ID, "lease", errAttemptBudgetExhausted)
+		}
+		return result
+	}
 	timeoutCtx, cancelTimeout := context.WithTimeout(parent, w.AttemptTimeout)
 	workCtx, cancelWork := context.WithCancelCause(timeoutCtx)
 	stopHeartbeat := w.startHeartbeat(workCtx, cancelWork, lease)
@@ -313,21 +325,12 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 	}
 	decision := (RetryPolicy{Base: w.RetryBase, Maximum: w.RetryMax, MaxAttempts: w.MaxAttempts}).Decide(lease.Attempt)
 	if decision.Failed || errors.Is(operationErr, ErrSizeLimit) {
-		failureErr := w.Queue.FailRawParseJob(
-			parent, lease, stage, jobErrorDiagnostic(stage, operationErr),
-		)
-		if errors.Is(failureErr, ErrLeaseLost) {
-			result.leaseLost = 1
-			result.err = errors.Join(result.err, reportableJobError(lease.ID, stage, ErrLeaseLost))
-			return result
+		failure := w.failLease(parent, lease, stage, operationErr)
+		if failure.err != nil {
+			result.err = errors.Join(result.err, failure.err)
 		}
-		if failureErr != nil {
-			result.err = errors.Join(result.err, fmt.Errorf(
-				"recording terminal failure: %s", jobErrorDiagnostic("fail", failureErr),
-			))
-			return result
-		}
-		result.failed = 1
+		result.failed = failure.failed
+		result.leaseLost = failure.leaseLost
 		return result
 	}
 	retryAt := w.now().Add(decision.Delay)
@@ -346,6 +349,21 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 		return result
 	}
 	result.retried = 1
+	return result
+}
+
+func (w *Worker) failLease(ctx context.Context, lease JobLease, stage string, operationErr error) leaseResult {
+	result := leaseResult{id: lease.ID}
+	err := w.Queue.FailRawParseJob(ctx, lease, stage, jobErrorDiagnostic(stage, operationErr))
+	switch {
+	case errors.Is(err, ErrLeaseLost):
+		result.leaseLost = 1
+		result.err = reportableJobError(lease.ID, stage, ErrLeaseLost)
+	case err != nil:
+		result.err = fmt.Errorf("recording terminal failure: %s", jobErrorDiagnostic("fail", err))
+	default:
+		result.failed = 1
+	}
 	return result
 }
 

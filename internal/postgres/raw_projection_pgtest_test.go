@@ -321,6 +321,32 @@ func TestRawProjectionRefreshesFrictionForExistingPhysicalSession(t *testing.T) 
 	assert.Equal(t, "[friction/deferral] "+resolved.SessionID+": next session", findings[0].Title)
 }
 
+func TestRawProjectionQueueFencesReselectedGeneration(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "capture-a", "")
+	old := f.lease(t, m)
+	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-2")
+	require.NoError(t, err)
+	_, err = f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
+	require.NoError(t, err)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), old.Owner, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	current := leases[0]
+	require.Equal(t, old.ID, current.ID)
+	require.Equal(t, old.Attempt, current.Attempt)
+	require.Greater(t, current.ProjectionGeneration, old.ProjectionGeneration)
+
+	assert.ErrorIs(t, f.jobs.FailRawParseJob(t.Context(), old, "parse", "parse:internal"), rawderive.ErrLeaseLost)
+	assert.ErrorIs(t, f.jobs.RetryRawParseJob(t.Context(), old, time.Now().Add(time.Minute), "parse", "parse:internal"), rawderive.ErrLeaseLost)
+	assert.ErrorIs(t, f.jobs.HeartbeatRawParseJob(t.Context(), old, time.Minute), rawderive.ErrLeaseLost)
+	assert.ErrorIs(t, f.jobs.CompleteRawParseJob(t.Context(), old), rawderive.ErrLeaseLost)
+	var state string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, current.ID).Scan(&state))
+	assert.Equal(t, "leased", state)
+	require.NoError(t, f.jobs.HeartbeatRawParseJob(t.Context(), current, time.Minute))
+}
+
 func TestRawProjectionGenerationAndLeaseFences(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")

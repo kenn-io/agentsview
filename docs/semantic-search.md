@@ -5,9 +5,8 @@ description: Vector (semantic) search over session messages, plus hybrid search 
 
 AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
-substring/regex/FTS5 content search. This is an opt-in feature backed by an
-OpenAI-compatible embeddings endpoint — a local [Ollama](https://ollama.com)
-model or a hosted API.
+substring/regex/FTS5 content search. This is an opt-in feature backed by
+Ollama, Kit's shared local server, or a configured OpenAI-compatible API.
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
@@ -24,6 +23,27 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Add a `[vector]` section to
 `~/.agentsview/config.toml`:
+
+```toml
+[vector]
+enabled = true
+```
+
+Restart the daemon, then run `agentsview embeddings build`. AgentsView uses a
+running Ollama server with Nomic or Kit's shared local server. If the local
+server needs files, the CLI asks before downloading them. Search and automatic
+builds reuse installed files; they direct you to the CLI when a download needs
+approval. Declining stops the download and build.
+
+The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
+characters, 2,048 context tokens, `search_query: ` for queries, and
+`search_document: ` for documents. Explicit model recipes keep their existing
+settings, including empty prefixes. Only untagged `nomic-embed-text` uses
+automatic discovery without a server table. Tagged recipes such as
+`nomic-embed-text:latest` and `nomic-embed-text:v1.5` need a named server with
+`endpoint` or `local = true`.
+
+For an explicit model or endpoint, configure the recipe and named servers:
 
 ```toml
 [vector]
@@ -69,10 +89,9 @@ input beyond the window. Changing this cap on an existing index
 [creates a new generation and re-embeds the archive](#building-the-index) on the
 next build.
 
-`model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
-entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
-fast with an actionable message if any is missing or a duration field doesn't
-parse. Restart the daemon (or run a CLI command) after editing the file.
+With explicit servers, `model` and `dimension` are required. Each server needs
+an `endpoint` or `local = true`. Invalid settings fail at config load. Restart
+the daemon (or run a CLI command) after editing the file.
 
 Automatic Recall embedding has a separate, default-off consent gate. Setting
 `[vector.embed] recall = true` permits daemon startup, corpus mutations, and
@@ -89,13 +108,50 @@ refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
 
 ### Named embeddings servers
 
+To select Kit's local server while Ollama keeps running, keep your existing
+explicit Nomic recipe and add a named server:
+
+```toml
+[vector.embeddings.servers.shared]
+local = true
+```
+
+If you started with only `[vector] enabled = true`, write out its default
+recipe when adding the server table:
+
+```toml
+[vector]
+enabled = true
+
+[vector.embeddings]
+model = "nomic-embed-text"
+dimension = 768
+max_input_chars = 4000
+model_context_tokens = 2048
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+default_server = "shared"
+
+[vector.embeddings.servers.shared]
+local = true
+```
+
+Set `default_server = "shared"` under `[vector.embeddings]` for searches and
+scheduled builds, or run `agentsview embeddings build --using shared` for one
+build. Keep your existing model, dimensions, prefixes, suffix, and input cap to
+reuse the active generation. Only new or changed content needs embedding.
+`local = true` supports `nomic-embed-text`, `nomic-embed-text:latest`, and
+`nomic-embed-text:v1.5` and cannot have an `endpoint`. Keep the configured model
+spelling when switching servers; changing model identity requires rebuilding
+the index.
+
 Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`,
 `query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
-What varies per server is transport and capacity: `endpoint`, `api_key_env`,
-`timeout`, `max_retries`, `batch_size`, `max_batch_tokens`, `concurrency`, and
-`ollama_cpu_fallback`.
+What varies per server is transport and capacity: `endpoint`, `local`,
+`api_key_env`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
+`concurrency`, and `ollama_cpu_fallback`.
 
 When `model_context_tokens` and a server's `max_batch_tokens` are both set,
 builds cap that server's effective batch size at
@@ -464,7 +520,7 @@ ranked below top-level human-driven work. The
 
 ```bash
 agentsview embeddings build            # incremental: refresh + fill whatever's missing
-agentsview embeddings build --yes      # skip confirmation prompts
+agentsview embeddings build --yes      # skip the full-rebuild prompt; local downloads still ask
 agentsview embeddings build --full-rebuild --yes  # re-embeds every document
 agentsview embeddings build --backstop # force a full mirror reconciliation scan
 agentsview embeddings build --repair-invalid # regenerate only documents with invalid stored vectors
@@ -830,6 +886,7 @@ of `ordinal_range` to read the whole stretch.
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview embeddings build --full-rebuild'`                                           |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview embeddings build` ``                                              |
 | `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI/HTTP: `scope is only supported for semantic and hybrid search modes`; MCP also supports scope with `terms`                                               |
+| An unattended search or build needs a first local download | `local embeddings: run agentsview embeddings build to approve the first download`; run `agentsview embeddings build` in the CLI and approve the download. |
 | Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                          |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                  |
 | Embeddings endpoint returned a non-finite or zero-norm vector                                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview embeddings build --repair-invalid` |

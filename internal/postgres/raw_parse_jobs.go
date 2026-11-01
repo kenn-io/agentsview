@@ -181,6 +181,7 @@ func (s *RawIngestStore) HeartbeatRawParseJob(
 			updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
 			AND ($5 = '' OR (job.tenant_id = $5 AND job.manifest_id = $6 AND job.processing_version = $7))
+			AND job.projection_generation = $8
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -195,7 +196,7 @@ func (s *RawIngestStore) HeartbeatRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, leaseDuration.Microseconds(), s.tenant, lease.ManifestID, lease.ProcessingVersion,
+		lease.ID, lease.Owner, lease.Attempt, leaseDuration.Microseconds(), s.tenant, lease.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration,
 	)
 	if err != nil {
 		return fmt.Errorf("heartbeating raw parse job: %w", err)
@@ -220,6 +221,7 @@ func (s *RawIngestStore) CompleteRawParseJob(
 			last_error_class = '', last_error = '', updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
 			AND ($4 = '' OR (job.tenant_id = $4 AND job.manifest_id = $5 AND job.processing_version = $6))
+			AND job.projection_generation = $7
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -234,7 +236,7 @@ func (s *RawIngestStore) CompleteRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, s.tenant, lease.ManifestID, lease.ProcessingVersion,
+		lease.ID, lease.Owner, lease.Attempt, s.tenant, lease.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration,
 	)
 	if err != nil {
 		return fmt.Errorf("completing raw parse job: %w", err)
@@ -266,6 +268,7 @@ func (s *RawIngestStore) RetryRawParseJob(
 			updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
 			AND ($7 = '' OR (job.tenant_id = $7 AND job.manifest_id = $8 AND job.processing_version = $9))
+			AND job.projection_generation = $10
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -280,7 +283,7 @@ func (s *RawIngestStore) RetryRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, availableAt.UTC(), errorClass, message, s.tenant, lease.ManifestID, lease.ProcessingVersion,
+		lease.ID, lease.Owner, lease.Attempt, availableAt.UTC(), errorClass, message, s.tenant, lease.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration,
 	)
 	if err != nil {
 		return fmt.Errorf("retrying raw parse job: %w", err)
@@ -308,6 +311,7 @@ func (s *RawIngestStore) FailRawParseJob(
 			last_error_class = $4, last_error = $5, updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
 			AND ($6 = '' OR (job.tenant_id = $6 AND job.manifest_id = $7 AND job.processing_version = $8))
+			AND job.projection_generation = $9
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -322,7 +326,7 @@ func (s *RawIngestStore) FailRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, errorClass, message, s.tenant, lease.ManifestID, lease.ProcessingVersion,
+		lease.ID, lease.Owner, lease.Attempt, errorClass, message, s.tenant, lease.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration,
 	)
 	if err != nil {
 		return fmt.Errorf("failing raw parse job: %w", err)

@@ -66,15 +66,7 @@
   const GENERIC_UNAVAILABLE = "embeddings manager not available";
 
   const CONFIG_SNIPPET = `[vector]
-enabled = true
-
-[vector.embeddings]
-model = "nomic-embed-text"
-dimension = 768
-max_input_chars = 4000
-
-[vector.embeddings.servers.local]
-endpoint = "http://localhost:11434/v1"`;
+enabled = true`;
 
   const BUILD_COMMAND = "agentsview embeddings build";
   const BUILD_POLL_MS = 2000;
@@ -275,6 +267,10 @@ endpoint = "http://localhost:11434/v1"`;
       />
       <pre>{BUILD_COMMAND}</pre>
     </div>
+    <span class="setup-text">
+      {m.command_palette_semantic_setup_local()}
+      <a href="https://agentsview.io/docs/semantic-search/#named-embeddings-servers" target="_blank" rel="noreferrer">{m.command_palette_semantic_setup_local_link()}</a>
+    </span>
   {:else if phase === "disabled"}
     <strong>{m.command_palette_semantic_disabled_title()}</strong>
     <span class="setup-text">{detail}</span>
