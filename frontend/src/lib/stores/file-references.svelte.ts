@@ -6,6 +6,11 @@ import type {
 import { ApiError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
 
+// A live session gets a new revision on every sync. Each lookup rereads the
+// whole transcript and asks Docbank about every digest, so refreshes of a
+// session that already shows matches are spaced at least this far apart.
+export const MIN_REFRESH_INTERVAL_MS = 15_000;
+
 export class FileReferencesStore {
   enabled = $state(false);
   result = $state<ServiceFileReferencesResult>();
@@ -14,16 +19,29 @@ export class FileReferencesStore {
   private revision: string | null = null;
   private read = new LatestRead();
   private pending: Promise<void> = Promise.resolve();
+  private lastRefresh = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   track(id: string | null, revision: string | null): Promise<void> {
     if (!this.enabled) return Promise.resolve();
     if (this.sessionId === id && this.revision === revision) return this.pending;
-    this.reset();
-    [this.sessionId, this.revision] = [id, revision];
-    return revision ? this.refresh() : this.pending;
+    if (this.sessionId !== id || !revision || !this.result) {
+      this.reset();
+      [this.sessionId, this.revision] = [id, revision];
+      return revision ? this.refresh() : this.pending;
+    }
+    // Same session, new revision: keep the current matches on screen and
+    // refresh no more often than MIN_REFRESH_INTERVAL_MS.
+    this.revision = revision;
+    const wait = this.lastRefresh + MIN_REFRESH_INTERVAL_MS - Date.now();
+    if (wait <= 0) return this.refresh();
+    this.timer ??= setTimeout(() => void this.refresh(), wait);
+    return this.pending;
   }
 
   reset(): void {
+    this.cancelTimer();
+    this.lastRefresh = 0;
     this.read.cancel();
     this.sessionId = null;
     this.revision = null;
@@ -33,6 +51,8 @@ export class FileReferencesStore {
   }
 
   refresh(retryStale = true): Promise<void> {
+    this.cancelTimer();
+    this.lastRefresh = Date.now();
     const signal = this.read.begin();
     if (!this.enabled || !this.sessionId) {
       this.status = "idle";
@@ -44,6 +64,11 @@ export class FileReferencesStore {
       .then((result) => this.accept(result, signal, retryStale))
       .catch((error) => this.reject(error, signal, retryStale));
     return this.pending;
+  }
+
+  private cancelTimer(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   private reject(error: unknown, signal: AbortSignal, retryStale: boolean): void | Promise<void> {

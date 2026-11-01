@@ -163,6 +163,33 @@ func TestFileReferencesLookupFailure(t *testing.T) {
 	assert.Equal(t, "unavailable", out.Occurrences[1].State)
 }
 
+func TestFileReferencesStopsAfterLookupFailure(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	var calls []db.ToolCall
+	for i := range 20 {
+		calls = append(calls, db.ToolCall{ToolUseID: strconv.Itoa(i), ToolName: "Read", ResultContent: fmt.Sprintf(`[{"type":"agentsview_image","image_ref":"asset://%064x.png","media_type":"image/png","byte_size":3}]`, i)})
+	}
+	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "images", ToolCalls: calls}}))
+	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	var requests atomic.Int32
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer stub.Close()
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, id)
+	require.NoError(t, err)
+	// Each of the four workers sees its own failure before starting another.
+	assert.LessOrEqual(t, requests.Load(), int32(4))
+	assert.True(t, out.LookupFailed)
+	require.Len(t, out.Occurrences, 20)
+	for _, occurrence := range out.Occurrences {
+		assert.Equal(t, "unavailable", occurrence.State)
+	}
+}
+
 func TestFileReferencesRequestBudget(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)

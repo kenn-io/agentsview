@@ -11,22 +11,39 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"uuid"
 
 	"go.kenn.io/agentsview/internal/config"
 )
 
-const maxPageBytes = 1 << 20
+const (
+	maxPageBytes = 1 << 20
+	// cacheTTL bounds how long a successful answer is reused. An open live
+	// session refreshes its lookups as the transcript grows, and most of its
+	// digests do not change between refreshes.
+	cacheTTL        = time.Minute
+	maxCacheEntries = 4096
+)
 
 type Client struct {
 	http *http.Client
 	cfg  config.DocbankIntegration
+	now  func() time.Time
+
+	mu    sync.Mutex
+	cache map[string]cachedResult
+}
+
+type cachedResult struct {
+	result  Result
+	expires time.Time
 }
 
 // New builds a client from configuration validated by the local backend.
 func New(cfg config.DocbankIntegration) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &Client{cfg: cfg, now: time.Now, cache: map[string]cachedResult{}, http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 type Match struct {
@@ -57,8 +74,47 @@ type remotePage struct {
 	Total *int `json:"total"`
 }
 
-// Lookup reads current references for a digest from Docbank.
+// Lookup reads current references for a digest from Docbank. Successful
+// answers are reused for cacheTTL; failures are never cached.
 func (c *Client) Lookup(ctx context.Context, digest string) (Result, error) {
+	if result, ok := c.cached(digest); ok {
+		return result, nil
+	}
+	result, err := c.fetch(ctx, digest)
+	if err == nil {
+		c.store(digest, result)
+	}
+	return result, err
+}
+
+func (c *Client) cached(digest string) (Result, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.cache[digest]
+	if !ok || !c.now().Before(entry.expires) {
+		return Result{}, false
+	}
+	return entry.result, true
+}
+
+func (c *Client) store(digest string, result Result) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if len(c.cache) >= maxCacheEntries {
+		for key, entry := range c.cache {
+			if !now.Before(entry.expires) {
+				delete(c.cache, key)
+			}
+		}
+		if len(c.cache) >= maxCacheEntries {
+			clear(c.cache)
+		}
+	}
+	c.cache[digest] = cachedResult{result: result, expires: now.Add(cacheTTL)}
+}
+
+func (c *Client) fetch(ctx context.Context, digest string) (Result, error) {
 	unavailable := errors.New("docbank unavailable")
 	key := c.cfg.APIKey()
 	if key == "" {

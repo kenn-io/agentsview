@@ -3,6 +3,7 @@ package servicehttp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -20,7 +21,9 @@ func (b *httpBackend) FileReferences(ctx context.Context, id string) (service.Fi
 		return service.FileReferencesResult{}, err
 	}
 	if response.HTTPResponse.StatusCode == http.StatusNotFound {
-		return service.FileReferencesResult{}, service.ErrSessionNotFound
+		// Keep the transport marker so callers treat a missing session as a
+		// rejected request rather than a failed daemon.
+		return service.FileReferencesResult{}, fmt.Errorf("%w: %w", service.ErrSessionNotFound, errHTTPNotFound)
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		return service.FileReferencesResult{}, err

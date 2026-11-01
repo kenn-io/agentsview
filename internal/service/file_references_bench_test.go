@@ -49,5 +49,6 @@ func BenchmarkFileReferences20000Messages(b *testing.B) {
 		require.Len(b, out.Occurrences, 6)
 		require.False(b, out.LookupFailed)
 	}
-	require.Equal(b, int64(b.N)*3, requests.Load())
+	// The client reuses successful answers, so only the first pass asks Docbank.
+	require.Equal(b, int64(3), requests.Load())
 }

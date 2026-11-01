@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,12 +32,11 @@ func TestLookup(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := config.DocbankIntegration{URL: srv.URL, WebURL: "https://example.com/docbank/", APIKeyEnv: "DOCBANK_TEST_KEY"}
-	client := New(cfg)
-	result, err := client.Lookup(t.Context(), digest)
+	result, err := New(cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Zero(t, result.Total)
 	assert.Empty(t, result.Matches)
-	result, err = client.Lookup(t.Context(), digest)
+	result, err = New(cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Equal(t, 15, result.Total)
 	require.Len(t, result.Matches, 3)
@@ -48,6 +48,39 @@ func TestLookup(t *testing.T) {
 	result, err = New(cfg).Lookup(t.Context(), digest)
 	require.NoError(t, err)
 	assert.Empty(t, result.Matches[0].OpenURL)
+}
+
+func TestLookupCache(t *testing.T) {
+	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	var requests atomic.Int32
+	failNext := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if failNext {
+			failNext = false
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	}))
+	defer srv.Close()
+	client := New(config.DocbankIntegration{URL: srv.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	client.now = func() time.Time { return now }
+
+	_, err := client.Lookup(t.Context(), digest)
+	require.Error(t, err)
+	_, err = client.Lookup(t.Context(), digest)
+	require.NoError(t, err, "a failure is not cached")
+	_, err = client.Lookup(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), requests.Load(), "a success is reused within the TTL")
+
+	now = now.Add(cacheTTL)
+	_, err = client.Lookup(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), requests.Load(), "an expired answer is fetched again")
 }
 
 func TestLookupFailures(t *testing.T) {

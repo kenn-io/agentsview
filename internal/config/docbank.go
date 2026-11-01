@@ -20,6 +20,10 @@ type DocbankIntegration struct {
 func (c DocbankIntegration) Configured() bool {
 	return strings.TrimSpace(c.URL) != "" && strings.TrimSpace(c.APIKeyEnv) != ""
 }
+
+// Enabled reports whether lookup may run: the settings are present and valid.
+func (c DocbankIntegration) Enabled() bool { return c.Configured() && c.Validate() == nil }
+
 func (c DocbankIntegration) APIKey() string { return os.Getenv(strings.TrimSpace(c.APIKeyEnv)) }
 func (c DocbankIntegration) Validate() error {
 	if c.URL == "" && c.APIKeyEnv == "" && c.WebURL == "" {

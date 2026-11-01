@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -60,12 +61,13 @@ func WithDocbank(client *docbank.Client) DirectBackendOption {
 }
 
 // WithConfiguredDocbank applies the same integration configuration to every local backend.
+// Invalid settings leave lookup off, so no caller can send the API key to an
+// endpoint that validation rejects. Config loading reports the error.
 func WithConfiguredDocbank(cfg config.Config) DirectBackendOption {
-	client := docbank.New(cfg.Integrations.Docbank)
-	if !cfg.Integrations.Docbank.Configured() {
-		client = nil
+	if !cfg.Integrations.Docbank.Enabled() {
+		return WithDocbank(nil)
 	}
-	return WithDocbank(client)
+	return WithDocbank(docbank.New(cfg.Integrations.Docbank))
 }
 
 func (b *directBackend) FileReferences(ctx context.Context, id string) (FileReferencesResult, error) {
@@ -86,6 +88,8 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	// Each worker owns a distinct result slot; occurrences are updated after joining.
+	// After one lookup fails, workers stop starting new ones: the rest would
+	// most likely fail the same way, and the user can retry.
 	digests := []string{}
 	seen := make(map[string]int)
 	for _, occurrence := range out.Occurrences {
@@ -97,16 +101,19 @@ func (b *directBackend) FileReferences(ctx context.Context, id string) (FileRefe
 	results := make([]docbank.Result, len(digests))
 	resolved := make([]bool, len(digests))
 	var workers sync.WaitGroup
+	var failed atomic.Bool
 	for worker := range min(4, len(digests)) {
 		workers.Go(func() {
 			for i := worker; i < len(digests); i += 4 {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || failed.Load() {
 					return
 				}
 				result, err := b.docbank.Lookup(ctx, digests[i])
-				if err == nil {
-					results[i], resolved[i] = result, true
+				if err != nil {
+					failed.Store(true)
+					continue
 				}
+				results[i], resolved[i] = result, true
 			}
 		})
 	}
