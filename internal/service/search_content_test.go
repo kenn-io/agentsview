@@ -75,9 +75,11 @@ func TestDirectSearchContentFTSSourceGuard(t *testing.T) {
 // test path reached it (none of these tests exercise anything else).
 type fakeContentStore struct {
 	db.Store
-	page       db.ContentSearchPage
-	lastFilter db.ContentSearchFilter
-	windows    map[string][]db.Message // keyed by contextWindowKey
+	page           db.ContentSearchPage
+	pagesByPattern map[string]db.ContentSearchPage
+	lastFilter     db.ContentSearchFilter
+	filters        []db.ContentSearchFilter
+	windows        map[string][]db.Message // keyed by contextWindowKey
 }
 
 func (f *fakeContentStore) HasFTS(context.Context) bool { return true }
@@ -92,7 +94,154 @@ func (f *fakeContentStore) SearchContent(
 	_ context.Context, filter db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
 	f.lastFilter = filter
+	f.filters = append(f.filters, filter)
+	if page, ok := f.pagesByPattern[filter.Pattern]; ok {
+		return page, nil
+	}
 	return f.page, nil
+}
+
+func TestDirectSearchContentConceptsIntersectAndRankSessions(t *testing.T) {
+	store := &fakeContentStore{pagesByPattern: map[string]db.ContentSearchPage{
+		"auth model": {Matches: []db.ContentMatch{
+			{SessionID: "both", Ordinal: 4, OrdinalRange: [2]int{3, 5}, Snippet: "auth evidence", Score: new(0.7), TranscriptRevision: "rev-1"},
+			{SessionID: "both", Ordinal: 8, OrdinalRange: [2]int{8, 9}, Snippet: "weaker auth", Score: new(0.4), TranscriptRevision: "rev-1"},
+			{SessionID: "auth-only", Ordinal: 2, OrdinalRange: [2]int{2, 2}, Snippet: "auth only", Score: new(0.95), TranscriptRevision: "rev-1"},
+			{SessionID: "tie", Ordinal: 1, OrdinalRange: [2]int{1, 2}, Snippet: "tie auth", Score: new(0.6), TranscriptRevision: "rev-1"},
+		}},
+		"retry policy": {Matches: []db.ContentMatch{
+			{SessionID: "both", Ordinal: 12, OrdinalRange: [2]int{11, 13}, Snippet: "retry evidence", Score: new(0.9), TranscriptRevision: "rev-2"},
+			{SessionID: "tie", Ordinal: 6, OrdinalRange: [2]int{6, 7}, Snippet: "tie retry", Score: new(0.8), TranscriptRevision: "rev-1"},
+		}},
+	}}
+	be := service.NewReadOnlyBackend(store)
+
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
+		Concepts: []string{" auth model ", "retry policy"},
+		Project:  "agentsview", Agent: "codex", SessionID: "target",
+		GitBranchExact: "feature/memory", DateFrom: "2026-08-01",
+		DateTo: "2026-09-20", ExcludeSessionIDs: []string{"current"},
+		Scope: "top", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 2)
+	assert.False(t, res.CandidateTruncated)
+	assert.True(t, res.RevisionBound)
+
+	both := res.Matches[0]
+	assert.Equal(t, "both", both.SessionID)
+	require.NotNil(t, both.Score)
+	assert.InDelta(t, 0.8, *both.Score, 0.0001)
+	require.Len(t, both.ConceptEvidence, 2)
+	assert.Equal(t, db.ConceptEvidence{
+		Concept: "auth model", Ordinal: 4, OrdinalRange: [2]int{3, 5},
+		Snippet: "auth evidence", Score: 0.7, TranscriptRevision: "rev-1",
+	}, both.ConceptEvidence[0])
+	assert.Equal(t, db.ConceptEvidence{
+		Concept: "retry policy", Ordinal: 12, OrdinalRange: [2]int{11, 13},
+		Snippet: "retry evidence", Score: 0.9, TranscriptRevision: "rev-2",
+	}, both.ConceptEvidence[1])
+
+	assert.Equal(t, "tie", res.Matches[1].SessionID)
+	require.NotNil(t, res.Matches[1].Score)
+	assert.InDelta(t, 0.7, *res.Matches[1].Score, 0.0001)
+
+	require.Len(t, store.filters, 2)
+	assert.Equal(t, "auth model", store.filters[0].Pattern)
+	assert.Equal(t, "retry policy", store.filters[1].Pattern)
+	for _, filter := range store.filters {
+		assert.Equal(t, "semantic", filter.Mode)
+		assert.Equal(t, "agentsview", filter.Project)
+		assert.Equal(t, "codex", filter.Agent)
+		assert.Equal(t, "target", filter.SessionID)
+		assert.Equal(t, "feature/memory", filter.GitBranchExact)
+		assert.Equal(t, "2026-08-01", filter.DateFrom)
+		assert.Equal(t, "2026-09-20", filter.DateTo)
+		assert.Equal(t, []string{"current"}, filter.ExcludeSessionIDs)
+		assert.Equal(t, "top", filter.Scope)
+		assert.Equal(t, 50, filter.Limit)
+		assert.Zero(t, filter.Cursor)
+	}
+}
+
+func TestDirectSearchContentConceptsRejectInvalidRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  service.ContentSearchRequest
+		want string
+	}{
+		{"pattern", service.ContentSearchRequest{Pattern: "x", Concepts: []string{"a", "b"}}, "pattern and concepts"},
+		{"one", service.ContentSearchRequest{Concepts: []string{"a"}}, "between 2 and 5"},
+		{"six", service.ContentSearchRequest{Concepts: []string{"a", "b", "c", "d", "e", "f"}}, "between 2 and 5"},
+		{"blank", service.ContentSearchRequest{Concepts: []string{"a", " "}}, "must not be blank"},
+		{"duplicate", service.ContentSearchRequest{Concepts: []string{"a", " a"}}, "must be distinct"},
+		{"mode", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Mode: "hybrid"}, "mode must be semantic"},
+		{"cursor", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Cursor: 1}, "cursor is not supported"},
+		{"limit", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Limit: 51}, "limit must be between 1 and 50"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeContentStore{}
+			_, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), tc.req)
+			var inputErr *db.SearchInputError
+			require.ErrorAs(t, err, &inputErr)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Empty(t, store.filters)
+		})
+	}
+}
+
+func TestDirectSearchContentConceptsBoundCandidatesAndReportTruncation(t *testing.T) {
+	sessions := func(ids ...string) db.ContentSearchPage {
+		page := db.ContentSearchPage{}
+		for _, id := range ids {
+			page.Matches = append(page.Matches, db.ContentMatch{SessionID: id, Score: new(0.5)})
+		}
+		return page
+	}
+	tests := []struct {
+		name          string
+		limit         int
+		a, b          db.ContentSearchPage
+		wantLegLimit  int
+		wantSessions  []string
+		wantTruncated bool
+	}{
+		{
+			name: "default limit", limit: 0,
+			a: sessions("s1"), b: sessions("s1"),
+			wantLegLimit: 250, wantSessions: []string{"s1"},
+		},
+		{
+			// Equal mean scores keep the legs' reciprocal-rank order.
+			name: "limit cuts the intersection", limit: 1,
+			a: sessions("z", "a"), b: sessions("z", "a"),
+			wantLegLimit: 5, wantSessions: []string{"z"}, wantTruncated: true,
+		},
+		{
+			name: "full candidate window", limit: 1,
+			a: sessions("s1", "s2", "s3", "s4", "s5"), b: sessions("s1"),
+			wantLegLimit: 5, wantSessions: []string{"s1"}, wantTruncated: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeContentStore{pagesByPattern: map[string]db.ContentSearchPage{
+				"a": tc.a, "b": tc.b,
+			}}
+			res, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), service.ContentSearchRequest{
+				Concepts: []string{"a", "b"}, Limit: tc.limit,
+			})
+			require.NoError(t, err)
+			ids := make([]string, 0, len(res.Matches))
+			for _, m := range res.Matches {
+				ids = append(ids, m.SessionID)
+			}
+			assert.Equal(t, tc.wantSessions, ids)
+			assert.Equal(t, tc.wantTruncated, res.CandidateTruncated)
+			require.Len(t, store.filters, 2)
+			assert.Equal(t, tc.wantLegLimit, store.filters[0].Limit)
+		})
+	}
 }
 
 func TestDirectSearchContentTermsAndExactFilters(t *testing.T) {

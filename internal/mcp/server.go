@@ -197,6 +197,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"prior work and answering contextual questions, especially when the exact wording is unknown. " +
 			"If these modes report not available, use terms when every literal term must occur within one " +
 			"user/assistant exchange, or substring/regex for exact error messages, identifiers, and code fragments. " +
+			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
 			"The default mode remains substring. Set context to include N messages of " +
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +
 			"current conversation) are excluded unless include_active is set; current_session_id replaces " +
