@@ -653,16 +653,6 @@ func ClaudeSnapshotSurvivorSelectionContext(
 	return mask, attribution, webSearchRequests, err
 }
 
-func claudeSnapshotSurvivorSelection(
-	usage []UsageRow, eligible []bool,
-) (mask []bool, attribution []string, webSearchRequests []int) {
-	mask, attribution, webSearchRequests, _, err := claudeSnapshotSelectionContext(context.Background(), usage, eligible)
-	if err != nil {
-		panic(err)
-	}
-	return mask, attribution, webSearchRequests
-}
-
 func claudeSnapshotSelectionContext(
 	ctx context.Context, usage []UsageRow, eligible []bool,
 ) (
@@ -844,7 +834,13 @@ func laterClaudeSnapshot(candidate, current UsageRow) bool {
 func UsageSurvivorSelection(
 	start, end, effEnd time.Time, usage []UsageRow,
 ) (mask []bool, attribution []string, webSearchRequests []int) {
-	return usageSurvivorSelection(start, end, effEnd, usage, nil)
+	mask, attribution, webSearchRequests, err := usageSurvivorSelection(
+		context.Background(), start, end, effEnd, usage, nil,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return mask, attribution, webSearchRequests
 }
 
 // UsageSurvivorSelectionForSessions selects complete Claude snapshots across
@@ -852,20 +848,22 @@ func UsageSurvivorSelection(
 // before applying generic first-seen deduplication. This prevents an excluded
 // source-UUID or usage-key duplicate from suppressing an included row.
 func UsageSurvivorSelectionForSessions(
+	ctx context.Context,
 	start, end, effEnd time.Time, usage []UsageRow, sessionIDs []string,
-) (mask []bool, attribution []string, webSearchRequests []int) {
+) (mask []bool, attribution []string, webSearchRequests []int, err error) {
 	allowed := make(map[string]struct{}, len(sessionIDs))
 	for _, id := range sessionIDs {
 		allowed[id] = struct{}{}
 	}
-	return usageSurvivorSelection(start, end, effEnd, usage, allowed)
+	return usageSurvivorSelection(ctx, start, end, effEnd, usage, allowed)
 }
 
 func usageSurvivorSelection(
+	ctx context.Context,
 	start, end, effEnd time.Time,
 	usage []UsageRow,
 	allowed map[string]struct{},
-) (mask []bool, attribution []string, webSearchRequests []int) {
+) (mask []bool, attribution []string, webSearchRequests []int, err error) {
 	eligible := make([]bool, len(usage))
 	for i, u := range usage {
 		t, ok := parseTS(u.Timestamp)
@@ -877,7 +875,10 @@ func usageSurvivorSelection(
 		}
 		eligible[i] = true
 	}
-	snapshots, snapshotAttribution, snapshotWebSearchRequests := claudeSnapshotSurvivorSelection(usage, eligible)
+	snapshots, snapshotAttribution, snapshotWebSearchRequests, _, err := claudeSnapshotSelectionContext(ctx, usage, eligible)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	mask = make([]bool, len(usage))
 	attribution = make([]string, len(usage))
 	webSearchRequests = make([]int, len(usage))
@@ -898,7 +899,7 @@ func usageSurvivorSelection(
 		attribution[i] = snapshotAttribution[i]
 		webSearchRequests[i] = snapshotWebSearchRequests[i]
 	}
-	return mask, attribution, webSearchRequests
+	return mask, attribution, webSearchRequests, nil
 }
 
 // dedupUsage filters usage rows to the range, keeps the fullest Claude
@@ -909,9 +910,12 @@ func usageSurvivorSelection(
 // at or after effEnd are dropped before they can claim a dedup key, matching
 // the activity/bucket clipping Aggregate applies. For a full range
 // effEnd == end, so nothing extra is excluded.
-func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
+func dedupUsage(ctx context.Context, start, end, effEnd time.Time, usage []UsageRow) ([]UsageRow, error) {
 	out := make([]UsageRow, 0, len(usage))
-	mask, attribution, webSearchRequests := usageSurvivorSelection(start, end, effEnd, usage, nil)
+	mask, attribution, webSearchRequests, err := usageSurvivorSelection(ctx, start, end, effEnd, usage, nil)
+	if err != nil {
+		return nil, err
+	}
 	for i, keep := range mask {
 		if keep {
 			row := usage[i]
@@ -920,7 +924,7 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 			out = append(out, row)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func applyUsageRows(

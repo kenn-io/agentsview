@@ -22,7 +22,7 @@ func parseCursorTestFile(t *testing.T, path string) (*ParsedSession, []ParsedMes
 	t.Helper()
 	provider := &cursorProvider{}
 	session, messages, err := provider.parseSession(
-		path, "project", "/workspace/project", "test-machine",
+		t.Context(), path, "project", "/workspace/project", "test-machine",
 	)
 	require.NoError(t, err)
 	return session, messages
@@ -52,7 +52,7 @@ func TestCursorJSONLTimestampFromTextBlock(t *testing.T) {
 		`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Tuesday, Jun 16, 2026, 8:41 PM (UTC-4)</timestamp>\n<user_query>Inspect the logs.</user_query>"}]}}`,
 		`{"role":"assistant","message":{"content":[{"type":"text","text":"The logs are clean."}]}}`,
 	}, "\n")
-	messages := parseCursorJSONL(data)
+	messages := parseCursorJSONL(t.Context(), data)
 	require.Len(t, messages, 2)
 	assert.Equal(t, cursorTestTime(t, "2026-06-17T00:41:00Z"), messages[0].Timestamp)
 	assert.Equal(t, "Inspect the logs.", messages[0].Content)
@@ -185,7 +185,7 @@ func TestCursorLiteralTimestampXML(t *testing.T) {
 		"assistant:",
 		"The assistant repeats <timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>.",
 	}, "\n")
-	messages := parseCursorMessages(strings.Split(text, "\n"))
+	messages := parseCursorMessages(t.Context(), strings.Split(text, "\n"))
 	require.Len(t, messages, 2)
 	assert.Contains(t, messages[0].Content, "<timestamp>")
 	assert.Contains(t, messages[1].Content, "<timestamp>")
@@ -410,7 +410,7 @@ func TestExtractAssistantContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			text, hasThinking, toolCalls := extractAssistantContent(
+			text, hasThinking, toolCalls := extractAssistantContent(t.Context(),
 				tt.lines,
 			)
 			assert.Equal(t, tt.wantText, text, "text")
@@ -452,7 +452,7 @@ func TestCursorLegacyToolResultMultiline(t *testing.T) {
 		"    second call result",
 	}
 
-	messages := parseCursorMessages(lines)
+	messages := parseCursorMessages(t.Context(), lines)
 
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].ToolCalls, 2)
@@ -479,7 +479,7 @@ func TestCursorLegacyToolResultMultiline(t *testing.T) {
 }
 
 func TestCursorLegacyToolResultStaysWithinAssistantBlock(t *testing.T) {
-	messages := parseCursorMessages([]string{
+	messages := parseCursorMessages(t.Context(), []string{
 		"assistant:",
 		"[Tool call] Shell",
 		"  command=ls",
@@ -503,7 +503,7 @@ func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
 		`  {"patch":"` + strings.ReplaceAll(patch, "\n", `\n`) + `","path":"src/app.ts"}`,
 	}
 
-	text, hasThinking, toolCalls := extractAssistantContent(lines)
+	text, hasThinking, toolCalls := extractAssistantContent(t.Context(), lines)
 
 	assert.Empty(t, text)
 	assert.False(t, hasThinking)
@@ -522,7 +522,7 @@ func TestExtractAssistantContentCursorApplyPatchDedentsRawPatch(t *testing.T) {
 		"  +new",
 	}
 
-	_, _, toolCalls := extractAssistantContent(lines)
+	_, _, toolCalls := extractAssistantContent(t.Context(), lines)
 
 	require.Len(t, toolCalls, 1)
 	assert.JSONEq(t,
@@ -754,7 +754,7 @@ func TestParseCursorJSONL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := strings.Join(tt.lines, "\n")
-			msgs := parseCursorJSONL(data)
+			msgs := parseCursorJSONL(t.Context(), data)
 
 			require.Len(t, msgs, tt.wantCount, "message count")
 			if tt.wantCount == 0 {

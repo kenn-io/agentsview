@@ -136,7 +136,7 @@ func TestKiloSQLiteProjectionWithoutSequence(t *testing.T) {
  ('msg_a', 'ses_kilo', 'assistant', 1700000002000, 1700000002000, '{"content":[{"type":"text","text":"First answer"}]}');`)
 				require.NoError(t, err)
 			}
-			metas, err := ListKiloSessionMeta(path)
+			metas, err := ListKiloSessionMeta(t.Context(), path)
 			require.NoError(t, err)
 			require.Len(t, metas, 1)
 			_, messages, err := parseOpenCodeDBSession(path, "ses_kilo", "testmachine")

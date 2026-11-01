@@ -247,6 +247,7 @@ func parseKiloLegacyAPIHistoryModels(
 // session and nil messages with a nil error so the provider can
 // skip cleanly.
 func parseKiloLegacySession(
+	ctx context.Context,
 	taskDir string,
 	projectHint string,
 	machine string,
@@ -332,7 +333,7 @@ func parseKiloLegacySession(
 		parsedMessages, totalOutputTok, totalInputTok, peakContextTok,
 			totalCost, hasCost, totalRequests, requestsWithCost,
 			provider, minTS, maxTS,
-			totalCacheReads, totalCacheWrites, parseErr = parseKiloLegacyMessages(msgsBytes, apiModels)
+			totalCacheReads, totalCacheWrites, parseErr = parseKiloLegacyMessages(ctx, msgsBytes, apiModels)
 		if parseErr != nil {
 			return nil, nil, fmt.Errorf(
 				"parsing ui_messages.json: %w", parseErr,
@@ -402,13 +403,13 @@ func parseKiloLegacySession(
 	// rarely fires), then to the coarse project hint.
 	project := projectHint
 	if workspaceDir != "" {
-		if p := ExtractProjectFromCwd(workspaceDir); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, workspaceDir, ""); p != "" {
 			project = p
 		}
 	} else if len(metadata.FilesInContext) > 0 {
 		if first := metadata.FilesInContext[0].Path; first != "" {
 			if dir := absoluteParent(first); dir != "" {
-				if p := ExtractProjectFromCwd(dir); p != "" {
+				if p := ExtractProjectFromCwdWithBranchContext(ctx, dir, ""); p != "" {
 					project = p
 				}
 			}
@@ -533,6 +534,7 @@ func parseKiloLegacySession(
 // compute startedAt/endedAt. Errors only on a malformed array
 // payload; message-level decoding errors are tolerated.
 func parseKiloLegacyMessages(
+	ctx context.Context,
 	data []byte,
 	apiModels []string,
 ) (
@@ -648,7 +650,7 @@ func parseKiloLegacyMessages(
 		}
 
 		role, toolCalls, toolResults := classifyKiloLegacyMessage(
-			msg, isFirst, ordinal,
+			ctx, msg, isFirst, ordinal,
 		)
 		isFirst = false
 
@@ -1133,7 +1135,7 @@ func parseKiloLegacyMessagesDistinctProviders(data []byte) int {
 // handles RooCode/Cline's quirk that message [0] is always the
 // user's initial task prompt (say="text", not ask).
 func classifyKiloLegacyMessage(
-	msg kiloLegacyMessage, isFirst bool, ordinal int,
+	ctx context.Context, msg kiloLegacyMessage, isFirst bool, ordinal int,
 ) (RoleType, []ParsedToolCall, []ParsedToolResult) {
 	say := msg.Say
 	ask := msg.Ask
@@ -1177,7 +1179,7 @@ func classifyKiloLegacyMessage(
 
 	switch ask {
 	case "tool":
-		tc := parseKiloLegacyToolCall(msg.Text, ordinal)
+		tc := parseKiloLegacyToolCall(ctx, msg.Text, ordinal)
 		if tc == nil {
 			return RoleAssistant, nil, nil
 		}
@@ -1221,7 +1223,7 @@ func classifyKiloLegacyMessage(
 	case "completion_result":
 		return RoleAssistant, nil, nil
 	case "use_mcp_server":
-		tc := parseKiloLegacyToolCall(msg.Text, ordinal)
+		tc := parseKiloLegacyToolCall(ctx, msg.Text, ordinal)
 		if tc == nil {
 			return RoleAssistant, nil, nil
 		}
@@ -1636,7 +1638,7 @@ func kiloCommandOutputIsError(output string) bool {
 // Result-only fields (per kiloResultBearingReadTools) are stripped
 // before marshalling InputJSON, and SkillName is inferred for
 // SKILL.md reads just like RooCode does.
-func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
+func parseKiloLegacyToolCall(ctx context.Context, text string, ordinal int) *ParsedToolCall {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
@@ -1656,7 +1658,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 				if mcpName, _ := toolData["toolName"].(string); mcpName != "" {
 					serverName, _ := toolData["serverName"].(string)
 					tc := parseKiloLegacyMCPToolCall(
-						mcpName, serverName, toolData, ordinal,
+						ctx, mcpName, serverName, toolData, ordinal,
 					)
 					if tc == nil {
 						return nil
@@ -1669,7 +1671,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 			case "access_mcp_resource":
 				serverName, _ := toolData["serverName"].(string)
 				tc := parseKiloLegacyMCPToolCall(
-					t, serverName, toolData, ordinal,
+					ctx, t, serverName, toolData, ordinal,
 				)
 				if tc == nil {
 					return nil
@@ -1702,7 +1704,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 			tc.SkillName, _ = toolData["name"].(string)
 		}
 	} else {
-		tc.SkillName = inferToolSkillName(context.Background(), toolName, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(ctx, toolName, tc.InputJSON)
 	}
 	// FilePath is exposed from the payload when present so the
 	// frontend can route Edits / Writes to the right file even
@@ -1724,7 +1726,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 // skipped because MCP arguments are pure input with no embedded
 // result fields.
 func parseKiloLegacyMCPToolCall(
-	toolName, serverName string, toolData map[string]any, ordinal int,
+	ctx context.Context, toolName, serverName string, toolData map[string]any, ordinal int,
 ) *ParsedToolCall {
 	qualified := toolName
 	if serverName != "" {
@@ -1738,7 +1740,7 @@ func parseKiloLegacyMCPToolCall(
 		Category:  "MCP",
 		InputJSON: inputJSON,
 	}
-	tc.SkillName = inferToolSkillName(context.Background(), qualified, inputJSON)
+	tc.SkillName = inferToolSkillName(ctx, qualified, inputJSON)
 	return tc
 }
 
@@ -1794,7 +1796,7 @@ func absoluteParent(p string) string {
 // from task_metadata.json, ui_messages.json, and
 // api_conversation_history.json so any of the three changing
 // triggers a reparse.
-func kiloLegacyFingerprintSource(path string) (SourceFingerprint, error) {
+func kiloLegacyFingerprintSource(ctx context.Context, path string) (SourceFingerprint, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
@@ -1810,7 +1812,7 @@ func kiloLegacyFingerprintSource(path string) (SourceFingerprint, error) {
 	}
 	h := sha256.New()
 	if err := addSiblingMetadataFingerprintPart(
-		h, "task_metadata", path, info,
+		ctx, h, "task_metadata", path, info,
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -1833,7 +1835,7 @@ func kiloLegacyFingerprintSource(path string) (SourceFingerprint, error) {
 			fp.MTimeNS = ts
 		}
 		if err := addSiblingMetadataFingerprintPart(
-			h, name, sibPath, sibInfo,
+			ctx, h, name, sibPath, sibInfo,
 		); err != nil {
 			return SourceFingerprint{}, err
 		}

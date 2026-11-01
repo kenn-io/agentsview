@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -22,10 +21,10 @@ func TestPushSchemaCurrentRequiresFrictionTables(t *testing.T) {
 			pgURL := testPGURL(t)
 			cleanPGSchema(t, pgURL)
 			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-			pg, err := Open(pgURL, "agentsview", true)
+			pg, err := Open(t.Context(), pgURL, "agentsview", true)
 			require.NoError(t, err)
 			defer pg.Close()
-			ctx := context.Background()
+			ctx := t.Context()
 			require.NoError(t, EnsureSchema(ctx, pg, "agentsview"))
 			require.True(t, pushSchemaCurrent(ctx, pg))
 			stmt := "DROP " + drop
@@ -110,7 +109,7 @@ func TestPGPushFrictionRoundTrip(t *testing.T) {
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx := t.Context()
@@ -144,7 +143,7 @@ func TestPGPushFrictionChangeRepushesAndUnchangedSkips(t *testing.T) {
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "machine-friction-2", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction-2", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx := t.Context()
@@ -197,7 +196,7 @@ func TestPGPushMetadataPreservesUnchangedFriction(t *testing.T) {
 			cleanPGSchema(t, pgURL)
 			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 			local := testDB(t)
-			ps, err := New(pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
+			ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { ps.Close() })
 			ctx := t.Context()
@@ -282,7 +281,7 @@ func TestPushFrictionReportsChange(t *testing.T) {
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "machine-friction-3", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction-3", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx := t.Context()

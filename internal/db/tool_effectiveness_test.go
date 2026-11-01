@@ -192,7 +192,7 @@ func TestToolObservationsReplacementFingerprintAndOrphanCopy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 	replacement := testDB(t)
-	_, err = replacement.CopyOrphanedDataFromExcluding(d.Path(), nil)
+	_, err = replacement.CopyOrphanedDataFromExcluding(t.Context(), d.Path(), nil)
 	require.NoError(t, err)
 	copied, err := replacement.ToolCallFingerprint(t.Context(), "recovered")
 	require.NoError(t, err)

@@ -211,6 +211,7 @@ func TestHostedProjectionConfiguredContentPolicies(t *testing.T) {
 
 func TestHostedRawDerivationRejectsImageOffloadBeforeOpeningDatabase(t *testing.T) {
 	_, err := prepareHostedPGServe(
+		t.Context(),
 		config.Config{RequireAuth: true, ToolResultImages: config.ToolResultImagesOffload},
 		config.PGConfig{RawTenant: "tenant", Schema: "hosted", RawDerivation: true, URL: "://invalid"},
 		"",

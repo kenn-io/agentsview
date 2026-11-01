@@ -447,7 +447,7 @@ func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
 func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var initial bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &initial))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &initial))
 	seeded := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	for _, id := range []string{"startup-parent", "startup-child"} {
 		require.NoError(t, seeded.UpsertSession(t.Context(), db.Session{

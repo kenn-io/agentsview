@@ -603,7 +603,7 @@ func TestOrphanCopyPreservesFriction(t *testing.T) {
 	dst, err := Open(ctx, filepath.Join(dir, "new.db"))
 	require.NoError(t, err)
 	defer dst.Close()
-	count, err := dst.CopyOrphanedDataFrom(srcPath)
+	count, err := dst.CopyOrphanedDataFrom(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
@@ -640,7 +640,7 @@ func TestOrphanCopyOfRemappedCodexPageLeavesFrictionStale(t *testing.T) {
 	require.NoError(t, err)
 
 	dst := testDB(t)
-	ids, err := dst.CopyOrphanedDataFromExcluding(src.Path(), nil)
+	ids, err := dst.CopyOrphanedDataFromExcluding(t.Context(), src.Path(), nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{page}, ids)
 
@@ -675,7 +675,7 @@ func TestOrphanCopyFromArchiveWithoutFrictionTables(t *testing.T) {
 	dst, err := Open(ctx, filepath.Join(dir, "new.db"))
 	require.NoError(t, err)
 	defer dst.Close()
-	count, err := dst.CopyOrphanedDataFrom(srcPath)
+	count, err := dst.CopyOrphanedDataFrom(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 	s, err := dst.GetSessionFull(ctx, "s1")
@@ -693,7 +693,7 @@ func TestTrashedCopyPreservesFriction(t *testing.T) {
 	require.NoError(t, src.SoftDeleteSession(t.Context(), "s1"))
 
 	dst := testDB(t)
-	ids, err := dst.CopyTrashedDataFrom(src.Path())
+	ids, err := dst.CopyTrashedDataFrom(t.Context(), src.Path())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"s1"}, ids)
 	got, err := dst.SessionFrictionFindings(t.Context(), "s1")
@@ -775,7 +775,7 @@ func TestOrphanCopyOfRetiredCodexSourceLeavesFrictionStale(t *testing.T) {
 	dst := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
 	t.Cleanup(func() { dst.Close() })
 	insertSession(t, dst, "codex:"+legacyThread, "project", func(s *Session) { s.Agent = "codex" })
-	_, err = dst.CopyOrphanedDataFromExcluding(srcPath, nil)
+	_, err = dst.CopyOrphanedDataFromExcluding(t.Context(), srcPath, nil)
 	require.NoError(t, err)
 
 	page := "codex:" + legacyThread + "_" + legacyRoll1

@@ -58,7 +58,10 @@ func GetSessionUsageRollup(
 		}
 		if rowSet != nil {
 			rows := rowSet.Rows
-			allocated := activity.AllocateUsageCosts(rows)
+			allocated, err := activity.AllocateUsageCostsContext(ctx, rows)
+			if err != nil {
+				return nil, err
+			}
 			for i, row := range rows {
 				cost := allocated[i]
 				if !cost.Contributes {

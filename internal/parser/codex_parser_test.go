@@ -712,9 +712,9 @@ func TestCodexBuilderCanUseLexicalProjectDiscovery(t *testing.T) {
 
 	ctx := WithoutFilesystemProjectDiscovery(t.Context())
 	builder := newCodexSessionBuilder(
-		ctx, AgentCodex, false, nil, NewCodexCollectingSink(0),
+		AgentCodex, false, nil, NewCodexCollectingSink(0),
 	)
-	builder.handleSessionMeta(gjson.Parse(`{"id":"abc","cwd":`+
+	builder.handleSessionMeta(ctx, gjson.Parse(`{"id":"abc","cwd":`+
 		fmt.Sprintf("%q", cwd)+`}`), time.Time{})
 
 	assert.Equal(t, "recorded_cwd", builder.project)
@@ -896,7 +896,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
 		b := newCodexSessionBuilder(
-			t.Context(), AgentCodex, false, nil, NewCodexCollectingSink(0),
+			AgentCodex, false, nil, NewCodexCollectingSink(0),
 		)
 		b.rememberToolCall("call_abc", "exec_command", &ParsedToolCallPosition{MessageOrdinal: 1, CallIndex: 0})
 		assert.False(t, b.codexIncrementalNeedsFullParse(line))
@@ -4062,7 +4062,7 @@ func TestCodexServiceTierMessages(t *testing.T) {
 		}, []string{"openai-priority"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newCodexSessionBuilder(t.Context(), AgentCodex, false, func(string) (map[string]struct{}, bool) {
+			b := newCodexSessionBuilder(AgentCodex, false, func(string) (map[string]struct{}, bool) {
 				return map[string]struct{}{"parent-turn": {}}, true
 			}, NewCodexCollectingSink(0))
 			for _, line := range tc.lines {

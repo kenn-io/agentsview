@@ -587,10 +587,10 @@ func TestPiProviderStepCodeParentedSessionIsFork(t *testing.T) {
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
 	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0o644))
 
-	parent, _, err := parsePiLikeSession(
+	parent, _, err := parsePiLikeSession(t.Context(),
 		parentPath, "my_project", "local", AgentStepCode, "stepcode:")
 	require.NoError(t, err)
-	child, _, err := parsePiLikeSession(
+	child, _, err := parsePiLikeSession(t.Context(),
 		childPath, "my_project", "local", AgentStepCode, "stepcode:")
 	require.NoError(t, err)
 
@@ -617,9 +617,9 @@ func TestPiProviderNativeParentSessionUsesHeaderIdentity(t *testing.T) {
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
 	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0o644))
 
-	parent, _, err := parsePiLikeSession(parentPath, "my_project", "local", AgentPi, "pi:")
+	parent, _, err := parsePiLikeSession(t.Context(), parentPath, "my_project", "local", AgentPi, "pi:")
 	require.NoError(t, err)
-	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentPi, "pi:")
+	child, _, err := parsePiLikeSession(t.Context(), childPath, "my_project", "local", AgentPi, "pi:")
 	require.NoError(t, err)
 
 	assert.Equal(t, "pi:header-id-does-not-match-filename", parent.ID)
@@ -674,7 +674,7 @@ func TestPiProviderOMPSubagentUsesV1ParentFilenameID(t *testing.T) {
 		"",
 	}, "\n")), 0o644))
 
-	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentOMP, "omp:")
+	child, _, err := parsePiLikeSession(t.Context(), childPath, "my_project", "local", AgentOMP, "omp:")
 	require.NoError(t, err)
 
 	assert.Equal(t, "omp:child-def", child.ID)
@@ -704,7 +704,7 @@ func TestPiProviderOMPSubagentFollowsSymlinkedParent(t *testing.T) {
 		"",
 	}, "\n")), 0o644))
 
-	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentOMP, "omp:")
+	child, _, err := parsePiLikeSession(t.Context(), childPath, "my_project", "local", AgentOMP, "omp:")
 	require.NoError(t, err)
 
 	assert.Equal(t, "omp:child-def", child.ID)
@@ -790,7 +790,7 @@ func TestPiProviderOMPPathParentsUseTranscriptIdentity(t *testing.T) {
 				"",
 			}, "\n"))
 
-			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			child, messages, err := parsePiLikeSession(t.Context(), childPath, "example", "local", AgentOMP, "omp:")
 			require.NoError(t, err)
 			require.NotNil(t, child)
 			assert.Equal(t, "omp:child-id", child.ID)
@@ -892,7 +892,7 @@ func TestPiProviderOMPStructuralLineageHonorsExplicitParents(t *testing.T) {
 				"",
 			}, "\n"))
 
-			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			child, messages, err := parsePiLikeSession(t.Context(), childPath, "example", "local", AgentOMP, "omp:")
 			require.NoError(t, err)
 			require.NotNil(t, child)
 			assert.Equal(t, "omp:child-id", child.ID)
@@ -935,7 +935,7 @@ func TestPiProviderOMPInvalidParentTargetsKeepChildAvailable(t *testing.T) {
 				"",
 			}, "\n"))
 
-			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			child, messages, err := parsePiLikeSession(t.Context(), childPath, "example", "local", AgentOMP, "omp:")
 			require.NoError(t, err)
 			require.NotNil(t, child)
 			assert.Equal(t, "omp:child-id", child.ID)
@@ -981,7 +981,7 @@ func TestPiProviderOMPPathParentDoesNotLinkToChild(t *testing.T) {
 				"",
 			}, "\n"))
 
-			child, messages, err := parsePiLikeSession(childPath, "example", "local", AgentOMP, "omp:")
+			child, messages, err := parsePiLikeSession(t.Context(), childPath, "example", "local", AgentOMP, "omp:")
 			require.NoError(t, err)
 			require.NotNil(t, child)
 			assert.Equal(t, tt.wantID, child.ID)

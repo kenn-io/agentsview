@@ -274,7 +274,7 @@ func TestMappingCursorNotAdvancedOnFailure(t *testing.T) {
 
 	// Sabotage the mirror table so the mapping publication insert fails
 	// after the other push finalization steps have already succeeded.
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`ALTER TABLE source_worktree_project_mappings DROP COLUMN project`)
 	require.NoError(t, err, "drop project column")
 

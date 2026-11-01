@@ -20,7 +20,7 @@ import (
 
 func TestStartQuackServerDoesNotEmitAuthTokenToProcessOutput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "serve-no-token-fd-log.duckdb")
 	bind := "quack:127.0.0.1:" + freeQuackServePort(t)
 	const token = "agentsview-quack-serve-secret-token"
@@ -42,7 +42,7 @@ func TestStartQuackServerDoesNotEmitAuthTokenToProcessOutput(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, stopErr := server.ExecContext(context.Background(),
+		_, stopErr := server.ExecContext(context.WithoutCancel(t.Context()),
 			`CALL quack_stop(?)`, bind)
 		require.NoError(t, stopErr)
 	})

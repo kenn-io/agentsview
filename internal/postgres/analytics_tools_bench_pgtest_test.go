@@ -33,7 +33,7 @@ func seedPGToolsBenchArchive(
 	b.Helper()
 	schema := "agentsview_tools_bench_" + archive.name
 	pgURL := testPGURL(b)
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(b.Context(), pgURL, schema, true)
 	require.NoError(b, err)
 	b.Cleanup(func() { _ = pg.Close() })
 	ctx := b.Context()
@@ -86,7 +86,7 @@ func seedPGToolsBenchArchive(
 	_, err = pg.ExecContext(ctx, `ANALYZE sessions, messages, tool_calls`)
 	require.NoError(b, err)
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(b.Context(), pgURL, schema, true)
 	require.NoError(b, err)
 	b.Cleanup(func() { _ = store.Close() })
 	return store

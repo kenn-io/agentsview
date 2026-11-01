@@ -96,7 +96,7 @@ func readServeRequest(ctx context.Context, in io.Reader) (serveRequest, error) {
 func serveOp(ctx context.Context, op Op, cfg config.Config, req serveRequest, out io.Writer) error {
 	switch op {
 	case OpTargets:
-		targets, err := remotesync.ResolveTargets(cfg)
+		targets, err := remotesync.ResolveTargets(ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("resolve targets: %w", err)
 		}
@@ -114,7 +114,7 @@ func serveOp(ctx context.Context, op Op, cfg config.Config, req serveRequest, ou
 		if req.Archive == nil {
 			return errors.New("archive request has no body")
 		}
-		plan, err := remotesync.PlanArchive(cfg, *req.Archive)
+		plan, err := remotesync.PlanArchive(ctx, cfg, *req.Archive)
 		if err != nil {
 			return err
 		}

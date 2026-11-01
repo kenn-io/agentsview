@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -348,7 +349,7 @@ func parseCortexTimestamps(_ string) map[string]time.Time {
 // is embedded (the split-file format), the companion .history.jsonl file is
 // read instead.
 func (p *cortexProvider) parseSession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -416,7 +417,7 @@ func (p *cortexProvider) parseSession(
 		}
 	}
 
-	project := extractCortexProject(meta)
+	project := extractCortexProject(ctx, meta)
 
 	// Use the title if it's not the default auto-generated one.
 	displayName := ""
@@ -487,13 +488,13 @@ func readCortexHistoryJSONL(
 
 // extractCortexProject derives a project name from session metadata,
 // using the working directory or git root as the source.
-func extractCortexProject(meta cortexSessionJSON) string {
+func extractCortexProject(ctx context.Context, meta cortexSessionJSON) string {
 	cwd := meta.WorkingDirectory
 	if cwd == "" {
 		cwd = meta.GitRoot
 	}
 	branch := meta.GitBranch
-	if proj := ExtractProjectFromCwdWithBranch(cwd, branch); proj != "" {
+	if proj := ExtractProjectFromCwdWithBranchContext(ctx, cwd, branch); proj != "" {
 		return proj
 	}
 	return "unknown"

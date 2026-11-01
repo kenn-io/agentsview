@@ -121,12 +121,12 @@ func (Backend) NewPusher(
 }
 
 func (Backend) OpenStore(
-	t storage.ReplicaTarget,
+	ctx context.Context, t storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
 	if err := CheckTransportSecurity(t.URL, t.AllowInsecure); err != nil {
 		return nil, err
 	}
-	store, err := NewStore(context.Background(), target(t))
+	store, err := NewStore(ctx, target(t))
 	if err != nil {
 		return nil, err
 	}

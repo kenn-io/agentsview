@@ -190,7 +190,7 @@ func TestScopedConfigDaemonTransportUsesDeploymentAuth(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	require.NoError(t, err)
-	_, err = ensureTransport(&cfg, transportIntentRead, 0)
+	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentRead, 0)
 	require.ErrorContains(t, err, "AGENTSVIEW_AUTH_TOKEN_FILE")
 }
 

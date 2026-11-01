@@ -50,7 +50,7 @@ func TestFrictionConcurrentBuildsAfterActivityMoves(t *testing.T) {
 			local, hub := openFrictionParityStores(t)
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
-			other, err := NewStore(testPGURL(t), "agentsview_friction_digest_test", true)
+			other, err := NewStore(t.Context(), testPGURL(t), "agentsview_friction_digest_test", true)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = other.Close() })
 			paused := &pausedFrictionSelection{Store: hub, selected: make(chan struct{}), resume: make(chan struct{})}

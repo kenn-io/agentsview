@@ -25,7 +25,6 @@ import (
 
 // ActivityReportConfig holds the flags for `agentsview activity report`.
 type ActivityReportConfig struct {
-	ctx                 context.Context
 	Preset              string
 	Date                string
 	From                string
@@ -53,7 +52,7 @@ type ActivityReportConfig struct {
 var activityReportNow = time.Now
 
 // runActivityReport syncs, resolves the range, runs the report, and prints it.
-func runActivityReport(cfg ActivityReportConfig) error {
+func runActivityReport(ctx context.Context, cfg ActivityReportConfig) error {
 	if cfg.ProgressWriter == nil {
 		cfg.ProgressWriter = cfg.ErrorWriter
 		if cfg.ProgressWriter == nil {
@@ -69,10 +68,6 @@ func runActivityReport(cfg ActivityReportConfig) error {
 			return cliValidationError(err,
 				"Use --date YYYY-MM-DD, or --preset custom with --from/--to RFC3339; use an IANA --timezone and --bucket 5m, 15m, 1h, 1d, or 1w. Run `agentsview activity report --help` for details.")
 		}
-	}
-	ctx := cfg.ctx
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
@@ -371,11 +366,11 @@ func activitySessionPageOptions(
 // costed, then resolves the report. runActivityReport and the pricing test
 // share this seam so the test exercises the same seeding the command performs.
 func resolveActivityReportPriced(
-	cfg ActivityReportConfig, database *db.DB,
+	ctx context.Context, cfg ActivityReportConfig, database *db.DB,
 	customPricing map[string]config.CustomModelRate,
 ) (activity.Report, error) {
-	ensureUsagePricing(database, cfg.Offline, customPricing)
-	return resolveActivityReport(cfg, database)
+	ensureUsagePricing(ctx, database, cfg.Offline, customPricing)
+	return resolveActivityReport(ctx, cfg, database)
 }
 
 // resolveActivityReport defaults the timezone and date, resolves the range
@@ -383,7 +378,7 @@ func resolveActivityReportPriced(
 // all validation (timezone, bounds, bucket allow-list, range limits) happens
 // inside activity.ResolveQuery before any database query.
 func resolveActivityReport(
-	cfg ActivityReportConfig, database *db.DB,
+	ctx context.Context, cfg ActivityReportConfig, database *db.DB,
 ) (activity.Report, error) {
 	var q activity.Query
 	var f db.AnalyticsFilter
@@ -410,7 +405,7 @@ func resolveActivityReport(
 		if err != nil {
 			return activity.Report{}, err
 		}
-		f.Machine, err = db.ResolveMachineFilter(context.Background(), database, f.Machine)
+		f.Machine, err = db.ResolveMachineFilter(ctx, database, f.Machine)
 		if err != nil {
 			return activity.Report{}, err
 		}
@@ -421,7 +416,7 @@ func resolveActivityReport(
 		onProgress = newActivityProgressPrinter(cfg.ProgressWriter)
 	}
 	artifacts, err := database.BuildActivityReportArtifacts(
-		context.Background(), f, q, onProgress,
+		ctx, f, q, onProgress,
 	)
 	if err != nil {
 		return activity.Report{}, err

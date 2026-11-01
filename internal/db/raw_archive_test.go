@@ -54,7 +54,7 @@ func TestRawArchiveAcceptanceAndCopy(t *testing.T) {
 	require.NoError(t, d.RecordRawArchiveParse(ctx, "m1", "v1", "parse failed"))
 	require.ErrorIs(t, d.RecordRawArchiveParse(ctx, "missing", "v1", ""), sql.ErrNoRows)
 	target := testDB(t)
-	require.NoError(t, target.CopySyncStateFrom(d.path))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), d.path))
 	roots, err := target.ListRawArchiveRoots(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []RawArchiveRoot{changed, root}, roots)
@@ -114,7 +114,7 @@ func TestRawArchiveMigrationAndLegacyCopy(t *testing.T) {
 		require.NoError(t, err)
 	}
 	target := testDB(t)
-	require.NoError(t, target.CopySyncStateFrom(legacy.path))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), legacy.path))
 	roots, err := target.ListRawArchiveRoots(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, roots)

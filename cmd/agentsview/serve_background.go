@@ -38,7 +38,6 @@ type backgroundLaunchPolicy struct {
 	// particular, NoSync is a CLI/runtime option rather than a config key.
 	ConfigOnly bool
 	Operation  string
-	Context    context.Context
 	Attached   bool
 	OnLaunch   func(pid int, logPath string)
 	OnProgress func(*startupState, time.Duration)
@@ -119,9 +118,9 @@ func isBackgroundLaunchActive(dataDir string) bool {
 // is still in progress when no record appears in time. authToken may be empty
 // for a contender that has not loaded config; a require_auth daemon then
 // reports as in-progress rather than by URL.
-func reportBackgroundLaunchInProgress(dataDir, authToken string) {
+func reportBackgroundLaunchInProgress(ctx context.Context, dataDir, authToken string) {
 	waitForBackgroundLaunchOwner(
-		context.Background(), dataDir, authToken, backgroundServeReadyTimeout,
+		ctx, dataDir, authToken, backgroundServeReadyTimeout,
 	)
 	if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
 		!rt.ReadOnly && !shouldReplaceDaemonRuntime(rt, version) {
@@ -158,7 +157,7 @@ func runServeBackgroundCommand(
 	if !ok {
 		// Another launch holds the lock and owns the config writes. Report
 		// without loading config so this process never touches config.toml.
-		reportBackgroundLaunchInProgress(dataDir, "")
+		reportBackgroundLaunchInProgress(cmd.Context(), dataDir, "")
 		return
 	}
 	defer func() { _ = launchLock.Unlock() }()
@@ -247,7 +246,7 @@ func startServeBackground(ctx context.Context,
 	case serveReplacementAuto, serveReplacementExplicit:
 		waitedForExternalStartup := false
 		if waited, err := waitForExternalServeStartupBeforeReplacement(
-			context.Background(),
+			ctx,
 			cfg.DataDir,
 			cfg.AuthToken,
 			backgroundServeReadyTimeout,
@@ -319,7 +318,7 @@ func startServeBackground(ctx context.Context,
 	// is mid-startup and holds the start lock but has not yet published a
 	// runtime record. Wait for it instead of racing a second server.
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		reportBackgroundLaunchInProgress(cfg.DataDir, cfg.AuthToken)
+		reportBackgroundLaunchInProgress(ctx, cfg.DataDir, cfg.AuthToken)
 		return result, nil
 	}
 
@@ -346,12 +345,8 @@ func startServeBackground(ctx context.Context,
 		waitCh <- child.Wait()
 	}()
 
-	waitContext := policy.Context
-	if waitContext == nil {
-		waitContext = context.Background()
-	}
 	rt, err := waitForBackgroundServeReadyWithPolicy(
-		waitContext,
+		ctx,
 		cfg.DataDir,
 		cfg.AuthToken,
 		waitCh,

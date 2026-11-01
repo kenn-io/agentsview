@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -21,8 +20,8 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
-	ctx := context.Background()
-	pg, err := Open(pgURL, schema, true)
+	ctx := t.Context()
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -88,7 +87,7 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
 	ctx := t.Context()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))

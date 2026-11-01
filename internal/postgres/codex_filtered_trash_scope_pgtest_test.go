@@ -37,7 +37,7 @@ func TestCodexFilteredPageRestoreSyncsExcludedAnchorScope(t *testing.T) {
 			require.NotNil(t, before)
 			require.True(t, before.TrashIncludesCodexPages)
 
-			filtered, err := New(testPGURL(t), initial.schema, local, "machine", true, tc.opts)
+			filtered, err := New(t.Context(), testPGURL(t), initial.schema, local, "machine", true, tc.opts)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, filtered.Close()) })
 			pushed, err := filtered.Push(ctx, false, nil)
@@ -96,7 +96,7 @@ func TestCodexFilteredPageRestorePreservesRemoteThreadTrash(t *testing.T) {
 	require.NoError(t, err)
 	_, err = local.AssignSessionProject(ctx, codexTrashPage, "selected")
 	require.NoError(t, err)
-	filtered, err := New(testPGURL(t), initial.schema, local, "machine", true, storage.PusherOptions{Projects: []string{"selected"}})
+	filtered, err := New(t.Context(), testPGURL(t), initial.schema, local, "machine", true, storage.PusherOptions{Projects: []string{"selected"}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, filtered.Close()) })
 	result, err := filtered.Push(ctx, false, nil)
@@ -130,7 +130,7 @@ func TestCodexFilteredScopeSyncRespectsArchiveOwnership(t *testing.T) {
 	} {
 		require.NoError(t, other.UpsertSession(ctx, sess))
 	}
-	filtered, err := New(testPGURL(t), initial.schema, other, "machine", true, storage.PusherOptions{Projects: []string{"selected"}})
+	filtered, err := New(t.Context(), testPGURL(t), initial.schema, other, "machine", true, storage.PusherOptions{Projects: []string{"selected"}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, filtered.Close()) })
 	result, err := filtered.Push(ctx, false, nil)

@@ -89,6 +89,7 @@ type customPricingStore interface {
 }
 
 var openPGReadStore = func(
+	ctx context.Context,
 	cfg config.Config,
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
@@ -97,7 +98,7 @@ var openPGReadStore = func(
 		return nil, nil, err
 	}
 	if pgCfg.RawTenant != "" {
-		store, err := postgres.NewHostedStore(pgCfg.URL, pgCfg.Schema, pgCfg.RawTenant, pgCfg.AllowInsecure)
+		store, err := postgres.NewHostedStore(ctx, pgCfg.URL, pgCfg.Schema, pgCfg.RawTenant, pgCfg.AllowInsecure)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -108,7 +109,7 @@ var openPGReadStore = func(
 		return store, func() { _ = store.Close() }, nil
 	}
 	backend := pgReplica{}
-	store, err := backend.OpenStore(postgres.ReplicaTarget(pgCfg))
+	store, err := backend.OpenStore(ctx, postgres.ReplicaTarget(pgCfg))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,21 +118,6 @@ var openPGReadStore = func(
 		return nil, nil, err
 	}
 	return store, func() { _ = store.Close() }, nil
-}
-
-// detectTransport picks the transport mode:
-//  1. If a kit runtime record points to a live daemon, use HTTP.
-//  2. If a daemon start lock exists, wait up to waitTimeout for the
-//     daemon to become ready, then try again.
-//  3. If a writable local daemon owns the SQLite archive but is not
-//     reachable by ping, use direct read-only access.
-//  4. Otherwise use direct access.
-func detectTransport(
-	dataDir string, authToken string, waitTimeout time.Duration,
-) (transport, error) {
-	return detectTransportContext(
-		context.Background(), dataDir, authToken, waitTimeout,
-	)
 }
 
 // detectClientTransportContext probes an existing daemon using deployment
@@ -159,6 +145,13 @@ func loadDaemonClientConfig(scope config.ValidationScope) (config.Config, error)
 	return cfg, err
 }
 
+// detectTransportContext picks the transport mode:
+//  1. If a kit runtime record points to a live daemon, use HTTP.
+//  2. If a daemon start lock exists, wait up to waitTimeout for the
+//     daemon to become ready, then try again.
+//  3. If a writable local daemon owns the SQLite archive but is not
+//     reachable by ping, use direct read-only access.
+//  4. Otherwise use direct access.
 func detectTransportContext(
 	ctx context.Context,
 	dataDir string,
@@ -224,16 +217,6 @@ func detectTransportContext(
 		}, nil
 	}
 	return transport{Mode: transportDirect}, nil
-}
-
-func ensureTransport(
-	cfg *config.Config,
-	intent transportIntent,
-	waitTimeout time.Duration,
-) (transport, error) {
-	return ensureTransportContext(
-		context.Background(), cfg, intent, waitTimeout,
-	)
 }
 
 func ensureTransportContext(
@@ -595,7 +578,7 @@ func newService(ctx context.Context,
 				"opening db: %w", err,
 			)
 		}
-		closeVectorSearcher := installDirectVectorSearcher(cfg, d)
+		closeVectorSearcher := installDirectVectorSearcher(ctx, cfg, d)
 		cleanup := func() {
 			if closeVectorSearcher != nil {
 				if cerr := closeVectorSearcher(); cerr != nil {
@@ -641,9 +624,9 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 // --semantic|--hybrid` and `mcp --pg` get the same semantic search
 // the SQLite direct path wires via installDirectVectorSearcher.
 func newPGReadService(
-	cfg config.Config, pgCfg config.PGConfig,
+	ctx context.Context, cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
-	store, cleanup, err := openPGReadStore(cfg, pgCfg)
+	store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -655,7 +638,7 @@ func newPGReadService(
 			priced.SetCustomPricing(cfg.CustomModelPricing)
 		}
 	}
-	wireReplicaReadVectorSearchFn(cfg, pgReplica{}, store)
+	wireReplicaReadVectorSearchFn(ctx, cfg, pgReplica{}, store)
 	return service.NewReadOnlyBackend(
 		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
 	), cleanup, nil

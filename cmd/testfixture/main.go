@@ -90,7 +90,7 @@ func run() error {
 	defer database.Close()
 
 	// Seed model pricing for usage page e2e tests.
-	if err := database.UpsertModelPricing([]db.ModelPricing{
+	if err := database.UpsertModelPricingContext(ctx, []db.ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-4-20250514",
 			InputPerMTok:         money.Money{Microdollars: 3_000_000},
@@ -144,7 +144,7 @@ func run() error {
 		return fmt.Errorf("creating recent-edits fixture: %w", err)
 	}
 
-	if err := createProjectReclassificationFixture(
+	if err := createProjectReclassificationFixture(ctx,
 		database, base.Add(120*time.Hour),
 	); err != nil {
 		return fmt.Errorf("creating project-reclassification fixture: %w", err)
@@ -152,7 +152,7 @@ func run() error {
 
 	fmt.Printf("Fixture DB written to %s\n", *out)
 	if *duckDBOut != "" {
-		if err := writeDuckDBMirror(database, *duckDBOut); err != nil {
+		if err := writeDuckDBMirror(ctx, database, *duckDBOut); err != nil {
 			return fmt.Errorf("writing DuckDB mirror: %w", err)
 		}
 		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
@@ -161,7 +161,7 @@ func run() error {
 }
 
 func createProjectReclassificationFixture(
-	database *db.DB, start time.Time,
+	ctx context.Context, database *db.DB, start time.Time,
 ) error {
 	const (
 		machine      = "remote-example-host"
@@ -176,7 +176,6 @@ func createProjectReclassificationFixture(
 		{suffix: "root", cwd: worktreeRoot},
 		{suffix: "nested", cwd: worktreeRoot + "/cmd/server"},
 	}
-	ctx := context.Background()
 	for index, item := range cwds {
 		sessionID := "test-session-project-reclassification-" + item.suffix
 		startedAt := start.Add(time.Duration(index) * time.Hour)
@@ -280,12 +279,11 @@ func createToolSequencesFixture(
 	return database.ReplaceSessionMessages(ctx, sessionID, msgs)
 }
 
-func writeDuckDBMirror(database *db.DB, path string) error {
+func writeDuckDBMirror(ctx context.Context, database *db.DB, path string) error {
 	if err := os.Remove(path); err != nil &&
 		!errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing existing DuckDB mirror: %w", err)
 	}
-	ctx := context.Background()
 	result, err := duckdbsync.Push(
 		ctx, path, database, "test-machine", storage.MirrorPushOptions{}, true, nil,
 	)

@@ -335,9 +335,15 @@ func buildCandidateArtifactsFromSource(
 	}
 	survivors := usage
 	if !usageIsSurvivorSet {
-		survivors = dedupUsage(p.RangeStart, p.RangeEnd, p.EffectiveEnd, usage)
+		survivors, err = dedupUsage(ctx, p.RangeStart, p.RangeEnd, p.EffectiveEnd, usage)
+		if err != nil {
+			return CandidateArtifacts{}, err
+		}
 	}
-	allocated := AllocateUsageCosts(survivors)
+	allocated, err := AllocateUsageCostsContext(ctx, survivors)
+	if err != nil {
+		return CandidateArtifacts{}, err
+	}
 	if err := applyUsageRows(
 		&report, windows, survivors, allocated, kindBy,
 	); err != nil {

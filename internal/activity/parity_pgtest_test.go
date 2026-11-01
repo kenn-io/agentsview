@@ -405,7 +405,7 @@ func pushParityPostgres(
 	t.Cleanup(func() { dropParitySchema(t, pgURL) })
 
 	ps, err := postgresstore.New(
-		pgURL, paritySchema, local, "parity-machine", true,
+		t.Context(), pgURL, paritySchema, local, "parity-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating pg sync")
@@ -417,7 +417,7 @@ func pushParityPostgres(
 	require.Equal(t, len(parityFixture()), res.SessionsPushed,
 		"pg sessions pushed")
 
-	store, err := postgresstore.NewStore(pgURL, paritySchema, true)
+	store, err := postgresstore.NewStore(t.Context(), pgURL, paritySchema, true)
 	require.NoError(t, err, "opening pg store")
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store
@@ -426,7 +426,7 @@ func pushParityPostgres(
 // dropParitySchema removes the PG schema so each run starts clean.
 func dropParitySchema(t *testing.T, pgURL string) {
 	t.Helper()
-	store, err := postgresstore.NewStore(pgURL, paritySchema, true)
+	store, err := postgresstore.NewStore(t.Context(), pgURL, paritySchema, true)
 	require.NoError(t, err, "opening pg for schema drop")
 	defer func() { require.NoError(t, store.Close()) }()
 	_, _ = store.DB().Exec("DROP SCHEMA IF EXISTS " + paritySchema + " CASCADE")
@@ -515,7 +515,7 @@ func canonicalizeReport(r *activity.Report) {
 // complete (non-partial) and every backend's report is deterministic regardless
 // of wall clock.
 func TestGetActivityReportParityAcrossBackends(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := seedParitySQLite(t)
 
 	var pgStore *postgresstore.Store
@@ -680,7 +680,7 @@ func TestActivityReportMessageCountsAcrossBackends(t *testing.T) {
 func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := seedParitySQLite(t)
 	var pgStore *postgresstore.Store
 	if os.Getenv("TEST_PG_URL") != "" {

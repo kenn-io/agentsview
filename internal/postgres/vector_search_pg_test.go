@@ -34,12 +34,12 @@ func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 // tables and skips when pgvector is unavailable.
 func newVectorSearchTestPG(t *testing.T, pgURL, schema string) *sql.DB {
 	t.Helper()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
@@ -57,7 +57,7 @@ func insertSearchDoc(
 	offsets, content string,
 ) {
 	t.Helper()
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 INSERT INTO vector_documents (
     doc_key, session_id, source_uuid, ordinal, ordinal_end,
     subordinate, offsets, content, content_hash)
@@ -73,7 +73,7 @@ func insertSearchChunk(
 	t.Helper()
 	literal, err := halfvecLiteral(emb)
 	require.NoError(t, err, "halfvecLiteral "+docKey)
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`INSERT INTO `+table+` (doc_key, chunk_index, embedding)
 		 VALUES ($1, $2, $3::`+halfvecType+`)`,
 		docKey, chunkIndex, literal)
@@ -94,7 +94,7 @@ func insertSearchChunk(
 // tomb and gone must be dropped during hydration, leaving [u1, r1, u2].
 func seedVectorSearchFixture(t *testing.T, pg *sql.DB) (genID int64, table string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	genID, err := ensureVectorGeneration(ctx, pg, "fp-search", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")
 	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
@@ -117,7 +117,7 @@ func seedVectorSearchFixture(t *testing.T, pg *sql.DB) (genID int64, table strin
 	insertSearchChunk(t, pg, table, halfvec, "tomb", 0, []float32{0.95, 0.3122, 0, 0})
 
 	// gone's chunk stays; its document row disappears between KNN and hydrate.
-	_, err = pg.Exec(`DELETE FROM vector_documents WHERE doc_key = 'gone'`)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM vector_documents WHERE doc_key = 'gone'`)
 	require.NoError(t, err, "delete gone doc")
 	return genID, table
 }
@@ -135,7 +135,7 @@ var (
 func TestPGVectorSearcher(t *testing.T) {
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	genID, _ := seedVectorSearchFixture(t, pg)
 	searcher := NewVectorSearcher(
@@ -277,7 +277,7 @@ func TestPGVectorSearcher(t *testing.T) {
 func TestPGVectorSearcherExactK(t *testing.T) {
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_exactk_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	genID, err := ensureVectorGeneration(ctx, pg, "fp-exactk", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")
@@ -311,7 +311,7 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_efsearch_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	genID, err := ensureVectorGeneration(ctx, pg, "fp-efsearch", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")

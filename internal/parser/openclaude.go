@@ -254,7 +254,7 @@ func (s openClaudeSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFile(path)
+	hash, err := hashJSONLSourceFileContext(ctx, path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -285,7 +285,7 @@ func (s openClaudeSourceSet) Parse(
 		req.Source.ProjectHint,
 		filepath.Base(filepath.Dir(path)),
 	))
-	sess, msgs, err := parseOpenClaudeSession(path, project, machine)
+	sess, msgs, err := parseOpenClaudeSession(ctx, path, project, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -393,7 +393,7 @@ func (s openClaudeSourceSet) hasRoot(root string) bool {
 }
 
 func parseOpenClaudeSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -406,7 +406,7 @@ func parseOpenClaudeSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	lastLine := ""
 	malformedLines := 0
@@ -439,7 +439,7 @@ func parseOpenClaudeSession(
 
 		switch strings.TrimSpace(gjson.Get(line, "type").Str) {
 		case "attachment":
-			if qc, ok := extractOpenClaudeQueuedCommand(line); ok {
+			if qc, ok := extractOpenClaudeQueuedCommand(ctx, line); ok {
 				queuedCommands = append(queuedCommands, qc)
 			}
 			continue
@@ -481,7 +481,7 @@ func parseOpenClaudeSession(
 		}
 
 		if isOpenClaudeCompactBoundary(line) {
-			content, _, _, _, _, _, _ := ExtractTextContent(context.Background(),
+			content, _, _, _, _, _, _ := ExtractTextContent(ctx,
 				gjson.Get(line, "message.content"),
 			)
 			messages = append(messages, ParsedMessage{
@@ -516,7 +516,7 @@ func parseOpenClaudeSession(
 		}
 
 		content := gjson.Get(line, "message.content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(ctx, content)
 		if strings.TrimSpace(text) == "" && len(toolResults) == 0 &&
 			len(toolCalls) == 0 && role != "system" {
 			continue
@@ -600,7 +600,10 @@ func parseOpenClaudeSession(
 		messages = mergeQueuedCommands(
 			messages, queuedCommands, 0, openClaudeQueuedCommandMessage,
 		)
-		firstUser, userCount = firstMessageAndUserCount(messages)
+		firstUser, userCount, err = firstMessageAndUserCountContext(ctx, messages)
+		if err != nil {
+			return nil, nil, err
+		}
 		for _, qc := range queuedCommands {
 			if qc.timestamp.After(endedAt) {
 				endedAt = qc.timestamp
@@ -677,7 +680,7 @@ func openClaudeSemanticMessages(messages []ParsedMessage) []ParsedMessage {
 	return filtered
 }
 
-func extractOpenClaudeQueuedCommand(line string) (claudeQueuedCommand, bool) {
+func extractOpenClaudeQueuedCommand(ctx context.Context, line string) (claudeQueuedCommand, bool) {
 	attachment := gjson.Get(line, "attachment")
 	if attachment.Get("type").Str != "queued_command" {
 		return claudeQueuedCommand{}, false
@@ -689,7 +692,7 @@ func extractOpenClaudeQueuedCommand(line string) (claudeQueuedCommand, bool) {
 		return claudeQueuedCommand{}, false
 	}
 
-	prompt, _, _, _, _, _, _ := ExtractTextContent(context.Background(), attachment.Get("prompt"))
+	prompt, _, _, _, _, _, _ := ExtractTextContent(ctx, attachment.Get("prompt"))
 	if strings.TrimSpace(prompt) == "" {
 		return claudeQueuedCommand{}, false
 	}

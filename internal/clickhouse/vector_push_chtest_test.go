@@ -126,7 +126,7 @@ func newFixtureVectorSource() *fakeVectorSource {
 
 func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -217,7 +217,7 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 		{name: "one flush per session", batchSessions: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local, target := seedFixture(t)
 			source := newFixtureVectorSource()
 			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -272,7 +272,7 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 // next push repeats them instead of trusting the half-finished write.
 func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -310,7 +310,7 @@ func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
 
 func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 
 	plain := newTestSync(t, local, target, storage.PusherOptions{})
@@ -336,7 +336,7 @@ func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {
 // the scope has its vectors evicted with it.
 func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	source.hashes["ghost"] = "g-v1"
@@ -370,7 +370,7 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 // the generation row itself is registered.
 func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -411,7 +411,7 @@ func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 // phase skipped instead of failing or panicking on the unopened export.
 func TestVectorPushPromotedExportNotReady(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -459,7 +459,7 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local, target := seedFixture(t)
 			source := newFixtureVectorSource()
 			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -517,7 +517,7 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 		{"detached", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local, target := seedFixture(t)
 			source := newFixtureVectorSource()
 			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -580,7 +580,7 @@ func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 
 func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	source.hashes[fixtureChildID] = "child-v1"
@@ -718,7 +718,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 
 func TestVectorPushRepairsNamedSessions(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})

@@ -660,7 +660,7 @@ func traeSourceHash(ctx context.Context, path, manifest string) (string, error) 
 	_, _ = h.Write([]byte(value))
 	_, _ = h.Write([]byte{0})
 	if manifest != "" && IsRegularFile(manifest) {
-		hash, err := hashJSONLSourceFile(manifest)
+		hash, err := hashJSONLSourceFileContext(ctx, manifest)
 		if err != nil {
 			return "", err
 		}

@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -18,7 +17,7 @@ import (
 func TestStoreAnalyticsReads(t *testing.T) {
 	t.Parallel()
 	store, _, _ := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	filter := db.AnalyticsFilter{
 		From: "2026-01-01",
 		To:   "2026-01-31",
@@ -112,7 +111,7 @@ func TestStoreAnalyticsReads(t *testing.T) {
 
 func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name      string
 		populated bool

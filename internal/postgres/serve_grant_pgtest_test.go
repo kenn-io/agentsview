@@ -21,7 +21,7 @@ func TestServeWithoutSchemaUsageAsksForTheGrant(t *testing.T) {
 	const role = "agentsview_serve_no_usage"
 	const rolePassword = "agentsview_serve_no_usage_pw"
 
-	admin, err := Open(pgURL, schema, true)
+	admin, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open admin")
 	t.Cleanup(func() { _ = admin.Close() })
 	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
@@ -42,7 +42,7 @@ func TestServeWithoutSchemaUsageAsksForTheGrant(t *testing.T) {
 	serveURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	serveURL.User = url.UserPassword(role, rolePassword)
-	store, err := NewStore(serveURL.String(), schema, true)
+	store, err := NewStore(t.Context(), serveURL.String(), schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 

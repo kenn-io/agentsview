@@ -136,7 +136,7 @@ func newSessionExportCommand() *cobra.Command {
 			case string(parser.AgentWindsurf):
 				if dbPath, sessionID, ok := parser.SplitWindsurfVirtualPath(storedPath); ok {
 					err := parser.WriteWindsurfSessionJSON(
-						cmd.OutOrStdout(), dbPath, sessionID,
+						cmd.Context(), cmd.OutOrStdout(), dbPath, sessionID,
 					)
 					if errors.Is(err, os.ErrNotExist) {
 						return fmt.Errorf(

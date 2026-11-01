@@ -21,7 +21,7 @@ func TestPGSessionAnnotationParity(t *testing.T) {
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "Push")
 
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 	dbtest.AssertSessionAnnotationParity(t, local, store)
@@ -99,7 +99,7 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	require.NoError(t, err, "Push migrates the schema")
 	assert.True(t, pushSchemaCurrent(ctx, pg))
 
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 	got, err := store.GetSession(ctx, dbtest.AnnotatedLauncherID)

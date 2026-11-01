@@ -16,7 +16,7 @@ func parseQwenTestSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	tb.Helper()
-	return parseQwenSession(path, project, machine)
+	return parseQwenSession(tb.Context(), path, project, machine)
 }
 
 func discoverQwenTestSessions(tb testing.TB, root string) []DiscoveredFile {

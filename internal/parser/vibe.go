@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -74,7 +75,7 @@ type VibeStats struct {
 // parseVibeResult parses a Mistral Vibe messages.jsonl file into a ParseResult.
 // It owns the on-disk shape (messages.jsonl plus the sibling meta.json) for the
 // Vibe provider; the package-level entrypoint was folded onto the provider.
-func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
+func parseVibeResultFile(ctx context.Context, path string, fileInfo FileInfo) (ParseResult, error) {
 	result := ParseResult{
 		Session: ParsedSession{
 			Agent:     AgentVibe,
@@ -92,7 +93,7 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 	result.Session.ID = "vibe:" + filepath.Base(dir)
 	result.Session.Project = "vibe"
 
-	sessionModel, sessionStats, hasMetaData, err := applyVibeMetadata(&result, dir)
+	sessionModel, sessionStats, hasMetaData, err := applyVibeMetadata(ctx, &result, dir)
 	if err != nil {
 		return result, err
 	}
@@ -111,7 +112,7 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 	}
 	defer file.Close()
 
-	lr := newLineReader(file, maxLineSize)
+	lr := newLineReaderContext(ctx, file, maxLineSize)
 	defer releaseLineReader(lr)
 	messageOrdinal := 0
 
@@ -187,7 +188,7 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 	return result, nil
 }
 
-func applyVibeMetadata(result *ParseResult, dir string) (string, VibeStats, bool, error) {
+func applyVibeMetadata(ctx context.Context, result *ParseResult, dir string) (string, VibeStats, bool, error) {
 	var sessionModel string
 	var sessionStats VibeStats
 	var hasMetaData bool
@@ -216,8 +217,8 @@ func applyVibeMetadata(result *ParseResult, dir string) (string, VibeStats, bool
 		}
 		if identity.WorkingDir != "" {
 			result.Session.Cwd = identity.WorkingDir
-			if project := ExtractProjectFromCwdWithBranch(
-				identity.WorkingDir, identity.GitBranch,
+			if project := ExtractProjectFromCwdWithBranchContext(
+				ctx, identity.WorkingDir, identity.GitBranch,
 			); project != "" {
 				result.Session.Project = project
 			}
@@ -251,8 +252,8 @@ func applyVibeMetadata(result *ParseResult, dir string) (string, VibeStats, bool
 			// directory (the enclosing git repo, or its basename),
 			// matching how Claude sessions are grouped. Falls back to
 			// "vibe" when no working directory is recorded.
-			if p := ExtractProjectFromCwdWithBranch(
-				metaData.WorkingDir, metaData.GitBranch,
+			if p := ExtractProjectFromCwdWithBranchContext(
+				ctx, metaData.WorkingDir, metaData.GitBranch,
 			); p != "" {
 				result.Session.Project = p
 			}
@@ -423,7 +424,7 @@ func vibeToolArguments(args jsontext.Value) string {
 // and usage events in the shape the provider consumes: (*ParsedSession,
 // []ParsedMessage, []ParsedUsageEvent, error). It stats the file to build
 // FileInfo and optionally overrides the project and machine.
-func parseVibeSession(path, project, machine string) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
+func parseVibeSession(ctx context.Context, path, project, machine string) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -437,9 +438,9 @@ func parseVibeSession(path, project, machine string) (*ParsedSession, []ParsedMe
 
 	var result ParseResult
 	if vibeIsUnifiedAnchor(path) {
-		result, err = parseVibeUnifiedResultFile(path, fileInfo)
+		result, err = parseVibeUnifiedResultFile(ctx, path, fileInfo)
 	} else {
-		result, err = parseVibeResultFile(path, fileInfo)
+		result, err = parseVibeResultFile(ctx, path, fileInfo)
 	}
 	if err != nil {
 		return nil, nil, nil, err

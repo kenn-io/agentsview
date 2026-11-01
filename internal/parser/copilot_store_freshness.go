@@ -113,7 +113,7 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 	h := sha256.New()
 	var started time.Time
 	sessionID := ""
-	lr := newLineReader(io.TeeReader(file, h), maxLineSize)
+	lr := newLineReaderContext(ctx, io.TeeReader(file, h), maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		if err := ctx.Err(); err != nil {

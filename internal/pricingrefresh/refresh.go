@@ -125,21 +125,22 @@ func SeedFallbackContext(ctx context.Context, database *db.DB) error {
 
 // RefreshIfStale refreshes when the last attempt is older than cooldown.
 // It can refresh and return an error at once: a fetch that degraded to a
-// LiteLLM-only snapshot (see pricing.FetchCatalog) still stores rows and
+// LiteLLM-only snapshot (see pricing.FetchCatalogContext) still stores rows and
 // reports true, and the error describes the degradation.
 func RefreshIfStale(
+	ctx context.Context,
 	database *db.DB,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	cooldown time.Duration,
 	now time.Time,
 ) (bool, error) {
-	return refreshIfStale(context.Background(), database, fetch, cooldown, now)
+	return refreshIfStale(ctx, database, fetch, cooldown, now)
 }
 
 func refreshIfStale(
 	ctx context.Context,
 	database *db.DB,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	cooldown time.Duration,
 	now time.Time,
 ) (bool, error) {
@@ -159,7 +160,7 @@ func refreshIfStale(
 func refreshAt(
 	ctx context.Context,
 	database *db.DB,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
 	if err := database.SetPricingMetaContext(
@@ -169,7 +170,7 @@ func refreshAt(
 			"recording pricing refresh attempt: %w", err,
 		)
 	}
-	catalog, fetchErr := fetch()
+	catalog, fetchErr := fetch(ctx)
 	if fetchErr != nil && catalog.GenAI == nil && len(catalog.LiteLLM) == 0 {
 		return false, fetchErr
 	}
@@ -181,19 +182,20 @@ func refreshAt(
 
 // Ensure seeds fallback pricing and refreshes online catalogs when due.
 func Ensure(
+	ctx context.Context,
 	database *db.DB,
 	offline bool,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
-	return ensure(context.Background(), database, offline, fetch, now)
+	return ensure(ctx, database, offline, fetch, now)
 }
 
 func ensure(
 	ctx context.Context,
 	database *db.DB,
 	offline bool,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
 	if offline {
@@ -273,15 +275,12 @@ func runCurrent(
 	if err != nil {
 		return fmt.Errorf("reading pricing refresh meta: %w", err)
 	}
-	fetchCurrent := func() (pricing.Catalog, error) {
-		return fetch(ctx)
-	}
 	if force {
 		if err = SeedFallbackContext(ctx, database); err == nil {
-			_, err = refreshAt(ctx, database, fetchCurrent, now)
+			_, err = refreshAt(ctx, database, fetch, now)
 		}
 	} else {
-		_, err = ensure(ctx, database, false, fetchCurrent, now)
+		_, err = ensure(ctx, database, false, fetch, now)
 	}
 	if err == nil || ctx.Err() == nil {
 		return err
@@ -289,12 +288,13 @@ func runCurrent(
 	// Put back the previous attempt time so the next refresh can retry. Skip
 	// the write when this refresh never recorded an attempt: it can wait
 	// behind a long archive write, and a canceled push should not.
-	current, readErr := database.GetPricingMeta(refreshAttemptMetaKey)
+	restoreCtx := context.WithoutCancel(ctx)
+	current, readErr := database.GetPricingMetaContext(restoreCtx, refreshAttemptMetaKey)
 	if readErr == nil && current == previousAttempt {
 		return err
 	}
-	if restoreErr := database.SetPricingMeta(
-		refreshAttemptMetaKey, previousAttempt,
+	if restoreErr := database.SetPricingMetaContext(
+		restoreCtx, refreshAttemptMetaKey, previousAttempt,
 	); restoreErr != nil {
 		return fmt.Errorf(
 			"restoring pricing refresh attempt after cancellation: %w: %w",

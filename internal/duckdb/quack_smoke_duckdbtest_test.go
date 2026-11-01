@@ -22,7 +22,7 @@ const duckDBGoModuleVersion = "v2.10504.0"
 
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "agentsview-quack.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
 	const token = "agentsview-duckdbtest-token-0001"
@@ -141,7 +141,7 @@ func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 }
 
 func TestQuackStoreReattachesAfterServerRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "agentsview-quack-reattach.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
 	const token = "agentsview-duckdbtest-token-0009"
@@ -191,7 +191,7 @@ func TestQuackStoreReattachesAfterServerRestart(t *testing.T) {
 }
 
 func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "agentsview-quack-reattach-failure.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
 	const token = "agentsview-duckdbtest-token-0011"
@@ -242,7 +242,7 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 }
 
 func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "agentsview-quack-analytics.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
 	const token = "agentsview-duckdbtest-token-0006"
@@ -382,7 +382,7 @@ func openQuackMirrorServer(
 	_, err = server.ExecContext(ctx, `CALL quack_serve(?, token => ?)`, uri, token)
 	require.NoError(t, err, "start quack server")
 	t.Cleanup(func() {
-		_, stopErr := server.ExecContext(context.Background(), `CALL quack_stop(?)`, uri)
+		_, stopErr := server.ExecContext(context.WithoutCancel(t.Context()), `CALL quack_stop(?)`, uri)
 		require.NoError(t, stopErr, "stop quack server")
 	})
 	return server
@@ -390,7 +390,7 @@ func openQuackMirrorServer(
 
 func freeTCPPort(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err, "allocate free TCP port")
 	defer func() {
 		require.NoError(t, ln.Close(), "close port probe listener")
