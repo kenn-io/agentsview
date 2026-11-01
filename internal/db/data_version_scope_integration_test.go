@@ -363,6 +363,7 @@ func TestCodexParentInventoryUpgradeRepairsUnchangedForks(t *testing.T) {
 			)))
 			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{agent: {root}}}
 			engine := sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
 			require.Zero(t, engine.SyncAll(ctx, nil).Failed)
 			engine.Close()
 			id := string(agent) + ":" + child
