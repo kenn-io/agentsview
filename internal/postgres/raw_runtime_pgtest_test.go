@@ -305,6 +305,99 @@ func TestHostedRuntimeRepairBatchLeavesOtherHeadsLockable(t *testing.T) {
 	assert.Equal(t, "failed", state)
 }
 
+func TestHostedRuntimeRepairSkipsSelectionChangedWhileWaiting(t *testing.T) {
+	f := newProjectionFixture(t)
+	a, _ := f.accept(t, "device-a", "failed-a", "")
+	aLease := f.lease(t, a)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.runtime.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE`, a.ManifestID)
+	require.NoError(t, err)
+	var count int
+	var repairErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 64)
+	}()
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-done
+	}()
+	waitHostedLocks(t, f, ctx, 1)
+	// A rollout selects a new version; the old job stays failed but unselected.
+	_, err = selectRawSourceGenerationTx(ctx, gate, a, "parser-2")
+	require.NoError(t, err)
+	require.NoError(t, gate.Commit())
+	<-done
+	require.NoError(t, repairErr)
+	assert.Zero(t, count)
+	var version string
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT processing_version FROM raw_source_projections WHERE selected_manifest_id=$1`, a.ManifestID).Scan(&version))
+	assert.Equal(t, "parser-2", version, "repair overwrote the rollout's selection")
+	var state string
+	var selected bool
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state,projection_selected FROM raw_ingest_jobs WHERE id=$1`, aLease.ID).Scan(&state, &selected))
+	assert.Equal(t, "failed", state)
+	assert.False(t, selected)
+}
+
+func TestHostedRuntimeRepairReachesNextFailureAfterUploadAdvancesHead(t *testing.T) {
+	f := newProjectionFixture(t)
+	a, receipt := f.accept(t, "device-a", "failed-a", "")
+	aLease := f.lease(t, a)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
+	b, _ := f.accept(t, "device-b", "failed-b", "")
+	bLease := f.lease(t, b)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
+
+	// Hold an upload to the oldest failure's source after it locks the head.
+	f.parkOn(t, "INSERT", "raw_manifests", "true")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+	next := a.Manifest
+	next.CaptureID = "next-a"
+	next.ExpectedParentReceipt = receipt.Receipt
+	uploaded := make(chan error, 1)
+	go func() {
+		_, err := f.custody.CommitManifest(ctx, a.Identity, next)
+		uploaded <- err
+	}()
+	var count int
+	var repairErr error
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-uploaded
+		<-done
+	}()
+	waitHostedLocks(t, f, ctx, 1)
+	go func() {
+		defer close(done)
+		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 1)
+	}()
+	waitHostedLocks(t, f, ctx, 2)
+	require.NoError(t, gate.Commit())
+	<-done
+	require.NoError(t, repairErr)
+	assert.Equal(t, 1, count, "repair reported zero while a failure remained")
+	var state string
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, bLease.ID).Scan(&state))
+	assert.Equal(t, "ready", state)
+}
+
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	f := newProjectionFixture(t)
 	f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
