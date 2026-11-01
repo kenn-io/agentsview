@@ -586,7 +586,6 @@ func newService(ctx context.Context,
 		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	default:
-		docbankOption := service.WithConfiguredDocbank(cfg)
 		if err := directIncompatibleDaemonError(tr); err != nil {
 			return nil, nil, err
 		}
@@ -608,39 +607,10 @@ func newService(ctx context.Context,
 		// engine is nil — CLI reads don't need it, and Sync
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(
-			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), docbankOption,
+			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
+			service.WithConfiguredDocbank(cfg),
 		), cleanup, nil
 	}
-}
-
-// newDocbankReadService resolves the read transport and builds its service.
-// A daemon reached over HTTP uses its own Docbank config, so invalid local
-// [integrations.docbank] settings are refused only when no daemon serves
-// the read, ahead of any transport error.
-func newDocbankReadService(ctx context.Context,
-	cfg config.Config,
-) (service.SessionService, func(), error) {
-	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
-	if err != nil || tr.Mode != transportHTTP {
-		if verr := cfg.Integrations.Docbank.Validate(); verr != nil {
-			return nil, nil, fmt.Errorf("loading config: %w", verr)
-		}
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	return newService(ctx, cfg, tr)
-}
-
-// newDocbankPGReadService is newPGReadService behind the same Docbank
-// config check the direct SQLite read path applies.
-func newDocbankPGReadService(
-	cfg config.Config, pgCfg config.PGConfig,
-) (service.SessionService, func(), error) {
-	if err := cfg.Integrations.Docbank.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
-	}
-	return newPGReadService(cfg, pgCfg)
 }
 
 func directIncompatibleDaemonError(tr transport) error {
@@ -674,7 +644,6 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
-	docbankOption := service.WithConfiguredDocbank(cfg)
 	store, cleanup, err := openPGReadStore(cfg, pgCfg)
 	if err != nil {
 		if cleanup != nil {
@@ -689,6 +658,7 @@ func newPGReadService(
 	}
 	wireReplicaReadVectorSearchFn(cfg, pgReplica{}, store)
 	return service.NewReadOnlyBackend(
-		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)), docbankOption,
+		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
+		service.WithConfiguredDocbank(cfg),
 	), cleanup, nil
 }

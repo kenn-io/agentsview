@@ -111,7 +111,7 @@ func resolveDoctorMemoryService(
 	}
 	// Diagnostics must not generate installation identity or cursor-secret
 	// state. Both local and PostgreSQL reads begin with the read-only loader.
-	cfg, err := config.LoadReadOnlyFor(config.ScopeVector | config.ScopeDocbank)
+	cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}

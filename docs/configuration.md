@@ -2643,8 +2643,9 @@ The desktop app's auto-updater is controlled separately via
 
 Configure your Docbank server to find where it holds the exact bytes of a
 transcript image. Results show current files, prior versions, and trash. Set
-`web_url` to make each match link to its exact version in the browser. Exact-version
-links require [docbank#1024](https://github.com/kenn-io/docbank/pull/1024).
+`web_url` to make each match link to its exact version in the browser.
+Exact-version links require
+[docbank#1024](https://github.com/kenn-io/docbank/pull/1024).
 
 ```toml
 [integrations.docbank]
@@ -2653,9 +2654,11 @@ web_url = "https://docbank.example.com"
 api_key_env = "DOCBANK_API_KEY"
 ```
 
-Set `DOCBANK_API_KEY` in the environment of each consumer, including the daemon, CLI, and MCP server. Both `url` and `api_key_env`
-are required to enable lookup. Omit the section to disable it. Invalid configuration stops consumers that build a local backend. CLI commands
-that connect to a daemon use the daemon's integration configuration.
+Set `DOCBANK_API_KEY` in the environment of each consumer, including the
+daemon, CLI, and MCP server. Both `url` and `api_key_env` are required to enable
+lookup. Omit the section to disable it. The server refuses to start with an
+invalid section; other commands print a warning and leave lookup off. CLI
+commands that connect to a daemon use the daemon's integration configuration.
 
 MCP offers `get_session_file_references` when its backend enables Docbank
 lookup. Connections through a signed reader listener omit this tool.
@@ -2672,13 +2675,20 @@ images in message text. Claude pasted images aren't covered yet. Native Codex
 attachments and files handled by tools require exact bytes in the archive;
 paths and references alone aren't covered.
 
-Only SHA-256 digests leave the machine. Transcript reads run independently of
-Docbank. Database reads and Docbank requests each have their own five-second
-budget. Each lookup resolves up to 50 distinct digests with four requests at a
-time and shows up to ten matches per digest. Docbank lookup failures report
-Docbank unavailable and can be retried. Archive read failures report session
-files unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
+Only SHA-256 digests leave the machine. Docbank file names, paths, and trash
+entries come back with the results, so anyone who can read sessions on this
+server can see them.
+
+Transcript reads run independently of Docbank. Database reads and Docbank
+requests each have their own five-second budget. Each lookup resolves up to 50
+distinct digests with four requests at a time and shows up to ten matches per
+digest. Docbank lookup failures report Docbank unavailable and can be retried;
+after the first failed lookup, a request stops asking Docbank and reports its
+remaining digests unavailable. Archive read failures report session files
+unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
 Images dropped by the image policy have no bytes to hash, so they report
 `bytes_not_kept` without a lookup.
-Results refresh when the transcript changes or the session reopens. No migration
-or resync is required.
+
+Results refresh when the session reopens and when its transcript changes, at
+most every 15 seconds while matches are already shown. Successful Docbank
+answers are reused for one minute. No migration or resync is required.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ApiError } from "../api/runtime.js";
-import { FileReferencesStore } from "./file-references.svelte.js";
+import { FileReferencesStore, MIN_REFRESH_INTERVAL_MS } from "./file-references.svelte.js";
 import { imageOccurrence } from "../components/content/docbankTestHelpers.js";
 const lookup = vi.hoisted(() => vi.fn());
 vi.mock("../api/generated/sessions/sessions.js", () => ({
@@ -13,27 +13,36 @@ const result = {
 };
 
 describe("file references store", () => {
-  it("clears results while fetching a new transcript revision", async () => {
-    lookup.mockReset().mockResolvedValueOnce(result);
-    const store = new FileReferencesStore();
-    store.enabled = true;
-    await store.track("a", "1");
-    expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
-    let resolve!: (value: unknown) => void;
-    lookup.mockImplementationOnce(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    );
-    const pending = store.track("a", "2");
-    expect(store.result).toBeUndefined();
-    expect(store.forMessage("a", 0)).toEqual([]);
-    expect(store.status).toBe("loading");
-    resolve({ ...result, transcript_revision: "2" });
-    await pending;
-    expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
-    expect(store.result?.transcript_revision).toBe("2");
+  it("keeps results on screen and spaces refreshes of a growing transcript", async () => {
+    vi.useFakeTimers();
+    try {
+      lookup.mockReset().mockResolvedValueOnce(result);
+      const store = new FileReferencesStore();
+      store.enabled = true;
+      await store.track("a", "1");
+      expect(lookup).toHaveBeenCalledTimes(1);
+
+      lookup.mockResolvedValue({ ...result, transcript_revision: "3" });
+      await store.track("a", "2");
+      await store.track("a", "3");
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
+      expect(store.status).toBe("ok");
+
+      // One refresh for the latest revision once the interval has passed.
+      await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS);
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(store.result?.transcript_revision).toBe("3");
+      expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
+
+      // Leaving the session cancels a scheduled refresh.
+      await store.track("a", "4");
+      store.reset();
+      await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS);
+      expect(lookup).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it.each([
     { name: "current refetch", refetchRevision: "1", status: "ok", sourceChanged: false },

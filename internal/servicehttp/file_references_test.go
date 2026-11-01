@@ -60,7 +60,9 @@ func TestFileReferencesRoundTrip(t *testing.T) {
 	require.NoError(t, json.UnmarshalRead(response.Body, &body))
 	assert.Equal(t, []any{}, body["occurrences"])
 	_, err = service.FileReferences(t.Context(), svc, "missing")
-	assert.ErrorIs(t, err, service.ErrSessionNotFound)
+	require.ErrorIs(t, err, service.ErrSessionNotFound)
+	// MCP keeps its daemon selection only for rejected requests.
+	assert.True(t, servicehttp.IsRequestRejected(err))
 }
 
 func TestFileReferencesDiscoveredCapability(t *testing.T) {

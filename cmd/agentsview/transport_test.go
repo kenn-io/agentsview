@@ -1384,8 +1384,12 @@ func TestServicePreservesIPv6BrowserURL(t *testing.T) {
 }
 
 func TestNewServiceDocbankConfigured(t *testing.T) {
-	for _, mode := range []string{"direct", "pg"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, tc := range []struct {
+		mode    string
+		invalid bool
+	}{{"direct", false}, {"pg", false}, {"direct", true}, {"pg", true}} {
+		mode := tc.mode
+		t.Run(fmt.Sprintf("%s/invalid=%t", mode, tc.invalid), func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "sessions.db")
 			seed, err := db.Open(t.Context(), path)
@@ -1402,6 +1406,10 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 			defer stub.Close()
 			cfg := config.Config{DBPath: path}
 			cfg.Integrations.Docbank = config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"}
+			if tc.invalid {
+				// Validation rejects a query string; the key must not reach the stub.
+				cfg.Integrations.Docbank.URL += "?token=1"
+			}
 			var svc service.SessionService
 			var cleanup func()
 			if mode == "pg" {
@@ -1412,8 +1420,13 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 			}
 			require.NoError(t, err)
 			defer cleanup()
-			_, err = service.FileReferences(t.Context(), svc, "session-a")
+			out, err := service.FileReferences(t.Context(), svc, "session-a")
 			require.NoError(t, err)
+			if tc.invalid {
+				assert.Zero(t, requests)
+				assert.Equal(t, "disabled", out.Integration)
+				return
+			}
 			assert.Equal(t, 1, requests)
 		})
 	}

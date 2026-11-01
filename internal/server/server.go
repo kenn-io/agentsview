@@ -277,9 +277,9 @@ func New(
 	// still need the local handle. Non-SQLite stores use the generic read-only
 	// backend.
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
-	backendOptions := []service.DirectBackendOption{service.WithModelGroups(modelGroups)}
-	docbankOption := service.WithConfiguredDocbank(cfg)
-	backendOptions = append(backendOptions, docbankOption)
+	backendOptions := []service.DirectBackendOption{
+		service.WithModelGroups(modelGroups), service.WithConfiguredDocbank(cfg),
+	}
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
 		local.SetArchiveContent(cfg.ArchiveContent)

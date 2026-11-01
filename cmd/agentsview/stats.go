@@ -156,7 +156,11 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	return newDocbankReadService(cmd.Context(), cfg)
+	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	return newService(cmd.Context(), cfg, tr)
 }
 
 // printStatsHuman renders a human-readable summary of a SessionStats

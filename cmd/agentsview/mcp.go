@@ -248,7 +248,7 @@ func resolveMCPService(
 		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
 			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
-		return newDocbankPGReadService(cfg, pgCfg)
+		return newPGReadService(cfg, pgCfg)
 	}
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return nil, nil, fmt.Errorf("loading daemon auth: %w", err)
@@ -284,7 +284,7 @@ func (s *mcpDaemonService) SupportsFileReferences() bool {
 func servingDocbankEnabled(cfg config.Config) bool {
 	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
 	if runtime == nil {
-		return cfg.Integrations.Docbank.Configured()
+		return cfg.Integrations.Docbank.Enabled()
 	}
 	base := urlFromDaemonRuntime(runtime)
 	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(context.Background(), base, cfg.AuthToken)
