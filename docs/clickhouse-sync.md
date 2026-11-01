@@ -286,8 +286,10 @@ local download in the CLI before running builds unattended.
     ```
 
 1. Restart the daemon, then build the local index. The CLI asks before the
-   first download; declining stops the download and build. Confirm an active
-   generation exists:
+   first download; declining stops the download and build. `--yes` skips rebuild
+   confirmation but does not approve this download. Approve the first install
+   interactively before running unattended builds. Confirm an active generation
+   exists:
 
     ```bash
     agentsview embeddings build

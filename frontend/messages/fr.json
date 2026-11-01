@@ -161,7 +161,7 @@
   "command_palette_search_failed": "La recherche a échoué. Veuillez réessayer.",
   "command_palette_semantic_setup_title": "La recherche sémantique n'est pas configurée",
   "command_palette_semantic_setup_config_step": "1. Ajoutez ceci à config.toml :",
-  "command_palette_semantic_setup_local": "Suivez la configuration complète pour conserver votre index Nomic en passant au serveur local partagé.",
+  "command_palette_semantic_setup_local": "Vous utilisez déjà Nomic avec Ollama ? Suivez la configuration complète pour conserver votre index en passant au serveur local partagé.",
   "command_palette_semantic_setup_local_link": "Paramètres du serveur",
   "command_palette_semantic_setup_build_step": "2. Redémarrez le démon, puis créez l'index. La CLI demande votre accord avant le premier téléchargement :",
   "command_palette_semantic_copy_config": "Copier l'extrait de configuration",

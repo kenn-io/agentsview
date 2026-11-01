@@ -163,7 +163,7 @@
   "command_palette_search_failed": "La búsqueda falló. Inténtalo de nuevo.",
   "command_palette_semantic_setup_title": "La búsqueda semántica no está configurada",
   "command_palette_semantic_setup_config_step": "1. Añade esto a config.toml:",
-  "command_palette_semantic_setup_local": "Sigue la configuración completa para conservar tu índice de Nomic al cambiar al servidor local compartido.",
+  "command_palette_semantic_setup_local": "¿Ya usas Nomic con Ollama? Sigue la configuración completa para conservar tu índice al cambiar al servidor local compartido.",
   "command_palette_semantic_setup_local_link": "Configuración del servidor",
   "command_palette_semantic_setup_build_step": "2. Reinicia el daemon y crea el índice. La CLI pide permiso antes de la primera descarga:",
   "command_palette_semantic_copy_config": "Copiar el fragmento de configuración",

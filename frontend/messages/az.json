@@ -163,7 +163,7 @@
   "command_palette_search_failed": "Axtarış uğursuz oldu. Yenidən cəhd edin.",
   "command_palette_semantic_setup_title": "Semantik axtarış konfiqurasiya edilməyib",
   "command_palette_semantic_setup_config_step": "1. Bunu config.toml faylına əlavə edin:",
-  "command_palette_semantic_setup_local": "Ortaq yerli serverə keçərkən Nomic indeksini saxlamaq üçün tam konfiqurasiya nümunəsinə əməl edin.",
+  "command_palette_semantic_setup_local": "Artıq Ollama ilə Nomic istifadə edirsiniz? Ortaq yerli serverə keçərkən indeksinizi saxlamaq üçün tam konfiqurasiya nümunəsinə əməl edin.",
   "command_palette_semantic_setup_local_link": "Server parametrləri",
   "command_palette_semantic_setup_build_step": "2. Daemonu yenidən başladın, sonra indeks yaradın. CLI ilk endirmədən əvvəl icazə istəyir:",
   "command_palette_semantic_copy_config": "Konfiqurasiya parçasını kopyala",

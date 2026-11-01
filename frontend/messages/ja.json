@@ -161,7 +161,7 @@
   "command_palette_search_failed": "検索に失敗しました。もう一度試してください。",
   "command_palette_semantic_setup_title": "セマンティック検索が設定されていません",
   "command_palette_semantic_setup_config_step": "1. config.toml に次を追加します：",
-  "command_palette_semantic_setup_local": "共有ローカルサーバーへの切り替え時に Nomic のインデックスを維持するには、設定例をすべて適用してください。",
+  "command_palette_semantic_setup_local": "Ollama で Nomic を使用中ですか？共有ローカルサーバーへの切り替え時にインデックスを維持するには、設定例をすべて適用してください。",
   "command_palette_semantic_setup_local_link": "サーバー設定",
   "command_palette_semantic_setup_build_step": "2. デーモンを再起動してインデックスを作成します。初回ダウンロード前に CLI が確認します：",
   "command_palette_semantic_copy_config": "設定スニペットをコピーする",
