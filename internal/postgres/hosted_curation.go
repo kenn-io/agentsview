@@ -129,12 +129,13 @@ func (h *HostedStore) DeleteSessionIfTrashed(ctx context.Context, id string) (in
 }
 
 func (h *HostedStore) EmptyTrash(ctx context.Context) (int, error) {
-	n, err := h.core.EmptyTrash(ctx)
-	if err != nil {
-		return n, err
-	}
+	// Legacy alias conflicts must abort before any raw group is purged.
 	legacy, err := h.physical.emptyTrash(ctx, true)
-	return n + legacy, err
+	if err != nil {
+		return 0, err
+	}
+	n, err := h.core.EmptyTrash(ctx)
+	return legacy + n, err
 }
 
 func (h *HostedStore) PinMessage(ctx context.Context, id string, ordinal int64, note *string) (int64, error) {
@@ -238,7 +239,7 @@ func (h *HostedStore) GetSessionWatchState(id string) (db.SessionWatchState, err
 // write transaction. Legacy membership writes take the same lock in their trigger.
 func (h *HostedStore) guardCurationIdentity(ctx context.Context, tx *sql.Tx, alias string, target RawIdentity) error {
 	var legacy string
-	err := tx.QueryRowContext(ctx, `SELECT hosted_legacy_alias(id) FROM sessions WHERE provenance_kind='legacy' AND (id=$1 OR hosted_legacy_alias(id)=$1)`, alias).Scan(&legacy)
+	err := tx.QueryRowContext(ctx, `SELECT hosted_legacy_alias(id) FROM sessions WHERE provenance_kind='legacy' AND NOT rollout_hidden AND (id=$1 OR hosted_legacy_alias(id)=$1)`, alias).Scan(&legacy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

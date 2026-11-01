@@ -18,7 +18,7 @@ func (s *Store) ActivityReportSourceProbe(
 		session_probe.max_updated_at,
 		session_probe.max_data_version,
 		session_probe.message_count,
-		COALESCE((SELECT MAX(id) FROM usage_events), 0),
+		COALESCE((SELECT MAX(u.id) FROM usage_events u JOIN sessions s ON s.id=u.session_id WHERE NOT s.rollout_hidden), 0),
 		GREATEST(
 			COALESCE((SELECT MAX(updated_at)::text FROM model_pricing), ''),
 			COALESCE((SELECT MAX(updated_at)::text FROM genai_pricing), '')
@@ -29,7 +29,7 @@ func (s *Store) ActivityReportSourceProbe(
 			COALESCE(MAX(updated_at)::text, '') AS max_updated_at,
 			COALESCE(MAX(data_version), 0) AS max_data_version,
 			COALESCE(SUM(message_count), 0) AS message_count
-		FROM sessions
+		FROM sessions WHERE NOT rollout_hidden
 	) AS session_probe`, activityReportProjectIdentityGenerationKey).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
 		&probe.MaxMessageID, &probe.MaxUsageID, &probe.MaxPricingUpdated,

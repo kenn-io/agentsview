@@ -2372,7 +2372,7 @@ func deletePGExcludedSessionRows(
 		return nil
 	}
 	if _, err := pg.ExecContext(ctx,
-		`DELETE FROM sessions WHERE id = ANY($1)`,
+		`DELETE FROM sessions WHERE id = ANY($1) AND NOT rollout_hidden`,
 		ids,
 	); err != nil {
 		return fmt.Errorf("deleting pg excluded session rows: %w", err)

@@ -16,6 +16,9 @@ func MatchingMachineIDs(ctx context.Context, reader messageRowsQuerier, dialect 
 	err := queryChunked(candidates, func(chunk []string) error {
 		b := NewQueryBuilder(dialect, 0)
 		predicate := b.ValuesPredicate("machine", chunk, true)
+		if dialect.name == "postgres" {
+			predicate += " AND NOT rollout_hidden"
+		}
 		rows, err := reader.QueryContext(ctx, "SELECT DISTINCT machine FROM sessions WHERE "+predicate+" ORDER BY machine", b.Args()...)
 		if err != nil {
 			return err

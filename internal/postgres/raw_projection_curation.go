@@ -17,6 +17,9 @@ func (e *RawIdentityError) Error() string {
 }
 
 func (s *RawProjectionStore) lockRawCurationTarget(ctx context.Context, tx *sql.Tx, alias string) (RawIdentity, error) {
+	if err := lockRawRolloutShared(ctx, tx); err != nil {
+		return RawIdentity{}, err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g JOIN raw_session_public_aliases a ON a.group_id=g.group_id WHERE a.alias_id=$1 ORDER BY g.group_id FOR UPDATE OF g`, alias)
 	if err != nil {
 		return RawIdentity{}, err
@@ -53,6 +56,11 @@ func (s *RawProjectionStore) lockRawCurationTarget(ctx context.Context, tx *sql.
 // supersedes the same field's branch overrides, including inactive branches.
 // A variant action writes every active member of its current content cohort.
 func (s *RawProjectionStore) SetCuration(ctx context.Context, alias, field string, value any) error {
+	_, err := retryPGCuration(ctx, func() (struct{}, error) { return struct{}{}, s.setCurationOnce(ctx, alias, field, value) })
+	return err
+}
+
+func (s *RawProjectionStore) setCurationOnce(ctx context.Context, alias, field string, value any) error {
 	switch field {
 	case "starred", "trashed":
 		if _, ok := value.(bool); !ok {
