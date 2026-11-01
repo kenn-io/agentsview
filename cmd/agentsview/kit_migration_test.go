@@ -19,6 +19,31 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 )
 
+func TestLocalServerSwitchFromDefaultsKeepsGeneration(t *testing.T) {
+	dir := testDataDir(t)
+	writeTestConfig(t, dir, "[vector]\nenabled = true\n")
+	before, err := config.LoadMinimal()
+	require.NoError(t, err)
+	writeTestConfig(t, dir, `[vector]
+enabled = true
+
+[vector.embeddings]
+model = "nomic-embed-text"
+dimension = 768
+max_input_chars = 4000
+model_context_tokens = 2048
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+default_server = "shared"
+
+[vector.embeddings.servers.shared]
+local = true
+`)
+	after, err := config.LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, vectorGeneration(before.Vector.Embeddings).Fingerprint(), vectorGeneration(after.Vector.Embeddings).Fingerprint())
+}
+
 func TestLocalServerSwitchKeepsGeneration(t *testing.T) {
 	oldEndpoint := localEmbeddingEndpoint
 	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })

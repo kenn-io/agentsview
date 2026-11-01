@@ -107,9 +107,29 @@ refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
 ### Named embeddings servers
 
 To select Kit's local server while Ollama keeps running, keep your existing
-Nomic recipe and add a named server:
+explicit Nomic recipe and add a named server:
 
 ```toml
+[vector.embeddings.servers.shared]
+local = true
+```
+
+If you started with only `[vector] enabled = true`, write out its default
+recipe when adding the server table:
+
+```toml
+[vector]
+enabled = true
+
+[vector.embeddings]
+model = "nomic-embed-text"
+dimension = 768
+max_input_chars = 4000
+model_context_tokens = 2048
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+default_server = "shared"
+
 [vector.embeddings.servers.shared]
 local = true
 ```
@@ -127,7 +147,7 @@ Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`
 `query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
-What varies per server is transport and capacity: `endpoint`, `api_key_env`,
+What varies per server is transport and capacity: `endpoint`, `local`, `api_key_env`,
 `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`, `concurrency`, and
 `ollama_cpu_fallback`.
 
