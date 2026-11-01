@@ -86,6 +86,11 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "dimension",
 		},
 		{
+			name:    "enabled oversized Nomic dimension",
+			mutate:  func(c *VectorConfig) { c.Embeddings.Dimension = 1024 },
+			wantErr: "dimension must be at most 768",
+		},
+		{
 			name:    "enabled zero max_input_chars",
 			mutate:  func(c *VectorConfig) { c.Embeddings.MaxInputChars = 0 },
 			wantErr: "max_input_chars",
@@ -345,6 +350,19 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, server.Endpoint)
 		assert.False(t, server.Local)
+	})
+	t.Run("default Nomic rejects oversized dimensions", func(t *testing.T) {
+		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"dimension": 1024},
+		}})
+		require.ErrorContains(t, err, "dimension must be at most 768")
+	})
+	t.Run("default Nomic permits reduced dimensions", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"dimension": 256},
+		}})
+		assert.Equal(t, "nomic-embed-text", cfg.Vector.Embeddings.Model)
+		assert.Equal(t, 256, cfg.Vector.Embeddings.Dimension)
 	})
 	t.Run("default recipe preserves explicit overrides", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{

@@ -476,6 +476,9 @@ func (c VectorConfig) Validate() error {
 	if c.Embeddings.Dimension <= 0 {
 		return errors.New("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
 	}
+	if isNomicModel(c.Embeddings.Model) && c.Embeddings.Dimension > 768 {
+		return fmt.Errorf("[vector.embeddings] dimension must be at most 768 for %q, got %d", c.Embeddings.Model, c.Embeddings.Dimension)
+	}
 	if c.Embeddings.MaxInputChars <= 0 {
 		return fmt.Errorf(
 			"[vector.embeddings] max_input_chars must be greater than 0, got %d",
