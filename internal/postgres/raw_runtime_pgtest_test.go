@@ -251,6 +251,60 @@ func TestHostedRuntimeRepairConcurrentBatchesReachNextFailure(t *testing.T) {
 	}
 }
 
+func TestHostedRuntimeRepairBatchLeavesOtherHeadsLockable(t *testing.T) {
+	f := newProjectionFixture(t)
+	a, _ := f.accept(t, "device-a", "failed-a", "")
+	aLease := f.lease(t, a)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
+	b, _ := f.accept(t, "device-b", "failed-b", "")
+	bLease := f.lease(t, b)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
+
+	// Hold the repair after selection, while it resets the oldest failure.
+	f.parkOn(t, "UPDATE", "raw_ingest_jobs", "NEW.state='ready'")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+	var count int
+	var repairErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 1)
+	}()
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-done
+	}()
+	require.Eventually(t, func() bool {
+		var parked int
+		err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`, f.role).Scan(&parked)
+		return err == nil && parked == 1
+	}, 3*time.Second, 10*time.Millisecond)
+
+	// Uploads and rollouts must still be able to lock the head outside this batch.
+	var manifestID string
+	err = f.runtime.QueryRowContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE NOWAIT`, b.ManifestID).Scan(&manifestID)
+	assert.NoError(t, err, "batch-size-1 repair locked the head outside its batch")
+	if err == nil {
+		assert.Equal(t, b.ManifestID, manifestID)
+	}
+	require.NoError(t, gate.Commit())
+	<-done
+	require.NoError(t, repairErr)
+	assert.Equal(t, 1, count)
+	var state string
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, aLease.ID).Scan(&state))
+	assert.Equal(t, "ready", state)
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, bLease.ID).Scan(&state))
+	assert.Equal(t, "failed", state)
+}
+
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	f := newProjectionFixture(t)
 	f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
