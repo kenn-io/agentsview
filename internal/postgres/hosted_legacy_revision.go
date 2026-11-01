@@ -12,7 +12,7 @@ BEGIN
  IF NOT old_legacy AND NOT new_legacy THEN RETURN NULL; END IF;
  IF TG_OP='DELETE' THEN bound_tenant:=OLD.tenant_id; ELSE bound_tenant:=NEW.tenant_id; END IF;
  identity_change := TG_OP <> 'UPDATE';
- IF TG_OP='UPDATE' THEN identity_change := old_legacy IS DISTINCT FROM new_legacy OR OLD.id IS DISTINCT FROM NEW.id; END IF;
+	IF TG_OP='UPDATE' THEN identity_change := old_legacy IS DISTINCT FROM new_legacy OR OLD.id IS DISTINCT FROM NEW.id OR OLD.rollout_hidden IS DISTINCT FROM NEW.rollout_hidden; END IF;
  IF identity_change THEN
   IF old_legacy THEN legacy_ids:=array_append(legacy_ids,OLD.id); legacy_ids:=array_append(legacy_ids,hosted_legacy_alias(OLD.id)); END IF;
   IF new_legacy THEN legacy_ids:=array_append(legacy_ids,NEW.id); legacy_ids:=array_append(legacy_ids,hosted_legacy_alias(NEW.id)); END IF;

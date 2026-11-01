@@ -24,7 +24,7 @@ func (h *HostedStore) resolve(ctx context.Context, alias string) (hostedIdentity
 		return hostedIdentity{}, err
 	}
 	var legacy string
-	err = h.physical.pg.QueryRowContext(ctx, `SELECT id FROM sessions WHERE provenance_kind='legacy' AND (id=$1 OR `+hostedLegacyAliasSQL+`=$1)`, alias).Scan(&legacy)
+	err = h.physical.pg.QueryRowContext(ctx, `SELECT id FROM sessions WHERE provenance_kind='legacy' AND NOT rollout_hidden AND (id=$1 OR `+hostedLegacyAliasSQL+`=$1)`, alias).Scan(&legacy)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return hostedIdentity{}, err
 	}
@@ -128,19 +128,44 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 		ids = append(ids, l.owner, l.alias)
 		ids = append(ids, edges[l.owner+"\x00"+l.alias]...)
 	}
+	// Legacy relationships carry literal archive IDs, not source-owned raw
+	// edges. Redirect hidden superseded targets to every current served cohort
+	// before public-ID mapping. Raw owner authority remains exclusively above.
+	redirects := map[string][]string{}
+	if len(r.links) > 0 {
+		rows, err := h.physical.pg.QueryContext(ctx, `SELECT legacy_id,session_id FROM `+hostedLegacyTargetsSQL+` legacy_target WHERE legacy_id=ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var legacy, target string
+			if err = rows.Scan(&legacy, &target); err != nil {
+				break
+			}
+			redirects[legacy] = append(redirects[legacy], target)
+			ids = append(ids, target)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		if err != nil {
+			return err
+		}
+	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	if len(ids) == 0 {
 		return nil
 	}
 	rows, err := h.physical.pg.QueryContext(ctx, `
- WITH targets AS (SELECT id,provenance_kind,raw_group_id FROM sessions WHERE id=ANY($1)),
+ WITH targets AS (SELECT id,provenance_kind,raw_group_id FROM sessions WHERE id=ANY($1) AND NOT rollout_hidden),
  groups AS (SELECT DISTINCT raw_group_id AS group_id FROM targets WHERE raw_group_id<>''),
- cohorts AS (SELECT s.raw_group_id AS group_id,count(*) AS n FROM sessions s JOIN groups g ON g.group_id=s.raw_group_id GROUP BY s.raw_group_id),
- representatives AS (SELECT b.session_id,min(b.branch_id) AS branch FROM raw_session_branches b JOIN groups g ON g.group_id=b.group_id WHERE b.active AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) GROUP BY b.session_id)
+ cohorts AS (SELECT s.raw_group_id AS group_id,count(*) AS n FROM sessions s JOIN groups g ON g.group_id=s.raw_group_id WHERE NOT s.rollout_hidden GROUP BY s.raw_group_id),
+ representatives AS (SELECT b.session_id,min(b.branch_id) AS branch FROM raw_session_branches b JOIN groups g ON g.group_id=b.group_id WHERE b.active AND EXISTS(SELECT 1 FROM sessions eligible WHERE eligible.id=b.session_id AND NOT eligible.rollout_hidden) AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) GROUP BY b.session_id)
  SELECT t.id,t.provenance_kind, CASE WHEN t.provenance_kind='legacy' THEN
-  CASE WHEN EXISTS(SELECT 1 FROM raw_session_groups g JOIN sessions s ON s.raw_group_id=g.group_id WHERE g.base_alias=t.id) THEN hosted_legacy_alias(t.id) ELSE t.id END
- ELSE CASE WHEN c.n>1 OR EXISTS(SELECT 1 FROM sessions l WHERE l.id=g.base_alias AND l.provenance_kind='legacy') OR (SELECT count(DISTINCT a.group_id) FROM raw_session_public_aliases a JOIN sessions s ON s.raw_group_id=a.group_id WHERE a.alias_id=g.base_alias)>1 THEN g.base_alias||'~'||r.branch ELSE g.base_alias END END
+  CASE WHEN EXISTS(SELECT 1 FROM raw_session_groups g JOIN sessions s ON s.raw_group_id=g.group_id WHERE g.base_alias=t.id AND NOT s.rollout_hidden) THEN hosted_legacy_alias(t.id) ELSE t.id END
+ ELSE CASE WHEN c.n>1 OR EXISTS(SELECT 1 FROM sessions l WHERE l.id=g.base_alias AND l.provenance_kind='legacy' AND NOT l.rollout_hidden) OR (SELECT count(DISTINCT a.group_id) FROM raw_session_public_aliases a JOIN sessions s ON s.raw_group_id=a.group_id WHERE a.alias_id=g.base_alias AND NOT s.rollout_hidden)>1 THEN g.base_alias||'~'||r.branch ELSE g.base_alias END END
  FROM targets t LEFT JOIN raw_session_groups g ON g.group_id=t.raw_group_id LEFT JOIN cohorts c ON c.group_id=g.group_id LEFT JOIN representatives r ON r.session_id=t.id`, ids)
 	if err != nil {
 		return err
@@ -166,7 +191,7 @@ func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 	for _, l := range r.links {
 		targets := edges[l.owner+"\x00"+l.alias]
 		if kinds[l.owner] == "legacy" {
-			targets = []string{l.alias}
+			targets = redirects[l.alias]
 		}
 		variants := make([]string, 0, len(targets))
 		for _, id := range targets {
@@ -233,8 +258,8 @@ func (h *HostedStore) resolveBatch(ctx context.Context, aliases []string, exclud
 	if len(aliases) == 0 {
 		return nil, nil
 	}
-	rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT a.alias_id,b.session_id FROM raw_session_public_aliases a JOIN raw_session_branches b ON b.group_id=a.group_id AND b.active AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id) JOIN sessions s ON s.id=b.session_id WHERE a.alias_id=ANY($1) AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false)
- UNION SELECT requested.alias,id FROM unnest($1::text[]) requested(alias) JOIN sessions s ON (s.id=requested.alias OR hosted_legacy_alias(s.id)=requested.alias) WHERE s.provenance_kind='legacy'`, aliases)
+	rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT a.alias_id,b.session_id FROM raw_session_public_aliases a JOIN raw_session_branches b ON b.group_id=a.group_id AND b.active AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id) JOIN sessions s ON s.id=b.session_id WHERE a.alias_id=ANY($1) AND NOT s.rollout_hidden AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false)
+ UNION SELECT requested.alias,id FROM unnest($1::text[]) requested(alias) JOIN sessions s ON (s.id=requested.alias OR hosted_legacy_alias(s.id)=requested.alias) WHERE s.provenance_kind='legacy' AND NOT s.rollout_hidden`, aliases)
 	if err != nil {
 		return nil, err
 	}

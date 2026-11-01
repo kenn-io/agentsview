@@ -11,111 +11,145 @@ import (
 func (h *HostedStore) HasFTS(ctx context.Context) bool { return h.physical.HasFTS(ctx) }
 func (h *HostedStore) HasSemantic() bool               { return h.physical.HasSemantic() }
 func (h *HostedStore) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
-	return h.physical.GetStats(ctx, excludeOneShot, excludeAutomated)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.Stats, error) {
+		return h.physical.GetStats(ctx, excludeOneShot, excludeAutomated)
+	})
 }
 
 func (h *HostedStore) GetProjects(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.ProjectInfo, error) {
-	return h.physical.GetProjects(ctx, excludeOneShot, excludeAutomated)
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]db.ProjectInfo, error) {
+		return h.physical.GetProjects(ctx, excludeOneShot, excludeAutomated)
+	})
 }
 
 func (h *HostedStore) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
-	return h.physical.GetActiveProjectLabels(ctx)
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]string, error) { return h.physical.GetActiveProjectLabels(ctx) })
 }
 
 func (h *HostedStore) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.AgentInfo, error) {
-	return h.physical.GetAgents(ctx, excludeOneShot, excludeAutomated)
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]db.AgentInfo, error) {
+		return h.physical.GetAgents(ctx, excludeOneShot, excludeAutomated)
+	})
 }
 
 func (h *HostedStore) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
-	return h.physical.GetMachines(ctx, excludeOneShot, excludeAutomated)
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]string, error) {
+		return h.physical.GetMachines(ctx, excludeOneShot, excludeAutomated)
+	})
 }
 
 func (h *HostedStore) GetMachineLabels(ctx context.Context) (map[string]string, error) {
-	return h.physical.GetMachineLabels(ctx)
+	return hostedRead(ctx, h, func(_ hostedRevision) (map[string]string, error) { return h.physical.GetMachineLabels(ctx) })
 }
 
 func (h *HostedStore) GetMachineAliases(ctx context.Context) (map[string]string, error) {
-	return h.physical.GetMachineAliases(ctx)
+	return hostedRead(ctx, h, func(_ hostedRevision) (map[string]string, error) { return h.physical.GetMachineAliases(ctx) })
 }
 
 func (h *HostedStore) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
-	return h.physical.GetBranches(ctx, excludeOneShot, excludeAutomated)
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]db.BranchInfo, error) {
+		return h.physical.GetBranches(ctx, excludeOneShot, excludeAutomated)
+	})
 }
 
 func (h *HostedStore) ListProjectIdentityObservations(ctx context.Context, labels []string) ([]export.ProjectIdentityObservation, error) {
-	return h.physical.ListProjectIdentityObservations(ctx, labels)
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]export.ProjectIdentityObservation, error) {
+		return h.physical.ListProjectIdentityObservations(ctx, labels)
+	})
 }
 
 func (h *HostedStore) BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error) {
-	return h.physical.BuildProjectIdentityMap(ctx, labels)
+	return hostedRead(ctx, h, func(_ hostedRevision) (map[string]export.ProjectMapEntry, error) {
+		return h.physical.BuildProjectIdentityMap(ctx, labels)
+	})
 }
 
 func (h *HostedStore) GetProjectInventory(ctx context.Context, filter db.ProjectDateFilter) (db.ProjectInventory, error) {
-	return h.physical.GetProjectInventory(ctx, filter)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.ProjectInventory, error) {
+		return h.physical.GetProjectInventory(ctx, filter)
+	})
 }
 
 func (h *HostedStore) ListProjectRules(ctx context.Context, machine string) (db.ProjectRules, error) {
-	return h.physical.ListProjectRules(ctx, machine)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.ProjectRules, error) { return h.physical.ListProjectRules(ctx, machine) })
 }
 
 func (h *HostedStore) GetAnalyticsSummary(ctx context.Context, f db.AnalyticsFilter) (db.AnalyticsSummary, error) {
-	return h.physical.GetAnalyticsSummary(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.AnalyticsSummary, error) { return h.physical.GetAnalyticsSummary(ctx, f) })
 }
 
 func (h *HostedStore) GetAnalyticsActivity(ctx context.Context, f db.AnalyticsFilter, granularity string) (db.ActivityResponse, error) {
-	return h.physical.GetAnalyticsActivity(ctx, f, granularity)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.ActivityResponse, error) {
+		return h.physical.GetAnalyticsActivity(ctx, f, granularity)
+	})
 }
 
 func (h *HostedStore) GetAnalyticsHeatmap(ctx context.Context, f db.AnalyticsFilter, metric string) (db.HeatmapResponse, error) {
-	return h.physical.GetAnalyticsHeatmap(ctx, f, metric)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.HeatmapResponse, error) {
+		return h.physical.GetAnalyticsHeatmap(ctx, f, metric)
+	})
 }
 
 func (h *HostedStore) GetAnalyticsProjects(ctx context.Context, f db.AnalyticsFilter) (db.ProjectsAnalyticsResponse, error) {
-	return h.physical.GetAnalyticsProjects(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.ProjectsAnalyticsResponse, error) {
+		return h.physical.GetAnalyticsProjects(ctx, f)
+	})
 }
 
 func (h *HostedStore) GetAnalyticsHourOfWeek(ctx context.Context, f db.AnalyticsFilter) (db.HourOfWeekResponse, error) {
-	return h.physical.GetAnalyticsHourOfWeek(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.HourOfWeekResponse, error) {
+		return h.physical.GetAnalyticsHourOfWeek(ctx, f)
+	})
 }
 
 func (h *HostedStore) GetAnalyticsSessionShape(ctx context.Context, f db.AnalyticsFilter) (db.SessionShapeResponse, error) {
-	return h.physical.GetAnalyticsSessionShape(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.SessionShapeResponse, error) {
+		return h.physical.GetAnalyticsSessionShape(ctx, f)
+	})
 }
 
 func (h *HostedStore) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
-	return h.physical.GetAnalyticsTools(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.ToolsAnalyticsResponse, error) { return h.physical.GetAnalyticsTools(ctx, f) })
 }
 
 func (h *HostedStore) GetAnalyticsSkills(ctx context.Context, f db.AnalyticsFilter, granularity string) (db.SkillsAnalyticsResponse, error) {
-	return h.physical.GetAnalyticsSkills(ctx, f, granularity)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.SkillsAnalyticsResponse, error) {
+		return h.physical.GetAnalyticsSkills(ctx, f, granularity)
+	})
 }
 
 func (h *HostedStore) GetAnalyticsVelocity(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
-	return h.physical.GetAnalyticsVelocity(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.VelocityResponse, error) { return h.physical.GetAnalyticsVelocity(ctx, f) })
 }
 
 func (h *HostedStore) GetAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-	return h.physical.GetAnalyticsSignals(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.SignalsAnalyticsResponse, error) {
+		return h.physical.GetAnalyticsSignals(ctx, f)
+	})
 }
 
 func (h *HostedStore) GetTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	return h.physical.GetTrendsTerms(ctx, f, terms, granularity)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.TrendsTermsResponse, error) {
+		return h.physical.GetTrendsTerms(ctx, f, terms, granularity)
+	})
 }
 
 func (h *HostedStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	return h.physical.GetDailyUsage(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.DailyUsageResult, error) { return h.physical.GetDailyUsage(ctx, f) })
 }
 
 func (h *HostedStore) GetUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.UsageSessionCounts, error) {
-	return h.physical.GetUsageSessionCounts(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.UsageSessionCounts, error) { return h.physical.GetUsageSessionCounts(ctx, f) })
 }
 
 func (h *HostedStore) GetUsageMatchingSessionCount(ctx context.Context, f db.UsageFilter) (int, error) {
-	return h.physical.GetUsageMatchingSessionCount(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (int, error) { return h.physical.GetUsageMatchingSessionCount(ctx, f) })
 }
 
 func (h *HostedStore) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
-	return h.physical.GetPlanUsageSessionCounts(ctx, f)
+	return hostedRead(ctx, h, func(_ hostedRevision) (db.PlanUsageSessionCounts, error) {
+		return h.physical.GetPlanUsageSessionCounts(ctx, f)
+	})
 }
 
 func (h *HostedStore) ListInsights(ctx context.Context, f db.InsightFilter) ([]db.Insight, error) {

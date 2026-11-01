@@ -202,7 +202,7 @@ func (s *Store) FindSessionIDsByPartial(
 	}
 	rows, err := s.pg.QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE strpos(id, $1) > 0 AND deleted_at IS NULL
+		 WHERE strpos(id, $1) > 0 AND deleted_at IS NULL AND NOT rollout_hidden
 		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC
 		 LIMIT $2`,
 		partial, limit,
@@ -252,7 +252,7 @@ func scanPGSessionRowsWithSource(
 // sessions.
 const pgRootSessionFilter = `message_count > 0
 	AND relationship_type NOT IN ('subagent', 'fork')
-	AND deleted_at IS NULL`
+	AND deleted_at IS NULL AND NOT rollout_hidden`
 
 func buildPGSessionBaseFilter(
 	f db.SessionFilter,
@@ -782,7 +782,7 @@ func (s *Store) GetSession(
 		ctx,
 		"SELECT "+pgSessionCols+
 			" FROM sessions WHERE id = $1"+
-			" AND deleted_at IS NULL",
+			" AND deleted_at IS NULL AND NOT rollout_hidden",
 		id,
 	)
 	sess, err := scanPGSession(row)
@@ -814,7 +814,7 @@ func (s *Store) FindSessionIDsByRawSuffix(
 		`SELECT id FROM sessions
 		 WHERE (id = $1
 		        OR RIGHT(id, LENGTH($1) + 1) IN (':' || $1, '~' || $1))
-		   AND deleted_at IS NULL
+		   AND deleted_at IS NULL AND NOT rollout_hidden
 		 ORDER BY (id = $1) DESC,
 		          COALESCE(ended_at, started_at, created_at) DESC
 		 LIMIT $2`,
@@ -876,7 +876,7 @@ func (s *Store) GetChildSessions(
 	query := "SELECT " + pgSessionCols +
 		" FROM sessions" +
 		" WHERE parent_session_id = $1" +
-		" AND deleted_at IS NULL" +
+		" AND deleted_at IS NULL AND NOT rollout_hidden" +
 		" ORDER BY COALESCE(started_at, created_at) ASC"
 	rows, err := s.pg.QueryContext(ctx, query, parentID)
 	if err != nil {
@@ -943,7 +943,7 @@ func (s *Store) GetProjects(
 		FROM sessions
 		WHERE message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL`
+		  AND deleted_at IS NULL AND NOT rollout_hidden`
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
@@ -982,7 +982,7 @@ func (s *Store) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
 	rows, err := s.pg.QueryContext(ctx,
 		`SELECT DISTINCT project
 		 FROM sessions
-		 WHERE deleted_at IS NULL
+		 WHERE deleted_at IS NULL AND NOT rollout_hidden
 		 ORDER BY project`)
 	if err != nil {
 		return nil, fmt.Errorf("querying active project labels: %w", err)
@@ -1008,7 +1008,7 @@ func (s *Store) GetAgents(
 	q := `SELECT agent, COUNT(*) as session_count
 		FROM sessions
 		WHERE message_count > 0 AND agent <> ''
-		  AND deleted_at IS NULL
+		  AND deleted_at IS NULL AND NOT rollout_hidden
 		  AND relationship_type NOT IN ('subagent', 'fork')`
 	if excludeOneShot {
 		if !excludeAutomated {
@@ -1050,7 +1050,7 @@ func (s *Store) GetMachines(
 	excludeOneShot, excludeAutomated bool,
 ) ([]string, error) {
 	q := `SELECT DISTINCT machine FROM sessions
-		WHERE deleted_at IS NULL`
+		WHERE deleted_at IS NULL AND NOT rollout_hidden`
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
@@ -1088,7 +1088,7 @@ func (s *Store) GetBranches(
 	q := `SELECT DISTINCT project, git_branch FROM sessions
 		WHERE message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL`
+		  AND deleted_at IS NULL AND NOT rollout_hidden`
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
