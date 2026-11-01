@@ -4301,6 +4301,12 @@ schemas keep their existing ordering behavior.
   `ChatModelMetadata.model_display_name` (field 21) remains the complete label
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.
+- **Prompt envelope (checked 2026-11-01):** The brain transcript reported in
+  [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps CLI
+  prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>` and
+  `<USER_SETTINGS_CHANGE>` blocks. The CLI parser extracts a complete request
+  block for user messages, titles, and history matching. Incomplete wrappers
+  and non-user messages keep their content. Evidence remains `no-public-source`.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and

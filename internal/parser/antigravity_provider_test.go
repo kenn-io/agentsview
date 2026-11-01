@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1319,6 +1320,56 @@ func TestAntigravityProvidersReadOnlyCheckpointedWAL(t *testing.T) {
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
 			assert.NotEmpty(t, outcome.Results[0].Result.Messages)
+		})
+	}
+}
+
+func TestAntigravityCLIBrainTranscriptPromptEnvelope(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const prompt = "What is the capital of Türkiye? Answer in one word, do not use tools."
+	const envelope = `<USER_REQUEST>
+What is the capital of Türkiye? Answer in one word, do not use tools.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-30T13:53:46+03:00.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting Model Selection from None to Gemini 3.8 Flash (Low). No need to comment on this change if the user doesn't ask about it. ...
+</USER_SETTINGS_CHANGE>`
+	for _, withHistory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("history=%t", withHistory), func(t *testing.T) {
+			line, err := json.Marshal(map[string]any{
+				"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+				"created_at": "2026-10-30T10:53:46Z", "content": envelope,
+			})
+			require.NoError(t, err)
+			fixture := antigravityCLIBrainFixture{
+				setupDB: func(t *testing.T, db *sql.DB) {
+					t.Helper()
+					mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, X'00')`)
+				},
+				transcript: string(line) + "\n",
+			}
+			if withHistory {
+				history, err := json.Marshal(map[string]any{
+					"conversationId": id, "timestamp": 1793357626000, "display": prompt,
+				})
+				require.NoError(t, err)
+				fixture.history = string(history) + "\n"
+			}
+			path := fixture.write(t, id)
+			provider := newAntigravityCLITestProvider(t, filepath.Dir(filepath.Dir(path)))
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+			require.NoError(t, err)
+			require.True(t, ok)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			result := outcome.Results[0].Result
+			assert.Equal(t, prompt, result.Session.FirstMessage)
+			require.Len(t, result.Messages, 1, "history must match the wrapped brain prompt")
+			assert.Equal(t, prompt, result.Messages[0].Content)
+			assert.Equal(t, 70, result.Messages[0].ContentLength)
 		})
 	}
 }

@@ -343,8 +343,13 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	var firstMessage string
 	var userCount int
 	var startedAt, endedAt time.Time
-	for _, m := range messages {
+	for i := range messages {
+		m := &messages[i]
 		if m.Role == RoleUser {
+			if content := extractAntigravityCLIUserRequest(m.Content); content != m.Content {
+				m.Content = content
+				m.ContentLength = len(content)
+			}
 			userCount++
 			if firstMessage == "" && m.Content != "" {
 				firstMessage = truncate(
@@ -672,7 +677,21 @@ func appendMissingAntigravityHistoryMessages(
 }
 
 func normalizedAntigravityPrompt(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	return strings.Join(strings.Fields(extractAntigravityCLIUserRequest(s)), " ")
+}
+
+// extractAntigravityCLIUserRequest drops the context injected around CLI prompts.
+// Keep incomplete envelopes unchanged so a truncated source loses no text.
+func extractAntigravityCLIUserRequest(s string) string {
+	_, request, ok := strings.Cut(s, "<USER_REQUEST>")
+	if !ok {
+		return s
+	}
+	request, _, ok = strings.CutLast(request, "</USER_REQUEST>")
+	if !ok {
+		return s
+	}
+	return strings.TrimSpace(request)
 }
 
 func nonEmptyAntigravityHistoryMessages(

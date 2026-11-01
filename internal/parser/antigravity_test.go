@@ -19,6 +19,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAntigravityCLIUserRequestContent(t *testing.T) {
+	tests := []struct {
+		name, content, want string
+		assistant           bool
+	}{
+		{name: "plain", content: "  Keep my spacing\n", want: "  Keep my spacing\n"},
+		{name: "missing closing tag", content: "<USER_REQUEST>unfinished", want: "<USER_REQUEST>unfinished"},
+		{name: "missing opening tag", content: "unfinished</USER_REQUEST>", want: "unfinished</USER_REQUEST>"},
+		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST>", want: "First line\nSecond line"},
+		{name: "literal closing tag", content: "<USER_REQUEST>Explain the </USER_REQUEST> tag.</USER_REQUEST>", want: "Explain the </USER_REQUEST> tag."},
+		{name: "surrounding blocks", content: "<UNKNOWN>context</UNKNOWN><USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>", want: "Prompt"},
+		{name: "assistant", content: "<USER_REQUEST>quoted prompt</USER_REQUEST>", want: "<USER_REQUEST>quoted prompt</USER_REQUEST>", assistant: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			source, kind := "USER_EXPLICIT", "USER_INPUT"
+			wantRole := RoleUser
+			if tc.assistant {
+				source, kind = "MODEL", "PLANNER_RESPONSE"
+				wantRole = RoleAssistant
+			}
+			line, err := json.Marshal(map[string]any{
+				"step_index": 0, "source": source, "type": kind, "content": tc.content,
+			})
+			require.NoError(t, err)
+			path := antigravityCLIBrainFixture{pb: true, transcript: string(line) + "\n"}.write(
+				t, "99999999-aaaa-bbbb-cccc-dddddddddddd",
+			)
+			session, messages, _, _, err := parseAntigravityCLITestSessionWithStatus(t, path, "", "devbox")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, wantRole, messages[0].Role)
+			assert.Equal(t, tc.want, messages[0].Content)
+			assert.Equal(t, len(tc.want), messages[0].ContentLength)
+			if tc.assistant {
+				assert.Empty(t, session.FirstMessage)
+			}
+		})
+	}
+}
+
 // newAntigravityTestProvider builds a concrete antigravityProvider for the given
 // roots so package tests can exercise the folded discovery, source-lookup, and
 // parse behavior directly through provider methods.
