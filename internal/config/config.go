@@ -285,7 +285,9 @@ type VectorEmbeddingsConfig struct {
 // and capacity settings only; the model identity lives on
 // VectorEmbeddingsConfig.
 type VectorEmbeddingsServerConfig struct {
-	Endpoint string `toml:"endpoint" json:"endpoint"`
+	Endpoint  string `toml:"endpoint" json:"endpoint"`
+	Local     bool   `toml:"local" json:"local,omitempty"`
+	automatic bool
 	// OllamaCPUFallback retries invalid Metal vectors once through Ollama's
 	// native CPU embedding path. It is transport-only and defaults to false.
 	OllamaCPUFallback bool `toml:"ollama_cpu_fallback" json:"ollama_cpu_fallback,omitempty"`
@@ -566,6 +568,9 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 		}
 	}
 	for _, name := range sortedServerNames(c.Servers) {
+		if c.Servers[name].Local && c.Model != "nomic-embed-text" {
+			return fmt.Errorf("[vector.embeddings.servers.%s] local requires nomic-embed-text; changing models requires rebuilding the index", name)
+		}
 		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {
 			return err
 		}
@@ -576,7 +581,10 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 // validate checks one named server's transport settings.
 func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens int) error {
 	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
-	if c.Endpoint == "" {
+	if c.Local && c.Endpoint != "" {
+		return fmt.Errorf("%s local cannot be combined with endpoint", section)
+	}
+	if c.Endpoint == "" && !c.Local && !c.automatic {
 		return fmt.Errorf("%s endpoint is required", section)
 	}
 	if c.OllamaCPUFallback {
@@ -2104,6 +2112,27 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if len(file.Vector.Embeddings.Servers) > 0 {
 		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
+	}
+	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && !meta.IsDefined("vector", "embeddings", "servers") {
+		c.Vector.Embeddings.Model = "nomic-embed-text"
+		if !meta.IsDefined("vector", "embeddings", "dimension") {
+			c.Vector.Embeddings.Dimension = 768
+		}
+		if !meta.IsDefined("vector", "embeddings", "max_input_chars") {
+			c.Vector.Embeddings.MaxInputChars = 4000
+		}
+		if !meta.IsDefined("vector", "embeddings", "model_context_tokens") {
+			c.Vector.Embeddings.ModelContextTokens = 2048
+		}
+		if !meta.IsDefined("vector", "embeddings", "query_prefix") {
+			c.Vector.Embeddings.QueryPrefix = "search_query: "
+		}
+		if !meta.IsDefined("vector", "embeddings", "document_prefix") {
+			c.Vector.Embeddings.DocumentPrefix = "search_document: "
+		}
+	}
+	if c.Vector.Enabled && c.Vector.Embeddings.Model == "nomic-embed-text" && !meta.IsDefined("vector", "embeddings", "servers") {
+		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(map[string]VectorEmbeddingsServerConfig{"automatic": {automatic: true}}, meta)
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
 		c.Vector.Embed.RunAfterSync = file.Vector.Embed.RunAfterSync

@@ -133,9 +133,7 @@ describe("SemanticSetupHelp", () => {
     expect(copyButtons.length).toBe(2);
     (copyButtons[0] as HTMLButtonElement).click();
     await settle();
-    expect(mockCopyToClipboard).toHaveBeenCalledWith(
-      expect.stringContaining("[vector.embeddings.servers.local]"),
-    );
+    expect(mockCopyToClipboard).toHaveBeenCalledWith("[vector]\nenabled = true");
     (copyButtons[1] as HTMLButtonElement).click();
     await settle();
     expect(mockCopyToClipboard).toHaveBeenCalledWith("agentsview embeddings build");

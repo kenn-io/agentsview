@@ -324,6 +324,9 @@ func newVectorEncoder(
 	if err != nil {
 		return nil, err
 	}
+	if server.Endpoint == "" {
+		return lazyLocalEncoder(c, name, server, role, retryRateLimits), nil
+	}
 	transport, err := server.EmbedTransport()
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)
@@ -430,6 +433,9 @@ func runEmbeddingsBuild(
 	// Resolve --using against this config up front so a mistyped name fails
 	// with the full server list instead of a daemon-side error.
 	if _, _, err := cfg.Vector.Embeddings.Server(opts.Using); err != nil {
+		return err
+	}
+	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, in, out); err != nil {
 		return err
 	}
 

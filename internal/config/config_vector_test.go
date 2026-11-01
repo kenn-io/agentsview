@@ -332,6 +332,58 @@ func minimalServers() map[string]any {
 // isolation) is covered, including per-server defaults and the ability to
 // explicitly override a zero-value field like max_retries.
 func TestVectorConfigTOMLLoad(t *testing.T) {
+	t.Run("enabled only selects the Nomic recipe", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"enabled": true}})
+		c := cfg.Vector.Embeddings
+		assert.Equal(t, "nomic-embed-text", c.Model)
+		assert.Equal(t, 768, c.Dimension)
+		assert.Equal(t, 4000, c.MaxInputChars)
+		assert.Equal(t, 2048, c.ModelContextTokens)
+		assert.Equal(t, "search_query: ", c.QueryPrefix)
+		assert.Equal(t, "search_document: ", c.DocumentPrefix)
+		_, server, err := c.Server("")
+		require.NoError(t, err)
+		assert.Empty(t, server.Endpoint)
+		assert.False(t, server.Local)
+	})
+	t.Run("default recipe preserves explicit overrides", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{
+				"max_input_chars": 3000, "model_context_tokens": 0,
+				"query_prefix": "", "document_prefix": "custom: ",
+			},
+		}})
+		assert.Equal(t, 3000, cfg.Vector.Embeddings.MaxInputChars)
+		assert.Zero(t, cfg.Vector.Embeddings.ModelContextTokens)
+		assert.Empty(t, cfg.Vector.Embeddings.QueryPrefix)
+		assert.Equal(t, "custom: ", cfg.Vector.Embeddings.DocumentPrefix)
+	})
+	t.Run("configured server still requires a model", func(t *testing.T) {
+		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"servers": minimalServers()},
+		}})
+		require.ErrorContains(t, err, "model is required")
+	})
+	t.Run("local server selects shared Nomic", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{
+				"model": "nomic-embed-text", "dimension": 768,
+				"servers": map[string]any{"shared": map[string]any{"local": true}},
+			},
+		}})
+		_, server, err := cfg.Vector.Embeddings.Server("")
+		require.NoError(t, err)
+		assert.True(t, server.Local)
+		assert.Empty(t, cfg.Vector.Embeddings.QueryPrefix)
+		assert.Empty(t, cfg.Vector.Embeddings.DocumentPrefix)
+		server.Endpoint = "http://127.0.0.1:11434/v1"
+		cfg.Vector.Embeddings.Servers["shared"] = server
+		require.ErrorContains(t, cfg.Vector.Validate(), "local cannot be combined with endpoint")
+		server.Endpoint = ""
+		cfg.Vector.Embeddings.Servers["shared"] = server
+		cfg.Vector.Embeddings.Model = "other-model"
+		require.ErrorContains(t, cfg.Vector.Validate(), "changing models requires rebuilding")
+	})
 	t.Run("unset server fields keep defaults, explicit zero overrides", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{
 			"vector": map[string]any{
@@ -510,12 +562,26 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.True(t, cfg.Vector.Embed.Recall)
 	})
 
-	t.Run("enabled without servers fails to load", func(t *testing.T) {
+	t.Run("explicit Nomic without servers uses discovery and preserves its recipe", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"model": "nomic-embed-text", "dimension": 768},
+		}})
+		c := cfg.Vector.Embeddings
+		_, server, err := c.Server("")
+		require.NoError(t, err)
+		assert.Empty(t, server.Endpoint)
+		assert.False(t, server.Local)
+		assert.Equal(t, 8192, c.MaxInputChars)
+		assert.Zero(t, c.ModelContextTokens)
+		assert.Empty(t, c.QueryPrefix)
+		assert.Empty(t, c.DocumentPrefix)
+	})
+	t.Run("other models without servers fail to load", func(t *testing.T) {
 		err := loadMinimalErrWithConfig(t, map[string]any{
 			"vector": map[string]any{
 				"enabled": true,
 				"embeddings": map[string]any{
-					"model":     "nomic-embed-text",
+					"model":     "other-model",
 					"dimension": 768,
 				},
 			},

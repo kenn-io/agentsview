@@ -5,9 +5,8 @@ description: Vector (semantic) search over session messages, plus hybrid search 
 
 AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
-substring/regex/FTS5 content search. This is an opt-in feature backed by an
-OpenAI-compatible embeddings endpoint — a local [Ollama](https://ollama.com)
-model or a hosted API.
+substring/regex/FTS5 content search. This is an opt-in feature backed by
+Ollama, Kit's shared local server, or a configured OpenAI-compatible API.
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
@@ -24,6 +23,24 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Add a `[vector]` section to
 `~/.agentsview/config.toml`:
+
+```toml
+[vector]
+enabled = true
+```
+
+Restart the daemon, then run `agentsview embeddings build`. AgentsView uses a
+running Ollama server with Nomic or Kit's shared local server. If the local
+server needs files, the CLI asks before downloading them. Search and automatic
+builds reuse installed files; they direct you to the CLI when a download needs
+approval. Declining stops the download and build.
+
+The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
+characters, 2,048 context tokens, `search_query: ` for queries, and
+`search_document: ` for documents. Explicit model recipes keep their existing
+settings, including empty prefixes.
+
+For an explicit model or endpoint, configure the recipe and named servers:
 
 ```toml
 [vector]
@@ -69,10 +86,9 @@ input beyond the window. Changing this cap on an existing index
 [creates a new generation and re-embeds the archive](#building-the-index) on the
 next build.
 
-`model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
-entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
-fast with an actionable message if any is missing or a duration field doesn't
-parse. Restart the daemon (or run a CLI command) after editing the file.
+With explicit servers, `model` and `dimension` are required. Each server needs
+an `endpoint` or `local = true`. Invalid settings fail at config load. Restart
+the daemon (or run a CLI command) after editing the file.
 
 Automatic Recall embedding has a separate, default-off consent gate. Setting
 `[vector.embed] recall = true` permits daemon startup, corpus mutations, and
@@ -88,6 +104,21 @@ completed build; lexical queries remain available while an automatic or manual
 refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
 
 ### Named embeddings servers
+
+To select Kit's local server while Ollama keeps running, keep your existing
+Nomic recipe and add a named server:
+
+```toml
+[vector.embeddings.servers.shared]
+local = true
+```
+
+Set `default_server = "shared"` under `[vector.embeddings]` for searches and
+scheduled builds, or run `agentsview embeddings build --using shared` for one
+build. Keep your existing model, dimensions, prefixes, suffix, and input cap to
+reuse the active generation. Only new or changed content needs embedding.
+`local = true` requires `nomic-embed-text` and cannot have an `endpoint`.
+Changing models requires rebuilding the index.
 
 Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`,
 `query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
