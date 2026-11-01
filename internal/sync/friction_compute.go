@@ -76,6 +76,9 @@ const (
 // that fail are passed over for the rest of the tick so they cannot starve
 // later ones.
 func (e *Engine) BackfillFriction(ctx context.Context) (int, error) {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return 0, err
+	}
 	if e.refuseWriteInForceParse("BackfillFriction") {
 		return 0, errors.New("BackfillFriction refused on report-only parse-diff engine")
 	}
@@ -93,6 +96,9 @@ func (e *Engine) BackfillFriction(ctx context.Context) (int, error) {
 // progress, leaving only sessions that failed. Replica push work calls it
 // inside SyncThenRun and its siblings, which already hold the sync lock.
 func (e *Engine) DrainStaleFrictionLocked(ctx context.Context) error {
+	if err := e.db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	if !e.frictionEnabled {
 		return nil
 	}

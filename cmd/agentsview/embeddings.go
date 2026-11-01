@@ -400,6 +400,9 @@ func runEmbeddingsBuild(
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+	if cfg.HostedRawMode() {
+		return config.ErrHostedRawMode
+	}
 	if err := requireVectorEnabled(cfg); err != nil {
 		return err
 	}
@@ -494,6 +497,9 @@ func countEmbeddingStoreUnits(
 func runEmbeddingsBuildDirect(
 	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
 ) error {
+	if cfg.HostedRawMode() {
+		return config.ErrHostedRawMode
+	}
 	lock, err := tryAcquireNamedLock(cfg.DataDir, vectorsWriteLockFile)
 	if err != nil {
 		return err
@@ -578,18 +584,24 @@ func embeddingManager(
 	ix *vector.Index, database *db.DB, encoders vector.EncoderSet,
 	cfg config.Config, store string,
 ) *vector.Manager {
+	disable := func(m *vector.Manager) *vector.Manager {
+		if cfg.HostedRawMode() {
+			m.DisableLocalDerivation()
+		}
+		return m
+	}
 	if store != vector.RecallIndexSpec().Name {
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
 			Source: database, Generation: gen,
 			Space: vectorSpace(cfg.Vector.Embeddings, gen),
 		}
-		return vector.NewResolvingManager(
+		return disable(vector.NewResolvingManager(
 			ix, encoders, gen,
 			func(context.Context) (vector.BuildTarget, error) { return target, nil },
-		)
+		))
 	}
-	return vector.NewResolvingManager(
+	return disable(vector.NewResolvingManager(
 		ix,
 		encoders,
 		recallVectorGeneration(cfg.Vector.Embeddings, ""),
@@ -602,7 +614,7 @@ func embeddingManager(
 				Space: vectorSpace(cfg.Vector.Embeddings, generation),
 			}, err
 		},
-	)
+	))
 }
 
 // runDirectBuild runs m.TryBuild synchronously on a background goroutine

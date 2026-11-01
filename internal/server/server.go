@@ -278,6 +278,9 @@ func New(
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
+		if cfg.HostedRawMode() {
+			local.DisableLocalDerivation()
+		}
 		local.SetArchiveContent(cfg.ArchiveContent)
 		sessions = service.NewDirectBackend(local, engine, service.WithModelGroups(modelGroups))
 	} else {

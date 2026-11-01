@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -199,6 +201,12 @@ func TestRawSyncStatusWithoutCheckpointDoesNotCreateState(t *testing.T) {
 	output, err := executeCommand(newRootCommand(), "raw-sync", "status")
 
 	require.NoError(t, err)
+	var status map[string]jsontext.Value
+	require.NoError(t, json.Unmarshal([]byte(output), &status))
+	require.NotEmpty(t, status["unsupported_enabled_providers"])
+	delete(status, "unsupported_enabled_providers")
+	payload, err := json.Marshal(status)
+	require.NoError(t, err)
 	assert.JSONEq(t, `{
 		"device_id":"",
 		"pending_generations":0,
@@ -206,7 +214,7 @@ func TestRawSyncStatusWithoutCheckpointDoesNotCreateState(t *testing.T) {
 		"pending_object_bytes":0,
 		"outbox":{"used_bytes":0,"reserved_bytes":0,"limit_bytes":0},
 		"permanent_failures":0
-	}`, output)
+	}`, string(payload))
 	_, err = os.Stat(filepath.Join(dataDir, "raw-sync"))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }

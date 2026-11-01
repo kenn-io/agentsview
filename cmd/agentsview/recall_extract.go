@@ -149,6 +149,9 @@ func buildExtractManager(
 func setupRecallExtraction(
 	cfg config.Config, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
+	if cfg.HostedRawMode() {
+		return nil, nil
+	}
 	if !cfg.Recall.Extract.Enabled {
 		database.SetExtractCandidateFindingsAllowed(
 			cfg.Recall.Extract.AllowCandidateFindings())
@@ -216,6 +219,9 @@ const extractReconcileDebounce = 2 * time.Second
 func openWritableExtractDB(
 	ctx context.Context, cfg config.Config,
 ) (*db.DB, *writeOwnerLock, error) {
+	if cfg.HostedRawMode() {
+		return nil, nil, config.ErrHostedRawMode
+	}
 	tr, err := detectClientTransportContext(ctx, &cfg, 0)
 	if err != nil {
 		return nil, nil, err

@@ -240,6 +240,9 @@ func withRawArchive(cmd *cobra.Command, run func(*rawarchive.Archive) error) (re
 }
 
 func archiveModeAfterRecovery(ctx context.Context, cfg config.Config) (bool, error) {
+	if cfg.HostedRawMode() {
+		return db.ArchiveOnlyAt(ctx, cfg.DBPath)
+	}
 	pending, err := db.CompactRecoveryPending(cfg.DBPath)
 	if err != nil {
 		return false, err

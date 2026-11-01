@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-23
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -35,6 +35,48 @@ enrollment command or HTTP endpoint. The broader delivery work remains tracked
 in [issue #1352](https://github.com/kenn-io/agentsview/issues/1352), including
 embedding consumption, accepted-generation retention and garbage collection, and
 disaster rebuilds.
+
+## Stop local parsing after cutover
+
+**Unreleased on `main`.** Workstations can stop local parsing and embedding
+while continuing raw uploads. Before enabling this mode, confirm capture uploads
+successfully and server reads work with `--server`.
+
+1. Stop local ingestion and embedding services, including replica push watchers.
+2. Add the following to the workstation's configuration:
+
+   ```toml
+   [raw_sync]
+   hosted = true
+   ```
+
+3. Restart only the services you intend to keep, including `raw-sync watch`.
+4. Confirm uploads continue with `raw-sync status`. Check its
+   `unsupported_enabled_providers` list, also shown by `doctor sync`: those
+   enabled providers cannot upload raw sources and need another collection plan.
+
+`AGENTSVIEW_RAW_SYNC_HOSTED=true` (or `1`) overrides TOML. Set it to `false`
+(or `0`) to override TOML in the other direction; an empty value is unset.
+Without either setting, local operation stays unchanged.
+
+Hosted mode refuses local sync, parse-diff, Recall extraction, embedding builds
+and pushes to every replica backend. Watchers, startup sync, scheduled work and
+HTTP requests obey the same restriction. A local read target (`--local`) does
+not enable derivation. Query encoding for local semantic search is still allowed;
+document encoding is disabled.
+
+The local server opens an existing archive read-only, without classifier audits
+or parser upgrades. If its data version is stale, it serves the stored history
+with a notice. A missing archive serves an empty catalog without creating an
+archive. An incompatible schema still needs its normal upgrade. This setting
+never converts the archive to archive-only mode, so raw capture remains
+available.
+
+To restore local operation, stop the intended services, remove or disable
+`[raw_sync] hosted` and its environment override, then restart ingestion and
+embedding services. A parser upgrade may require the normal archive rebuild.
+An adopted hosted PostgreSQL schema still refuses `pg push`; rolling back this
+workstation setting does not change that server restriction.
 
 ## Provision a hosted instance
 

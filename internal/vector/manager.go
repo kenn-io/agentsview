@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
@@ -78,6 +80,8 @@ func validateBuildRequest(req BuildRequest) error {
 // their check-then-act refusal invariants (Missing coverage, the
 // active-generation check) hold under concurrent calls.
 type Manager struct {
+	localDerivationDisabled atomic.Bool
+
 	ix            *Index
 	encoders      EncoderSet
 	gen           kitvec.Generation
@@ -420,11 +424,17 @@ func (m *Manager) Retire(ctx context.Context, id int64, force bool) error {
 	return m.ix.RetireByID(ctx, id)
 }
 
+// DisableLocalDerivation prevents every document build on a hosted workstation.
+func (m *Manager) DisableLocalDerivation() { m.localDerivationDisabled.Store(true) }
+
 // begin transitions the manager into the running state, resetting the
 // progress fields of status for the new run. It returns ErrBuildRunning
 // without changing anything if a build is already in flight. Taking opMu
 // first serializes build starts behind any in-flight Activate/Retire.
 func (m *Manager) begin() error {
+	if m.localDerivationDisabled.Load() {
+		return config.ErrHostedRawMode
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	m.mu.Lock()

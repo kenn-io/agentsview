@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"go.kenn.io/agentsview/internal/config"
 )
 
 var ErrArchiveOnly = errors.New("archive-only database: source sync and publication are disabled; use archive import or archive reparse")
@@ -34,6 +36,9 @@ func (db *DB) IsArchiveOnly(ctx context.Context) (bool, error) {
 }
 
 func (db *DB) RequireSourceSync(ctx context.Context) error {
+	if err := db.RequireLocalDerivation(); err != nil {
+		return err
+	}
 	enabled, err := db.IsArchiveOnly(ctx)
 	if err != nil {
 		return fmt.Errorf("reading archive mode: %w", err)
@@ -68,4 +73,16 @@ func ArchiveOnlyAt(ctx context.Context, path string) (bool, error) {
 	var enabled bool
 	err = conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM archive_metadata WHERE key='archive_only' AND value='1')`).Scan(&enabled)
 	return enabled, err
+}
+
+// DisableLocalDerivation restricts this handle for a hosted workstation. It
+// never writes archive metadata and cannot be undone by a read-target override.
+func (db *DB) DisableLocalDerivation() { db.localDerivationDisabled.Store(true) }
+
+// RequireLocalDerivation guards model-backed work independently of custody.
+func (db *DB) RequireLocalDerivation() error {
+	if db.localDerivationDisabled.Load() {
+		return config.ErrHostedRawMode
+	}
+	return nil
 }

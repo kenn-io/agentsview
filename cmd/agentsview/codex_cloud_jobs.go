@@ -45,7 +45,7 @@ func newCodexCloudSyncer(
 		Gates: codexcloud.NewGateSource(
 			filepath.Join(cfg.DataDir, "config.toml"), cfg, load, os.Getenv, userHome,
 		),
-		NoSync:    cfg.NoSync,
+		NoSync:    cfg.NoSync || cfg.HostedRawMode(),
 		ReadLogin: codexcloud.ReadLogin,
 		Version:   version,
 		Log:       log.Default(),

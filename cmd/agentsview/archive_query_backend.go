@@ -86,6 +86,9 @@ func resolveArchiveQueryBackendWithConfig(
 	cfg config.Config,
 	policy archiveQueryPolicy,
 ) (archiveQueryBackend, func(), error) {
+	if cfg.HostedRawMode() {
+		policy.NoSync = true
+	}
 	if !policy.Offline {
 		tr, err := resolveArchiveQueryTransport(ctx, &cfg, policy)
 		if err != nil {
@@ -190,7 +193,7 @@ func openArchiveQueryDB(
 	cfg config.Config,
 	readOnly bool,
 ) (*db.DB, *writeOwnerLock, error) {
-	if readOnly {
+	if readOnly || cfg.HostedRawMode() {
 		database, err := openReadOnlyDB(ctx, cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening database: %w", err)

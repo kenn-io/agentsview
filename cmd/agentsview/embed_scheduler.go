@@ -680,6 +680,9 @@ func setupVectorServing(
 	ctx context.Context, cfg config.Config, database *db.DB,
 	idle *server.IdleTracker,
 ) (vectorServing, error) {
+	if cfg.HostedRawMode() {
+		return vectorServing{Close: installDirectVectorSearcher(cfg, database)}, nil
+	}
 	if cfg.ArchiveContent.UsageOnly() || database.ArchiveContent().UsageOnly() || !cfg.Vector.Enabled {
 		return vectorServing{}, nil
 	}

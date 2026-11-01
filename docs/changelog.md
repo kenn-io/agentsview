@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- Workstations can stop local parsing and embedding with `[raw_sync] hosted`
+  while continuing raw uploads. Existing local history stays readable; status
+  and diagnostics identify enabled providers that cannot upload raw sources.
+
 - `agentsview agents` lists every supported agent, where AgentsView looks for its
   sessions, and which session details it reads, such as tool calls, thinking,
   subagents, and token usage. Add `--json` for scripts. It works without a
