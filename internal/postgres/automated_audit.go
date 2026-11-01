@@ -171,6 +171,7 @@ func auditAutomatedMatchingHashPG(
 			SELECT m.content
 			FROM messages m
 			WHERE m.session_id = s.id
+			  AND s.user_message_count <= 1
 			  AND m.role = 'user'
 			  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 			  AND COALESCE(m.is_system, false) = false
