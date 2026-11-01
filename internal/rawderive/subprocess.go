@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +19,6 @@ import (
 
 const (
 	ParserChildFlag    = "--internal-raw-parser"
-	parserOutputLimit  = 32 << 20
 	parserErrorLimit   = 64 << 10
 	parserProbeFile    = "parser-probe"
 	parserProbeContent = "hosted parser source probe"
@@ -67,7 +65,7 @@ type wireOutcome struct {
 	MessagePresence       [][]wireMessageState
 }
 
-func encodeParserOutcome(p ParsedManifest) ([]byte, error) {
+func encodeParserOutcome(dst io.Writer, p ParsedManifest) error {
 	w := wireOutcome{Outcome: p.Outcome, Tombstone: p.Tombstone, ReplaceSessionContent: p.ReplaceSessionContent}
 	w.Outcome.SourceErrors = nil
 	for _, e := range p.Outcome.SourceErrors {
@@ -89,15 +87,17 @@ func encodeParserOutcome(p ParsedManifest) ([]byte, error) {
 		}
 	}
 	// Keep absent provider slices distinct from present empty collections.
-	return json.Marshal(w, json.FormatNilSliceAsNull(true))
+	return json.MarshalWrite(dst, w, json.FormatNilSliceAsNull(true))
 }
 
-func decodeParserOutcome(data []byte) (ParsedManifest, error) {
+func decodeParserOutcome(src io.Reader) (ParsedManifest, error) {
 	var w wireOutcome
-	if len(data) > parserOutputLimit {
-		return ParsedManifest{}, errParserProtocol
+	limited := &io.LimitedReader{R: src, N: parserOutputLimit + 1}
+	err := json.UnmarshalRead(limited, &w, json.RejectUnknownMembers(true))
+	if limited.N == 0 {
+		return ParsedManifest{}, errors.Join(errParserProtocol, ErrSizeLimit)
 	}
-	if err := json.Unmarshal(data, &w, json.RejectUnknownMembers(true)); err != nil {
+	if err != nil {
 		return ParsedManifest{}, errParserProtocol
 	}
 	if len(w.Outcome.SourceErrors) != 0 {
@@ -111,6 +111,8 @@ func decodeParserOutcome(data []byte) (ParsedManifest, error) {
 			err = context.Canceled
 		case "deadline_exceeded":
 			err = context.DeadlineExceeded
+		case "size_limit":
+			err = ErrSizeLimit
 		case "invalid":
 			err = rawsync.ErrInvalid
 		case "internal", "object_not_found", "missing_object", "conflict", "lease_lost":
@@ -180,46 +182,60 @@ func (p *SubprocessParser) Parse(ctx context.Context, m rawsync.CanonicalManifes
 	if tree == nil || tree.Root() == "" {
 		return ParsedManifest{}, rawsync.ErrInvalid
 	}
-	data, err := p.execute(ctx, tree.Root(), parserRequest{Identity: m.Identity, ManifestID: m.ManifestID, CanonicalJSON: m.CanonicalJSON})
-	if err != nil {
-		return ParsedManifest{}, err
-	}
-	return decodeParserOutcome(data)
+	return p.execute(ctx, tree.Root(), parserRequest{Identity: m.Identity, ManifestID: m.ManifestID, CanonicalJSON: m.CanonicalJSON})
 }
 
-func (p *SubprocessParser) execute(parent context.Context, source string, req parserRequest) ([]byte, error) {
+func (p *SubprocessParser) execute(parent context.Context, source string, req parserRequest) (ParsedManifest, error) {
 	input, err := json.Marshal(req)
 	if err != nil || len(input) > 2*rawsync.DefaultManifestLimits().MaxCanonicalBytes+4096 {
-		return nil, errParserProtocol
+		return ParsedManifest{}, errParserProtocol
 	}
 	jail, err := os.MkdirTemp("", "raw-jail-")
 	if err != nil {
-		return nil, ErrSandboxUnavailable
+		return ParsedManifest{}, ErrSandboxUnavailable
 	}
 	defer os.RemoveAll(jail)
 	if os.Mkdir(filepath.Join(jail, "source"), 0o700) != nil {
-		return nil, ErrSandboxUnavailable
+		return ParsedManifest{}, ErrSandboxUnavailable
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return nil, ErrSandboxUnavailable
+		return ParsedManifest{}, ErrSandboxUnavailable
 	}
 	ctx, cancel := context.WithTimeout(parent, p.WallTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, ParserChildFlag, source, jail)
-	cmd.Env = []string{"GOMAXPROCS=2", "GOMEMLIMIT=384MiB", "TZ=UTC", "LANG=C"}
+	// Protocol rejection stops the child without replacing the attempt's
+	// caller cancellation or wall deadline with an internal cancellation.
+	childCtx, stopChild := context.WithCancel(ctx)
+	defer stopChild()
+	cmd := exec.CommandContext(childCtx, exe, ParserChildFlag, source, jail)
+	cmd.Env = []string{"GOMAXPROCS=2", "GOMEMLIMIT=" + parserGoMemoryLimit, "TZ=UTC", "LANG=C"}
 	if err = configureParserNamespace(cmd); err != nil {
-		return nil, err
+		return ParsedManifest{}, err
 	}
-	return runParserProcess(ctx, cancel, cmd, input, parserOutputLimit, parserErrorLimit)
+	var result ParsedManifest
+	err = runParserProcess(ctx, stopChild, cmd, input, parserOutputLimit, parserErrorLimit, func(src io.Reader) error {
+		if req.Probe {
+			var extra [1]byte
+			if _, readErr := io.ReadFull(src, extra[:]); !errors.Is(readErr, io.EOF) {
+				return errParserProtocol
+			}
+			return nil
+		}
+		var decodeErr error
+		result, decodeErr = decodeParserOutcome(src)
+		return decodeErr
+	})
+	if err != nil {
+		return ParsedManifest{}, err
+	}
+	return result, nil
 }
 
 type parserCapture struct {
 	data     bytes.Buffer
 	limit    int
 	cancel   context.CancelFunc
-	ready    chan struct{}
-	once     sync.Once
 	overflow bool
 }
 
@@ -230,64 +246,110 @@ func (w *parserCapture) Write(p []byte) (int, error) {
 		return 0, errParserProtocol
 	}
 	w.data.Write(p)
-	if w.ready != nil && w.data.Len() >= 6 {
-		w.once.Do(func() { close(w.ready) })
-	}
 	return len(p), nil
+}
+
+type parserOutputWriter struct {
+	dst       io.Writer
+	remaining int64
+}
+
+func (w *parserOutputWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		return 0, ErrSizeLimit
+	}
+	n, err := w.dst.Write(p)
+	w.remaining -= int64(n)
+	if err == nil && n != len(p) {
+		return n, io.ErrShortWrite
+	}
+	return n, err
 }
 
 // runParserProcess retains Wait on every started process, including output
 // overflow, protocol failure, cancellation and a provider ignoring context.
-func runParserProcess(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, input []byte, outLimit, errLimit int) ([]byte, error) {
+// Decode runs while the child writes; no complete stdout buffer is retained.
+// Wait starts only after stdout has been consumed, as required by StdoutPipe.
+// ctx bounds the attempt; stopChild cancels only the command's child context.
+func runParserProcess(ctx context.Context, stopChild context.CancelFunc, cmd *exec.Cmd, input []byte, outLimit, errLimit int, decode func(io.Reader) error) error {
 	ready := make(chan struct{})
-	out := &parserCapture{limit: outLimit, cancel: cancel, ready: ready}
-	diagnostic := &parserCapture{limit: errLimit, cancel: cancel}
-	cmd.Stdout = out
+	diagnostic := &parserCapture{limit: errLimit, cancel: stopChild}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return errParserFailed
+	}
 	cmd.Stderr = diagnostic
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, errParserFailed
+		stdout.Close()
+		return errParserFailed
 	}
 	if err = cmd.Start(); err != nil {
 		stdin.Close()
-		return nil, ErrSandboxUnavailable
+		stdout.Close()
+		return ErrSandboxUnavailable
 	}
+
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	var waitErr error
+	go func() {
+		var prefix [6]byte
+		_, readErr := io.ReadFull(stdout, prefix[:])
+		if readErr != nil || string(prefix[:]) != "READY\n" {
+			readErr = errParserProtocol
+		} else {
+			close(ready)
+			limited := &io.LimitedReader{R: stdout, N: int64(outLimit) + 1}
+			readErr = decode(limited)
+			if readErr == nil {
+				_, readErr = io.Copy(io.Discard, limited)
+			}
+			if limited.N == 0 {
+				readErr = errors.Join(errParserProtocol, ErrSizeLimit)
+			}
+		}
+		if readErr != nil {
+			stopChild()
+		}
+		done <- readErr
+	}()
+	var outputErr, writeErr error
 	select {
 	case <-ready:
-		// The bounded writer is still active. Validate its readiness prefix
-		// after Wait; never read the growing buffer concurrently.
-		_, err = stdin.Write(input)
+		_, writeErr = stdin.Write(input)
 		stdin.Close()
-		if err != nil {
-			cancel()
+		if writeErr != nil {
+			stopChild()
 		}
-		waitErr = <-done
-	case waitErr = <-done:
+		outputErr = <-done
+	case outputErr = <-done:
 		stdin.Close()
 	case <-ctx.Done():
-		cancel()
 		stdin.Close()
-		waitErr = <-done
+		outputErr = <-done
 	}
-	if out.overflow || diagnostic.overflow {
-		return nil, errParserProtocol
+	waitErr := cmd.Wait()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if diagnostic.overflow {
+		return errParserProtocol
+	}
+	if errors.Is(outputErr, ErrSizeLimit) || cmd.ProcessState.ExitCode() == parserSizeLimitExitCode {
+		return errors.Join(errParserProtocol, ErrSizeLimit)
+	}
+	if outputErr != nil {
+		return errParserProtocol
+	}
+	if writeErr != nil {
+		return errParserFailed
 	}
 	if waitErr != nil {
 		if testing.Testing() {
 			fmt.Fprintf(os.Stderr, "isolated parser child failed: %v\nstderr: %s\n", waitErr, diagnostic.data.Bytes())
 		}
-		return nil, errParserFailed
+		return errParserFailed
 	}
-	if !bytes.HasPrefix(out.data.Bytes(), []byte("READY\n")) {
-		return nil, errParserProtocol
-	}
-	return bytes.Clone(out.data.Bytes()[6:]), nil
+	return nil
 }
 
 // RunParserChild must be dispatched before ordinary CLI/config/database setup.
@@ -332,11 +394,11 @@ func RunParserChild(args []string) (bool, int) {
 	if err != nil {
 		return true, 79
 	}
-	data, err := encodeParserOutcome(result)
-	if err != nil || len(data) > parserOutputLimit {
-		return true, 79
-	}
-	if _, err = os.Stdout.Write(data); err != nil {
+	output := &parserOutputWriter{dst: os.Stdout, remaining: parserOutputLimit}
+	if err = encodeParserOutcome(output, result); err != nil {
+		if errors.Is(err, ErrSizeLimit) {
+			return true, parserSizeLimitExitCode
+		}
 		return true, 79
 	}
 	return true, 0

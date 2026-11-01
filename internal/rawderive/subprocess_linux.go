@@ -55,7 +55,7 @@ func isolateParser(source, jail string) error {
 	if err := unix.Chdir("/"); err != nil {
 		return err
 	}
-	for resource, limit := range map[int]uint64{unix.RLIMIT_AS: 2 << 30, unix.RLIMIT_DATA: 512 << 20, unix.RLIMIT_CPU: 30, unix.RLIMIT_CORE: 0, unix.RLIMIT_NOFILE: 64, unix.RLIMIT_FSIZE: 0} {
+	for resource, limit := range map[int]uint64{unix.RLIMIT_AS: parserAddressSpaceLimit, unix.RLIMIT_DATA: parserDataLimit, unix.RLIMIT_CPU: 30, unix.RLIMIT_CORE: 0, unix.RLIMIT_NOFILE: 64, unix.RLIMIT_FSIZE: 0} {
 		if err := unix.Setrlimit(resource, &unix.Rlimit{Cur: limit, Max: limit}); err != nil {
 			return err
 		}
