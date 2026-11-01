@@ -129,16 +129,6 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	if brainTranscriptErr != nil && !os.IsNotExist(brainTranscriptErr) {
 		return nil, nil, nil, status, brainTranscriptErr
 	}
-	brainTranscriptMsgs := make([]ParsedMessage, len(brainTranscriptSteps))
-	for i := range brainTranscriptSteps {
-		msg := &brainTranscriptSteps[i].msg
-		normalizeAntigravityCLIUserMessage(msg, nil)
-		brainTranscriptMsgs[i] = *msg
-	}
-	brainTranscriptOK := hasDisplayableAntigravityCLITrajectoryMessage(
-		brainTranscriptMsgs,
-	)
-
 	historyMsgs := collectAntigravityHistoryMessages(
 		filepath.Join(root, "history.jsonl"), id,
 	)
@@ -146,6 +136,16 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	for _, msg := range historyMsgs {
 		historyPrompts[msg.Content] = struct{}{}
 	}
+	brainTranscriptMsgs := make([]ParsedMessage, len(brainTranscriptSteps))
+	for i := range brainTranscriptSteps {
+		msg := &brainTranscriptSteps[i].msg
+		normalizeAntigravityCLIUserMessage(msg, historyPrompts)
+		brainTranscriptMsgs[i] = *msg
+	}
+	brainTranscriptOK := hasDisplayableAntigravityCLITrajectoryMessage(
+		brainTranscriptMsgs,
+	)
+
 	var dbErr error
 	if ext == ".db" {
 		var dbResult antigravityStepLoadResult

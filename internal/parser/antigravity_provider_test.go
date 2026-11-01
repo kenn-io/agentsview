@@ -1420,6 +1420,31 @@ func TestAntigravityCLISidecarLiteralEnvelopeHistory(t *testing.T) {
 	}
 }
 
+func TestAntigravityCLIBrainLiteralEnvelopeHistory(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const literal = "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>literal context</ADDITIONAL_METADATA>"
+	line, err := json.Marshal(map[string]any{
+		"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": literal,
+	})
+	require.NoError(t, err)
+	history, err := json.Marshal(map[string]any{"conversationId": id, "display": literal, "timestamp": 1793357626000})
+	require.NoError(t, err)
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			path := antigravityCLIBrainFixture{
+				pb: legacy, setupDB: func(*testing.T, *sql.DB) {},
+				transcript: string(line) + "\n", history: string(history) + "\n",
+			}.write(t, id)
+			session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+			require.NoError(t, err)
+			assert.Equal(t, literal, session.FirstMessage)
+			require.Len(t, messages, 1)
+			assert.Equal(t, literal, messages[0].Content)
+			assert.Equal(t, len(literal), messages[0].ContentLength)
+		})
+	}
+}
+
 func TestAntigravityCLIBrainTranscriptAndFailClosed(t *testing.T) {
 	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
 	tests := []struct {
