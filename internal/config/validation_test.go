@@ -17,6 +17,7 @@ func TestScopedLoadersValidateUsedSections(t *testing.T) {
 		data, want string
 		scope      ValidationScope
 	}{
+		{"[integrations.docbank]\nurl='https://example.com'", "[integrations.docbank]", ScopeDocbank},
 		{"[vector]\nenabled=true\n[vector.embeddings.servers]\n", "model is required", ScopeVector},
 		{"[recall.extract]\nenabled=true\nmodel='local'", "recall.extract", ScopeRecall},
 		{"[insights]\nendpoint='http://models.example/v1'\nmodel='remote'", "plaintext", ScopeInsights},

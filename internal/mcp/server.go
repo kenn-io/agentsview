@@ -46,6 +46,8 @@ const (
 	ToolListFrictionPatterns = "list_friction_patterns"
 )
 
+const ToolGetSessionFileReferences = "get_session_file_references"
+
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
 type Profile string
@@ -124,6 +126,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
+		addFileReferencesTool(s, t, readOnly)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
@@ -306,6 +309,13 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 
 	return s
+}
+
+// addFileReferencesTool advertises the Docbank lookup only when the backend has Docbank configured.
+func addFileReferencesTool(s *mcp.Server, t *toolset, readOnly *mcp.ToolAnnotations) {
+	if service.SupportsFileReferences(t.svc) {
+		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact bytes of session files and images in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
+	}
 }
 
 // newHTTPHandler builds the StreamableHTTP handler with its protections.

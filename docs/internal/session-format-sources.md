@@ -162,6 +162,7 @@ evidence; they do not establish whether a tool helped the task.
   through directory symlinks. `TestSkillInferenceSkipsProtectedPaths` covers
   this with synthetic files, the explicit opt-in, and ordinary unprotected
   paths. No producer format changed.
+
 - **Blank thinking usage (2026-10-27):** Reverified against the synthetic
   transcript in [#2469](https://github.com/kenn-io/agentsview/issues/2469),
   kept in `internal/parser/testdata/claude/blank_thinking_usage.jsonl`. An
@@ -172,6 +173,7 @@ evidence; they do not establish whether a tool helped the task.
   response. It is stored as a hidden system row that keeps its usage; a blank
   record with all-zero usage is still skipped. Data version 150 reparses
   Claude-format sources in place.
+
 - **Screenshot intake (checked 2026-10-24):** A frozen native-file selection
   retained JSONL envelopes, message and tool identifiers, subagent
   transcripts, and companion text files. Decoded-string sanitization followed
@@ -666,6 +668,7 @@ fixtures retain this field; missing identities remain source-local.
   `model_provider_id` as `openai` and `service_tier` as `priority`; Codex can
   omit that selected tier from requests for models that do not advertise
   support.
+
 - **Screenshot intake (checked 2026-10-24):** Ordinary sync accepted sanitized
   native JSONL with `encrypted_content` explicitly omitted. The local parser's
   `extractCodexInboundAgentMessage` also accepts plaintext under that field
@@ -1792,6 +1795,12 @@ Normal sync tests use the captured beta database schema and check archived
 payloads, image keep/drop behavior, unchanged PDF/text files and references, and
 an unchanged second sync. Data version 108 makes existing imports eligible to
 recover omitted file payloads. This adds retention, not a PDF previewer.
+`TestRetainedToolResultFilesProducerFixture` uses `tool_files.json` to check
+PDF/text sizes and the text digest. Service and UI tests use separate inputs.
+Reverified the retained-file decoder on 2026-10-22 against the parser's
+unchanged `file.uri` retention. Constructed service and API regressions cover
+empty base64 bodies and MIME parameters before the base64 marker, asserting
+decoded-byte digests and visible file occurrences.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the

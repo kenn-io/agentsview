@@ -248,7 +248,7 @@ func resolveMCPService(
 		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
 			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newDocbankPGReadService(cfg, pgCfg)
 	}
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return nil, nil, fmt.Errorf("loading daemon auth: %w", err)
@@ -271,6 +271,24 @@ type mcpDaemonSelection struct {
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
 	return &mcpDaemonService{cfg: cfg}
+}
+
+func (s *mcpDaemonService) SupportsFileReferences() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return servingDocbankEnabled(s.cfg)
+}
+
+// servingDocbankEnabled answers from the daemon that serves MCP calls. Without
+// one, the daemon MCP will start reads the same config.
+func servingDocbankEnabled(cfg config.Config) bool {
+	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	if runtime == nil {
+		return cfg.Integrations.Docbank.Configured()
+	}
+	base := urlFromDaemonRuntime(runtime)
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(context.Background(), base, cfg.AuthToken)
+	return err == nil && service.SupportsFileReferences(servicehttp.NewHTTPBackendForServer(base, cfg.AuthToken, capabilities))
 }
 
 func (s *mcpDaemonService) SupportsRecallQueries() bool {
@@ -717,4 +735,10 @@ func normalizeMCPHTTPAddr(addr string, allowInsecure bool) (string, error) {
 				"an authenticating reverse proxy)", trimmed)
 	}
 	return trimmed, nil
+}
+
+func (s *mcpDaemonService) FileReferences(ctx context.Context, id string) (service.FileReferencesResult, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (service.FileReferencesResult, error) {
+		return service.FileReferences(ctx, svc, id)
+	})
 }

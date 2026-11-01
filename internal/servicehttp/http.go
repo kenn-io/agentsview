@@ -84,7 +84,9 @@ type httpBackend struct {
 	client            *http.Client
 	longRunningClient *http.Client
 	readOnly          bool
+	signed            bool
 	recallQueries     bool
+	docbankEnabled    bool
 	// apiVersion is the probed server API version, or 0 when unknown.
 	apiVersion int
 	friction   bool
@@ -101,6 +103,7 @@ type HTTPServerCapabilities struct {
 	NonRecordingRecall bool
 	// FrictionReadable is set when the server's store serves friction reads.
 	FrictionReadable bool
+	DocbankEnabled   bool `json:"docbank_enabled"`
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -133,15 +136,15 @@ func NewHTTPBackendForServer(
 	)
 	b.apiVersion = capabilities.APIVersion
 	b.friction = capabilities.FrictionReadable
+	b.docbankEnabled = capabilities.DocbankEnabled
 	return b
 }
 
 func newHTTPBackend(
 	baseURL, token string, readOnly, recallQueries bool,
 ) *httpBackend {
-	browserURL := baseURL
-	if requestsign.SignsFromEnvironment(baseURL) {
-		// Signed machine listeners serve no browser UI, so omit session links.
+	signed, browserURL := requestsign.SignsFromEnvironment(baseURL), baseURL
+	if signed {
 		browserURL = ""
 	}
 	return &httpBackend{
@@ -150,10 +153,13 @@ func newHTTPBackend(
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
+		signed:            signed,
 		recallQueries:     recallQueries,
 		token:             token,
 	}
 }
+
+func (b *httpBackend) SupportsFileReferences() bool { return !b.signed && b.docbankEnabled }
 
 // ProbeHTTPServerCapabilities reads the metadata needed to expose tools safely
 // for an explicit daemon URL. Such callers do not have a local runtime record.
@@ -178,7 +184,7 @@ func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HT
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording", FrictionReadable: response.JSON200.FrictionReadable != nil && *response.JSON200.FrictionReadable}, nil
+	return HTTPServerCapabilities{DocbankEnabled: response.JSON200.DocbankEnabled != nil && *response.JSON200.DocbankEnabled, ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording", FrictionReadable: response.JSON200.FrictionReadable != nil && *response.JSON200.FrictionReadable}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }

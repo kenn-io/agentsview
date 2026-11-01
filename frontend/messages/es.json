@@ -3176,5 +3176,18 @@
   "friction_session_error": "Los hallazgos de fricción no están disponibles.",
   "friction_session_empty": "No hay hallazgos de fricción en esta sesión.",
   "friction_session_jump": "Mensaje {ordinal}",
-  "friction_session_jump_title": "Ir al mensaje {ordinal}"
+  "friction_session_jump_title": "Ir al mensaje {ordinal}",
+  "docbank_subagent_open_session": "Las coincidencias de archivos aparecen al abrir como sesión.",
+  "docbank_checking": "Buscando en Docbank…",
+  "docbank_current": "Versión actual",
+  "docbank_prior": "Versión anterior",
+  "docbank_trash": "Papelera",
+  "docbank_not_found": "No está en Docbank",
+  "docbank_read_unavailable": "Archivos de sesión no disponibles",
+  "docbank_unavailable": "Docbank no disponible",
+  "docbank_limit_exceeded": "Se alcanzó el límite de búsquedas en Docbank",
+  "docbank_bytes_not_kept": "No se conservaron los bytes de la imagen",
+  "docbank_file": "Archivo {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "Archivo {n} · {mediaType}",
+  "docbank_more": "+{count} más en Docbank"
 }

@@ -7,6 +7,8 @@
   import { m } from "../../i18n/index.js";
 
   interface Props {
+    sessionId?: string;
+    ordinal?: number;
     toolCalls: ToolCall[];
     callTimingByID?: Map<string, CallTiming>;
     isRunning?: boolean;
@@ -14,7 +16,7 @@
   }
 
   let {
-    toolCalls,
+    sessionId, ordinal, toolCalls,
     callTimingByID,
     isRunning = false,
     searchOrdinal,
@@ -35,7 +37,7 @@
     {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
       {@const dur = ct === undefined ? undefined : ct.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
-      <ToolBlock
+      <ToolBlock {sessionId} {ordinal}
         {toolCall}
         content=""
         label={displayToolName(toolCall)}

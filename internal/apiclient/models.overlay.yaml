@@ -261,3 +261,9 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/rawsync
         name: rawsync
+  - target: $.components.schemas.ServiceFileReferencesResult
+    update:
+      x-go-type: service.FileReferencesResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service

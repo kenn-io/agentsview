@@ -2010,3 +2010,19 @@ func TestListSessionsRejectsUnknownMachine(t *testing.T) {
 	var filterError *db.MachineFilterError
 	require.ErrorAs(t, err, &filterError)
 }
+
+func TestFileReferencesTool(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "s1", "proj")
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil, withTestDocbank())}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	res, err := ct.CallTool(t.Context(), callParams(ToolGetSessionFileReferences, map[string]any{"session_id": "s1"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var out service.FileReferencesResult
+	require.NoError(t, json.Unmarshal(raw, &out))
+	assert.Equal(t, "enabled", out.Integration)
+	assert.Empty(t, out.Occurrences)
+}
