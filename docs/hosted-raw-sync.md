@@ -229,7 +229,8 @@ unresolved members and retry finitely. Attempts that end without an outcome,
 including those interrupted by a restart, count toward `raw_max_attempts`; to
 allow for a restart, the worker runs once past that limit before another claim
 fails the job with error class `lease`. Exhausted jobs remain failed until new
-source or processing-version selection provides new work.
+source or processing-version selection provides new work, or an operator runs
+`pg raw-reparse --repair`.
 
 Equivalent content from several devices coalesces when it shares a stable
 provider session identity. Piebald's numeric database IDs stay scoped to their
@@ -296,6 +297,20 @@ selects at most 1–256 heads and atomically saves its keyset checkpoint. The ru
 ID is bound to the executable's processing version. Equal manifest/version
 selection is idempotent: a new run ID does not resurrect completed or exhausted
 jobs for that same selection. Startup and idle polls perform no reparse scan.
+
+After fixing the cause of a failed job, give it a fresh attempt budget:
+
+```bash
+agentsview pg raw-reparse hosted --repair --batch-size 64
+```
+
+Repeat until the command prints `Rescheduled 0 failed jobs`. If the count stops
+reaching zero while health still lists the same failures, those jobs are failing
+again. Fix their cause or raise `--batch-size` (up to 256). Repair uses this
+executable's processing version and is safe to repeat.
+It only reschedules failed jobs still selected for current heads, leaving
+healthy jobs, in-progress jobs, and heads at other versions unchanged. `--repair`
+and `--run-id` are mutually exclusive.
 
 A source whose file has left its device has a tombstone as its current head.
 Reparsing it changes nothing, so its retained sessions keep the output of the
