@@ -211,7 +211,7 @@ thread creation. No external sandbox helper is required.
 | Worker concurrency                           | One sequential job per instance                 |
 | Poll interval                                | Default 5 seconds; maximum 60                   |
 | Whole attempt wall time                      | Default 60 seconds; maximum 300                 |
-| Attempts per selected generation             | Default 5; maximum 10                           |
+| Attempts per selected generation             | Default 5; maximum 10; 6 / 11 after interruption |
 | Retry backoff                                | Exponential from 1 second, capped at 60 seconds |
 | Lease / heartbeat                            | 60 seconds / 10 seconds                         |
 | Materialized source bytes                    | 512 MiB                                         |
@@ -225,7 +225,10 @@ remain retained but cannot be projected by this worker. Accepted source bytes
 are untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
-unresolved members and retry finitely. Exhausted jobs remain failed until new
+unresolved members and retry finitely. Attempts that end without an outcome,
+including those interrupted by a restart, count toward `raw_max_attempts`; to
+allow for a restart, the worker runs once past that limit before another claim
+fails the job with error class `lease`. Exhausted jobs remain failed until new
 source or processing-version selection provides new work.
 
 Equivalent content from several devices coalesces when it shares a stable
