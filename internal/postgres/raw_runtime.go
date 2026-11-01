@@ -92,9 +92,17 @@ type RawRolloutBatch struct {
 	Done     bool
 }
 
+// rawRepairableSQL finds selected failed jobs at version $2. Candidate
+// selection and the recheck under the head lock share it, so they agree.
+const rawRepairableSQL = `raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id
+ JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
+ JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
+ WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2`
+
 // RepairFailedJobs gives selected failed jobs at version a fresh attempt budget.
 // Reset jobs leave the failed set, so repeated calls need no checkpoint.
-// Wait for locked candidates so callers can stop when the count is zero.
+// It waits for locked candidates and takes the next ones when all of a batch
+// changed while it waited, so callers can stop when the count is zero.
 func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version string, limit int) (int, error) {
 	if limit < 1 || limit > 256 {
 		return 0, rawsync.ErrInvalid
@@ -111,51 +119,50 @@ func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version strin
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "agentsview-raw-repair:"+s.options.Tenant); err != nil {
 		return 0, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT c.device_id,c.manifest_id,c.canonical_json,c.id FROM (
- SELECT h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,m.manifest_id,m.canonical_json,j.id
- FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id
- JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
- JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
- WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2
- ORDER BY j.updated_at,j.id LIMIT $3
- ) c JOIN raw_source_heads h ON h.tenant_id=$1 AND (h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,h.manifest_id)=(c.device_id,c.provider,c.configured_root_id,c.source_key_sha256,c.manifest_id)
- JOIN raw_ingest_jobs j ON j.tenant_id=$1 AND j.id=c.id AND j.state='failed'
- ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 FOR UPDATE OF h, j`, s.options.Tenant, version, limit)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
 	type head struct {
-		device, id string
-		data       []byte
-		job        int64
+		device, id      string
+		data            []byte
+		job, generation int64
 	}
-	var heads []head
-	for rows.Next() {
-		var h head
-		if err = rows.Scan(&h.device, &h.id, &h.data, &h.job); err != nil {
-			return 0, err
-		}
-		heads = append(heads, h)
-	}
-	if err = rows.Err(); err != nil {
-		return 0, err
-	}
-	for _, h := range heads {
-		m, err := rawsync.ParseCanonicalManifest(rawsync.AuthIdentity{TenantID: s.options.Tenant, DeviceID: h.device}, h.id, h.data, rawsync.DefaultManifestLimits())
+	repaired, heads := 0, []head{{}}
+	for repaired == 0 && len(heads) > 0 {
+		rows, err := tx.QueryContext(ctx, `SELECT c.device_id,c.manifest_id,c.canonical_json,c.id FROM (SELECT h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,m.manifest_id,m.canonical_json,j.id FROM `+rawRepairableSQL+` ORDER BY j.updated_at,j.id LIMIT $3) c
+ JOIN raw_source_heads h ON h.tenant_id=$1 AND (h.device_id,h.provider,h.configured_root_id,h.source_key_sha256)=(c.device_id,c.provider,c.configured_root_id,c.source_key_sha256)
+ ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 FOR UPDATE OF h`, s.options.Tenant, version, limit)
 		if err != nil {
 			return 0, err
 		}
-		// Read after the head lock: a commit we waited on may have advanced it.
-		var generation int64
-		if err = tx.QueryRowContext(ctx, `SELECT projection_generation FROM raw_source_projections WHERE tenant_id=$1 AND source_id=$2`, s.options.Tenant, rawSourceID(m)).Scan(&generation); err != nil {
+		defer rows.Close()
+		heads = heads[:0]
+		for rows.Next() {
+			var h head
+			if err = rows.Scan(&h.device, &h.id, &h.data, &h.job); err != nil {
+				return 0, err
+			}
+			heads = append(heads, h)
+		}
+		if err = rows.Err(); err != nil {
 			return 0, err
 		}
-		if _, err = resetRawSourceSelectionTx(ctx, tx, m, version, generation+1, h.job); err != nil {
-			return 0, err
+		for _, h := range heads {
+			// Recheck in a fresh statement: a commit we waited on may have changed the selection.
+			err = tx.QueryRowContext(ctx, `SELECT p.projection_generation FROM `+rawRepairableSQL+` AND h.manifest_id=$3 AND j.id=$4 FOR UPDATE OF j`, s.options.Tenant, version, h.id, h.job).Scan(&h.generation)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			} else if err != nil {
+				return 0, err
+			}
+			m, err := rawsync.ParseCanonicalManifest(rawsync.AuthIdentity{TenantID: s.options.Tenant, DeviceID: h.device}, h.id, h.data, rawsync.DefaultManifestLimits())
+			if err != nil {
+				return 0, err
+			}
+			if _, err = resetRawSourceSelectionTx(ctx, tx, m, version, h.generation+1, h.job); err != nil {
+				return 0, err
+			}
+			repaired++
 		}
 	}
-	return len(heads), tx.Commit()
+	return repaired, tx.Commit()
 }
 
 const rawRolloutHeadsSQL = `SELECT h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,m.manifest_id,m.canonical_json FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id WHERE h.tenant_id=$1 AND (h.device_id,h.provider,h.configured_root_id,h.source_key_sha256)>($2,$3,$4,$5) ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 LIMIT $6 FOR UPDATE OF h`
