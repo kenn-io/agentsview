@@ -1691,3 +1691,64 @@ CREATE TABLE IF NOT EXISTS archive_session_provenance (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_session_source
     ON archive_session_provenance(archive_id,device_id,root_id,source_key);
+
+-- Derived commit observations outlive their sessions. No session foreign key.
+CREATE TABLE IF NOT EXISTS commit_session_links (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    source TEXT NOT NULL,
+    printed_sha TEXT NOT NULL,
+    project_hint TEXT NOT NULL DEFAULT '',
+    source_revision TEXT NOT NULL DEFAULT '',
+    changed_paths TEXT NOT NULL DEFAULT '[]',
+    paths_complete INTEGER NOT NULL DEFAULT 0,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commit_session_links_sha ON commit_session_links(commit_sha);
+CREATE INDEX IF NOT EXISTS idx_commit_session_links_session ON commit_session_links(session_id);
+CREATE TABLE IF NOT EXISTS commit_link_state (
+    session_id TEXT PRIMARY KEY,
+    revision TEXT NOT NULL,
+    project TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    extractor_version INTEGER NOT NULL,
+    unsupported INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS commit_link_publication_state (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision INTEGER NOT NULL DEFAULT 0,
+    ready INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO commit_link_publication_state(singleton) VALUES(1);
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_insert AFTER INSERT ON commit_session_links BEGIN
+    UPDATE commit_link_publication_state SET revision=revision+1 WHERE singleton=1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_update AFTER UPDATE ON commit_session_links
+WHEN OLD.payload IS NOT NEW.payload OR OLD.project_hint IS NOT NEW.project_hint OR OLD.source_revision IS NOT NEW.source_revision BEGIN
+    UPDATE commit_link_publication_state SET revision=revision+1 WHERE singleton=1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_delete AFTER DELETE ON commit_session_links BEGIN
+    UPDATE commit_link_publication_state SET revision=revision+1 WHERE singleton=1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_session_insert AFTER INSERT ON sessions BEGIN
+    UPDATE commit_link_publication_state SET revision=revision+1 WHERE singleton=1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_session_delete AFTER DELETE ON sessions BEGIN
+    UPDATE commit_session_links SET project_hint=OLD.project,payload=json_set(payload,
+        '$.session',json('null'),'$.gone',json('true'),'$.turn',json('null'),
+        '$.agent','','$.project','','$.session_started_at','','$.web_url','')
+    WHERE session_id=OLD.id OR json_extract(payload,'$.session.id')=OLD.id
+       OR session_id IN (
+           SELECT native.parser_id FROM raw_archive_sessions AS native
+           WHERE native.session_id=OLD.id AND native.provider=CASE
+               WHEN instr(native.parser_id,':')>0 THEN substr(native.parser_id,1,instr(native.parser_id,':')-1)
+               ELSE 'claude' END
+             AND (SELECT COUNT(*) FROM raw_archive_sessions AS owner
+                  WHERE owner.provider=native.provider AND owner.parser_id=native.parser_id)=1
+       );
+    DELETE FROM commit_link_state WHERE session_id=OLD.id;
+    UPDATE commit_link_publication_state SET revision=revision+1 WHERE singleton=1;
+END;

@@ -1503,3 +1503,57 @@ against `pg serve`, with the same masking and `--reveal` constraints.
 ### Ingest-time image offload
 
 The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.
+
+## Commit-session links
+
+`agentsview session commits <id> --format json` returns stored commit evidence
+for that exact session ID, including retained evidence after permanent deletion.
+It uses an existing daemon or opens the archive read-only. It never starts a
+daemon, refreshes source transcripts, or runs Git. `--server` and `--pg` work as
+for other session reads.
+
+The daemon indexes retained transcripts in bounded background batches. To build
+an existing archive's index explicitly while its daemon is stopped, run
+`agentsview commits backfill`. It reads the archive's stored messages, then
+advances offline Git discovery in eligible local checkouts. It does not read
+source session files. Repeated runs resume discovery. Foreign, attached, missing,
+and protected repository paths are skipped.
+
+Transcript evidence requires a recorded shell `git commit` call and Git's commit
+summary output. Its message ordinal and call index identify the recorded call;
+the preceding user prompt supplies context, not proof of authorship. Literal
+`Agent-Session: <agent>:<session-id>` lines in local commits supply trailer
+evidence. Trailer context uses the last tool input naming a changed file before
+the commit plus five minutes, then the last preceding user prompt. Fallbacks are
+marked `before` or `match`; transcript prompts are marked `commit-call`.
+
+The HTTP lookup surfaces are:
+
+- `POST /api/v1/commits/sessions`, body `{"shas":["abcdef0"]}`, returns
+  `{"commits":{"abcdef0":[...]}}`. Every requested spelling is a key; misses
+  are empty arrays. Empty requests return `{"commits":{}}`.
+- `GET /api/v1/sessions/{id}/commits` returns `{"commits":[...]}`.
+
+A link includes `session_id`, `commit_sha`, `resolved`, `source`, nullable
+`message_ordinal` and `call_index`, `repository_path`, `branch`, `subject`,
+`committed_at`, `ambiguous`, `agent`, `project`, `session_started_at`, `web_url`,
+nullable `session:{id}`, `gone`, and nullable `turn:{ordinal,at,prompt,why}`.
+Prompts are redacted before truncation to 600 Unicode characters. Unknown or
+permanently deleted sessions have `session:null`, `gone:true`, empty session
+metadata, and no turn. Trashed sessions are hidden. Commit facts remain stored
+independently of session deletion. A changed transcript revision clears stale
+prompt context until the next indexing pass.
+
+SHA queries accept 7–40 hexadecimal characters, case-insensitively. Invalid
+batches or more than 200 SHA requests fail with HTTP 400. Unresolved short SHAs
+and known prefix collisions are marked ambiguous. Both evidence sources remain
+separate rows. Results are bounded to 4,096 total link occurrences and 8 MiB of
+encoded JSON; an oversized result fails atomically with HTTP 422. An unavailable
+or unbuilt index returns an upgrade/backfill error, rather than an empty match.
+
+Full archives retain both evidence sources. Transcripts-only archives omit
+transcript links because tool evidence is absent. Usage-only archives omit
+prompt text, commit subjects, branches, and repository paths. Replica pushes
+publish source-owned commit evidence independently of changed session rows;
+PostgreSQL, DuckDB, and ClickHouse reads use those stored snapshots. Hosted
+PostgreSQL projection does not yet expose provenance identities.

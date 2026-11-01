@@ -14,17 +14,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/mcpdiscovery"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"go.kenn.io/agentsview/internal/service"
 )
 
 // Tool names. The same constant is used to register a tool and to refer
 // to it in tests.
 const (
+	ToolCommitSessions       = "commit_sessions"
 	ToolSearchSessions       = "search_sessions"
 	ToolQueryRecall          = "query_recall"
 	ToolListSessions         = "list_sessions"
@@ -124,6 +123,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
+		mcp.AddTool(s, &mcp.Tool{Name: ToolCommitSessions, Description: "Find stored agent-session evidence and writing prompts for commit SHAs. Read-only; does not synchronize sources or run Git. Unresolved prefixes are ambiguous evidence, not proof of authorship.", Annotations: readOnly}, t.commitSessions)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +

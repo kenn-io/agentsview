@@ -568,7 +568,13 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
 	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
+	provenanceEngine := engine
+	if provenanceEngine == nil {
+		provenanceEngine = sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: archiveOnly, Machine: cfg.InstallationID, ScanProtectedPaths: cfg.ScanProtectedPaths, ArchiveContent: cfg.ArchiveContent})
+		defer provenanceEngine.Close()
+	}
 	scheduler := poller.Start(ctx,
+		commitProvenanceJob(provenanceEngine),
 		pricingRefreshJob(database, pricingRefreshRunner),
 		codexCloudSyncJob(codexCloudSync, idleTracker),
 		codexCloudLiveJob(codexCloudMonitor, idleTracker),
