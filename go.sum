@@ -370,8 +370,8 @@ go.duckdb.org/libduckdb/windows-amd64 v0.20000.0 h1:/aGtHSsXGmd3orkky7vmX/rMpky4
 go.duckdb.org/libduckdb/windows-amd64 v0.20000.0/go.mod h1:eBhoLryMd4QH8f0EX013x32MHnXEXab0eB4oLnMEBhs=
 go.kenn.io/docbank v0.16.0 h1:vQ35d88jU6oEWrQ9CLItfacf1v+fjqWKiwikTYDw36E=
 go.kenn.io/docbank v0.16.0/go.mod h1:s/Tciu87HBnrbc2Lu+t6N5BtheRL0tBkG3qsyRPympc=
-go.kenn.io/kit v0.47.5-0.20261101045915-a1f90caf87c8 h1:WzdG7oL72GfAtzazfFzE0CtwHbAdYtp+uiK6fQSro1Q=
-go.kenn.io/kit v0.47.5-0.20261101045915-a1f90caf87c8/go.mod h1:3mIcn0wWeb6MaG4ftwrJEHBYiN0C/mmL1m4hF+QYxZ4=
+go.kenn.io/kit v0.47.5 h1:CSzivpLrVRo0dPPvXLhHbUPMU0l/sNWe6WoVZ8UET80=
+go.kenn.io/kit v0.47.5/go.mod h1:3mIcn0wWeb6MaG4ftwrJEHBYiN0C/mmL1m4hF+QYxZ4=
 go.mongodb.org/mongo-driver/v2 v2.9.2 h1:OCAdjI37pC/SVxucz/9CM8zD4jCdegtsY5QcKzYFCgE=
 go.mongodb.org/mongo-driver/v2 v2.9.2/go.mod h1:SHKN0IWkKmEVGHLjXnni6s4wPKX4v86FTgOeJJFuXcA=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
