@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
@@ -32,14 +33,18 @@ func (pgReplica) serveOptions(
 			"pg serve store is %T, not *postgres.Store", store,
 		)
 	}
+	pool := pgStore.DB()
+	if pool == nil {
+		return nil, nil, db.ErrReadOnly
+	}
 	rawSyncWritable, err := postgres.CanWriteRawSyncSchema(
-		ctx, pgStore.DB(), target.Schema,
+		ctx, pool, target.Schema,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	rawSyncOption, closeRawSync, err := preparePGRawSyncServicesIfWritable(
-		ctx, appCfg.DataDir, pgStore.DB(), rawSyncWritable,
+		ctx, appCfg.DataDir, pool, rawSyncWritable,
 	)
 	if err != nil {
 		return nil, nil, err

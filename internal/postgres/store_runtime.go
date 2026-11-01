@@ -23,10 +23,18 @@ func (s *Store) runtimeState() *storeRuntime {
 	return s.runtime
 }
 
-func (s *Store) beginTx(ctx context.Context, options *sql.TxOptions) (*sql.Tx, error) {
+func (s *Store) requireOwnedPool() (*sql.DB, error) {
 	pool := s.DB()
 	if pool == nil {
 		return nil, db.ErrReadOnly
+	}
+	return pool, nil
+}
+
+func (s *Store) beginTx(ctx context.Context, options *sql.TxOptions) (*sql.Tx, error) {
+	pool, err := s.requireOwnedPool()
+	if err != nil {
+		return nil, err
 	}
 	return pool.BeginTx(ctx, options)
 }

@@ -54,7 +54,7 @@ func NewHostedStore(pgURL, schema, tenant string, allowInsecure bool) (*HostedSt
 }
 
 // DB returns the underlying *sql.DB for operations that need
-// direct access (e.g. schema compatibility checks).
+// direct access (e.g. schema compatibility checks), or nil for a borrowed view.
 func (s *Store) DB() *sql.DB {
 	if s.readTx != nil {
 		return nil
