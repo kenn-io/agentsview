@@ -94,6 +94,7 @@ type RawRolloutBatch struct {
 
 // RepairFailedJobs gives selected failed jobs at version a fresh attempt budget.
 // Reset jobs leave the failed set, so repeated calls need no checkpoint.
+// Wait for locked candidates so callers can stop when the count is zero.
 func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version string, limit int) (int, error) {
 	if limit < 1 || limit > 256 {
 		return 0, rawsync.ErrInvalid
@@ -111,7 +112,7 @@ func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version strin
  JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
  JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
  WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2
- ORDER BY j.id LIMIT $3 FOR UPDATE OF h, j SKIP LOCKED`, s.options.Tenant, version, limit)
+ ORDER BY j.id LIMIT $3 FOR UPDATE OF h, j`, s.options.Tenant, version, limit)
 	if err != nil {
 		return 0, err
 	}

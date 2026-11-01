@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,20 @@ import (
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/server"
 )
+
+func TestPGRawReparseRequiresNonemptyRunID(t *testing.T) {
+	for _, args := range [][]string{{"--run-id", ""}, {"--run-id", " "}, {"--repair=false"}} {
+		t.Run(fmt.Sprint(args), func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			t.Setenv("AGENTSVIEW_PG_URL", "")
+			cmd := newPGRawReparseCommand()
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(args)
+			require.EqualError(t, cmd.ExecuteContext(t.Context()), "raw-reparse requires --run-id")
+		})
+	}
+}
 
 func TestPGRawRuntimeChild(t *testing.T) {
 	if os.Getenv("RAW_RUNTIME_CHILD") != "1" {

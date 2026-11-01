@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -143,6 +144,45 @@ func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 	var state string
 	require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&state))
 	assert.Equal(t, "complete", state)
+}
+
+func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
+	f := newProjectionFixture(t)
+	f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
+	m, _ := f.accept(t, "device-a", "failed", "")
+	lease := f.lease(t, m)
+	partial := projectionOutcome("partial")
+	partial.Outcome.ResultSetComplete = false
+	require.ErrorIs(t, f.sink.Project(t.Context(), lease, m, partial), rawderive.ErrProjectionFailed)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.runtime.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	// Acceptance and rollouts take this same current-head lock.
+	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE`, m.ManifestID)
+	require.NoError(t, err)
+	var count int
+	var repairErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 64)
+	}()
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-done
+	}()
+	waitHostedLocks(t, f, ctx, 1)
+	require.NoError(t, gate.Commit())
+	<-done
+	require.NoError(t, repairErr)
+	assert.Equal(t, 1, count)
+	var state string
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state))
+	assert.Equal(t, "ready", state)
 }
 
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {

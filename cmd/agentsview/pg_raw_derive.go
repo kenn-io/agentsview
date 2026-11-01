@@ -237,6 +237,9 @@ func newPGRawReparseCommand() *cobra.Command {
 	var batch int
 	var repair bool
 	cmd := &cobra.Command{Use: "raw-reparse [target]", Short: "Schedule one bounded, resumable batch of current raw heads for this parser version", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if !repair && strings.TrimSpace(runID) == "" {
+			return errors.New("raw-reparse requires --run-id")
+		}
 		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
 			return err
