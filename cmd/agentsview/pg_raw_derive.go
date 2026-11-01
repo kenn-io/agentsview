@@ -272,7 +272,11 @@ func newPGRawReparseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Rescheduled %d failed jobs\n", count)
+			jobs := "jobs"
+			if count == 1 {
+				jobs = "job"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Rescheduled %d failed %s\n", count, jobs)
 			return nil
 		}
 		result, err := sink.ScheduleCurrentHeads(cmd.Context(), runID, rawProcessingVersion(), batch)
