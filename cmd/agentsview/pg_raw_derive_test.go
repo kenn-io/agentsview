@@ -25,8 +25,6 @@ import (
 func TestPGRawReparseRequiresNonemptyRunID(t *testing.T) {
 	for _, args := range [][]string{{"--run-id", ""}, {"--run-id", " "}, {"--repair=false"}} {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
-			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
-			t.Setenv("AGENTSVIEW_PG_URL", "")
 			cmd := newPGRawReparseCommand()
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)

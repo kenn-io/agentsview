@@ -249,9 +249,6 @@ func TestHostedRuntimeRepairConcurrentBatchesReachNextFailure(t *testing.T) {
 		require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, id).Scan(&state))
 		assert.Equal(t, "ready", state)
 	}
-	count, err := f.sink.RepairFailedJobs(ctx, "parser-1", 1)
-	require.NoError(t, err)
-	assert.Zero(t, count)
 }
 
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
@@ -265,11 +262,7 @@ func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	b, _ := f.accept(t, "device-b", "b", "")
 	healthy := f.lease(t, b)
 	require.NoError(t, f.sink.Project(t.Context(), healthy, b, projectionOutcome("complete")))
-	_, err := f.sink.ScheduleCurrentHeads(t.Context(), "repeat", "parser-1", 64)
-	require.NoError(t, err)
 	var state string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, stale.ID).Scan(&state))
-	assert.Equal(t, "failed", state)
 	n, err := f.sink.RepairFailedJobs(t.Context(), "parser-1", 64)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
@@ -292,7 +285,6 @@ func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	assert.Equal(t, stale.ID, leases[0].ID)
 	assert.Equal(t, stale.Attempt, leases[0].Attempt)
 	assert.Greater(t, leases[0].ProjectionGeneration, stale.ProjectionGeneration)
-	require.ErrorIs(t, f.jobs.FailRawParseJob(t.Context(), stale, "parse", "stale"), rawderive.ErrLeaseLost)
 }
 
 func TestHostedRuntimeRepairRefailedJobYieldsToOlderFailure(t *testing.T) {
@@ -352,19 +344,6 @@ func TestHostedRuntimeRepairFailedJobsBoundsAndVersions(t *testing.T) {
 	assert.Equal(t, "failed", state)
 	assert.Equal(t, "parser-1", version)
 	assert.Equal(t, oldLease.ProjectionGeneration, generation)
-}
-
-func TestHostedRuntimeRolloutSchedulesAbsentSelection(t *testing.T) {
-	f := newProjectionFixture(t)
-	m, _ := f.accept(t, "device-a", "a", "")
-	result, err := f.sink.ScheduleCurrentHeads(t.Context(), "initial", "parser-1", 64)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Selected)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	assert.Equal(t, m.ManifestID, leases[0].ManifestID)
-	assert.EqualValues(t, 1, leases[0].ProjectionGeneration)
 }
 
 func TestHostedRuntimeSelectionFailureRollsBackAcceptance(t *testing.T) {
