@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1321,6 +1322,130 @@ func TestAntigravityProvidersReadOnlyCheckpointedWAL(t *testing.T) {
 			assert.NotEmpty(t, outcome.Results[0].Result.Messages)
 		})
 	}
+}
+
+func TestAntigravityCLIBrainTranscriptPromptEnvelope(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const prompt = "What is the capital of Türkiye? Answer in one word, do not use tools."
+	const envelope = `<USER_REQUEST>
+What is the capital of Türkiye? Answer in one word, do not use tools.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-30T13:53:46+03:00.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting Model Selection from None to Gemini 3.8 Flash (Low). No need to comment on this change if the user doesn't ask about it. ...
+</USER_SETTINGS_CHANGE>`
+	line, err := json.Marshal(map[string]any{
+		"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+		"created_at": "2026-10-30T10:53:46Z", "content": envelope,
+	})
+	require.NoError(t, err)
+	history, err := json.Marshal(map[string]any{"conversationId": id, "timestamp": 1793357626000, "display": prompt})
+	require.NoError(t, err)
+	encodedEnvelope, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	sidecar := fmt.Sprintf(`{"steps":[
+		{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{"userResponse":%s}},
+		{"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","systemMessage":{"message":%s}},
+		{"type":"CORTEX_STEP_TYPE_CHECKPOINT","checkpoint":{"userRequests":[%s],"sessionSummary":"Keep this summary."}}
+	]}`, encodedEnvelope, encodedEnvelope, encodedEnvelope)
+	rawUserStep := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, X'00')`)
+	}
+	userMessages := []ParsedMessage{{Content: prompt}}
+	sidecarMessages := []ParsedMessage{
+		{Content: prompt},
+		{Content: envelope, IsSystem: true},
+		{Content: "[Checkpoint]\nUser Requests: " + envelope + "\nKeep this summary.", IsSystem: true},
+	}
+	tests := []struct {
+		name         string
+		fixture      antigravityCLIBrainFixture
+		wantMessages []ParsedMessage
+	}{
+		{"brain matches plain history", antigravityCLIBrainFixture{setupDB: rawUserStep, transcript: string(line) + "\n", history: string(history) + "\n"}, userMessages},
+		{"covering sidecar beats dirty brain", antigravityCLIBrainFixture{setupDB: rawUserStep, transcript: `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"dirty brain prompt"}` + "\n", sidecar: sidecar}, sidecarMessages},
+		{"legacy sidecar", antigravityCLIBrainFixture{pb: true, sidecar: sidecar}, sidecarMessages},
+		{"selected SQLite without history", antigravityCLIBrainFixture{setupDB: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, antigravityTestStepPayload(1793357626, envelope))
+		}}, userMessages},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.fixture.write(t, id)
+			provider := newAntigravityCLITestProvider(t, filepath.Dir(filepath.Dir(path)))
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+			require.NoError(t, err)
+			require.True(t, ok)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			result := outcome.Results[0].Result
+			assert.Equal(t, prompt, result.Session.FirstMessage)
+			require.Len(t, result.Messages, len(tc.wantMessages))
+			assert.Equal(t, 70, result.Messages[0].ContentLength)
+			for i, want := range tc.wantMessages {
+				assert.Equal(t, want.Content, result.Messages[i].Content)
+				assert.Equal(t, want.IsSystem, result.Messages[i].IsSystem)
+			}
+		})
+	}
+}
+
+func TestAntigravityCLIProducerLiteralEnvelopeHistory(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const literal = "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>literal context</ADDITIONAL_METADATA>"
+	line, err := json.Marshal(map[string]any{
+		"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": literal,
+	})
+	require.NoError(t, err)
+	history, err := json.Marshal(map[string]any{"conversationId": id, "display": literal, "timestamp": 1793357626000})
+	require.NoError(t, err)
+	const sidecar = `{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{"userResponse":"<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>literal context</ADDITIONAL_METADATA>"}}]}`
+	for _, tc := range []struct{ source, transcript, sidecar string }{
+		{source: "brain", transcript: string(line) + "\n"},
+		{source: "sidecar", sidecar: sidecar},
+	} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/legacy=%t", tc.source, legacy), func(t *testing.T) {
+				path := antigravityCLIBrainFixture{
+					pb: legacy, setupDB: func(*testing.T, *sql.DB) {},
+					transcript: tc.transcript, sidecar: tc.sidecar, history: string(history) + "\n",
+				}.write(t, id)
+				session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+				require.NoError(t, err)
+				assert.Equal(t, literal, session.FirstMessage)
+				require.Len(t, messages, 1)
+				assert.Equal(t, literal, messages[0].Content)
+				assert.Equal(t, len(literal), messages[0].ContentLength)
+			})
+		}
+	}
+}
+
+func TestAntigravityCLISQLiteLiteralEnvelopeWhitespaceHistory(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const literal = "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"
+	const raw = " \t" + literal + "\n\t "
+	history, err := json.Marshal(map[string]any{"conversationId": id, "display": raw, "timestamp": 1793357626000})
+	require.NoError(t, err)
+	path := antigravityCLIBrainFixture{
+		setupDB: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, antigravityTestStepPayload(1793357626, raw))
+		},
+		history: string(history) + "\n" + `{"conversationId":"99999999-aaaa-bbbb-cccc-dddddddddddd","display":"Follow up","timestamp":1793357686000}` + "\n",
+	}.write(t, id)
+	session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+	require.NoError(t, err)
+	assert.Equal(t, literal, session.FirstMessage)
+	require.NotEmpty(t, messages)
+	assert.Equal(t, literal, messages[0].Content)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Follow up", messages[1].Content)
 }
 
 func TestAntigravityCLIBrainTranscriptAndFailClosed(t *testing.T) {
