@@ -1396,6 +1396,30 @@ The user changed setting Model Selection from None to Gemini 3.8 Flash (Low). No
 	}
 }
 
+func TestAntigravityCLISidecarLiteralEnvelopeHistory(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const literal = "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>"
+	const sidecar = `{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{"userResponse":"<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>"}}]}`
+	for _, legacy := range []bool{false, true} {
+		for _, want := range []string{literal, "Prompt"} {
+			t.Run(fmt.Sprintf("legacy=%t/history=%s", legacy, want), func(t *testing.T) {
+				history, err := json.Marshal(map[string]any{"conversationId": id, "display": want, "timestamp": 1793357626000})
+				require.NoError(t, err)
+				path := antigravityCLIBrainFixture{
+					pb: legacy, setupDB: func(*testing.T, *sql.DB) {},
+					sidecar: sidecar, history: string(history) + "\n",
+				}.write(t, id)
+				session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, want, messages[0].Content)
+				assert.Equal(t, len(want), messages[0].ContentLength)
+				assert.Equal(t, want, session.FirstMessage)
+			})
+		}
+	}
+}
+
 func TestAntigravityCLIBrainTranscriptAndFailClosed(t *testing.T) {
 	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
 	tests := []struct {
