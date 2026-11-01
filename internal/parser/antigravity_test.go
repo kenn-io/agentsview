@@ -19,6 +19,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAntigravityCLIUserRequestContent(t *testing.T) {
+	tests := []struct {
+		name, content, want string
+		assistant           bool
+	}{
+		{name: "plain", content: "  Keep my spacing\n", want: "  Keep my spacing\n"},
+		{name: "missing closing tag", content: "<USER_REQUEST>unfinished", want: "<USER_REQUEST>unfinished"},
+		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "First line\nSecond line"},
+		{name: "request whitespace", content: "<USER_REQUEST>\n\n    code  \n\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "\n    code  \n"},
+		{name: "bare literal wrapper", content: "<USER_REQUEST>Prompt</USER_REQUEST>", want: "<USER_REQUEST>Prompt</USER_REQUEST>"},
+		{name: "nested literal tags", content: "<USER_REQUEST>Explain <USER_REQUEST>hello</USER_REQUEST> tags.</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "Explain <USER_REQUEST>hello</USER_REQUEST> tags."},
+		{name: "closing tag in metadata", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>Describe </USER_REQUEST> here.</ADDITIONAL_METADATA>", want: "Prompt"},
+		{name: "CRLF and settings", content: " \r\n<USER_REQUEST>\r\nPrompt\r\n</USER_REQUEST>\r\n<ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>\r\n<USER_SETTINGS_CHANGE>setting</USER_SETTINGS_CHANGE>\r\n", want: "Prompt"},
+		{name: "unknown tail", content: "<USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>", want: "<USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>"},
+		{name: "trailing prose", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>prose", want: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>prose"},
+		{name: "incomplete metadata", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context", want: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context"},
+		{name: "incomplete settings", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA><USER_SETTINGS_CHANGE>setting", want: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA><USER_SETTINGS_CHANGE>setting"},
+		{name: "empty request", content: "<USER_REQUEST> \n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST> \n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>"},
+		{name: "mid-text literal tags", content: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags.", want: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags."},
+		{name: "assistant", content: "<USER_REQUEST>quoted prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST>quoted prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", assistant: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.assistant {
+				msg := ParsedMessage{Role: RoleAssistant, Content: tc.content}
+				normalizeAntigravityCLIUserMessage(&msg, nil)
+				assert.Equal(t, tc.want, msg.Content)
+				return
+			}
+			assert.Equal(t, tc.want, extractAntigravityCLIUserRequest(tc.content))
+		})
+	}
+}
+
 // newAntigravityTestProvider builds a concrete antigravityProvider for the given
 // roots so package tests can exercise the folded discovery, source-lookup, and
 // parse behavior directly through provider methods.

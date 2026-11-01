@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -143,6 +144,209 @@ func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 	var state string
 	require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&state))
 	assert.Equal(t, "complete", state)
+}
+
+func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		selectionMoved bool
+		wantCount      int
+	}{
+		{name: "failed_job_re_failed", wantCount: 2},
+		{name: "selection_moved", selectionMoved: true, wantCount: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
+			if !tc.selectionMoved {
+				// Job IDs run opposite to rollout's head order.
+				b, _ := f.accept(t, "device-b", "failed-b", "")
+				bLease := f.lease(t, b)
+				require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
+			}
+			m, _ := f.accept(t, "device-a", "failed", "")
+			lease := f.lease(t, m)
+			partial := projectionOutcome("partial")
+			partial.Outcome.ResultSetComplete = false
+			require.ErrorIs(t, f.sink.Project(t.Context(), lease, m, partial), rawderive.ErrProjectionFailed)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			gate, err := f.runtime.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer gate.Rollback()
+			// Acceptance and rollouts take this same current-head lock.
+			_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE`, m.ManifestID)
+			require.NoError(t, err)
+			var count int
+			var repairErr error
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 64)
+			}()
+			defer func() {
+				cancel()
+				_ = gate.Rollback()
+				<-done
+			}()
+			waitHostedLocks(t, f, ctx, 1)
+			if tc.selectionMoved {
+				// A rollout selects a new version; the old job stays failed but unselected.
+				_, err = selectRawSourceGenerationTx(ctx, gate, m, "parser-2")
+				require.NoError(t, err)
+			} else {
+				// Commit the state left by another repair followed by a worker failure
+				// while the waiting repair still has its original statement snapshot.
+				_, err = resetRawSourceSelectionTx(ctx, gate, m, "parser-1", 2, lease.ID)
+				require.NoError(t, err)
+				_, err = gate.ExecContext(ctx, `UPDATE raw_ingest_jobs SET state='failed',attempt_count=1,last_error_class='parse',last_error='failed',updated_at=now() WHERE id=$1`, lease.ID)
+				require.NoError(t, err)
+			}
+			require.NoError(t, gate.Commit())
+			<-done
+			require.NoError(t, repairErr)
+			assert.Equal(t, tc.wantCount, count)
+			var state string
+			if tc.selectionMoved {
+				var version string
+				require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT processing_version FROM raw_source_projections WHERE selected_manifest_id=$1`, m.ManifestID).Scan(&version))
+				assert.Equal(t, "parser-2", version, "repair overwrote the rollout's selection")
+				var selected bool
+				require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state,projection_selected FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state, &selected))
+				assert.Equal(t, "failed", state)
+				assert.False(t, selected)
+			} else {
+				require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state))
+				assert.Equal(t, "ready", state)
+				var generation int64
+				require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT projection_generation FROM raw_source_projections WHERE selected_job_id=$1`, lease.ID).Scan(&generation))
+				assert.EqualValues(t, 3, generation)
+			}
+		})
+	}
+}
+
+func TestHostedRuntimeRepairReachesNextFailureAfterUploadAdvancesHead(t *testing.T) {
+	f := newProjectionFixture(t)
+	a, receipt := f.accept(t, "device-a", "failed-a", "")
+	aLease := f.lease(t, a)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
+	b, _ := f.accept(t, "device-b", "failed-b", "")
+	bLease := f.lease(t, b)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
+
+	// Hold an upload to the oldest failure's source after it locks the head.
+	f.parkOn(t, "INSERT", "raw_manifests", "true")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+	next := a.Manifest
+	next.CaptureID = "next-a"
+	next.ExpectedParentReceipt = receipt.Receipt
+	uploaded := make(chan error, 1)
+	go func() {
+		_, err := f.custody.CommitManifest(ctx, a.Identity, next)
+		uploaded <- err
+	}()
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-uploaded
+	}()
+	var count int
+	var repairErr error
+	done := make(chan struct{})
+	waitHostedLocks(t, f, ctx, 1)
+	go func() {
+		defer close(done)
+		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 1)
+	}()
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-done
+	}()
+	waitHostedLocks(t, f, ctx, 2)
+	require.NoError(t, gate.Commit())
+	<-done
+	require.NoError(t, repairErr)
+	assert.Equal(t, 1, count, "repair reported zero while a failure remained")
+	var state string
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, bLease.ID).Scan(&state))
+	assert.Equal(t, "ready", state)
+}
+
+func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
+	t.Run("field_reset_and_healthy_job", func(t *testing.T) {
+		f := newProjectionFixture(t)
+		f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
+		a, _ := f.accept(t, "device-a", "a", "")
+		stale := f.lease(t, a)
+		partial := projectionOutcome("partial")
+		partial.Outcome.ResultSetComplete = false
+		require.ErrorIs(t, f.sink.Project(t.Context(), stale, a, partial), rawderive.ErrProjectionFailed)
+		b, _ := f.accept(t, "device-b", "b", "")
+		healthy := f.lease(t, b)
+		require.NoError(t, f.sink.Project(t.Context(), healthy, b, projectionOutcome("complete")))
+		var state string
+		n, err := f.sink.RepairFailedJobs(t.Context(), "parser-1", 64)
+		require.NoError(t, err)
+		assert.Equal(t, 1, n)
+		var attempt int
+		var generation int64
+		var errorClass, diagnostic string
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation,last_error_class,last_error FROM raw_ingest_jobs WHERE id=$1`, stale.ID).Scan(&state, &attempt, &generation, &errorClass, &diagnostic))
+		assert.Equal(t, "ready", state)
+		assert.Zero(t, attempt)
+		assert.Empty(t, errorClass)
+		assert.Empty(t, diagnostic)
+		assert.Equal(t, stale.ProjectionGeneration+1, generation)
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation FROM raw_ingest_jobs WHERE id=$1`, healthy.ID).Scan(&state, &attempt, &generation))
+		assert.Equal(t, "complete", state)
+		assert.Equal(t, healthy.Attempt, attempt)
+		assert.Equal(t, healthy.ProjectionGeneration, generation)
+		leases, err := f.jobs.ClaimRawParseJobs(t.Context(), stale.Owner, 1, time.Minute)
+		require.NoError(t, err)
+		require.Len(t, leases, 1)
+		assert.Equal(t, stale.ID, leases[0].ID)
+		assert.Equal(t, stale.Attempt, leases[0].Attempt)
+		assert.Greater(t, leases[0].ProjectionGeneration, stale.ProjectionGeneration)
+	})
+	t.Run("limit_and_other_version", func(t *testing.T) {
+		f := newProjectionFixture(t)
+		old, _ := f.accept(t, "device-old", "old", "")
+		oldLease := f.lease(t, old)
+		require.NoError(t, f.jobs.FailRawParseJob(t.Context(), oldLease, "parse", "failed"))
+		jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-2")
+		require.NoError(t, err)
+		for _, device := range []string{"device-a", "device-b"} {
+			m, _ := f.accept(t, device, device, "")
+			_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-2")
+			require.NoError(t, err)
+			leases, err := jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
+			require.NoError(t, err)
+			require.Len(t, leases, 1)
+			require.Equal(t, m.ManifestID, leases[0].ManifestID)
+			require.Equal(t, "parser-2", leases[0].ProcessingVersion)
+			require.NoError(t, jobs.FailRawParseJob(t.Context(), leases[0], "parse", "failed"))
+		}
+		for _, want := range []int{1, 1, 0} {
+			n, err := f.sink.RepairFailedJobs(t.Context(), "parser-2", 1)
+			require.NoError(t, err)
+			assert.Equal(t, want, n)
+		}
+		var state, version string
+		var generation int64
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,processing_version,projection_generation FROM raw_ingest_jobs WHERE id=$1`, oldLease.ID).Scan(&state, &version, &generation))
+		assert.Equal(t, "failed", state)
+		assert.Equal(t, "parser-1", version)
+		assert.Equal(t, oldLease.ProjectionGeneration, generation)
+	})
 }
 
 func TestHostedRuntimeSelectionFailureRollsBackAcceptance(t *testing.T) {

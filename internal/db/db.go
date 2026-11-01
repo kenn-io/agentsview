@@ -633,7 +633,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // sources in place; source and session identities are unchanged.)
 // (158: repair OMP path-based parent links and structural subagent classification.
 // Re-parse OMP sources in place; source and session identities are unchanged.)
-const dataVersion = 158
+// (159: declare the contiguous Antigravity CLI scope for prompt-envelope
+// repair; source and session identities are unchanged.)
+// (160: remove injected Antigravity CLI prompt envelopes from stored user
+// messages and titles. Re-parse unchanged CLI sources in place.)
+const dataVersion = 160
 
 const archiveOnlyVersionBase = 1 << 20
 

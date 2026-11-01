@@ -272,33 +272,27 @@ matches a pushed generation.
 
 #### Enabling Semantic Search
 
-Follow these steps on the machine that owns the sessions. Every step names the
-output that confirms it, so an operator or an agent can run the sequence
-unattended and stop at the first step that does not confirm.
+Follow these steps on the machine that owns the sessions. Approve the first
+local download in the CLI before running builds unattended.
 
-1. Enable vectors in `~/.agentsview/config.toml`. `model`, `dimension`, and one
-   `[vector.embeddings.servers.<name>]` entry with an `endpoint` are required;
-   the full key list and `max_input_chars` guidance are in
+1. Enable vectors in `~/.agentsview/config.toml`. AgentsView discovers Ollama
+   with Nomic or uses Kit's shared local server. Explicit recipes and server
+   settings are described in
    [Enabling `[vector]`](/docs/semantic-search/#enabling-vector).
 
     ```toml
     [vector]
     enabled = true
-
-    [vector.embeddings]
-    model = "nomic-embed-text"
-    dimension = 768
-    max_input_chars = 4000
-    default_server = "local"
-
-    [vector.embeddings.servers.local]
-    endpoint = "http://localhost:11434/v1"
     ```
 
-1. Build the local index and confirm an active generation exists:
+1. Restart the daemon, then build the local index. The CLI asks before the
+   first download; declining stops the download and build. `--yes` skips rebuild
+   confirmation but does not approve this download. Approve the first install
+   interactively before running unattended builds. Confirm an active generation
+   exists:
 
     ```bash
-    agentsview embeddings build --yes
+    agentsview embeddings build
     agentsview embeddings list
     ```
 

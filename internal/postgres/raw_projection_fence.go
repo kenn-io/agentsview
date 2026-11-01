@@ -112,10 +112,16 @@ func selectRawSourceGenerationTx(ctx context.Context, tx *sql.Tx, m rawsync.Cano
 	if manifest == m.ManifestID && selected == version {
 		return generation, nil
 	}
-	generation++
+	return resetRawSourceSelectionTx(ctx, tx, m, version, generation+1, previousJob)
+}
+
+// resetRawSourceSelectionTx requires the current source-head lock and a verified
+// canonical manifest. The caller supplies the next selection generation.
+func resetRawSourceSelectionTx(ctx context.Context, tx *sql.Tx, m rawsync.CanonicalManifest, version string, generation, previousJob int64) (int64, error) {
+	source := rawSourceID(m)
 	var jobID int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO raw_ingest_jobs(tenant_id,manifest_id,stage,processing_version,projection_generation) VALUES($1,$2,'parse',$3,$4)
- ON CONFLICT(tenant_id,manifest_id,stage,processing_version) DO UPDATE SET projection_generation=EXCLUDED.projection_generation,projection_selected=true,attempt_count=0,state='ready',available_at=clock_timestamp(),lease_owner='',lease_expires_at=NULL RETURNING id`, m.Identity.TenantID, m.ManifestID, version, generation).Scan(&jobID)
+	err := tx.QueryRowContext(ctx, `INSERT INTO raw_ingest_jobs(tenant_id,manifest_id,stage,processing_version,projection_generation) VALUES($1,$2,'parse',$3,$4)
+ ON CONFLICT(tenant_id,manifest_id,stage,processing_version) DO UPDATE SET projection_generation=EXCLUDED.projection_generation,projection_selected=true,attempt_count=0,state='ready',available_at=clock_timestamp(),lease_owner='',lease_expires_at=NULL,last_error_class='',last_error='' RETURNING id`, m.Identity.TenantID, m.ManifestID, version, generation).Scan(&jobID)
 	if err != nil {
 		return 0, err
 	}

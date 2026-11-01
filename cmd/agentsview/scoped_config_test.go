@@ -83,7 +83,7 @@ func seedScopedConfigArchive(t *testing.T) {
 func TestScopedConfigExportIgnoresUnusedSections(t *testing.T) {
 	for _, tt := range []struct{ section, data string }{
 		{"insights", "[insights]\nendpoint = 'http://models.example/v1'\nmodel = 'remote'\n"},
-		{"vector", "[vector]\nenabled = true\n"},
+		{"vector", "[vector]\nenabled = true\n[vector.embeddings.servers]\n"},
 		{"proxy", "[proxy]\nmode = 'invalid'\n"},
 		{"public_url", "public_url = 'not-a-url'\n"},
 		{"public_origins", "public_origins = ['not-an-origin']\n"},
@@ -153,7 +153,7 @@ func TestScopedConfigParseErrorsAreGlobal(t *testing.T) {
 
 func TestScopedConfigWarnsForEveryInvalidUnusedSection(t *testing.T) {
 	seedScopedConfigArchive(t)
-	data := "public_url='invalid'\n[vector]\nenabled=true\n[insights]\nmodel='incomplete'\n"
+	data := "public_url='invalid'\n[vector]\nenabled=true\n[vector.embeddings.servers]\n[insights]\nmodel='incomplete'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "config.toml"), []byte(data), 0o600))
 	stdout, stderr, err := runScopedConfigCLI(t, nil, "export", "sessions", "--format", "json")
 	require.NoError(t, err, stderr)
@@ -202,7 +202,7 @@ func TestScopedConfigReplicaTargetCanDisableVectors(t *testing.T) {
 		backend := tt.backend
 		t.Run(backend.Name(), func(t *testing.T) {
 			seedScopedConfigArchive(t)
-			data := "[" + backend.Name() + "]\nurl='" + tt.url + "'\npush_vectors=false\n[vector]\nenabled=true\n"
+			data := "[" + backend.Name() + "]\nurl='" + tt.url + "'\npush_vectors=false\n[vector]\nenabled=true\n[vector.embeddings.servers]\n"
 			require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "config.toml"), []byte(data), 0o600))
 			push := ReplicaPushConfig{}
 			cfg, err := config.LoadMinimalFor(replicaConfigScope(backend, &push))
@@ -343,7 +343,7 @@ func TestScopedConfigReplacementRejectsInvalidServerConfigBeforeStop(t *testing.
 		env              map[string]string
 	}{
 		{"insights", "[insights]\nmodel='incomplete'\n", "endpoint and model", nil},
-		{"vector", "[vector]\nenabled=true\n", "model is required", nil},
+		{"vector", "[vector]\nenabled=true\n[vector.embeddings.servers]\n", "model is required", nil},
 		{"palette", "chart_palette='invalid'\n", "chart_palette", nil},
 		{"deployment embeddings", "[vector]\nenabled=false\n", "AGENTSVIEW_EMBEDDINGS_*", map[string]string{
 			"AGENTSVIEW_MODE": "serve", "AGENTSVIEW_EMBEDDINGS_ENDPOINT": "http://127.0.0.1:30000/v1",

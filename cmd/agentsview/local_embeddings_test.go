@@ -1,0 +1,200 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/embedlocal"
+
+	"go.kenn.io/agentsview/internal/config"
+)
+
+func TestLocalEmbeddingsBuildConsent(t *testing.T) {
+	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
+	for _, daemon := range []bool{false, true} {
+		for _, state := range []string{"declined", "approved", "running", "full rebuild"} {
+			if daemon && state == "running" {
+				continue
+			}
+			t.Run(fmt.Sprintf("daemon=%t/%s", daemon, state), func(t *testing.T) {
+				approve := state != "declined"
+				dir := testDataDir(t)
+				writeTestConfig(t, dir, "[vector]\nenabled = true\n")
+				seedEmbeddableArchive(t, dir)
+				stub := newEmbeddingsStubServer(t, 768)
+				t.Cleanup(stub.Close)
+				installed, dispatched, starting := state == "running", false, false
+				localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+					assert.False(t, opts.SkipOllama)
+					if !installed {
+						return "", embedlocal.ErrNotFound
+					}
+					if starting {
+						assert.Equal(t, "kennembed", opts.Executable)
+						assert.NotEmpty(t, opts.DataDir)
+						starting = false
+					}
+					return stub.URL + "/v1", nil
+				}
+				installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+					require.False(t, installed, "a running server needs no installation")
+					require.NotNil(t, opts.Confirm)
+					ok, err := opts.Confirm(ctx, 290_000_000)
+					require.NoError(t, err)
+					if !ok {
+						return embedlocal.Installation{}, errors.New("embedding download declined; approve installation to use local embeddings")
+					}
+					installed, starting = true, true
+					return embedlocal.Installation{DataDir: opts.DataDir, Executable: "kennembed"}, nil
+				}
+				if daemon {
+					startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+						"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+							assert.True(t, installed)
+							dispatched = true
+							w.WriteHeader(http.StatusAccepted)
+						},
+						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"running":false}`) },
+					})
+				}
+				var out bytes.Buffer
+				answer := "n\n"
+				if approve {
+					answer = "y\n"
+				}
+				opts := EmbeddingsBuildOptions{Yes: true}
+				if state == "full rebuild" {
+					opts = EmbeddingsBuildOptions{FullRebuild: true}
+					answer = "y\ny\n"
+				}
+				err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(answer), opts)
+				if state == "running" {
+					assert.NotContains(t, out.String(), "Download")
+				} else {
+					assert.Contains(t, out.String(), "Download approximately 290 MB")
+				}
+				if approve {
+					require.NoError(t, err)
+					if !daemon {
+						assert.Contains(t, out.String(), "Embedded 2 documents")
+					}
+				} else {
+					require.EqualError(t, err, "embedding download declined; approve installation to use local embeddings")
+					assert.NoFileExists(t, filepath.Join(dir, "vectors.db"))
+				}
+				assert.Equal(t, approve && daemon, dispatched)
+				assert.Equal(t, approve, installed)
+			})
+		}
+	}
+}
+
+func TestLocalEmbeddingsResolution(t *testing.T) {
+	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
+	c := enabledVectorConfig(t).Vector.Embeddings
+	c.Model = "nomic-embed-text"
+	c.RequestDimensions = true
+	c.Servers = map[string]config.VectorEmbeddingsServerConfig{"shared": {Local: true, Timeout: "5s", MaxRetries: 1, BatchSize: 32, Concurrency: 1}}
+	t.Run("refresh approval guidance and install errors", func(t *testing.T) {
+		first := newEmbeddingsStubServer(t, 4)
+		second := newEmbeddingsStubServer(t, 4)
+		t.Cleanup(first.Close)
+		t.Cleanup(second.Close)
+		discoveries := 0
+		localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+			assert.True(t, opts.SkipOllama)
+			discoveries++
+			if discoveries == 1 {
+				return first.URL + "/v1", nil
+			}
+			return second.URL + "/v1", nil
+		}
+		installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
+			require.FailNow(t, "a running server needs no installation")
+			return embedlocal.Installation{}, nil
+		}
+		encode, err := newVectorQueryEncoder(c, "")
+		require.NoError(t, err)
+		assert.Zero(t, discoveries)
+		_, err = encode(t.Context(), []string{"hello"})
+		require.NoError(t, err)
+		first.Close()
+		_, err = encode(t.Context(), []string{"hello"})
+		require.Error(t, err)
+		vectors, err := encode(t.Context(), []string{"hello"})
+		require.NoError(t, err)
+		assert.Equal(t, [][]float32{{1, 1, 1, 1}}, vectors)
+		assert.Equal(t, 2, discoveries)
+
+		localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+		installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+			require.NotNil(t, opts.Confirm)
+			_, err := opts.Confirm(ctx, 290_000_000)
+			return embedlocal.Installation{}, fmt.Errorf("install: %w", err)
+		}
+		encoders, err := vectorDocumentEncoderSet(c)
+		require.NoError(t, err)
+		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
+		require.EqualError(t, err, "local embeddings: run agentsview embeddings build to approve the first download")
+		cause := errors.New("install lock failed")
+		installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
+			return embedlocal.Installation{}, fmt.Errorf("install interrupted: %w", cause)
+		}
+		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
+		require.ErrorIs(t, err, cause)
+	})
+	t.Run("cancellation does not wait for another discovery", func(t *testing.T) {
+		entered, release := make(chan struct{}), make(chan struct{})
+		var enteredOnce sync.Once
+		localEmbeddingEndpoint = func(ctx context.Context, _ embedlocal.Options) (string, error) {
+			enteredOnce.Do(func() { close(entered) })
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-release:
+				return "", context.Canceled
+			}
+		}
+		encode, err := newVectorQueryEncoder(c, "")
+		require.NoError(t, err)
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
+		var workers sync.WaitGroup
+		defer func() {
+			close(release)
+			cancelFirst()
+			workers.Wait()
+		}()
+		workers.Go(func() { _, _ = encode(firstCtx, []string{"first"}) })
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "first caller did not enter discovery")
+		}
+		secondCtx, cancelSecond := context.WithCancel(t.Context())
+		cancelSecond()
+		secondDone := make(chan error, 1)
+		workers.Go(func() {
+			_, err := encode(secondCtx, []string{"second"})
+			secondDone <- err
+		})
+		select {
+		case err := <-secondDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "canceled caller waited for another discovery")
+		}
+	})
+}
