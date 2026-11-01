@@ -201,6 +201,59 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 	assert.EqualValues(t, 3, generation)
 }
 
+func TestHostedRuntimeRepairConcurrentBatchesReachNextFailure(t *testing.T) {
+	f := newProjectionFixture(t)
+	a, _ := f.accept(t, "device-a", "failed-a", "")
+	aLease := f.lease(t, a)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
+	b, _ := f.accept(t, "device-b", "failed-b", "")
+	bLease := f.lease(t, b)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.runtime.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE`, a.ManifestID)
+	require.NoError(t, err)
+	type result struct {
+		count int
+		err   error
+	}
+	results := make(chan result, 2)
+	received := 0
+	for range 2 {
+		go func() {
+			count, err := f.sink.RepairFailedJobs(ctx, "parser-1", 1)
+			results <- result{count, err}
+		}()
+	}
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		for range 2 - received {
+			<-results
+		}
+	}()
+	waitHostedLocks(t, f, ctx, 2)
+	require.NoError(t, gate.Commit())
+	for range 2 {
+		r := <-results
+		received++
+		require.NoError(t, r.err)
+		assert.Equal(t, 1, r.count, "each concurrent batch must repair one failure")
+	}
+	for _, id := range []int64{aLease.ID, bLease.ID} {
+		var state string
+		require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, id).Scan(&state))
+		assert.Equal(t, "ready", state)
+	}
+	count, err := f.sink.RepairFailedJobs(ctx, "parser-1", 1)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	f := newProjectionFixture(t)
 	f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
