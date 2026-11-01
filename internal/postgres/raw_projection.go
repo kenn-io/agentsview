@@ -23,7 +23,11 @@ type rawBranch struct {
 }
 
 func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg string) ([]rawBranch, error) {
-	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches WHERE `+where+`=$1 ORDER BY branch_id`, arg)
+	return loadRawBranchRows(ctx, q, where+`=$1`, arg)
+}
+
+func loadRawBranchRows(ctx context.Context, q hostedQuerier, predicate, arg string) ([]rawBranch, error) {
+	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches b WHERE `+predicate+` ORDER BY branch_id`, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +44,11 @@ func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg str
 }
 
 func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLease, m rawsync.CanonicalManifest, parsed rawderive.ParsedManifest) error {
+	_, err := retryPGCuration(ctx, func() (struct{}, error) { return struct{}{}, s.projectOnce(ctx, lease, m, parsed) })
+	return err
+}
+
+func (s *RawProjectionStore) projectOnce(ctx context.Context, lease rawderive.JobLease, m rawsync.CanonicalManifest, parsed rawderive.ParsedManifest) error {
 	if err := s.validateManifest(m); err != nil {
 		return err
 	}
@@ -54,6 +63,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = lockRawRolloutShared(ctx, tx); err != nil {
+		return err
+	}
 	if err = s.lockHead(ctx, tx, m); err != nil {
 		return err
 	}
@@ -124,9 +136,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			aliases = append(aliases, pgSessionAliasIDs(candidates[group].Session)...)
 		}
 	}
-	if err = lockHostedAliases(ctx, tx, aliases); err != nil {
+	derivedLocks, err := lockRawDerivedAliases(ctx, tx, ordered, aliases)
+	if err != nil {
 		return err
 	}
+	ordered = derivedLocks.Groups
 	for _, group := range ordered {
 		if base := groups[group]; base != "" {
 			_, err = tx.ExecContext(ctx, `INSERT INTO raw_session_groups(group_id,provider,logical_key,base_alias) VALUES($1,$2,$3,$4) ON CONFLICT(group_id) DO NOTHING`, group, candidates[group].Session.Agent, keys[group], base)
@@ -142,6 +156,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if key, ok := keys[group]; ok && key != storedKey {
 			return errors.New("raw logical identity digest collision")
 		}
+	}
+	if err = derivedLocks.lockSessions(ctx, tx); err != nil {
+		return err
 	}
 	complete := parsed.Tombstone || parsed.Outcome.ResultSetComplete && len(parsed.Outcome.SourceErrors) == 0
 	for _, r := range parsed.Outcome.Results {
@@ -331,8 +348,15 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
-	if changed || derivedChanged || len(staleFrictionGroups) > 0 {
-		if err = publishRawRevision(ctx, tx, changed, embeddings); err != nil {
+	staged, err := s.prepareRawDerivedWrites(ctx, tx, derivedLocks)
+	if err != nil {
+		return err
+	}
+	if err = applyRawLegacyVisibility(ctx, tx, staged); err != nil {
+		return err
+	}
+	if changed || derivedChanged || len(staleFrictionGroups) > 0 || staged.IdentityChanged {
+		if err = publishRawRevision(ctx, tx, changed || staged.IdentityChanged, embeddings); err != nil {
 			return err
 		}
 	}

@@ -28,7 +28,7 @@ func linkChildOutcome() rawderive.ParsedManifest {
 // The fallback is bounded to the immutable capture scope, and counts content
 // cohorts rather than duplicate proofs. Public reads must not choose a variant.
 func TestHostedCrossSourceRelationshipScope(t *testing.T) {
-	for _, mode := range []string{"unique", "equal_cohort", "ambiguous", "other_device", "other_root", "other_provider"} {
+	for _, mode := range []string{"unique", "equal_cohort", "ambiguous", "hidden_competitor", "other_device", "other_root", "other_provider"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
 			child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
@@ -52,20 +52,24 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 				p.Outcome.Results[0].Result.Messages[1].HasToolUse = true
 			}
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parent), parent, p))
-			if mode == "equal_cohort" || mode == "ambiguous" {
+			if mode == "equal_cohort" || mode == "ambiguous" || mode == "hidden_competitor" {
 				second, _ := f.acceptScoped(t, "device-a", "second", "", parser.AgentCodex, "root-a", "second.jsonl")
 				text := "parent"
-				if mode == "ambiguous" {
+				if mode == "ambiguous" || mode == "hidden_competitor" {
 					text = "different parent"
 				}
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome(text)))
+				if mode == "hidden_competitor" {
+					_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=true WHERE id IN (SELECT session_id FROM messages WHERE content='different parent')`)
+					require.NoError(t, err)
+				}
 			}
 			h, err := newHostedAdapter(f.runtime, f.tenant)
 			require.NoError(t, err)
 			got, err := h.GetSessionFull(t.Context(), "codex:child")
 			require.NoError(t, err)
 			require.NotNil(t, got)
-			if mode == "unique" || mode == "equal_cohort" {
+			if mode == "unique" || mode == "equal_cohort" || mode == "hidden_competitor" {
 				require.NotNil(t, got.ParentSessionID)
 				assert.Equal(t, "codex:portable", *got.ParentSessionID)
 				children, err := h.GetChildSessions(t.Context(), "codex:portable")
@@ -100,7 +104,7 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 }
 
 func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
-	for _, mode := range []string{"removed", "excluded"} {
+	for _, mode := range []string{"removed", "excluded", "hidden"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
 			own, accepted := f.acceptScoped(t, "device-a", "own", "", parser.AgentCodex, "root-a", "own.jsonl")
@@ -110,7 +114,7 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 			if mode == "removed" {
 				next, _ := f.acceptScoped(t, "device-a", "removed", accepted.Receipt, parser.AgentCodex, "root-a", "own.jsonl")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, linkChildOutcome()))
-			} else {
+			} else if mode == "excluded" {
 				require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "trashed", true))
 				removed, err := f.sink.ExcludeTrashedSession(t.Context(), "codex:portable")
 				require.NoError(t, err)
@@ -124,6 +128,12 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 			p.Outcome.Results[0].Result.Session.SourceSessionID = "alternate-key"
 			p.Outcome.Results[0].Result.Session.StartedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, alternate), alternate, p))
+			if mode == "hidden" {
+				// Stage the read fixture after publication, which recomputes the
+				// connected groups' eligibility from their rollout scopes.
+				_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=true WHERE id IN (SELECT session_id FROM messages WHERE content='exact parent')`)
+				require.NoError(t, err)
+			}
 			h, err := newHostedAdapter(f.runtime, f.tenant)
 			require.NoError(t, err)
 			got, err := h.GetSessionFull(t.Context(), "codex:child")

@@ -40,7 +40,11 @@ var matrixSQLToken = regexp.MustCompile(`'(?:[^']|'')*'|"(?:[^"]|"")*"|\bs\.[a-z
 func TestFilterMatrixAnalytics(t *testing.T) {
 	for _, d := range filterMatrixDialects {
 		t.Run(d.name, func(t *testing.T) {
-			base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
+			live := "s.deleted_at IS NULL"
+			if d.name == "postgres" {
+				live += " AND NOT s.rollout_hidden"
+			}
+			base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND " + live
 			clean := "s.termination_status = 'clean'"
 			model := "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model IN (?,?))"
 			if d.name == "clickhouse" {
@@ -67,7 +71,7 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 				{"automated", AnalyticsFilter{AutomatedScope: "automated"}, base + " AND s.is_automated = " + d.trueSQL, []any{}},
 				{"human-one-shot", AnalyticsFilter{ExcludeAutomated: true, ExcludeOneShot: true}, base + " AND s.user_message_count > 1 AND s.is_automated = " + d.falseSQL, []any{}},
 				{"automated-one-shot", AnalyticsFilter{AutomatedScope: "automated", ExcludeOneShot: true}, base + " AND (s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") AND s.is_automated = " + d.trueSQL, []any{}},
-				{"subagents-one-shot", AnalyticsFilter{IncludeSubagents: true, ExcludeOneShot: true}, "s.message_count > 0 AND s.relationship_type NOT IN ('fork') AND s.deleted_at IS NULL AND ((s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") OR s.relationship_type = 'subagent')", []any{}},
+				{"subagents-one-shot", AnalyticsFilter{IncludeSubagents: true, ExcludeOneShot: true}, "s.message_count > 0 AND s.relationship_type NOT IN ('fork') AND " + live + " AND ((s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") OR s.relationship_type = 'subagent')", []any{}},
 				{"interactive", AnalyticsFilter{ExcludeInteractive: true}, base + " AND s.is_automated = " + d.trueSQL, []any{}},
 			}
 			for _, c := range cases {
@@ -94,7 +98,7 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 			if d.name == "clickhouse" {
 				modelSQL = "s.id IN (SELECT m.session_id FROM messages m WHERE m.model IN (?,?))"
 			}
-			want := "s.message_count > 0 AND 1=1 AND s.deleted_at IS NULL AND s.started_at >= ? AND s.started_at <= ? AND s.machine IN (?,?) AND s.project = ? AND ((s.project = ? AND s.git_branch = ?) OR (s.project = ? AND s.git_branch = ?)) AND s.agent IN (?,?) AND " + modelSQL + " AND s.user_message_count >= ? AND ((s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") OR s.relationship_type = 'subagent') AND " + d.activity + " AND " + term
+			want := "s.message_count > 0 AND 1=1 AND " + live + " AND s.started_at >= ? AND s.started_at <= ? AND s.machine IN (?,?) AND s.project = ? AND ((s.project = ? AND s.git_branch = ?) OR (s.project = ? AND s.git_branch = ?)) AND s.agent IN (?,?) AND " + modelSQL + " AND s.user_message_count >= ? AND ((s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") OR s.relationship_type = 'subagent') AND " + d.activity + " AND " + term
 			assert.Equal(t, matrixSQL(d, want, 2), BuildAnalyticsWhere(f, b, "s.", "", dates))
 			assert.Equal(t, []any{"from", "to", "laptop", "server", "team,tools", "team,tools", "main", "other", "topic", "codex", "claude", "model-a", "model-b", 2, f.ActiveSince}, b.Args())
 		})
@@ -175,6 +179,9 @@ func TestFilterMatrixTermination(t *testing.T) {
 							assert.Equal(t, []string{want}, BuildUsageSessionFilter(UsageFilter{Termination: c.status}, b, ""))
 						} else {
 							base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
+							if d.name == "postgres" {
+								base += " AND NOT s.rollout_hidden"
+							}
 							assert.Equal(t, base+" AND "+want, BuildAnalyticsWhere(AnalyticsFilter{Termination: c.status}, b, "s.", "", nil))
 						}
 						args := b.Args()
@@ -220,7 +227,7 @@ func TestFilterMatrixRecentEdits(t *testing.T) {
  JOIN sessions s ON s.id = tc.session_id
  WHERE tc.category IN ('Edit','Write')
  AND tc.file_path IS NOT NULL AND tc.file_path <> ''
- AND s.deleted_at IS NULL %s
+ AND %s %s
  ), file_page AS (
  SELECT project, file_path, edit_count,
  timestamp AS last_edited_at, session_id AS last_session_id,
@@ -267,7 +274,11 @@ func TestFilterMatrixRecentEdits(t *testing.T) {
 				} else {
 					wantArgs = append(wantArgs, 6, 3, 2)
 				}
-				want := matrixSQL(d, fmt.Sprintf(query, row, count, d.join, filters, lastEdited, timestamp), 2)
+				live := "s.deleted_at IS NULL"
+				if d.name == "postgres" {
+					live += " AND NOT s.rollout_hidden"
+				}
+				want := matrixSQL(d, fmt.Sprintf(query, row, count, d.join, live, filters, lastEdited, timestamp), 2)
 				assert.Equal(t, strings.Join(strings.Fields(want), " "), strings.Join(strings.Fields(got), " "))
 				assert.Equal(t, wantArgs, b.Args())
 			}

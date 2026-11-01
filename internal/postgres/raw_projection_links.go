@@ -59,7 +59,7 @@ func writeRawLinks(ctx context.Context, tx *sql.Tx, branch string, p ingest.Prep
 // equal proofs coalesce, while independently proven plural parents survive.
 const hostedLinkFromSQL = ` FROM raw_session_links e
  JOIN raw_session_branches owner ON owner.branch_id=e.branch_id AND owner.active
- JOIN sessions own_session ON own_session.id=owner.session_id
+ JOIN sessions own_session ON own_session.id=owner.session_id AND NOT own_session.rollout_hidden
  JOIN raw_source_projections owner_source ON owner_source.source_id=owner.source_id
  JOIN LATERAL (
    SELECT EXISTS (
@@ -76,7 +76,7 @@ const hostedLinkFromSQL = ` FROM raw_session_links e
      JOIN raw_session_branches b ON b.group_id=a.group_id AND b.active
        AND (a.anchor_branch='' OR a.anchor_branch=b.branch_id)
      JOIN raw_source_projections target_source ON target_source.source_id=b.source_id
-     JOIN sessions materialized ON materialized.id=b.session_id
+     JOIN sessions materialized ON materialized.id=b.session_id AND NOT materialized.rollout_hidden
      WHERE a.alias_id=e.target_alias
        AND (b.source_id=owner.source_id OR (NOT authority.exact
          AND target_source.tenant_id=owner_source.tenant_id
@@ -91,12 +91,27 @@ const hostedLinkFromSQL = ` FROM raw_session_links e
  JOIN sessions target_session ON target_session.id=target.session_id
  WHERE NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=owner.group_id AND c.field='excluded' AND c.branch_id IN ('',owner.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) `
 
+// Legacy owners refer to literal archive IDs. A visible target keeps that
+// identity; a hidden mapped target expands to all currently eligible raw
+// cohorts. This relation never supplies authority for a raw owner's edge.
+const hostedLegacyTargetsSQL = `(
+ SELECT l.id AS legacy_id,l.id AS session_id FROM sessions l
+ WHERE NOT l.rollout_hidden
+ UNION
+ SELECT l.id,s.id FROM sessions l
+ JOIN raw_legacy_supersessions x ON x.tenant_id=l.tenant_id AND x.legacy_session_id=l.id
+ JOIN sessions s ON s.tenant_id=x.tenant_id AND s.raw_group_id=x.group_id AND s.provenance_kind='raw' AND NOT s.rollout_hidden
+ JOIN raw_session_branches b ON b.tenant_id=s.tenant_id AND b.session_id=s.id AND b.group_id=x.group_id AND b.active
+ WHERE l.provenance_kind='legacy' AND l.rollout_hidden
+ AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false)
+)`
+
 func (s *Store) sessionDialect() db.QueryDialect {
 	d := db.PostgresQueryDialect()
 	if !s.hostedRelations {
 		return d
 	}
 	return d.WithParentRelation(func(child, parent string) string {
-		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
+		return "((" + child + ".provenance_kind='legacy' AND EXISTS(SELECT 1 FROM " + hostedLegacyTargetsSQL + " legacy_target WHERE legacy_target.legacy_id=" + child + ".parent_session_id AND legacy_target.session_id=" + parent + ".id)) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
 	})
 }
