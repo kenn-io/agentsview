@@ -183,6 +183,12 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 	// A rollout holding the first head can still lock the second head.
 	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE NOWAIT`, b.ManifestID)
 	require.NoError(t, err)
+	// Commit the state left by another repair followed by a worker failure
+	// while the waiting repair still has its original statement snapshot.
+	_, err = resetRawSourceSelectionTx(ctx, gate, m, "parser-1", 2, lease.ID)
+	require.NoError(t, err)
+	_, err = gate.ExecContext(ctx, `UPDATE raw_ingest_jobs SET state='failed' WHERE id=$1`, lease.ID)
+	require.NoError(t, err)
 	require.NoError(t, gate.Commit())
 	<-done
 	require.NoError(t, repairErr)
@@ -190,6 +196,9 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 	var state string
 	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state))
 	assert.Equal(t, "ready", state)
+	var generation int64
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT projection_generation FROM raw_source_projections WHERE selected_job_id=$1`, lease.ID).Scan(&generation))
+	assert.EqualValues(t, 3, generation)
 }
 
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
@@ -213,9 +222,12 @@ func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	assert.Equal(t, 1, n)
 	var attempt int
 	var generation int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation FROM raw_ingest_jobs WHERE id=$1`, stale.ID).Scan(&state, &attempt, &generation))
+	var errorClass, diagnostic string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation,last_error_class,last_error FROM raw_ingest_jobs WHERE id=$1`, stale.ID).Scan(&state, &attempt, &generation, &errorClass, &diagnostic))
 	assert.Equal(t, "ready", state)
 	assert.Zero(t, attempt)
+	assert.Empty(t, errorClass)
+	assert.Empty(t, diagnostic)
 	assert.Equal(t, stale.ProjectionGeneration+1, generation)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation FROM raw_ingest_jobs WHERE id=$1`, healthy.ID).Scan(&state, &attempt, &generation))
 	assert.Equal(t, "complete", state)
