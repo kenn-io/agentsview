@@ -151,6 +151,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	changed := false
 	derivedChanged := false
+	fresh := make(map[string][]byte)
 	for _, group := range ordered {
 		c, ok := candidates[group]
 		if !ok {
@@ -220,9 +221,18 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4) ON CONFLICT(session_id) DO NOTHING`, sessionID, group, revision, payload)
+		inserted, err := tx.ExecContext(ctx, `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4) ON CONFLICT(session_id) DO NOTHING`, sessionID, group, revision, payload)
 		if err != nil {
 			return err
+		}
+		count, err := inserted.RowsAffected()
+		if err != nil {
+			return err
+		}
+		// Reuse only bytes inserted by this transaction. Conflicts retain
+		// their stored payload and mutable derived state.
+		if count == 1 {
+			fresh[sessionID] = payload
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
@@ -307,7 +317,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if !changed && !staleFrictionGroups[group] {
 				continue
 			}
-			changes, err := s.materializeGroup(ctx, tx, group)
+			changes, err := s.materializeGroup(ctx, tx, group, fresh)
 			if err != nil {
 				return err
 			}
@@ -353,11 +363,22 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 
 // loadRawPayload is transaction-bound and does not use alias resolution.
 func loadRawPayload(ctx context.Context, tx *sql.Tx, id string) (ingest.PreparedSession, error) {
-	var payload, recency []byte
-	err := tx.QueryRowContext(ctx, `SELECT payload,recency_state FROM raw_content_revisions WHERE session_id=$1`, id).Scan(&payload, &recency)
+	return loadRawPayloadBytes(ctx, tx, id, nil)
+}
+
+func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []byte) (ingest.PreparedSession, error) {
+	var recency []byte
+	var err error
+	if payload == nil {
+		err = tx.QueryRowContext(ctx, `SELECT payload,recency_state FROM raw_content_revisions WHERE session_id=$1`, id).Scan(&payload, &recency)
+	} else {
+		err = tx.QueryRowContext(ctx, `SELECT recency_state FROM raw_content_revisions WHERE session_id=$1`, id).Scan(&recency)
+	}
 	if err != nil {
 		return ingest.PreparedSession{}, err
 	}
+	// Fresh rows use the same gob representation and mutable overlays as
+	// retained rows; gob can change optional zero values during decoding.
 	p, err := decodeRawPayload(payload)
 	if err != nil {
 		return p, err
