@@ -128,6 +128,7 @@ func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
 		{"storage error", 3, 5, errors.New("storage detail"), BatchResult{Claimed: 1}, 0, "recording terminal failure: fail:internal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			lease := workerTestLease()
 			lease.Attempt = tc.attempt
 			manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -153,9 +154,9 @@ func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
 			worker.MaxAttempts = tc.maxAttempts
 			result, err := worker.RunBatch(t.Context())
 			if tc.wantErr != "" {
-				assert.EqualError(t, err, tc.wantErr)
+				require.EqualError(t, err, tc.wantErr)
 			} else {
-				assert.ErrorIs(t, err, tc.failErr)
+				require.ErrorIs(t, err, tc.failErr)
 			}
 			assert.Equal(t, tc.want, result)
 			assert.Equal(t, tc.wantRuns, runs)
