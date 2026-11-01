@@ -822,6 +822,16 @@ fixtures retain this field; missing identities remain source-local.
   Standalone parses refresh the inventory on every lookup. Directory identity,
   modification time, and metadata change time refresh changed folders when
   pages appear or move, while file identity still validates cached turn IDs.
+  Linux can retain both directory timestamps for changes within one kernel
+  clock tick ([kernel timestamp documentation](https://docs.kernel.org/filesystems/multigrain-ts.html)).
+  Reverified the pinned archival producer and inventory regressions on
+  2026-11-01: Linux reads native directory-name notifications synchronously,
+  sharing one descriptor across the factory's cached roots. Only notified
+  directories refresh their filenames; overflow or watch failures keep forks
+  eligible for retry and rebuild the notification instance. Invalidation,
+  eviction and runtime cleanup release descriptors. Stable source snapshots
+  enumerate once per parse without notifications, including inside the
+  read-only hosted parser sandbox.
   Reverified on 2026-10-11 with 10 and 1,000 unrelated files and dated
   directories, page discovery across batches, and parent edits and removal
   within a batch. On Windows, directory metadata comes from one open handle,

@@ -412,6 +412,7 @@ func (p *codexProvider) PlanRawCapture(
 	if err := ctx.Err(); err != nil {
 		return RawCapturePlan{}, err
 	}
+	ctx = p.parentInventoryContext(ctx)
 	if p.spec.agent != AgentCodex {
 		return RawCapturePlan{}, invalidRawCapturePlan("provider does not own Codex raw companions")
 	}

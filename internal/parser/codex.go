@@ -1828,6 +1828,7 @@ func (p *codexProvider) parseSessionWithCursor(
 func (p *codexProvider) parentTurnResolver(
 	ctx context.Context, childPath string,
 ) codexParentTurnResolver {
+	ctx = p.parentInventoryContext(ctx)
 	return func(parentID string) (map[string]struct{}, bool) {
 		var paths []string
 		hasOriginal := false
@@ -1885,6 +1886,13 @@ func (p *codexProvider) parentTurnResolver(
 		p.parentTurnCache.Put(files, turnIDs)
 		return turnIDs, true
 	}
+}
+
+func (p *codexProvider) parentInventoryContext(ctx context.Context) context.Context {
+	if !p.Config.StableSourceSnapshots {
+		return ctx
+	}
+	return context.WithValue(ctx, codexThreadInventoryContextKey{}, &codexThreadInventoryBatch{stable: true})
 }
 
 // CodexReplayParentID returns the explicit parent only when the rollout has a
