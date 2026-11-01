@@ -162,6 +162,7 @@ evidence; they do not establish whether a tool helped the task.
   through directory symlinks. `TestSkillInferenceSkipsProtectedPaths` covers
   this with synthetic files, the explicit opt-in, and ordinary unprotected
   paths. No producer format changed.
+
 - **Blank thinking usage (2026-10-27):** Reverified against the synthetic
   transcript in [#2469](https://github.com/kenn-io/agentsview/issues/2469),
   kept in `internal/parser/testdata/claude/blank_thinking_usage.jsonl`. An
@@ -172,6 +173,7 @@ evidence; they do not establish whether a tool helped the task.
   response. It is stored as a hidden system row that keeps its usage; a blank
   record with all-zero usage is still skipped. Data version 150 reparses
   Claude-format sources in place.
+
 - **Screenshot intake (checked 2026-10-24):** A frozen native-file selection
   retained JSONL envelopes, message and tool identifiers, subagent
   transcripts, and companion text files. Decoded-string sanitization followed
@@ -666,6 +668,7 @@ fixtures retain this field; missing identities remain source-local.
   `model_provider_id` as `openai` and `service_tier` as `priority`; Codex can
   omit that selected tier from requests for models that do not advertise
   support.
+
 - **Screenshot intake (checked 2026-10-24):** Ordinary sync accepted sanitized
   native JSONL with `encrypted_content` explicitly omitted. The local parser's
   `extractCodexInboundAgentMessage` also accepts plaintext under that field
@@ -4115,7 +4118,7 @@ schemas keep their existing ordering behavior.
   per-conversation and restructure settings" (#1081, commit `495f493cf`,
   2026-04-21), first shipped in the Positron release `v0.3.3` (2026-04-24).
   This is from a private repository, so the evidence level is unchanged. Data
-  version 158 reparses Posit Assistant archives to pick this up.
+  version 161 reparses Posit Assistant archives to pick this up.
 
 ## Z Code (`zcode`)
 
@@ -4322,17 +4325,17 @@ schemas keep their existing ordering behavior.
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.
 - **Prompt envelope (checked 2026-11-01):** The brain transcript reported in
-  [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps CLI
-  prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>` and
-  `<USER_SETTINGS_CHANGE>` blocks. CLI-owned cleanup recognizes a complete
+  [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps
+  CLI prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>`
+  and `<USER_SETTINGS_CHANGE>` blocks. CLI-owned cleanup recognizes a complete
   leading request with an `<ADDITIONAL_METADATA>` tail and optional complete
-  `<USER_SETTINGS_CHANGE>`. It removes these blocks from producer user messages
-  and derived titles before history matching. Fixtures cover selected brain,
-  SQLite, and sidecar messages; sidecar fixtures establish consumer behavior,
-  rather than an observed producer emission. Raw history, system rows, literal
-  tags, incomplete envelopes, and empty requests retain their text. Evidence
-  remains `no-public-source`. Ordinary sync repairs existing CLI messages and
-  titles in place, even when source files are unchanged.
+  `<USER_SETTINGS_CHANGE>`. It removes these blocks from producer user
+  messages and derived titles before history matching. Fixtures cover selected
+  brain, SQLite, and sidecar messages; sidecar fixtures establish consumer
+  behavior, rather than an observed producer emission. Raw history, system
+  rows, literal tags, incomplete envelopes, and empty requests retain their
+  text. Evidence remains `no-public-source`. Ordinary sync repairs existing
+  CLI messages and titles in place, even when source files are unchanged.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
