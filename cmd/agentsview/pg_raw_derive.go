@@ -236,7 +236,7 @@ func newPGRawReparseCommand() *cobra.Command {
 	var runID string
 	var batch int
 	var repair bool
-	cmd := &cobra.Command{Use: "raw-reparse [target]", Short: "Schedule one bounded, resumable batch of current raw heads for this parser version", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "raw-reparse [target]", Short: "Schedule current raw heads or repair failed jobs in one bounded batch for this parser version", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !repair && strings.TrimSpace(runID) == "" {
 			return errors.New("raw-reparse requires --run-id")
 		}
@@ -283,7 +283,7 @@ func newPGRawReparseCommand() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&runID, "run-id", "", "Durable rollout checkpoint ID; reuse to resume")
-	cmd.Flags().IntVar(&batch, "batch-size", 64, "Maximum current heads in this invocation (1-256)")
+	cmd.Flags().IntVar(&batch, "batch-size", 64, "Maximum current heads to schedule or failed jobs to repair in this invocation (1-256)")
 	cmd.Flags().BoolVar(&repair, "repair", false, "Reschedule failed jobs for this parser version")
 	cmd.MarkFlagsMutuallyExclusive("repair", "run-id")
 	cmd.MarkFlagsOneRequired("repair", "run-id")

@@ -107,12 +107,21 @@ func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version strin
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT h.device_id,m.manifest_id,m.canonical_json,p.projection_generation,j.id
- FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id
+	// Pick the oldest failures first, then lock that batch in rollout's head order.
+	rows, err := tx.QueryContext(ctx, `WITH candidates AS (
+ SELECT j.id FROM raw_source_heads h
  JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
  JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
  WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2
- ORDER BY j.id LIMIT $3 FOR UPDATE OF h, j`, s.options.Tenant, version, limit)
+ ORDER BY j.updated_at,j.id LIMIT $3
+ )
+ SELECT h.device_id,m.manifest_id,m.canonical_json,p.projection_generation,j.id
+ FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id
+ JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
+ JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
+ JOIN candidates c ON c.id=j.id
+ WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2
+ ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 FOR UPDATE OF h, j`, s.options.Tenant, version, limit)
 	if err != nil {
 		return 0, err
 	}

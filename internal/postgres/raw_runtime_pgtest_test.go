@@ -149,6 +149,10 @@ func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 	f := newProjectionFixture(t)
 	f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
+	// Job IDs run opposite to rollout's head order.
+	b, _ := f.accept(t, "device-b", "failed-b", "")
+	bLease := f.lease(t, b)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
 	m, _ := f.accept(t, "device-a", "failed", "")
 	lease := f.lease(t, m)
 	partial := projectionOutcome("partial")
@@ -176,10 +180,13 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 		<-done
 	}()
 	waitHostedLocks(t, f, ctx, 1)
+	// A rollout holding the first head can still lock the second head.
+	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE NOWAIT`, b.ManifestID)
+	require.NoError(t, err)
 	require.NoError(t, gate.Commit())
 	<-done
 	require.NoError(t, repairErr)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 2, count)
 	var state string
 	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state))
 	assert.Equal(t, "ready", state)
@@ -221,6 +228,34 @@ func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	assert.Equal(t, stale.Attempt, leases[0].Attempt)
 	assert.Greater(t, leases[0].ProjectionGeneration, stale.ProjectionGeneration)
 	require.ErrorIs(t, f.jobs.FailRawParseJob(t.Context(), stale, "parse", "stale"), rawderive.ErrLeaseLost)
+}
+
+func TestHostedRuntimeRepairRefailedJobYieldsToOlderFailure(t *testing.T) {
+	f := newProjectionFixture(t)
+	// The oldest failure sorts last by rollout's head order.
+	a, _ := f.accept(t, "device-z", "failed-a", "")
+	aLease := f.lease(t, a)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
+	b, _ := f.accept(t, "device-a", "failed-b", "")
+	bLease := f.lease(t, b)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
+
+	n, err := f.sink.RepairFailedJobs(t.Context(), "parser-1", 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.Equal(t, aLease.ID, leases[0].ID)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), leases[0], "parse", "failed again"))
+
+	n, err = f.sink.RepairFailedJobs(t.Context(), "parser-1", 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	leases, err = f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	assert.Equal(t, bLease.ID, leases[0].ID)
 }
 
 func TestHostedRuntimeRepairFailedJobsBoundsAndVersions(t *testing.T) {
