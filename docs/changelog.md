@@ -103,6 +103,8 @@ The latest release is
 
 **Bug fixes**
 
+- Crashed or still-running Copilot CLI sessions now show tokens and estimated
+  cost.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are

@@ -29,6 +29,7 @@ const (
 	copilotEventAssistantReason = "assistant.reasoning"
 	copilotEventModelChange     = "session.model_change"
 	copilotEventSessionShutdown = "session.shutdown"
+	copilotEventUsageRecord     = "session.usage_record"
 	copilotReportedCostSource   = "copilot-reported"
 )
 
@@ -39,19 +40,22 @@ var copilotUsageBasedPricingStartedAt = time.Date(
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
-	messages                []ParsedMessage
-	usageEvents             []ParsedUsageEvent
-	firstMessage            string
-	startedAt               time.Time
-	endedAt                 time.Time
-	sessionID               string
-	project                 string
-	ordinal                 int
-	currentModel            string
-	shutdownCoveredMessages int
-	usageCoveredAt          time.Time
-	fallbackOutput          int
-	hasFallbackOutput       bool
+	messages                 []ParsedMessage
+	usageEvents              []ParsedUsageEvent
+	usageRecords             []ParsedUsageEvent
+	uncoveredShutdownUsage   []ParsedUsageEvent
+	receiptAfterReportedCost bool
+	firstMessage             string
+	startedAt                time.Time
+	endedAt                  time.Time
+	sessionID                string
+	project                  string
+	ordinal                  int
+	currentModel             string
+	shutdownCoveredMessages  int
+	usageCoveredAt           time.Time
+	fallbackOutput           int
+	hasFallbackOutput        bool
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -88,6 +92,14 @@ func (b *copilotSessionBuilder) processLine(line string) {
 	case copilotEventModelChange:
 		if v := data.Get("newModel"); v.Exists() {
 			b.currentModel = normalizeCopilotModel(v.Str)
+		}
+	case copilotEventUsageRecord:
+		if event, ok := copilotTokenUsage(data.Get("usage")); ok {
+			event.Source = "usage-record"
+			event.Model = normalizeCopilotModel(data.Get("usage.model").Str)
+			event.OccurredAt = timeString(ts, b.startedAt)
+			b.usageRecords = append(b.usageRecords, event)
+			b.receiptAfterReportedCost = true
 		}
 	case copilotEventSessionShutdown:
 		b.handleShutdown(data, ts)
@@ -300,6 +312,30 @@ func (b *copilotSessionBuilder) handleAssistantReasoning() {
 	}
 }
 
+func copilotTokenUsage(usage gjson.Result) (ParsedUsageEvent, bool) {
+	totalInput := int(usage.Get("inputTokens").Int())
+	event := ParsedUsageEvent{
+		OutputTokens:             int(usage.Get("outputTokens").Int()),
+		CacheReadInputTokens:     int(usage.Get("cacheReadTokens").Int()),
+		CacheCreationInputTokens: int(usage.Get("cacheWriteTokens").Int()),
+		ReasoningTokens:          int(usage.Get("reasoningTokens").Int()),
+	}
+	event.InputTokens = max(totalInput-event.CacheReadInputTokens-event.CacheCreationInputTokens, 0)
+	return event, event.InputTokens != 0 || event.OutputTokens != 0 ||
+		event.CacheReadInputTokens != 0 || event.CacheCreationInputTokens != 0 ||
+		event.ReasoningTokens != 0
+}
+
+func (b *copilotSessionBuilder) clearReportedCost() {
+	for i := range b.usageEvents {
+		if b.usageEvents[i].CostSource == copilotReportedCostSource {
+			b.usageEvents[i].Cost = nil
+			b.usageEvents[i].CostStatus = ""
+			b.usageEvents[i].CostSource = ""
+		}
+	}
+}
+
 // handleShutdown extracts per-model token usage from the
 // session.shutdown event's modelMetrics field.
 func (b *copilotSessionBuilder) handleShutdown(
@@ -314,45 +350,21 @@ func (b *copilotSessionBuilder) handleShutdown(
 	// totalNanoAiu is cumulative. Keep its authoritative cost on only the
 	// latest shutdown, including when that final value is zero.
 	if hasReportedCost {
-		for i := range b.usageEvents {
-			if b.usageEvents[i].CostSource == copilotReportedCostSource {
-				b.usageEvents[i].Cost = nil
-				b.usageEvents[i].CostStatus = ""
-				b.usageEvents[i].CostSource = ""
-			}
-		}
+		b.clearReportedCost()
+		b.receiptAfterReportedCost = false
 	}
 
 	occurredAt := timeString(ts, b.startedAt)
 	var events []ParsedUsageEvent
 	data.Get("modelMetrics").ForEach(
 		func(modelKey, metrics gjson.Result) bool {
-			usage := metrics.Get("usage")
-			totalInput := int(usage.Get("inputTokens").Int())
-			cacheRead := int(usage.Get("cacheReadTokens").Int())
-			cacheWrite := int(usage.Get("cacheWriteTokens").Int())
-			output := int(usage.Get("outputTokens").Int())
-			reasoning := int(usage.Get("reasoningTokens").Int())
-
-			// Fresh input = total - cache_read - cache_write.
-			freshInput := max(totalInput-cacheRead-cacheWrite, 0)
-
-			if freshInput == 0 && output == 0 &&
-				cacheRead == 0 && cacheWrite == 0 &&
-				reasoning == 0 {
-				return true
+			event, ok := copilotTokenUsage(metrics.Get("usage"))
+			if ok {
+				event.Source = "shutdown"
+				event.Model = normalizeCopilotModel(modelKey.Str)
+				event.OccurredAt = occurredAt
+				events = append(events, event)
 			}
-
-			events = append(events, ParsedUsageEvent{
-				Source:                   "shutdown",
-				Model:                    normalizeCopilotModel(modelKey.Str),
-				InputTokens:              freshInput,
-				OutputTokens:             output,
-				CacheCreationInputTokens: cacheWrite,
-				CacheReadInputTokens:     cacheRead,
-				ReasoningTokens:          reasoning,
-				OccurredAt:               occurredAt,
-			})
 			return true
 		},
 	)
@@ -363,6 +375,12 @@ func (b *copilotSessionBuilder) handleShutdown(
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
 	})
+	// Sum shutdown tokens before the first usable receipt, as in receipt-free sessions.
+	// After that receipt, shutdowns are cumulative snapshots of usage receipts already record.
+	// See the Copilot CLI 1.0.105 schema evidence in docs/internal/session-format-sources.md.
+	if len(b.usageRecords) == 0 {
+		b.uncoveredShutdownUsage = append(b.uncoveredShutdownUsage, events...)
+	}
 
 	if hasReportedCost {
 		if len(events) == 0 {
@@ -395,7 +413,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 func (b *copilotSessionBuilder) retainStoreOutputRemainder() {
 	storeOutput := make(map[string]int)
 	for _, event := range b.usageEvents {
-		if event.Source == "session-store" {
+		if event.Source == "session-store" || event.Source == "usage-record" || event.Source == "shutdown" {
 			storeOutput[event.Model] += event.OutputTokens
 		}
 	}
@@ -669,36 +687,46 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	if rawSessionID == "" {
 		rawSessionID = sessionIDFromPath(path)
 	}
-	usesStoreUsage := false
+	usesRequestUsage := false
+	var storeUsage []ParsedUsageEvent
 	if !b.startedAt.Before(copilotUsageBasedPricingStartedAt) {
-		storeUsage, err := loadCopilotStoreUsage(ctx, storePath, rawSessionID)
+		storeUsage, err = loadCopilotStoreUsage(ctx, storePath, rawSessionID)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+	}
+	if len(storeUsage) == 0 {
+		storeUsage = b.usageRecords
+		if len(storeUsage) > 0 && b.receiptAfterReportedCost {
+			b.clearReportedCost()
+		}
 		if len(storeUsage) > 0 {
-			for _, event := range storeUsage {
-				b.markUsageCoveredAt(parseTimestamp(event.OccurredAt))
-			}
-			for _, event := range b.usageEvents {
-				if event.Cost == nil ||
-					event.CostSource != copilotReportedCostSource {
-					continue
-				}
-				// Store usage supplies richer observed tokens, but transcript
-				// shutdown remains the authoritative reported-cost source.
-				storeUsage = append(storeUsage, ParsedUsageEvent{
-					Source: event.Source, Model: event.Model, OccurredAt: event.OccurredAt,
-					Cost: event.Cost, CostStatus: event.CostStatus, CostSource: event.CostSource,
-				})
-				break
-			}
-			b.usageEvents = storeUsage
-			// Only the selected token source determines message coverage.
-			b.shutdownCoveredMessages = 0
-			usesStoreUsage = true
+			storeUsage = append(storeUsage, b.uncoveredShutdownUsage...)
 		}
 	}
-	if usesStoreUsage {
+	if len(storeUsage) > 0 {
+		for _, event := range storeUsage {
+			b.markUsageCoveredAt(parseTimestamp(event.OccurredAt))
+		}
+		for _, event := range b.usageEvents {
+			if event.Cost == nil ||
+				event.CostSource != copilotReportedCostSource {
+				continue
+			}
+			// Request usage supplies richer observed tokens, but transcript
+			// shutdown remains the authoritative reported-cost source.
+			storeUsage = append(storeUsage, ParsedUsageEvent{
+				Source: event.Source, Model: event.Model, OccurredAt: event.OccurredAt,
+				Cost: event.Cost, CostStatus: event.CostStatus, CostSource: event.CostSource,
+			})
+			break
+		}
+		b.usageEvents = storeUsage
+		// Only the selected token source determines message coverage.
+		b.shutdownCoveredMessages = 0
+		usesRequestUsage = true
+	}
+	if usesRequestUsage {
 		b.retainStoreOutputRemainder()
 	}
 	b.applyMessageUsageFallback()
@@ -739,12 +767,14 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	}
 
 	accumulateMessageTokenUsage(sess, b.messages)
-	if usesStoreUsage {
-		// Store output and uncovered message output replace the transcript total,
-		// including when the store contains no positive output tokens.
-		sess.TotalOutputTokens = 0
-		sess.HasTotalOutputTokens = false
-		applyUsageEventTokenTotals(sess, b.usageEvents)
+	if usesRequestUsage {
+		// Request output and uncovered message output replace the transcript total,
+		// including when the requests contain no positive output tokens.
+		contextEvents := slices.DeleteFunc(slices.Clone(b.usageEvents), func(event ParsedUsageEvent) bool {
+			return event.Source == "shutdown"
+		})
+		applyUsageEventTokenTotals(sess, contextEvents)
+		sess.TotalOutputTokens, sess.HasTotalOutputTokens, _, _ = UsageEventTokenAggregate(b.usageEvents)
 		if b.hasFallbackOutput {
 			sess.HasTotalOutputTokens = true
 			sess.TotalOutputTokens += b.fallbackOutput

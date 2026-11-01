@@ -1436,12 +1436,30 @@ fixtures retain this field; missing identities remain source-local.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
 
-- **Usage and cost:** Assistant messages can persist model identity and output
-  tokens. Shutdown metrics can persist input, output, cache-read, cache-write,
-  and reasoning totals. When both shutdown and store usage are absent,
-  Agentsview records only known per-message output tokens; it does not infer
-  input, cache, reasoning, or credit totals. Known-model tokens use catalog
-  estimates; the existing shutdown reported-cost treatment is unchanged.
+- **Usage and cost:** Per-call store rows take precedence over
+  `session.usage_record` receipts and replace all shutdown token rollups.
+  Shutdown token rows before the first usable receipt are summed, just as in
+  sessions without receipts. Shutdowns written after that receipt are cumulative
+  snapshots of what receipts already record, so their token rows are dropped.
+  See the published schema evidence below. Receipts preserve each
+  request's timestamp, input, output, cache-read, cache-write, and reasoning
+  tokens. Without per-call usage, shutdown metrics supply totals, then known
+  per-message output is the fallback. Known-model tokens use catalog estimates.
+  A usable receipt after the latest reported-cost shutdown clears that stale
+  cost only when receipts supply the per-call usage.
+
+- **Receipt schema:** Reverified 2026-10-31 against the published
+  [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
+  (SHA1 `43322d0817b8564afcfe00f3929c00b033bca116`). The embedded schema
+  describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated" and
+  `accountingSnapshot` as "captured atomically with receipt watermarks". It defines
+  `session.usage_checkpoint` for "reconstructing aggregate accounting on resume".
+  It defines `session.usage_record` with `data.usage.model` and token fields
+  under `data.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`,
+  `cacheWriteTokens`, and `reasoningTokens`. Fresh input subtracts cache reads
+  and writes. Receipts use request pricing and their event timestamp without a
+  message ordinal. Data version 159 reparses available Copilot CLI sources in
+  place without changing session or source identities.
 
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
