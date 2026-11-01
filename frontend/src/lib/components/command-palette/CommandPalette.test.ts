@@ -716,6 +716,26 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it.each(["semantic", "hybrid"] as const)("offers server settings in %s mode", async (mode) => {
+    mockSearchStore.mode = mode;
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const links = document.querySelectorAll<HTMLAnchorElement>(
+      'a[href="https://agentsview.io/docs/semantic-search/#named-embeddings-servers"]',
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toBe("Server settings");
+    unmount(component);
+    mockSearchStore.error = {
+      detail: "semantic search unavailable",
+      kind: "semantic-unavailable",
+    };
+    const failedComponent = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    expect(document.querySelector(".palette-server-settings")).toBeNull();
+    unmount(failedComponent);
+  });
+
   it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {

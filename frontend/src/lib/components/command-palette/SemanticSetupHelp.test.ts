@@ -128,14 +128,19 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain("[vector]");
     expect(text()).toContain("enabled = true");
     expect(text()).toContain("agentsview embeddings build");
+    expect(text()).toContain(
+      "Already using Nomic with Ollama? Follow the full recipe to keep your index when switching to the shared local server.",
+    );
+    const guide = document.body.querySelector<HTMLAnchorElement>("a");
+    expect(guide?.getAttribute("href")).toBe(
+      "https://agentsview.io/docs/semantic-search/#named-embeddings-servers",
+    );
 
     const copyButtons = document.body.querySelectorAll("button.kit-copy-btn");
     expect(copyButtons.length).toBe(2);
     (copyButtons[0] as HTMLButtonElement).click();
     await settle();
-    expect(mockCopyToClipboard).toHaveBeenCalledWith(
-      expect.stringContaining("[vector.embeddings.servers.local]"),
-    );
+    expect(mockCopyToClipboard).toHaveBeenCalledWith("[vector]\nenabled = true");
     (copyButtons[1] as HTMLButtonElement).click();
     await settle();
     expect(mockCopyToClipboard).toHaveBeenCalledWith("agentsview embeddings build");
