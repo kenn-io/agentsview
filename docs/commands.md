@@ -1336,6 +1336,24 @@ agentsview pg status [target] [flags]
 
 ______________________________________________________________________
 
+### `agentsview pg raw-parity` (unreleased)
+
+Compare hosted raw projections with retained pushed sessions in one read-only
+snapshot, including trashed rows. Requires the selected target's restricted
+runtime connection and `raw_tenant`; owner connections are refused.
+
+```bash
+agentsview pg raw-parity [target] [--device ID] [--provider P] [--format human|json]
+```
+
+Without JSON output, prints one summary line. With `--format json` or `--json`,
+stdout contains the complete report and stderr contains the summary. Exit
+status is 0 even when `pass` is false. Use `pass` in scripts. See
+[Compare before cutover](/docs/hosted-raw-sync/#compare-before-cutover-unreleased)
+for matching, classes, scope counts and the readiness gate.
+
+______________________________________________________________________
+
 ### `agentsview pg serve`
 
 Start a read-only session web UI backed by PostgreSQL. On a writable PostgreSQL
