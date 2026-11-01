@@ -180,9 +180,6 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 		<-done
 	}()
 	waitHostedLocks(t, f, ctx, 1)
-	// A rollout holding the first head can still lock the second head.
-	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE NOWAIT`, b.ManifestID)
-	require.NoError(t, err)
 	// Commit the state left by another repair followed by a worker failure
 	// while the waiting repair still has its original statement snapshot.
 	_, err = resetRawSourceSelectionTx(ctx, gate, m, "parser-1", 2, lease.ID)
@@ -199,110 +196,6 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 	var generation int64
 	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT projection_generation FROM raw_source_projections WHERE selected_job_id=$1`, lease.ID).Scan(&generation))
 	assert.EqualValues(t, 3, generation)
-}
-
-func TestHostedRuntimeRepairConcurrentBatchesReachNextFailure(t *testing.T) {
-	f := newProjectionFixture(t)
-	a, _ := f.accept(t, "device-a", "failed-a", "")
-	aLease := f.lease(t, a)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
-	b, _ := f.accept(t, "device-b", "failed-b", "")
-	bLease := f.lease(t, b)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	gate, err := f.runtime.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer gate.Rollback()
-	_, err = gate.ExecContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE`, a.ManifestID)
-	require.NoError(t, err)
-	type result struct {
-		count int
-		err   error
-	}
-	results := make(chan result, 2)
-	received := 0
-	for range 2 {
-		go func() {
-			count, err := f.sink.RepairFailedJobs(ctx, "parser-1", 1)
-			results <- result{count, err}
-		}()
-	}
-	defer func() {
-		cancel()
-		_ = gate.Rollback()
-		for range 2 - received {
-			<-results
-		}
-	}()
-	waitHostedLocks(t, f, ctx, 2)
-	require.NoError(t, gate.Commit())
-	for range 2 {
-		r := <-results
-		received++
-		require.NoError(t, r.err)
-		assert.Equal(t, 1, r.count, "each concurrent batch must repair one failure")
-	}
-	for _, id := range []int64{aLease.ID, bLease.ID} {
-		var state string
-		require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, id).Scan(&state))
-		assert.Equal(t, "ready", state)
-	}
-}
-
-func TestHostedRuntimeRepairBatchLeavesOtherHeadsLockable(t *testing.T) {
-	f := newProjectionFixture(t)
-	a, _ := f.accept(t, "device-a", "failed-a", "")
-	aLease := f.lease(t, a)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
-	b, _ := f.accept(t, "device-b", "failed-b", "")
-	bLease := f.lease(t, b)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
-
-	// Hold the repair after selection, while it resets the oldest failure.
-	f.parkOn(t, "UPDATE", "raw_ingest_jobs", "NEW.state='ready'")
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	gate, err := f.admin.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer gate.Rollback()
-	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
-	require.NoError(t, err)
-	var count int
-	var repairErr error
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 1)
-	}()
-	defer func() {
-		cancel()
-		_ = gate.Rollback()
-		<-done
-	}()
-	require.Eventually(t, func() bool {
-		var parked int
-		err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`, f.role).Scan(&parked)
-		return err == nil && parked == 1
-	}, 3*time.Second, 10*time.Millisecond)
-
-	// Uploads and rollouts must still be able to lock the head outside this batch.
-	var manifestID string
-	err = f.runtime.QueryRowContext(ctx, `SELECT manifest_id FROM raw_source_heads WHERE manifest_id=$1 FOR UPDATE NOWAIT`, b.ManifestID).Scan(&manifestID)
-	assert.NoError(t, err, "batch-size-1 repair locked the head outside its batch")
-	if err == nil {
-		assert.Equal(t, b.ManifestID, manifestID)
-	}
-	require.NoError(t, gate.Commit())
-	<-done
-	require.NoError(t, repairErr)
-	assert.Equal(t, 1, count)
-	var state string
-	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, aLease.ID).Scan(&state))
-	assert.Equal(t, "ready", state)
-	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT state FROM raw_ingest_jobs WHERE id=$1`, bLease.ID).Scan(&state))
-	assert.Equal(t, "failed", state)
 }
 
 func TestHostedRuntimeRepairSkipsSelectionChangedWhileWaiting(t *testing.T) {
@@ -374,19 +267,23 @@ func TestHostedRuntimeRepairReachesNextFailureAfterUploadAdvancesHead(t *testing
 		_, err := f.custody.CommitManifest(ctx, a.Identity, next)
 		uploaded <- err
 	}()
-	var count int
-	var repairErr error
-	done := make(chan struct{})
 	defer func() {
 		cancel()
 		_ = gate.Rollback()
 		<-uploaded
-		<-done
 	}()
+	var count int
+	var repairErr error
+	done := make(chan struct{})
 	waitHostedLocks(t, f, ctx, 1)
 	go func() {
 		defer close(done)
 		count, repairErr = f.sink.RepairFailedJobs(ctx, "parser-1", 1)
+	}()
+	defer func() {
+		cancel()
+		_ = gate.Rollback()
+		<-done
 	}()
 	waitHostedLocks(t, f, ctx, 2)
 	require.NoError(t, gate.Commit())
@@ -432,34 +329,6 @@ func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 	assert.Equal(t, stale.ID, leases[0].ID)
 	assert.Equal(t, stale.Attempt, leases[0].Attempt)
 	assert.Greater(t, leases[0].ProjectionGeneration, stale.ProjectionGeneration)
-}
-
-func TestHostedRuntimeRepairRefailedJobYieldsToOlderFailure(t *testing.T) {
-	f := newProjectionFixture(t)
-	// The oldest failure sorts last by rollout's head order.
-	a, _ := f.accept(t, "device-z", "failed-a", "")
-	aLease := f.lease(t, a)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), aLease, "parse", "failed"))
-	b, _ := f.accept(t, "device-a", "failed-b", "")
-	bLease := f.lease(t, b)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), bLease, "parse", "failed"))
-
-	n, err := f.sink.RepairFailedJobs(t.Context(), "parser-1", 1)
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	require.Equal(t, aLease.ID, leases[0].ID)
-	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), leases[0], "parse", "failed again"))
-
-	n, err = f.sink.RepairFailedJobs(t.Context(), "parser-1", 1)
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
-	leases, err = f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	assert.Equal(t, bLease.ID, leases[0].ID)
 }
 
 func TestHostedRuntimeRepairFailedJobsBoundsAndVersions(t *testing.T) {

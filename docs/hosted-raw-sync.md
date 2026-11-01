@@ -306,10 +306,12 @@ agentsview pg raw-reparse hosted --repair --batch-size 64
 
 Repeat until the command prints `Rescheduled 0 failed jobs`. Jobs whose cause
 remains unfixed fail again and can keep the count above zero; health's failed
-counts show these recurring failures. Repair uses this executable's processing
-version and is safe to repeat. It only reschedules failed jobs still selected
-for current heads, leaving healthy jobs, in-progress jobs, and heads at other
-versions unchanged. `--repair` and `--run-id` are mutually exclusive.
+counts show these recurring failures. If the count stays at the batch size,
+failures are recurring, so raise `--batch-size` (up to 256) or fix the remaining
+cause. Repair uses this executable's processing version and is safe to repeat.
+It only reschedules failed jobs still selected for current heads, leaving
+healthy jobs, in-progress jobs, and heads at other versions unchanged. `--repair`
+and `--run-id` are mutually exclusive.
 
 A source whose file has left its device has a tombstone as its current head.
 Reparsing it changes nothing, so its retained sessions keep the output of the
