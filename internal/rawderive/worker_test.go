@@ -109,6 +109,69 @@ func TestWorkerClassifiesParseFailureAndRetriesAfterCleanup(t *testing.T) {
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+func TestWorkerBoundsInterruptedAttempts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		maxAttempts int
+		attempt     int
+		failErr     error
+		want        BatchResult
+		wantRuns    int
+		wantErr     string
+	}{
+		{"single attempt grace run", 1, 2, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1, ""},
+		{"single attempt exhausted", 1, 3, nil, BatchResult{Claimed: 1, Failed: 1}, 0, "raw parse job 1: lease:attempt_budget_exhausted"},
+		{"grace run at max plus one", 3, 4, nil, BatchResult{Claimed: 1, Succeeded: 1}, 1, ""},
+		{"exhausted", 3, 5, nil, BatchResult{Claimed: 1, Failed: 1}, 0, "raw parse job 1: lease:attempt_budget_exhausted"},
+		{"lost lease", 3, 5, ErrLeaseLost, BatchResult{Claimed: 1, LeaseLost: 1}, 0, ""},
+		{"storage error", 3, 5, errors.New("storage detail"), BatchResult{Claimed: 1}, 0, "recording terminal failure: fail:internal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			lease := workerTestLease()
+			lease.Attempt = tc.attempt
+			manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
+			lease.ManifestID = manifest.ManifestID
+			queue := &workerQueueFixture{leases: []JobLease{lease}, failErr: tc.failErr}
+			var runs, projections int
+			worker := newWorkerForTest(t, queue,
+				manifestSourceFunc(func(context.Context, JobLease) (rawsync.CanonicalManifest, error) {
+					runs++
+					return manifest, nil
+				}),
+				sourceMaterializerFunc(func(context.Context, rawsync.CanonicalManifest) (*Materialization, error) {
+					return &Materialization{root: t.TempDir()}, nil
+				}),
+				sourceParserFunc(func(context.Context, rawsync.CanonicalManifest, *Materialization) (ParsedManifest, error) {
+					return ParsedManifest{}, nil
+				}),
+				projectionSinkFunc(func(context.Context, JobLease, rawsync.CanonicalManifest, ParsedManifest) error {
+					projections++
+					return nil
+				}),
+			)
+			worker.MaxAttempts = tc.maxAttempts
+			result, err := worker.RunBatch(t.Context())
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+			} else {
+				require.ErrorIs(t, err, tc.failErr)
+			}
+			assert.Equal(t, tc.want, result)
+			assert.Equal(t, tc.wantRuns, runs)
+			assert.Equal(t, tc.wantRuns, projections)
+			assert.Empty(t, queue.retries)
+			if tc.wantRuns == 0 {
+				require.Len(t, queue.failures, 1)
+				assert.Equal(t, workerFailure{lease: lease, class: "lease", message: "lease:attempt_budget_exhausted"}, queue.failures[0])
+			} else {
+				assert.Empty(t, queue.failures)
+			}
+		})
+	}
+}
+
 func TestWorkerMovesTerminalAttemptToDurableFailure(t *testing.T) {
 	t.Parallel()
 	lease := workerTestLease()
@@ -986,6 +1049,7 @@ func newWorkerForTest(
 
 type workerQueueFixture struct {
 	leases       []JobLease
+	failErr      error
 	heartbeatErr error
 	heartbeat    func(context.Context, JobLease, time.Duration) error
 	heartbeats   atomic.Int64
@@ -1052,7 +1116,7 @@ func (q *workerQueueFixture) FailRawParseJob(
 	q.failures = append(q.failures, workerFailure{
 		lease: lease, class: class, message: message,
 	})
-	return nil
+	return q.failErr
 }
 
 type manifestSourceFunc func(context.Context, JobLease) (rawsync.CanonicalManifest, error)

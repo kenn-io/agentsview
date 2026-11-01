@@ -4301,6 +4301,18 @@ schemas keep their existing ordering behavior.
   `ChatModelMetadata.model_display_name` (field 21) remains the complete label
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.
+- **Prompt envelope (checked 2026-11-01):** The brain transcript reported in
+  [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps CLI
+  prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>` and
+  `<USER_SETTINGS_CHANGE>` blocks. CLI-owned cleanup recognizes a complete
+  leading request with an `<ADDITIONAL_METADATA>` tail and optional complete
+  `<USER_SETTINGS_CHANGE>`. It removes these blocks from producer user messages
+  and derived titles before history matching. Fixtures cover selected brain,
+  SQLite, and sidecar messages; sidecar fixtures establish consumer behavior,
+  rather than an observed producer emission. Raw history, system rows, literal
+  tags, incomplete envelopes, and empty requests retain their text. Evidence
+  remains `no-public-source`. Ordinary sync repairs existing CLI messages and
+  titles in place, even when source files are unchanged.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and

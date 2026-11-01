@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- Hosted operators can retry failed raw parse jobs after fixing their cause with
+  `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
+  this executable's processing version a fresh attempt budget.
+
 - `agentsview agents` lists every supported agent, where AgentsView looks for its
   sessions, and which session details it reads, such as tool calls, thinking,
   subagents, and token usage. Add `--json` for scripts. It works without a
@@ -106,6 +110,9 @@ The latest release is
 - Hosted PostgreSQL searches and session reads no longer fail solely because
   newly accepted raw captures are waiting for processing. Changes to published
   content or public identities still cause reads to retry.
+- Hosted transcript jobs whose workers keep stopping now fail with error class
+  `lease` after one run past `raw_max_attempts`, instead of retrying forever.
+  Workers from an older processing generation can no longer change a newer lease.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are

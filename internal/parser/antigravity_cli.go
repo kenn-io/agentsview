@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -128,21 +129,31 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	if brainTranscriptErr != nil && !os.IsNotExist(brainTranscriptErr) {
 		return nil, nil, nil, status, brainTranscriptErr
 	}
+	historyMsgs := collectAntigravityHistoryMessages(
+		filepath.Join(root, "history.jsonl"), id,
+	)
+	historyPrompts := make(map[string]struct{}, len(historyMsgs))
+	for _, msg := range historyMsgs {
+		// SQLite decoding trims outer whitespace before normalization.
+		historyPrompts[strings.TrimSpace(msg.Content)] = struct{}{}
+	}
 	brainTranscriptMsgs := make([]ParsedMessage, len(brainTranscriptSteps))
-	for i, s := range brainTranscriptSteps {
-		brainTranscriptMsgs[i] = s.msg
+	for i := range brainTranscriptSteps {
+		msg := &brainTranscriptSteps[i].msg
+		normalizeAntigravityCLIUserMessage(msg, historyPrompts)
+		brainTranscriptMsgs[i] = *msg
 	}
 	brainTranscriptOK := hasDisplayableAntigravityCLITrajectoryMessage(
 		brainTranscriptMsgs,
 	)
 
-	historyMsgs := collectAntigravityHistoryMessages(
-		filepath.Join(root, "history.jsonl"), id,
-	)
 	var dbErr error
 	if ext == ".db" {
 		var dbResult antigravityStepLoadResult
 		dbResult, dbErr = loadAntigravityCLIDBSteps(ctx, path)
+		for i := range dbResult.messages {
+			normalizeAntigravityCLIUserMessage(&dbResult.messages[i], historyPrompts)
+		}
 		sourceVersion = dbResult.sourceVersion
 		hasGenMetadata = dbResult.hasGenMetadata
 		// gen_metadata token usage describes the session's actual
@@ -173,6 +184,9 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		tRes, tErr := parseAntigravityCLITrajectory(
 			sidecarPath, dbResult.executors,
 		)
+		for i := range tRes.messages {
+			normalizeAntigravityCLIUserMessage(&tRes.messages[i], historyPrompts)
+		}
 		if tErr == nil {
 			parentCascadeID = tRes.parentCascadeID
 		}
@@ -239,6 +253,9 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		if tRes, err := parseAntigravityCLITrajectory(
 			sidecarPath, nil,
 		); err == nil {
+			for i := range tRes.messages {
+				normalizeAntigravityCLIUserMessage(&tRes.messages[i], historyPrompts)
+			}
 			parentCascadeID = tRes.parentCascadeID
 			// Usage events flow whenever the sidecar parses, even when
 			// no message is displayable, matching the message-less
@@ -673,6 +690,41 @@ func appendMissingAntigravityHistoryMessages(
 
 func normalizedAntigravityPrompt(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+func normalizeAntigravityCLIUserMessage(msg *ParsedMessage, history map[string]struct{}) {
+	if msg.Role != RoleUser || msg.IsSystem {
+		return
+	}
+	if _, authored := history[strings.TrimSpace(msg.Content)]; authored {
+		return
+	}
+	msg.Content = extractAntigravityCLIUserRequest(msg.Content)
+	msg.ContentLength = len(msg.Content)
+}
+
+var antigravityCLIUserRequestRegex = regexp.MustCompile(
+	`(?s)^<USER_REQUEST>(.*)</USER_REQUEST>\s*<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>\s*(?:<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>\s*)?$`,
+)
+
+// extractAntigravityCLIUserRequest recognizes the complete injected metadata tail.
+// Literal tags, incomplete envelopes, and empty requests retain their source text.
+func extractAntigravityCLIUserRequest(s string) string {
+	if match := antigravityCLIUserRequestRegex.FindStringSubmatch(strings.TrimSpace(s)); match != nil {
+		// Remove only the envelope's framing newlines, preserving prompt spacing.
+		request, ok := strings.CutPrefix(match[1], "\r\n")
+		if !ok {
+			request = strings.TrimPrefix(request, "\n")
+		}
+		request, ok = strings.CutSuffix(request, "\r\n")
+		if !ok {
+			request = strings.TrimSuffix(request, "\n")
+		}
+		if strings.TrimSpace(request) != "" {
+			return request
+		}
+	}
+	return s
 }
 
 func nonEmptyAntigravityHistoryMessages(
