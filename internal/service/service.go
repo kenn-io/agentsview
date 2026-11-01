@@ -65,6 +65,10 @@ const (
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
 // (proxies to a running daemon).
 type SessionService interface {
+	// CommitSessions maps each original SHA request to its retained evidence.
+	CommitSessions(ctx context.Context, shas []string) (map[string][]CommitSessionLink, error)
+	// SessionCommits also accepts exact IDs whose session has been deleted.
+	SessionCommits(ctx context.Context, id string) ([]CommitSessionLink, error)
 	Get(ctx context.Context, id string) (*SessionDetail, error)
 	// FindSessionIDsByPartial returns IDs containing partial as a literal,
 	// case-sensitive substring, ordered by most recent activity and capped by

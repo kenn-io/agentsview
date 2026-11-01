@@ -45,6 +45,7 @@ func newSessionCommand() *cobra.Command {
 	)
 
 	cmd.AddCommand(newSessionGetCommand())
+	cmd.AddCommand(newSessionCommitsCommand())
 	cmd.AddCommand(newSessionUsageCommand())
 	cmd.AddCommand(newSessionUsageBatchCommand())
 	cmd.AddCommand(newSessionListCommand())

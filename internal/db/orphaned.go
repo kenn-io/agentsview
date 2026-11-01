@@ -2062,6 +2062,19 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("clearing copied pin notes: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "commit_session_links") {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO main.commit_session_links
+			SELECT c.* FROM old_db.commit_session_links c
+			LEFT JOIN main.sessions s ON s.id=c.session_id
+			WHERE c.source='trailer' OR s.id IS NULL
+			   OR c.source_revision=COALESCE(s.transcript_revision,'')
+			ON CONFLICT(id) DO NOTHING`); err != nil {
+			return fmt.Errorf("preserving commit provenance: %w", err)
+		}
+		if err := applyCommitContentPolicyTx(ctx, tx, d.ArchiveContent()); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 

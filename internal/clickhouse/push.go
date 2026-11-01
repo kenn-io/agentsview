@@ -46,6 +46,9 @@ func (s *Sync) PushWithOptions(
 ) (storage.PushResult, error) {
 	s.fullRunRecorded = false
 	result, err := s.pushWithOptions(ctx, opts, onProgress)
+	if err == nil && result.Errors == 0 {
+		err = s.publishCommitLinks(ctx)
+	}
 	if err != nil && opts.Full && !s.fullRunRecorded {
 		// The push failed before it recorded the requested full push, so
 		// nothing can resume it.
