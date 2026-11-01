@@ -352,12 +352,26 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		}})
 		require.ErrorContains(t, err, "dimension must be at most 768")
 	})
+	t.Run("default Nomic reduced dimensions require a request", func(t *testing.T) {
+		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"dimension": 256},
+		}})
+		require.ErrorContains(t, err, "request_dimensions must be true")
+	})
 	t.Run("default Nomic permits reduced dimensions", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
-			"enabled": true, "embeddings": map[string]any{"dimension": 256},
+			"enabled": true, "embeddings": map[string]any{"dimension": 256, "request_dimensions": true},
 		}})
 		assert.Equal(t, "nomic-embed-text", cfg.Vector.Embeddings.Model)
 		assert.Equal(t, 256, cfg.Vector.Embeddings.Dimension)
+	})
+	t.Run("remote Nomic permits provider-specific dimensions", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{
+				"model": "nomic-embed-text", "dimension": 1024, "servers": minimalServers(),
+			},
+		}})
+		assert.Equal(t, 1024, cfg.Vector.Embeddings.Dimension)
 	})
 	t.Run("default recipe preserves explicit overrides", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{

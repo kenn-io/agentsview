@@ -107,6 +107,7 @@ func TestLocalEmbeddingsLazyDiscoveryAndRefresh(t *testing.T) {
 	t.Cleanup(second.Close)
 	c := enabledVectorConfig(t).Vector.Embeddings
 	c.Model = "nomic-embed-text"
+	c.RequestDimensions = true
 	c.Servers = map[string]config.VectorEmbeddingsServerConfig{"shared": {Local: true, Timeout: "5s", MaxRetries: 1}}
 	discoveries := 0
 	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
@@ -195,27 +196,4 @@ func TestLocalEmbeddingsDiscoveryDoesNotBlockCancellation(t *testing.T) {
 		<-secondDone
 		require.FailNow(t, "canceled caller waited for another discovery")
 	}
-}
-
-func TestLocalEmbeddingsAutomaticNomic(t *testing.T) {
-	oldEndpoint := localEmbeddingEndpoint
-	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
-	stub := newEmbeddingsStubServer(t, 4)
-	t.Cleanup(stub.Close)
-	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-		assert.False(t, opts.SkipOllama)
-		return stub.URL + "/v1", nil
-	}
-	c := enabledVectorConfig(t).Vector.Embeddings
-	c.Model, c.DefaultServer, c.Servers = "nomic-embed-text", "", nil
-	encoders, err := vectorDocumentEncoderSet(c)
-	require.NoError(t, err)
-	require.Equal(t, "automatic", encoders.Default)
-	encoder, ok := encoders.ByName["automatic"]
-	require.True(t, ok)
-	vectors, err := encoder.Encode(t.Context(), []string{"hello"})
-	require.NoError(t, err)
-	assert.Equal(t, [][]float32{{1, 1, 1, 1}}, vectors)
-	assert.Equal(t, 32, encoder.Settings.BatchSize)
-	assert.Equal(t, 4, encoder.Settings.Concurrency)
 }

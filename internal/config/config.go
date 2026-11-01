@@ -321,14 +321,16 @@ type VectorEmbeddingsServerConfig struct {
 	apiKey string
 }
 
+const defaultNomicModel = "nomic-embed-text"
+
 func isNomicModel(model string) bool {
-	return model == "nomic-embed-text" || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
+	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
 }
 
 // ServerNames returns the available server names, including automatic
 // discovery when an untagged Nomic recipe has no configured server table.
 func (c VectorEmbeddingsConfig) ServerNames() []string {
-	if c.Servers == nil && c.Model == "nomic-embed-text" {
+	if c.Servers == nil && c.Model == defaultNomicModel {
 		return []string{"automatic"}
 	}
 	return sortedServerNames(c.Servers)
@@ -355,7 +357,7 @@ func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsSer
 		name = c.ResolvedDefaultServer()
 	}
 	s, ok := c.Servers[name]
-	if !ok && name == "automatic" && c.Servers == nil && c.Model == "nomic-embed-text" {
+	if !ok && name == "automatic" && c.Servers == nil && c.Model == defaultNomicModel {
 		return name, normalizedEmbeddingsServers(map[string]VectorEmbeddingsServerConfig{"automatic": {}}, toml.MetaData{})[name], nil
 	}
 	if !ok {
@@ -476,9 +478,6 @@ func (c VectorConfig) Validate() error {
 	if c.Embeddings.Dimension <= 0 {
 		return errors.New("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
 	}
-	if isNomicModel(c.Embeddings.Model) && c.Embeddings.Dimension > 768 {
-		return fmt.Errorf("[vector.embeddings] dimension must be at most 768 for %q, got %d", c.Embeddings.Model, c.Embeddings.Dimension)
-	}
 	if c.Embeddings.MaxInputChars <= 0 {
 		return fmt.Errorf(
 			"[vector.embeddings] max_input_chars must be greater than 0, got %d",
@@ -565,8 +564,8 @@ func (c VectorEmbeddingsServerConfig) APIKey() string {
 	return os.Getenv(c.APIKeyEnv)
 }
 
-// validateServers checks the named-servers section: at least one server, an
-// unambiguous default, and per-server transport settings that parse.
+// validateServers checks available servers, their default and transport
+// settings, and the dimensions supported by local Nomic.
 func (c VectorEmbeddingsConfig) validateServers() error {
 	names := c.ServerNames()
 	if len(names) == 0 {
@@ -585,12 +584,22 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 				c.DefaultServer, strings.Join(names, ", "))
 		}
 	}
+	local := c.Servers == nil
 	for _, name := range sortedServerNames(c.Servers) {
 		if c.Servers[name].Local && !isNomicModel(c.Model) {
 			return fmt.Errorf("[vector.embeddings.servers.%s] local requires nomic-embed-text; changing models requires rebuilding the index", name)
 		}
+		local = local || c.Servers[name].Local
 		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {
 			return err
+		}
+	}
+	if local {
+		if c.Dimension > 768 {
+			return fmt.Errorf("[vector.embeddings] dimension must be at most 768 for local %q, got %d", c.Model, c.Dimension)
+		}
+		if c.Dimension < 768 && !c.RequestDimensions {
+			return errors.New("[vector.embeddings] request_dimensions must be true for local Nomic dimensions below 768")
 		}
 	}
 	return nil
@@ -2132,7 +2141,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
 	}
 	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && !meta.IsDefined("vector", "embeddings", "servers") {
-		c.Vector.Embeddings.Model = "nomic-embed-text"
+		c.Vector.Embeddings.Model = defaultNomicModel
 		if !meta.IsDefined("vector", "embeddings", "dimension") {
 			c.Vector.Embeddings.Dimension = 768
 		}
