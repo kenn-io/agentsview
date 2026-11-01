@@ -1336,28 +1336,40 @@ The current local time is: 2026-10-30T13:53:46+03:00.
 <USER_SETTINGS_CHANGE>
 The user changed setting Model Selection from None to Gemini 3.8 Flash (Low). No need to comment on this change if the user doesn't ask about it. ...
 </USER_SETTINGS_CHANGE>`
-	for _, withHistory := range []bool{false, true} {
-		t.Run(fmt.Sprintf("history=%t", withHistory), func(t *testing.T) {
-			line, err := json.Marshal(map[string]any{
-				"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
-				"created_at": "2026-10-30T10:53:46Z", "content": envelope,
-			})
-			require.NoError(t, err)
-			fixture := antigravityCLIBrainFixture{
-				setupDB: func(t *testing.T, db *sql.DB) {
-					t.Helper()
-					mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, X'00')`)
-				},
-				transcript: string(line) + "\n",
-			}
-			if withHistory {
-				history, err := json.Marshal(map[string]any{
-					"conversationId": id, "timestamp": 1793357626000, "display": prompt,
-				})
-				require.NoError(t, err)
-				fixture.history = string(history) + "\n"
-			}
-			path := fixture.write(t, id)
+	line, err := json.Marshal(map[string]any{
+		"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+		"created_at": "2026-10-30T10:53:46Z", "content": envelope,
+	})
+	require.NoError(t, err)
+	history, err := json.Marshal(map[string]any{"conversationId": id, "timestamp": 1793357626000, "display": prompt})
+	require.NoError(t, err)
+	encodedEnvelope, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	sidecar := fmt.Sprintf(`{"steps":[
+		{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{"userResponse":%s}},
+		{"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","systemMessage":{"message":%s}},
+		{"type":"CORTEX_STEP_TYPE_CHECKPOINT","checkpoint":{"userRequests":[%s],"sessionSummary":"Keep this summary."}}
+	]}`, encodedEnvelope, encodedEnvelope, encodedEnvelope)
+	rawUserStep := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, X'00')`)
+	}
+	tests := []struct {
+		name    string
+		fixture antigravityCLIBrainFixture
+	}{
+		{"reported brain envelope with metadata reconstruction", antigravityCLIBrainFixture{setupDB: rawUserStep, transcript: string(line) + "\n"}},
+		{"brain matches plain history", antigravityCLIBrainFixture{setupDB: rawUserStep, transcript: string(line) + "\n", history: string(history) + "\n"}},
+		{"covering sidecar beats dirty brain", antigravityCLIBrainFixture{setupDB: rawUserStep, transcript: `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"dirty brain prompt"}` + "\n", sidecar: sidecar}},
+		{"legacy sidecar", antigravityCLIBrainFixture{pb: true, sidecar: sidecar}},
+		{"selected SQLite without history", antigravityCLIBrainFixture{setupDB: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, antigravityTestStepPayload(1793357626, envelope))
+		}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.fixture.write(t, id)
 			provider := newAntigravityCLITestProvider(t, filepath.Dir(filepath.Dir(path)))
 			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
 			require.NoError(t, err)
@@ -1367,9 +1379,19 @@ The user changed setting Model Selection from None to Gemini 3.8 Flash (Low). No
 			require.Len(t, outcome.Results, 1)
 			result := outcome.Results[0].Result
 			assert.Equal(t, prompt, result.Session.FirstMessage)
-			require.Len(t, result.Messages, 1, "history must match the wrapped brain prompt")
+			wantCount := 1
+			if tc.fixture.sidecar != "" {
+				wantCount = 3
+			}
+			require.Len(t, result.Messages, wantCount)
 			assert.Equal(t, prompt, result.Messages[0].Content)
 			assert.Equal(t, 70, result.Messages[0].ContentLength)
+			if tc.fixture.sidecar != "" {
+				assert.Equal(t, envelope, result.Messages[1].Content)
+				assert.True(t, result.Messages[1].IsSystem)
+				assert.Equal(t, "[Checkpoint]\nUser Requests: "+envelope+"\nKeep this summary.", result.Messages[2].Content)
+				assert.True(t, result.Messages[2].IsSystem)
+			}
 		})
 	}
 }

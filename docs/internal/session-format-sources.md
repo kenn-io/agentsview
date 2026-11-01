@@ -4304,10 +4304,14 @@ schemas keep their existing ordering behavior.
 - **Prompt envelope (checked 2026-11-01):** The brain transcript reported in
   [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps CLI
   prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>` and
-  `<USER_SETTINGS_CHANGE>` blocks. The CLI parser extracts a complete leading
-  request envelope from brain-transcript user steps before history matching
-  and title derivation. Raw history, other sources, system rows, and incomplete
-  or mid-text wrappers keep their content. Evidence remains `no-public-source`.
+  `<USER_SETTINGS_CHANGE>` blocks. CLI-owned cleanup recognizes a complete
+  leading request with an `<ADDITIONAL_METADATA>` tail and optional complete
+  `<USER_SETTINGS_CHANGE>`. It removes these blocks from producer user messages
+  and derived titles before history matching. Fixtures cover selected brain,
+  SQLite, and sidecar messages; sidecar fixtures establish consumer behavior,
+  rather than an observed producer emission. Raw history, system rows, literal
+  tags, incomplete envelopes, and empty requests retain their text. Evidence
+  remains `no-public-source`.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and

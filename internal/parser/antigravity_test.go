@@ -20,32 +20,33 @@ import (
 )
 
 func TestAntigravityCLIHistoryPreservesLiteralRequestTags(t *testing.T) {
-	const prompt = "Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed."
 	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
-	for _, withBrain := range []bool{false, true} {
-		name := "history only"
-		if withBrain {
-			name = "wrapped brain and raw history"
-		}
-		t.Run(name, func(t *testing.T) {
-			history, err := json.Marshal(map[string]any{"conversationId": id, "display": prompt, "timestamp": 1793357626000})
-			require.NoError(t, err)
-			fixture := antigravityCLIBrainFixture{pb: true, history: string(history) + "\n"}
+	for _, prompt := range []string{"Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed.", "<USER_REQUEST>hello</USER_REQUEST><ADDITIONAL_METADATA>literal</ADDITIONAL_METADATA>"} {
+		for _, withBrain := range []bool{false, true} {
+			name := "history only"
 			if withBrain {
-				line, err := json.Marshal(map[string]any{
-					"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
-					"content": "<USER_REQUEST>\n" + prompt + "\n</USER_REQUEST><METADATA>context</METADATA>",
-				})
-				require.NoError(t, err)
-				fixture.transcript = string(line) + "\n"
+				name = "wrapped brain and raw history"
 			}
-			path := fixture.write(t, id)
-			session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			assert.Equal(t, prompt, messages[0].Content)
-			assert.Equal(t, prompt, session.FirstMessage)
-		})
+			t.Run(prompt+"/"+name, func(t *testing.T) {
+				history, err := json.Marshal(map[string]any{"conversationId": id, "display": prompt, "timestamp": 1793357626000})
+				require.NoError(t, err)
+				fixture := antigravityCLIBrainFixture{pb: true, history: string(history) + "\n"}
+				if withBrain {
+					line, err := json.Marshal(map[string]any{
+						"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+						"content": "<USER_REQUEST>\n" + prompt + "\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>",
+					})
+					require.NoError(t, err)
+					fixture.transcript = string(line) + "\n"
+				}
+				path := fixture.write(t, id)
+				session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, prompt, messages[0].Content)
+				assert.Equal(t, prompt, session.FirstMessage)
+			})
+		}
 	}
 }
 
@@ -57,12 +58,19 @@ func TestAntigravityCLIUserRequestContent(t *testing.T) {
 		{name: "plain", content: "  Keep my spacing\n", want: "  Keep my spacing\n"},
 		{name: "missing closing tag", content: "<USER_REQUEST>unfinished", want: "<USER_REQUEST>unfinished"},
 		{name: "missing opening tag", content: "unfinished</USER_REQUEST>", want: "unfinished</USER_REQUEST>"},
-		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST>", want: "First line\nSecond line"},
-		{name: "literal closing tag", content: "<USER_REQUEST>Explain the </USER_REQUEST> tag.</USER_REQUEST>", want: "Explain the </USER_REQUEST> tag."},
-		{name: "trailing metadata", content: " \n<USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>", want: "Prompt"},
+		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "First line\nSecond line"},
+		{name: "bare literal wrapper", content: "<USER_REQUEST>Prompt</USER_REQUEST>", want: "<USER_REQUEST>Prompt</USER_REQUEST>"},
+		{name: "nested literal tags", content: "<USER_REQUEST>Explain <USER_REQUEST>hello</USER_REQUEST> tags.</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "Explain <USER_REQUEST>hello</USER_REQUEST> tags."},
+		{name: "closing tag in metadata", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>Describe </USER_REQUEST> here.</ADDITIONAL_METADATA>", want: "Prompt"},
+		{name: "CRLF and settings", content: " \r\n<USER_REQUEST>\r\nPrompt\r\n</USER_REQUEST>\r\n<ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>\r\n<USER_SETTINGS_CHANGE>setting</USER_SETTINGS_CHANGE>\r\n", want: "Prompt"},
+		{name: "unknown tail", content: "<USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>", want: "<USER_REQUEST>Prompt</USER_REQUEST><OTHER>context</OTHER>"},
+		{name: "trailing prose", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>prose", want: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>prose"},
+		{name: "incomplete metadata", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context", want: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context"},
+		{name: "incomplete settings", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA><USER_SETTINGS_CHANGE>setting", want: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA><USER_SETTINGS_CHANGE>setting"},
+		{name: "empty request", content: "<USER_REQUEST> \n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST> \n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>"},
 		{name: "mid-text literal tags", content: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags.", want: "Explain <USER_REQUEST>Prompt</USER_REQUEST> tags."},
-		{name: "assistant", content: "<USER_REQUEST>quoted prompt</USER_REQUEST>", want: "<USER_REQUEST>quoted prompt</USER_REQUEST>", assistant: true},
-		{name: "system", content: "<USER_REQUEST>system context</USER_REQUEST>", want: "<USER_REQUEST>system context</USER_REQUEST>", system: true},
+		{name: "assistant", content: "<USER_REQUEST>quoted prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST>quoted prompt</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", assistant: true},
+		{name: "system", content: "<USER_REQUEST>system context</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "<USER_REQUEST>system context</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", system: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
