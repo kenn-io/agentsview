@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +25,7 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
 	for _, daemon := range []bool{false, true} {
-		for _, state := range []string{"declined", "approved", "running"} {
+		for _, state := range []string{"declined", "approved", "running", "full rebuild"} {
 			t.Run(fmt.Sprintf("daemon=%t/%s", daemon, state), func(t *testing.T) {
 				approve := state != "declined"
 				dir := testDataDir(t)
@@ -69,7 +72,12 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 				if approve {
 					answer = "y\n"
 				}
-				err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(answer), EmbeddingsBuildOptions{Yes: true})
+				opts := EmbeddingsBuildOptions{Yes: true}
+				if state == "full rebuild" {
+					opts = EmbeddingsBuildOptions{FullRebuild: true}
+					answer = "y\ny\n"
+				}
+				err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(answer), opts)
 				if state == "running" {
 					assert.NotContains(t, out.String(), "Download")
 				} else {
@@ -128,21 +136,66 @@ func TestLocalEmbeddingsLazyDiscoveryAndRefresh(t *testing.T) {
 	assert.Equal(t, 2, discoveries)
 
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-	installLocalEmbeddings = func(_ context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		assert.Nil(t, opts.Confirm)
-		return embedlocal.Installation{}, errors.New("download needs approval")
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		require.NotNil(t, opts.Confirm)
+		_, err := opts.Confirm(ctx, 290_000_000)
+		return embedlocal.Installation{}, fmt.Errorf("install: %w", err)
 	}
 	encoders, err := vectorDocumentEncoderSet(c)
 	require.NoError(t, err)
 	_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
 	require.EqualError(t, err, "local embeddings: run agentsview embeddings build to approve the first download")
-	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, os.ErrPermission, errors.New("install lock failed")} {
 		installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
 			return embedlocal.Installation{}, fmt.Errorf("install interrupted: %w", cause)
 		}
 		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
 		require.ErrorIs(t, err, cause)
 	}
-	err = prepareLocalEmbeddings(t.Context(), config.VectorEmbeddingsConfig{Servers: map[string]config.VectorEmbeddingsServerConfig{"remote": {Endpoint: second.URL}}}, "remote", strings.NewReader(""), io.Discard)
+	err = prepareLocalEmbeddings(t.Context(), config.VectorEmbeddingsConfig{Servers: map[string]config.VectorEmbeddingsServerConfig{"remote": {Endpoint: second.URL}}}, "remote", bufio.NewScanner(strings.NewReader("")), io.Discard)
 	require.NoError(t, err)
+}
+
+func TestLocalEmbeddingsDiscoveryDoesNotBlockCancellation(t *testing.T) {
+	oldEndpoint := localEmbeddingEndpoint
+	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
+	entered := make(chan struct{})
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	defer cancelFirst()
+	localEmbeddingEndpoint = func(ctx context.Context, _ embedlocal.Options) (string, error) {
+		if ctx == firstCtx {
+			close(entered)
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	c := enabledVectorConfig(t).Vector.Embeddings
+	c.Servers = map[string]config.VectorEmbeddingsServerConfig{"shared": {Local: true}}
+	encode, err := newVectorQueryEncoder(c, "")
+	require.NoError(t, err)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := encode(firstCtx, []string{"first"})
+		firstDone <- err
+	}()
+	defer func() {
+		cancelFirst()
+		<-firstDone
+	}()
+	<-entered
+	secondCtx, cancelSecond := context.WithCancel(t.Context())
+	cancelSecond()
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := encode(secondCtx, []string{"second"})
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		cancelFirst()
+		<-secondDone
+		require.FailNow(t, "canceled caller waited for another discovery")
+	}
 }

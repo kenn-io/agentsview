@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -16,8 +17,9 @@ import (
 )
 
 var (
-	localEmbeddingEndpoint = embedlocal.Endpoint
-	installLocalEmbeddings = embedlocal.Install
+	localEmbeddingEndpoint   = embedlocal.Endpoint
+	installLocalEmbeddings   = embedlocal.Install
+	errLocalApprovalRequired = errors.New("local embedding download requires approval")
 )
 
 func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsServerConfig, approve func(context.Context, int64) (bool, error)) (string, error) {
@@ -33,12 +35,12 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	if err != nil {
 		return "", err
 	}
+	if approve == nil {
+		approve = func(context.Context, int64) (bool, error) { return false, errLocalApprovalRequired }
+	}
 	installation, err := installLocalEmbeddings(ctx, embedlocal.InstallOptions{DataDir: opts.DataDir, Confirm: approve})
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return "", err
-		}
-		if approve == nil {
+		if errors.Is(err, errLocalApprovalRequired) {
 			return "", errors.New("local embeddings: run agentsview embeddings build to approve the first download")
 		}
 		return "", err
@@ -47,13 +49,13 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	return localEmbeddingEndpoint(ctx, opts)
 }
 
-func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in io.Reader, out io.Writer) error {
+func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer) error {
 	_, server, err := c.Server(name)
 	if err != nil {
 		return err
 	}
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
-		return confirm(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)), nil
+		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)), nil
 	})
 	return err
 }
@@ -63,10 +65,11 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 	var cached *kitvec.EncodeFunc
 	return func(ctx context.Context, texts []string) ([][]float32, error) {
 		mu.Lock()
-		if cached == nil {
+		current := cached
+		mu.Unlock()
+		if current == nil {
 			endpoint, err := resolveLocalEmbeddings(ctx, server, nil)
 			if err != nil {
-				mu.Unlock()
 				return nil, err
 			}
 			resolved := c
@@ -75,13 +78,15 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 			resolved.Servers = map[string]config.VectorEmbeddingsServerConfig{name: deployment}
 			encoder, err := newVectorEncoder(resolved, name, role, retryRateLimits)
 			if err != nil {
-				mu.Unlock()
 				return nil, err
 			}
-			cached = &encoder
+			mu.Lock()
+			if cached == nil {
+				cached = &encoder
+			}
+			current = cached
+			mu.Unlock()
 		}
-		current := cached
-		mu.Unlock()
 		vectors, err := (*current)(ctx, texts)
 		if _, ok := errors.AsType[*embedclient.TransportError](err); ok {
 			mu.Lock()

@@ -364,6 +364,18 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		}})
 		require.ErrorContains(t, err, "model is required")
 	})
+	for _, model := range []string{"nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
+		t.Run("local server preserves "+model, func(t *testing.T) {
+			cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+				"enabled": true, "embeddings": map[string]any{
+					"model": model, "dimension": 768,
+					"servers": map[string]any{"shared": map[string]any{"local": true}},
+				},
+			}})
+			assert.Equal(t, model, cfg.Vector.Embeddings.Model)
+			require.NoError(t, cfg.Vector.Validate())
+		})
+	}
 	t.Run("local server selects shared Nomic", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
 			"enabled": true, "embeddings": map[string]any{

@@ -25,7 +25,7 @@ func TestLocalServerSwitchKeepsGeneration(t *testing.T) {
 	ollama, local := &recordingEmbeddings{}, &recordingEmbeddings{}
 	ollamaServer, localServer := ollama.serve(t), local.serve(t)
 	c := enabledVectorConfig(t)
-	c.Vector.Embeddings.Model = "nomic-embed-text"
+	c.Vector.Embeddings.Model = "nomic-embed-text:v1.5"
 	c.Vector.Embeddings.DefaultServer = "ollama"
 	c.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{
 		"ollama": {Endpoint: ollamaServer.URL + "/v1", Timeout: "5s", MaxRetries: 1, BatchSize: 32, Concurrency: 1},
@@ -58,6 +58,7 @@ func TestLocalServerSwitchKeepsGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, after, 1)
 	assert.Equal(t, before[0].ID, after[0].ID)
+	assert.Equal(t, "nomic-embed-text:v1.5", after[0].Model)
 	assert.Equal(t, "active", after[0].State)
 }
 

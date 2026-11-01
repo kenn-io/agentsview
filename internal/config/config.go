@@ -568,7 +568,7 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 		}
 	}
 	for _, name := range sortedServerNames(c.Servers) {
-		if c.Servers[name].Local && c.Model != "nomic-embed-text" {
+		if c.Servers[name].Local && c.Model != "nomic-embed-text" && c.Model != "nomic-embed-text:latest" && c.Model != "nomic-embed-text:v1.5" {
 			return fmt.Errorf("[vector.embeddings.servers.%s] local requires nomic-embed-text; changing models requires rebuilding the index", name)
 		}
 		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {

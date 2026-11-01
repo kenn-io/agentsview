@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -111,7 +112,7 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.RepairInvalid, "repair-invalid", false,
 		"Regenerate only documents with malformed, non-finite, or zero-norm stored vectors")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
-		"Skip the full-rebuild confirmation prompt")
+		"Skip the full-rebuild confirmation prompt; local downloads still ask")
 	cmd.Flags().StringVar(&opts.Using, "using", "",
 		"Named embeddings server from [vector.embeddings.servers] to run this "+
 			"build against (default: the config's default_server)")
@@ -417,9 +418,10 @@ func runEmbeddingsBuild(
 	}
 	includeAutomated = spec.NormalizeIncludeAutomated(includeAutomated)
 
+	confirmation := bufio.NewScanner(in)
 	if opts.FullRebuild && !opts.Yes {
 		proceed, err := confirmFullRebuild(
-			ctx, in, out, cfg, includeAutomated, spec.Name,
+			ctx, confirmation, out, cfg, includeAutomated, spec.Name,
 		)
 		if err != nil {
 			return err
@@ -430,12 +432,7 @@ func runEmbeddingsBuild(
 		}
 	}
 
-	// Resolve --using against this config up front so a mistyped name fails
-	// with the full server list instead of a daemon-side error.
-	if _, _, err := cfg.Vector.Embeddings.Server(opts.Using); err != nil {
-		return err
-	}
-	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, in, out); err != nil {
+	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out); err != nil {
 		return err
 	}
 
@@ -458,7 +455,7 @@ func runEmbeddingsBuild(
 // documents (user messages and assistant runs) in the archive under
 // includeAutomated's scope — the exact set a full rebuild re-embeds.
 func confirmFullRebuild(
-	ctx context.Context, in io.Reader, out io.Writer, cfg config.Config,
+	ctx context.Context, in *bufio.Scanner, out io.Writer, cfg config.Config,
 	includeAutomated bool, store string,
 ) (bool, error) {
 	n, err := countEmbeddingStoreUnits(ctx, cfg, includeAutomated, store)
@@ -466,7 +463,7 @@ func confirmFullRebuild(
 		return false, fmt.Errorf("counting documents: %w", err)
 	}
 	msg := fmt.Sprintf("This re-embeds all %d documents. Continue?", n)
-	return confirm(in, out, msg), nil
+	return confirmScanned(in, out, msg), nil
 }
 
 func countEmbeddingStoreUnits(
