@@ -92,6 +92,61 @@ type RawRolloutBatch struct {
 	Done     bool
 }
 
+// RepairFailedJobs gives selected failed jobs at version a fresh attempt budget.
+// Reset jobs leave the failed set, so repeated calls need no checkpoint.
+func (s *RawProjectionStore) RepairFailedJobs(ctx context.Context, version string, limit int) (int, error) {
+	if limit < 1 || limit > 256 {
+		return 0, rawsync.ErrInvalid
+	}
+	if err := validateRawIngestProcessingVersion(version); err != nil {
+		return 0, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `SELECT h.device_id,m.manifest_id,m.canonical_json,p.projection_generation,j.id
+ FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id
+ JOIN raw_source_projections p ON p.tenant_id=h.tenant_id AND p.selected_manifest_id=h.manifest_id
+ JOIN raw_ingest_jobs j ON j.tenant_id=p.tenant_id AND j.id=p.selected_job_id
+ WHERE h.tenant_id=$1 AND j.state='failed' AND j.projection_selected AND p.processing_version=$2 AND j.processing_version=$2
+ ORDER BY j.id LIMIT $3 FOR UPDATE OF h, j SKIP LOCKED`, s.options.Tenant, version, limit)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	type head struct {
+		device, id      string
+		data            []byte
+		generation, job int64
+	}
+	var heads []head
+	for rows.Next() {
+		var h head
+		if err = rows.Scan(&h.device, &h.id, &h.data, &h.generation, &h.job); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		heads = append(heads, h)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	for _, h := range heads {
+		m, err := rawsync.ParseCanonicalManifest(rawsync.AuthIdentity{TenantID: s.options.Tenant, DeviceID: h.device}, h.id, h.data, rawsync.DefaultManifestLimits())
+		if err != nil {
+			return 0, err
+		}
+		if _, err = resetRawSourceSelectionTx(ctx, tx, m, version, h.generation+1, h.job); err != nil {
+			return 0, err
+		}
+	}
+	return len(heads), tx.Commit()
+}
+
 const rawRolloutHeadsSQL = `SELECT h.device_id,h.provider,h.configured_root_id,h.source_key_sha256,m.manifest_id,m.canonical_json FROM raw_source_heads h JOIN raw_manifests m ON m.tenant_id=h.tenant_id AND m.manifest_id=h.manifest_id WHERE h.tenant_id=$1 AND (h.device_id,h.provider,h.configured_root_id,h.source_key_sha256)>($2,$3,$4,$5) ORDER BY h.device_id,h.provider,h.configured_root_id,h.source_key_sha256 LIMIT $6 FOR UPDATE OF h`
 
 // ScheduleCurrentHeads is an explicit, resumable version rollout, never an idle

@@ -235,10 +235,8 @@ func newPGHostedProvisionCommand() *cobra.Command {
 func newPGRawReparseCommand() *cobra.Command {
 	var runID string
 	var batch int
+	var repair bool
 	cmd := &cobra.Command{Use: "raw-reparse [target]", Short: "Schedule one bounded, resumable batch of current raw heads for this parser version", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if runID == "" {
-			return errors.New("raw-reparse requires --run-id for its durable checkpoint")
-		}
 		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
 			return err
@@ -266,6 +264,14 @@ func newPGRawReparseCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if repair {
+			count, err := sink.RepairFailedJobs(cmd.Context(), rawProcessingVersion(), batch)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Rescheduled %d failed jobs\n", count)
+			return nil
+		}
 		result, err := sink.ScheduleCurrentHeads(cmd.Context(), runID, rawProcessingVersion(), batch)
 		if err != nil {
 			return err
@@ -275,6 +281,9 @@ func newPGRawReparseCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&runID, "run-id", "", "Durable rollout checkpoint ID; reuse to resume")
 	cmd.Flags().IntVar(&batch, "batch-size", 64, "Maximum current heads in this invocation (1-256)")
+	cmd.Flags().BoolVar(&repair, "repair", false, "Reschedule failed jobs for this parser version")
+	cmd.MarkFlagsMutuallyExclusive("repair", "run-id")
+	cmd.MarkFlagsOneRequired("repair", "run-id")
 	return cmd
 }
 

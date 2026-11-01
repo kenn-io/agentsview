@@ -145,6 +145,88 @@ func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 	assert.Equal(t, "complete", state)
 }
 
+func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
+	f := newProjectionFixture(t)
+	f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
+	a, _ := f.accept(t, "device-a", "a", "")
+	stale := f.lease(t, a)
+	partial := projectionOutcome("partial")
+	partial.Outcome.ResultSetComplete = false
+	require.ErrorIs(t, f.sink.Project(t.Context(), stale, a, partial), rawderive.ErrProjectionFailed)
+	b, _ := f.accept(t, "device-b", "b", "")
+	healthy := f.lease(t, b)
+	require.NoError(t, f.sink.Project(t.Context(), healthy, b, projectionOutcome("complete")))
+	_, err := f.sink.ScheduleCurrentHeads(t.Context(), "repeat", "parser-1", 64)
+	require.NoError(t, err)
+	var state string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, stale.ID).Scan(&state))
+	assert.Equal(t, "failed", state)
+	n, err := f.sink.RepairFailedJobs(t.Context(), "parser-1", 64)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	var attempt int
+	var generation int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation FROM raw_ingest_jobs WHERE id=$1`, stale.ID).Scan(&state, &attempt, &generation))
+	assert.Equal(t, "ready", state)
+	assert.Zero(t, attempt)
+	assert.Equal(t, stale.ProjectionGeneration+1, generation)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,attempt_count,projection_generation FROM raw_ingest_jobs WHERE id=$1`, healthy.ID).Scan(&state, &attempt, &generation))
+	assert.Equal(t, "complete", state)
+	assert.Equal(t, healthy.Attempt, attempt)
+	assert.Equal(t, healthy.ProjectionGeneration, generation)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), stale.Owner, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	assert.Equal(t, stale.ID, leases[0].ID)
+	assert.Equal(t, stale.Attempt, leases[0].Attempt)
+	assert.Greater(t, leases[0].ProjectionGeneration, stale.ProjectionGeneration)
+	require.ErrorIs(t, f.jobs.FailRawParseJob(t.Context(), stale, "parse", "stale"), rawderive.ErrLeaseLost)
+}
+
+func TestHostedRuntimeRepairFailedJobsBoundsAndVersions(t *testing.T) {
+	f := newProjectionFixture(t)
+	old, _ := f.accept(t, "device-old", "old", "")
+	oldLease := f.lease(t, old)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), oldLease, "parse", "failed"))
+	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-2")
+	require.NoError(t, err)
+	for _, device := range []string{"device-a", "device-b"} {
+		m, _ := f.accept(t, device, device, "")
+		_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-2")
+		require.NoError(t, err)
+		leases, err := jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
+		require.NoError(t, err)
+		require.Len(t, leases, 1)
+		require.Equal(t, m.ManifestID, leases[0].ManifestID)
+		require.Equal(t, "parser-2", leases[0].ProcessingVersion)
+		require.NoError(t, jobs.FailRawParseJob(t.Context(), leases[0], "parse", "failed"))
+	}
+	for _, want := range []int{1, 1, 0} {
+		n, err := f.sink.RepairFailedJobs(t.Context(), "parser-2", 1)
+		require.NoError(t, err)
+		assert.Equal(t, want, n)
+	}
+	var state, version string
+	var generation int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state,processing_version,projection_generation FROM raw_ingest_jobs WHERE id=$1`, oldLease.ID).Scan(&state, &version, &generation))
+	assert.Equal(t, "failed", state)
+	assert.Equal(t, "parser-1", version)
+	assert.Equal(t, oldLease.ProjectionGeneration, generation)
+}
+
+func TestHostedRuntimeRolloutSchedulesAbsentSelection(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "a", "")
+	result, err := f.sink.ScheduleCurrentHeads(t.Context(), "initial", "parser-1", 64)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Selected)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	assert.Equal(t, m.ManifestID, leases[0].ManifestID)
+	assert.EqualValues(t, 1, leases[0].ProjectionGeneration)
+}
+
 func TestHostedRuntimeSelectionFailureRollsBackAcceptance(t *testing.T) {
 	f := newProjectionFixture(t)
 	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-1")
