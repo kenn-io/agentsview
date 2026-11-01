@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Hosted cutover tooling can read complete session content and source readiness
+  in one read-only PostgreSQL snapshot, including trashed sessions. This adds
+  the comparison inputs and matches sessions by recorded provider identity,
+  keeping unresolved and source-local collisions separate. An operator
+  comparison command is not available yet.
+
 - `agentsview agents` lists every supported agent, where AgentsView looks for its
   sessions, and which session details it reads, such as tool calls, thinking,
   subagents, and token usage. Add `--json` for scripts. It works without a
