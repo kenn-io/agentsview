@@ -25,7 +25,7 @@ type hostedFixture struct {
 	schema, role, tenant, dsn string
 }
 
-func newHostedFixture(t *testing.T, tenant string) hostedFixture {
+func newHostedFixture(t *testing.T, tenant string, beforeAdoption ...func(*sql.DB)) hostedFixture {
 	t.Helper()
 	schema := fmt.Sprintf("hosted_test_%x", rand.Uint64())
 	role := schema + "_runtime"
@@ -38,12 +38,18 @@ func newHostedFixture(t *testing.T, tenant string) hostedFixture {
 		assert.NoError(t, err)
 		assert.NoError(t, admin.Close())
 	})
+	if len(beforeAdoption) > 0 {
+		require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+	}
+	for _, seed := range beforeAdoption {
+		seed(admin)
+	}
 	require.NoError(t, EnsureHostedTenant(t.Context(), admin, schema, tenant))
 	_, err = admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`)
 	require.NoError(t, err)
 	_, err = admin.ExecContext(t.Context(), `GRANT USAGE ON SCHEMA "`+schema+`" TO "`+role+`";
  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "`+schema+`" TO "`+role+`";
- GRANT USAGE ON ALL SEQUENCES IN SCHEMA "`+schema+`" TO "`+role+`"`)
+ GRANT USAGE ON ALL SEQUENCES IN SCHEMA "`+schema+`" TO "`+role+`"; REVOKE INSERT,UPDATE,DELETE ON "`+schema+`".raw_rollout_scopes FROM "`+role+`"`)
 	require.NoError(t, err)
 	password := setHostedFixturePassword(t, admin, role)
 	dsn, err := appendConnParams(testPGURL(t), map[string]string{"password": password, "user": role, "search_path": "public", "agentsview.tenant_id": "wrong"})
@@ -369,6 +375,11 @@ func TestHostedTenantRuntimeRoleGate(t *testing.T) {
 		{"superuser", `ALTER ROLE "` + f.role + `" SUPERUSER`, `ALTER ROLE "` + f.role + `" NOSUPERUSER`},
 		{"ddl", `GRANT CREATE ON SCHEMA "` + f.schema + `" TO "` + f.role + `"`, `REVOKE CREATE ON SCHEMA "` + f.schema + `" FROM "` + f.role + `"`},
 		{"truncate", `GRANT TRUNCATE ON sessions TO "` + f.role + `"`, `REVOKE TRUNCATE ON sessions FROM "` + f.role + `"`},
+		{"scope insert", `GRANT INSERT ON raw_rollout_scopes TO "` + f.role + `"`, `REVOKE INSERT ON raw_rollout_scopes FROM "` + f.role + `"`},
+		{"scope update", `GRANT UPDATE ON raw_rollout_scopes TO "` + f.role + `"`, `REVOKE UPDATE ON raw_rollout_scopes FROM "` + f.role + `"`},
+		{"scope delete", `GRANT DELETE ON raw_rollout_scopes TO "` + f.role + `"`, `REVOKE DELETE ON raw_rollout_scopes FROM "` + f.role + `"`},
+		{"scope column insert", `GRANT INSERT(state) ON raw_rollout_scopes TO "` + f.role + `"`, `REVOKE INSERT(state) ON raw_rollout_scopes FROM "` + f.role + `"`},
+		{"scope column update", `GRANT UPDATE(state) ON raw_rollout_scopes TO "` + f.role + `"`, `REVOKE UPDATE(state) ON raw_rollout_scopes FROM "` + f.role + `"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := f.admin.ExecContext(t.Context(), test.grant)

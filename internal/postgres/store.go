@@ -365,7 +365,7 @@ func (s *Store) RenameSession(ctx context.Context,
 		`UPDATE sessions
 		 SET display_name = $2,
 		     updated_at = NOW()
-		 WHERE id = $1 AND deleted_at IS NULL`,
+		 WHERE id = $1 AND deleted_at IS NULL AND NOT rollout_hidden`,
 		id, displayName,
 	)
 	if err != nil {
@@ -381,7 +381,7 @@ func (s *Store) SoftDeleteSession(ctx context.Context, id string) error {
 		 SET deleted_at = NOW(),
 		     deletion_cause = NULL,
 		     updated_at = NOW()
-		 WHERE id = $1 AND deleted_at IS NULL`,
+		 WHERE id = $1 AND deleted_at IS NULL AND NOT rollout_hidden`,
 		id,
 	)
 	if err != nil {
@@ -412,7 +412,7 @@ func (s *Store) SoftDeleteSessions(ctx context.Context, ids []string) (int, erro
 			     deletion_cause = NULL,
 			     updated_at = NOW()
 			 WHERE id IN (`+strings.Join(placeholders, ",")+
-				`) AND deleted_at IS NULL`,
+				`) AND deleted_at IS NULL AND NOT rollout_hidden`,
 			pb.args...,
 		)
 		if err != nil {
@@ -456,7 +456,7 @@ func restorePGSessionTx(ctx context.Context, tx *sql.Tx, id string) (int64, erro
 	res, err := tx.ExecContext(ctx, `UPDATE sessions
 		SET deleted_at = NULL, deletion_cause = NULL,
 			data_version = $2, updated_at = NOW()
-		WHERE id = $1 AND deleted_at IS NOT NULL`,
+		WHERE id = $1 AND deleted_at IS NOT NULL AND NOT rollout_hidden`,
 		id, max(db.CurrentDataVersion()-1, 0))
 	if err != nil {
 		return 0, err
@@ -470,7 +470,7 @@ func restorePGSessionTx(ctx context.Context, tx *sql.Tx, id string) (int64, erro
 			SET trash_includes_codex_pages = FALSE, updated_at = NOW()
 			FROM sessions candidate
 			WHERE candidate.id = $1 AND candidate.provenance_kind = 'legacy'
-				AND scope.provenance_kind = 'legacy' AND scope.trash_includes_codex_pages
+				AND scope.provenance_kind = 'legacy' AND NOT scope.rollout_hidden AND scope.trash_includes_codex_pages
 				AND scope.agent = candidate.agent
 				AND (scope.id = candidate.id OR (left(right(candidate.id, 37), 1) = '_'
 					AND scope.id = left(candidate.id, -37)))
@@ -501,7 +501,7 @@ func (s *Store) deleteSessionIfTrashed(ctx context.Context, id string) (int64, e
 
 	sessionIDs, excludedIDs, scopedIDs, err := readPGTrashedSessionExclusions(
 		ctx, tx,
-		"s.id = $1 AND s.deleted_at IS NOT NULL",
+		"s.id = $1 AND s.deleted_at IS NOT NULL AND NOT s.rollout_hidden",
 		id,
 	)
 	if err != nil {
@@ -547,7 +547,7 @@ func (s *Store) ListTrashedSessions(
 ) ([]db.Session, error) {
 	rows, err := s.pg.QueryContext(ctx,
 		"SELECT "+pgSessionCols+
-			" FROM sessions WHERE deleted_at IS NOT NULL"+
+			" FROM sessions WHERE deleted_at IS NOT NULL AND NOT rollout_hidden"+
 			" ORDER BY deleted_at DESC LIMIT 500",
 	)
 	if err != nil {
@@ -573,7 +573,13 @@ func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	where := "s.deleted_at IS NOT NULL"
+	if legacyOnly {
+		if err := lockRawRolloutShared(ctx, tx); err != nil {
+			return 0, err
+		}
+	}
+
+	where := "s.deleted_at IS NOT NULL AND NOT s.rollout_hidden"
 	if legacyOnly {
 		where += " AND s.provenance_kind='legacy'"
 	}
@@ -615,13 +621,16 @@ func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error
 func readPGTrashedSessionExclusions(
 	ctx context.Context, tx *sql.Tx, where string, args ...any,
 ) ([]string, []string, []string, error) {
+	if err := lockRawRolloutShared(ctx, tx); err != nil {
+		return nil, nil, nil, err
+	}
 	rows, err := tx.QueryContext(ctx,
 		`SELECT s.id, sa.alias_id, rsa.session_id, rsaa.alias_id, s.trash_includes_codex_pages
 		 FROM sessions s
-		 LEFT JOIN session_aliases sa ON sa.session_id = s.id
-		 LEFT JOIN session_aliases rsa ON rsa.alias_id = s.id
-		 LEFT JOIN session_aliases rsaa ON rsaa.session_id = rsa.session_id
-		 WHERE `+where+`
+		 LEFT JOIN session_aliases sa ON sa.session_id = s.id AND NOT EXISTS(SELECT 1 FROM sessions p WHERE p.id=sa.alias_id AND p.rollout_hidden)
+		 LEFT JOIN session_aliases rsa ON rsa.alias_id = s.id AND NOT EXISTS(SELECT 1 FROM sessions p WHERE p.id=rsa.session_id AND p.rollout_hidden)
+		 LEFT JOIN session_aliases rsaa ON rsaa.session_id = rsa.session_id AND NOT EXISTS(SELECT 1 FROM sessions p WHERE p.id=rsaa.alias_id AND p.rollout_hidden)
+		 WHERE NOT s.rollout_hidden AND `+where+`
 		 FOR UPDATE OF s`,
 		args...,
 	)
@@ -679,7 +688,7 @@ func readPGTrashedSessionExclusions(
 	}
 	rows.Close()
 	if len(scopedIDs) > 0 {
-		children, err := tx.QueryContext(ctx, `SELECT candidate.id FROM sessions candidate
+		children, err := tx.QueryContext(ctx, `SELECT candidate.id,scope.id,candidate.rollout_hidden FROM sessions candidate
 			JOIN sessions scope ON scope.id = left(candidate.id, -37)
 			WHERE candidate.provenance_kind = 'legacy' AND left(right(candidate.id, 37), 1) = '_'
 				AND scope.id = ANY($1) AND scope.agent = candidate.agent
@@ -689,26 +698,42 @@ func readPGTrashedSessionExclusions(
 			return nil, nil, nil, err
 		}
 		defer children.Close()
+		blocked := map[string]bool{}
+		pageScopes := map[string]string{}
 		for children.Next() {
-			var id string
-			if err := children.Scan(&id); err != nil {
+			var id, scope string
+			var hidden bool
+			if err := children.Scan(&id, &scope, &hidden); err != nil {
 				return nil, nil, nil, err
 			}
+			if hidden {
+				blocked[scope] = true
+				continue
+			}
+			pageScopes[id] = scope
+			addExcludedID(id)
 			if _, ok := sessionSeen[id]; !ok {
 				sessionIDs = append(sessionIDs, id)
 			}
-			// The owned thread exclusion covers this page. EmptyTrash may
-			// also have selected it above; neither path should turn inherited
-			// scope into a global exact-ID exclusion.
-			delete(excludedSeen, id)
 		}
 		if err := children.Err(); err != nil {
 			return nil, nil, nil, err
+		}
+		// A broad exclusion would also suppress protected pages on later pushes.
+		// Keep exact exclusions for purged pages when that thread scope is unsafe.
+		scopedIDs = slices.DeleteFunc(scopedIDs, func(id string) bool { return blocked[id] })
+		for id, scope := range pageScopes {
+			if !blocked[scope] {
+				delete(excludedSeen, id)
+			}
 		}
 		excludedIDs = slices.DeleteFunc(excludedIDs, func(id string) bool {
 			_, keep := excludedSeen[id]
 			return !keep
 		})
+	}
+	if err := checkPGProtectedSessionExclusions(ctx, tx, excludedIDs); err != nil {
+		return nil, nil, nil, err
 	}
 	return sessionIDs, excludedIDs, scopedIDs, nil
 }
@@ -721,7 +746,7 @@ func deletePGTrashedSessionRows(
 	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM sessions
-		 WHERE id = ANY($1)`,
+		 WHERE id = ANY($1) AND NOT rollout_hidden`,
 		ids,
 	)
 	if err != nil {
