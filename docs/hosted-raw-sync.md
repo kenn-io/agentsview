@@ -310,6 +310,52 @@ Automated retention and garbage collection of accepted generations, disaster
 rebuilds, enrollment UX, embedding consumption and migration cutover tooling
 remain outside this release.
 
+### Physical parity inputs (unreleased)
+
+Cutover tooling can read complete physical PostgreSQL sessions through the
+tenant runtime role, including trashed rows. These reads use one caller-owned
+`REPEATABLE READ READ ONLY` transaction for the entire comparison and source
+readiness report. They apply no public transcript limits or visibility filters.
+
+Matching support pairs projected sessions with retained pushed history using
+an equal agent and an exact recorded parser ID. Codex thread and page IDs stay
+distinct, and variants keep their own prefixes. Piebald and sessions without a
+stable source ID are `unmatchable` when a legacy candidate exists, or `raw_only`
+otherwise. Host-prefixed and multi-machine legacy IDs remain `legacy_only`
+history. Matching never strips prefixes or guesses an alias from content.
+
+The matcher groups connected candidates before classifying them. A stable-ID
+component with more than one candidate on either side is `ambiguous`; a unique
+pair is eligible for content comparison. Identity matching alone does not
+establish content parity or permit activation. The operator comparison command
+is not available yet.
+
+Relationship comparison resolves parent, tool-call subagent and result-event
+subagent links from physical source-owned evidence in the same snapshot.
+Hidden and trashed targets remain evidence; excluded or missing targets do
+not. Historical exact-source authority prevents fallback to a different source
+after removal or exclusion. Without exact authority, only one physical target
+in the same tenant, device, provider and configured root is admissible. Each
+source's asserted edge is checked before shared owners are combined. Equal
+literal aliases cannot hide a missing or ambiguous target. Legacy targets are
+compared through globally unique identity matches.
+
+The stored-content comparison uses this field matrix:
+
+| Class | Fields |
+| --- | --- |
+| Compared | Session agent, project, cwd, first message, start/end and message counts; persisted messages including model and accounting; tool calls, target paths and result events; usage accounting; secret and friction findings; parent and subagent relationship meaning through a match map |
+| Normalized | Physical identity through a match map, UTC microsecond timestamps, JSON object key order and row order with explicit coordinates preserved |
+| Masked | Machine, custody file coordinates, publication clocks and versions, provenance, deletion and rollout state, names, stars, pins, derived signals, dialogue search text, friction titles and fingerprints |
+
+Readiness counts current source heads by device and provider. A source is
+`projected` only when its selected job has completely published the current
+head at the requested processing version. Current terminal failures are
+`failed`; older versions, unselected heads and partial publication are
+`pending`. Providers without raw capture support in the running binary are
+`unsupported`. Devices sharing a physical session each retain their own source
+counts. These counts describe source readiness, independently of content parity.
+
 ## Backfill existing laptop sources
 
 Run a finite backfill before starting the watcher on a laptop that already has
