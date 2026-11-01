@@ -106,13 +106,9 @@ func resolveService(
 				return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 			}
 		}
-		return newPGReadService(cmd.Context(), cfg, pgCfg)
+		return newDocbankPGReadService(cmd.Context(), cfg, pgCfg)
 	}
-	tr, err := ensureTransportContext(cmd.Context(), &cfg, transportIntentRead, 0)
-	if err != nil {
-		return nil, nil, err
-	}
-	return newService(cmd.Context(), cfg, tr)
+	return newDocbankReadService(cmd.Context(), cfg)
 }
 
 // resolveSinceFlag validates the --since/--active-since pair shared by

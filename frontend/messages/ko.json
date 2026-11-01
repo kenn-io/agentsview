@@ -3048,5 +3048,18 @@
   "friction_session_error": "마찰 발견 항목을 사용할 수 없습니다.",
   "friction_session_empty": "이 세션에는 마찰 발견 항목이 없습니다.",
   "friction_session_jump": "메시지 {ordinal}",
-  "friction_session_jump_title": "메시지 {ordinal}(으)로 이동"
+  "friction_session_jump_title": "메시지 {ordinal}(으)로 이동",
+  "docbank_subagent_open_session": "세션으로 열면 일치하는 파일이 표시됩니다.",
+  "docbank_checking": "Docbank 확인 중…",
+  "docbank_current": "현재 버전",
+  "docbank_prior": "이전 버전",
+  "docbank_trash": "휴지통",
+  "docbank_not_found": "Docbank에 없음",
+  "docbank_read_unavailable": "세션 파일을 읽을 수 없음",
+  "docbank_unavailable": "Docbank에 연결할 수 없음",
+  "docbank_limit_exceeded": "Docbank 조회 한도에 도달했습니다",
+  "docbank_bytes_not_kept": "이미지 바이트가 보관되지 않았습니다",
+  "docbank_file": "파일 {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "파일 {n} · {mediaType}",
+  "docbank_more": "Docbank에 {count}개 더 있음"
 }
