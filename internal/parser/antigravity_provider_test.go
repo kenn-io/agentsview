@@ -1426,6 +1426,28 @@ func TestAntigravityCLIProducerLiteralEnvelopeHistory(t *testing.T) {
 	}
 }
 
+func TestAntigravityCLISQLiteLiteralEnvelopeWhitespaceHistory(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	const literal = "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"
+	const raw = " \t" + literal + "\n\t "
+	history, err := json.Marshal(map[string]any{"conversationId": id, "display": raw, "timestamp": 1793357626000})
+	require.NoError(t, err)
+	path := antigravityCLIBrainFixture{
+		setupDB: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, antigravityTestStepPayload(1793357626, raw))
+		},
+		history: string(history) + "\n" + `{"conversationId":"99999999-aaaa-bbbb-cccc-dddddddddddd","display":"Follow up","timestamp":1793357686000}` + "\n",
+	}.write(t, id)
+	session, messages, err := parseAntigravityCLITestSession(t, path, "", "devbox")
+	require.NoError(t, err)
+	assert.Equal(t, literal, session.FirstMessage)
+	require.NotEmpty(t, messages)
+	assert.Equal(t, literal, messages[0].Content)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Follow up", messages[1].Content)
+}
+
 func TestAntigravityCLIBrainTranscriptAndFailClosed(t *testing.T) {
 	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
 	tests := []struct {

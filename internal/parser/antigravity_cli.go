@@ -134,7 +134,8 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	)
 	historyPrompts := make(map[string]struct{}, len(historyMsgs))
 	for _, msg := range historyMsgs {
-		historyPrompts[msg.Content] = struct{}{}
+		// SQLite decoding trims outer whitespace before normalization.
+		historyPrompts[strings.TrimSpace(msg.Content)] = struct{}{}
 	}
 	brainTranscriptMsgs := make([]ParsedMessage, len(brainTranscriptSteps))
 	for i := range brainTranscriptSteps {
@@ -695,7 +696,7 @@ func normalizeAntigravityCLIUserMessage(msg *ParsedMessage, history map[string]s
 	if msg.Role != RoleUser || msg.IsSystem {
 		return
 	}
-	if _, authored := history[msg.Content]; authored {
+	if _, authored := history[strings.TrimSpace(msg.Content)]; authored {
 		return
 	}
 	msg.Content = extractAntigravityCLIUserRequest(msg.Content)
