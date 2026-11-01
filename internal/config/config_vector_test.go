@@ -152,6 +152,27 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "changing models requires rebuilding",
 		},
 		{
+			name: "local server preserves nomic-embed-text",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "nomic-embed-text"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+		},
+		{
+			name: "local server preserves nomic-embed-text:latest",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "nomic-embed-text:latest"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+		},
+		{
+			name: "local server preserves nomic-embed-text:v1.5",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "nomic-embed-text:v1.5"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+		},
+		{
 			name: "automatic default can be selected explicitly",
 			mutate: func(c *VectorConfig) {
 				c.Embeddings.Servers = nil
@@ -415,22 +436,6 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Empty(t, cfg.Vector.Embeddings.QueryPrefix)
 		assert.Equal(t, "custom: ", cfg.Vector.Embeddings.DocumentPrefix)
 	})
-	t.Run("configured local server still requires a model", func(t *testing.T) {
-		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-			"enabled": true, "embeddings": map[string]any{"servers": map[string]any{"shared": map[string]any{"local": true}}},
-		}})
-		require.ErrorContains(t, err, "model is required")
-	})
-	for _, model := range []string{"nomic-embed-text", "nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
-		t.Run("local server preserves "+model, func(t *testing.T) {
-			loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
-				"enabled": true, "embeddings": map[string]any{
-					"model": model, "dimension": 768,
-					"servers": map[string]any{"shared": map[string]any{"local": true}},
-				},
-			}})
-		})
-	}
 	t.Run("unset server fields keep defaults, explicit zero overrides", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{
 			"vector": map[string]any{
@@ -627,12 +632,14 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Empty(t, c.QueryPrefix)
 		assert.Empty(t, c.DocumentPrefix)
 	})
-	t.Run("nomic-embed-text:latest requires a named server", func(t *testing.T) {
-		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-			"enabled": true, "embeddings": map[string]any{"model": "nomic-embed-text:latest", "dimension": 768},
-		}})
-		require.ErrorContains(t, err, "at least one server is required")
-	})
+	for _, model := range []string{"other-model", "nomic-embed-text:latest"} {
+		t.Run(model+" requires a named server", func(t *testing.T) {
+			err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
+				"enabled": true, "embeddings": map[string]any{"model": model, "dimension": 768},
+			}})
+			require.ErrorContains(t, err, "at least one server is required")
+		})
+	}
 	t.Run("explicit empty server table stays empty", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
 			"embeddings": map[string]any{"model": "nomic-embed-text", "dimension": 768, "servers": map[string]any{}},
@@ -642,20 +649,6 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		_, _, err := cfg.Vector.Embeddings.Server("")
 		require.ErrorContains(t, err, "no server named")
 	})
-	t.Run("other models without servers fail to load", func(t *testing.T) {
-		err := loadMinimalErrWithConfig(t, map[string]any{
-			"vector": map[string]any{
-				"enabled": true,
-				"embeddings": map[string]any{
-					"model":     "other-model",
-					"dimension": 768,
-				},
-			},
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "at least one server")
-	})
-
 	t.Run("multiple servers without default_server fails to load", func(t *testing.T) {
 		servers := minimalServers()
 		servers["remote"] = map[string]any{"endpoint": "http://build-box:30000/v1"}

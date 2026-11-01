@@ -726,6 +726,14 @@ describe("CommandPalette", () => {
     expect(links).toHaveLength(1);
     expect(links[0]?.textContent).toBe("Server settings");
     unmount(component);
+    mockSearchStore.error = {
+      detail: "semantic search unavailable",
+      kind: "semantic-unavailable",
+    };
+    const failedComponent = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    expect(document.querySelector(".palette-server-settings")).toBeNull();
+    unmount(failedComponent);
   });
 
   it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
@@ -739,7 +747,6 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     expect(document.querySelector(".semantic-setup")).not.toBeNull();
-    expect(document.querySelector(".palette-server-settings")).toBeNull();
     expect(document.querySelector(".palette-error")).toBeNull();
 
     unmount(component);
