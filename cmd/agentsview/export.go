@@ -16,8 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-const sessionExportCursorResetExitCode = 4
-
 type exportSessionsFormat string
 
 func (f *exportSessionsFormat) String() string { return string(*f) }

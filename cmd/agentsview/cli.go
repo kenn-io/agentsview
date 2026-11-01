@@ -27,8 +27,6 @@ const (
 	groupMeta  = "meta"
 )
 
-const dataVersionTooNewExitCode = 3
-
 type cliExitError struct {
 	code   int
 	err    error
@@ -60,6 +58,9 @@ func withSilentExitCode(err error, code int) error {
 func exitCodeFromError(err error) int {
 	if exitErr, ok := errors.AsType[*cliExitError](err); ok {
 		return exitErr.code
+	}
+	if diagnostic, ok := errors.AsType[*cliDiagnosticError](err); ok && diagnostic.code != 0 {
+		return diagnostic.code
 	}
 	return 1
 }
@@ -156,6 +157,9 @@ func newRootCommand() *cobra.Command {
 		defaultHelp(cmd, args)
 	})
 
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd()
+	installCLIDiagnostics(root)
 	return root
 }
 
@@ -508,8 +512,8 @@ func newTokenUseCommand() *cobra.Command {
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runTokenUse(cmd.Context(), args)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTokenUse(cmd, args)
 		},
 	}
 }
@@ -573,9 +577,9 @@ func newHealthCommand() *cobra.Command {
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			runHealth(cmd, args, cfg)
+			return runHealth(cmd, args, cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -609,10 +613,12 @@ func newUsageDailyCommand() *cobra.Command {
 		Short:        "Daily cost summary",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.ctx = cmd.Context()
-			runUsageDaily(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageDaily(cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -634,10 +640,12 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Short:        "One-line cost summary for today",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.ctx = cmd.Context()
-			runUsageStatusline(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageStatusline(cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -669,10 +677,12 @@ func newActivityReportCommand() *cobra.Command {
 		Short:        "Activity report over a date range",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.ctx = cmd.Context()
-			runActivityReport(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runActivityReport(cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Preset, "preset", "", "Range preset: day, week, month, custom")

@@ -46,7 +46,7 @@ func newSessionGetCommand() *cobra.Command {
 				return err
 			}
 			if detail == nil {
-				return fmt.Errorf("session %s not found", args[0])
+				return &cliDiagnosticError{err: fmt.Errorf("session %s not found", args[0]), kind: "not_found", hint: sessionLookupHint}
 			}
 			if outputFormat(cmd) == "json" {
 				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), detail)
