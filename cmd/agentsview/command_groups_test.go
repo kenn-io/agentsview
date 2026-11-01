@@ -54,9 +54,12 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	assert.Contains(t, help, "agentsview <command> --help")
 
 	for _, tt := range []struct{ prefix, want string }{
-		{"source", "sync\t"}, {"report", "activity\t"},
-		{"replica", "pg\t"}, {"index", "embeddings\t"},
-		{"project", "list\t"}, {"session", "prune\t"},
+		{"source", "sync\t"},
+		{"report", "activity\t"},
+		{"replica", "pg\t"},
+		{"index", "embeddings\t"},
+		{"project", "list\t"},
+		{"session", "prune\t"},
 	} {
 		out, err := executeCommand(newRootCommand(), "__complete", tt.prefix, "")
 		require.NoError(t, err)
@@ -87,7 +90,7 @@ func TestCommandGroupsAdvertisedExamplesParse(t *testing.T) {
 		cmd, _, err := newRootCommand().Find(strings.Fields(path))
 		require.NoError(t, err)
 		require.NotEmpty(t, cmd.Example, path)
-		for _, line := range strings.Split(cmd.Example, "\n") {
+		for line := range strings.SplitSeq(cmd.Example, "\n") {
 			args, err := shlex.Split(line)
 			require.NoError(t, err, line)
 			require.Greater(t, len(args), 1, line)
@@ -182,7 +185,7 @@ func TestCommandGroupsHealthUsesSessionTransport(t *testing.T) {
 	dir := testDataDir(t)
 	requests := 0
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sessions", r.URL.Path)
+		assert.Equal(t, "/api/v1/sessions", r.URL.Path)
 		assert.Equal(t, "7", r.URL.Query().Get("limit"))
 		requests++
 		writeJSONResponse(w, `{"sessions":[],"total":0}`)
@@ -206,7 +209,7 @@ func TestCommandGroupsFlagStateIsIndependent(t *testing.T) {
 	assert.Equal(t, "true", canonical.Flag("full").Value.String())
 	legacy, _, err := root.Find([]string{"sync"})
 	require.NoError(t, err)
-	assert.Equal(t, "", legacy.Flag("host").Value.String())
+	assert.Empty(t, legacy.Flag("host").Value.String())
 	assert.Equal(t, "false", legacy.Flag("full").Value.String())
 	assert.False(t, legacy.Flag("host").Changed)
 }

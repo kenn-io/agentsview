@@ -101,6 +101,9 @@ func groupCommands(root *cobra.Command) {
 	// This command already has its own JSON-only handler and deprecation notice.
 	// Keep it executable, but direct new clients to session usage --json.
 	tokenUse := directCLICommand(root, "token-use")
+	if tokenUse == nil {
+		panic("missing legacy CLI command: token-use")
+	}
 	tokenUse.Hidden = true
 	tokenUse.Long = "Deprecated: use 'agentsview session usage ID --json'.\n" +
 		"This spelling retains its JSON-only output and existing exit codes."
