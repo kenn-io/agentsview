@@ -197,7 +197,7 @@ func TestLocalEmbeddingsDiscoveryDoesNotBlockCancellation(t *testing.T) {
 	}
 }
 
-func TestLocalEmbeddingsAutomaticAliases(t *testing.T) {
+func TestLocalEmbeddingsAutomaticNomic(t *testing.T) {
 	oldEndpoint := localEmbeddingEndpoint
 	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
 	stub := newEmbeddingsStubServer(t, 4)
@@ -206,20 +206,16 @@ func TestLocalEmbeddingsAutomaticAliases(t *testing.T) {
 		assert.False(t, opts.SkipOllama)
 		return stub.URL + "/v1", nil
 	}
-	for _, model := range []string{"nomic-embed-text", "nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
-		t.Run(model, func(t *testing.T) {
-			c := enabledVectorConfig(t).Vector.Embeddings
-			c.Model, c.DefaultServer, c.Servers = model, "", nil
-			encoders, err := vectorDocumentEncoderSet(c)
-			require.NoError(t, err)
-			require.Equal(t, "automatic", encoders.Default)
-			encoder, ok := encoders.ByName["automatic"]
-			require.True(t, ok)
-			vectors, err := encoder.Encode(t.Context(), []string{"hello"})
-			require.NoError(t, err)
-			assert.Equal(t, [][]float32{{1, 1, 1, 1}}, vectors)
-			assert.Equal(t, 32, encoder.Settings.BatchSize)
-			assert.Equal(t, 4, encoder.Settings.Concurrency)
-		})
-	}
+	c := enabledVectorConfig(t).Vector.Embeddings
+	c.Model, c.DefaultServer, c.Servers = "nomic-embed-text", "", nil
+	encoders, err := vectorDocumentEncoderSet(c)
+	require.NoError(t, err)
+	require.Equal(t, "automatic", encoders.Default)
+	encoder, ok := encoders.ByName["automatic"]
+	require.True(t, ok)
+	vectors, err := encoder.Encode(t.Context(), []string{"hello"})
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{1, 1, 1, 1}}, vectors)
+	assert.Equal(t, 32, encoder.Settings.BatchSize)
+	assert.Equal(t, 4, encoder.Settings.Concurrency)
 }

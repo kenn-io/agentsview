@@ -326,9 +326,9 @@ func isNomicModel(model string) bool {
 }
 
 // ServerNames returns the available server names, including automatic
-// discovery when a Nomic recipe has no configured server table.
+// discovery when an untagged Nomic recipe has no configured server table.
 func (c VectorEmbeddingsConfig) ServerNames() []string {
-	if c.Servers == nil && isNomicModel(c.Model) {
+	if c.Servers == nil && c.Model == "nomic-embed-text" {
 		return []string{"automatic"}
 	}
 	return sortedServerNames(c.Servers)
@@ -355,7 +355,7 @@ func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsSer
 		name = c.ResolvedDefaultServer()
 	}
 	s, ok := c.Servers[name]
-	if !ok && name == "automatic" && c.Servers == nil && isNomicModel(c.Model) {
+	if !ok && name == "automatic" && c.Servers == nil && c.Model == "nomic-embed-text" {
 		return name, normalizedEmbeddingsServers(map[string]VectorEmbeddingsServerConfig{"automatic": {}}, toml.MetaData{})[name], nil
 	}
 	if !ok {

@@ -587,24 +587,30 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.True(t, cfg.Vector.Embed.Recall)
 	})
 
-	for _, model := range []string{"nomic-embed-text", "nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
-		t.Run("automatic "+model+" preserves its recipe", func(t *testing.T) {
-			cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+	t.Run("automatic untagged Nomic preserves its recipe", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"model": "nomic-embed-text", "dimension": 768},
+		}})
+		c := cfg.Vector.Embeddings
+		assert.Equal(t, "nomic-embed-text", c.Model)
+		assert.Nil(t, c.Servers)
+		assert.Equal(t, []string{"automatic"}, c.ServerNames())
+		name, server, err := c.Server("")
+		require.NoError(t, err)
+		assert.Equal(t, "automatic", name)
+		assert.Empty(t, server.Endpoint)
+		assert.False(t, server.Local)
+		assert.Equal(t, 8192, c.MaxInputChars)
+		assert.Zero(t, c.ModelContextTokens)
+		assert.Empty(t, c.QueryPrefix)
+		assert.Empty(t, c.DocumentPrefix)
+	})
+	for _, model := range []string{"nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
+		t.Run(model+" requires a named server", func(t *testing.T) {
+			err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
 				"enabled": true, "embeddings": map[string]any{"model": model, "dimension": 768},
 			}})
-			c := cfg.Vector.Embeddings
-			assert.Equal(t, model, c.Model)
-			assert.Nil(t, c.Servers)
-			assert.Equal(t, []string{"automatic"}, c.ServerNames())
-			name, server, err := c.Server("")
-			require.NoError(t, err)
-			assert.Equal(t, "automatic", name)
-			assert.Empty(t, server.Endpoint)
-			assert.False(t, server.Local)
-			assert.Equal(t, 8192, c.MaxInputChars)
-			assert.Zero(t, c.ModelContextTokens)
-			assert.Empty(t, c.QueryPrefix)
-			assert.Empty(t, c.DocumentPrefix)
+			require.ErrorContains(t, err, "at least one server is required")
 		})
 	}
 	t.Run("explicit empty server table stays empty", func(t *testing.T) {

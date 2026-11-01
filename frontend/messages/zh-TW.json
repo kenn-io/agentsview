@@ -158,7 +158,7 @@
   "command_palette_search_failed": "搜尋失敗。請再試一次。",
   "command_palette_semantic_setup_title": "語意搜尋尚未設定",
   "command_palette_semantic_setup_config_step": "1. 將以下內容加入 config.toml：",
-  "command_palette_semantic_setup_local": "正在透過 Ollama 使用 Nomic？設定 local = true 即可保留索引並使用共用本機伺服器。",
+  "command_palette_semantic_setup_local": "切換至共用本機伺服器時，請使用完整設定範例以保留 Nomic 索引。",
   "command_palette_semantic_setup_local_link": "伺服器設定",
   "command_palette_semantic_setup_build_step": "2. 重新啟動守護程序，然後建立索引。CLI 會在首次下載前徵求許可：",
   "command_palette_semantic_copy_config": "複製設定片段",

@@ -128,6 +128,9 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain("[vector]");
     expect(text()).toContain("enabled = true");
     expect(text()).toContain("agentsview embeddings build");
+    expect(text()).toContain("Follow the full recipe to keep your Nomic index when switching to the shared local server.");
+    const guide = document.body.querySelector<HTMLAnchorElement>("a");
+    expect(guide?.getAttribute("href")).toBe("https://agentsview.io/docs/semantic-search/#named-embeddings-servers");
 
     const copyButtons = document.body.querySelectorAll("button.kit-copy-btn");
     expect(copyButtons.length).toBe(2);

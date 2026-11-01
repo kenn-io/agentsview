@@ -38,8 +38,10 @@ approval. Declining stops the download and build.
 The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
 characters, 2,048 context tokens, `search_query: ` for queries, and
 `search_document: ` for documents. Explicit model recipes keep their existing
-settings, including empty prefixes. Without a server table, `nomic-embed-text`,
-`nomic-embed-text:latest`, and `nomic-embed-text:v1.5` use automatic discovery.
+settings, including empty prefixes. Only untagged `nomic-embed-text` uses
+automatic discovery without a server table. Tagged recipes such as
+`nomic-embed-text:latest` and `nomic-embed-text:v1.5` need a named server with
+`endpoint` or `local = true`.
 
 For an explicit model or endpoint, configure the recipe and named servers:
 

@@ -161,7 +161,7 @@
   "command_palette_search_failed": "Search failed. Please try again.",
   "command_palette_semantic_setup_title": "Semantic search isn't set up",
   "command_palette_semantic_setup_config_step": "1. Add this to config.toml:",
-  "command_palette_semantic_setup_local": "Using Nomic with Ollama? Select local = true to keep your index and use the shared local server.",
+  "command_palette_semantic_setup_local": "Follow the full recipe to keep your Nomic index when switching to the shared local server.",
   "command_palette_semantic_setup_local_link": "Server settings",
   "command_palette_semantic_setup_build_step": "2. Restart the daemon, then build the index. The CLI asks before the first download:",
   "command_palette_semantic_copy_config": "Copy config snippet",
