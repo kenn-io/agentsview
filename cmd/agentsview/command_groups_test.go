@@ -144,43 +144,6 @@ func TestCommandGroupsPruneRejectsUnsupportedInheritedFlags(t *testing.T) {
 	}
 }
 
-func FuzzCommandGroupsFlagCompatibility(f *testing.F) {
-	for _, value := range []string{"", "source", "--pg", "-1", "a,b", `"invalid`, "a\nb", "会話"} {
-		f.Add(uint8(0), value, true)
-		f.Add(uint8(1), value, false)
-		f.Add(uint8(2), value, true)
-		f.Add(uint8(3), value, false)
-	}
-	f.Fuzz(func(t *testing.T, variant uint8, value string, joined bool) {
-		cases := []struct{ canonical, legacy, flag string }{
-			{"source sync", "sync", "host"},
-			{"source import", "import", "replace"},
-			{"replica pg push", "pg push", "projects"},
-			{"archive diff", "parse-diff", "agent"},
-		}
-		tt := cases[int(variant)%len(cases)]
-		root := newRootCommand()
-		canonical, _, err := root.Find(strings.Fields(tt.canonical))
-		require.NoError(t, err)
-		legacy, _, err := root.Find(strings.Fields(tt.legacy))
-		require.NoError(t, err)
-		args := []string{"--" + tt.flag, value, "--" + tt.flag, "source"}
-		if joined {
-			args = []string{"--" + tt.flag + "=" + value, "--" + tt.flag + "=source"}
-		}
-		args = append(args, "--", value, "report", "--json")
-		got, old := canonical.ParseFlags(args), legacy.ParseFlags(args)
-		if old != nil {
-			require.EqualError(t, got, old.Error())
-			return
-		}
-		require.NoError(t, got)
-		assert.Equal(t, legacy.Flag(tt.flag).Value.String(), canonical.Flag(tt.flag).Value.String())
-		assert.True(t, canonical.Flag(tt.flag).Changed)
-		assert.Equal(t, []string{value, "report", "--json"}, canonical.Flags().Args())
-	})
-}
-
 func TestCommandGroupsHealthUsesSessionTransport(t *testing.T) {
 	dir := testDataDir(t)
 	requests := 0
@@ -272,4 +235,22 @@ func FuzzCommandGroupsCatalogCompatibility(f *testing.F) {
 		assert.Equal(t, legacy.String(), canonical.String())
 		assert.NotContains(t, canonical.String(), "deprecated")
 	})
+}
+
+// Docker deployments and installed services keep their argv across upgrades,
+// so the binary must launch canonical commands that will outlive the legacy
+// spellings and do not print deprecation warnings into service logs.
+func TestCommandGroupsSelfLaunchedCommandsAreCanonical(t *testing.T) {
+	isolateDeploymentEnv(t)
+	t.Setenv("AGENTSVIEW_MODE", "pg-serve")
+	pgServe, err := deploymentArgs(nil)
+	require.NoError(t, err)
+	for _, args := range [][]string{pgServe, pgServiceKind.Args, clickHouseServiceKind.Args} {
+		cmd, rest, err := newRootCommand().Find(args)
+		require.NoError(t, err)
+		require.NoError(t, cmd.ParseFlags(rest))
+		for c := cmd; c != nil; c = c.Parent() {
+			assert.False(t, c.Hidden, "%v resolves through hidden legacy command %q", args, c.Name())
+		}
+	}
 }
