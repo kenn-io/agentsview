@@ -25,7 +25,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Verify the workflow action lockfile
         env:
           GH_TOKEN: ${{ github.token }}
-        run: make actions-lock-check
+        run: kit-retry 3 5 make gh-actions-lock-install && make actions-lock-check

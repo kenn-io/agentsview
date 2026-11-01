@@ -28,6 +28,8 @@ concurrency:
 # Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
   frontend:
+    env:
+      DOWNLOAD_RETRY: kit-retry 3 5
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -40,6 +42,8 @@ jobs:
           node-version: "26.12.1"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
 
       - run: make frontend
 

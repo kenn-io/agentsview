@@ -62,12 +62,14 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run focused macOS FSEvents deadline linters
         run: |
-          make lint-tools nilaway-golangci-build
+          kit-retry 3 5 make lint-tools nilaway-golangci-build
           ./custom-gcl run --enable-only kennlint,kennnolint,nolintlint ./internal/fsevents ./internal/sync
         env:
           CGO_ENABLED: "1"
