@@ -156,6 +156,30 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 - Format Markdown with `mdformat --wrap 80` when `mdformat` and
   `mdformat-tables` are available.
 
+## Go Contexts
+
+- A function that does I/O, queries a database, calls a process or service,
+  sleeps, retries, or waits on a channel takes `ctx context.Context` first and
+  passes it on. Cobra commands start from `cmd.Context()`. Do not add a
+  wrapper that calls `context.Background()` for callers without a context;
+  give them the context-taking function.
+- Pass contexts as arguments. Only types that adapt a context to another
+  interface, such as `internal/ctxio`, and owners of a lifetime, such as the
+  server's base context or a background coordinator, may store one.
+- Detach only work that must outlive its caller: shutdown, final flushes,
+  cleanup after cancellation, and shared work that one waiter must not cancel
+  (see
+  [usage cache backfill](docs/agents/background-work.md#usage-cache-backfill)).
+  Cleanup that finishes one caller's work uses `context.WithoutCancel(ctx)`.
+  Shared work that belongs to no single caller starts from
+  `context.Background()`, so it carries no caller's request values. Bound
+  detached work and say why in a comment.
+- Tests use `t.Context()`. Inside `t.Cleanup`, where `t.Context()` is already
+  canceled, use `context.WithoutCancel(t.Context())`.
+- `make lint` checks part of this with `noctx`, `usetesting`, `fatcontext`, and
+  govet `lostcancel`. It compiles only `fts5` files, so check `pgtest`,
+  `chtest`, `duckdbtest`, and `s3test` files by hand.
+
 ## Pull Requests
 
 - Pull requests must have a user-facing benefit or improve the developer

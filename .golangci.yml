@@ -57,6 +57,9 @@ linters:
     # kit analyzers (requires a custom golangci-lint build, see docs)
     - kennlint
     - kennnolint
+    # Catches contexts re-derived from themselves in loops and closures,
+    # which grow an ever-deeper parent chain.
+    - fatcontext
   settings:
     errcheck:
       check-type-assertions: false
