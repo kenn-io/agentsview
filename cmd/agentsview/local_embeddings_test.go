@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -152,8 +151,6 @@ func TestLocalEmbeddingsLazyDiscoveryAndRefresh(t *testing.T) {
 		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
 		require.ErrorIs(t, err, cause)
 	}
-	err = prepareLocalEmbeddings(t.Context(), config.VectorEmbeddingsConfig{Servers: map[string]config.VectorEmbeddingsServerConfig{"remote": {Endpoint: second.URL}}}, "remote", bufio.NewScanner(strings.NewReader("")), io.Discard)
-	require.NoError(t, err)
 }
 
 func TestLocalEmbeddingsDiscoveryDoesNotBlockCancellation(t *testing.T) {
@@ -197,5 +194,32 @@ func TestLocalEmbeddingsDiscoveryDoesNotBlockCancellation(t *testing.T) {
 		cancelFirst()
 		<-secondDone
 		require.FailNow(t, "canceled caller waited for another discovery")
+	}
+}
+
+func TestLocalEmbeddingsAutomaticAliases(t *testing.T) {
+	oldEndpoint := localEmbeddingEndpoint
+	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
+	stub := newEmbeddingsStubServer(t, 4)
+	t.Cleanup(stub.Close)
+	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+		assert.False(t, opts.SkipOllama)
+		return stub.URL + "/v1", nil
+	}
+	for _, model := range []string{"nomic-embed-text", "nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
+		t.Run(model, func(t *testing.T) {
+			c := enabledVectorConfig(t).Vector.Embeddings
+			c.Model, c.DefaultServer, c.Servers = model, "", nil
+			encoders, err := vectorDocumentEncoderSet(c)
+			require.NoError(t, err)
+			require.Equal(t, "automatic", encoders.Default)
+			encoder, ok := encoders.ByName["automatic"]
+			require.True(t, ok)
+			vectors, err := encoder.Encode(t.Context(), []string{"hello"})
+			require.NoError(t, err)
+			assert.Equal(t, [][]float32{{1, 1, 1, 1}}, vectors)
+			assert.Equal(t, 32, encoder.Settings.BatchSize)
+			assert.Equal(t, 4, encoder.Settings.Concurrency)
+		})
 	}
 }

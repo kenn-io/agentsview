@@ -38,7 +38,8 @@ approval. Declining stops the download and build.
 The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
 characters, 2,048 context tokens, `search_query: ` for queries, and
 `search_document: ` for documents. Explicit model recipes keep their existing
-settings, including empty prefixes.
+settings, including empty prefixes. Without a server table, `nomic-embed-text`,
+`nomic-embed-text:latest`, and `nomic-embed-text:v1.5` use automatic discovery.
 
 For an explicit model or endpoint, configure the recipe and named servers:
 
@@ -117,8 +118,10 @@ Set `default_server = "shared"` under `[vector.embeddings]` for searches and
 scheduled builds, or run `agentsview embeddings build --using shared` for one
 build. Keep your existing model, dimensions, prefixes, suffix, and input cap to
 reuse the active generation. Only new or changed content needs embedding.
-`local = true` requires `nomic-embed-text` and cannot have an `endpoint`.
-Changing models requires rebuilding the index.
+`local = true` supports `nomic-embed-text`, `nomic-embed-text:latest`, and
+`nomic-embed-text:v1.5` and cannot have an `endpoint`. Keep the configured model
+spelling when switching servers; changing model identity requires rebuilding
+the index.
 
 Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`,
 `query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
@@ -495,7 +498,7 @@ ranked below top-level human-driven work. The
 
 ```bash
 agentsview embeddings build            # incremental: refresh + fill whatever's missing
-agentsview embeddings build --yes      # skip confirmation prompts
+agentsview embeddings build --yes      # skip the full-rebuild prompt; local downloads still ask
 agentsview embeddings build --full-rebuild --yes  # re-embeds every document
 agentsview embeddings build --backstop # force a full mirror reconciliation scan
 agentsview embeddings build --repair-invalid # regenerate only documents with invalid stored vectors

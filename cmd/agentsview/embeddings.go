@@ -367,15 +367,20 @@ func newVectorDocumentEncoder(
 	return newVectorEncoder(c, serverName, embedconfig.RoleDocument, true)
 }
 
-// vectorDocumentEncoderSet builds one document encoder per configured
+// vectorDocumentEncoderSet builds one document encoder per available
 // embeddings server, so a Manager can run any build against the server the
 // request names without sharing the query recipe.
 func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSet, error) {
+	names := c.ServerNames()
 	set := vector.EncoderSet{
 		Default: c.ResolvedDefaultServer(),
-		ByName:  make(map[string]vector.ManagedEncoder, len(c.Servers)),
+		ByName:  make(map[string]vector.ManagedEncoder, len(names)),
 	}
-	for name, server := range c.Servers {
+	for _, name := range names {
+		_, server, err := c.Server(name)
+		if err != nil {
+			return vector.EncoderSet{}, err
+		}
 		enc, err := newVectorDocumentEncoder(c, name)
 		if err != nil {
 			return vector.EncoderSet{}, err
