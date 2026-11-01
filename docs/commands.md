@@ -1,10 +1,109 @@
 ---
-last_edited: 2026-10-27
+last_edited: 2026-10-31
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
 
 ## Commands
+
+### `agentsview git-hook`
+
+Available on `main`. Install optional Git hooks to record the current agent
+session in commits:
+
+These commands require Git 2.31 or later.
+
+```bash
+agentsview git-hook install
+agentsview git-hook status
+agentsview git-hook uninstall
+
+agentsview git-hook install --repo /path/to/repository
+agentsview git-hook install --global
+```
+
+The hooks add a line such as `Agent-Session: codex:<session-uuid>`. Several
+sessions can be recorded. An amend by the same session keeps one line; an
+amend by another session adds its line. This identifies the session making
+the commit, rather than proving that it authored every staged change.
+
+Installation is the opt-in. Installed hooks are enabled unless `config.toml`
+contains:
+
+```toml
+[git_trailer]
+enabled = false
+```
+
+The hook reads this table without opening an archive or contacting a daemon.
+It does not migrate legacy JSON configuration. An absent config file uses
+defaults; invalid configuration skips stamping and reports one diagnostic per invocation.
+
+The hook discovers sessions from environment variables only:
+
+- Set both `AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to choose a
+  session explicitly. A partial or invalid pair skips stamping.
+- Otherwise the hook reads `CLAUDE_CODE_SESSION_ID` for Claude and
+  `CODEX_THREAD_ID` or `CODEX_SESSION_ID` for Codex. Every nonempty source must
+  agree on the agent and exact ID. Claude and Codex IDs must be UUIDs.
+- Add other agents through a variable mapping:
+
+    ```toml
+    [git_trailer.session_id_env]
+    pi = "PI_SESSION_ID"
+    ```
+
+Agent keys contain 1–32 lowercase letters, digits or hyphens and start with a
+letter or digit. Other agents' IDs contain 1–128 ASCII letters, digits, dots,
+underscores or hyphens and start with a letter or digit. Values retain their
+case. Nested agents can inherit conflicting variables; use the explicit pair
+to resolve that ambiguity. The hook never guesses from timestamps, files or
+the process tree.
+
+Installation uses the effective hooks directory, including `core.hooksPath`,
+without changing Git configuration. Linked worktrees share the default hooks
+directory. A custom or global directory can affect every repository using it.
+`--global` requires an existing globally configured absolute hooks path (a
+`~/` path also works). It follows ordinary global includes in a context with
+no repository. Use `--repo` for relative paths or repository-dependent
+conditional includes. `--repo` and `--global` cannot be combined.
+
+Existing executable `sh`, `bash` and `dash` hooks keep their content, arguments,
+mode and exit status. Direct shell shebangs and `#!/usr/bin/env bash`-style
+forms are supported; `env` options and other interpreters are refused.
+AgentsView prepends a marked block. Installation rejects scripts whose resulting
+size would exceed 2 MiB. Reinstalling is idempotent; uninstalling
+removes only its intact block, preserving later edits elsewhere. Modified
+blocks require manual attention. Existing hook code runs afterward and can
+change or remove the trailer.
+
+Both `prepare-commit-msg` and `commit-msg` participate. Message-only `-m`/`-F`
+commits are stamped early; editor and amend messages are checked after editing.
+Empty messages, sign-off-only messages, abandoned verbose editor messages and
+untouched templates still abort normally. A small preparation record beside
+the Git message file binds both hooks to the same Git process lifetime. It
+stores hashes and status, never template text or session content. Missing or
+failed preparation skips final stamping. An aborted editor may leave the
+record until a later invocation with a valid session.
+
+Explicit `core.commentChar` and `core.commentString` settings follow Git's
+effective order; the last value wins. Setting either alias to `auto`, or to a
+prefix that would make the generated `Agent-Session:` line a Git comment, skips
+stamping with a warning. Installed-hook stamping supports Linux and macOS. Other
+platforms skip it conservatively because shell and native process IDs may differ.
+
+Rebases, `git am` and cherry-picks with active Git replay markers preserve the
+existing provenance. A manual commit after `cherry-pick --no-commit`, a revert
+or a merge can record the current session. `--no-verify` still runs
+`prepare-commit-msg`, so `-m` commits may still be stamped. To remove a trailer,
+uninstall or disable these hooks before amending the commit message, then
+re-enable them afterward.
+
+The hook entry point, `agentsview git-trailer <message-file> [<source>]`,
+always exits successfully. A missing binary or runtime error does not block
+a commit. Input files are limited to 2 MiB; Git work has a three-second
+budget plus a bounded pipe-drain interval. Failures leave the message
+unchanged. Installation and removal report errors normally.
 
 ### `agentsview archive`
 
