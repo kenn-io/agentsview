@@ -21,7 +21,12 @@ import (
 
 func TestAntigravityCLIHistoryPreservesLiteralRequestTags(t *testing.T) {
 	const id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
-	for _, prompt := range []string{"Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed.", "<USER_REQUEST>hello</USER_REQUEST><ADDITIONAL_METADATA>literal</ADDITIONAL_METADATA>"} {
+	for _, tc := range []struct{ prompt, title string }{
+		{"Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed.", "Explain how <USER_REQUEST>hello</USER_REQUEST> is parsed."},
+		{"<USER_REQUEST>hello</USER_REQUEST><ADDITIONAL_METADATA>literal</ADDITIONAL_METADATA>", "<USER_REQUEST>hello</USER_REQUEST><ADDITIONAL_METADATA>literal</ADDITIONAL_METADATA>"},
+		{"    if ready:\n        launch()\n  ", "if ready: " + "        launch()"},
+	} {
+		prompt := tc.prompt
 		for _, withBrain := range []bool{false, true} {
 			name := "history only"
 			if withBrain {
@@ -44,7 +49,7 @@ func TestAntigravityCLIHistoryPreservesLiteralRequestTags(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, messages, 1)
 				assert.Equal(t, prompt, messages[0].Content)
-				assert.Equal(t, prompt, session.FirstMessage)
+				assert.Equal(t, tc.title, session.FirstMessage)
 			})
 		}
 	}
@@ -59,6 +64,7 @@ func TestAntigravityCLIUserRequestContent(t *testing.T) {
 		{name: "missing closing tag", content: "<USER_REQUEST>unfinished", want: "<USER_REQUEST>unfinished"},
 		{name: "missing opening tag", content: "unfinished</USER_REQUEST>", want: "unfinished</USER_REQUEST>"},
 		{name: "complete", content: "<USER_REQUEST>\nFirst line\nSecond line\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "First line\nSecond line"},
+		{name: "request whitespace", content: "<USER_REQUEST>\n\n    code  \n\n</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "\n    code  \n"},
 		{name: "bare literal wrapper", content: "<USER_REQUEST>Prompt</USER_REQUEST>", want: "<USER_REQUEST>Prompt</USER_REQUEST>"},
 		{name: "nested literal tags", content: "<USER_REQUEST>Explain <USER_REQUEST>hello</USER_REQUEST> tags.</USER_REQUEST><ADDITIONAL_METADATA>context</ADDITIONAL_METADATA>", want: "Explain <USER_REQUEST>hello</USER_REQUEST> tags."},
 		{name: "closing tag in metadata", content: "<USER_REQUEST>Prompt</USER_REQUEST><ADDITIONAL_METADATA>Describe </USER_REQUEST> here.</ADDITIONAL_METADATA>", want: "Prompt"},

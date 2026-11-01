@@ -703,7 +703,16 @@ var antigravityCLIUserRequestRegex = regexp.MustCompile(
 // Literal tags, incomplete envelopes, and empty requests retain their source text.
 func extractAntigravityCLIUserRequest(s string) string {
 	if match := antigravityCLIUserRequestRegex.FindStringSubmatch(strings.TrimSpace(s)); match != nil {
-		if request := strings.TrimSpace(match[1]); request != "" {
+		// Remove only the envelope's framing newlines, preserving prompt spacing.
+		request, ok := strings.CutPrefix(match[1], "\r\n")
+		if !ok {
+			request = strings.TrimPrefix(request, "\n")
+		}
+		request, ok = strings.CutSuffix(request, "\r\n")
+		if !ok {
+			request = strings.TrimSuffix(request, "\n")
+		}
+		if strings.TrimSpace(request) != "" {
 			return request
 		}
 	}
