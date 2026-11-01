@@ -1,6 +1,10 @@
 package postgres
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -207,8 +211,13 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 		TokenUsage: []byte(`{"input_tokens":9007199254740993,"output_tokens":0}`),
 		ToolCalls:  []db.ToolCall{{InputJSON: `{"large":9007199254740993,"fraction":1.2500,"exponent":1e+03,"negative_zero":-0,"text":"<>&\u2028\u2029","duplicate":0,"duplicate":1,"null":null}`}},
 	}}}
+	before, err := encodeRawPayload(p)
+	require.NoError(t, err)
 	got, err := rawContentRevision(p)
 	require.NoError(t, err)
+	after, err := encodeRawPayload(p)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "hashing preserves the caller's complete content")
 	// The original normalized-content-v1 digest must survive encoder changes.
 	assert.Equal(t, "d5c710716bc7b8a68d60e43d58192489be71935625e141f9eb6c9dae723c3a29", got)
 	key, err := rawMessageKey(p.Messages[0])
@@ -229,4 +238,57 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	projectedKey, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
 	assert.Equal(t, key, projectedKey)
+}
+
+func BenchmarkRawContentRevisionEncoding(b *testing.B) {
+	for _, shape := range []struct {
+		name            string
+		messages, bytes int
+	}{
+		{"small", 4, 256},
+		{"large_scalar", 1, 4 << 20},
+		{"many_messages", 1024, 4 << 10},
+	} {
+		b.Run(shape.name, func(b *testing.B) {
+			p := ingest.PreparedSession{Messages: make([]db.Message, shape.messages)}
+			text := strings.Repeat("output <>&\n", (shape.bytes+10)/11)[:shape.bytes]
+			for i := range p.Messages {
+				p.Messages[i] = db.Message{Ordinal: i, Role: "assistant", Content: text}
+			}
+			structure, err := rawCanonicalValue(reflect.ValueOf(p), "")
+			require.NoError(b, err)
+			want, err := bufferedRawJSONContentRevision(structure)
+			require.NoError(b, err)
+			actual, err := rawContentRevision(p)
+			require.NoError(b, err)
+			require.Equal(b, want, actual)
+			for _, encoder := range []struct {
+				name string
+				run  func(any) (string, error)
+			}{
+				{"buffered", bufferedRawJSONContentRevision},
+				{"direct_bytes", rawJSONContentRevision},
+			} {
+				b.Run(encoder.name, func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(int64(shape.messages * shape.bytes))
+					var got string
+					for b.Loop() {
+						got, err = encoder.run(structure)
+						require.NoError(b, err)
+					}
+					require.Equal(b, want, got)
+				})
+			}
+		})
+	}
+}
+
+// Keep the previous serialization as a benchmark reference, outside production.
+func bufferedRawJSONContentRevision(structure any) (string, error) {
+	encoded, err := json.Marshal(structure, json.Deterministic(true), jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true))
+	if err != nil {
+		return "", err
+	}
+	return rawDigest("normalized-content-v1", string(encoded)), nil
 }
