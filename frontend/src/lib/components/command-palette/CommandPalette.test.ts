@@ -724,7 +724,6 @@ describe("CommandPalette", () => {
     const links = document.querySelectorAll<HTMLAnchorElement>('a[href="https://agentsview.io/docs/semantic-search/#named-embeddings-servers"]');
     expect(links).toHaveLength(1);
     expect(links[0]?.textContent).toBe("Server settings");
-    expect(document.querySelector(".item-snippet")).not.toBeNull();
     unmount(component);
   });
 

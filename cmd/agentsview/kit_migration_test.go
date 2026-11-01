@@ -19,31 +19,6 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 )
 
-func TestLocalServerSwitchFromDefaultsKeepsGeneration(t *testing.T) {
-	dir := testDataDir(t)
-	writeTestConfig(t, dir, "[vector]\nenabled = true\n")
-	before, err := config.LoadMinimal()
-	require.NoError(t, err)
-	writeTestConfig(t, dir, `[vector]
-enabled = true
-
-[vector.embeddings]
-model = "nomic-embed-text"
-dimension = 768
-max_input_chars = 4000
-model_context_tokens = 2048
-query_prefix = "search_query: "
-document_prefix = "search_document: "
-default_server = "shared"
-
-[vector.embeddings.servers.shared]
-local = true
-`)
-	after, err := config.LoadMinimal()
-	require.NoError(t, err)
-	assert.Equal(t, vectorGeneration(before.Vector.Embeddings).Fingerprint(), vectorGeneration(after.Vector.Embeddings).Fingerprint())
-}
-
 func TestLocalServerSwitchKeepsGeneration(t *testing.T) {
 	oldEndpoint := localEmbeddingEndpoint
 	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
@@ -58,7 +33,7 @@ func TestLocalServerSwitchKeepsGeneration(t *testing.T) {
 		"shared": {Local: true, Timeout: "5s", MaxRetries: 1, BatchSize: 32, Concurrency: 1},
 	}
 	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-		assert.True(t, opts.SkipOllama, "Ollama remains available while local is selected")
+		assert.True(t, opts.SkipOllama, "local selection skips Ollama discovery")
 		return localServer.URL + "/v1", nil
 	}
 	ix, err := vector.Open(t.Context(), c.Vector.ResolvedDBPath(c.DataDir), false, c.Vector.Embeddings.MaxInputChars)

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +24,9 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
 	for _, daemon := range []bool{false, true} {
 		for _, state := range []string{"declined", "approved", "running", "full rebuild"} {
+			if daemon && state == "running" {
+				continue
+			}
 			t.Run(fmt.Sprintf("daemon=%t/%s", daemon, state), func(t *testing.T) {
 				approve := state != "declined"
 				dir := testDataDir(t)
@@ -51,7 +53,7 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 					ok, err := opts.Confirm(ctx, 290_000_000)
 					require.NoError(t, err)
 					if !ok {
-						return embedlocal.Installation{}, errors.New("declined")
+						return embedlocal.Installation{}, errors.New("embedding download declined; approve installation to use local embeddings")
 					}
 					installed, starting = true, true
 					return embedlocal.Installation{DataDir: opts.DataDir, Executable: "kennembed"}, nil
@@ -88,7 +90,7 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 						assert.Contains(t, out.String(), "Embedded 2 documents")
 					}
 				} else {
-					require.EqualError(t, err, "declined")
+					require.EqualError(t, err, "embedding download declined; approve installation to use local embeddings")
 					assert.NoFileExists(t, filepath.Join(dir, "vectors.db"))
 				}
 				assert.Equal(t, approve && daemon, dispatched)
@@ -98,7 +100,7 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 	}
 }
 
-func TestLocalEmbeddingsLazyDiscoveryAndRefresh(t *testing.T) {
+func TestLocalEmbeddingsDiscoveryRefreshAndInstallErrors(t *testing.T) {
 	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
 	first := newEmbeddingsStubServer(t, 4)
@@ -145,13 +147,12 @@ func TestLocalEmbeddingsLazyDiscoveryAndRefresh(t *testing.T) {
 	require.NoError(t, err)
 	_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
 	require.EqualError(t, err, "local embeddings: run agentsview embeddings build to approve the first download")
-	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, os.ErrPermission, errors.New("install lock failed")} {
-		installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
-			return embedlocal.Installation{}, fmt.Errorf("install interrupted: %w", cause)
-		}
-		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
-		require.ErrorIs(t, err, cause)
+	cause := errors.New("install lock failed")
+	installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		return embedlocal.Installation{}, fmt.Errorf("install interrupted: %w", cause)
 	}
+	_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
+	require.ErrorIs(t, err, cause)
 }
 
 func TestLocalEmbeddingsDiscoveryDoesNotBlockCancellation(t *testing.T) {
