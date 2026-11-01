@@ -132,10 +132,8 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	for i := range brainTranscriptSteps {
 		msg := &brainTranscriptSteps[i].msg
 		if msg.Role == RoleUser {
-			if content := extractAntigravityCLIUserRequest(msg.Content); content != msg.Content {
-				msg.Content = content
-				msg.ContentLength = len(content)
-			}
+			msg.Content = extractAntigravityCLIUserRequest(msg.Content)
+			msg.ContentLength = len(msg.Content)
 		}
 		brainTranscriptMsgs[i] = *msg
 	}
