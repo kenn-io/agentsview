@@ -24,6 +24,7 @@ internal/web/dist/*
 /.sqlite-include/
 *.out
 coverage.out
+.hegel/
 *.test
 
 # Air (live-reload dev server)

@@ -410,6 +410,7 @@ export * from "./rawsyncObjectRef.ts";
 export * from "./rawsyncOpenUploadStatus.ts";
 export * from "./rawsyncOrphanedManifest.ts";
 export * from "./rawsyncParseJobCounts.ts";
+export * from "./rawsyncRolloutScopeStatus.ts";
 export * from "./rawsyncSourceHeadStatus.ts";
 export * from "./rawsyncStaleSourceHead.ts";
 export * from "./rawsyncStatus.ts";

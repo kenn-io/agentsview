@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-23
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -136,7 +136,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
 GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.sessions, hosted_sessions.session_sources,
   hosted_sessions.pinned_messages, hosted_sessions.raw_curation,
-  hosted_sessions.raw_pins TO hosted_runtime;
+  hosted_sessions.raw_pins,
+  hosted_sessions.raw_legacy_supersessions TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.starred_sessions,
   hosted_sessions.raw_session_links TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.friction_findings TO hosted_runtime;
@@ -147,10 +148,28 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   TO hosted_runtime;
 ```
 
-For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+### Upgrade an existing deployment
+
+Run `agentsview pg hosted-provision provision`, then reapply
+`GRANT SELECT ON ALL TABLES IN SCHEMA hosted_sessions TO hosted_runtime` as the
+owner, along with the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants
+above. The SELECT grant includes `raw_rollout_scopes` and
+`raw_legacy_supersessions`. The latter also needs the projection write grants
+above; it stores derived legacy-to-raw group mappings. Activation also requires
+a build that can verify the selected target's embedding configuration.
+`ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
+fails startup until provisioning and these grants are complete.
+
+The hosted schema reserves `raw_rollout_scopes` for owner-managed cutover policy.
+Runtime roles need `SELECT` and must have no table or column write grants on it.
+Provisioning adds `sessions.rollout_hidden` while preserving existing rows,
+visibility and user trash. Use the rollout commands below to inspect or change
+policy.
+
+Projection and curation acquire the tenant rollout lock before source, lease or
+group row locks. They retry the whole transaction after a serialization conflict
+or deadlock, so retries cannot publish only part of a projection or curation
+change.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.
@@ -279,6 +298,106 @@ The maintenance pass examines at most 64 indexed pending signal rows with a
 cancels and joins worker, materializer and parser work before closing custody
 and PostgreSQL.
 
+## Rollout scopes
+
+Operators can record rollout policy with an owner target:
+
+```bash
+agentsview pg raw-rollout shadow provision
+agentsview pg raw-rollout shadow provision --device device-a --provider codex
+agentsview pg raw-rollout list provision
+agentsview pg raw-rollout clear provision --device device-a --provider codex
+agentsview pg raw-rollout clear provision
+```
+
+Create the tenant scope (no selectors) before narrower scopes. Clear narrower
+scopes before clearing the tenant scope. With no scopes, all raw groups retain
+the previous visibility policy. Precedence is device plus provider, device,
+provider, then tenant. A group shared by several sources is eligible when any
+source is active, even if another device is in shadow.
+
+Shadow sessions stay out of public session reads, identity resolution, search,
+reports, usage totals and trash. Session-specific pins and curation also reject
+hidden sessions. Rollout visibility is independent of user trash: restoring or
+emptying trash cannot expose or purge a hidden session. A purge whose global
+alias exclusion also covers a protected session returns HTTP 409 before any
+deletion. EmptyTrash also keeps raw trash when a legacy alias conflicts. Other
+visible purges remain permanent. Purging a thread keeps hidden pages and their
+durable exclusions untouched; the returned count includes only deleted rows.
+Stored insights remain visible as historical summaries. Persistent archive
+project-identity observations and maps remain visible, as does configuration.
+Archive metadata has no exact per-session provenance. Rollout hiding does not
+conceal historical project names or roots. Session-derived project counts and
+candidate examples exclude hidden sessions.
+
+Scope changes invalidate existing session cursors when the served set or public
+aliases change. Physical projection reads still include shadow rows. `list`
+counts physical raw rows, including user trash, as served or shadow. It also
+prints superseded legacy counts, unresolved legacy pins and the last gate audit.
+A shared group may contribute to several scope rows. `raw-sync server-status`
+returns the same scope states and counts in its `rollout` array; these diagnostics
+cannot authorize activation.
+
+Follow [the existing-deployment upgrade recipe](#upgrade-an-existing-deployment)
+after upgrading. The runtime needs `SELECT` on `raw_rollout_scopes`, and must
+have no insert, update or delete privileges on it. Scope changes use the schema
+owner connection. Scope writes, projection and curation serialize through a
+tenant advisory lock. Rollout preserves every legacy session and its original
+curation.
+
+### Activate and return to shadow (unreleased)
+
+This build refuses operator activation because it cannot yet verify the selected
+target's hosted embedding configuration. An absent setting or vector table is
+unknown, not disabled. Use a build with embedding-aware target configuration
+before following the activation step below. Configured embeddings additionally
+require the coverage gate; this build refuses that case too, even when the
+embedding recipe or transport is invalid. There is no override for these gates.
+
+Once those prerequisites are available, use this order:
+
+1. Drop pushed vectors with `pg vectors drop`, then adopt the vector-free schema
+   with `pg hosted-provision`. Adoption ends `pg push` into that schema;
+   returning to shadow does not re-enable it.
+2. Record the tenant `shadow` scope before enrolling devices. Enroll devices,
+   then run `raw-sync backfill` and `raw-sync watch`. Keep the shadow window
+   short: new shadow sessions are captured and parsed but are not served.
+3. Run `pg raw-parity --json` until sources are projected. Investigate content
+   differences and unresolved identities. Pending, failed, unsupported, empty,
+   ambiguous and unmatchable scopes cannot activate.
+4. Activate a device, provider, their intersection, or the tenant with the owner
+   target. For example: `pg raw-rollout activate provision --device device-a`.
+   `--accept-differences` waives only content differences. The audit retains the
+   original counts, pass result and explicit waiver; it never stores transcripts.
+5. Inspect `pg raw-rollout list provision` and `raw-sync server-status`. Confirm
+   reads use the server before retiring local ingestion and embedding work on
+   each device. Confirm raw capture continues uploading after any restart.
+6. To return a scope to legacy service, run
+   `pg raw-rollout shadow provision --device device-a`. Restore that device's
+   intended local services and restart them. Clearing a narrower row inherits
+   its remaining scope rules; clearing the last tenant row serves both raw and
+   legacy history without supersession.
+
+Activation acquires rollout before its stable snapshot and holds the corpus
+publication fence through final parity and commit. Contention retries the entire
+attempt with a fresh snapshot. A refusal changes no policy, curation or served
+view. The stored checked and activated corpus revisions come from that same
+transaction; legacy visibility triggers may publish additional revisions.
+
+While an explicitly active group is served, its matched legacy row is hidden and
+the raw row takes the plain public ID. Future projection creates valid matches
+in its own transaction. Physical replacements and source tombstones retain the
+logical match; authoritative withdrawal of the final membership releases it.
+Legacy-only history stays visible. Existing legacy links follow the map, keeping
+plural targets ambiguous when raw cohorts diverge.
+
+The first supersession carries stars, names and trash only into missing raw
+group values. Explicit false, null, unpins and branch overrides win. Pins match
+source UUID and normalized content; ordinal alone never matches. Unresolved
+pins, labels and all original legacy content and curation stay on the legacy
+row. Returning to shadow reveals those originals. Raw edits remain on raw
+curation for later reactivation and are never copied back to legacy rows.
+
 ## Reparse and rollback
 
 After an executable upgrade changes the parser data version or the Friction Log
@@ -309,6 +428,68 @@ Keep PostgreSQL metadata and the immutable raw repository together in backups.
 Automated retention and garbage collection of accepted generations, disaster
 rebuilds, enrollment UX, embedding consumption and migration cutover tooling
 remain outside this release.
+
+### Compare before cutover (unreleased)
+
+Cutover tooling can read complete physical PostgreSQL sessions through the
+tenant runtime role, including trashed rows. These reads use one caller-owned
+`REPEATABLE READ READ ONLY` transaction for the entire comparison and source
+readiness report. They apply no public transcript limits or visibility filters.
+Run `agentsview pg raw-parity hosted --json` with the selected target's
+restricted tenant runtime connection and `raw_tenant`. The existing
+`CheckHostedTenant` gate applies; owner connections are refused. Add `--device
+ID` or `--provider P` to inspect a source scope. The command does not open a
+local archive, parse sources or change server state.
+
+JSON stdout contains `pass`, complete `counts`, readiness, per-device/provider
+counts and every non-equal candidate component in `sessions`. The one-line
+summary goes to stderr with `--json`, or stdout without it. Exit status is 0
+whether parity passes or fails; scripts must read `pass`.
+
+Classes are `equal`, `differs`, `raw_only`, `legacy_only`, `ambiguous` and
+`unmatchable`. Differences name only the affected parts, never transcript
+content. Raw IDs use explicit branch aliases; legacy IDs use their public
+legacy aliases and include `machine`. Counts deduplicate candidate components
+across devices; per-device counts may overlap for shared sessions. A device
+filter keeps tenant legacy-only history because legacy machines are not device
+IDs. Identity ambiguity is checked across all devices before filtering.
+
+Matching requires equal agents and an exact recorded parser ID. Codex thread
+and page IDs stay distinct, and variants keep their own prefixes. Piebald and
+sessions without a stable source ID are `unmatchable` when a legacy candidate
+exists, or `raw_only` otherwise. Host-prefixed and multi-machine legacy IDs
+remain `legacy_only` history. No automatic prefix stripping or operator mapping
+is performed.
+
+`pass` requires at least one projected source, no pending, failed or unsupported
+sources, and no `differs`, `ambiguous` or `unmatchable` components. `raw_only`
+and `legacy_only` do not prevent a pass. An empty scope does not pass.
+
+Relationship comparison resolves parent, tool-call subagent and result-event
+subagent links from physical source-owned evidence in the same snapshot.
+Hidden and trashed targets remain evidence; excluded or missing targets do
+not. Historical exact-source authority prevents fallback to a different source
+after removal or exclusion. Without exact authority, only one physical target
+in the same tenant, device, provider and configured root is admissible. Each
+source's asserted edge is checked before shared owners are combined. Equal
+literal aliases cannot hide a missing or ambiguous target. Legacy targets are
+compared through globally unique identity matches.
+
+The stored-content comparison uses this field matrix:
+
+| Class | Fields |
+| --- | --- |
+| Compared | Session agent, project, cwd, first message, start/end and message counts; persisted messages including model and accounting; tool calls, target paths and result events; usage accounting; secret and friction findings; parent and subagent relationship meaning through a match map |
+| Normalized | Physical identity through a match map, UTC microsecond timestamps, JSON object key order and row order with explicit coordinates preserved |
+| Masked | Machine, custody file coordinates, publication clocks and versions, provenance, deletion and rollout state, names, stars, pins, derived signals, dialogue search text, friction titles and fingerprints |
+
+Readiness counts current source heads by device and provider. A source is
+`projected` only when its selected job has completely published the current
+head at the requested processing version. Current terminal failures are
+`failed`; older versions, unselected heads and partial publication are
+`pending`. Providers without raw capture support in the running binary are
+`unsupported`. Devices sharing a physical session each retain their own source
+counts. These counts describe source readiness, independently of content parity.
 
 ## Backfill existing laptop sources
 
