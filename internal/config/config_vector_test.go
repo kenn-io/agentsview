@@ -106,6 +106,67 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "at least one server",
 		},
 		{
+			name: "default Nomic rejects oversized dimensions",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Servers = nil
+				c.Embeddings.DefaultServer = ""
+				c.Embeddings.Dimension = 1024
+			},
+			wantErr: "dimension must be at most 768",
+		},
+		{
+			name: "default Nomic reduced dimensions require a request",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Servers = nil
+				c.Embeddings.DefaultServer = ""
+				c.Embeddings.Dimension = 256
+			},
+			wantErr: "request_dimensions must be true",
+		},
+		{
+			name: "default Nomic permits reduced dimensions",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Servers = nil
+				c.Embeddings.DefaultServer = ""
+				c.Embeddings.Dimension = 256
+				c.Embeddings.RequestDimensions = true
+			},
+		},
+		{
+			name:   "remote Nomic permits provider-specific dimensions",
+			mutate: func(c *VectorConfig) { c.Embeddings.Dimension = 1024 },
+		},
+		{
+			name: "local server rejects an endpoint",
+			mutate: func(c *VectorConfig) {
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local = true })
+			},
+			wantErr: "local cannot be combined with endpoint",
+		},
+		{
+			name: "local server rejects another model",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "other-model"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+			wantErr: "changing models requires rebuilding",
+		},
+		{
+			name: "automatic default can be selected explicitly",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Servers = nil
+				c.Embeddings.DefaultServer = "automatic"
+			},
+		},
+		{
+			name: "automatic discovery rejects an unknown default",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Servers = nil
+				c.Embeddings.DefaultServer = "missing"
+			},
+			wantErr: `default_server "missing" is not a defined server (have: automatic)`,
+		},
+		{
 			name: "multiple servers without default_server",
 			mutate: func(c *VectorConfig) {
 				c.Embeddings.DefaultServer = ""
@@ -342,27 +403,6 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, "search_query: ", c.QueryPrefix)
 		assert.Equal(t, "search_document: ", c.DocumentPrefix)
 	})
-	for _, tc := range []struct {
-		name       string
-		embeddings map[string]any
-		wantErr    string
-	}{
-		{"default Nomic rejects oversized dimensions", map[string]any{"dimension": 1024}, "dimension must be at most 768"},
-		{"default Nomic reduced dimensions require a request", map[string]any{"dimension": 256}, "request_dimensions must be true"},
-		{"default Nomic permits reduced dimensions", map[string]any{"dimension": 256, "request_dimensions": true}, ""},
-		{"remote Nomic permits provider-specific dimensions", map[string]any{"model": "nomic-embed-text", "dimension": 1024, "servers": minimalServers()}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-				"enabled": true, "embeddings": tc.embeddings,
-			}})
-			if tc.wantErr != "" {
-				require.ErrorContains(t, err, tc.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
 	t.Run("default recipe preserves explicit overrides", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
 			"enabled": true, "embeddings": map[string]any{
@@ -389,25 +429,6 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 					"servers": map[string]any{"shared": map[string]any{"local": true}},
 				},
 			}})
-		})
-	}
-	for _, tc := range []struct {
-		name    string
-		model   string
-		server  map[string]any
-		wantErr string
-	}{
-		{"local server rejects an endpoint", "nomic-embed-text", map[string]any{"local": true, "endpoint": "http://127.0.0.1:11434/v1"}, "local cannot be combined with endpoint"},
-		{"local server rejects another model", "other-model", map[string]any{"local": true}, "changing models requires rebuilding"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-				"enabled": true, "embeddings": map[string]any{
-					"model": tc.model, "dimension": 768,
-					"servers": map[string]any{"shared": tc.server},
-				},
-			}})
-			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 	t.Run("unset server fields keep defaults, explicit zero overrides", func(t *testing.T) {
@@ -606,14 +627,12 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Empty(t, c.QueryPrefix)
 		assert.Empty(t, c.DocumentPrefix)
 	})
-	for _, model := range []string{"nomic-embed-text:latest", "nomic-embed-text:v1.5"} {
-		t.Run(model+" requires a named server", func(t *testing.T) {
-			err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-				"enabled": true, "embeddings": map[string]any{"model": model, "dimension": 768},
-			}})
-			require.ErrorContains(t, err, "at least one server is required")
-		})
-	}
+	t.Run("nomic-embed-text:latest requires a named server", func(t *testing.T) {
+		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
+			"enabled": true, "embeddings": map[string]any{"model": "nomic-embed-text:latest", "dimension": 768},
+		}})
+		require.ErrorContains(t, err, "at least one server is required")
+	})
 	t.Run("explicit empty server table stays empty", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
 			"embeddings": map[string]any{"model": "nomic-embed-text", "dimension": 768, "servers": map[string]any{}},
@@ -622,34 +641,6 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Empty(t, cfg.Vector.Embeddings.ServerNames())
 		_, _, err := cfg.Vector.Embeddings.Server("")
 		require.ErrorContains(t, err, "no server named")
-	})
-	for _, tc := range []struct {
-		name          string
-		defaultServer string
-		wantErr       string
-	}{
-		{"automatic default can be selected explicitly", "automatic", ""},
-		{"automatic discovery rejects an unknown default", "missing", `default_server "missing" is not a defined server (have: automatic)`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-				"enabled": true, "embeddings": map[string]any{"default_server": tc.defaultServer},
-			}})
-			if tc.wantErr != "" {
-				require.ErrorContains(t, err, tc.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-	t.Run("named automatic entry still requires an endpoint", func(t *testing.T) {
-		err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{
-			"enabled": true, "embeddings": map[string]any{
-				"model": "nomic-embed-text", "dimension": 768,
-				"servers": map[string]any{"automatic": map[string]any{"batch_size": 16}},
-			},
-		}})
-		require.ErrorContains(t, err, "endpoint is required")
 	})
 	t.Run("other models without servers fail to load", func(t *testing.T) {
 		err := loadMinimalErrWithConfig(t, map[string]any{

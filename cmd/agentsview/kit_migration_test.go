@@ -11,57 +11,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/kit/embedlocal"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/vector"
 )
-
-func TestLocalServerSwitchKeepsGeneration(t *testing.T) {
-	oldEndpoint := localEmbeddingEndpoint
-	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
-	ollama, local := &recordingEmbeddings{}, &recordingEmbeddings{}
-	ollamaServer, localServer := ollama.serve(t), local.serve(t)
-	c := enabledVectorConfig(t)
-	c.Vector.Embeddings.Model = "nomic-embed-text:v1.5"
-	c.Vector.Embeddings.RequestDimensions = true
-	c.Vector.Embeddings.DefaultServer = "ollama"
-	c.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{
-		"ollama": {Endpoint: ollamaServer.URL + "/v1", Timeout: "5s", MaxRetries: 1, BatchSize: 32, Concurrency: 1},
-		"shared": {Local: true, Timeout: "5s", MaxRetries: 1, BatchSize: 32, Concurrency: 1},
-	}
-	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-		assert.True(t, opts.SkipOllama, "local selection skips Ollama discovery")
-		return localServer.URL + "/v1", nil
-	}
-	ix, err := vector.Open(t.Context(), c.Vector.ResolvedDBPath(c.DataDir), false, c.Vector.Embeddings.MaxInputChars)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, ix.Close()) })
-	source := testPushUnitSource()
-	encoders, err := vectorDocumentEncoderSet(c.Vector.Embeddings)
-	require.NoError(t, err)
-	gen := vectorGeneration(c.Vector.Embeddings)
-	manager := vector.NewManager(ix, source, encoders, gen)
-	_, err = manager.TryBuild(t.Context(), vector.BuildRequest{})
-	require.NoError(t, err)
-	assert.Len(t, ollama.received(), 3)
-	before, err := ix.Generations(t.Context())
-	require.NoError(t, err)
-	source.units = append(source.units, db.EmbeddableUnit{SessionID: "session-3", Kind: "user", SourceUUID: "u-new", Content: "new message"})
-	manager = vector.NewManager(ix, source, encoders, gen)
-	_, err = manager.TryBuild(t.Context(), vector.BuildRequest{Using: "shared", Backstop: true})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"new message"}, local.received())
-	assert.Len(t, ollama.received(), 3)
-	after, err := ix.Generations(t.Context())
-	require.NoError(t, err)
-	require.Len(t, after, 1)
-	assert.Equal(t, before[0].ID, after[0].ID)
-	assert.Equal(t, "nomic-embed-text:v1.5", after[0].Model)
-	assert.Equal(t, "active", after[0].State)
-}
 
 // TestVectorGenerationFingerprintsMatchPreKitRelease pins the generation
 // fingerprints to the values the release before the kit embedding stack

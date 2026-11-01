@@ -100,7 +100,7 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 	}
 }
 
-func TestLocalEmbeddingsDiscoveryRefreshAndInstallErrors(t *testing.T) {
+func TestLocalEmbeddingsRefreshApprovalGuidanceAndInstallErrors(t *testing.T) {
 	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
 	first := newEmbeddingsStubServer(t, 4)
@@ -110,7 +110,7 @@ func TestLocalEmbeddingsDiscoveryRefreshAndInstallErrors(t *testing.T) {
 	c := enabledVectorConfig(t).Vector.Embeddings
 	c.Model = "nomic-embed-text"
 	c.RequestDimensions = true
-	c.Servers = map[string]config.VectorEmbeddingsServerConfig{"shared": {Local: true, Timeout: "5s", MaxRetries: 1}}
+	c.Servers = map[string]config.VectorEmbeddingsServerConfig{"shared": {Local: true, Timeout: "5s", MaxRetries: 1, BatchSize: 32, Concurrency: 1}}
 	discoveries := 0
 	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
 		assert.True(t, opts.SkipOllama)
