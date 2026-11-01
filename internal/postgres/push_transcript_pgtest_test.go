@@ -42,7 +42,7 @@ func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
 		MessageCount: total, CreatedAt: "2026-09-25T12:00:00Z",
 	}))
 	require.NoError(t, local.InsertMessages(ctx, transcript(0)))
-	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)
@@ -112,7 +112,7 @@ func TestPushCopiesSessionThatGrowsDuringTheCopy(t *testing.T) {
 		MessageCount: total, CreatedAt: "2026-09-25T12:00:00Z",
 	}))
 	require.NoError(t, local.InsertMessages(ctx, transcript()))
-	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)

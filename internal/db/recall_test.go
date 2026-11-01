@@ -2518,7 +2518,7 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath), "CopyRecallEntriesFrom")
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath), "CopyRecallEntriesFrom")
 
 	ctx := t.Context()
 	destinationRevision, err := dstDB.RecallCorpusRevision(ctx)
@@ -2600,7 +2600,7 @@ func TestCopyRecallEntriesFromAdvancesQueryRevisionWhenAllEntriesSkipped(
 	require.NoError(t, err)
 	defer dstDB.Close()
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	entries, err := dstDB.ListRecallEntries(ctx, RecallQuery{})
 	require.NoError(t, err)
@@ -2655,7 +2655,7 @@ func TestCopyRecallEntriesFromPreservesPendingArchivedEmbeddingChange(
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = dstDB.Close() })
 	insertSession(t, dstDB, "s1", "agentsview")
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	var changes []EmbeddableUnit
 	nextWatermark, err := dstDB.ScanRecallEmbeddingUnits(
@@ -2693,7 +2693,7 @@ func TestCopyRecallEntriesFromReconcilesShiftedEvidence(t *testing.T) {
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, shifted...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.True(t, got.ProvenanceOK)
@@ -2741,7 +2741,7 @@ func TestCopyRecallEntriesFromRevokesIDEEnvelopeSplitEvidence(t *testing.T) {
 	hidden.IsSystem = true
 	insertMessages(t, dstDB, append([]Message{hidden}, oldMessages...)...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK,
@@ -2771,7 +2771,7 @@ func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, shifted...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK)
@@ -2830,7 +2830,7 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 	insertSession(t, dstDB, "entry-session", "agentsview")
 	logs := captureRecallEvidenceLog(t)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	for _, entryID := range []string{"a-entry", "z-entry"} {
 		got := requireRecallEntry(t, dstDB, entryID)
@@ -2881,7 +2881,7 @@ func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, messages...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK)

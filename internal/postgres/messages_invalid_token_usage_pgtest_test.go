@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	json "encoding/json/v2"
 	"testing"
@@ -28,18 +27,18 @@ func TestPGGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	seedInvalidUsageRow(t, pg, "pg-invalid-usage",
 		`{"input_tokens":4,"cache_read_input_tokens":123`)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	msgs, err := store.GetMessages(ctx, "pg-invalid-usage", 0, 10, true)
 	require.NoError(t, err, "GetMessages")
 	require.Len(t, msgs, 1)
@@ -62,17 +61,17 @@ func TestPGGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	seedInvalidUsageRow(t, pg, "pg-valid-usage", `{"input_tokens":7}`)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	msgs, err := store.GetMessages(context.Background(), "pg-valid-usage", 0, 10, true)
+	msgs, err := store.GetMessages(t.Context(), "pg-valid-usage", 0, 10, true)
 	require.NoError(t, err, "GetMessages")
 	require.Len(t, msgs, 1)
 	assert.JSONEq(t, `{"input_tokens":7}`, string(msgs[0].TokenUsage))
@@ -82,7 +81,7 @@ func TestPGGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 // raw token_usage text, so the read path is what gets exercised.
 func seedInvalidUsageRow(t *testing.T, pg *sql.DB, sessionID, rawUsage string) {
 	t.Helper()
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, message_count, user_message_count
 		) VALUES ($1, 'test-machine', 'test-project', 'claude', 1, 1)
@@ -90,7 +89,7 @@ func seedInvalidUsageRow(t *testing.T, pg *sql.DB, sessionID, rawUsage string) {
 	`, sessionID)
 	require.NoError(t, err, "insert session")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			session_id, ordinal, role, content,
 			content_length, model, token_usage

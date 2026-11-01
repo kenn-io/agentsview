@@ -18,7 +18,7 @@ import (
 )
 
 func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dsn := chtest.ServerURL(t)
 	database := "agentsview_boot_" + strings.ReplaceAll(t.Name(), "/", "_")
 	parsed, err := url.Parse(dsn)
@@ -31,7 +31,7 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 	assert.True(t, status.SchemaMissing)
 	require.NoError(t, EnsureSchema(ctx, Target{URL: missingDSN}))
 	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.Background(),
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()),
 			"DROP DATABASE IF EXISTS "+database+" SYNC")
 	})
 	conn := chtest.Open(t, missingDSN, database)
@@ -39,7 +39,7 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 }
 
 func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 
@@ -97,7 +97,7 @@ func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 }
 
 func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -177,7 +177,7 @@ func TestPushRemovesUsageForReplacedMessages(t *testing.T) {
 }
 
 func TestPushRemovesHardDeletedSessions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -272,7 +272,7 @@ func TestPushAfterArchiveRebuildRemovesRetiredSessions(t *testing.T) {
 }
 
 func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -312,7 +312,7 @@ func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 }
 
 func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	res, err := s.Push(ctx, false, nil)
@@ -353,7 +353,7 @@ func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 }
 
 func TestPushRefreshesCurationWithoutContentChange(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -375,7 +375,7 @@ func TestPushRefreshesCurationWithoutContentChange(t *testing.T) {
 }
 
 func TestEnsureSchemaUpgradesOlderMirrorInPlace(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	target := Target{URL: dsn, Database: database}
 	require.NoError(t, EnsureSchema(ctx, target))

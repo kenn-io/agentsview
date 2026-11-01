@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,7 +67,7 @@ func (b *zencoderSessionBuilder) processHeader(line string) {
 
 // processMessage handles lines 2+ (messages) in a Zencoder
 // JSONL file.
-func (b *zencoderSessionBuilder) processMessage(line string) {
+func (b *zencoderSessionBuilder) processMessage(ctx context.Context, line string) {
 	role := gjson.Get(line, "role").Str
 	ts := parseTimestamp(gjson.Get(line, "createdAt").Str)
 
@@ -84,7 +85,7 @@ func (b *zencoderSessionBuilder) processMessage(line string) {
 
 	switch role {
 	case "system":
-		b.handleSystemMessage(line, ts)
+		b.handleSystemMessage(ctx, line, ts)
 	case "user":
 		b.handleUserMessage(line, ts)
 	case "assistant":
@@ -111,7 +112,7 @@ func (b *zencoderSessionBuilder) processMessage(line string) {
 }
 
 func (b *zencoderSessionBuilder) handleSystemMessage(
-	line string, ts time.Time,
+	ctx context.Context, line string, ts time.Time,
 ) {
 	// System content is a plain string (not array).
 	content := gjson.Get(line, "content").Str
@@ -125,7 +126,7 @@ func (b *zencoderSessionBuilder) handleSystemMessage(
 		if b.cwd == "" {
 			b.cwd = cwd
 		}
-		if proj := ExtractProjectFromCwd(cwd); proj != "" {
+		if proj := ExtractProjectFromCwdWithBranchContext(ctx, cwd, ""); proj != "" {
 			b.project = proj
 		}
 	}
@@ -447,7 +448,7 @@ func zencoderToolResultContentLength(
 }
 
 func parseZencoderSession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -463,7 +464,7 @@ func parseZencoderSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newZencoderSessionBuilder()
 
@@ -481,7 +482,7 @@ func parseZencoderSession(
 		if lineNum == 0 {
 			b.processHeader(line)
 		} else {
-			b.processMessage(line)
+			b.processMessage(ctx, line)
 		}
 		lineNum++
 	}
@@ -529,7 +530,11 @@ func parseZencoderSession(
 	}
 
 	// Annotate tool calls with their subagent session IDs.
-	annotateSubagentSessions(b.messages, b.subagentMap)
+	if err := annotateSubagentSessionsContext(
+		ctx, b.messages, b.subagentMap,
+	); err != nil {
+		return nil, nil, err
+	}
 
 	userCount := 0
 	for _, m := range b.messages {

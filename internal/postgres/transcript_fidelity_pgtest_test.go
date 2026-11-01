@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -20,12 +19,12 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_transcript_fidelity_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
@@ -56,7 +55,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push (summary)")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

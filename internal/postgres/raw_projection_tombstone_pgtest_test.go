@@ -17,7 +17,7 @@ import (
 
 func (f projectionFixture) hosted(t *testing.T) *HostedStore {
 	t.Helper()
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	return h

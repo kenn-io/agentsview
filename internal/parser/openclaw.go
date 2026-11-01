@@ -19,7 +19,7 @@ import (
 // OpenClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
 func (p *openClawProvider) parseSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -32,7 +32,7 @@ func (p *openClawProvider) parseSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	builder := newOpenClawRecordBuilder()
 
@@ -41,7 +41,7 @@ func (p *openClawProvider) parseSession(
 		if !ok {
 			break
 		}
-		if err := builder.consume(line, false); err != nil {
+		if err := builder.consume(ctx, line, false); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -51,7 +51,7 @@ func (p *openClawProvider) parseSession(
 	}
 
 	return builder.finish(
-		path, project, machine, info,
+		ctx, path, project, machine, info,
 		openClawAgentIDFromPath(path),
 		OpenClawSessionID(filepath.Base(path)),
 	)
@@ -77,7 +77,7 @@ func newOpenClawRecordBuilder() *openClawRecordBuilder {
 	return &openClawRecordBuilder{}
 }
 
-func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
+func (b *openClawRecordBuilder) consume(ctx context.Context, line string, rejectInvalid bool) error {
 	if !gjson.Valid(line) {
 		if rejectInvalid {
 			return errors.New("invalid OpenClaw event JSON")
@@ -124,7 +124,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 	switch role {
 	case "user":
 		content := msg.Get("content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 		text = strings.TrimSpace(text)
 		if text == "" && len(tcs) == 0 && len(trs) == 0 {
 			return nil
@@ -151,7 +151,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 
 	case "assistant":
 		content := msg.Get("content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 		text = strings.TrimSpace(text)
 		if text == "" && len(tcs) == 0 && len(trs) == 0 {
 			return nil
@@ -200,7 +200,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 }
 
 func (b *openClawRecordBuilder) finish(
-	path, project, machine string, info os.FileInfo,
+	ctx context.Context, path, project, machine string, info os.FileInfo,
 	agentID, fallbackSessionID string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if len(b.messages) == 0 {
@@ -214,7 +214,7 @@ func (b *openClawRecordBuilder) finish(
 		agentID = "unknown"
 	}
 	if project == "" && b.cwd != "" {
-		project = ExtractProjectFromCwd(b.cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, b.cwd, "")
 	}
 	if project == "" {
 		project = "openclaw"

@@ -473,7 +473,7 @@ func TestCopySessionMetadataFromPreservesLabelsAndExternalParents(t *testing.T) 
 	insertSession(t, destination, "manager", "proj")
 	insertSession(t, destination, "worker", "proj")
 
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	worker, err := destination.GetSession(ctx, "worker")
 	require.NoError(t, err)
@@ -514,7 +514,7 @@ func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
 				require.NoError(t, err)
 			}
 			destination := testDB(t)
-			_, err = destination.CopyTrashedDataFrom(source.Path())
+			_, err = destination.CopyTrashedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			insertSession(t, destination, "manager", "proj")
 			if !tc.copied {
@@ -528,10 +528,10 @@ func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
 					insertSession(t, destination, "worker", "proj", func(s *Session) { s.RelationshipType = tc.fresh })
 				}
 			}
-			_, err = destination.CopyOrphanedDataFrom(source.Path())
+			_, err = destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			for range 2 {
-				require.NoError(t, destination.CopySessionMetadataFrom(source.Path()))
+				require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), source.Path()))
 			}
 			link, err := destination.GetSessionExternalParent(ctx, "worker")
 			require.NoError(t, err)
@@ -1025,7 +1025,7 @@ func TestVSCodeLegacyReplyPinConversion(t *testing.T) {
 					insertMessages(t, fresh, incoming...)
 					path := d.Path()
 					require.NoError(t, d.Close())
-					require.NoError(t, fresh.CopySessionMetadataFrom(path))
+					require.NoError(t, fresh.CopySessionMetadataFrom(t.Context(), path))
 					d = fresh
 				} else {
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", incoming))

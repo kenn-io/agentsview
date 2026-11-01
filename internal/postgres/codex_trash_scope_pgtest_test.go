@@ -35,7 +35,7 @@ func TestPreSplitPGTrashKeepsPagesHidden(t *testing.T) {
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
 			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-			pg, err := Open(pgURL, schema, true)
+			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
 			require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -133,14 +133,14 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
-	require.NoError(t, local.CopyArchiveIdentityFrom(sourcePath))
-	_, err = local.CopyTrashedDataFrom(sourcePath)
+	require.NoError(t, local.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+	_, err = local.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	for _, id := range []string{codexTrashPage, codexTrashSibling} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "codex", Project: "sample", Machine: "machine", ParentSessionID: new(codexTrashThread), RelationshipType: "continuation"}))
 		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "user", Content: "Saved page", SourceUUID: id}}))
 	}
-	require.NoError(t, local.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, local.CopySessionMetadataFrom(t.Context(), sourcePath))
 	// Start outside the next incremental push window. A page restore must
 	// advance its anchor's marker and fingerprint even though the anchor's
 	// other mirrored metadata stays unchanged.
@@ -153,7 +153,7 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -333,7 +333,7 @@ func TestHostedLegacyCodexTrashScope(t *testing.T) {
 			require.NoError(t, err)
 			_, err = f.runtime.ExecContext(ctx, `INSERT INTO excluded_sessions(id) VALUES($1)`, codexTrashThread)
 			require.NoError(t, err)
-			h, err := newHostedAdapter(f.runtime, f.tenant)
+			h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 			require.NoError(t, err)
 			wantRemoved := 3
 			restoredID := ""
@@ -387,7 +387,7 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
 			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-			pg, err := Open(pgURL, schema, true)
+			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
 			require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -434,13 +434,13 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, local.Close()) })
-			require.NoError(t, local.CopyArchiveIdentityFrom(sourcePath))
-			require.NoError(t, local.CopySyncStateFrom(sourcePath))
-			_, err = local.CopyTrashedDataFrom(sourcePath)
+			require.NoError(t, local.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+			require.NoError(t, local.CopySyncStateFrom(t.Context(), sourcePath))
+			_, err = local.CopyTrashedDataFrom(t.Context(), sourcePath)
 			require.NoError(t, err)
 			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: codexTrashPage, Agent: "codex", Project: "sample", Machine: "machine", DataVersion: db.CurrentDataVersion(), ParentSessionID: new(codexTrashThread), RelationshipType: "continuation", MessageCount: 1, UserMessageCount: 1}))
 			require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: codexTrashPage, Role: "user", Content: "Retained sibling page", SourceUUID: "page-message"}}))
-			require.NoError(t, local.CopySessionMetadataFrom(sourcePath))
+			require.NoError(t, local.CopySessionMetadataFrom(t.Context(), sourcePath))
 			for _, id := range []string{codexTrashThread, codexTrashPage} {
 				sess, err := local.GetSessionFull(ctx, id)
 				require.NoError(t, err)

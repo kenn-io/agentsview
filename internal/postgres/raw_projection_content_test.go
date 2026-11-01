@@ -11,7 +11,7 @@ import (
 )
 
 func TestRawProjectionRejectsImageOffload(t *testing.T) {
-	_, err := NewRawProjectionStore(nil, RawProjectionOptions{
+	_, err := NewRawProjectionStore(t.Context(), nil, RawProjectionOptions{
 		Content: ingest.ContentOptions{ToolResultImages: config.ToolResultImagesOffload},
 	})
 	require.ErrorContains(t, err, "tool_result_images = offload is not supported for hosted raw derivation")

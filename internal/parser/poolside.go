@@ -127,6 +127,7 @@ type poolsideSessionError struct {
 
 // parsePoolsideSession parses a poolside trajectory NDJSON file.
 func parsePoolsideSession(
+	ctx context.Context,
 	trajectoryPath string,
 	projectHint string,
 	machine string,
@@ -196,7 +197,7 @@ func parsePoolsideSession(
 	sessionID := poolsideIDPrefix + strings.TrimPrefix(fileName, "trajectory-")
 	sessionID = strings.TrimSuffix(sessionID, ".ndjson")
 
-	lr := newLineReader(file, maxLineSize)
+	lr := newLineReaderContext(ctx, file, maxLineSize)
 	defer releaseLineReader(lr)
 	var malformedLines int
 	var lastLineWasMalformed bool
@@ -326,7 +327,7 @@ func parsePoolsideSession(
 				// Extract skill name from skill tool calls.
 				// For other tools, infer from SKILL.md references in read/shell.
 				var skillName string
-				skillName = inferToolSkillName(context.Background(), name, inputJSON)
+				skillName = inferToolSkillName(ctx, name, inputJSON)
 				if name == "skill" && skillName == "" {
 					skillName = gjson.Get(inputJSON, "skill").Str
 					if skillName == "" {
@@ -535,7 +536,7 @@ func parsePoolsideSession(
 	// Extract project from working directories.
 	project := projectHint
 	if sessionStart != nil && len(sessionStart.WorkingDirectories) > 0 {
-		if p := ExtractProjectFromCwd(sessionStart.WorkingDirectories[0]); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, sessionStart.WorkingDirectories[0], ""); p != "" {
 			project = p
 		}
 	}

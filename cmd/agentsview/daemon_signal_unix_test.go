@@ -45,9 +45,8 @@ func TestDaemonRestartSIGTERMHelperProcess(t *testing.T) {
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
-		require.NotNil(t, policy.Context)
 		require.Eventually(t, func() bool {
-			return errors.Is(policy.Context.Err(), context.Canceled)
+			return errors.Is(ctx.Err(), context.Canceled)
 		}, time.Second, time.Millisecond)
 		t.Log("replacement launch observed canceled context")
 		return backgroundLaunchResult{

@@ -353,7 +353,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		broadcaster, vectorServe, cfg.Vector.Embed.RunAfterSyncEnabled(),
 	)
 
-	extractSched, err := setupRecallExtraction(cfg, database, idleTracker)
+	extractSched, err := setupRecallExtraction(ctx, cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up recall extraction: %v", err)
 	}
@@ -563,7 +563,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if engine != nil {
 		pricingRefreshRunner = engine
 	}
-	seedPricing(database, pricingRefreshRunner)
+	seedPricing(ctx, database, pricingRefreshRunner)
 	codexCloudStatus := codexcloud.NewStatusBoard()
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
@@ -1363,7 +1363,7 @@ func runWorkerResyncBuild(
 			}
 			return launchErr
 		}
-		installed, serr := engine.SwapResyncDatabase(engine.ResyncTempPath())
+		installed, serr := engine.SwapResyncDatabase(recoveryCtx, engine.ResyncTempPath())
 		if installed {
 			doneStats = statsFromWorkerResult(result)
 			doneStats.ArchiveRebuilt = true
@@ -3219,7 +3219,7 @@ func startPeriodicSync(
 			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("archive sources: %v", err)
 			}
-			recomputePendingSessions(engine, database)
+			recomputePendingSessions(ctx, engine, database)
 			recomputeStaleFriction(ctx, engine)
 		})
 	}
@@ -3587,12 +3587,12 @@ func runRemoteHostSyncLoop(
 }
 
 func recomputePendingSessions(
-	engine *sync.Engine, database *db.DB,
+	ctx context.Context, engine *sync.Engine, database *db.DB,
 ) {
 	cutoff := time.Now().Add(-signals.RecencyWindow).
 		UTC().Format(time.RFC3339)
 	ids, err := database.PendingSignalSessions(
-		context.Background(), cutoff,
+		ctx, cutoff,
 	)
 	if err != nil {
 		log.Printf("deferred recompute query: %v", err)
@@ -3606,10 +3606,13 @@ func recomputePendingSessions(
 		len(ids),
 	)
 	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
 		// Errors are already logged by RecomputeSignals; the
 		// deferred-recompute loop is best-effort, the next
 		// pass will retry any that failed.
-		_ = engine.RecomputeSignals(context.Background(), id)
+		_ = engine.RecomputeSignals(ctx, id)
 	}
 }
 

@@ -406,7 +406,7 @@ func (s positronSourceSet) Fingerprint(
 			}
 		}
 	}
-	fingerprint.Hash, err = vscodeCopilotSourceHash(path, workspacePath)
+	fingerprint.Hash, err = vscodeCopilotSourceHash(ctx, path, workspacePath)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}

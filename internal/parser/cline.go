@@ -148,11 +148,12 @@ func parseClineTimestamp(s string) (time.Time, bool) {
 // parseClineSession parses a single Cline session from its metadata file
 // (<sessionId>.json) and transcript file (<sessionId>.messages.json).
 func parseClineSession(
+	ctx context.Context,
 	metaPath string,
 	projectHint string,
 	machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	results, err := parseClineSessionWithTeammates(metaPath, projectHint, machine)
+	results, err := parseClineSessionWithTeammates(ctx, metaPath, projectHint, machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -166,6 +167,7 @@ func parseClineSession(
 // teammate transcripts into ParseResults. The parent is results[0]; every
 // teammate file follows as its own result.
 func parseClineSessionWithTeammates(
+	ctx context.Context,
 	metaPath string,
 	projectHint string,
 	machine string,
@@ -208,7 +210,7 @@ func parseClineSessionWithTeammates(
 
 	project := projectHint
 	if cwd != "" {
-		if p := ExtractProjectFromCwd(cwd); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, cwd, ""); p != "" {
 			project = p
 		}
 	}
@@ -228,7 +230,7 @@ func parseClineSessionWithTeammates(
 		return nil, err
 	}
 	if messagesInfo != nil {
-		parsedMessages, peakCtx, maxTS, err = parseClineMessages(messagesPath, model, provider)
+		parsedMessages, peakCtx, maxTS, err = parseClineMessages(ctx, messagesPath, model, provider)
 		if err != nil {
 			return nil, fmt.Errorf("parsing cline messages: %w", err)
 		}
@@ -409,7 +411,7 @@ func parseClineSessionWithTeammates(
 		sess.UsageEvents = []ParsedUsageEvent{event}
 	}
 
-	teammates, agentMap, err := parseClineTeammates(sessionDir, canonicalID, sess, model, provider)
+	teammates, agentMap, err := parseClineTeammates(ctx, sessionDir, canonicalID, sess, model, provider)
 	if err != nil {
 		return nil, fmt.Errorf("parsing cline teammates: %w", err)
 	}
@@ -429,6 +431,7 @@ func parseClineSessionWithTeammates(
 
 // parseClineMessages reads and parses <sessionId>.messages.json into ParsedMessages.
 func parseClineMessages(
+	ctx context.Context,
 	path string,
 	defaultModel string,
 	defaultProvider string,
@@ -448,7 +451,7 @@ func parseClineMessages(
 		rawFile.Messages = slice
 	}
 
-	parsedMessages, peakCtx, maxTS := parseClineRawMessages(rawFile.Messages, defaultModel, defaultProvider)
+	parsedMessages, peakCtx, maxTS := parseClineRawMessages(ctx, rawFile.Messages, defaultModel, defaultProvider)
 	return parsedMessages, peakCtx, maxTS, nil
 }
 
@@ -460,6 +463,7 @@ type clineToolCallLocation struct {
 // parseClineRawMessages parses raw Cline messages into ParsedMessages,
 // computing peak context tokens and maximum timestamp.
 func parseClineRawMessages(
+	ctx context.Context,
 	rawMessages []clineRawMessage,
 	defaultModel string,
 	defaultProvider string,
@@ -524,7 +528,7 @@ func parseClineRawMessages(
 						}
 					}
 				} else {
-					tc.SkillName = inferToolSkillName(context.Background(), block.Name, tc.InputJSON)
+					tc.SkillName = inferToolSkillName(ctx, block.Name, tc.InputJSON)
 				}
 				toolCalls = append(toolCalls, tc)
 			case "tool_result":
@@ -743,6 +747,7 @@ func clineTeammateSessionID(
 // subagent has exactly one transcript. A team_run_task call carries only the
 // agent ID, so with several runs it cannot be matched to one of them.
 func parseClineTeammates(
+	ctx context.Context,
 	sessionDir string,
 	parentSessionID string,
 	parentSess *ParsedSession,
@@ -804,7 +809,7 @@ func parseClineTeammates(
 		sessionBySubagent[subagent] = fullSessionID
 
 		parsedMessages, peakCtx, maxTS := parseClineRawMessages(
-			rawFile.Messages, parentModel, parentProvider,
+			ctx, rawFile.Messages, parentModel, parentProvider,
 		)
 		var startedAt time.Time
 		if len(parsedMessages) > 0 && !parsedMessages[0].Timestamp.IsZero() {
@@ -1163,7 +1168,7 @@ func clineLastMessageIsThinkingOnly(messages []ParsedMessage) bool {
 
 // clineFingerprintSource computes a composite fingerprint from <sessionId>.json,
 // <sessionId>.messages.json, and any teammate *.messages.json files for freshness detection.
-func clineFingerprintSource(path string) (SourceFingerprint, error) {
+func clineFingerprintSource(ctx context.Context, path string) (SourceFingerprint, error) {
 	info, err := clineRegularFileInfo(path, false)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -1186,7 +1191,7 @@ func clineFingerprintSource(path string) (SourceFingerprint, error) {
 	}
 
 	h := sha256.New()
-	if err := addSiblingMetadataFingerprintPart(h, "metadata", path, info); err != nil {
+	if err := addSiblingMetadataFingerprintPart(ctx, h, "metadata", path, info); err != nil {
 		return SourceFingerprint{}, err
 	}
 
@@ -1201,7 +1206,7 @@ func clineFingerprintSource(path string) (SourceFingerprint, error) {
 		if ts := msgInfo.ModTime().UnixNano(); ts > fp.MTimeNS {
 			fp.MTimeNS = ts
 		}
-		if err := addSiblingMetadataFingerprintPart(h, "messages", msgPath, msgInfo); err != nil {
+		if err := addSiblingMetadataFingerprintPart(ctx, h, "messages", msgPath, msgInfo); err != nil {
 			return SourceFingerprint{}, err
 		}
 	}
@@ -1228,7 +1233,7 @@ func clineFingerprintSource(path string) (SourceFingerprint, error) {
 			if ts := teammateInfo.ModTime().UnixNano(); ts > fp.MTimeNS {
 				fp.MTimeNS = ts
 			}
-			if err := addSiblingMetadataFingerprintPart(h, "teammate:"+name, teammatePath, teammateInfo); err != nil {
+			if err := addSiblingMetadataFingerprintPart(ctx, h, "teammate:"+name, teammatePath, teammateInfo); err != nil {
 				return SourceFingerprint{}, err
 			}
 		}

@@ -15,7 +15,7 @@ func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.admin.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN raw_content_revision; ALTER TABLE raw_ingest_jobs DROP COLUMN projection_selected; ALTER TABLE raw_content_revisions DROP COLUMN recency_state; DROP INDEX idx_tool_result_events_terminal; DROP INDEX raw_session_sources_source; DROP INDEX raw_session_sources_content; DROP INDEX raw_session_sources_physical; DROP INDEX idx_messages_dialogue_trgm; DROP INDEX idx_messages_thinking_trgm`)
 	require.NoError(t, err)
-	_, constructorErr := NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	_, constructorErr := NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.Error(t, constructorErr)
 	assert.Contains(t, constructorErr.Error(), "provisioning")
 	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
@@ -31,7 +31,7 @@ func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, index).Scan(&exists))
 		assert.True(t, exists, index)
 	}
-	_, constructorErr = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	_, constructorErr = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.NoError(t, constructorErr)
 	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }

@@ -35,9 +35,9 @@ var (
 	ErrHostedCursor          = fmt.Errorf("invalid or expired hosted cursor: %w", db.ErrInvalidCursor)
 )
 
-func newHostedAdapter(pg *sql.DB, tenant string) (*HostedStore, error) {
+func newHostedAdapter(ctx context.Context, pg *sql.DB, tenant string) (*HostedStore, error) {
 	var revisionTrigger bool
-	if err := pg.QueryRowContext(context.Background(), `SELECT EXISTS(
+	if err := pg.QueryRowContext(ctx, `SELECT EXISTS(
  SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
  WHERE t.tgrelid='sessions'::regclass AND t.tgname='hosted_legacy_revision'
  AND t.tgenabled='O' AND t.tgtype=29 AND t.tgqual IS NULL AND t.tgnargs=0
@@ -58,7 +58,7 @@ func newHostedAdapter(pg *sql.DB, tenant string) (*HostedStore, error) {
 	if !revisionTrigger {
 		return nil, errors.New("hosted identity revision protection is missing or altered; owner must reprovision the schema")
 	}
-	core, err := NewRawProjectionStore(pg, RawProjectionOptions{Tenant: tenant})
+	core, err := NewRawProjectionStore(ctx, pg, RawProjectionOptions{Tenant: tenant})
 	if err != nil {
 		return nil, err
 	}

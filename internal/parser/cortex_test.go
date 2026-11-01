@@ -46,7 +46,7 @@ func parseCortexSessionForTest(
 	require.True(t, ok)
 	cortex, ok := provider.(*cortexProvider)
 	require.True(t, ok)
-	return cortex.parseSession(path, machine)
+	return cortex.parseSession(t.Context(), path, machine)
 }
 
 func TestParseCortexSession_Basic(t *testing.T) {
@@ -464,7 +464,7 @@ func TestExtractCortexProject(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractCortexProject(tt.meta))
+			assert.Equal(t, tt.want, extractCortexProject(t.Context(), tt.meta))
 		})
 	}
 }

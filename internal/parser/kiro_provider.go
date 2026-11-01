@@ -192,7 +192,7 @@ func (p *kiroProvider) parseSQLiteDB(
 		return ParseOutcome{}, err
 	}
 	defer store.Close()
-	metas, err := store.ListSessionMeta()
+	metas, err := store.ListSessionMeta(ctx)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -410,7 +410,7 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 		}
 		if dbPath != "" {
 			dbSource := s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB)
-			metas, err := ListKiroSQLiteSessionMeta(dbPath)
+			metas, err := ListKiroSQLiteSessionMeta(ctx, dbPath)
 			if err != nil {
 				return nil, nil, fmt.Errorf("list Kiro SQLite sessions in %s: %w", dbPath, err)
 			}
@@ -1102,17 +1102,17 @@ func (s kiroSourceSet) Fingerprint(
 	var hash string
 	switch src.Kind {
 	case kiroSourceSubagentJSONL:
-		hash, err = hashKiroSubagentSource(s.roots, src)
+		hash, err = hashKiroSubagentSource(ctx, s.roots, src)
 	case kiroSourceCurrentJSONL:
 		sidecar = ""
 		if candidate, ok := kiroCurrentSidecarPath(s.roots, src.Path); ok {
 			sidecar = candidate
 		}
-		hash, err = hashKiroJSONLSource(src.Path, sidecar)
+		hash, err = hashKiroJSONLSource(ctx, src.Path, sidecar)
 	case kiroSourceLegacyJSONL:
-		hash, err = hashKiroJSONLSource(src.Path, sidecar)
+		hash, err = hashKiroJSONLSource(ctx, src.Path, sidecar)
 	default:
-		hash, err = hashJSONLSourceFile(src.Path)
+		hash, err = hashJSONLSourceFileContext(ctx, src.Path)
 	}
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -1121,15 +1121,15 @@ func (s kiroSourceSet) Fingerprint(
 	return fingerprint, nil
 }
 
-func hashKiroJSONLSource(transcript, sidecar string) (string, error) {
-	transcriptHash, err := hashJSONLSourceFile(transcript)
+func hashKiroJSONLSource(ctx context.Context, transcript, sidecar string) (string, error) {
+	transcriptHash, err := hashJSONLSourceFileContext(ctx, transcript)
 	if err != nil {
 		return "", err
 	}
 	sidecarHash := "missing"
 	if sidecar != "" {
 		if _, err := os.Stat(sidecar); err == nil {
-			sidecarHash, err = hashJSONLSourceFile(sidecar)
+			sidecarHash, err = hashJSONLSourceFileContext(ctx, sidecar)
 			if err != nil {
 				return "", err
 			}
@@ -1145,8 +1145,8 @@ func hashKiroJSONLSource(transcript, sidecar string) (string, error) {
 // directory it takes from its session's session.json. The rest of
 // session.json, such as the title and modification time, changes as the
 // session runs but does not affect the subagent, so it is left out.
-func hashKiroSubagentSource(roots []string, src kiroSource) (string, error) {
-	transcriptHash, err := hashJSONLSourceFile(src.Path)
+func hashKiroSubagentSource(ctx context.Context, roots []string, src kiroSource) (string, error) {
+	transcriptHash, err := hashJSONLSourceFileContext(ctx, src.Path)
 	if err != nil {
 		return "", err
 	}

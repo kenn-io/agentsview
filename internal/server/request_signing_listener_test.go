@@ -214,7 +214,7 @@ func TestRestrictedListenerRequiresAuthTokenForReaderGrant(t *testing.T) {
 	secretFile := filepath.Join(dir, "secret")
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
 	replayPath := filepath.Join(dir, "replay.db")
-	require.NoError(t, requestsign.InitReplay(replayPath))
+	require.NoError(t, requestsign.InitReplay(t.Context(), replayPath))
 	policyFile := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{
 		ExternalURL: "https://example.com/native",
@@ -241,7 +241,7 @@ func TestRestrictedListenerRejectsPublicBinding(t *testing.T) {
 	// A key generated at runtime avoids committing secret fixtures.
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
 	state := filepath.Join(dir, "replay.db")
-	require.NoError(t, requestsign.InitReplay(state))
+	require.NoError(t, requestsign.InitReplay(t.Context(), state))
 	policyFile := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{ExternalURL: "https://example.com/native", ReplayDB: state, Listen: "0.0.0.0:0", Keys: []requestsign.PolicyKey{{ID: "reader", File: secretFile, Grant: "reader"}}}
 	data, err := json.Marshal(policy)
@@ -274,7 +274,7 @@ func TestRestrictedListenerDefaultAvoidsOccupiedHTTPPort(t *testing.T) {
 	secretFile := filepath.Join(dir, "secret")
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
 	state := filepath.Join(dir, "replay.db")
-	require.NoError(t, requestsign.InitReplay(state))
+	require.NoError(t, requestsign.InitReplay(t.Context(), state))
 	policyFile := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{
 		ExternalURL: "https://example.com/native",

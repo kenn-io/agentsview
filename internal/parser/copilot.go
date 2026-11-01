@@ -61,7 +61,7 @@ func newCopilotSessionBuilder() *copilotSessionBuilder {
 }
 
 // processLine handles a single non-empty, valid JSON line.
-func (b *copilotSessionBuilder) processLine(line string) {
+func (b *copilotSessionBuilder) processLine(ctx context.Context, line string) {
 	ts := parseTimestamp(gjson.Get(line, "timestamp").Str)
 	if !ts.IsZero() {
 		if b.startedAt.IsZero() {
@@ -74,7 +74,7 @@ func (b *copilotSessionBuilder) processLine(line string) {
 
 	switch gjson.Get(line, "type").Str {
 	case copilotEventSessionStart:
-		b.handleSessionStart(data)
+		b.handleSessionStart(ctx, data)
 	case copilotEventUserMessage:
 		b.handleUserMessage(data, ts)
 	case copilotEventAssistantMsg:
@@ -95,7 +95,7 @@ func (b *copilotSessionBuilder) processLine(line string) {
 }
 
 func (b *copilotSessionBuilder) handleSessionStart(
-	data gjson.Result,
+	ctx context.Context, data gjson.Result,
 ) {
 	if id := data.Get("sessionId").Str; id != "" {
 		b.sessionID = id
@@ -104,8 +104,8 @@ func (b *copilotSessionBuilder) handleSessionStart(
 	cwd := data.Get("context.cwd").Str
 	branch := data.Get("context.branch").Str
 	if cwd != "" {
-		if p := ExtractProjectFromCwdWithBranch(
-			cwd, branch,
+		if p := ExtractProjectFromCwdWithBranchContext(
+			ctx, cwd, branch,
 		); p != "" {
 			b.project = p
 		}
@@ -634,7 +634,7 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCopilotSessionBuilder()
 
@@ -646,7 +646,7 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 		if !gjson.Valid(line) {
 			continue
 		}
-		b.processLine(line)
+		b.processLine(ctx, line)
 	}
 
 	if err := lr.Err(); err != nil {

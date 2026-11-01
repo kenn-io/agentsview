@@ -41,7 +41,7 @@ type sqliteDiscoveryWatermark struct {
 // The factory owns it so short-lived provider instances share the same cursors.
 type sqliteChangeTracker struct {
 	agent  AgentType
-	open   func(string, bool) (*sql.DB, error)
+	open   func(context.Context, string, bool) (*sql.DB, error)
 	schema func(context.Context, *sql.DB) (int, []sqliteCursorTable, error)
 
 	mu      sync.Mutex
@@ -106,7 +106,7 @@ func (t *sqliteChangeTracker) changedSessionIDs(
 	if err != nil {
 		return nil, false, sqliteTrackedDatabase{}, fmt.Errorf("stat %s sessions database: %w", t.agent, err)
 	}
-	db, err := t.open(dbPath, stableSnapshot)
+	db, err := t.open(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return nil, false, sqliteTrackedDatabase{}, err
 	}
@@ -155,7 +155,7 @@ func (t *sqliteChangeTracker) read(
 	if err != nil {
 		return sqliteTrackedDatabase{}, fmt.Errorf("stat %s sessions database: %w", t.agent, err)
 	}
-	db, err := t.open(dbPath, stableSnapshot)
+	db, err := t.open(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return sqliteTrackedDatabase{}, err
 	}

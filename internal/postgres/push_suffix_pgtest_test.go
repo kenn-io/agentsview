@@ -87,7 +87,7 @@ func TestPushSuffixPublication(t *testing.T) {
 			messages[0].ToolCalls = append(messages[0].ToolCalls, db.ToolCall{ToolName: "Bash", Category: "shell", ToolUseID: "second-call", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "second-call", Source: "tool_result", Status: "empty"}}})
 			require.NoError(t, local.InsertMessages(t.Context(), messages))
 			require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: "sample", InputTokens: 22, DedupKey: "usage"}}))
-			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+			syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			result, err := syncer.Push(t.Context(), true, nil)
@@ -180,7 +180,7 @@ func TestPushLegacyVSCodeReplyPin(t *testing.T) {
 				{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Let me check.", Timestamp: "2026-08-06T05:51:31.425Z"},
 			}
 			require.NoError(t, local.InsertMessages(t.Context(), messages))
-			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+			syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			result, err := syncer.Push(t.Context(), true, nil)

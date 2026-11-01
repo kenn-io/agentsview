@@ -167,7 +167,7 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 		},
 	))
 
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 	assertSessionProject(t, destination, "session-a", "target_project")
 	observations, err := destination.ListProjectIdentityObservations(
 		ctx, []string{"reparsed", "target_project"},
@@ -229,8 +229,8 @@ func TestCodexPageUpgradePreservesProjectAssignment(t *testing.T) {
 			require.NoError(t, source.Close())
 
 			destination := testDB(t)
-			require.NoError(t, destination.CopyArchiveIdentityFrom(sourcePath))
-			_, err = destination.CopyTrashedDataFrom(sourcePath)
+			require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+			_, err = destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 			require.NoError(t, err)
 			if tc.headExists {
 				insertSession(t, destination, thread, "head_project", func(session *Session) {
@@ -243,9 +243,9 @@ func TestCodexPageUpgradePreservesProjectAssignment(t *testing.T) {
 				observation.SessionID, observation.Project = page, "reparsed_project"
 				require.NoError(t, destination.UpsertProjectIdentityObservation(ctx, observation))
 			}
-			_, err = destination.CopyOrphanedDataFromExcluding(sourcePath, nil)
+			_, err = destination.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, nil)
 			require.NoError(t, err)
-			require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+			require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 			assignedID := page
 			if tc.headExists {
 				assignedID = thread

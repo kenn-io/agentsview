@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -417,7 +418,7 @@ func (op vibeUnifiedProjectionOp) apply(snapshot *vibeUnifiedSnapshot) error {
 
 // parseVibeUnifiedResultFile parses a unified harness session directory,
 // anchored on its CURRENT pointer, into a ParseResult.
-func parseVibeUnifiedResultFile(anchorPath string, fileInfo FileInfo) (ParseResult, error) {
+func parseVibeUnifiedResultFile(ctx context.Context, anchorPath string, fileInfo FileInfo) (ParseResult, error) {
 	sessionDir := filepath.Dir(anchorPath)
 	dirName := filepath.Base(sessionDir)
 
@@ -442,7 +443,7 @@ func parseVibeUnifiedResultFile(anchorPath string, fileInfo FileInfo) (ParseResu
 	}
 	projSession := snapshot.Session
 
-	_, _, _, err = applyVibeMetadata(&result, sessionDir)
+	_, _, _, err = applyVibeMetadata(ctx, &result, sessionDir)
 	if err != nil {
 		return result, err
 	}
@@ -456,7 +457,7 @@ func parseVibeUnifiedResultFile(anchorPath string, fileInfo FileInfo) (ParseResu
 	}
 	if result.Session.Cwd == "" {
 		result.Session.Cwd = runtimeMeta.SessionMetadata.Cwd
-		if project := ExtractProjectFromCwdWithBranch(result.Session.Cwd, result.Session.GitBranch); project != "" {
+		if project := ExtractProjectFromCwdWithBranchContext(ctx, result.Session.Cwd, result.Session.GitBranch); project != "" {
 			result.Session.Project = project
 		}
 	}
@@ -855,7 +856,7 @@ func vibeUnifiedParseInputs(sessionDir string) ([]string, error) {
 // pins the generation documents by digest, meta.json is rewritten, and the
 // journal segment grows by appends. The journal can reach tens of megabytes,
 // so it contributes its size and mtime rather than a content hash.
-func vibeUnifiedFingerprint(sessionDir string) (SourceFingerprint, error) {
+func vibeUnifiedFingerprint(ctx context.Context, sessionDir string) (SourceFingerprint, error) {
 	var size, mtime int64
 	hash := sha256.New()
 	for _, path := range []string{
@@ -871,7 +872,7 @@ func vibeUnifiedFingerprint(sessionDir string) (SourceFingerprint, error) {
 		}
 		size += info.Size()
 		mtime = max(mtime, info.ModTime().UnixNano())
-		if err := addSiblingMetadataFingerprintPart(hash, filepath.Base(path), path, info); err != nil {
+		if err := addSiblingMetadataFingerprintPart(ctx, hash, filepath.Base(path), path, info); err != nil {
 			return SourceFingerprint{}, err
 		}
 	}

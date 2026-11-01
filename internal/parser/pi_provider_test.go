@@ -906,12 +906,12 @@ func TestPiProviderMarksHeaderParentedSubagentRunsAsSubagents(t *testing.T) {
 			writeSourceFile(t, childPath, piChildFixture(t, "child-uuid", parentPath))
 			writeSourceFile(t, deepPath, piChildFixture(t, "grandchild-uuid", childPath))
 
-			child, _, err := parsePiLikeSession(childPath, "proj", "local", agent, prefix)
+			child, _, err := parsePiLikeSession(t.Context(), childPath, "proj", "local", agent, prefix)
 			require.NoError(t, err)
 			assert.Equal(t, prefix+"parent-uuid", child.ParentSessionID)
 			assert.Equal(t, RelSubagent, child.RelationshipType)
 
-			grandchild, _, err := parsePiLikeSession(deepPath, "proj", "local", agent, prefix)
+			grandchild, _, err := parsePiLikeSession(t.Context(), deepPath, "proj", "local", agent, prefix)
 			require.NoError(t, err)
 			assert.Equal(t, prefix+"child-uuid", grandchild.ParentSessionID)
 			assert.Equal(t, RelSubagent, grandchild.RelationshipType)
@@ -935,7 +935,7 @@ func TestPiProviderKeepsHeaderParentOutsideSubagentRunsAsFork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			writeSourceFile(t, path, piChildFixture(t, "fork-uuid", parentPath))
 
-			child, _, err := parsePiLikeSession(path, "proj", "local", AgentPi, "pi:")
+			child, _, err := parsePiLikeSession(t.Context(), path, "proj", "local", AgentPi, "pi:")
 			require.NoError(t, err)
 			assert.Equal(t, "pi:parent-uuid", child.ParentSessionID)
 			assert.Equal(t, RelFork, child.RelationshipType)

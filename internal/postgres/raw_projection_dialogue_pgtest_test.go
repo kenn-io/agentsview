@@ -16,7 +16,7 @@ import (
 
 func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 	f := newProjectionFixture(t)
-	_, grantErr := f.admin.Exec(`REVOKE UPDATE ON messages FROM "` + f.role + `"; GRANT UPDATE(dialogue_text) ON messages TO "` + f.role + `"`)
+	_, grantErr := f.admin.ExecContext(t.Context(), `REVOKE UPDATE ON messages FROM "`+f.role+`"; GRANT UPDATE(dialogue_text) ON messages TO "`+f.role+`"`)
 	require.NoError(t, grantErr)
 	m, _ := f.accept(t, "device-a", "dialogue-capture", "")
 	outcome := projectionOutcome("question")
@@ -168,11 +168,11 @@ func TestRawProjectionDialogueVersionChecksAtOpen(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("question")))
 	_, err := f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$1`, db.CurrentDataVersion()+1)
 	require.NoError(t, err)
-	_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	_, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	var tooNew *db.DataVersionTooNewError
 	require.ErrorAs(t, err, &tooNew)
 	assert.Equal(t, db.CurrentDataVersion()+1, tooNew.DatabaseVersion)
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	if store != nil {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	}

@@ -63,7 +63,6 @@ func defaultUsageDateRange(
 }
 
 type UsageDailyConfig struct {
-	ctx       context.Context
 	JSON      bool
 	Since     string
 	Until     string
@@ -143,14 +142,14 @@ func resolveUsageWindowPoint(
 	return t, t.In(loc).Format("2006-01-02"), nil
 }
 
-func runUsageDaily(cfg UsageDailyConfig) {
-	if err := runUsageDailyResult(cfg); err != nil {
+func runUsageDaily(ctx context.Context, cfg UsageDailyConfig) {
+	if err := runUsageDailyResult(ctx, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runUsageDailyResult(cfg UsageDailyConfig) error {
+func runUsageDailyResult(ctx context.Context, cfg UsageDailyConfig) error {
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
@@ -174,10 +173,6 @@ func runUsageDailyResult(cfg UsageDailyConfig) error {
 	}
 	noDefaultRange := cfg.All || cfg.Since != "" || cfg.Until != ""
 
-	ctx := cfg.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
@@ -290,7 +285,6 @@ func noTokenDataNote(agent string, totals db.UsageTotals) string {
 }
 
 type UsageStatuslineConfig struct {
-	ctx     context.Context
 	JSON    bool
 	Agent   string
 	Offline bool
@@ -316,14 +310,14 @@ func usageDateForTimezone(now time.Time, timezone string) string {
 	return now.In(loc).Format("2006-01-02")
 }
 
-func runUsageStatusline(cfg UsageStatuslineConfig) {
-	if err := runUsageStatuslineResult(cfg); err != nil {
+func runUsageStatusline(ctx context.Context, cfg UsageStatuslineConfig) {
+	if err := runUsageStatuslineResult(ctx, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
+func runUsageStatuslineResult(ctx context.Context, cfg UsageStatuslineConfig) error {
 	timezone := localTimezone()
 	today := usageDateForTimezone(time.Now(), timezone)
 	filter := db.UsageFilter{
@@ -333,10 +327,6 @@ func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
 		Timezone: timezone,
 	}
 
-	ctx := cfg.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
@@ -523,20 +513,21 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // (see internal/pricing/supplemental.go) also reach existing
 // databases without a resync.
 func seedPricing(
+	ctx context.Context,
 	database *db.DB,
 	runner remoteSyncExclusiveRunner,
 ) {
 	err := runPricingExclusive(runner, func() error {
-		return pricingrefresh.SeedFallback(database)
+		return pricingrefresh.SeedFallbackContext(ctx, database)
 	})
 	if err != nil {
 		log.Printf("pricing seed: %v", err)
 	}
 }
 
-func ensurePricing(database *db.DB, offline bool) {
+func ensurePricing(ctx context.Context, database *db.DB, offline bool) {
 	if _, err := pricingrefresh.Ensure(
-		database, offline, pricing.FetchCatalog, time.Now(),
+		ctx, database, offline, pricing.FetchCatalogContext, time.Now(),
 	); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"warning: pricing refresh failed: %v\n", err)
@@ -544,14 +535,14 @@ func ensurePricing(database *db.DB, offline bool) {
 }
 
 func ensureUsagePricing(
-	database *db.DB, offline bool,
+	ctx context.Context, database *db.DB, offline bool,
 	custom map[string]config.CustomModelRate,
 ) {
 	if offline && database.ReadOnly() {
 		applyFallbackPricing(database, custom)
 		return
 	}
-	ensurePricing(database, offline)
+	ensurePricing(ctx, database, offline)
 }
 
 func applyFallbackPricing(

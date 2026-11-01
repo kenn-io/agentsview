@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,11 +13,11 @@ func TestEnsureSchemaRepairsLegacySourceMissingDeletion(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, message_count,
 			user_message_count, deleted_at, source_deleted_at, deletion_cause
@@ -28,14 +27,14 @@ func TestEnsureSchemaRepairsLegacySourceMissingDeletion(t *testing.T) {
 			('source-batch', 'machine', 'project', 'claude', 1, 1,
 			 NOW(), NOW(), 'source_missing')`)
 	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(context.Background(), store.DB(), testSchema))
+	require.NoError(t, EnsureSchema(t.Context(), store.DB(), testSchema))
 
 	visible, err := store.GetSession(t.Context(), "source-single")
 	require.NoError(t, err)
 	require.NotNil(t, visible)
 	for _, id := range []string{"source-single", "source-batch"} {
 		var deletedAt, sourceDeletedAt, cause *string
-		require.NoError(t, store.DB().QueryRow(`
+		require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 			SELECT deleted_at::text, source_deleted_at::text, deletion_cause
 			FROM sessions WHERE id = $1`, id,
 		).Scan(&deletedAt, &sourceDeletedAt, &cause))
@@ -51,7 +50,7 @@ func TestEnsureSchemaRepairsLegacySourceMissingDeletion(t *testing.T) {
 
 	for _, id := range []string{"source-single", "source-batch"} {
 		var deletedAt *string
-		require.NoError(t, store.DB().QueryRow(
+		require.NoError(t, store.DB().QueryRowContext(t.Context(),
 			`SELECT deleted_at::text FROM sessions WHERE id = $1`, id,
 		).Scan(&deletedAt))
 		assert.NotNil(t, deletedAt)

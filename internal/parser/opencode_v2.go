@@ -286,7 +286,7 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 					}
 				case "tool":
 					pm.HasToolUse = true
-					call, err := openCodeV2ToolCall(item, cwd)
+					call, err := openCodeV2ToolCall(ctx, item, cwd)
 					if err != nil {
 						return nil, true, "", fmt.Errorf("decoding opencode v2 tool %s: %w", item.ID, err)
 					}
@@ -336,7 +336,7 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 	return parsed, present, fmt.Sprintf("opencode-v2:%x", hash.Sum(nil)), rows.Err()
 }
 
-func openCodeV2ToolCall(item openCodeV2Content, cwd string) (ParsedToolCall, error) {
+func openCodeV2ToolCall(ctx context.Context, item openCodeV2Content, cwd string) (ParsedToolCall, error) {
 	call := ParsedToolCall{
 		ToolUseID: item.ID, ToolName: item.Name, Category: NormalizeToolCategory(item.Name),
 		InputJSON: string(item.State.Input),
@@ -347,7 +347,7 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) (ParsedToolCall, err
 	if item.Name == "skill" {
 		call.SkillName = gjson.Get(call.InputJSON, "name").Str
 	} else {
-		call.SkillName = inferOpenCodeSkillName(item.Name, call.InputJSON, cwd)
+		call.SkillName = inferOpenCodeSkillName(ctx, item.Name, call.InputJSON, cwd)
 	}
 	if item.State.Status == "completed" || item.State.Status == "error" {
 		var texts []string

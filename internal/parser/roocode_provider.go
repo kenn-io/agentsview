@@ -28,14 +28,14 @@ func newRooCodeProviderFactory(def AgentDef) ProviderFactory {
 						return rooCodeClassifyPath(root, path, allowMissing)
 					},
 				),
-				WithFileLookup(func(root, rawID string) (singleFileMatch, bool) {
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
 					return rooCodeFindFile(root, rawID)
 				}),
-				WithFileFingerprint(func(src singleFileSource) (SourceFingerprint, error) {
-					return rooCodeFingerprintSource(src.Path)
+				WithFileFingerprint(func(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
+					return rooCodeFingerprintSource(ctx, src.Path)
 				}),
-				WithFileParse(func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
-					return rooCodeParseFile(src, req)
+				WithFileParse(func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
+					return rooCodeParseFile(ctx, src, req)
 				}),
 			)
 		},
@@ -144,12 +144,12 @@ func rooCodeFindFile(root, rawID string) (singleFileMatch, bool) {
 
 // rooCodeParseFile parses a single RooCode session from a task directory.
 func rooCodeParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	taskDir := filepath.Dir(src.Path)
 
 	sess, msgs, err := parseRooCodeSession(
-		taskDir, req.Source.ProjectHint, req.Machine,
+		ctx, taskDir, req.Source.ProjectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err

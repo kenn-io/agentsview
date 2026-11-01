@@ -23,7 +23,7 @@ import (
 
 func TestRawUploadStoreResumesAfterRestartAndRepairsCrashTail(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	first, err := NewRawUploadStore(pg, dataDir)
+	first, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = first.Close() })
 
@@ -56,7 +56,7 @@ func TestRawUploadStoreResumesAfterRestartAndRepairsCrashTail(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	restarted, err := NewRawUploadStore(pg, dataDir)
+	restarted, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 	status, err := restarted.Status(t.Context(), identity, record.ID, now)
@@ -87,7 +87,7 @@ func TestRawUploadStoreResumesAfterRestartAndRepairsCrashTail(t *testing.T) {
 
 func TestRawUploadStoreFencesTenantDeviceExpiryAndCompletion(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -140,7 +140,7 @@ func TestRawUploadStoreFencesTenantDeviceExpiryAndCompletion(t *testing.T) {
 
 func TestRawUploadStoreResetLeavesTruncationToNextLockedAppend(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -177,7 +177,7 @@ func TestRawUploadStoreResetLeavesTruncationToNextLockedAppend(t *testing.T) {
 
 func TestRawUploadStoreResetFencesVerifiedGeneration(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -222,7 +222,7 @@ func TestRawUploadStoreResetFencesVerifiedGeneration(t *testing.T) {
 
 func TestRawUploadStoreRetriesFailedStageDirectorySync(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	syncCalls := 0
@@ -258,7 +258,7 @@ func TestRawUploadStoreRetriesFailedStageDirectorySync(t *testing.T) {
 
 func TestRawUploadStoreStartupCleansExpiredCompletedAndOrphanedSpools(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	now := time.Now().UTC()
 	past := now.Add(-2 * time.Hour)
@@ -293,7 +293,7 @@ func TestRawUploadStoreStartupCleansExpiredCompletedAndOrphanedSpools(t *testing
 	))
 	require.NoError(t, store.Close())
 
-	restarted, err := NewRawUploadStore(pg, dataDir)
+	restarted, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 
@@ -312,7 +312,7 @@ func TestRawUploadStoreStartupCleansExpiredCompletedAndOrphanedSpools(t *testing
 
 func TestRawUploadStorePeriodicCleanupRunsOnTick(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -342,7 +342,7 @@ func TestRawUploadStorePeriodicCleanupRunsOnTick(t *testing.T) {
 
 func TestRawUploadStoreCleanupBoundsEachPass(t *testing.T) {
 	pg, dataDir := newRawUploadTestDatabase(t)
-	store, err := NewRawUploadStore(pg, dataDir)
+	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	now := time.Now().UTC()
@@ -374,7 +374,7 @@ func newRawUploadTestDatabase(t *testing.T) (*sql.DB, string) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))

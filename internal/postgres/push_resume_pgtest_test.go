@@ -30,7 +30,7 @@ func newResumeFixture(t *testing.T, schema string) resumeFixture {
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
@@ -287,7 +287,7 @@ func TestRequestedFullPushAfterResyncReportsDiscardedRun(t *testing.T) {
 	f.killedPush(t)
 
 	resynced := openResumeArchive(t)
-	require.NoError(t, resynced.CopySyncStateFrom(f.local.Path()))
+	require.NoError(t, resynced.CopySyncStateFrom(t.Context(), f.local.Path()))
 	before, err := f.local.GetDatabaseID(t.Context())
 	require.NoError(t, err)
 	after, err := resynced.GetDatabaseID(t.Context())

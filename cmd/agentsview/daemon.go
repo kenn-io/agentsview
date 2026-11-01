@@ -255,7 +255,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		cfg, []string{"serve"}, serveReplacementOptions{},
 		backgroundLaunchPolicy{
 			ConfigOnly: true, Operation: "daemon start",
-			Context: ctx, Attached: true,
+			Attached: true,
 			OnLaunch: progress.launch, OnProgress: progress.progress,
 		},
 	)
@@ -711,8 +711,8 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	})
 }
 
-func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
-	return runDaemonRestartWithPolicy(context.Background(), w, deps, false)
+func runDaemonRestart(ctx context.Context, w io.Writer, deps daemonCommandDeps) error {
+	return runDaemonRestartWithPolicy(ctx, w, deps, false)
 }
 
 func runDaemonRestartAttached(
@@ -790,7 +790,6 @@ func runDaemonRestartWithPolicy(
 	}
 	if attached {
 		progress := &daemonLaunchProgressWriter{w: w}
-		policy.Context = ctx
 		policy.Attached = true
 		policy.OnLaunch = progress.launch
 		policy.OnProgress = progress.progress

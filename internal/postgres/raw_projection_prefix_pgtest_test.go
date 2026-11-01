@@ -33,7 +33,7 @@ func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
 				b, accepted = f.accept(t, "device-b", "long", "")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
 			}
-			h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+			h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, h.Close()) })
 			page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 10})

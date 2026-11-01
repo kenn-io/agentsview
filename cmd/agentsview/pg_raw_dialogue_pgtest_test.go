@@ -21,7 +21,7 @@ import (
 
 func TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion(t *testing.T) {
 	cfg, _ := hostedRuntimeConfig(t)
-	runtime, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	runtime, err := postgres.OpenHosted(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	repo, err := artifact.OpenRepository(t.Context(), t.TempDir())
@@ -31,7 +31,7 @@ func TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion(t *testi
 	require.NoError(t, err)
 	jobs, err := postgres.NewTenantRawIngestStore(runtime, cfg.PG.RawTenant)
 	require.NoError(t, err)
-	sink, err := postgres.NewRawProjectionStore(runtime, postgres.RawProjectionOptions{Tenant: cfg.PG.RawTenant})
+	sink, err := postgres.NewRawProjectionStore(t.Context(), runtime, postgres.RawProjectionOptions{Tenant: cfg.PG.RawTenant})
 	require.NoError(t, err)
 	// The last released version, before parsers produced dialogue.
 	const previousVersion = "parser-data-139+friction-v1"

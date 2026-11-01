@@ -18,7 +18,7 @@ func TestKiloLegacySessionNameUTF8(t *testing.T) {
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), []map[string]any{
 		{"ts": 1700000000000, "type": "say", "say": "text", "text": text},
 	})
-	sess, _, err := parseKiloLegacySession(taskDir, "project", "local")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "project", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, strings.Repeat("a", 76)+"...", sess.SessionName)

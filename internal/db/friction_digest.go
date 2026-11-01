@@ -484,13 +484,12 @@ func (db *DB) UpdateFrictionDigestRender(
 // CopyFrictionStateFrom carries friction review state (digests, membership
 // and recurrence) across a full resync, like CopyInsightsFrom. Tables absent
 // from an older source archive are skipped.
-func (db *DB) CopyFrictionStateFrom(sourcePath string) error {
+func (db *DB) CopyFrictionStateFrom(ctx context.Context, sourcePath string) error {
 	if err := db.requireDerivedTextStorage("friction review state"); err != nil {
 		return err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -499,7 +498,7 @@ func (db *DB) CopyFrictionStateFrom(sourcePath string) error {
 	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS old_db", sourcePath); err != nil {
 		return fmt.Errorf("attaching source db: %w", err)
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db") }()
+	defer func() { _, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db") }()
 
 	copies := []struct{ table, columns string }{
 		{"friction_digests", "date, timezone, rules_version, built_at, revision, sessions_scanned, snapshot_json, summary_json, markdown, markdown_sha256, run_id"},

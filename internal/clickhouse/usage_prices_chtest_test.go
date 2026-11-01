@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -534,7 +533,7 @@ func TestPushPricesCursorUsageAddedLater(t *testing.T) {
 		InputTokens: 70, OutputTokens: 7, CacheReadTokens: 9,
 		Charged: money.MustParseDollars("0.04"), DedupKey: "cursor-3",
 	}}))
-	_, err := syncer.Push(context.Background(), false, nil)
+	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	assertDailyUsageParity(t, local, store)
 	stats := dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC"})

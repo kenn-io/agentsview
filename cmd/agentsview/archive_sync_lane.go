@@ -135,7 +135,7 @@ func (w archivePushWatch) run(ctx context.Context) error {
 			// repeat the push just interrupted. A local owner still archives
 			// the changes the watcher had not handed over.
 			if w.engine != nil {
-				flushCtx, cancel := loop.flushContext()
+				flushCtx, cancel := loop.flushContext(ctx)
 				defer cancel()
 				if err := lane.syncBeforeExit(flushCtx, ""); err != nil {
 					log.Printf("%s: %v", w.label, err)

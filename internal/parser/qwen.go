@@ -2,6 +2,7 @@ package parser
 
 import (
 	"cmp"
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -26,7 +27,7 @@ import (
 // tool-call-only entries with no text follow-up is emitted as a single
 // coalesced assistant message so the data isn't lost.
 func parseQwenSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -39,7 +40,7 @@ func parseQwenSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 
 	var (
@@ -189,7 +190,7 @@ func parseQwenSession(
 		sessionID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
 	if project == "" && cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 
 	sessionName := cmp.Or(userTitle, autoTitle)

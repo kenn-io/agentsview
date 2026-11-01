@@ -35,7 +35,7 @@ func preparePGRawSyncServicesIfWritable(
 }
 
 func preparePGRawSyncServices(
-	_ context.Context,
+	ctx context.Context,
 	dataDir string,
 	database *sql.DB,
 ) (server.Option, func() error, error) {
@@ -58,7 +58,7 @@ func preparePGRawSyncServices(
 		version:  rawProcessingVersion(),
 	}
 	uploadOption, closeUploads, err := preparePGRawSyncUploads(
-		dataDir, database, custody,
+		ctx, dataDir, database, custody,
 	)
 	if err != nil {
 		return nil, nil, errors.Join(err, custody.Close())
@@ -183,11 +183,12 @@ func (c *pgRawSyncCustody) Close() error {
 }
 
 func preparePGRawSyncUploads(
+	ctx context.Context,
 	dataDir string,
 	database *sql.DB,
 	custody rawsync.UploadCustody,
 ) (server.Option, func() error, error) {
-	uploadStore, err := postgres.NewRawUploadStore(database, dataDir)
+	uploadStore, err := postgres.NewRawUploadStore(ctx, database, dataDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("preparing raw upload session store: %w", err)
 	}

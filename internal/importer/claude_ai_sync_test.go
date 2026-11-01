@@ -58,7 +58,7 @@ func TestSyncClaudeAIResyncRestoresTranscript(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	destination, err := db.OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
 	require.NoError(t, err)
-	_, err = destination.CopyOrphanedDataFrom(source.Path())
+	_, err = destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 	require.NoError(t, err)
 	before, err := destination.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)

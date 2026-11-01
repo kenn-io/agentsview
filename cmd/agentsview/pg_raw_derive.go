@@ -82,7 +82,7 @@ func (r *pgRawRuntime) Stop() {
 	}
 }
 
-func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string) (replicaServeStartup, error) {
+func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGConfig, basePath string) (replicaServeStartup, error) {
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return replicaServeStartup{}, err
 	}
@@ -90,11 +90,11 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		return replicaServeStartup{}, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
 	applyClassifierConfig(app)
-	store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+	store, err := postgres.NewHostedStore(ctx, pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {
 		return replicaServeStartup{}, err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
 	var closeUploads func() error
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
@@ -152,7 +152,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 			return fail(err)
 		}
 		retry := rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: maxAttempts}
-		sink, err := postgres.NewRawProjectionStore(store.DB(), hostedRawProjectionOptions(app, pg.RawTenant, retry))
+		sink, err := postgres.NewRawProjectionStore(ctx, store.DB(), hostedRawProjectionOptions(app, pg.RawTenant, retry))
 		if err != nil {
 			return fail(err)
 		}
@@ -185,7 +185,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err != nil {
 		return fail(err)
 	}
-	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(app.DataDir, store.DB(), custody)
+	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(ctx, app.DataDir, store.DB(), custody)
 	if err != nil {
 		return fail(err)
 	}
@@ -219,7 +219,7 @@ func newPGHostedProvisionCommand() *cobra.Command {
 			return errors.New("hosted-provision requires raw_tenant in the selected PG target")
 		}
 		applyClassifierConfig(cfg)
-		database, err := postgres.Open(pg.URL, pg.Schema, pg.AllowInsecure)
+		database, err := postgres.Open(cmd.Context(), pg.URL, pg.Schema, pg.AllowInsecure)
 		if err != nil {
 			return errors.New("opening hosted owner connection failed")
 		}
@@ -257,12 +257,12 @@ func newPGRawReparseCommand() *cobra.Command {
 		if pg.RawTenant == "" {
 			return errors.New("raw-reparse requires raw_tenant")
 		}
-		store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+		store, err := postgres.NewHostedStore(cmd.Context(), pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
-		sink, err := postgres.NewRawProjectionStore(store.DB(), postgres.RawProjectionOptions{Tenant: pg.RawTenant})
+		sink, err := postgres.NewRawProjectionStore(cmd.Context(), store.DB(), postgres.RawProjectionOptions{Tenant: pg.RawTenant})
 		if err != nil {
 			return err
 		}

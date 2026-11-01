@@ -128,7 +128,7 @@ func (p *positAssistantProvider) Parse(
 		src.Project = req.Source.ProjectHint
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, events, err := parsePositAssistantConversation(src, machine)
+	sess, msgs, events, err := parsePositAssistantConversation(ctx, src, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -475,7 +475,7 @@ func (s positAssistantSourceSet) Fingerprint(
 			}
 		}
 	}
-	fingerprint.Hash, err = positAssistantSourceHash(src.Path, lmPath, uePath, wsPath)
+	fingerprint.Hash, err = positAssistantSourceHash(ctx, src.Path, lmPath, uePath, wsPath)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -508,15 +508,15 @@ func (s positAssistantSourceSet) workspaceManifestForSource(
 // creating it must invalidate the skip cache and freshness checks, not just
 // re-emit sources. The sidecar is included because idle sessions receive
 // keepalive appends with no transcript change.
-func positAssistantSourceHash(convPath, lmPath, uePath, wsPath string) (string, error) {
-	hash, err := hashJSONLSourceFile(convPath)
+func positAssistantSourceHash(ctx context.Context, convPath, lmPath, uePath, wsPath string) (string, error) {
+	hash, err := hashJSONLSourceFileContext(ctx, convPath)
 	if err != nil {
 		return "", err
 	}
 	combined := "conversation\x00" + hash
 	composite := false
 	if IsRegularFile(lmPath) {
-		lmHash, err := hashJSONLSourceFile(lmPath)
+		lmHash, err := hashJSONLSourceFileContext(ctx, lmPath)
 		if err != nil {
 			return "", err
 		}
@@ -524,7 +524,7 @@ func positAssistantSourceHash(convPath, lmPath, uePath, wsPath string) (string, 
 		composite = true
 	}
 	if IsRegularFile(uePath) {
-		ueHash, err := hashJSONLSourceFile(uePath)
+		ueHash, err := hashJSONLSourceFileContext(ctx, uePath)
 		if err != nil {
 			return "", err
 		}
@@ -532,7 +532,7 @@ func positAssistantSourceHash(convPath, lmPath, uePath, wsPath string) (string, 
 		composite = true
 	}
 	if wsPath != "" && IsRegularFile(wsPath) {
-		wsHash, err := hashJSONLSourceFile(wsPath)
+		wsHash, err := hashJSONLSourceFileContext(ctx, wsPath)
 		if err != nil {
 			return "", err
 		}
@@ -745,6 +745,7 @@ type positAssistantTreeNode struct {
 }
 
 func parsePositAssistantConversation(
+	ctx context.Context,
 	src positAssistantSource,
 	machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
@@ -769,7 +770,7 @@ func parsePositAssistantConversation(
 
 	convDir := filepath.Dir(src.Path)
 	lmMessages, malformed, err := readPositAssistantLMMessages(
-		filepath.Join(convDir, positAssistantLMMessagesFile),
+		ctx, filepath.Join(convDir, positAssistantLMMessagesFile),
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -830,7 +831,7 @@ func parsePositAssistantConversation(
 
 	sessionID := positAssistantIDPrefix + filepath.Base(convDir)
 	events, eventMalformed, err := readPositAssistantUsageEvents(
-		filepath.Join(convDir, positAssistantUsageEventsFile),
+		ctx, filepath.Join(convDir, positAssistantUsageEventsFile),
 		sessionID, nodeOrdinals, endedAt,
 	)
 	if err != nil {
@@ -882,7 +883,7 @@ func parsePositAssistantConversation(
 // the numeric message ID that conversation.json tree nodes reference. A
 // missing transcript yields an empty map so the tree still parses.
 func readPositAssistantLMMessages(
-	path string,
+	ctx context.Context, path string,
 ) (map[int]gjson.Result, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -895,7 +896,7 @@ func readPositAssistantLMMessages(
 
 	lines := make(map[int]gjson.Result)
 	malformed := 0
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
@@ -929,7 +930,7 @@ func readPositAssistantLMMessages(
 // keeping the additive messages-plus-usage-events cost queries free of
 // double counting. A missing sidecar yields no events.
 func readPositAssistantUsageEvents(
-	path, sessionID string,
+	ctx context.Context, path, sessionID string,
 	nodeOrdinals map[string]int,
 	fallbackTime time.Time,
 ) ([]ParsedUsageEvent, int, error) {
@@ -945,7 +946,7 @@ func readPositAssistantUsageEvents(
 	var events []ParsedUsageEvent
 	malformed := 0
 	lineNo := 0
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()

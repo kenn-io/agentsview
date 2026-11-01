@@ -57,10 +57,10 @@ func newKimiWorkSourceSet(roots []string) JSONLSourceSet {
 }
 
 func kimiWorkParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	sess, msgs, err := parseKimiSessionWithFallbackModel(
-		path, req.Source.ProjectHint, req.Machine, defaultKimiWorkModel,
+		ctx, path, req.Source.ProjectHint, req.Machine, defaultKimiWorkModel,
 	)
 	if err != nil {
 		return nil, nil, err

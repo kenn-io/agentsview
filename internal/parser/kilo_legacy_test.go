@@ -128,7 +128,7 @@ func TestParseKiloLegacySessionBasic(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, parsedMsgs, err := parseKiloLegacySession(
+	sess, parsedMsgs, err := parseKiloLegacySession(t.Context(),
 		taskDir, "myproject", "testmachine",
 	)
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestParseKiloLegacySessionProjectFromWorkspaceDir(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "hintproject", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "hintproject", "h")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	// Workspace directory overrides both the relative
@@ -226,7 +226,7 @@ func TestParseKiloLegacySessionProjectFromAPIHistoryFallback(t *testing.T) {
 	mustWriteRaw(t,
 		filepath.Join(taskDir, "api_conversation_history.json"), api)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "hintproject", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "hintproject", "h")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "gadget", sess.Project,
@@ -318,7 +318,7 @@ func TestParseKiloLegacySessionReadFileExtractsEmbeddedResult(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	tc := parsedMsgs[1].ToolCalls[0]
@@ -347,7 +347,7 @@ func TestParseKiloLegacySessionAppliedDiffKeepsDiff(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	tc := parsedMsgs[1].ToolCalls[0]
@@ -392,7 +392,7 @@ func TestParseKiloLegacySessionCommandOutputPairsAndFlagsError(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 
 	// Both execute_command tool calls emitted.
@@ -448,7 +448,7 @@ func TestParseKiloLegacySessionEmptyCommandOutputStillCompletes(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	last := parsedMsgs[1]
@@ -478,7 +478,7 @@ func TestParseKiloLegacySessionMCPResponsePairs(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	last := parsedMsgs[1]
@@ -522,7 +522,7 @@ func TestParseKiloLegacySessionMCPUseMcpToolShape(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	last := parsedMsgs[1]
@@ -544,7 +544,7 @@ func TestParseKiloLegacySessionMCPUseMcpToolShape(t *testing.T) {
 // the use_mcp_tool shape, including the no-serverName case.
 func TestParseKiloLegacyMCPToolCallUnit(t *testing.T) {
 	// With serverName.
-	tc := parseKiloLegacyToolCall(
+	tc := parseKiloLegacyToolCall(t.Context(),
 		`{"type":"use_mcp_tool","serverName":"srv","toolName":"do_thing","arguments":"{\"a\":1}"}`,
 		3,
 	)
@@ -556,7 +556,7 @@ func TestParseKiloLegacyMCPToolCallUnit(t *testing.T) {
 
 	// Without serverName, the name falls back to the raw tool name so
 	// the call is still captured rather than dropped.
-	tcNoServer := parseKiloLegacyToolCall(
+	tcNoServer := parseKiloLegacyToolCall(t.Context(),
 		`{"type":"use_mcp_tool","toolName":"bare_tool","arguments":"{}"}`,
 		4,
 	)
@@ -566,7 +566,7 @@ func TestParseKiloLegacyMCPToolCallUnit(t *testing.T) {
 		"MCP calls without serverName should still have Category=MCP")
 
 	// Legacy Cline shape is unaffected.
-	tcLegacy := parseKiloLegacyToolCall(
+	tcLegacy := parseKiloLegacyToolCall(t.Context(),
 		`{"tool":"readFile","path":"src/foo.ts"}`, 5,
 	)
 	require.NotNil(t, tcLegacy)
@@ -607,7 +607,7 @@ func TestParseKiloLegacySessionCompactBoundaryEmitted(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 3)
 	assert.True(t, parsedMsgs[1].IsCompactBoundary,
@@ -634,7 +634,7 @@ func TestParseKiloLegacySessionDiffErrorPairsPendingToolCall(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	last := parsedMsgs[1]
@@ -664,7 +664,7 @@ func TestParseKiloLegacySessionReasoningEmittedAsThinking(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 3)
 	assert.True(t, parsedMsgs[1].HasThinking)
@@ -690,7 +690,7 @@ func TestParseKiloLegacySessionSkipsPartialMessages(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, parsedMsgs, err := parseKiloLegacySession(taskDir, "", "h")
+	_, parsedMsgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, parsedMsgs, 2)
 	assert.Equal(t, "first", parsedMsgs[0].Content)
@@ -702,7 +702,7 @@ func TestParseKiloLegacySessionMissingMessagesFileIsEmptySession(t *testing.T) {
 	require.NoError(t, os.Remove(
 		filepath.Join(taskDir, "ui_messages.json"),
 	))
-	sess, msgs, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, msgs, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.NotNil(t, sess, "session should still be returned")
 	assert.Empty(t, msgs, "no ui_messages means no parsed messages")
@@ -740,7 +740,7 @@ func TestParseKiloLegacySessionAPIRecordingTracksPeakAndCost(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	assert.Equal(t, 170, sess.TotalOutputTokens,
 		"output tokens are summed across api_req_started events")
@@ -779,7 +779,7 @@ func TestParseKiloLegacySessionQuantizesEachRequestCostBeforeSumming(
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 
 	require.NoError(t, err)
 	require.Len(t, sess.UsageEvents, 1)
@@ -798,7 +798,7 @@ func TestParseKiloLegacySessionInvalidCostPreservesTokenUsage(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 
 	require.NoError(t, err)
 	require.Len(t, sess.UsageEvents, 1)
@@ -849,7 +849,7 @@ func TestParseKiloLegacySessionModelFromAPIHistory(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, parsed, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 
 	// When multiple distinct models are observed, the model is omitted
@@ -883,7 +883,7 @@ func TestParseKiloLegacyAPIHistoryModelsMissingFile(t *testing.T) {
 
 func TestParseKiloLegacySessionMissingMetadataReturnsNilSession(t *testing.T) {
 	dir := t.TempDir()
-	sess, msgs, err := parseKiloLegacySession(dir, "", "h")
+	sess, msgs, err := parseKiloLegacySession(t.Context(), dir, "", "h")
 	require.NoError(t, err)
 	assert.Nil(t, sess,
 		"task dir without task_metadata.json should yield a nil session")
@@ -904,7 +904,7 @@ func TestParseKiloLegacySessionOrphanToolCallTermination(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	assert.Equal(t, TerminationToolCallPending,
 		sess.TerminationStatus,
@@ -929,7 +929,7 @@ func TestParseKiloLegacySessionFinishTaskIsClean(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	assert.Equal(t, TerminationClean,
 		sess.TerminationStatus,
@@ -950,7 +950,7 @@ func TestParseKiloLegacySessionFinishTaskOnlyIsClean(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	assert.Equal(t, TerminationClean,
 		sess.TerminationStatus,
@@ -1021,7 +1021,7 @@ func TestKiloLegacyFingerprintComposite(t *testing.T) {
 	))
 
 	anchor := filepath.Join(taskDir, "task_metadata.json")
-	fp, err := kiloLegacyFingerprintSource(anchor)
+	fp, err := kiloLegacyFingerprintSource(t.Context(), anchor)
 	require.NoError(t, err)
 	assert.Positive(t, fp.Size)
 	assert.NotEmpty(t, fp.Hash)
@@ -1031,7 +1031,7 @@ func TestKiloLegacyFingerprintComposite(t *testing.T) {
 		[]byte(`[{"ts":1,"type":"say","say":"text","text":"x"}]`),
 		0o644,
 	))
-	fp2, err := kiloLegacyFingerprintSource(anchor)
+	fp2, err := kiloLegacyFingerprintSource(t.Context(), anchor)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp.Hash, fp2.Hash,
 		"sibling content change should change fingerprint hash")
@@ -1063,6 +1063,7 @@ func TestKiloLegacyParseFileReturnsUsageFromUI(t *testing.T) {
 	matches := kiloLegacyDiscoverMatchesForTest(t, root)
 	require.Len(t, matches, 1)
 	results, _, err := kiloLegacyParseFile(
+		t.Context(),
 		singleFileSource{Root: root, Path: matches[0].Path},
 		ParseRequest{
 			Machine: "h",
@@ -1094,7 +1095,7 @@ func TestParseKiloLegacySessionCostAbsentNoUsageEvents(t *testing.T) {
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), []kiloLegacyMessage{
 		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "hello"},
 	})
-	sess, _, err := parseKiloLegacySession(taskDir, "", "")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, sess.UsageEvents, "no api_req_started means no usage events")
@@ -1116,7 +1117,7 @@ func TestParseKiloLegacySessionToolUseIDsUnique(t *testing.T) {
 		{Timestamp: 1688836855000, Type: "say", Say: "command_output", Text: "ok"},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	ids := make(map[string]bool)
@@ -1142,7 +1143,7 @@ func TestParseKiloLegacySessionResultEventTimestamp(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
@@ -1179,7 +1180,7 @@ func TestParseKiloLegacySessionImageOnlyMessages(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	sess, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	sess, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -1204,7 +1205,7 @@ func TestParseKiloLegacySessionSkillDetection(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	var skillTC *ParsedToolCall
@@ -1237,7 +1238,7 @@ func TestParseKiloLegacySessionMetadataMessageSkipped(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Only the two "text" say messages should appear; metadata skipped.
@@ -1255,7 +1256,7 @@ func TestKiloLegacyFingerprintChangesOnAPIHistoryMutation(t *testing.T) {
 		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "hello"},
 	})
 
-	fingerprint1, err := kiloLegacyFingerprintSource(
+	fingerprint1, err := kiloLegacyFingerprintSource(t.Context(),
 		filepath.Join(taskDir, "task_metadata.json"))
 	require.NoError(t, err)
 
@@ -1267,7 +1268,7 @@ func TestKiloLegacyFingerprintChangesOnAPIHistoryMutation(t *testing.T) {
 			}{{Text: "new content"}}},
 		})
 
-	fingerprint2, err := kiloLegacyFingerprintSource(
+	fingerprint2, err := kiloLegacyFingerprintSource(t.Context(),
 		filepath.Join(taskDir, "task_metadata.json"))
 	require.NoError(t, err)
 	assert.NotEqual(t, fingerprint1.Hash, fingerprint2.Hash,
@@ -1289,7 +1290,7 @@ func TestParseKiloLegacySessionCodebaseSearchResultPairs(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Find the tool call message.
@@ -1333,7 +1334,7 @@ func TestParseKiloLegacySessionCodebaseSearchResultStandalone(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Orphaned result should appear as a standalone system message that is
@@ -1381,7 +1382,7 @@ func TestParseKiloLegacySessionFollowupUnwrapsJSON(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Find the followup message.
@@ -1409,7 +1410,7 @@ func TestParseKiloLegacySessionCompletionResultUnwrapsJSON(t *testing.T) {
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Find the completion_result message.
@@ -1455,7 +1456,7 @@ func TestParseKiloLegacySessionPartialCostExcluded(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, sess.UsageEvents, 1)
 	// The first request is a valid JSON payload (usageMissing) and
@@ -1489,7 +1490,7 @@ func TestParseKiloLegacySessionWorkspaceDirExcluded(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err)
 	require.Len(t, sess.UsageEvents, 1)
 	// Workspace metadata is not a valid JSON payload, so it is
@@ -1553,7 +1554,7 @@ func TestParseKiloLegacySessionMalformedAPIHistoryContinues(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(t.Context(), taskDir, "", "h")
 	require.NoError(t, err,
 		"malformed api_conversation_history.json should not abort import")
 	require.NotNil(t, sess)
@@ -1574,7 +1575,7 @@ func TestParseKiloLegacySessionUnpairedCommandOutputIsMarkedToolOutput(
 		},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
-	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	_, parsed, err := parseKiloLegacySession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	var fallback *ParsedMessage

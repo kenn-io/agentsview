@@ -22,7 +22,9 @@ func newGrokProviderFactory(def AgentDef) ProviderFactory {
 				WithStreamingFileDiscovery(grokDiscoverEach),
 				WithFileWatchRoots(grokWatchRoots),
 				WithFileChangedPathClassifier(grokClassifyPath),
-				WithFileLookup(grokFindFile),
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
+					return grokFindFile(root, rawID)
+				}),
 				WithFileFingerprint(grokFingerprintSource),
 				WithFileParse(grokParseFile),
 			)
@@ -195,7 +197,7 @@ func grokClassifySubagentMeta(
 	return singleFileMatch{}, false
 }
 
-func grokFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
+func grokFingerprintSource(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.Path, err)
@@ -209,7 +211,7 @@ func grokFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 	mtime := info.ModTime().UnixNano()
 	h := sha256.New()
 	if err := addSiblingMetadataFingerprintPart(
-		h, "summary", src.Path, info,
+		ctx, h, "summary", src.Path, info,
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -233,7 +235,7 @@ func grokFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 			mtime = ts
 		}
 		if err := addSiblingMetadataFingerprintPart(
-			h, label, companion, companionInfo,
+			ctx, h, label, companion, companionInfo,
 		); err != nil {
 			return SourceFingerprint{}, err
 		}
@@ -249,7 +251,7 @@ func grokFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 				mtime = ts
 			}
 			if err := addSiblingMetadataFingerprintPart(
-				h, "subagent_parent_meta", metaPath, metaInfo,
+				ctx, h, "subagent_parent_meta", metaPath, metaInfo,
 			); err != nil {
 				return SourceFingerprint{}, err
 			}
@@ -273,9 +275,9 @@ func grokCompanionFiles(summaryPath string) map[string]string {
 }
 
 func grokParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	result, err := ParseGrokSummary(src.Path, req.Source.ProjectHint, req.Machine)
+	result, err := ParseGrokSummary(ctx, src.Path, req.Source.ProjectHint, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

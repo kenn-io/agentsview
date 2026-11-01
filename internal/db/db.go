@@ -4825,6 +4825,7 @@ func (db *DB) startWALCheckpointLoop() {
 		for {
 			select {
 			case <-ticker.C:
+				// Ticks have no caller; stopWALCheckpointLoop ends the loop.
 				db.walMaintenanceTick(context.Background(), &diag)
 			case <-stop:
 				return
@@ -5374,6 +5375,8 @@ func checkpointWALWithoutWriter(ctx context.Context, path string) error {
 // file can be renamed on every platform. Gives up after closeDrainTimeout
 // and returns the pools that still had connections checked out.
 func drainPools(pools []*sql.DB) []*sql.DB {
+	// The drain ignores caller cancellation: callers may rename the file only
+	// after every closed pool has drained, so only the bound ends the wait.
 	ctx, cancel := context.WithTimeout(context.Background(), closeDrainTimeout)
 	defer cancel()
 	return drainPoolsContext(ctx, pools)

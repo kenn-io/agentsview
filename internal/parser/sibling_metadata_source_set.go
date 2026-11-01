@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,12 +44,13 @@ func siblingMetadataFileInfoStrict(path string) (os.FileInfo, error) {
 // addSiblingMetadataFingerprintPart folds a source or companion file's name,
 // size, mtime, and content hash into the fingerprint hasher.
 func addSiblingMetadataFingerprintPart(
+	ctx context.Context,
 	h interface{ Write([]byte) (int, error) },
 	label string,
 	path string,
 	info os.FileInfo,
 ) error {
-	hash, err := hashJSONLSourceFile(path)
+	hash, err := hashJSONLSourceFileContext(ctx, path)
 	if err != nil {
 		return err
 	}

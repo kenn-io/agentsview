@@ -21,7 +21,11 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 	write.ReplaceMessages = true
 	write.RejectMessageCountDecrease = false
-	write = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
+	sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
+	if err != nil {
+		return "", err
+	}
+	write = db.storageSessionBatchWrite(sanitized)
 	id := write.Session.ID
 
 	// Writers hold db.mu, so the row read here matches the messages the transaction reads.

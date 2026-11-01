@@ -589,7 +589,7 @@ func aiderRawIDAtWithID(historyPath, idPath string, idx int) (string, bool) {
 	), true
 }
 
-func aiderFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
+func aiderFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Container)
 	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.Container, err)
@@ -599,7 +599,7 @@ func aiderFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
 			"stat %s: source is a directory", src.Container,
 		)
 	}
-	hash, err := hashJSONLSourceFile(src.Container)
+	hash, err := hashJSONLSourceFileContext(ctx, src.Container)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -624,7 +624,7 @@ func aiderFingerprintSourceContext(
 		return SourceFingerprint{}, err
 	}
 	if !found {
-		return aiderFingerprintSource(src)
+		return aiderFingerprintSource(ctx, src)
 	}
 	var fingerprint SourceFingerprint
 	if err := json.Unmarshal([]byte(encoded), &fingerprint); err != nil {

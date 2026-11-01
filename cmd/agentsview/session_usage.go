@@ -144,14 +144,14 @@ func resolveSessionUsageReader(cmd *cobra.Command) (
 		if err != nil {
 			return nil, nil, err
 		}
-		store, cleanup, err := openPGReadStore(cfg, pgCfg)
+		store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
 		if err != nil {
 			closeArchiveQueryBackend(cleanup)
 			return nil, nil, fmt.Errorf("opening pg store: %w", err)
 		}
 		return func(id string) (*sessionUsageOutput, int, error) {
 			query.SessionID = id
-			return storeSessionUsageData("pg", cfg, store, query)
+			return storeSessionUsageData(ctx, "pg", cfg, store, query)
 		}, cleanup, nil
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
@@ -313,6 +313,7 @@ func httpSessionSyncStatus(
 }
 
 func storeSessionUsageData(
+	ctx context.Context,
 	storeName string,
 	cfg config.Config,
 	store db.Store,
@@ -324,7 +325,6 @@ func storeSessionUsageData(
 		}
 	}
 
-	ctx := context.Background()
 	sessionID := query.SessionID
 	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
 	if err != nil {

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -18,19 +17,19 @@ const testSchema = "agentsview_store_test"
 // ensureStoreSchema creates the test schema and seed data.
 func ensureStoreSchema(t *testing.T, pgURL string) {
 	t.Helper()
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	_, err = pg.Exec(`
-		DROP SCHEMA IF EXISTS ` + testSchema + ` CASCADE;
+	_, err = pg.ExecContext(t.Context(), `
+		DROP SCHEMA IF EXISTS `+testSchema+` CASCADE;
 	`)
 	require.NoError(t, err, "dropping schema")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, testSchema), "creating schema")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -44,7 +43,7 @@ func ensureStoreSchema(t *testing.T, pgURL string) {
 			 2, 1, '/fixtures/store-test-001.jsonl')
 	`)
 	require.NoError(t, err, "inserting test session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length)
@@ -63,19 +62,19 @@ func ensureAnalyticsTokenStoreSchema(
 	t *testing.T, pgURL string,
 ) {
 	t.Helper()
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	_, err = pg.Exec(`
-		DROP SCHEMA IF EXISTS ` + testSchema + ` CASCADE;
+	_, err = pg.ExecContext(t.Context(), `
+		DROP SCHEMA IF EXISTS `+testSchema+` CASCADE;
 	`)
 	require.NoError(t, err, "dropping schema")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, testSchema), "creating schema")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			started_at, ended_at, message_count,
@@ -118,7 +117,7 @@ func TestNewStore(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -130,12 +129,12 @@ func TestDetectInsightGenerationAvailability(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	require.NoError(t, store.DetectInsightGenerationAvailability(
-		context.Background(),
+		t.Context(),
 	), "DetectInsightGenerationAvailability")
 	assert.True(t, store.InsightGenerationAvailable())
 }
@@ -144,19 +143,19 @@ func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	tx, err := pg.BeginTx(
-		context.Background(),
+		t.Context(),
 		&sql.TxOptions{ReadOnly: true},
 	)
 	require.NoError(t, err, "BeginTx")
 	defer func() { _ = tx.Rollback() }()
 
 	available, err := probeInsightGenerationAvailabilityTx(
-		context.Background(), tx,
+		t.Context(), tx,
 	)
 	require.NoError(t, err, "probeInsightGenerationAvailabilityTx")
 	assert.False(t, available)
@@ -166,11 +165,11 @@ func TestStoreListSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.ListSessions(
 		ctx, db.SessionFilter{Limit: 10},
 	)
@@ -192,11 +191,11 @@ func TestStoreListSessions_MachineMultiSelect(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -217,7 +216,7 @@ func TestStoreListSessions_MachineMultiSelect(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting extra sessions")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.ListSessions(
 		ctx,
 		db.SessionFilter{
@@ -241,11 +240,11 @@ func ensureSidebarIndexStoreSchema(
 	t.Helper()
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
-	_, err = store.DB().Exec(`DELETE FROM messages`)
+	_, err = store.DB().ExecContext(t.Context(), `DELETE FROM messages`)
 	require.NoError(t, err, "clearing seed messages")
-	_, err = store.DB().Exec(`DELETE FROM sessions`)
+	_, err = store.DB().ExecContext(t.Context(), `DELETE FROM sessions`)
 	require.NoError(t, err, "clearing seed sessions")
 	return store
 }
@@ -272,7 +271,7 @@ func insertSidebarIndexSession(
 		opt(&row)
 	}
 
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			display_name, started_at, ended_at, message_count,
@@ -357,7 +356,7 @@ func TestStoreGetSidebarSessionIndexComputesIsTeammate(
 	insertSidebarIndexSession(t, store, "normal")
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{},
+		t.Context(), db.SessionFilter{},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex")
 
@@ -379,13 +378,13 @@ func TestStoreGetSidebarSessionIndexReturnsDisplayNameAndProjectAssignment(
 	) {
 		s.displayName = &displayName
 	})
-	_, err := store.DB().Exec(
+	_, err := store.DB().ExecContext(t.Context(),
 		`UPDATE sessions SET project_assigned = TRUE WHERE id = $1`, "named",
 	)
 	require.NoError(t, err)
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{},
+		t.Context(), db.SessionFilter{},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	require.Len(t, index.Sessions, 1)
@@ -412,7 +411,7 @@ func TestStoreGetSidebarSessionIndexExcludeAutomated(
 	})
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(),
+		t.Context(),
 		db.SessionFilter{ExcludeAutomated: true},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex exclude automated")
@@ -420,7 +419,7 @@ func TestStoreGetSidebarSessionIndexExcludeAutomated(
 	assert.Equal(t, 1, index.Total)
 
 	index, err = store.GetSidebarSessionIndex(
-		context.Background(),
+		t.Context(),
 		db.SessionFilter{ExcludeAutomated: false},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex include automated")
@@ -455,7 +454,7 @@ func TestStoreGetSidebarSessionIndexExcludeOneShotKeepsAutomated(
 	})
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(),
+		t.Context(),
 		db.SessionFilter{
 			ExcludeOneShot:   true,
 			ExcludeAutomated: false,
@@ -502,7 +501,7 @@ func TestStoreGetSidebarSessionIndexIncludesChildrenForMatchingRoot(
 	})
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{Agent: "claude"},
+		t.Context(), db.SessionFilter{Agent: "claude"},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	requireSidebarIndexIDs(
@@ -553,7 +552,7 @@ func TestStoreGetSidebarSessionIndexTotalCountsCanonicalRoots(t *testing.T) {
 	})
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{Project: "alpha"},
+		t.Context(), db.SessionFilter{Project: "alpha"},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	requireSidebarIndexIDs(t, index.Sessions, []string{
@@ -597,14 +596,14 @@ func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
 	})
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(),
+		t.Context(),
 		db.SessionFilter{ExcludeAutomated: true, Limit: 1},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex exclude automated")
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "human-child"})
 
 	index, err = store.GetSidebarSessionIndex(
-		context.Background(),
+		t.Context(),
 		db.SessionFilter{ExcludeAutomated: false, Limit: 1},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex include automated")
@@ -642,7 +641,7 @@ func TestStoreGetSidebarSessionIndexPaginatesContinuationsAsDescendants(
 		s.endedAt = otherEnd
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first, err := store.GetSidebarSessionIndex(
 		ctx, db.SessionFilter{Limit: 1},
 	)
@@ -692,7 +691,7 @@ func TestStoreGetSidebarSessionIndexPaginatesByDescendantFreshness(
 		s.endedAt = otherEnd
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first, err := store.GetSidebarSessionIndex(
 		ctx, db.SessionFilter{Limit: 1},
 	)
@@ -743,7 +742,7 @@ func TestStoreGetSidebarSessionIndexStarredIncludesStarredDescendantRoot(
 	require.True(t, ok, "starred-child should exist")
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{
+		t.Context(), db.SessionFilter{
 			Starred: true,
 			Limit:   1,
 		},
@@ -783,7 +782,7 @@ func TestStoreGetSidebarSessionIndexPaginatesOrphanRoots(t *testing.T) {
 	})
 
 	first, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{Limit: 2},
+		t.Context(), db.SessionFilter{Limit: 2},
 	)
 	require.NoError(t, err, "first page")
 	assert.Equal(t, 3, first.Total)
@@ -794,7 +793,7 @@ func TestStoreGetSidebarSessionIndexPaginatesOrphanRoots(t *testing.T) {
 	)
 
 	second, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{Limit: 2, Cursor: first.NextCursor},
+		t.Context(), db.SessionFilter{Limit: 2, Cursor: first.NextCursor},
 	)
 	require.NoError(t, err, "second page")
 	assert.Equal(t, 3, second.Total)
@@ -822,7 +821,7 @@ func TestStoreGetSidebarSessionIndexDoesNotPromoteSoftDeletedParentChildren(t *t
 	})
 
 	index, err := store.GetSidebarSessionIndex(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	assert.ElementsMatch(t,
@@ -835,11 +834,11 @@ func TestStoreGetSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	sess, err := store.GetSession(ctx, "store-test-001")
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, sess, "expected session, got nil")
@@ -850,11 +849,11 @@ func TestStoreGetMessages(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	msgs, err := store.GetMessages(
 		ctx, "store-test-001", 0, 100, true,
 	)
@@ -876,15 +875,15 @@ func seedActivitySession(
 
 	// PG doesn't allow multi-statement prepared queries,
 	// so run each statement separately.
-	_, err := pg.Exec(
+	_, err := pg.ExecContext(t.Context(),
 		`DELETE FROM messages WHERE session_id = $1`, sid,
 	)
 	require.NoError(t, err, "deleting messages")
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`DELETE FROM sessions WHERE id = $1`, sid,
 	)
 	require.NoError(t, err, "deleting session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -903,7 +902,7 @@ func seedActivitySession(
 		if m.ts != "" {
 			tsVal = m.ts
 		}
-		_, err := pg.Exec(`
+		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO messages
 				(session_id, ordinal, role, content,
 				 timestamp, content_length, is_system)
@@ -919,7 +918,7 @@ func TestStoreGetSessionActivity(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -941,7 +940,7 @@ func TestStoreGetSessionActivity(t *testing.T) {
 		{6, "user", "This session is being continued from a previous conversation.", "2026-03-26T10:29:30Z", true},
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	resp, err := store.GetSessionActivity(ctx, sid)
 	require.NoError(t, err, "GetSessionActivity")
 
@@ -965,7 +964,7 @@ func TestStoreGetSessionActivity_NoMessages(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -973,7 +972,7 @@ func TestStoreGetSessionActivity_NoMessages(t *testing.T) {
 	seedActivitySession(t, store, sid, nil)
 
 	resp, err := store.GetSessionActivity(
-		context.Background(), sid,
+		t.Context(), sid,
 	)
 	require.NoError(t, err, "GetSessionActivity")
 	assert.Empty(t, resp.Buckets)
@@ -985,7 +984,7 @@ func TestStoreGetSessionActivity_NullTimestamps(
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1002,7 +1001,7 @@ func TestStoreGetSessionActivity_NullTimestamps(
 	})
 
 	resp, err := store.GetSessionActivity(
-		context.Background(), sid,
+		t.Context(), sid,
 	)
 	require.NoError(t, err, "GetSessionActivity")
 	assert.Empty(t, resp.Buckets)
@@ -1015,7 +1014,7 @@ func TestStoreGetSessionActivity_SingleMessage(
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1031,7 +1030,7 @@ func TestStoreGetSessionActivity_SingleMessage(
 	})
 
 	resp, err := store.GetSessionActivity(
-		context.Background(), sid,
+		t.Context(), sid,
 	)
 	require.NoError(t, err, "GetSessionActivity")
 	require.Len(t, resp.Buckets, 1)
@@ -1044,7 +1043,7 @@ func TestStoreGetSessionActivity_PrefixInjectedExcluded(
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1063,7 +1062,7 @@ func TestStoreGetSessionActivity_PrefixInjectedExcluded(
 		{2, "user", "This session is being continued from a previous conversation.", "2026-03-26T10:01:00Z", false},
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	resp, err := store.GetSessionActivity(ctx, sid)
 	require.NoError(t, err, "GetSessionActivity")
 
@@ -1090,7 +1089,7 @@ func TestStoreGetSessionActivity_FractionalTimestamps(
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1107,7 +1106,7 @@ func TestStoreGetSessionActivity_FractionalTimestamps(
 		{2, "user", "c", "2026-03-26T10:01:01.000Z", false},
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	resp, err := store.GetSessionActivity(ctx, sid)
 	require.NoError(t, err, "GetSessionActivity")
 
@@ -1130,12 +1129,12 @@ func TestStoreAnalyticsSummaryOutputTokenCoverage(
 	pgURL := testPGURL(t)
 	ensureAnalyticsTokenStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	summary, err := store.GetAnalyticsSummary(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2026-03-12",
 			To:   "2026-03-13",
@@ -1150,12 +1149,12 @@ func TestStoreAnalyticsHeatmapOutputTokens(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureAnalyticsTokenStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	heatmap, err := store.GetAnalyticsHeatmap(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2026-03-12",
 			To:   "2026-03-13",
@@ -1178,12 +1177,12 @@ func TestStoreAnalyticsTopSessionsOutputTokens(
 	pgURL := testPGURL(t)
 	ensureAnalyticsTokenStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	top, err := store.GetAnalyticsTopSessions(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2026-03-12",
 			To:   "2026-03-13",
@@ -1206,11 +1205,11 @@ func TestStoreAnalyticsTopSessionsDisplayName(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			display_name, session_name,
@@ -1233,7 +1232,7 @@ func TestStoreAnalyticsTopSessionsDisplayName(t *testing.T) {
 	require.NoError(t, err, "inserting top session names")
 
 	top, err := store.GetAnalyticsTopSessions(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2026-03-12",
 			To:   "2026-03-12",
@@ -1264,11 +1263,11 @@ func TestStoreAnalyticsTopSessionsMessagesAllowRunningSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			started_at, ended_at, message_count,
@@ -1288,7 +1287,7 @@ func TestStoreAnalyticsTopSessionsMessagesAllowRunningSessions(t *testing.T) {
 	require.NoError(t, err, "inserting top sessions")
 
 	top, err := store.GetAnalyticsTopSessions(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2026-03-12",
 			To:   "2026-03-12",
@@ -1311,13 +1310,13 @@ func TestStoreAnalyticsTopSessionsDurationUsesClampedActiveDuration(t *testing.T
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	// Unique date so only these two sessions match the filter,
 	// regardless of what other tests leave behind in the schema.
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			started_at, ended_at, message_count, user_message_count
@@ -1335,7 +1334,7 @@ func TestStoreAnalyticsTopSessionsDurationUsesClampedActiveDuration(t *testing.T
 	`)
 	require.NoError(t, err, "inserting sessions")
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp) VALUES
 			('pg-clamp-wall', 0, 'user', 'noop',
@@ -1354,7 +1353,7 @@ func TestStoreAnalyticsTopSessionsDurationUsesClampedActiveDuration(t *testing.T
 	require.NoError(t, err, "inserting messages")
 
 	top, err := store.GetAnalyticsTopSessions(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{From: "2027-07-15", To: "2027-07-15"},
 		"duration",
 	)
@@ -1377,7 +1376,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1387,7 +1386,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 	// duration. PostgreSQL must reject it, matching SQLite and DuckDB.
 	// (Empty-string timestamps are not representable in timestamptz
 	// columns, so only the reversed case applies on this backend.)
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			started_at, ended_at, message_count, user_message_count
@@ -1405,7 +1404,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 	`)
 	require.NoError(t, err, "inserting sessions")
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp) VALUES
 			('pg-elig-valid', 0, 'user', 'start',
@@ -1420,7 +1419,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 	require.NoError(t, err, "inserting messages")
 
 	top, err := store.GetAnalyticsTopSessions(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{From: "2027-08-20", To: "2027-08-20"},
 		"duration",
 	)
@@ -1437,13 +1436,13 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 func TestStoreWriteSurface(t *testing.T) {
 	pgURL := testPGURL(t)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	assert.True(t, store.ReadOnly())
 
-	ctx := context.Background()
+	ctx := t.Context()
 	project := "store-capability"
 	sessionID := "store-capability-001"
 	trashedID := "store-capability-002"
@@ -1484,7 +1483,7 @@ func TestStoreWriteSurface(t *testing.T) {
 	require.NoError(t, err, "GetInsight after delete")
 	assert.Nil(t, insight)
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, first_message,
 			display_name, started_at, ended_at, message_count,
@@ -1525,7 +1524,7 @@ func TestStoreWriteSurface(t *testing.T) {
 
 	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
 		"SoftDeleteSession trashedID")
-	_, err = store.DB().Exec(`UPDATE sessions SET data_version = $1 WHERE id = $2`, db.CurrentDataVersion(), trashedID)
+	_, err = store.DB().ExecContext(t.Context(), `UPDATE sessions SET data_version = $1 WHERE id = $2`, db.CurrentDataVersion(), trashedID)
 	require.NoError(t, err, "marking restore target current")
 	restored, err := store.RestoreSession(t.Context(), trashedID)
 	require.NoError(t, err, "RestoreSession trashedID")
@@ -1565,7 +1564,7 @@ func TestStoreListSessionsParentlessChildrenRespectFilters(t *testing.T) {
 	for _, id := range []string{"worker", "dangling", "deleted", "other", "nested"} {
 		insertSidebarIndexSession(t, store, id)
 	}
-	_, err := store.DB().Exec(`UPDATE sessions SET relationship_type = 'subagent';
+	_, err := store.DB().ExecContext(t.Context(), `UPDATE sessions SET relationship_type = 'subagent';
   UPDATE sessions SET parent_session_id = 'missing' WHERE id = 'dangling';
   UPDATE sessions SET parent_session_id = 'worker' WHERE id = 'nested';
   UPDATE sessions SET deleted_at = NOW() WHERE id = 'deleted';

@@ -36,7 +36,9 @@ func (stubReplica) ValidateTarget(ReplicaTarget) error { return nil }
 func (stubReplica) NewPusher(context.Context, ReplicaTarget, *db.DB, PusherOptions) (Pusher, error) {
 	return nil, nil
 }
-func (stubReplica) OpenStore(ReplicaTarget) (ReplicaStore, error) { return nil, nil }
+
+func (stubReplica) OpenStore(context.Context, ReplicaTarget) (ReplicaStore, error) { return nil, nil }
+
 func (stubReplica) OpenServeStore(context.Context, ReplicaTarget) (ReplicaStore, error) {
 	return nil, nil
 }

@@ -365,7 +365,7 @@ func openQuackClient(ctx context.Context,
 		token:  token,
 	}
 	if err := runWithAttachTimeout(rawURL, timeout, func() error {
-		return client.attach(context.Background())
+		return client.attach(ctx)
 	}); err != nil {
 		conn.Close()
 		return nil, err

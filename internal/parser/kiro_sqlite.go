@@ -66,13 +66,6 @@ func (s *KiroSQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// kiroSQLiteDBPath returns the current-store Kiro SQLite DB when the
-// configured root contains one.
-func kiroSQLiteDBPath(dir string) string {
-	path, _ := kiroSQLiteDBPathChecked(dir)
-	return path
-}
-
 func kiroSQLiteDBPathChecked(dir string) (string, error) {
 	if dir == "" {
 		return "", nil
@@ -207,7 +200,7 @@ func (s *KiroSQLiteStore) sessionExists(ctx context.Context, sessionID string) (
 // conversation. Kiro's schema permits the same conversation_id
 // under multiple cwd keys, so the newest row is canonical.
 func ListKiroSQLiteSessionMeta(
-	dbPath string,
+	ctx context.Context, dbPath string,
 ) ([]KiroSQLiteSessionMeta, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, nil
@@ -217,14 +210,14 @@ func ListKiroSQLiteSessionMeta(
 		return nil, err
 	}
 	defer store.Close()
-	return store.ListSessionMeta()
+	return store.ListSessionMeta(ctx)
 }
 
 // ListSessionMeta returns one metadata row per logical conversation
 // using the store's existing SQLite handle.
-func (s *KiroSQLiteStore) ListSessionMeta() ([]KiroSQLiteSessionMeta, error) {
+func (s *KiroSQLiteStore) ListSessionMeta(ctx context.Context) ([]KiroSQLiteSessionMeta, error) {
 	var metas []KiroSQLiteSessionMeta
-	err := s.ForEachSessionMeta(context.Background(), func(meta KiroSQLiteSessionMeta) error {
+	err := s.ForEachSessionMeta(ctx, func(meta KiroSQLiteSessionMeta) error {
 		metas = append(metas, meta)
 		return nil
 	})
@@ -277,24 +270,6 @@ func (s *KiroSQLiteStore) ForEachSessionMeta(
 		return err
 	}
 	return nil
-}
-
-// KiroSQLiteSessionIDs returns the set of current-store logical
-// conversation IDs under dir.
-func KiroSQLiteSessionIDs(dir string) map[string]struct{} {
-	dbPath := kiroSQLiteDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-	metas, err := ListKiroSQLiteSessionMeta(dbPath)
-	if err != nil {
-		return nil
-	}
-	ids := make(map[string]struct{}, len(metas))
-	for _, meta := range metas {
-		ids[meta.SessionID] = struct{}{}
-	}
-	return ids
 }
 
 // KiroSQLiteSourceMtime resolves the canonical per-session

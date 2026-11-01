@@ -21,7 +21,7 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 
@@ -71,7 +71,7 @@ func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
@@ -141,7 +141,7 @@ func TestRawIngestSchemaEnforcesCaptureAndObjectCustody(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
@@ -219,7 +219,7 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
@@ -264,37 +264,37 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	const role = "agentsview_raw_restricted"
 	const rolePassword = "agentsview_raw_restricted_pw"
 
-	admin, err := Open(pgURL, schema, true)
+	admin, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open admin")
 	t.Cleanup(func() { _ = admin.Close() })
-	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
 	require.True(t, pushSchemaCurrent(t.Context(), admin),
 		"fixture must exercise the schema-current sync fast path")
 
-	_, _ = admin.Exec(`DROP OWNED BY ` + role)
-	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
-	_, err = admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
+	_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
+	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 	require.NoError(t, err, "create restricted role")
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-		_, _ = admin.Exec(`DROP OWNED BY ` + role)
-		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 	})
 	for _, grant := range []string{
 		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
 		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + schema + ` TO ` + role,
 	} {
-		_, err = admin.Exec(grant)
+		_, err = admin.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 
 	restrictedURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	restrictedURL.User = url.UserPassword(role, rolePassword)
-	restricted, err := Open(restrictedURL.String(), schema, true)
+	restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
@@ -314,21 +314,21 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 	const role = "agentsview_raw_runtime"
 	const rolePassword = "agentsview_raw_runtime_pw"
 
-	admin, err := Open(pgURL, schema, true)
+	admin, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open admin")
 	t.Cleanup(func() { _ = admin.Close() })
-	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
 
-	_, _ = admin.Exec(`DROP OWNED BY ` + role)
-	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
-	_, err = admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
+	_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
+	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 	require.NoError(t, err, "create runtime role")
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-		_, _ = admin.Exec(`DROP OWNED BY ` + role)
-		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 	})
 	for _, grant := range []string{
 		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
@@ -343,14 +343,14 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 		`GRANT INSERT ON ` + schema + `.raw_ingest_jobs TO ` + role,
 		`GRANT USAGE ON SEQUENCE ` + schema + `.raw_ingest_jobs_id_seq TO ` + role,
 	} {
-		_, err = admin.Exec(grant)
+		_, err = admin.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 
 	restrictedURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	restrictedURL.User = url.UserPassword(role, rolePassword)
-	restricted, err := Open(restrictedURL.String(), schema, true)
+	restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
 	require.NoError(t, err, "Open runtime role")
 	t.Cleanup(func() { _ = restricted.Close() })
 
@@ -363,7 +363,7 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 	assert.False(t, writable, "the prior insert-only job grants disable raw-sync routes")
 	assert.Contains(t, output.String(), "raw-sync routes disabled; missing requirements: SELECT ON raw_ingest_jobs, UPDATE ON raw_ingest_jobs")
 
-	_, err = admin.Exec(`GRANT SELECT, UPDATE ON ` + schema + `.raw_ingest_jobs TO ` + role)
+	_, err = admin.ExecContext(t.Context(), `GRANT SELECT, UPDATE ON `+schema+`.raw_ingest_jobs TO `+role)
 	require.NoError(t, err)
 	writable, err = CanWriteRawSyncSchema(t.Context(), restricted, schema)
 	require.NoError(t, err)
@@ -400,10 +400,10 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 				schema + `.` + required.table + ` FROM ` + role
 			grant := `GRANT ` + required.privilege + ` ON ` +
 				schema + `.` + required.table + ` TO ` + role
-			_, err := admin.Exec(revoke)
+			_, err := admin.ExecContext(t.Context(), revoke)
 			require.NoError(t, err, revoke)
 			t.Cleanup(func() {
-				_, cleanupErr := admin.Exec(grant)
+				_, cleanupErr := admin.ExecContext(context.WithoutCancel(t.Context()), grant)
 				require.NoError(t, cleanupErr, grant)
 			})
 
@@ -419,28 +419,28 @@ func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_sequence_free_test"
 
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	})
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 
 	var sequenceName sql.NullString
-	err = pg.QueryRow(`SELECT pg_get_serial_sequence(
+	err = pg.QueryRowContext(t.Context(), `SELECT pg_get_serial_sequence(
 		$1, 'id'
 	)`, schema+".raw_ingest_jobs").Scan(&sequenceName)
 	require.NoError(t, err)
 	if sequenceName.Valid {
-		_, err = pg.Exec(`ALTER TABLE ` + schema + `.raw_ingest_jobs
+		_, err = pg.ExecContext(t.Context(), `ALTER TABLE `+schema+`.raw_ingest_jobs
 			ALTER COLUMN id SET DEFAULT (
 				EXTRACT(EPOCH FROM clock_timestamp()) * 1000000
 			)::BIGINT`)
 		require.NoError(t, err)
-		_, err = pg.Exec(`DROP SEQUENCE ` + schema + `.raw_ingest_jobs_id_seq`)
+		_, err = pg.ExecContext(t.Context(), `DROP SEQUENCE `+schema+`.raw_ingest_jobs_id_seq`)
 		require.NoError(t, err)
 	}
 
@@ -457,7 +457,7 @@ func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
@@ -486,10 +486,10 @@ func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T
 		"application_name": "raw-guard-b",
 	})
 	require.NoError(t, err)
-	installerA, err := Open(dsnA, schemaTestSchema, true)
+	installerA, err := Open(t.Context(), dsnA, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, installerA.Close()) })
-	installerB, err := Open(dsnB, schemaTestSchema, true)
+	installerB, err := Open(t.Context(), dsnB, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, installerB.Close()) })
 

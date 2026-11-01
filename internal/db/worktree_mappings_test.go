@@ -1274,7 +1274,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
+		dstDB.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 	preCopied, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
@@ -1307,7 +1307,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 	require.NoError(t, err, "force dst updated_at ahead")
 
 	require.NoError(t,
-		dstDB.CopySessionMetadataFrom(srcPath),
+		dstDB.CopySessionMetadataFrom(t.Context(), srcPath),
 		"CopySessionMetadataFrom",
 	)
 
@@ -1386,7 +1386,7 @@ func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 			require.NoError(t, err, "create destination mapping")
 
 			require.NoError(t,
-				dst.CopySessionMetadataFrom(srcPath),
+				dst.CopySessionMetadataFrom(t.Context(), srcPath),
 				"copy source metadata",
 			)
 
@@ -1433,7 +1433,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRemovesDeletedPrecopy(
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
+		dstDB.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 
@@ -1446,7 +1446,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRemovesDeletedPrecopy(
 	require.NoError(t, srcDB.CloseConnections(ctx), "CloseConnections src")
 
 	require.NoError(t,
-		dstDB.CopySessionMetadataFrom(srcPath),
+		dstDB.CopySessionMetadataFrom(t.Context(), srcPath),
 		"CopySessionMetadataFrom",
 	)
 
@@ -1468,7 +1468,7 @@ func TestCopyWorktreeProjectMappingsFromOldSchemaDefaultsLayout(t *testing.T) {
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
+		dstDB.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 
@@ -1537,7 +1537,7 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 			require.NoError(t, err, "create destination mapping")
 
 			require.NoError(t,
-				destination.CopyWorktreeProjectMappingsFrom(sourcePath),
+				destination.CopyWorktreeProjectMappingsFrom(t.Context(), sourcePath),
 				"copy source mappings",
 			)
 
@@ -1572,7 +1572,7 @@ func TestCopySessionMetadataFromOldWorktreeMappingSchemaDefaultsLayout(t *testin
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopySessionMetadataFrom(srcPath),
+		dstDB.CopySessionMetadataFrom(t.Context(), srcPath),
 		"CopySessionMetadataFrom",
 	)
 
@@ -1601,13 +1601,13 @@ func TestCopyWorktreeMappingFromSchemaWithoutOriginalProjectDefaultsEmpty(
 		{
 			name: "resync pre-copy",
 			copy: func(dst *DB, source string) error {
-				return dst.CopyWorktreeProjectMappingsFrom(source)
+				return dst.CopyWorktreeProjectMappingsFrom(t.Context(), source)
 			},
 		},
 		{
 			name: "final metadata reconciliation",
 			copy: func(dst *DB, source string) error {
-				return dst.CopySessionMetadataFrom(source)
+				return dst.CopySessionMetadataFrom(t.Context(), source)
 			},
 		},
 	}

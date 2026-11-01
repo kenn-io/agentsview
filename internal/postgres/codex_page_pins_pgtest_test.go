@@ -52,7 +52,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 				SessionID: thread, Role: "assistant", Content: "answer saved only on page", SourceUUID: "page-answer",
 			}}))
 			require.NoError(t, source.SetSessionDataVersion(ctx, thread, 130))
-			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+			syncer, err := New(t.Context(), pgURL, schema, source, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			result, err := syncer.Push(ctx, true, nil)
@@ -80,8 +80,8 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			require.NoError(t, raw.Close())
 
 			rebuilt := testDB(t)
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-			require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+			require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), sourcePath))
 			for _, row := range []struct{ id, path, content, uuid string }{
 				{thread, headPath, "original answer", "head-answer"},
 				{page, pagePath, "answer saved only on page", "page-answer"},
@@ -101,9 +101,9 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 				}}))
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, row.id, db.CurrentDataVersion()))
 			}
-			_, err = rebuilt.CopyOrphanedDataFromExcluding(sourcePath, nil)
+			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, nil)
 			require.NoError(t, err)
-			require.NoError(t, rebuilt.CopySessionMetadataFrom(sourcePath))
+			require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), sourcePath))
 			opts := storage.PusherOptions{}
 			blocked := false
 			switch tc.name {
@@ -140,7 +140,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			if tc.name == "missing_unpinned_page" || tc.name == "filtered_unpinned_page" {
 				blocked = false
 			}
-			upgraded, err := New(pgURL, schema, rebuilt, "machine", true, opts)
+			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, opts)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 			if tc.name == "head_first" || tc.name == "page_first" {

@@ -53,7 +53,7 @@ INSERT INTO message_node_text VALUES(1,'Please check this'),(2,'Checked');`)
 	assert.Equal(t, "1", parsed.Outcome.Results[0].Result.Session.SourceSessionID)
 
 	f := newProjectionFixture(t)
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	var publicIDs []string
 	var firstReceipt string

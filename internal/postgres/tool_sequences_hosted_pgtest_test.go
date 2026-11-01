@@ -46,7 +46,7 @@ func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("transcript")))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	attempts := 0
@@ -65,7 +65,7 @@ func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			store := &toolSequenceExhaustedStore{HostedStore: h, fail: boundary, err: wrapped}
 			handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "hosted"}, store, nil).Handler()
-			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
 			req.RemoteAddr = "127.0.0.1:1234"
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, req)
@@ -97,7 +97,7 @@ func TestToolSequencesHosted_SourceBinding(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("first transcript")))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	before, err := h.resolve(t.Context(), "codex:portable")
@@ -120,7 +120,7 @@ func TestToolSequencesHosted_SourceBinding(t *testing.T) {
 	}}
 	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "hosted"}, store, nil).Handler()
 	request := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
@@ -157,10 +157,10 @@ func TestToolSequencesHosted_Mapping(t *testing.T) {
 	}
 	parent.Messages = append(parent.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleAssistant, HasToolUse: true, ToolCalls: []parser.ParsedToolCall{{ToolUseID: "recovered", ToolName: "Read", Category: "Read", ResultEvents: []parser.ParsedToolResultEvent{{Source: "tool_execution", Status: "completed", Content: "text"}}}}})
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
-	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
 	response := httptest.NewRecorder()
 	server.New(config.Config{Host: "127.0.0.1", InstallationID: "hosted"}, h, nil).Handler().ServeHTTP(response, request)

@@ -147,12 +147,12 @@ func buildExtractManager(
 // section is disabled it returns a reconcile-only scheduler if a generation
 // exists, and nil when none does.
 func setupRecallExtraction(
-	cfg config.Config, database *db.DB, idle *server.IdleTracker,
+	ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
 	if !cfg.Recall.Extract.Enabled {
 		database.SetExtractCandidateFindingsAllowed(
 			cfg.Recall.Extract.AllowCandidateFindings())
-		return setupExtractReconcileOnly(database, idle)
+		return setupExtractReconcileOnly(ctx, database, idle)
 	}
 	dist, err := resolveExtractDistillation(cfg.Recall.Extract)
 	if err != nil {
@@ -181,9 +181,9 @@ func setupRecallExtraction(
 // extraction was never run, so there is nothing to retract and a
 // default-disabled daemon starts no scheduler.
 func setupExtractReconcileOnly(
-	database *db.DB, idle *server.IdleTracker,
+	ctx context.Context, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
-	generations, err := database.ExtractGenerations(context.Background())
+	generations, err := database.ExtractGenerations(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("checking for extraction generations: %w", err)
 	}

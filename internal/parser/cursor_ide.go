@@ -650,7 +650,7 @@ func parseCursorIDEComposer(
 		ID:               cursorIDEIDPrefix + composerID,
 		Agent:            AgentCursorIDE,
 		Machine:          machine,
-		Project:          ExtractProjectFromCwd(cwd),
+		Project:          ExtractProjectFromCwdWithBranchContext(ctx, cwd, ""),
 		Cwd:              cwd,
 		GitBranch:        cursorIDELatestBranch(doc.TrackedGitRepos),
 		SessionName:      doc.Name,

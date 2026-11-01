@@ -43,7 +43,7 @@ func TestPoolsideRealTrajectoryBreakdown(t *testing.T) {
 
 func runRealPoolsideBreakdown(t *testing.T, path string) {
 	t.Helper()
-	sess, msgs, events, err := parsePoolsideSession(path, "", "realdata-validation")
+	sess, msgs, events, err := parsePoolsideSession(t.Context(), path, "", "realdata-validation")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 

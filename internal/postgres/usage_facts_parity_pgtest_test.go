@@ -94,14 +94,14 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	seedUsageParity1hCacheFixture(t, local)
 
 	syncer, err := New(
-		pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
+		t.Context(), pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "create PostgreSQL sync")
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err, "push parity fixture")
 
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "open PostgreSQL store")
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -184,12 +184,12 @@ func TestUsageCSVFiltersParity(t *testing.T) {
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
-	syncer, err := New(pgURL, schema, local, "host-a", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "host-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -253,12 +253,12 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 		},
 	}))
 
-	syncer, err := New(pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -468,7 +468,7 @@ func captureUsageParitySnapshot(
 	t *testing.T, store db.Store, filter db.UsageFilter,
 ) usageParitySnapshot {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	daily, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err, "daily usage")
 	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
@@ -532,7 +532,7 @@ func captureUsageParitySession(
 ) usageParitySession {
 	t.Helper()
 	session, err := store.GetSessionUsage(
-		context.Background(), "snapshot-winner", includeBreakdown)
+		t.Context(), "snapshot-winner", includeBreakdown)
 	require.NoError(t, err, "session usage")
 	require.NotNil(t, session, "session usage result")
 

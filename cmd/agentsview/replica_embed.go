@@ -188,7 +188,7 @@ func (e *replicaEmbedder) build(ctx context.Context) error {
 
 func (e *replicaEmbedder) resolveRecipe(ctx context.Context) (config.Config, error) {
 	applyClassifierConfig(e.appCfg)
-	store, err := e.backend.OpenStore(e.target)
+	store, err := e.backend.OpenStore(ctx, e.target)
 	if err != nil {
 		return config.Config{}, fmt.Errorf("opening %s: %w", e.backend.DisplayName(), err)
 	}

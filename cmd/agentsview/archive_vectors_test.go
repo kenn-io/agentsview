@@ -31,7 +31,7 @@ func TestUsageOnlyClearsExistingVectorContent(t *testing.T) {
 	cfg.Vector.Enabled = true
 	require.ErrorIs(t, requireVectorEnabled(cfg), db.ErrArchiveContentExcluded)
 	assert.Nil(t, newVectorPushSource(cfg))
-	assert.Nil(t, installDirectVectorSearcher(cfg, database))
+	assert.Nil(t, installDirectVectorSearcher(t.Context(), cfg, database))
 	serving, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
 	assert.Nil(t, serving.Scheduler)

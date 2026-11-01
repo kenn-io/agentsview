@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"encoding/json/v2"
 	"path/filepath"
 	"testing"
@@ -17,12 +16,12 @@ import (
 func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_read_progress_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
@@ -62,7 +61,7 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	detail, err := store.GetSession(ctx, sess.ID)

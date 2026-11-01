@@ -84,7 +84,7 @@ func TestCopyOrphanedDataFromDropsStaleCodexFormatThreadRows(t *testing.T) {
 	insertSession(t, dst, "codex:"+thread+"_"+page, "proj", withFile("codex", &archivedPath))
 	insertSession(t, dst, "traex:"+thread+"_"+page, "proj", withFile("traex", &datedPath))
 
-	ids, err := dst.CopyOrphanedDataFromExcluding(srcPath, nil)
+	ids, err := dst.CopyOrphanedDataFromExcluding(t.Context(), srcPath, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"augure-code:" + thread}, ids,
 		"only the row whose page file names no live session is an orphan")
@@ -140,13 +140,13 @@ func TestCopyOrphanedCodexPagePreservesArchivedContent(t *testing.T) {
 			dst := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
 			defer dst.Close()
 			dst.SetArchiveContent(tc.policy)
-			require.NoError(t, dst.CopyArchiveIdentityFrom(srcPath))
+			require.NoError(t, dst.CopyArchiveIdentityFrom(t.Context(), srcPath))
 			insertSession(t, dst, thread, "original-project")
 			insertMessages(t, dst, Message{SessionID: thread, Role: "assistant", Content: "Original answer", SourceUUID: "reply"})
-			ids, err := dst.CopyOrphanedDataFromExcluding(srcPath, nil)
+			ids, err := dst.CopyOrphanedDataFromExcluding(t.Context(), srcPath, nil)
 			require.NoError(t, err)
 			assert.Equal(t, []string{page}, ids)
-			require.NoError(t, dst.CopySessionMetadataFrom(srcPath))
+			require.NoError(t, dst.CopySessionMetadataFrom(t.Context(), srcPath))
 			messages, err := dst.GetAllMessages(ctx, page)
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
@@ -262,7 +262,7 @@ func TestCopyOrphanedCodexPageHonorsExclusionsAndUpgradeVersion(t *testing.T) {
 			if tc.trash {
 				require.NoError(t, dst.SoftDeleteSession(ctx, thread))
 			}
-			ids, err := dst.CopyOrphanedDataFromExcluding(srcPath, excluded)
+			ids, err := dst.CopyOrphanedDataFromExcluding(t.Context(), srcPath, excluded)
 			require.NoError(t, err)
 			if tc.wantPage {
 				assert.Equal(t, []string{page}, ids)
@@ -308,7 +308,7 @@ func TestCopySessionMetadataFromCodexPageProjectSnapshot(t *testing.T) {
 			require.NoError(t, src.Close())
 
 			dst := testDB(t)
-			require.NoError(t, dst.CopyArchiveIdentityFrom(srcPath))
+			require.NoError(t, dst.CopyArchiveIdentityFrom(t.Context(), srcPath))
 			for _, session := range []struct{ id, project, branch string }{
 				{thread, "sample", "feature"}, {page, "sample_feature", "other"},
 			} {
@@ -323,7 +323,7 @@ func TestCopySessionMetadataFromCodexPageProjectSnapshot(t *testing.T) {
 			}
 			before, err := dst.ListSessionProjectIdentitySnapshotsByID(ctx, []string{thread, page})
 			require.NoError(t, err)
-			require.NoError(t, dst.CopySessionMetadataFrom(srcPath))
+			require.NoError(t, dst.CopySessionMetadataFrom(t.Context(), srcPath))
 			after, err := dst.ListSessionProjectIdentitySnapshotsByID(ctx, []string{thread, page})
 			require.NoError(t, err)
 			if tc.version < 131 {
@@ -372,7 +372,7 @@ func TestCopyExcludedSessionsFromRetainsCodexThreadScope(t *testing.T) {
 			for _, phase := range []string{"upgrade", "later_rebuild"} {
 				dstPath := filepath.Join(t.TempDir(), phase+".db")
 				dst := testDBAtPath(t, dstPath, phase)
-				require.NoError(t, dst.CopyExcludedSessionsFrom(sourcePath))
+				require.NoError(t, dst.CopyExcludedSessionsFrom(t.Context(), sourcePath))
 				for _, tc := range []struct {
 					prefix       string
 					wantExcluded bool
@@ -415,7 +415,7 @@ func TestCopyExcludedCodexThreadFromArchiveOnly(t *testing.T) {
 			path := source.Path()
 			require.NoError(t, source.Close())
 			destination := testDB(t)
-			require.NoError(t, destination.CopyExcludedSessionsFrom(path))
+			require.NoError(t, destination.CopyExcludedSessionsFrom(t.Context(), path))
 			err = destination.UpsertSession(ctx, Session{ID: page, Agent: "codex", Project: "project", Machine: "local"})
 			if version < 131 {
 				require.ErrorIs(t, err, ErrSessionExcluded)

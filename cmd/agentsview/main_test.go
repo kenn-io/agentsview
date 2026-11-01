@@ -611,7 +611,7 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		Port:    port,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 	}
-	prepareReplicaServe = func(storage.Replica, config.Config, string, *ReplicaPushConfig) (replicaServeStartup, error) {
+	prepareReplicaServe = func(context.Context, storage.Replica, config.Config, string, *ReplicaPushConfig) (replicaServeStartup, error) {
 		return replicaServeStartup{
 			cfg: appCfg, ctx: ctx,
 			rtOpts: serveRuntimeOptions{
@@ -627,7 +627,7 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 	// This is only an orphan guard if the parent dies; normal completion is
 	// driven by the parent observing the warning on stdout.
 	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
-	runReplicaServe(pgReplica{}, appCfg, "", nil)
+	runReplicaServe(t.Context(), pgReplica{}, appCfg, "", nil)
 }
 
 func TestMustLoadConfig(t *testing.T) {

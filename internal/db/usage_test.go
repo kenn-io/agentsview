@@ -595,7 +595,7 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.NotNil(t, got[0].Cost, "Cost want %v", cost)
 	require.Equal(t, cost, *got[0].Cost, "Cost")
 	require.Equal(t, "session:hermes:event", got[0].DedupKey, "DedupKey")
-	fps, err := d.UsageEventFingerprints([]string{"hermes:event", "missing"})
+	fps, err := d.UsageEventFingerprints(t.Context(), []string{"hermes:event", "missing"})
 	require.NoError(t, err, "UsageEventFingerprints")
 	require.NotEmpty(t, fps["hermes:event"],
 		"expected non-empty usage event fingerprint")
@@ -5958,7 +5958,7 @@ func TestSortedUsageEventFingerprints(t *testing.T) {
 				id: tt.wantSorted, "missing": "",
 			}, sorted)
 
-			raw, err := database.UsageEventFingerprints(ids)
+			raw, err := database.UsageEventFingerprints(t.Context(), ids)
 			require.NoError(t, err)
 			assert.Equal(t, map[string]string{
 				id: tt.wantRaw, "missing": "",

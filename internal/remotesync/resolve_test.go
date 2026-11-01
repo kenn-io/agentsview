@@ -20,7 +20,7 @@ import (
 
 func resolveTargetsForTest(t *testing.T, cfg config.Config) remotesync.TargetSet {
 	t.Helper()
-	targets, err := remotesync.ResolveTargets(cfg)
+	targets, err := remotesync.ResolveTargets(t.Context(), cfg)
 	require.NoError(t, err)
 	return targets
 }

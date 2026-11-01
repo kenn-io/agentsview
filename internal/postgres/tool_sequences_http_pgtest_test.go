@@ -30,10 +30,10 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()
 
 	const schema = pgE2ESchema
-	store, err := postgres.NewStore(pgURL, schema, true)
+	store, err := postgres.NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	syncer, err := postgres.New(pgURL, schema, local, "tool-sequences-parity-host", true, storage.PusherOptions{})
+	syncer, err := postgres.New(t.Context(), pgURL, schema, local, "tool-sequences-parity-host", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
@@ -50,7 +50,7 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 
 func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID string) map[string]any {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+sessionID+"/tool-sequences", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+sessionID+"/tool-sequences", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)

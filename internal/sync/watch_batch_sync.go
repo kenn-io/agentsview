@@ -467,7 +467,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if stats.Deferred > 0 {
 		return stats, nil
 	}
-	e.signalSched.flushAllInline()
+	e.signalSched.flushAllInline(ctx)
 	e.clearCurrentProgress()
 	if work != nil {
 		if err := work(); err != nil {

@@ -177,7 +177,7 @@ func TestRunUsageDailyBreakdownJSONMachineLabelsFromDaemon(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:      true,
 			Breakdown: true,
 			NoSync:    true,
@@ -212,7 +212,7 @@ func TestRunUsageDailyBreakdownJSONEmitsEmptyMachineLabels(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON: true, Breakdown: true, NoSync: true,
 			Since: "2026-06-01", Until: "2026-06-01", Timezone: "UTC",
 		})
@@ -245,7 +245,7 @@ func TestRunUsageDailySkipsMachineLabelsWithoutJSONBreakdown(t *testing.T) {
 			cfg.NoSync = true
 			cfg.Timezone = "UTC"
 
-			captureStdout(t, func() { runUsageDaily(cfg) })
+			captureStdout(t, func() { runUsageDaily(t.Context(), cfg) })
 
 			assert.Zero(t, machineRequests)
 		})

@@ -300,7 +300,7 @@ func (m *discoveryDiskMap) forEach(
 func (m *discoveryDiskMap) addGeminiPath(
 	ctx context.Context, absolutePath, name string, replace bool,
 ) error {
-	project := ExtractProjectFromCwd(absolutePath)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, absolutePath, "")
 	if project == "" {
 		project = "unknown"
 	}

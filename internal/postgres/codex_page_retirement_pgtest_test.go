@@ -64,7 +64,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			}
 			require.NoError(t, source.InsertMessages(ctx, []db.Message{message}))
 			require.NoError(t, source.SetSessionDataVersion(ctx, thread, 130))
-			syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+			syncer, err := New(t.Context(), pgURL, schema, source, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			pushed, err := syncer.Push(ctx, true, nil)
@@ -107,10 +107,10 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 			rebuilt := testDB(t)
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-			require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+			require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), sourcePath))
 			// Resync copies trash before parsing; trashed files are not reparsed.
-			_, err = rebuilt.CopyTrashedDataFrom(sourcePath)
+			_, err = rebuilt.CopyTrashedDataFrom(t.Context(), sourcePath)
 			require.NoError(t, err)
 			sess.ID = page
 			sess.ParentSessionID = new(thread)
@@ -121,9 +121,9 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 			}
-			_, err = rebuilt.CopyOrphanedDataFromExcluding(sourcePath, nil)
+			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, nil)
 			require.NoError(t, err)
-			require.NoError(t, rebuilt.CopySessionMetadataFrom(sourcePath))
+			require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), sourcePath))
 			localHead, err := rebuilt.GetSessionFull(ctx, thread)
 			require.NoError(t, err)
 			if tc.localTrash {
@@ -155,7 +155,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 					ID: fmt.Sprintf("claude:earlier-%03d", i), Agent: "claude", Project: "sample", Machine: "machine",
 				}))
 			}
-			upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 			if tc.newerPage {
@@ -347,7 +347,7 @@ func TestCodexPageUpgradeIncrementalPushCopiesFriction(t *testing.T) {
 		SessionID: thread, Role: "assistant", Content: "answer saved only on page", SourceUUID: "page-answer",
 	}}))
 	require.NoError(t, local.SetSessionDataVersion(ctx, thread, 130))
-	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	pushed, err := syncer.Push(ctx, true, nil)
@@ -420,7 +420,7 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 			require.NoError(t, source.InsertMessages(ctx, []db.Message{message}))
 			require.NoError(t, source.SetSessionDataVersion(ctx, thread, 130))
 			projects := storage.PusherOptions{Projects: []string{"sample"}}
-			syncer, err := New(pgURL, schema, source, "machine", true, projects)
+			syncer, err := New(t.Context(), pgURL, schema, source, "machine", true, projects)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			pushed, err := syncer.Push(ctx, true, nil)
@@ -443,8 +443,8 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 			rebuilt := testDB(t)
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-			require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+			require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), sourcePath))
 			sess.ID = page
 			sess.Project = "other"
 			sess.ParentSessionID = new(thread)
@@ -454,7 +454,7 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 			require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
 			require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 
-			upgraded, err := New(pgURL, schema, rebuilt, "machine", true, projects)
+			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, projects)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 			if mode == "pinned during push" {
@@ -533,7 +533,7 @@ func TestFullPushKeepsRemotelyRestoredCodexThread(t *testing.T) {
 	}
 	require.NoError(t, source.InsertMessages(ctx, []db.Message{message}))
 	require.NoError(t, source.SetSessionDataVersion(ctx, thread, 130))
-	syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, source, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	pushed, err := syncer.Push(ctx, true, nil)
@@ -553,8 +553,8 @@ func TestFullPushKeepsRemotelyRestoredCodexThread(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	rebuilt := testDB(t)
-	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-	require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+	require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), sourcePath))
 	sess.ID = page
 	sess.ParentSessionID = new(thread)
 	sess.RelationshipType = "continuation"
@@ -563,7 +563,7 @@ func TestFullPushKeepsRemotelyRestoredCodexThread(t *testing.T) {
 	require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
 	require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 
-	upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+	upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	_, err = upgraded.Push(ctx, true, nil)

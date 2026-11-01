@@ -219,10 +219,10 @@ func shelleyFingerprint(h hash.Hash64) string {
 // loop does, so the meta digest and the stored file_hash match for
 // unchanged conversations. It shares the caller's open connection.
 func ListShelleyConversationMetas(
-	conn *sql.DB, dbPath string,
+	ctx context.Context, conn *sql.DB, dbPath string,
 ) ([]ShelleyConversationMeta, error) {
 	var metas []ShelleyConversationMeta
-	err := ForEachShelleyConversationMeta(context.Background(), conn, dbPath, func(meta ShelleyConversationMeta) error {
+	err := ForEachShelleyConversationMeta(ctx, conn, dbPath, func(meta ShelleyConversationMeta) error {
 		metas = append(metas, meta)
 		return nil
 	})
@@ -416,7 +416,7 @@ func parseShelleyConversationFromDB(ctx context.Context,
 		return nil, err
 	}
 	result, ok := buildShelleyParseResult(
-		conv, messages, fingerprint, dbPath, dbInfo, machine,
+		ctx, conv, messages, fingerprint, dbPath, dbInfo, machine,
 	)
 	if !ok {
 		return nil, nil
@@ -753,6 +753,7 @@ func shelleyTokenCount(n jsontext.Value) int {
 }
 
 func buildShelleyParseResult(
+	ctx context.Context,
 	conv shelleyConversationRow,
 	messages []ParsedMessage,
 	fingerprint string,
@@ -791,7 +792,7 @@ func buildShelleyParseResult(
 	}
 
 	cwd := strings.TrimSpace(conv.cwd)
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	if project == "" {
 		project = "unknown"
 	}
@@ -799,7 +800,7 @@ func buildShelleyParseResult(
 	// Count only genuine user turns: tool-result messages also carry
 	// the user role but hold their payload in ToolResults with empty
 	// Content, so the Content != "" guard excludes them (matching the
-	// Claude parser's firstMessageAndUserCount convention).
+	// Claude parser's firstMessageAndUserCountContext convention).
 	var firstMessage string
 	var userCount int
 	for _, m := range messages {

@@ -19,8 +19,8 @@ func TestVerifierBoundsConcurrentHandlersUntilTheyReturn(t *testing.T) {
 
 	key := signingKey(t)
 	state := filepath.Join(t.TempDir(), "replay.db")
-	require.NoError(t, InitReplay(state))
-	replay, err := OpenReplay(state)
+	require.NoError(t, InitReplay(t.Context(), state))
+	replay, err := OpenReplay(t.Context(), state)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = replay.Close() })
 
@@ -113,8 +113,8 @@ func TestVerifierBoundsConcurrentHandlersUntilTheyReturn(t *testing.T) {
 func TestVerifierQueuesBodiesWithoutBlockingReads(t *testing.T) {
 	key := signingKey(t)
 	state := filepath.Join(t.TempDir(), "replay.db")
-	require.NoError(t, InitReplay(state))
-	replay, err := OpenReplay(state)
+	require.NoError(t, InitReplay(t.Context(), state))
+	replay, err := OpenReplay(t.Context(), state)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = replay.Close() })
 	var handler http.Handler

@@ -103,12 +103,12 @@ func newVectorPushTestSync(
 	t *testing.T, pgURL, schema string,
 ) (*Sync, *db.DB, *sql.DB) {
 	t.Helper()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
@@ -200,7 +200,7 @@ func vdoc(
 func countRows(t *testing.T, pg *sql.DB, query string, args ...any) int {
 	t.Helper()
 	var n int
-	require.NoError(t, pg.QueryRow(query, args...).Scan(&n), "count: "+query)
+	require.NoError(t, pg.QueryRowContext(t.Context(), query, args...).Scan(&n), "count: "+query)
 	return n
 }
 
@@ -208,7 +208,7 @@ func countRows(t *testing.T, pg *sql.DB, query string, args ...any) int {
 func docOrdinal(t *testing.T, pg *sql.DB, docKey string) int {
 	t.Helper()
 	var ord int
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT ordinal FROM vector_documents WHERE doc_key = $1`, docKey,
 	).Scan(&ord), "ordinal of "+docKey)
 	return ord
@@ -222,7 +222,7 @@ func TestVectorPushChangeScoped(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_change_scoped_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -242,14 +242,14 @@ func TestVectorPushChangeScoped(t *testing.T) {
 	require.Equal(t, 2, res.Vectors.SessionsPushed)
 
 	var genID int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`,
 		"fp-scoped",
 	).Scan(&genID), "generation id")
 
 	// A PG-only state row no local session backs: eviction fodder that a
 	// scoped push must not touch.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 INSERT INTO vector_push_state (generation_id, session_id, doc_agg_hash)
 VALUES ($1, 'orphan', 'stale')`, genID)
 	require.NoError(t, err, "seed orphan state row")
@@ -296,12 +296,12 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 		"local hash read must be scoped to the changed session")
 
 	var aggHash string
-	require.NoError(t, pg.QueryRow(`
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
 SELECT doc_agg_hash FROM vector_push_state
  WHERE generation_id = $1 AND session_id = 'A'`, genID,
 	).Scan(&aggHash))
 	assert.Equal(t, "ha2", aggHash, "A's state row updates")
-	require.NoError(t, pg.QueryRow(`
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
 SELECT doc_agg_hash FROM vector_push_state
  WHERE generation_id = $1 AND session_id = 'B'`, genID,
 	).Scan(&aggHash))
@@ -314,7 +314,7 @@ SELECT COUNT(*) FROM vector_push_state
 
 	res, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "generation-wide Push")
-	require.NoError(t, pg.QueryRow(`
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
 SELECT doc_agg_hash FROM vector_push_state
  WHERE generation_id = $1 AND session_id = 'B'`, genID,
 	).Scan(&aggHash))
@@ -335,7 +335,7 @@ func TestVectorPushGenerationSwitchPromotesScopedPush(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_gen_switch_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -380,7 +380,7 @@ func TestVectorPushGenerationSwitchPromotesScopedPush(t *testing.T) {
 		"promotion reads the whole generation, not the changed subset")
 
 	var gen2 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp2",
 	).Scan(&gen2), "fp2 generation id")
 	assert.NotEqual(t, gen1, gen2, "the new fingerprint got a new generation id")
@@ -399,7 +399,7 @@ func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_gen_recreated_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -418,7 +418,7 @@ func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 
 	var gen1 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
 	).Scan(&gen1), "gen1 id")
 
@@ -429,7 +429,7 @@ func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
 		`DELETE FROM vector_generations WHERE id = $1`,
 	} {
-		_, err := pg.Exec(q, gen1)
+		_, err := pg.ExecContext(t.Context(), q, gen1)
 		require.NoError(t, err, q)
 	}
 	src.hashScopes = nil
@@ -446,7 +446,7 @@ func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
 		"promotion reads the whole generation, not the changed subset")
 
 	var gen2 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
 	).Scan(&gen2), "recreated generation id")
 	assert.NotEqual(t, gen1, gen2, "the generation row was recreated with a new id")
@@ -465,7 +465,7 @@ func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_tables_recreated_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -484,7 +484,7 @@ func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 
 	var gen1 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
 	).Scan(&gen1), "gen1 id")
 
@@ -498,7 +498,7 @@ func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
 		`DROP TABLE IF EXISTS vector_documents`,
 		`DROP TABLE IF EXISTS vector_generations`,
 	} {
-		_, err := pg.Exec(q)
+		_, err := pg.ExecContext(t.Context(), q)
 		require.NoError(t, err, q)
 	}
 	src.hashScopes = nil
@@ -507,7 +507,7 @@ func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
 	require.NoError(t, err, "scoped push after table recreation")
 
 	var gen2 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
 	).Scan(&gen2), "recreated generation id")
 	require.Equal(t, gen1, gen2,
@@ -530,7 +530,7 @@ func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_promotion_recheck_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -549,7 +549,7 @@ func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 	genID := res.Vectors.GenerationID
 	require.NotZero(t, genID)
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
 	)
 	require.NoError(t, err, "drop machine record")
@@ -585,7 +585,7 @@ func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_promotion_registration_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -634,7 +634,7 @@ func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_probe_race_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -653,7 +653,7 @@ func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *
 	require.NoError(t, err, "baseline Push")
 
 	var gen1 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-race",
 	).Scan(&gen1), "gen1 id")
 
@@ -664,7 +664,7 @@ func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *
 			`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
 			`DELETE FROM vector_generations WHERE id = $1`,
 		} {
-			_, err := pg.Exec(q, gen1)
+			_, err := pg.ExecContext(t.Context(), q, gen1)
 			require.NoError(t, err, q)
 		}
 		gen2, err := ensureVectorGeneration(
@@ -683,7 +683,7 @@ func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *
 		"recreated-generation race must reopen the full export")
 
 	var gen2 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-race",
 	).Scan(&gen2), "recreated generation id")
 	assert.NotEqual(t, gen1, gen2, "the recreated generation replaced the old id")
@@ -701,7 +701,7 @@ func TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide(t *testi
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_post_apply_race_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -720,7 +720,7 @@ func TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide(t *testi
 	require.NoError(t, err, "baseline Push")
 
 	var gen1 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-post",
 	).Scan(&gen1), "gen1 id")
 
@@ -733,7 +733,7 @@ func TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide(t *testi
 			`DROP TABLE IF EXISTS vector_documents`,
 			`DROP TABLE IF EXISTS vector_generations`,
 		} {
-			_, err := pg.Exec(q)
+			_, err := pg.ExecContext(t.Context(), q)
 			require.NoError(t, err, q)
 		}
 		unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
@@ -771,7 +771,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_deferred_witness_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -792,7 +792,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NotZero(t, genID)
 	witnessKey, err := sync.vectorGenerationWitnessKey(t.Context())
 	require.NoError(t, err, "vectorGenerationWitnessKey")
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
 	)
 	require.NoError(t, err, "drop machine record")
@@ -844,7 +844,7 @@ func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *test
 	pgURL := testPGURL(t)
 	_, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_filtered_witness_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "alpha", "alpha")
 	seedVectorSessionProject(t, localDB, "beta-1", "beta")
@@ -902,7 +902,7 @@ func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *test
 		`DROP TABLE IF EXISTS vector_documents`,
 		`DROP TABLE IF EXISTS vector_generations`,
 	} {
-		_, err := pg.Exec(q)
+		_, err := pg.ExecContext(t.Context(), q)
 		require.NoError(t, err, q)
 	}
 
@@ -938,7 +938,7 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_full_witness_race_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -957,7 +957,7 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 
 	var gen1 int64
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-full-race",
 	).Scan(&gen1), "gen1 id")
 	witnessKey, err := sync.vectorGenerationWitnessKey(ctx)
@@ -978,7 +978,7 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 			`DROP TABLE IF EXISTS vector_documents`,
 			`DROP TABLE IF EXISTS vector_generations`,
 		} {
-			_, err := pg.Exec(q)
+			_, err := pg.ExecContext(t.Context(), q)
 			require.NoError(t, err, q)
 		}
 		unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
@@ -1019,7 +1019,7 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_roundtrip_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1086,7 +1086,7 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, _ := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_noop_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1119,7 +1119,7 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_full_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 
@@ -1139,7 +1139,7 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 	require.True(t, ok)
 
 	// Silently lose the chunk while push state still says "current".
-	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM `+vectorChunkTable(genID))
 	require.NoError(t, err, "corrupting chunk table")
 
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
@@ -1156,7 +1156,7 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 		countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)),
 		"full push restores the missing chunk")
 
-	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM `+vectorChunkTable(genID))
 	require.NoError(t, err)
 	repair, err := sync.PushWithOptions(ctx, storage.PushOptions{
 		FullVectors: true, ScopeVectorsToChangedSessions: true,
@@ -1177,7 +1177,7 @@ func TestVectorPushRepairsNamedSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_repair_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	sync.vectorSource = &fakeVectorSource{
@@ -1194,7 +1194,7 @@ func TestVectorPushRepairsNamedSessions(t *testing.T) {
 	genID, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-repair")
 	require.NoError(t, err)
 	require.True(t, ok)
-	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM `+vectorChunkTable(genID))
 	require.NoError(t, err, "corrupting chunk table")
 
 	res, err := sync.PushWithOptions(ctx, storage.PushOptions{
@@ -1217,7 +1217,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_deferred_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1251,7 +1251,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 	assert.Equal(t, 1, res.SessionsUnchanged, "B is unchanged")
 
 	var content string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "A#0",
 	).Scan(&content))
 	assert.Equal(t, "old", content, "deferred session keeps its prior vectors")
@@ -1261,7 +1261,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 	require.NoError(t, err, "healing pushVectors")
 	assert.Equal(t, 0, res.SessionsDeferred)
 	assert.Equal(t, 1, res.SessionsPushed)
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "A#0",
 	).Scan(&content))
 	assert.Equal(t, "new", content)
@@ -1271,7 +1271,7 @@ func TestVectorPushContentChange(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_content_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1301,7 +1301,7 @@ func TestVectorPushContentChange(t *testing.T) {
 	assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
 
 	var content, hash string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content, content_hash FROM vector_documents WHERE doc_key = $1`,
 		"A#0").Scan(&content, &hash), "read updated doc")
 	assert.Equal(t, "c1-updated", content)
@@ -1312,7 +1312,7 @@ func TestVectorPushEviction(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_evict_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1358,7 +1358,7 @@ func TestVectorPushNoActiveGeneration(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_nogen_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	sync.vectorSource = &fakeVectorSource{hasGen: false}
@@ -1375,7 +1375,7 @@ func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_sharedgen_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "X")
 	seedVectorSession(t, localDB, "Y")
@@ -1437,7 +1437,7 @@ func TestVectorPushOrdinalShift(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_shift_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 
@@ -1489,7 +1489,7 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_shrink_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 
@@ -1574,7 +1574,7 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_conflict_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1593,7 +1593,7 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	require.NoError(t, err, "first Push")
 
 	// Hand A to another machine on the PG side.
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`UPDATE sessions SET owner_marker = 'other-machine' WHERE id = $1`, "A")
 	require.NoError(t, err, "reassign owner")
 
@@ -1608,7 +1608,7 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	assert.Equal(t, 1, res.Conflicts)
 	assert.Equal(t, 0, res.SessionsPushed)
 	var content string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "cA0",
 	).Scan(&content))
 	assert.Equal(t, "ca", content, "conflicted doc left untouched")
@@ -1639,7 +1639,7 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_legacy_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1659,10 +1659,10 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 
 	// Rewrite both PG rows as legacy (empty marker): A owned by a foreign
 	// machine, B carrying this pusher's own machine name.
-	_, err = pg.Exec(`UPDATE sessions
+	_, err = pg.ExecContext(t.Context(), `UPDATE sessions
 	   SET owner_marker = '', machine = 'other-machine' WHERE id = $1`, "A")
 	require.NoError(t, err, "make A a foreign legacy row")
-	_, err = pg.Exec(`UPDATE sessions
+	_, err = pg.ExecContext(t.Context(), `UPDATE sessions
 	   SET owner_marker = '', machine = 'test-machine' WHERE id = $1`, "B")
 	require.NoError(t, err, "make B an owned legacy row")
 
@@ -1679,11 +1679,11 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 	assert.Equal(t, 1, res.Conflicts, "foreign legacy row is a conflict")
 	assert.Equal(t, 1, res.SessionsPushed, "owned legacy row self-heals")
 	var content string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "lA0",
 	).Scan(&content))
 	assert.Equal(t, "ca", content, "foreign legacy doc left untouched")
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "lB0",
 	).Scan(&content))
 	assert.Equal(t, "cb-new", content)
@@ -1710,7 +1710,7 @@ func TestVectorPushForeignMachineSessionsNotConflicts(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_foreign_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "mine")
 	seedVectorSession(t, localDB, "theirs")
@@ -1731,7 +1731,7 @@ func TestVectorPushForeignMachineSessionsNotConflicts(t *testing.T) {
 	require.NoError(t, err, "first Push")
 
 	// Hand "theirs" and "shared" to another machine on the PG side.
-	_, err = pg.Exec(`UPDATE sessions SET owner_marker = 'other-machine'
+	_, err = pg.ExecContext(t.Context(), `UPDATE sessions SET owner_marker = 'other-machine'
 	   WHERE id IN ('theirs', 'shared')`)
 	require.NoError(t, err, "reassign owners")
 
@@ -1773,7 +1773,7 @@ func TestVectorPushEvictionUsesStableExportSnapshot(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_unready_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1822,7 +1822,7 @@ func TestVectorPushSkipsWhenSourceUnreadyAtBeginExport(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_begin_unready_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1877,7 +1877,7 @@ func TestVectorPushProjectScope(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_scope_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "alpha", "alpha")
 	seedVectorSessionProject(t, localDB, "beta", "beta")
@@ -1915,10 +1915,10 @@ func TestVectorPushProjectScope(t *testing.T) {
 	assert.Equal(t, 0, res.SessionsEvicted, "beta must not be evicted")
 
 	var alphaContent, betaContent string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "alpha#0",
 	).Scan(&alphaContent))
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "beta#0",
 	).Scan(&betaContent))
 	assert.Equal(t, "a-updated", alphaContent, "in-scope alpha updated")
@@ -1928,7 +1928,7 @@ func TestVectorPushProjectScope(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	var betaHash string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT doc_agg_hash FROM vector_push_state
 		 WHERE generation_id = $1 AND session_id = $2`, genID, "beta",
 	).Scan(&betaHash))
@@ -1946,7 +1946,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_localmove_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "mover", "alpha")
 
@@ -1981,7 +1981,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 	}
 
 	var pgProject string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT project FROM sessions WHERE id = $1`, "mover",
 	).Scan(&pgProject))
 	require.Equal(t, "alpha", pgProject, "PG project is still stale alpha")
@@ -1995,7 +1995,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 	assert.Equal(t, 0, res.Conflicts, "moved-out session is not a conflict")
 
 	var content string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT content FROM vector_documents WHERE doc_key = $1`, "mover#0",
 	).Scan(&content))
 	assert.Equal(t, "orig", content, "out-of-scope vector left untouched")
@@ -2004,7 +2004,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	var stateHash string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT doc_agg_hash FROM vector_push_state
 		 WHERE generation_id = $1 AND session_id = $2`, genID, "mover",
 	).Scan(&stateHash))
@@ -2019,7 +2019,7 @@ func TestVectorPushSkipsDocExportForMissingSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, _ := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_skipexport_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// "A" is a real session (pushed to PG). "ghost" is local-only: it never gets
 	// a PG sessions row, so the vector push must skip it.
@@ -2054,7 +2054,7 @@ func TestVectorPushOrphanStateEvicted(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_orphan_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -2077,7 +2077,7 @@ func TestVectorPushOrphanStateEvicted(t *testing.T) {
 
 	// Session A's row disappears (e.g. deleted) but its vector state lingers,
 	// and A leaves local so it is an eviction candidate.
-	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, "A")
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = $1`, "A")
 	require.NoError(t, err, "delete session row")
 	delete(fake.hashes, "A")
 	delete(fake.docs, "A")
@@ -2108,7 +2108,7 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_diverge_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 
@@ -2173,7 +2173,7 @@ func TestVectorEvictionRechecksOwnershipInTx(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_evict_recheck_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -2244,7 +2244,7 @@ func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_evict_failed_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
 
@@ -2298,7 +2298,7 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_evict_scope_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "moved", "alpha")
 	seedVectorSessionProject(t, localDB, "gone-out", "beta")
@@ -2368,12 +2368,12 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 	const role = "agentsview_vector_restricted"
 	const rolePassword = "agentsview_vector_restricted_pw"
 
-	admin, err := Open(pgURL, schema, true)
+	admin, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open admin")
 	t.Cleanup(func() { _ = admin.Close() })
 
-	ctx := context.Background()
-	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, admin, schema))
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, admin)
@@ -2389,33 +2389,33 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 		"vector_push_state", "vector_documents",
 		"vector_generation_machines", "vector_generations",
 	} {
-		_, err = admin.Exec(`DROP TABLE IF EXISTS ` + tbl + ` CASCADE`)
+		_, err = admin.ExecContext(t.Context(), `DROP TABLE IF EXISTS `+tbl+` CASCADE`)
 		require.NoError(t, err, tbl)
 	}
 
-	_, _ = admin.Exec(`DROP OWNED BY ` + role) // clear grants from prior runs
-	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
-	_, err = admin.Exec(
-		`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role) // clear grants from prior runs
+	_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
+	_, err = admin.ExecContext(t.Context(),
+		`CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 	require.NoError(t, err, "create restricted role")
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-		_, _ = admin.Exec(`DROP OWNED BY ` + role)
-		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 	})
 	for _, grant := range []string{
 		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` +
 			schema + ` TO ` + role,
 	} {
-		_, err = admin.Exec(grant)
+		_, err = admin.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 
 	restrictedURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	restrictedURL.User = url.UserPassword(role, rolePassword)
-	restricted, err := Open(restrictedURL.String(), schema, true)
+	restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
@@ -2457,10 +2457,10 @@ func TestUsageOnlyPushClearsVectors(t *testing.T) {
 	_, err := sync.Push(t.Context(), true, nil)
 	require.NoError(t, err)
 	var count int
-	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents`).Scan(&count))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents`).Scan(&count))
 	require.Equal(t, 1, count)
 	// A different archive's indexed document must survive this policy change.
-	_, err = pg.Exec(`INSERT INTO vector_documents (doc_key, session_id, ordinal, ordinal_end, content, content_hash) VALUES ('other#0', 'other-session', 0, 0, 'other archive text', 'other-hash')`)
+	_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_documents (doc_key, session_id, ordinal, ordinal_end, content, content_hash) VALUES ('other#0', 'other-session', 0, 0, 'other archive text', 'other-hash')`)
 	require.NoError(t, err)
 	local.SetArchiveContent(config.ArchiveContentUsage)
 	seedVectorSession(t, local, "usage-session")
@@ -2469,11 +2469,11 @@ func TestUsageOnlyPushClearsVectors(t *testing.T) {
 		result, err := sync.Push(t.Context(), full, nil)
 		require.NoError(t, err)
 		assert.True(t, result.Vectors.Skipped)
-		require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id = 'usage-session'`).Scan(&count))
+		require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id = 'usage-session'`).Scan(&count))
 		assert.Zero(t, count)
-		require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id = 'other-session'`).Scan(&count))
+		require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id = 'other-session'`).Scan(&count))
 		assert.Equal(t, 1, count)
-		require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_push_state`).Scan(&count))
+		require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state`).Scan(&count))
 		assert.Zero(t, count)
 	}
 }
@@ -2501,7 +2501,7 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 				generations = append(generations, result.Vectors.GenerationID)
 			}
 			// Another archive owns this session now, even though its machine matches.
-			_, err := pg.Exec(`UPDATE sessions SET owner_marker = 'another-archive' WHERE id = 'other-owner'`)
+			_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET owner_marker = 'another-archive' WHERE id = 'other-owner'`)
 			require.NoError(t, err)
 			for _, id := range []string{"removed", "other-owner"} {
 				require.NoError(t, local.DeleteSession(t.Context(), id))
@@ -2526,12 +2526,12 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 				{"removed", 0, 0}, {"other-owner", 1, 2},
 			} {
 				var count int
-				require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id = $1`, tc.id).Scan(&count))
+				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id = $1`, tc.id).Scan(&count))
 				assert.Equal(t, tc.docs, count, tc.id)
-				require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_push_state WHERE session_id = $1`, tc.id).Scan(&count))
+				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id = $1`, tc.id).Scan(&count))
 				assert.Equal(t, tc.states, count, tc.id)
 				for _, generation := range generations {
-					require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(generation)+` WHERE doc_key = $1`, tc.id+"#0").Scan(&count))
+					require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(generation)+` WHERE doc_key = $1`, tc.id+"#0").Scan(&count))
 					assert.Equal(t, tc.docs, count, "generation %d, session %s", generation, tc.id)
 				}
 			}

@@ -21,7 +21,7 @@ import (
 // parseOpenCodeDBSession), reproducing the deleted ParseOpenCodeDB
 // whole-database free function for the retained parse tests.
 func parseOpenCodeAll(dbPath, machine string) ([]ParseResult, error) {
-	metas, err := ListOpenCodeSessionMeta(dbPath)
+	metas, err := ListOpenCodeSessionMeta(context.Background(), dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -2240,7 +2240,7 @@ func TestListOpenCodeSessionMeta(t *testing.T) {
 	defer db.Close()
 	seedStandardSession(t, seeder)
 
-	metas, err := ListOpenCodeSessionMeta(dbPath)
+	metas, err := ListOpenCodeSessionMeta(t.Context(), dbPath)
 	require.NoError(t, err, "ListOpenCodeSessionMeta")
 	assertEq(t, "metas len", len(metas), 1)
 
@@ -2256,7 +2256,7 @@ func TestListOpenCodeSessionMeta(t *testing.T) {
 
 func TestListOpenCodeSessionMeta_NonexistentDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "nope.db")
-	metas, err := ListOpenCodeSessionMeta(dbPath)
+	metas, err := ListOpenCodeSessionMeta(t.Context(), dbPath)
 	require.NoError(t, err, "unexpected error")
 	assertEq(t, "metas len", len(metas), 0)
 }
@@ -2288,7 +2288,7 @@ func TestListOpenCodeSessionWatermarkMeta(t *testing.T) {
 	)
 	require.NoError(t, err, "raise project time")
 
-	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+	metas, err := ListOpenCodeSessionWatermarkMeta(t.Context(), dbPath)
 	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta")
 	require.Len(t, metas, 1)
 
@@ -2349,11 +2349,11 @@ func TestListOpenCodeSessionWatermarkMeta_LegacySchema(t *testing.T) {
 		"ses_legacy", "prj_legacy", "", "Legacy", 1700000000000, 1700000060000,
 	)
 
-	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+	metas, err := ListOpenCodeSessionWatermarkMeta(t.Context(), dbPath)
 	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta legacy")
 	require.Len(t, metas, 1)
 
-	full, err := ListOpenCodeSessionMeta(dbPath)
+	full, err := ListOpenCodeSessionMeta(t.Context(), dbPath)
 	require.NoError(t, err, "ListOpenCodeSessionMeta legacy")
 	require.Len(t, full, 1)
 

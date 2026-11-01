@@ -188,7 +188,7 @@ func clearPGClassifierHash(
 ) error {
 	applyClassifierConfig(cfg)
 	pg, err := postgres.Open(
-		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
+		ctx, pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
 	)
 	if err != nil {
 		return err

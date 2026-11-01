@@ -55,9 +55,9 @@ func newKimiSourceSet(roots []string) JSONLSourceSet {
 }
 
 func kimiParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseKimiSession(path, req.Source.ProjectHint, req.Machine)
+	sess, msgs, err := parseKimiSession(ctx, path, req.Source.ProjectHint, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

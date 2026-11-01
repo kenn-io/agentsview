@@ -170,7 +170,7 @@ func TestPlanUsageCountsParity(t *testing.T) {
 
 	if pgURL := os.Getenv("TEST_PG_URL"); pgURL != "" {
 		dropSchema := func() {
-			store, err := postgresstore.NewStore(pgURL, planUsageParitySchema, true)
+			store, err := postgresstore.NewStore(t.Context(), pgURL, planUsageParitySchema, true)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, store.Close()) }()
 			_, err = store.DB().ExecContext(context.WithoutCancel(ctx), "DROP SCHEMA IF EXISTS "+planUsageParitySchema+" CASCADE")
@@ -178,7 +178,7 @@ func TestPlanUsageCountsParity(t *testing.T) {
 		}
 		dropSchema()
 		t.Cleanup(dropSchema)
-		syncer, err := postgresstore.New(pgURL, planUsageParitySchema, local,
+		syncer, err := postgresstore.New(t.Context(), pgURL, planUsageParitySchema, local,
 			"parity-machine", true, storage.PusherOptions{})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -186,7 +186,7 @@ func TestPlanUsageCountsParity(t *testing.T) {
 		res, err := syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
 		require.Equal(t, sessions, res.SessionsPushed)
-		pg, err := postgresstore.NewStore(pgURL, planUsageParitySchema, true)
+		pg, err := postgresstore.NewStore(t.Context(), pgURL, planUsageParitySchema, true)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, pg.Close()) })
 		stores["postgres"] = pg

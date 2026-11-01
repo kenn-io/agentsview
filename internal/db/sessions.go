@@ -1733,7 +1733,9 @@ func upsertSessionExec(
 	s Session,
 	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
-	_ = ValidateAndSanitize(&s, nil, nil)
+	if _, err := ValidateAndSanitizeContext(ctx, &s, nil, nil); err != nil {
+		return sessionUpsertResult{}, err
+	}
 
 	// Check exclusion/trash state under the write lock to avoid a race with
 	// concurrent DeleteSession/EmptyTrash/RestoreSession.
@@ -2935,10 +2937,10 @@ func (db *DB) SetSessionDataVersionsContext(
 
 // SetExistingSessionDataVersions atomically stamps every listed session that
 // already exists, ignoring IDs that have not been inserted yet.
-func (db *DB) SetExistingSessionDataVersions(ids []string, version int) error {
-	return db.setSessionDataVersions(
-		context.Background(), ids, version, false,
-	)
+func (db *DB) SetExistingSessionDataVersions(
+	ctx context.Context, ids []string, version int,
+) error {
+	return db.setSessionDataVersions(ctx, ids, version, false)
 }
 
 func (db *DB) setSessionDataVersions(

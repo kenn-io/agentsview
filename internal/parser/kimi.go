@@ -132,15 +132,15 @@ func kimiIDComponentsValid(components ...string) bool {
 // ToolCall, ToolResult, StatusUpdate, TurnEnd). Kimi Code sessions store
 // top-level records (turn.prompt, context.append_loop_event, usage.record).
 func parseKimiSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	return parseKimiSessionWithFallbackModel(
-		path, project, machine, defaultKimiModel,
+		ctx, path, project, machine, defaultKimiModel,
 	)
 }
 
 func parseKimiSessionWithFallbackModel(
-	path, project, machine, fallbackModel string,
+	ctx context.Context, path, project, machine, fallbackModel string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -153,7 +153,7 @@ func parseKimiSessionWithFallbackModel(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 
 	// Extract session ID from path. Both legacy and .kimi-code
@@ -390,7 +390,7 @@ func parseKimiSessionWithFallbackModel(
 						ToolName:  fnName,
 						Category:  NormalizeToolCategory(fnName),
 						InputJSON: fnArgs,
-						SkillName: inferToolSkillName(context.Background(),
+						SkillName: inferToolSkillName(ctx,
 							fnName, fnArgs,
 						),
 					}
@@ -606,7 +606,7 @@ func parseKimiSessionWithFallbackModel(
 				ToolName:  fnName,
 				Category:  NormalizeToolCategory(fnName),
 				InputJSON: fnArgs,
-				SkillName: inferToolSkillName(context.Background(),
+				SkillName: inferToolSkillName(ctx,
 					fnName, fnArgs,
 				),
 			}

@@ -114,7 +114,7 @@ func TestGrokTimestampLookingPrompt(t *testing.T) {
 	writeGrokFixtureFile(t, filepath.Join(sessionDir, "chat_history.jsonl"),
 		`{"type":"user","content":"`+literal+`"}`+"\n")
 
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "agentsview", "test-machine",
 	)
 	require.NoError(t, err)
@@ -161,7 +161,7 @@ func TestParseGrokChatHistoryUnknownTypeFallsBackToLegacyRole(t *testing.T) {
 		`{"type":"future_metadata","role":"user","content":"legacy question"}`+"\n",
 	)
 
-	messages, malformed, err := parseGrokChatHistory(path)
+	messages, malformed, err := parseGrokChatHistory(t.Context(), path)
 	require.NoError(t, err)
 	assert.Zero(t, malformed)
 	require.Len(t, messages, 1)
@@ -214,7 +214,7 @@ func TestParseGrokChatHistoryReasoningShapes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "chat_history.jsonl")
 			writeGrokFixtureFile(t, path, strings.Join(tt.history, "\n")+"\n")
-			messages, malformed, err := parseGrokChatHistory(path)
+			messages, malformed, err := parseGrokChatHistory(t.Context(), path)
 			require.NoError(t, err)
 			assert.Zero(t, malformed)
 			require.Len(t, messages, tt.wantCount)
@@ -237,7 +237,7 @@ func TestParseGrokChatHistoryInlineReasoningOverridesPending(t *testing.T) {
 		`{"type":"reasoning","summary":[{"type":"summary_text","text":"pending"}]}`,
 		`{"type":"assistant","content":"answer","reasoning":{"text":"inline"}}`,
 	}, "\n")+"\n")
-	messages, malformed, err := parseGrokChatHistory(path)
+	messages, malformed, err := parseGrokChatHistory(t.Context(), path)
 	require.NoError(t, err)
 	assert.Zero(t, malformed)
 	require.Len(t, messages, 1)
@@ -250,7 +250,7 @@ func TestParseGrokChatHistoryDeduplicatesRawBackendToolCalls(t *testing.T) {
 		`{"type":"backend_tool_call","kind":{"tool_type":"web_search","id":"ws_same","status":"completed","action":{"type":"search","query":"same query","sources":[]}}}`,
 		`{"type":"assistant","content":"answer","raw_output":[{"type":"web_search_call","id":"ws_same","status":"completed","action":{"type":"search","query":"same query","sources":[]}}]}`,
 	}, "\n")+"\n")
-	messages, malformed, err := parseGrokChatHistory(path)
+	messages, malformed, err := parseGrokChatHistory(t.Context(), path)
 	require.NoError(t, err)
 	assert.Zero(t, malformed)
 	require.Len(t, messages, 2)
@@ -272,7 +272,7 @@ func TestParseGrokChatHistoryPreservesCodeInterpreterInput(t *testing.T) {
 			`,"container_id":"container_counterfactual","id":"ci_counterfactual","outputs":[{"type":"logs","logs":"finished"}],"status":"completed"}}`+"\n",
 	)
 
-	messages, malformed, err := parseGrokChatHistory(path)
+	messages, malformed, err := parseGrokChatHistory(t.Context(), path)
 	require.NoError(t, err)
 	assert.Zero(t, malformed)
 	require.Len(t, messages, 1)
@@ -318,7 +318,7 @@ func TestParseGrokChatHistoryDropsOrphanReasoning(t *testing.T) {
 			}, tt.trailing...)
 			path := filepath.Join(t.TempDir(), "chat_history.jsonl")
 			writeGrokFixtureFile(t, path, strings.Join(rows, "\n")+"\n")
-			messages, malformed, err := parseGrokChatHistory(path)
+			messages, malformed, err := parseGrokChatHistory(t.Context(), path)
 			require.NoError(t, err)
 			assert.Zero(t, malformed)
 			require.Len(t, messages, tt.wantCount)
@@ -500,7 +500,7 @@ func TestGrokProviderPreservesSignalPeakOverCumulativeUsageInput(t *testing.T) {
 	}`)
 	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), `{"params":{"update":{"usage":{"inputTokens":8192,"outputTokens":7,"cachedReadTokens":96}}}}`)
 
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "cwd-key", "local",
 	)
 	require.NoError(t, err)
@@ -522,7 +522,7 @@ func parseGrokUsageFixture(t *testing.T, updates string) ParseResult {
 		"updatedAt":"2026-07-08T10:30:00Z"
 	}`)
 	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), updates)
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "cwd-key", "local",
 	)
 	require.NoError(t, err)
@@ -539,7 +539,7 @@ func parseGrokUsageFixtureWithSummary(
 		t, filepath.Join(sessionDir, "summary.json"), summaryJSON,
 	)
 	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), updates)
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "cwd-key", "local",
 	)
 	require.NoError(t, err)
@@ -874,7 +874,7 @@ func TestGrokProviderEnrichesTranscriptWithUpdateTimestamps(t *testing.T) {
 		}, "\n")+"\n",
 	)
 
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
 	)
 	require.NoError(t, err)
@@ -925,7 +925,7 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 		}, "\n")+"\n",
 	)
 
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
 	)
 	require.NoError(t, err)
@@ -981,7 +981,7 @@ func TestGrokProviderUpdateTimestampsRejectMismatchedToolIDs(t *testing.T) {
 		}, "\n")+"\n",
 	)
 
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
 	)
 	require.NoError(t, err)
@@ -1024,7 +1024,7 @@ func TestGrokProviderUpdateTimestampsSeparateParallelBackendTools(t *testing.T) 
 		}, "\n")+"\n",
 	)
 
-	result, err := ParseGrokSummary(
+	result, err := ParseGrokSummary(t.Context(),
 		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
 	)
 	require.NoError(t, err)

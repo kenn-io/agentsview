@@ -59,12 +59,12 @@ func readIdentityRows(
 func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_projident_batch_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
@@ -232,11 +232,11 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_project_identity_chunk_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
@@ -289,11 +289,11 @@ func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_project_identity_salt_mismatch_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
@@ -305,15 +305,15 @@ func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 
 func TestPGUsageGroups(t *testing.T) {
 	const schema = "agentsview_usage_groups_test"
-	pg, err := Open(testPGURL(t), schema, true)
+	pg, err := Open(t.Context(), testPGURL(t), schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 	dbtest.SeedUsageGroups(t, pg)
 	dbtest.AssertUsageGroups(t, &Store{pg: pg})
-	_, err = pg.Exec(`UPDATE sessions SET display_name = 'Individual run' WHERE id = 'group-other'`)
+	_, err = pg.ExecContext(t.Context(), `UPDATE sessions SET display_name = 'Individual run' WHERE id = 'group-other'`)
 	require.NoError(t, err)
 	store := &Store{pg: pg}
 	for _, grouped := range []bool{false, true} {

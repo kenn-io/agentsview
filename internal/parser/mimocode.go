@@ -10,8 +10,8 @@ import (
 // mimocode: ID prefix. The OpenCode-format provider owns parsing and
 // relabels results through relabelOpenCodeSessionAsMiMoCode.
 
-func ListMiMoCodeSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
-	metas, err := ListOpenCodeSessionMeta(dbPath)
+func ListMiMoCodeSessionMeta(ctx context.Context, dbPath string) ([]OpenCodeSessionMeta, error) {
+	metas, err := ListOpenCodeSessionMeta(ctx, dbPath)
 	if err != nil {
 		return nil, err
 	}

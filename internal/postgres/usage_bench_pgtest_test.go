@@ -100,24 +100,24 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	schema := pgUsageBenchmarkSchema(t)
 	admin, err := sql.Open("pgx", pgURL)
 	require.NoError(err)
-	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+	_, err = admin.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 	require.NoError(err)
 	require.NoError(admin.Close())
 
 	local, err := db.Open(t.Context(), t.TempDir()+"/usage-bench.db")
 	require.NoError(err)
 	seedUsageParityFixture(t, local)
-	syncer, err := New(pgURL, schema, local, "bench-machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "bench-machine", true, storage.PusherOptions{})
 	require.NoError(err)
 	require.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(err)
 	t.Cleanup(func() {
 		_ = remote.Close()
 		_ = syncer.Close()
 		_ = local.Close()
 		admin, _ := sql.Open("pgx", pgURL)
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 		_ = admin.Close()
 	})
 
@@ -391,7 +391,7 @@ func BenchmarkPGUsageRead(b *testing.B) {
 	loadedSessions, loadedMessages := pgUsageRemoteCardinality(b, fixture.remote)
 	require.Equal(b, 6+pgUsageBenchmarkBulkSessions, loadedSessions)
 	require.Equal(b, 5+pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession, loadedMessages)
-	ctx := context.Background()
+	ctx := b.Context()
 	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := pgUsageBenchmarkFilter(tc)
@@ -505,7 +505,7 @@ func pgUsageBenchmarkWindow(column string, filter db.UsageFilter) (string, []any
 }
 
 func BenchmarkPGUsageRefresh(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	b.Run("ColdPush", func(b *testing.B) {
 		fixture := openPGUsageBenchmarkFixture(b)
 		var sessionsPushed, messagesPushed int
@@ -589,7 +589,7 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 }
 
 func BenchmarkPGUsageRefreshLarge(b *testing.B) {
-	ctx := context.Background()
+	ctx := b.Context()
 	b.Run("ColdPush", func(b *testing.B) {
 		fixture := openPGUsageBenchmarkFixture(b)
 		fixture.addBulk(b, pgUsageBenchmarkBulkSessions)

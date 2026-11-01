@@ -32,8 +32,8 @@ func TestNativeHTTPAndRawClientsSignFromEnvironment(t *testing.T) {
 	file := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(file, []byte(base64.StdEncoding.EncodeToString(secret)), 0o600))
 	state := filepath.Join(dir, "replay.db")
-	require.NoError(t, requestsign.InitReplay(state))
-	replay, err := requestsign.OpenReplay(state)
+	require.NoError(t, requestsign.InitReplay(t.Context(), state))
+	replay, err := requestsign.OpenReplay(t.Context(), state)
 	require.NoError(t, err)
 	defer replay.Close()
 	verifier, err = requestsign.NewVerifier(requestsign.VerifyConfig{ExternalURL: ts.URL, Replay: replay, Keys: func() (map[string]requestsign.Key, error) {

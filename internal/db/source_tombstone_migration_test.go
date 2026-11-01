@@ -161,7 +161,7 @@ func TestSourceMissingStateSurvivesRebuildOrphanCopy(t *testing.T) {
 
 	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination archive")
 	defer destination.Close()
-	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	copied, err := destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Equal(t, 1, copied)
 	assertSessionState(t, destination, "session", false, true)
@@ -213,7 +213,7 @@ func TestRebuildMetadataDoesNotRehideReappearedSource(t *testing.T) {
 	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination archive")
 	defer destination.Close()
 	insertSessionWithSourcePath(t, destination, "session", "claude", physicalPath)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 	assertSessionState(t, destination, "session", false, false)
 	active, err := destination.GetSession(t.Context(), "session")
 	require.NoError(t, err)

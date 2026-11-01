@@ -39,10 +39,10 @@ func hostedRuntimeConfig(t *testing.T) (config.Config, *sql.DB) {
 	suffix := hex.EncodeToString(nonce)
 	schema := "runtime_test_" + suffix
 	role := schema + "_role"
-	admin, err := postgres.Open(dsn, schema, false)
+	admin, err := postgres.Open(t.Context(), dsn, schema, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.Background(), `DROP SCHEMA "`+schema+`" CASCADE;DROP ROLE "`+role+`"`)
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA "`+schema+`" CASCADE;DROP ROLE "`+role+`"`)
 		assert.NoError(t, err)
 		assert.NoError(t, admin.Close())
 	})
@@ -50,7 +50,7 @@ func hostedRuntimeConfig(t *testing.T) (config.Config, *sql.DB) {
 	password := make([]byte, 32)
 	_, err = rand.Read(password)
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE ROLE "` + role + `" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '` + hex.EncodeToString(password) + `';GRANT USAGE ON SCHEMA "` + schema + `" TO "` + role + `";GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA "` + schema + `" TO "` + role + `";GRANT USAGE ON ALL SEQUENCES IN SCHEMA "` + schema + `" TO "` + role + `"`)
+	_, err = admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '`+hex.EncodeToString(password)+`';GRANT USAGE ON SCHEMA "`+schema+`" TO "`+role+`";GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA "`+schema+`" TO "`+role+`";GRANT USAGE ON ALL SEQUENCES IN SCHEMA "`+schema+`" TO "`+role+`"`)
 	require.NoError(t, err)
 	u, err := url.Parse(dsn)
 	require.NoError(t, err)
@@ -63,18 +63,18 @@ func TestHostedRuntimePreparationOffRetainsPublicReads(t *testing.T) {
 	cfg, _ := hostedRuntimeConfig(t)
 	// An occupied custody path makes any eager repository open fail decisively.
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, pgRawSyncDataDirectory), []byte("occupied"), 0600))
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	require.Nil(t, startup.startWorker)
 	startup.cleanup()
 	startup.cleanup()
-	store, closeStore, err := openPGReadStore(cfg, cfg.PG)
+	store, closeStore, err := openPGReadStore(t.Context(), cfg, cfg.PG)
 	require.NoError(t, err)
 	defer closeStore()
 	_, ok := store.(*postgres.HostedStore)
 	require.True(t, ok)
 	cfg.PG.RawTenant = ""
-	_, err = prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	_, err = prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 	require.ErrorContains(t, err, "raw_tenant")
 }
 
@@ -90,7 +90,7 @@ func TestHostedRuntimeHealthRequiresStatusToken(t *testing.T) {
 	require.NoError(t, err)
 	uploadToken, err := auth.IssueToken(t.Context(), device.Identity.DeviceID, device.Credential, rawsync.ScopeUpload)
 	require.NoError(t, err)
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	t.Cleanup(startup.cleanup)
 
@@ -135,7 +135,7 @@ func TestHostedRuntimePreparationSandboxAndIdle(t *testing.T) {
 		t.Fatal("mandatory sandbox unavailable")
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, pgRawSyncDataDirectory), []byte("occupied"), 0600))
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 	if !supported {
 		require.ErrorIs(t, err, rawderive.ErrSandboxUnavailable)
 		return
@@ -163,10 +163,10 @@ func TestHostedRuntimeDerivesAcceptedSource(t *testing.T) {
 	cfg, _ := hostedRuntimeConfig(t)
 	cfg.PG.RawDerivation = true
 	cfg.PG.RawPollSeconds = 1
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	defer startup.cleanup()
-	database, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	database, err := postgres.OpenHosted(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
 	require.NoError(t, err)
 	defer database.Close()
 	authStore, err := postgres.NewTenantRawDeviceAuthStore(database, cfg.PG.RawTenant)
@@ -176,7 +176,7 @@ func TestHostedRuntimeDerivesAcceptedSource(t *testing.T) {
 	enrolled, err := auth.EnrollDevice(t.Context(), cfg.PG.RawTenant, "synthetic device")
 	require.NoError(t, err)
 	request := func(method, path, token, kind string, body []byte) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, "http://127.0.0.1"+path, bytes.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), method, "http://127.0.0.1"+path, bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", kind)
 		req.Header.Set("X-AgentsView-Device-ID", enrolled.Identity.DeviceID)
@@ -209,7 +209,7 @@ func TestHostedRuntimeDerivesAcceptedSource(t *testing.T) {
 	accepted := request("POST", "/api/v1/raw-sync/manifests", token.Token, "application/json", encoded)
 	require.Equal(t, 200, accepted.Code, accepted.Body.String())
 	var attempts, generation int
-	require.NoError(t, database.QueryRow(`SELECT attempt_count,projection_generation FROM raw_ingest_jobs`).Scan(&attempts, &generation))
+	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT attempt_count,projection_generation FROM raw_ingest_jobs`).Scan(&attempts, &generation))
 	assert.Zero(t, attempts)
 	assert.Equal(t, 1, generation)
 	ctx, cancel := context.WithCancel(startup.ctx)
@@ -228,10 +228,10 @@ func TestHostedRuntimeDerivesAcceptedSource(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		var state string
-		err := database.QueryRow(`SELECT state FROM raw_ingest_jobs`).Scan(&state)
+		err := database.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs`).Scan(&state)
 		return err == nil && state == "complete"
 	}, 20*time.Second, 50*time.Millisecond)
-	store, err := postgres.NewHostedStore(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	store, err := postgres.NewHostedStore(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
 	require.NoError(t, err)
 	defer store.Close()
 	messages, err := store.GetMessages(t.Context(), "runtime-session", 0, 10, true)
@@ -246,7 +246,7 @@ func TestHostedRuntimeRejectsMissingPublicationPrivilegesBeforeReadiness(t *test
 	endpoint, err := url.Parse(cfg.PG.URL)
 	require.NoError(t, err)
 	role := endpoint.User.Username()
-	control, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	control, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 	require.NoError(t, err)
 	control.cleanup()
 	cfg.PG.RawDerivation = true
@@ -255,20 +255,20 @@ func TestHostedRuntimeRejectsMissingPublicationPrivilegesBeforeReadiness(t *test
 		{"tool_calls_id_seq", "USAGE", "SEQUENCE"}, {"tool_result_events_id_seq", "USAGE", "SEQUENCE"}, {"usage_events_id_seq", "USAGE", "SEQUENCE"}, {"pinned_messages_id_seq", "USAGE", "SEQUENCE"},
 	} {
 		t.Run(tc.object+"_"+tc.privilege, func(t *testing.T) {
-			_, err := admin.Exec(`REVOKE ` + tc.privilege + ` ON ` + tc.kind + ` "` + tc.object + `" FROM "` + role + `"`)
+			_, err := admin.ExecContext(t.Context(), `REVOKE `+tc.privilege+` ON `+tc.kind+` "`+tc.object+`" FROM "`+role+`"`)
 			require.NoError(t, err)
 			defer func() {
-				_, err := admin.Exec(`GRANT ` + tc.privilege + ` ON ` + tc.kind + ` "` + tc.object + `" TO "` + role + `"`)
+				_, err := admin.ExecContext(t.Context(), `GRANT `+tc.privilege+` ON `+tc.kind+` "`+tc.object+`" TO "`+role+`"`)
 				require.NoError(t, err)
 			}()
-			startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+			startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil)
 			if err == nil {
 				startup.cleanup()
 			}
 			require.ErrorContains(t, err, "privileges")
 			require.Nil(t, startup.startWorker)
 			var attempts int
-			require.NoError(t, admin.QueryRow(`SELECT COALESCE(sum(attempt_count),0) FROM raw_ingest_jobs`).Scan(&attempts))
+			require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT COALESCE(sum(attempt_count),0) FROM raw_ingest_jobs`).Scan(&attempts))
 			assert.Zero(t, attempts)
 		})
 	}

@@ -139,17 +139,16 @@ func quoteIdentifier(name string) (string, error) {
 }
 
 // Open opens a PG connection pool, validates SSL, and sets
-// search_path to the given schema on every connection.
+// search_path to the given schema on every connection. Its initial
+// connectivity check is bounded by ctx and at most ten seconds.
 //
 // The schema name is validated and quoted to prevent injection.
 // When allowInsecure is true, non-loopback connections without
 // TLS produce a warning instead of failing.
 func Open(
-	dsn, schema string, allowInsecure bool,
+	ctx context.Context, dsn, schema string, allowInsecure bool,
 ) (*sql.DB, error) {
-	ctx, cancel := context.WithTimeout(
-		context.Background(), 10*time.Second,
-	)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return OpenContext(ctx, dsn, schema, allowInsecure)
 }
@@ -280,7 +279,7 @@ func appendConnParams(
 // OpenHosted opens and verifies a restricted pool permanently assigned to one
 // tenant schema. Startup parameters override caller values on every connection;
 // checkout reset restores context after connection reuse or caller SET commands.
-func OpenHosted(dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error) {
+func OpenHosted(ctx context.Context, dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error) {
 	if err := validateHostedBinding(schema, tenant); err != nil {
 		return nil, err
 	}
@@ -317,7 +316,7 @@ func OpenHosted(dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error)
 	database.SetMaxIdleConns(5)
 	database.SetConnMaxLifetime(30 * time.Minute)
 	database.SetConnMaxIdleTime(5 * time.Minute)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err = CheckHostedTenant(ctx, database, schema, tenant); err != nil {
 		database.Close()
