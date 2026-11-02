@@ -144,7 +144,7 @@ func runClassifierRebuild(
 			return fmt.Errorf(
 				"clearing PG hash: %w (SQLite was cleared "+
 					"successfully; once PG is reachable, retry "+
-					"'agentsview index classifier rebuild', or run "+
+					"'agentsview index classifier rebuild --pg', or run "+
 					"'agentsview replica pg push --full' to repopulate "+
 					"PG from the corrected SQLite side)",
 				err,
