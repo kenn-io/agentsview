@@ -65,6 +65,11 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"nonleading cd", "git add . && cd /elsewhere && git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
 		{"quiet", "git commit -q -m fix", "", "", 0},
 		{"quiet HEAD", "git commit -q -m fix && git rev-parse HEAD", "abc1234000000000000000000000000000000000\n", "/work", 1},
+		{"failed quiet HEAD", "git commit -q -m fix; git rev-parse HEAD", "nothing to commit\nabc1234000000000000000000000000000000000\n", "", 0},
+		{"failed quiet log", "git commit -q -m fix; git log -1 --oneline", "nothing to commit\nabc1234 Previous commit\n", "", 0},
+		{"quiet earlier readback", "git rev-parse HEAD; git commit -q -m fix", "abc1234000000000000000000000000000000000\n", "", 0},
+		{"quiet recovered failure", "git commit -q -m fix || true && git log -1 --oneline", "abc1234 Previous commit\n", "", 0},
+		{"quiet quoted separator", `git commit -q -m 'fix && git rev-parse HEAD'; git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "", 0},
 		{"quiet log", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "/work", 1},
 		{"quiet log reordered", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "/work", 1},
 		{"quiet log n", "git commit -q -m fix && git log -n 1 --oneline", "abc1234 Fix parser\n", "/work", 1},
@@ -289,8 +294,7 @@ func TestCommitLinksPolled(t *testing.T) {
 				poll.ToolCalls[0].ToolUseID = "poll"
 				messages = append(messages, poll)
 			}
-			// An unmatched poll owns its summary; use a distinct SHA so it
-			// doesn't hide the paired poll through first-occurrence dedup.
+			// An unmatched poll must not manufacture a commit link.
 			messages[4].ToolCalls[0].ResultContent = `{"output":""}`
 			messages[4].ToolCalls[0].ResultEvents[0].Content = messages[4].ToolCalls[0].ResultContent
 			messages[6].ToolCalls[0].ResultContent = strings.ReplaceAll(result, "abc1234", "def5678")
@@ -302,7 +306,7 @@ func TestCommitLinksPolled(t *testing.T) {
 			insertMessages(t, d, messages[5:]...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
-			require.Len(t, got.Commits, 2)
+			require.Len(t, got.Commits, 1)
 			link := got.Commits[0]
 			assert.Equal(t, "abc1234", link.SHA)
 			assert.Equal(t, 2, link.MessageOrdinal)
@@ -311,7 +315,55 @@ func TestCommitLinksPolled(t *testing.T) {
 			assert.Equal(t, "/repo", link.Repository)
 			require.NotNil(t, link.Turn)
 			assert.Equal(t, "Record the parser fix", link.Turn.Text)
-			assert.Equal(t, 6, got.Commits[1].MessageOrdinal)
+		})
+	}
+}
+
+func TestCommitLinksNativePollOwnership(t *testing.T) {
+	for _, tt := range []struct {
+		name, initial, intermediate string
+		codeMode                    bool
+	}{
+		{"JSON process", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, false},
+		{"text process", "Chunk ID: abc\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\n", "Chunk ID: def\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\nstill running", false},
+		{"wrapped text process", `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\n"}]`, `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\nstill running"}]`, false},
+		{"partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, false},
+		{"code mode partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages := commitMessages("s1", `{"cmd":"git commit -m first && git commit -m second","workdir":"/repo"}`, tt.initial)
+			messages[2].ToolCalls[0].ToolName = "exec_command"
+			if tt.codeMode {
+				messages[2].ToolCalls[0].ToolName = "exec"
+				messages[2].ToolCalls[0].InputJSON = `text(await tools.exec_command({cmd:"git commit -m first && git commit -m second",workdir:"/repo"}))`
+			}
+			messages = append(messages, userMsg("s1", 3, "Later prompt"))
+			for i, output := range []string{tt.intermediate, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n"} {
+				poll := commitMessages("s1", `{"session_id":7,"chars":""}`, output)[2]
+				poll.Ordinal = 4 + i
+				poll.Timestamp = "2026-01-02T00:00:00Z"
+				poll.ToolCalls[0].ToolName = "write_stdin"
+				if tt.codeMode {
+					poll.ToolCalls[0].ToolName = "exec"
+					poll.ToolCalls[0].InputJSON = `text(await tools.write_stdin({session_id:7,chars:""}))`
+				}
+				poll.ToolCalls[0].ToolUseID = "poll"
+				messages = append(messages, poll)
+			}
+			insertMessages(t, d, messages...)
+			got, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+			require.NoError(t, err)
+			require.Len(t, got.Commits[0].Links, 1)
+			link := got.Commits[0].Links[0]
+			assert.Equal(t, 2, link.MessageOrdinal)
+			assert.Equal(t, 0, link.CallIndex)
+			assert.Equal(t, "commit-call", link.ToolUseID)
+			assert.Equal(t, tsZero, link.CommittedAt)
+			assert.Equal(t, "/repo", link.Repository)
+			require.NotNil(t, link.Turn)
+			assert.Equal(t, "Record the parser fix", link.Turn.Text)
 		})
 	}
 }

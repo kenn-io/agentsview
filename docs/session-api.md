@@ -1527,17 +1527,21 @@ carries `ambiguous: true` when a query matches distinct commits whose SHAs are
 not prefixes of each other. Several sessions recording the same commit do not
 make it ambiguous.
 
+Sessions permanently deleted before this release have no links because their
+stored tool calls are already gone.
+
 Links require the words `git` and `commit` in a shell call's input and Git's
 commit summary in its stored output. This includes commits made through shell
 wrappers or Python helpers. Codex output received through a later `write_stdin`
-poll links to the original call when its process ID matches. An unmatched poll
-with a commit summary links to the poll itself. Each session records a SHA once,
+poll links to the original commit call when its process ID matches. Polls with
+no originating commit call produce no links. Each session records a SHA once,
 at its first matching call.
 
 Quiet commits link only when the same call prints exactly one SHA through
 `git rev-parse HEAD` or `git log -1 --oneline`, including the equivalent
 `--oneline -1`, `-n 1 --oneline`, and `--oneline -n 1` forms. These links have
-an empty branch. Without that output, quiet commits have no link.
+an empty branch. The readback must run only after the commit succeeds, chained
+directly with `&&`. Without that evidence, quiet commits have no link.
 
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
 directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative
