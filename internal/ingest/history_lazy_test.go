@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,6 +83,71 @@ func TestReconcileProviderHistoryLazyContent(t *testing.T) {
 			cancel()
 			_, err = ingest.ReconcileProviderHistory(ctx, tc.candidate, &lazy, ingest.ContentOptions{})
 			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+}
+
+func TestReconcileProviderHistoryLazyClaudeToolResult(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	stamp := ts.Format(time.RFC3339)
+	const archived = "retained tool output"
+	priorRows := []db.Message{{
+		Ordinal: 0, Role: "user", Timestamp: stamp,
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "call-1", Category: "bash",
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "call-1", Source: "tool_result", Timestamp: stamp,
+				Content: archived, ContentLength: len(archived),
+			}},
+		}},
+	}}
+	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentIcodemate} {
+		t.Run(string(agent), func(t *testing.T) {
+			candidate := func() ingest.Candidate {
+				return ingest.Candidate{
+					Session: db.Session{Agent: string(agent)},
+					Messages: []db.Message{{
+						Ordinal: 0, Role: "user", Timestamp: stamp,
+						ToolCalls: []db.ToolCall{{
+							ToolUseID: "call-1", Category: "bash",
+							ResultEvents: []db.ToolResultEvent{{
+								ToolUseID: "call-1", Source: "tool_result", Timestamp: stamp,
+								Content: "unresolved placeholder", ContentLength: len("unresolved placeholder"),
+							}},
+						}},
+					}},
+					Parsed: parser.ParseResult{
+						Session: parser.ParsedSession{Agent: agent, File: parser.FileInfo{Path: "/synthetic/session.jsonl"}},
+						Messages: []parser.ParsedMessage{{
+							Ordinal: 0, Timestamp: ts,
+							ToolResults: []parser.ParsedToolResult{{
+								ToolUseID: "call-1", Source: "tool_result", PersistedOutputUnresolved: true,
+							}},
+						}},
+					},
+				}
+			}
+			eager, err := ingest.ReconcileProviderHistory(t.Context(), candidate(), &ingest.PriorSession{Messages: priorRows}, ingest.ContentOptions{})
+			require.NoError(t, err)
+			calls := 0
+			lazy := &ingest.PriorSession{LoadMessages: func(context.Context) ([]db.Message, error) {
+				calls++
+				return priorRows, nil
+			}}
+			got, err := ingest.ReconcileProviderHistory(t.Context(), candidate(), lazy, ingest.ContentOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, eager, got)
+			assert.Equal(t, 1, calls)
+			assert.Nil(t, lazy.Messages)
+			assert.Equal(t, ingest.HistoryMerge, got.Action)
+			assert.True(t, got.PriorContributed)
+			require.Len(t, got.Candidate.Messages, 1)
+			require.Len(t, got.Candidate.Messages[0].ToolCalls, 1)
+			assert.Equal(t, archived, got.Candidate.Messages[0].ToolCalls[0].ResultContent)
+			readErr := errors.New("retained tool result unavailable")
+			lazy.LoadMessages = func(context.Context) ([]db.Message, error) { return nil, readErr }
+			_, err = ingest.ReconcileProviderHistory(t.Context(), candidate(), lazy, ingest.ContentOptions{})
+			require.ErrorIs(t, err, readErr)
 		})
 	}
 }
