@@ -157,6 +157,36 @@ func TestRawParityPhysicalRelationships(t *testing.T) {
 	}
 }
 
+func TestRawParityPhysicalUsageRoot(t *testing.T) {
+	f := newProjectionFixture(t)
+	child := codexCloudProjection(1, false, &parser.ParsedPlanUsage{OutcomeKind: "counted_under", CountedUnder: "codex-cloud:root"})
+	root := codexCloudProjection(1, false, nil)
+	root.Outcome.Results[0].Result.Session.ID = "codex-cloud:root"
+	root.Outcome.Results[0].Result.Session.SourceSessionID = "root"
+	child.Outcome.Results = append(child.Outcome.Results, root.Outcome.Results...)
+	m, _ := f.accept(t, "device-a", "usage-root", "", parser.AgentCodexCloud)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, child))
+	childID, err := f.sink.Resolve(t.Context(), "codex-cloud:thread-a")
+	require.NoError(t, err)
+	rootID, err := f.sink.Resolve(t.Context(), "codex-cloud:root")
+	require.NoError(t, err)
+	tx := parityTx(t, f.runtime)
+	links, err := LoadRawParityLinks(t.Context(), tx, childID.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, []rawparity.Link{{Kind: "usage_root", Ordinal: -1, CallIndex: -1, EventIndex: -1, Targets: []string{rootID.SessionID}}}, links)
+	snapshots, err := LoadRawParitySnapshots(t.Context(), tx, []string{childID.SessionID})
+	require.NoError(t, err)
+	snapshot := snapshots[childID.SessionID]
+	require.NotNil(t, snapshot.PlanUsage)
+	assert.Equal(t, "codex-cloud:root", snapshot.PlanUsage.CountedUnder)
+	comparison, err := rawparity.CompareResolved(snapshot, snapshot, links, map[string]string{rootID.SessionID: "codex-cloud:root"})
+	require.NoError(t, err)
+	assert.Empty(t, comparison.Differing)
+	comparison, err = rawparity.CompareResolved(snapshot, snapshot, links, map[string]string{rootID.SessionID: "codex-cloud:other"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"usage"}, comparison.Differing)
+}
+
 func TestRawParityLinksRequireSnapshot(t *testing.T) {
 	_, err := LoadRawParityLinks(t.Context(), nil, "anything")
 	assert.ErrorContains(t, err, "REPEATABLE READ READ ONLY")
