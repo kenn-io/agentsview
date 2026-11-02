@@ -525,6 +525,17 @@ default as the `[pg]` config key, and an explicit `false` opts out.
 
 ## Backend Parity
 
+Automatic repository project naming belongs to the writable SQLite archive.
+`repository_project_names` retains choices derived from producer-recorded
+remotes and source snapshots; explicit folder rules and session assignments win.
+Identity writes apply names in the same transaction and retain source snapshot
+labels. Metadata copies preserve the registry, and rebuilds reapply it after
+restoring snapshots. The metadata-only `db repair-projects` command uses the
+same resolver. Updates advance session publication timestamps and reconcile
+identity observations, so replica reads consume the corrected project without
+their own naming inference. Hosted raw derivation does not consume this local
+archive registry.
+
 Reporting project-label keys are not repository identities. The reporting
 catalog must resolve every contributing session from the same read transaction;
 aggregate catalogs that ignore unknown observations cannot supply that evidence.
