@@ -7,7 +7,7 @@
 //	metadata       Agent, project, cwd, first message, start/end, message counts
 //	messages       All persisted message fields, including model and usage flags
 //	tool_calls     Calls (including input, target path and call index) and results
-//	usage          Every accounting field, including nullable cost/message links
+//	usage          Token events, plan reports, credits, outcomes and capture coverage
 //	findings       Secret and friction findings, including natural coordinates
 //	relationships  Parent set/type and call/result subagent targets via MatchIDs
 //
@@ -45,12 +45,13 @@ import (
 // literal; callers must not invent matches for ambiguous or source-local IDs.
 // A session's own ID is ignored: matching the two sessions is the caller's job.
 type Snapshot struct {
-	Session  db.Session
-	Messages []db.Message
-	Usage    []db.UsageEvent
-	Secrets  []db.SecretFinding
-	Friction []db.FrictionFinding
-	MatchIDs map[string]string
+	Session   db.Session
+	Messages  []db.Message
+	Usage     []db.UsageEvent
+	PlanUsage *db.SessionPlanUsage
+	Secrets   []db.SecretFinding
+	Friction  []db.FrictionFinding
+	MatchIDs  map[string]string
 }
 
 // Comparison exposes only digests and part names, never transcript content.
@@ -144,6 +145,24 @@ func digests(s Snapshot) (map[string]string, error) {
 		e.SessionID = ""
 		e.OccurredAt = timestamp(e.OccurredAt)
 		rows["usage"] = append(rows["usage"], e)
+	}
+	if s.PlanUsage != nil {
+		p := *s.PlanUsage
+		p.DataAsOf = timestamp(p.DataAsOf)
+		p.OutcomeAt = timestamp(p.OutcomeAt)
+		p.LastCaptureAt = timestamp(p.LastCaptureAt)
+		p.CountedUnder = target(s.MatchIDs, p.CountedUnder)
+		groups := make([]string, 0, len(p.Groups))
+		for _, group := range p.Groups {
+			encoded, err := json.Marshal(group, json.Deterministic(true))
+			if err != nil {
+				return nil, errors.New("cannot normalize parity plan usage group")
+			}
+			groups = append(groups, string(encoded))
+		}
+		slices.Sort(groups)
+		p.Groups = nil
+		rows["usage"] = append(rows["usage"], []any{"plan", p, groups})
 	}
 	for _, f := range s.Secrets {
 		f.SessionID = ""

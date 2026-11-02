@@ -3527,6 +3527,10 @@ schemas keep their existing ordering behavior.
 
 ## Codex Cloud (`codex-cloud`)
 
+- **Stored accounting parity (reverified 2026-11-01):** Shared parity
+  normalization compares plan reports separately from token events. It compares
+  row presence, decimal credits, nullable percentages, groups, outcomes and live
+  capture coverage. Synthetic fixtures cover the stored semantic fields.
 - **Format:** AgentsView-written mirror files,
   `{dataDir}/sources/codex-cloud/<accountKey>/<threadId>.jsonl.zstd`. Each
   file holds JSON lines in independent zstd frames with content checksums.
