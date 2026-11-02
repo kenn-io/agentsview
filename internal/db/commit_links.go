@@ -36,7 +36,7 @@ var (
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitOperationRE         = regexp.MustCompile(`\btools\.(exec_command|write_stdin)\s*\(\s*(\{(?:` + commitJSString + "|[^{}\"'`])*\\})\\s*\\)")
-	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)`)
+	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)\s*[,}]`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
 	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\.|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)

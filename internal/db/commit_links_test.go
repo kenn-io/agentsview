@@ -553,6 +553,35 @@ func TestCommitLinksWrappedCommands(t *testing.T) {
 	}
 }
 
+func TestCommitLinksCodeModePropertyExpressions(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, repository string
+		count                   int
+	}{
+		{"workdir concatenation", `tools.exec_command({cmd:"git commit -m fix",workdir:"/repo/"+name})`, "/work", 1},
+		{"cwd concatenation", `tools.exec_command({cmd:'git commit -m fix',cwd:'/repo/' + name})`, "/work", 1},
+		{"template concatenation", "tools.exec_command({cmd:`git commit -m fix`,workdir:`/repo/` + name})", "/work", 1},
+		{"command concatenation", `tools.exec_command({cmd:"git commit -m " + message,workdir:"/repo"})`, "", 0},
+		{"command method call", `tools.exec_command({cmd:"git commit -m fix".replace("fix", message),workdir:"/repo"})`, "", 0},
+		{"literal before comma", "tools.exec_command({workdir:\"/repo\" \n\t,cmd:\"git commit -m fix\"})", "/repo", 1},
+		{"literal before brace", "tools.exec_command({cmd:\"git commit -m fix\",workdir:\"/repo\" \n\t})", "/repo", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", tt.input, `{"output":"[main abc1234] Fix parser\n"}`)
+			messages[2].ToolCalls[0].ToolName = "exec"
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, tt.count)
+			if tt.count > 0 {
+				assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			}
+		})
+	}
+}
+
 func TestCommitLinksTemplateLiterals(t *testing.T) {
 	for _, tt := range []struct {
 		name, input string
