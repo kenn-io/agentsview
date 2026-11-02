@@ -636,7 +636,7 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 	store, err := NewStore(pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
-	store.pg.SetMaxOpenConns(1)
+	store.DB().SetMaxOpenConns(1)
 	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = '50ms'`)
 	require.NoError(t, err, "set lock timeout")
 

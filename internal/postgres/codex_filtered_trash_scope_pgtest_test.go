@@ -88,7 +88,7 @@ func TestCodexFilteredPageRestorePreservesRemoteThreadTrash(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key=$1`, codexThreadScopeMetadataKey)
 	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(ctx, store.pg, initial.schema))
+	require.NoError(t, EnsureSchema(ctx, store.DB(), initial.schema))
 	var remoteOverride bool
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT deleted_at IS DISTINCT FROM source_deleted_at FROM sessions WHERE id=$1`, codexTrashThread).Scan(&remoteOverride))
 	require.True(t, remoteOverride)

@@ -9,9 +9,9 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func hostedMapped[T any](ctx context.Context, h *HostedStore, read func() (T, error), collect func(*T, *hostedRefs)) (T, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (T, error) {
-		v, err := read()
+func hostedMapped[T any](ctx context.Context, h *HostedStore, read func(*HostedStore) (T, error), collect func(*T, *hostedRefs)) (T, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (T, error) {
+		v, err := read(h)
 		if err != nil {
 			return v, err
 		}
@@ -23,7 +23,7 @@ func hostedMapped[T any](ctx context.Context, h *HostedStore, read func() (T, er
 }
 
 func (h *HostedStore) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	return hostedMapped(ctx, h, func() (db.SearchPage, error) { return h.physical.Search(ctx, f) }, func(p *db.SearchPage, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (db.SearchPage, error) { return h.physical.Search(ctx, f) }, func(p *db.SearchPage, r *hostedRefs) {
 		p.Results = slices.Clone(p.Results)
 		for i := range p.Results {
 			r.add(&p.Results[i].SessionID)
@@ -33,7 +33,7 @@ func (h *HostedStore) Search(ctx context.Context, f db.SearchFilter) (db.SearchP
 }
 
 func (h *HostedStore) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	return hostedMapped(ctx, h, func() (db.ContentSearchPage, error) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (db.ContentSearchPage, error) {
 		q := f
 		if f.SessionID != "" {
 			target, err := h.resolve(ctx, f.SessionID)
@@ -62,7 +62,7 @@ func (h *HostedStore) SearchContent(ctx context.Context, f db.ContentSearchFilte
 }
 
 func (h *HostedStore) ListSecretFindings(ctx context.Context, f db.SecretFindingFilter) (db.SecretFindingPage, error) {
-	return hostedMapped(ctx, h, func() (db.SecretFindingPage, error) { return h.physical.ListSecretFindings(ctx, f) }, func(p *db.SecretFindingPage, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (db.SecretFindingPage, error) { return h.physical.ListSecretFindings(ctx, f) }, func(p *db.SecretFindingPage, r *hostedRefs) {
 		p.Findings = slices.Clone(p.Findings)
 		for i := range p.Findings {
 			r.add(&p.Findings[i].SessionID)
@@ -75,7 +75,7 @@ func (h *HostedStore) SecretFindingSource(ctx context.Context, f db.SecretFindin
 		content string
 		ok      bool
 	}
-	v, err := hostedDetail(ctx, h, f.SessionID, func(id string) (result, error) {
+	v, err := hostedDetail(ctx, h, f.SessionID, func(h *HostedStore, id string) (result, error) {
 		f.SessionID = id
 		c, ok, err := h.physical.SecretFindingSource(ctx, f)
 		return result{c, ok}, err
@@ -84,7 +84,7 @@ func (h *HostedStore) SecretFindingSource(ctx context.Context, f db.SecretFindin
 }
 
 func (h *HostedStore) GetSessionTiming(ctx context.Context, id string) (*db.SessionTiming, error) {
-	return hostedMapped(ctx, h, func() (*db.SessionTiming, error) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (*db.SessionTiming, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			return nil, err
@@ -140,7 +140,7 @@ func hostedPlanUsage(r *hostedRefs, owner string, p **db.SessionPlanUsage) {
 }
 
 func (h *HostedStore) GetSessionPlanUsage(ctx context.Context, id string) (*db.SessionPlanUsage, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (*db.SessionPlanUsage, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (*db.SessionPlanUsage, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			return nil, err
@@ -156,7 +156,7 @@ func (h *HostedStore) GetSessionPlanUsage(ctx context.Context, id string) (*db.S
 }
 
 func (h *HostedStore) GetSessionUsage(ctx context.Context, id string, breakdown bool) (*db.SessionUsage, error) {
-	return hostedMapped(ctx, h, func() (*db.SessionUsage, error) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (*db.SessionUsage, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			return nil, err
@@ -178,7 +178,9 @@ func (h *HostedStore) GetSessionUsage(ctx context.Context, id string, breakdown 
 }
 
 func (h *HostedStore) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
-	return hostedMapped(ctx, h, func() ([]db.TopSessionEntry, error) { return h.physical.GetTopSessionsByCost(ctx, f, limit) }, func(p *[]db.TopSessionEntry, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) ([]db.TopSessionEntry, error) {
+		return h.physical.GetTopSessionsByCost(ctx, f, limit)
+	}, func(p *[]db.TopSessionEntry, r *hostedRefs) {
 		*p = slices.Clone(*p)
 		for i := range *p {
 			r.add(&(*p)[i].SessionID)
@@ -187,7 +189,9 @@ func (h *HostedStore) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter
 }
 
 func (h *HostedStore) GetAnalyticsTopSessions(ctx context.Context, f db.AnalyticsFilter, metric string) (db.TopSessionsResponse, error) {
-	return hostedMapped(ctx, h, func() (db.TopSessionsResponse, error) { return h.physical.GetAnalyticsTopSessions(ctx, f, metric) }, func(p *db.TopSessionsResponse, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (db.TopSessionsResponse, error) {
+		return h.physical.GetAnalyticsTopSessions(ctx, f, metric)
+	}, func(p *db.TopSessionsResponse, r *hostedRefs) {
 		p.Sessions = slices.Clone(p.Sessions)
 		for i := range p.Sessions {
 			r.add(&p.Sessions[i].ID)
@@ -196,7 +200,7 @@ func (h *HostedStore) GetAnalyticsTopSessions(ctx context.Context, f db.Analytic
 }
 
 func (h *HostedStore) GetAnalyticsSignalSessions(ctx context.Context, f db.AnalyticsFilter, signal string, limit int) (db.SignalSessionsResponse, error) {
-	return hostedMapped(ctx, h, func() (db.SignalSessionsResponse, error) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (db.SignalSessionsResponse, error) {
 		return h.physical.GetAnalyticsSignalSessions(ctx, f, signal, limit)
 	}, func(p *db.SignalSessionsResponse, r *hostedRefs) {
 		p.Sessions = slices.Clone(p.Sessions)
@@ -207,7 +211,7 @@ func (h *HostedStore) GetAnalyticsSignalSessions(ctx context.Context, f db.Analy
 }
 
 func (h *HostedStore) RecentEdits(ctx context.Context, f db.RecentEditsParams) (db.RecentEditsResult, error) {
-	return hostedMapped(ctx, h, func() (db.RecentEditsResult, error) { return h.physical.RecentEdits(ctx, f) }, func(p *db.RecentEditsResult, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) (db.RecentEditsResult, error) { return h.physical.RecentEdits(ctx, f) }, func(p *db.RecentEditsResult, r *hostedRefs) {
 		p.Files = slices.Clone(p.Files)
 		for i := range p.Files {
 			f := &p.Files[i]
@@ -221,7 +225,7 @@ func (h *HostedStore) RecentEdits(ctx context.Context, f db.RecentEditsParams) (
 }
 
 func (h *HostedStore) ListArchiveWorktreeCandidates(ctx context.Context, f db.ArchiveWorktreeCandidateRequest) ([]db.WorktreeReclassificationCandidate, error) {
-	return hostedMapped(ctx, h, func() ([]db.WorktreeReclassificationCandidate, error) {
+	return hostedMapped(ctx, h, func(h *HostedStore) ([]db.WorktreeReclassificationCandidate, error) {
 		return h.physical.ListArchiveWorktreeCandidates(ctx, f)
 	}, func(p *[]db.WorktreeReclassificationCandidate, r *hostedRefs) {
 		*p = slices.Clone(*p)
@@ -247,7 +251,7 @@ func (r *hostedRefs) report(p *activity.Report) {
 }
 
 func (h *HostedStore) GetActivityReport(ctx context.Context, f db.AnalyticsFilter, q activity.Query) (activity.Report, error) {
-	return hostedMapped(ctx, h, func() (activity.Report, error) { return h.physical.GetActivityReport(ctx, f, q) }, func(p *activity.Report, r *hostedRefs) { r.report(p) })
+	return hostedMapped(ctx, h, func(h *HostedStore) (activity.Report, error) { return h.physical.GetActivityReport(ctx, f, q) }, func(p *activity.Report, r *hostedRefs) { r.report(p) })
 }
 
 // Map keys are copied into addressable entries for the same single batch lookup.
@@ -276,7 +280,7 @@ func hostedMapKeys[T any](m map[string]T, r *hostedRefs) func() map[string]T {
 }
 
 func (h *HostedStore) BuildActivityReportArtifacts(ctx context.Context, f db.AnalyticsFilter, q activity.Query, progress activity.ProgressFunc) (activity.CandidateArtifacts, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (activity.CandidateArtifacts, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (activity.CandidateArtifacts, error) {
 		p, err := h.physical.BuildActivityReportArtifacts(ctx, f, q, progress)
 		if err != nil {
 			return p, err
@@ -297,7 +301,7 @@ func (h *HostedStore) BuildActivityReportArtifacts(ctx context.Context, f db.Ana
 }
 
 func (h *HostedStore) ActivityReportSourceProbe(ctx context.Context) (activity.SourceProbe, error) {
-	return hostedReadWithScope(ctx, h, hostedAllRevisionsRead, func(rev hostedRevision) (activity.SourceProbe, error) {
+	return hostedReadWithScope(ctx, h, hostedAllRevisionsRead, func(h *HostedStore, rev hostedRevision) (activity.SourceProbe, error) {
 		p, err := h.physical.ActivityReportSourceProbe(ctx)
 		p.HostedIdentityRevision = rev.Identity
 		p.HostedSelectionRevision = rev.Selection
@@ -307,7 +311,7 @@ func (h *HostedStore) ActivityReportSourceProbe(ctx context.Context) (activity.S
 }
 
 func (h *HostedStore) GetSessionUsageRows(ctx context.Context, aliases []string) (*activity.SessionUsageRows, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (*activity.SessionUsageRows, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (*activity.SessionUsageRows, error) {
 		ids, err := h.resolveBatch(ctx, aliases, false, false)
 		if err != nil {
 			return nil, err

@@ -549,6 +549,12 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/readbase.Sessions`, with required backend SQL and typed scanners.
   `readbase.ReadOnlyStubs` owns unsupported archive writes; `MirrorStubs` adds
   mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
+- Published `hostedRead` operations keep physical queries, alias/link/pin
+  hydration and cursors in one read-only repeatable-read transaction. Borrowed
+  views share runtime locks and configuration, never pool ownership. Their
+  pricing loads run synchronously on that transaction and stay view-local;
+  detached pricing singleflight belongs only to owning stores. Source probes
+  retain their separate live revision fence.
 - All four backends share activity report assembly and session usage selection
   in `internal/activity`. Explicit inputs supply usage, candidate streams,
   message counts and project maps; SQL, pricing, caches and read lifetimes

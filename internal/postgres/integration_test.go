@@ -165,7 +165,7 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	// pushOnce runs pushSecretFindings in its own transaction and returns
 	// whether it reported a change.
 	pushOnce := func() bool {
-		tx, err := ps.pg.BeginTx(ctx, nil)
+		tx, err := ps.DB().BeginTx(ctx, nil)
 		require.NoError(t, err, "begin tx")
 		changed, err := ps.pushSecretFindings(ctx, tx, sessID)
 		if err != nil {

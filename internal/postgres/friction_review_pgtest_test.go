@@ -91,7 +91,7 @@ func TestFrictionConcurrentBuildsAfterActivityMoves(t *testing.T) {
 						Text: "changed after selection", Title: "updated", Fingerprint: "updated", RulesVersion: friction.RulesVersion}},
 				},
 			}))
-			syncer := &Sync{pg: hub.pg, local: local, machine: "machine", schema: "agentsview_friction_digest_test", schemaDone: true}
+			syncer := &Sync{pg: hub.DB(), local: local, machine: "machine", schema: "agentsview_friction_digest_test", schemaDone: true}
 			_, err = syncer.Push(ctx, true, nil)
 			require.NoError(t, err)
 			buildSecond := func() {
@@ -189,7 +189,7 @@ func TestFrictionHubCatchesUpAfterLatePush(t *testing.T) {
 			},
 		}))
 	}
-	syncer := &Sync{pg: hub.pg, local: local, machine: "machine", schema: "agentsview_friction_digest_test", schemaDone: true}
+	syncer := &Sync{pg: hub.DB(), local: local, machine: "machine", schema: "agentsview_friction_digest_test", schemaDone: true}
 	_, err = syncer.Push(t.Context(), true, nil)
 	require.NoError(t, err)
 	reps, err := r.CatchUp(t.Context())
@@ -226,7 +226,7 @@ func TestFrictionMidnightDSTParity(t *testing.T) {
 			Friction: &db.SessionFrictionUpdate{RulesVersion: friction.RulesVersion, Hash: s.id},
 		}))
 	}
-	syncer := &Sync{pg: hub.pg, local: local, machine: "machine", schema: "agentsview_friction_digest_test", schemaDone: true}
+	syncer := &Sync{pg: hub.DB(), local: local, machine: "machine", schema: "agentsview_friction_digest_test", schemaDone: true}
 	_, err = syncer.Push(t.Context(), true, nil)
 	require.NoError(t, err)
 	for name, store := range map[string]review.Store{"sqlite": local, "postgres": hub} {

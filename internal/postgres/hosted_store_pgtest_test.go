@@ -250,14 +250,14 @@ func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
 
 }
 
-func TestHostedReadRetriesTheWholeIdentitySnapshot(t *testing.T) {
+func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("before")))
 	h, err := newHostedAdapter(f.runtime, f.tenant)
 	require.NoError(t, err)
 	reads := 0
-	value, err := hostedRead(t.Context(), h, func(_ hostedRevision) (string, error) {
+	value, err := hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (string, error) {
 		reads++
 		target, e := h.resolve(t.Context(), "codex:portable")
 		if e != nil {
@@ -274,11 +274,13 @@ func TestHostedReadRetriesTheWholeIdentitySnapshot(t *testing.T) {
 		return messages[0].Content, nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "after", value)
-	assert.Equal(t, 2, reads)
+	assert.Equal(t, "before", value)
+	assert.Equal(t, 1, reads)
 	t.Run("corpus", func(t *testing.T) {
 		reads = 0
-		got, err := hostedRead(t.Context(), h, func(rev hostedRevision) (hostedRevision, error) {
+		before, err := h.revision(t.Context())
+		require.NoError(t, err)
+		got, err := hostedRead(t.Context(), h, func(h *HostedStore, rev hostedRevision) (hostedRevision, error) {
 			reads++
 			if reads == 1 {
 				_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET corpus_revision=corpus_revision+1 WHERE singleton=1`)
@@ -287,29 +289,27 @@ func TestHostedReadRetriesTheWholeIdentitySnapshot(t *testing.T) {
 			return rev, nil
 		})
 		require.NoError(t, err)
-		after, err := h.revision(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, after, got)
-		assert.Equal(t, 2, reads)
+		assert.Equal(t, before, got)
+		assert.Equal(t, 1, reads)
 	})
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('revision-probe','synthetic','archive','codex')`)
 	require.NoError(t, err)
 	before, err := h.revision(t.Context())
 	require.NoError(t, err)
 	reads = 0
-	_, err = hostedRead(t.Context(), h, func(_ hostedRevision) (string, error) {
+	_, err = hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (string, error) {
 		reads++
 		_, err := f.runtime.ExecContext(t.Context(), `UPDATE sessions SET display_name='still changing' WHERE id='revision-probe'`)
 		require.NoError(t, err)
 		return "", sql.ErrNoRows
 	})
-	assert.ErrorIs(t, err, ErrHostedIdentityChanged)
-	assert.Equal(t, 3, reads)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+	assert.Equal(t, 1, reads)
 	after, err := h.revision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, before.Identity, after.Identity)
 	assert.Equal(t, before.Selection, after.Selection)
-	assert.Equal(t, before.Corpus+3, after.Corpus)
+	assert.Equal(t, before.Corpus+1, after.Corpus)
 	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='revision-probe'`)
 	require.NoError(t, err)
 	// A legacy collision changes public identity while preserving both variants.

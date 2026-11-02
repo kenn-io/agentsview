@@ -293,7 +293,7 @@ func TestPushFrictionReportsChange(t *testing.T) {
 	require.NoError(t, err)
 
 	pushOnce := func() bool {
-		tx, err := ps.pg.BeginTx(ctx, nil)
+		tx, err := ps.DB().BeginTx(ctx, nil)
 		require.NoError(t, err)
 		f, err := ps.pushFrictionFindings(ctx, tx, id)
 		require.NoError(t, err)

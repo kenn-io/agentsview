@@ -116,6 +116,9 @@ The latest release is
 
 **Bug fixes**
 
+- Hosted PostgreSQL searches and session reads stay available while raw captures
+  arrive and transcripts are published. Each hosted read uses one database
+  snapshot for its content, public identities and related data.
 - DeepSeek Harness sessions that were missing from the archive now import. This
   covers compressed session logs written without zstd content checksums, and
   sessions that ran shell commands, which log `job/registered` and
@@ -128,9 +131,6 @@ The latest release is
 - Hosted transcript jobs whose workers keep stopping now fail with error class
   `lease` after one run past `raw_max_attempts`, instead of retrying forever.
   Workers from an older processing generation can no longer change a newer lease.
-- Hosted PostgreSQL searches and session reads no longer fail solely because
-  newly accepted raw captures are waiting for processing. Changes to published
-  content or public identities still cause reads to retry.
 - Crashed or still-running Copilot CLI sessions now show tokens and estimated
   cost.
 - Oh My Pi subagent runs now appear under the correct parent, including runs

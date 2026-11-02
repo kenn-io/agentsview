@@ -248,7 +248,7 @@ func TestFrictionSubjectsSeekActivityAndMembership(t *testing.T) {
 			assert.ElementsMatch(t, want, ids)
 			for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 				t.Run(fmt.Sprintf("%d/%t/%s", history, rebuild, mode), func(t *testing.T) {
-					tx, err := store.pg.BeginTx(t.Context(), nil)
+					tx, err := store.DB().BeginTx(t.Context(), nil)
 					require.NoError(t, err)
 					defer tx.Rollback()
 					_, err = tx.ExecContext(t.Context(), `SET LOCAL plan_cache_mode=`+mode)
