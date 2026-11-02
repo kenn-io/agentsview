@@ -58,7 +58,6 @@ func TestCommitTrailersHistory(t *testing.T) {
 	require.Len(t, commits, 1)
 	assert.Equal(t, []string{"claude:older"}, commits[0].Sessions)
 	assert.Equal(t, "origin/older", commits[0].Branch)
-
 }
 
 func TestCommitTrailersSHA256(t *testing.T) {
