@@ -645,7 +645,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // session identities.)
 // (163: count Copilot CLI usage receipts. Re-parse Copilot sources in place;
 // source and session identities are unchanged.)
-const dataVersion = 163
+// (164: retain provider-native identity evidence for Codex-format and Evener
+// sources. Re-parse those providers in place; source and session IDs stay fixed.)
+const dataVersion = 164
 
 const archiveOnlyVersionBase = 1 << 20
 
