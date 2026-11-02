@@ -162,12 +162,21 @@ func (u *Uploader) recordFailure(
 		case apiError.Code == rawclient.CodeHeadConflict:
 			class = rawcheckpoint.GenerationFailureParentReceiptConflict
 			retryAt = time.Time{}
+		case errors.Is(cause, rawclient.ErrUploadSessionExpired):
+			// The capture can retry after the bounded upload-session restart expires.
+		case apiError.Status == http.StatusConflict &&
+			apiError.Code == rawclient.CodeRequestSigningRejected:
+			// Replay admission can recover; signed retries get fresh nonces.
 		case apiError.Status == http.StatusRequestTimeout,
 			apiError.Status == http.StatusTooManyRequests,
 			apiError.Status >= http.StatusInternalServerError,
 			apiError.Code == rawclient.CodeMissingObject:
 		case apiError.Code == rawclient.CodeInvalidRequest,
-			apiError.Code == rawclient.CodeChecksumMismatch:
+			apiError.Code == rawclient.CodeChecksumMismatch,
+			apiError.Status >= http.StatusBadRequest && apiError.Status < http.StatusInternalServerError &&
+				apiError.Status != http.StatusUnauthorized && apiError.Status != http.StatusForbidden:
+			// Credential failures can recover after credential or policy changes.
+			// Other 4xx responses are deterministic unless handled above.
 			class = rawcheckpoint.GenerationFailurePermanent
 			retryAt = time.Time{}
 		}

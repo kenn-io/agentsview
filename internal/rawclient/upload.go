@@ -17,7 +17,10 @@ import (
 
 // maxUploadOffsetConflicts bounds consecutive offset-conflict recoveries so a
 // server that keeps rejecting cannot loop the client forever.
-const maxUploadOffsetConflicts = 8
+const (
+	maxUploadOffsetConflicts = 8
+	maxUploadSessionRestarts = 1
+)
 
 // MissingObjects asks the server which of objects it does not already hold
 // for provider and returns that subset in request order.
@@ -70,30 +73,51 @@ func (c *Client) MissingObjects(
 // the caller must re-capture the source. When the confirmed offset reaches
 // the full length before the server reports completion, one empty PATCH at
 // that offset triggers finalization — success is never reported before the
-// server confirms the session complete.
+// server confirms the session complete. If that session expires during a
+// PATCH, the client starts a replacement session and replays the object once.
 func (c *Client) UploadObject(
 	ctx context.Context,
 	provider parser.AgentType,
 	object rawsync.ObjectRef,
 	content io.ReaderAt,
 ) error {
-	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncUploadsResp, error) {
-		return api.PostAPIV1RawSyncUploadsWithResponse(ctx, &apiclient.PostAPIV1RawSyncUploadsRequestOptions{Body: &apiclient.RawSyncUploadStartInputBody{Provider: string(provider), Object: object}})
-	})
-	if err != nil {
-		return err
+	for restart := 0; ; restart++ {
+		response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncUploadsResp, error) {
+			return api.PostAPIV1RawSyncUploadsWithResponse(ctx, &apiclient.PostAPIV1RawSyncUploadsRequestOptions{Body: &apiclient.RawSyncUploadStartInputBody{Provider: string(provider), Object: object}})
+		})
+		if err != nil {
+			return err
+		}
+		session := response.JSON200
+		if err := validateUploadIdentity(*session, object, ""); err != nil {
+			return err
+		}
+		if err := validateUploadProgress(session.Offset, session.Complete, object.Length); err != nil {
+			return err
+		}
+		if session.Complete {
+			return nil
+		}
+		err = c.uploadSession(ctx, *session.UploadID, object, content, session.Offset)
+		if err == nil {
+			return nil
+		}
+		if !isMissingUploadSessionError(err) {
+			return err
+		}
+		if restart >= maxUploadSessionRestarts {
+			return fmt.Errorf("%w: %w", ErrUploadSessionExpired, err)
+		}
 	}
-	session := response.JSON200
-	if err := validateUploadIdentity(*session, object, ""); err != nil {
-		return err
-	}
-	if err := validateUploadProgress(session.Offset, session.Complete, object.Length); err != nil {
-		return err
-	}
-	if session.Complete {
-		return nil
-	}
-	offset := session.Offset
+}
+
+func (c *Client) uploadSession(
+	ctx context.Context,
+	uploadID string,
+	object rawsync.ObjectRef,
+	content io.ReaderAt,
+	offset int64,
+) error {
 	buf := make([]byte, c.chunkBytes)
 	conflicts := 0
 	for offset < object.Length {
@@ -105,9 +129,7 @@ func (c *Client) UploadObject(
 			(!errors.Is(err, io.EOF) || n != len(chunk)) {
 			return fmt.Errorf("rawclient: read object bytes at %d: %w", offset, err)
 		}
-		next, complete, err := c.appendChunk(
-			ctx, *session.UploadID, object, offset, chunk,
-		)
+		next, complete, err := c.appendChunk(ctx, uploadID, object, offset, chunk)
 		if err != nil {
 			if apiErr, ok := errors.AsType[*APIError](err); ok &&
 				apiErr.Code == CodeUploadOffset &&
@@ -142,9 +164,7 @@ func (c *Client) UploadObject(
 	// the start response and the last chunk can both land here. One empty
 	// PATCH at the confirmed offset asks the server to finalize; custody is
 	// not accepted until it answers complete.
-	next, complete, err := c.appendChunk(
-		ctx, *session.UploadID, object, offset, nil,
-	)
+	next, complete, err := c.appendChunk(ctx, uploadID, object, offset, nil)
 	if err != nil {
 		return err
 	}
@@ -153,6 +173,11 @@ func (c *Client) UploadObject(
 			"rawclient: upload session not finalized at offset %d", next)
 	}
 	return nil
+}
+
+func isMissingUploadSessionError(err error) bool {
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && apiErr.Status == http.StatusNotFound && apiErr.Code == CodeNotFound
 }
 
 // appendChunk PATCHes one chunk at offset and returns the server-confirmed

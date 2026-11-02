@@ -31,14 +31,19 @@ const (
 	CodeUploadOffset     = "upload_offset_conflict"
 	CodeChecksumMismatch = "checksum_mismatch"
 	// Gateway timeouts must be matched on HTTP Status 504, not this code field.
-	CodeGatewayTimeout = "gateway_timeout"
-	CodeInternal       = "internal_error"
+	CodeGatewayTimeout         = "gateway_timeout"
+	CodeInternal               = "internal_error"
+	CodeRequestSigningRejected = "request_signing_rejected"
 )
 
 const (
 	defaultChunkBytes  = int64(4 << 20) // matches rawsync.DefaultUploadChunkBytes
 	defaultTokenMargin = time.Minute
 )
+
+// ErrUploadSessionExpired marks an upload session that still returned not found
+// after the client's bounded replacement attempt.
+var ErrUploadSessionExpired = errors.New("rawclient: upload session expired")
 
 // maxErrorBodyBytes caps how much of an error response body is read before
 // decoding it; larger bodies are truncated, never buffered whole.

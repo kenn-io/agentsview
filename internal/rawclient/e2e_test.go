@@ -1,4 +1,4 @@
-package rawclient
+package rawclient_test
 
 import (
 	"bytes"
@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
+	"go.kenn.io/agentsview/internal/rawclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -60,7 +61,7 @@ func TestRawClientEndToEnd(t *testing.T) {
 	assert.Equal(t, enrollment.Identity.DeviceID, storedDevice)
 
 	// A small ChunkBytes forces every object through multiple PATCHes.
-	client, err := NewClient(Config{
+	client, err := rawclient.NewClient(rawclient.Config{
 		BaseURL:     httpServer.URL,
 		DeviceID:    enrollment.Identity.DeviceID,
 		Credential:  enrollment.Credential,
@@ -184,10 +185,10 @@ func TestRawClientEndToEnd(t *testing.T) {
 		"capture-e2e-3", capturedAt.Add(2*time.Minute), firstCommit.Receipt,
 	))
 	require.Error(t, err)
-	var apiErr APIError
-	require.True(t, AsAPIError(err, &apiErr))
+	var apiErr rawclient.APIError
+	require.True(t, rawclient.AsAPIError(err, &apiErr))
 	assert.Equal(t, http.StatusConflict, apiErr.Status)
-	assert.Equal(t, CodeHeadConflict, apiErr.Code)
+	assert.Equal(t, rawclient.CodeHeadConflict, apiErr.Code)
 	assert.Equal(t, secondCommit.ManifestID, apiErr.CurrentManifestID)
 	assert.Equal(t, secondCommit.Receipt, apiErr.CurrentReceipt)
 	assert.Equal(t, int64(2), apiErr.CurrentGeneration)
