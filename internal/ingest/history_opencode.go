@@ -53,15 +53,15 @@ func shouldPreserveOpenCodeFormatArchive(
 	if IsOpenCodeFormatSQLiteVirtualPath(agent, path) && !storedIsStorageArchive {
 		return false, nil
 	}
+	if storedHasStorageFingerprint &&
+		parser.HasOpenCodeStorageFingerprint(currentHash) &&
+		!parser.OpenCodeStorageFingerprintMissing(storedHash, currentHash) {
+		return false, nil
+	}
 	if err := prior.loadMessages(ctx); err != nil {
 		return false, err
 	}
 	if len(prior.Messages) == 0 {
-		return false, nil
-	}
-	if storedHasStorageFingerprint &&
-		parser.HasOpenCodeStorageFingerprint(currentHash) &&
-		!parser.OpenCodeStorageFingerprintMissing(storedHash, currentHash) {
 		return false, nil
 	}
 	if storedIsStorageArchive &&
