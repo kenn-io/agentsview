@@ -640,7 +640,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (161: record Posit Assistant per-message thinking effort as reasoning
 // effort. Re-parse Posit Assistant sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 161
+// (162: repair Codex-format forks that missed a parent page in their cached
+// directory inventory. Re-parse sources in place, preserving source and
+// session identities.)
+const dataVersion = 162
 
 const archiveOnlyVersionBase = 1 << 20
 
