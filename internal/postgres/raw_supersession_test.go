@@ -15,6 +15,7 @@ import (
 // The oracle counts edges in a generated logical identity graph, independently
 // of physical cohorts and the implementation's connected-component matcher.
 func TestRawLogicalSupersessionsModel(t *testing.T) {
+	requireHegel(t)
 	hegel.Test(t, func(ht *hegel.T) {
 		var rows []rawparity.Candidate
 		var edges [3][3]bool
@@ -150,6 +151,7 @@ func TestRawLegacyPinMatchesUUIDAndNormalizedContent(t *testing.T) {
 // A normalized match is ordinal-independent, but the installed pin key belongs
 // to the exact target message and includes its ordinal.
 func TestRawLegacyPinTargetKeyProperty(t *testing.T) {
+	requireHegel(t)
 	hegel.Test(t, func(ht *hegel.T) {
 		ordinal := hegel.Draw(ht, hegel.Integers(0, math.MaxInt32))
 		source := db.Message{Ordinal: 0, Role: "user", Content: hegel.Draw(ht, hegel.Text()), SourceUUID: "uuid:" + hegel.Draw(ht, hegel.Text())}
