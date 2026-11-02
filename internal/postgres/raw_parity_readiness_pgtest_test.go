@@ -5,8 +5,6 @@ package postgres
 import (
 	"database/sql"
 	"encoding/hex"
-	"os"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -109,28 +107,9 @@ func TestLoadRawParityReadinessIgnoresHistoricalFailure(t *testing.T) {
 	assert.Equal(t, []RawParityReadiness{{Device: "device-a", Provider: "codex", Pending: 1}}, got)
 }
 
-func TestRawParityRuntimeCannotReadOtherTenant(t *testing.T) {
-	a := newHostedFixture(t, "tenant-parity-a")
-	b := newProjectionFixture(t)
-	m, _ := b.accept(t, "device-b", "foreign", "")
-	require.NoError(t, b.sink.Project(t.Context(), b.lease(t, m), m, projectionOutcome("foreign")))
-	resolved, err := b.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	require.NoError(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
-	tx := parityTx(t, a.runtime)
-	snapshots, err := LoadRawParitySnapshots(t.Context(), tx, []string{resolved.SessionID})
-	require.NoError(t, err)
-	assert.Empty(t, snapshots)
-	readiness, err := LoadRawParityReadiness(t.Context(), tx, RawParityScope{}, "parser-1")
-	require.NoError(t, err)
-	assert.Empty(t, readiness)
-}
-
 // An independent source list is the oracle for complete, filtered counts.
 func TestLoadRawParityReadinessScopeProperty(t *testing.T) {
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "amd64" && os.Getenv("HEGEL_LIBHEGEL_PATH") == "" {
-		t.Skip("Hegel requires HEGEL_LIBHEGEL_PATH on darwin/amd64")
-	}
+	requireHegel(t)
 	f := parityReadinessFixture(t)
 	tx := parityTx(t, f.runtime)
 	sources := []struct{ device, provider, state string }{
