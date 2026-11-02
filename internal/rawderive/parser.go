@@ -155,6 +155,7 @@ func (p *ProviderParser) prepareSource(
 		Machine:               p.machine,
 		StableSourceSnapshots: true,
 		PathRewriter:          paths.rewrite,
+		StoredPathResolver:    paths.resolve,
 	})
 	if provider == nil {
 		return nil, parser.SourceRef{}, nil, nil, nil, fmt.Errorf("%w: provider construction failed", rawsync.ErrInvalid)
@@ -403,6 +404,19 @@ func matchProviderSource(
 	}
 	var matches, primaryMatches []match
 	for _, source := range sources {
+		// A companion is an input to this source, not another source to plan.
+		// Its own dependencies may be absent from this manifest by design.
+		if !localArchive && !rawCaptureSourceIdentityMatches(
+			source, source.Key, manifest.Manifest.SourceKey, sourceEntry,
+		) {
+			continue
+		}
+		if !localArchive && source.Key == source.DisplayPath {
+			primaryPath, err := materialized.EntryPath(sourceEntry)
+			if err != nil || filepath.Clean(source.DisplayPath) != filepath.Clean(primaryPath) {
+				continue
+			}
+		}
 		var members []parser.SourceRef
 		var plan parser.RawCapturePlan
 		var supported bool

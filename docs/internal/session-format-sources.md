@@ -2800,6 +2800,17 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
+- **Raw capture (2026-11-02):** Reverified against the pinned upstream
+  sources below and synthetic capture/upload/hosted replay fixtures for
+  direct and recursive sessions, including pi-subagents directory parents.
+  Raw plans preserve physical JSONL bytes, including malformed files, and
+  include existing parent transcripts whose headers the parser consults.
+  Dependencies must remain within the primary configured root. Hosted
+  replay uses captured parents and lexical project/skill metadata; it
+  does not read client working directories, skill files, or producer
+  blobs. Coverage: `TestPiRawCaptureFamily`,
+  `TestProviderParserHostedPiFamilyParents`, and
+  `TestPiRawSyncCaptureUploadDeriveLifecycle`.
 - **Dialogue projection:** Reverified 2026-10-17 against Pi block-order and
   ingest fixtures. Text blocks retain quoted markers, thinking blocks populate
   `thinking_text`, and tool calls retain their separate inputs and results.
@@ -2897,6 +2908,17 @@ schemas keep their existing ordering behavior.
 
 ## Prime Agent (`prime-agent`)
 
+- **Raw capture (2026-11-02):** Reverified against the pinned upstream
+  sources below and synthetic capture/upload/hosted replay fixtures for
+  flat session roots and path-valued fork parents.
+  Raw plans preserve physical JSONL bytes, including malformed files, and
+  include existing parent transcripts whose headers the parser consults.
+  Dependencies must remain within the primary configured root. Hosted
+  replay uses captured parents and lexical project/skill metadata; it
+  does not read client working directories, skill files, or producer
+  blobs. Coverage: `TestPiRawCaptureFamily`,
+  `TestProviderParserHostedPiFamilyParents`, and
+  `TestPiRawSyncCaptureUploadDeriveLifecycle`.
 - **Format:** Pi-family, tree-structured JSONL with current saved sessions
   stored directly under a flat session directory.
 
@@ -2942,6 +2964,17 @@ schemas keep their existing ordering behavior.
 
 ## OMO (`omo`)
 
+- **Raw capture (2026-11-02):** Reverified against the pinned upstream
+  sources below and synthetic capture/upload/hosted replay fixtures for
+  recursive senpi sessions and Pi-compatible parent headers.
+  Raw plans preserve physical JSONL bytes, including malformed files, and
+  include existing parent transcripts whose headers the parser consults.
+  Dependencies must remain within the primary configured root. Hosted
+  replay uses captured parents and lexical project/skill metadata; it
+  does not read client working directories, skill files, or producer
+  blobs. Coverage: `TestPiRawCaptureFamily`,
+  `TestProviderParserHostedPiFamilyParents`, and
+  `TestPiRawSyncCaptureUploadDeriveLifecycle`.
 - **Format:** Pi-family, tree-structured JSONL, one file per session under an
   encoded working-directory folder below `~/.omo/agent/sessions/`.
 
@@ -2976,6 +3009,18 @@ schemas keep their existing ordering behavior.
 
 ## Oh My Pi (`omp`)
 
+- **Raw capture (2026-11-02):** Reverified against the pinned upstream
+  sources below and synthetic capture/upload/hosted replay fixtures for
+  project sessions, nested task parents, leading title slots, and title
+  rewrites.
+  Raw plans preserve physical JSONL bytes, including malformed files, and
+  include existing parent transcripts whose headers the parser consults.
+  Dependencies must remain within the primary configured root. Hosted
+  replay uses captured parents and lexical project/skill metadata; it
+  does not read client working directories, skill files, or producer
+  blobs. Coverage: `TestPiRawCaptureFamily`,
+  `TestProviderParserHostedPiFamilyParents`, and
+  `TestPiRawSyncCaptureUploadDeriveLifecycle`.
 - **Format:** Pi-family JSONL with Oh My Pi session entry and persistence
   extensions.
 
@@ -3030,6 +3075,17 @@ schemas keep their existing ordering behavior.
 
 ## StepCode (`stepcode`)
 
+- **Raw capture (2026-11-02):** Reverified against the pinned upstream
+  sources below and synthetic capture/upload/hosted replay fixtures for
+  recursive project sessions and the unchanged Pi parent format.
+  Raw plans preserve physical JSONL bytes, including malformed files, and
+  include existing parent transcripts whose headers the parser consults.
+  Dependencies must remain within the primary configured root. Hosted
+  replay uses captured parents and lexical project/skill metadata; it
+  does not read client working directories, skill files, or producer
+  blobs. Coverage: `TestPiRawCaptureFamily`,
+  `TestProviderParserHostedPiFamilyParents`, and
+  `TestPiRawSyncCaptureUploadDeriveLifecycle`.
 - **Format:** Pi-family JSONL. StepCode distributes the Pi coding-agent harness
   as a product, so it reuses Pi's session file, entry types, and tree
   structure without modification.

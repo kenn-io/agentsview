@@ -227,7 +227,22 @@ func newE2ERawSyncApplication(
 	uploads *e2EUploadSessionStore,
 ) (*server.Server, *rawsync.DeviceAuthService) {
 	t.Helper()
+	srv, auth, _ := newE2ERawSyncApplicationWithObjects(t, uploads)
+	return srv, auth
+}
 
+// NewRawSyncServerForTest exposes the real HTTP custody fixture to external
+// integration tests that also import the uploader (which depends on rawclient).
+func NewRawSyncServerForTest(t *testing.T) (*httptest.Server, *rawsync.DeviceAuthService, rawsync.ObjectStore) {
+	t.Helper()
+	srv, auth, objects := newE2ERawSyncApplicationWithObjects(t, newE2EUploadSessionStore())
+	httpServer := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpServer.Close)
+	return httpServer, auth, objects
+}
+
+func newE2ERawSyncApplicationWithObjects(t *testing.T, uploads *e2EUploadSessionStore) (*server.Server, *rawsync.DeviceAuthService, rawsync.ObjectStore) {
+	t.Helper()
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repository.Close()) })
@@ -258,7 +273,7 @@ func newE2ERawSyncApplication(
 		server.WithRawSyncServices(auth, custody),
 		server.WithRawSyncUploads(uploadService),
 	)
-	return srv, auth
+	return srv, auth, objects
 }
 
 // e2EDeviceAuthStore is an in-memory DeviceAuthStore backed by maps. It
