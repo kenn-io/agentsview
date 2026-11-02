@@ -1,6 +1,10 @@
 import { m } from "../i18n/index.js";
-import { FrictionService } from "../api/generated/index";
-import type { FrictionDigestItem, FrictionDigestResponse } from "../api/generated/index.js";
+import { FrictionService, KataService } from "../api/generated/index";
+import type {
+  FrictionDigestItem,
+  FrictionDigestResponse,
+  FrictionIssueItem,
+} from "../api/generated/index.js";
 import { isAbortError, isNotFoundError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
 import { perf } from "./perf.svelte.js";
@@ -35,6 +39,12 @@ class FrictionStore {
   lastQueryDurationMs: number | null = $state(null);
   /** Counts list loads that succeeded, from any caller, including Build now. */
   listLoads = $state(0);
+  /** Whether this server's Kata connection is ready to file; checked once per
+   *  visit by checkKata, since kata_available reports only the last check. */
+  kataReady: boolean = $state(false);
+  /** Fingerprints with a Kata action in flight, and the last error per pattern. */
+  issueBusy = $state<Record<string, boolean>>({});
+  issueErrors = $state<Record<string, string>>({});
   #datesRead = new LatestRead();
   #digestRead = new LatestRead();
   #markdownRead = new LatestRead();
@@ -168,6 +178,69 @@ class FrictionStore {
     }
   }
 
+  async checkKata(): Promise<void> {
+    try {
+      const status = await KataService.getApiV1KataStatus();
+      this.kataReady = status.state === "ready";
+    } catch {
+      this.kataReady = false;
+    }
+  }
+
+  fileIssue(fingerprint: string): Promise<void> {
+    return this.#issueAction(fingerprint, async () => {
+      const res = await FrictionService.postApiV1FrictionPatternsByFingerprintIssue(
+        { fingerprint },
+        {},
+      );
+      return res.issue ?? null;
+    });
+  }
+
+  linkIssue(fingerprint: string, issue: string): Promise<void> {
+    return this.#issueAction(fingerprint, async () => {
+      const res = await FrictionService.putApiV1FrictionPatternsByFingerprintIssue(
+        { fingerprint },
+        { issue },
+      );
+      return res.issue;
+    });
+  }
+
+  unlinkIssue(fingerprint: string): Promise<void> {
+    return this.#issueAction(fingerprint, async () => {
+      await FrictionService.deleteApiV1FrictionPatternsByFingerprintIssue({ fingerprint });
+      return null;
+    });
+  }
+
+  // The server owns filing; on success the digest on screen shows the new
+  // link without reloading, and a failure stays with its pattern.
+  async #issueAction(
+    fingerprint: string,
+    act: () => Promise<FrictionIssueItem | null>,
+  ): Promise<void> {
+    if (this.issueBusy[fingerprint]) return;
+    this.issueBusy[fingerprint] = true;
+    delete this.issueErrors[fingerprint];
+    try {
+      const issue = await act();
+      const digest = this.digest;
+      if (digest?.patterns) {
+        this.digest = {
+          ...digest,
+          patterns: digest.patterns.map((p) =>
+            p.fingerprint === fingerprint ? { ...p, issue: issue ?? undefined } : p,
+          ),
+        };
+      }
+    } catch (e) {
+      this.issueErrors[fingerprint] = errorMessage(e);
+    } finally {
+      delete this.issueBusy[fingerprint];
+    }
+  }
+
   cancelInFlightReads(): void {
     this.#datesRead.cancel();
     this.#digestRead.cancel();
@@ -192,6 +265,9 @@ class FrictionStore {
     this.lastBuildWritten = null;
     this.lastUpdatedAt = null;
     this.lastQueryDurationMs = null;
+    this.kataReady = false;
+    this.issueBusy = {};
+    this.issueErrors = {};
   }
 }
 
