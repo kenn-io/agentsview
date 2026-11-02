@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/timeutil"
 	gitcmd "go.kenn.io/kit/git/cmd"
 )
 
@@ -30,11 +31,21 @@ func RefsFingerprint(ctx context.Context, repo string) (string, []string, error)
 	if err != nil {
 		return "", nil, fmt.Errorf("git show-ref: %w: %s", err, stderr)
 	}
+	worktrees, stderr, err := gitcmd.New().Run(ctx, repo, nil, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", nil, fmt.Errorf("git worktree list: %w: %s", err, stderr)
+	}
 	var tips []string
 	for line := range strings.Lines(string(out)) {
 		sha, _, _ := strings.Cut(line, " ")
 		tips = append(tips, sha)
 	}
+	for line := range strings.Lines(string(worktrees)) {
+		if sha, ok := strings.CutPrefix(strings.TrimSpace(line), "HEAD "); ok {
+			tips = append(tips, sha)
+		}
+	}
+	out = append(out, worktrees...)
 	return fmt.Sprintf("%x", sha256.Sum256(out)), tips, nil
 }
 
@@ -49,7 +60,8 @@ func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]
 	for _, tip := range previous {
 		revisions += "^" + tip + "\n"
 	}
-	args := []string{"log", "--all", "--stdin", "--source", "-E", "--grep=^Agent-Session:", "--format=%H%x1f%cI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
+	// --all includes HEAD from every worktree, including detached worktrees.
+	args := []string{"log", "--all", "--stdin", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session:", "--format=%H%x1f%cI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
 	out, stderr, err := runner.Run(ctx, repo, strings.NewReader(revisions), args...)
 	if err != nil && strings.Contains(string(stderr), "bad object") {
 		out, stderr, err = runner.Run(ctx, repo, nil, args...)
@@ -63,7 +75,11 @@ func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]
 		if len(fields) != 5 || !trailerSHARE.MatchString(fields[0]) {
 			continue
 		}
-		c := TrailerCommit{SHA: fields[0], CommittedAt: fields[1], Subject: fields[2]}
+		committedAt, err := time.Parse(time.RFC3339, fields[1])
+		if err != nil {
+			return nil, fmt.Errorf("git commit time: %w", err)
+		}
+		c := TrailerCommit{SHA: fields[0], CommittedAt: timeutil.Format(committedAt), Subject: fields[2]}
 		for _, prefix := range []string{"refs/heads/", "refs/remotes/"} {
 			if branch, ok := strings.CutPrefix(fields[3], prefix); ok {
 				c.Branch = branch

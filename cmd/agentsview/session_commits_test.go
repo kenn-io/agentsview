@@ -37,10 +37,17 @@ func TestSessionCommits(t *testing.T) {
 			if format == "json" {
 				got := decodeCLIJSON[db.SessionCommitList](t, out)
 				require.Len(t, got.Commits, 2)
-				assert.Equal(t, "abc1234", got.Commits[0].SHA)
-				assert.Equal(t, "s-commit", got.Commits[0].SessionID)
-				require.NotNil(t, got.Commits[0].Turn)
-				assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", got.Commits[0].Turn.Text)
+				var exact *db.CommitLink
+				for i := range got.Commits {
+					if got.Commits[i].Source == "transcript" {
+						exact = &got.Commits[i]
+					}
+				}
+				require.NotNil(t, exact)
+				assert.Equal(t, "abc1234", exact.SHA)
+				assert.Equal(t, "s-commit", exact.SessionID)
+				require.NotNil(t, exact.Turn)
+				assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", exact.Turn.Text)
 				return
 			}
 			assert.Contains(t, out, "trailer")
@@ -56,4 +63,18 @@ func TestSessionCommits(t *testing.T) {
 			assert.NotContains(t, out, "\x1b")
 		})
 	}
+}
+
+func TestSessionCommitsHeuristicPrompt(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSession(t, dataDir, "editor", "project-a")
+	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "editor", Ordinal: 0, Role: "user", Content: "Tidy docs", Timestamp: "2026-10-30T10:00:00Z"}}))
+	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:editor"}}}))
+	require.NoError(t, d.Close())
+	out, err := executeCommand(newRootCommand(), "session", "commits", "editor")
+	require.NoError(t, err)
+	assert.Contains(t, out, "0: Tidy docs (heuristic)")
 }

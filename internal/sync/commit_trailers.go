@@ -46,7 +46,19 @@ func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) {
 		}
 		paths[key] = identity.rootPath
 	}
-	for _, repo := range slices.Sorted(maps.Keys(paths)) {
+	if e.trailerScanAttempts == nil {
+		e.trailerScanAttempts = make(map[string]time.Time)
+	}
+	order := slices.Sorted(maps.Keys(paths))
+	slices.SortStableFunc(order, func(a, b string) int {
+		return e.trailerScanAttempts[a].Compare(e.trailerScanAttempts[b])
+	})
+	for _, repo := range order {
+		if ctx.Err() != nil {
+			return
+		}
+		// Failed scans also yield their place to repositories still waiting.
+		e.trailerScanAttempts[repo] = time.Now()
 		if err := e.reconcileRepositoryTrailers(ctx, repo, paths[repo]); err != nil {
 			log.Printf("commit trailers in %s: %v", repo, err)
 		}

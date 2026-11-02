@@ -46,6 +46,9 @@ func newSessionCommitsCommand() *cobra.Command {
 				turn := ""
 				if l.Turn != nil {
 					turn = fmt.Sprintf("%d: %s", l.Turn.Ordinal, truncCell(sanitizeTerminal(l.Turn.Text), 100))
+					if l.Turn.Heuristic {
+						turn += " (heuristic)"
+					}
 				}
 				fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sanitizeTerminal(l.SessionID), l.MessageOrdinal, l.CallIndex, sanitizeTerminal(l.ToolUseID), sanitizeTerminal(l.CommittedAt), sanitizeTerminal(l.Source), sanitizeTerminal(l.SHA), sanitizeTerminal(l.Branch), sanitizeTerminal(subject), turn)
 			}

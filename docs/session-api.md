@@ -1575,6 +1575,8 @@ under every archive policy.
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other
 sources, such as tags and stash, leave it empty.
+Their `committed_at` is the Git committer time in UTC. Their `message_ordinal`
+is the suggested prompt's ordinal, or `-1` when no eligible prompt exists.
 
 The suggested `turn` is the last real user prompt in transcript order with a
 usable timestamp at or before commit time plus five minutes. It carries

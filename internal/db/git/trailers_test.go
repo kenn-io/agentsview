@@ -72,3 +72,50 @@ func TestCommitTrailersSHA256(t *testing.T) {
 	require.Len(t, commits, 1)
 	assert.Len(t, commits[0].SHA, 64)
 }
+
+func TestCommitTrailersDetachedWorktree(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Initial")
+	worktree := t.TempDir()
+	gitRun(t, repo, nil, "worktree", "add", "--detach", worktree)
+	before, previous, err := RefsFingerprint(t.Context(), repo)
+	require.NoError(t, err)
+	gitRun(t, worktree, nil, "commit", "--allow-empty", "-qm", "Detached editor\n\nAgent-Session: codex:detached")
+	after, tips, err := RefsFingerprint(t.Context(), repo)
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
+	commits, err := ScanCommitTrailers(t.Context(), repo, previous)
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	assert.Equal(t, []string{"codex:detached"}, commits[0].Sessions)
+	assert.Contains(t, tips, commits[0].SHA)
+	assert.Empty(t, commits[0].Branch)
+	commits, err = ScanCommitTrailers(t.Context(), repo, tips)
+	require.NoError(t, err)
+	assert.Empty(t, commits)
+}
+
+func TestCommitTrailersKeyCase(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	for _, key := range []string{"agent-session", "AGENT-SESSION", "aGeNt-SeSsIoN"} {
+		gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\n"+key+": claude:editor")
+	}
+	commits, err := ScanCommitTrailers(t.Context(), repo, nil)
+	require.NoError(t, err)
+	require.Len(t, commits, 3)
+	for _, commit := range commits {
+		assert.Equal(t, []string{"claude:editor"}, commit.Sessions)
+	}
+}
+
+func TestCommitTrailersUTC(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-10-30T12:10:00+02:00"}, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:editor")
+	commits, err := ScanCommitTrailers(t.Context(), repo, nil)
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	assert.Equal(t, "2026-10-30T10:10:00Z", commits[0].CommittedAt)
+}

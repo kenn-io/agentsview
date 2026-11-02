@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"encoding/json/v2"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,4 +106,54 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	list, err = database.SessionCommitLinks(t.Context(), "editor-session")
 	require.NoError(t, err)
 	assert.Len(t, list.Commits, 2)
+}
+
+func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a shell Git wrapper")
+	}
+	testutil.IsolateGit(t)
+	database := openTestDB(t)
+	root := t.TempDir()
+	slow := filepath.Join(root, "a-slow")
+	later := filepath.Join(root, "z-later")
+	for _, repo := range []string{slow, later} {
+		require.NoError(t, os.Mkdir(repo, 0o700))
+		for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:fair"}} {
+			cmd := exec.CommandContext(t.Context(), "git", args...)
+			cmd.Dir = repo
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+		}
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: repo, Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
+	}
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "fair", Agent: "claude", Project: "project-a", Machine: "local"}))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	// Resolve identities before installing the wrapper so only the scan stalls.
+	engine.cachedProjectIdentity("local", slow)
+	engine.cachedProjectIdentity("local", later)
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := t.TempDir()
+	wrapper := "#!/bin/sh\nif [ \"$PWD\" = \"$TRAILER_TEST_SLOW\" ]; then\n  case \" $* \" in\n    *' show-ref '*) exec sleep 30 ;;\n  esac\nfi\nexec \"$TRAILER_TEST_GIT\" \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o700))
+	t.Setenv("TRAILER_TEST_GIT", realGit)
+	t.Setenv("TRAILER_TEST_SLOW", slow)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Exhaust the shared pass budget in the first repository.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	engine.ReconcileCommitTrailers(ctx)
+	cancel()
+	list, err := database.SessionCommitLinks(t.Context(), "fair")
+	require.NoError(t, err)
+	require.Empty(t, list.Commits)
+	// The next pass must reach the waiting repository before retrying the slow one.
+	ctx, cancel = context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	engine.ReconcileCommitTrailers(ctx)
+	list, err = database.SessionCommitLinks(t.Context(), "fair")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 1)
+	assert.Equal(t, later, list.Commits[0].Repository)
 }
