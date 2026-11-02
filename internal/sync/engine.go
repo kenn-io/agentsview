@@ -9737,7 +9737,7 @@ func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
 	if e.pathRewriter == nil {
 		return true
 	}
-	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
+	return agent != parser.AgentClaude && agent != parser.AgentEvener && agent != parser.AgentMusePersonal && !isCodexFormatAgent(agent)
 }
 
 // providerFreshDigestSourceCurrentInDB reports whether the active stored
@@ -12685,8 +12685,8 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 		return obj.LastModified.UnixNano()
 	}
 
-	if def.Type == parser.AgentEvener {
-		// Session polling must notice metadata and parent changes too.
+	if def.Type == parser.AgentEvener || def.Type == parser.AgentMusePersonal {
+		// Session polling must notice companion metadata changes too.
 		// This opaque stat token is compared for equality, not ordering.
 		if hasher := e.sources().providerStatHashers[def.Type]; hasher != nil {
 			return int64(hasher.ComputeMultiFileStatHash(path))
