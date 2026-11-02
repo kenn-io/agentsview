@@ -91,7 +91,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		// Native evidence can arrive on a later parse of the same source/member.
 		// Recover history from its source-local branch before changing groups.
-		if c.Session.SourceSessionID != "" {
+		// A completed promotion retains that branch as history; later uploads
+		// reconcile against the native branch instead of promoting it again.
+		if _, nativeExists := priorByGroup[group]; c.Session.SourceSessionID != "" && !nativeExists {
 			local := c.Session
 			local.SourceSessionID = ""
 			localGroup, _ := rawGroupID(m, local)
@@ -101,9 +103,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 					return err
 				}
 				if metadata.Session.SourceSessionID == "" && metadata.Session.Agent == c.Session.Agent {
-					if _, exists := priorByGroup[group]; exists {
-						return errors.New("native identity promotion conflicts with existing source member")
-					}
 					promotions[group] = previous
 					priorByGroup[group] = previous
 				}
