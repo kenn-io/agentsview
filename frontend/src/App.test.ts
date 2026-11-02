@@ -211,6 +211,7 @@ describe("App Recall availability", () => {
       friction_available: false,
       friction_build_allowed: false,
       insight_generation_available: false,
+      kata_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
