@@ -409,6 +409,41 @@ func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
 	assert.Equal(t, 1, retryCalls)
 }
 
+func TestCanceledRefreshAllowsImmediateRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refresh func(context.Context, *db.DB, func(context.Context) (pricing.Catalog, error), time.Time) (bool, error)
+	}{
+		{"Ensure", func(ctx context.Context, database *db.DB, fetch func(context.Context) (pricing.Catalog, error), now time.Time) (bool, error) {
+			return Ensure(ctx, database, false, fetch, now)
+		}},
+		{"RefreshIfStale", func(ctx context.Context, database *db.DB, fetch func(context.Context) (pricing.Catalog, error), now time.Time) (bool, error) {
+			return RefreshIfStale(ctx, database, fetch, time.Hour, now)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testDB(t)
+			now := pricingTestNow()
+			previous := seedPricingAttempt(t, database, now, 2*time.Hour)
+			ctx, cancel := context.WithCancel(t.Context())
+
+			_, err := tc.refresh(ctx, database, func(
+				context.Context,
+			) (pricing.Catalog, error) {
+				cancel()
+				return pricing.Catalog{}, ctx.Err()
+			}, now)
+
+			require.ErrorIs(t, err, context.Canceled)
+			assertPricingAttemptMeta(t, database, previous)
+			retry := &fetchRecorder{}
+			_, err = tc.refresh(t.Context(), database, retry.fetch, now.Add(time.Minute))
+			require.NoError(t, err)
+			assert.Equal(t, 1, retry.calls)
+		})
+	}
+}
+
 // A push refreshes pricing first. Canceling the push must end the refresh
 // even while a long archive write holds the lock its pricing writes need.
 func TestEnsureCurrentStopsWaitingBehindALongWrite(t *testing.T) {
