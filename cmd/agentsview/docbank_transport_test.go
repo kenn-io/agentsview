@@ -19,7 +19,7 @@ func TestReadCommandsIgnoreInvalidDocbankConfig(t *testing.T) {
 		args                  []string
 	}{
 		{"session", "/api/v1/sessions", `{"sessions":[{"id":"remote-session","project":"remote","agent":"claude"}],"total":1}`, []string{"session", "list", "--format", "json"}},
-		{"stats", "/api/v1/session-stats", `{"schema_version":2,"totals":{"sessions_all":5}}`, []string{"stats", "--format", "json"}},
+		{"stats", "/api/v1/session-stats", `{"schema_version":2,"totals":{"sessions_all":5}}`, []string{"report", "stats", "--format", "json"}},
 	} {
 		t.Run(command.name, func(t *testing.T) {
 			seedScopedConfigArchive(t)
