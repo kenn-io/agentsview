@@ -195,9 +195,6 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 		svc = servicehttp.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, b.tr.BrowserURL)
 	case localArchiveQueryBackend:
 		svc = service.NewReadOnlyBackend(b.database)
-	default:
-		closeArchiveQueryBackend(cleanup)
-		return nil, fmt.Errorf("unsupported session usage backend %T", backend)
 	}
 	return &sessionUsageBackend{
 		service: svc, cleanup: cleanup,

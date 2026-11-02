@@ -967,10 +967,12 @@ failures. Backend setup or output failures exit 1. The existing
 
 `agentsview session diagnose <id> --json` reports archived usage and evidence
 for investigating an expensive task. It uses the same pricing and linked
-subagent accounting and source refresh as `session usage`. Pass `--own-only`
-to exclude subagent usage; child links remain listed. Human output is the
-default; `--pg` and `--server` select the same read transports as other session
-commands.
+subagent accounting and source refresh as `session usage`. Pass `--no-sync`
+to read archived usage without refreshing source transcripts. If refresh fails,
+human output warns that it is incomplete, and JSON sets
+`usage.refresh_incomplete`. Pass `--own-only` to exclude subagent usage; child
+links remain listed. Human output is the default; `--pg` and `--server` select
+the same read transports as other session commands.
 Missing sessions and read failures return exit 1.
 
 The versioned JSON includes the usage breakdown, totals of its normalized

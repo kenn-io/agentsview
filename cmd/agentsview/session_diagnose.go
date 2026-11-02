@@ -1,4 +1,4 @@
-// ABOUTME: Read-only, evidence-based session usage diagnostics.
+// ABOUTME: Evidence-based session usage diagnostics with optional source refresh.
 // ABOUTME: Reuses archived usage accounting and does not emit transcript content.
 package main
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -49,17 +50,17 @@ type diagnosisTokens struct {
 }
 
 type sessionDiagnosis struct {
-	SchemaVersion int                         `json:"schema_version"`
-	SessionID     string                      `json:"session_id"`
-	Scope         string                      `json:"scope"`
-	Coverage      diagnosisCoverage           `json:"coverage"`
-	Usage         *service.SessionUsageReport `json:"usage"`
-	ObservedRows  diagnosisTokens             `json:"observed_usage_rows"`
-	Context       []diagnosisContext          `json:"context_timeline"`
-	Compactions   []int                       `json:"compaction_ordinals"`
-	LargeResults  []diagnosisTool             `json:"largest_tool_results"`
-	RetryRuns     []diagnosisRetry            `json:"retry_runs"`
-	ChildLinks    []diagnosisChildLink        `json:"child_links"`
+	SchemaVersion int                  `json:"schema_version"`
+	SessionID     string               `json:"session_id"`
+	Scope         string               `json:"scope"`
+	Coverage      diagnosisCoverage    `json:"coverage"`
+	Usage         *sessionUsageOutput  `json:"usage"`
+	ObservedRows  diagnosisTokens      `json:"observed_usage_rows"`
+	Context       []diagnosisContext   `json:"context_timeline"`
+	Compactions   []int                `json:"compaction_ordinals"`
+	LargeResults  []diagnosisTool      `json:"largest_tool_results"`
+	RetryRuns     []diagnosisRetry     `json:"retry_runs"`
+	ChildLinks    []diagnosisChildLink `json:"child_links"`
 }
 type diagnosisCoverage struct {
 	RequestCount            *int   `json:"request_count"`
@@ -77,7 +78,8 @@ func newSessionDiagnoseCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			backend, err := resolveSessionUsageBackend(cmd, false)
+			noSync, _ := cmd.Flags().GetBool("no-sync")
+			backend, err := resolveSessionUsageBackend(cmd, noSync)
 			if err != nil {
 				return err
 			}
@@ -90,11 +92,10 @@ func newSessionDiagnoseCommand() *cobra.Command {
 			if code == tokenUseExitNotFound {
 				return fmt.Errorf("%w: %s", errSessionNotFound, args[0])
 			}
-			if usage == nil {
-				return fmt.Errorf("session usage unavailable for %s", args[0])
-			}
 			id := usage.SessionID
 			out := buildSessionDiagnosis(id, &usage.SessionUsageReport)
+			out.Usage.RefreshIncomplete = usage.RefreshIncomplete
+			out.Usage.ServerRunning = usage.ServerRunning
 			ownOnly, _ := cmd.Flags().GetBool("own-only")
 			if ownOnly {
 				out.Scope = "usage, tool and context evidence cover the named session only; child links remain listed"
@@ -123,6 +124,7 @@ func newSessionDiagnoseCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("own-only", false, "Exclude subagent usage")
+	cmd.Flags().Bool("no-sync", false, "Use archived usage without synchronizing source transcripts")
 	return cmd
 }
 
@@ -134,7 +136,7 @@ func buildSessionDiagnosis(id string, usage *service.SessionUsageReport) *sessio
 		SchemaVersion: 1,
 		SessionID:     id,
 		Scope:         "usage includes linked subagents; tool and context evidence is the named session only",
-		Usage:         &safeUsage,
+		Usage:         &sessionUsageOutput{SessionUsageReport: safeUsage},
 		Coverage: diagnosisCoverage{
 			RequestCountStatus:      "unavailable: usage rows do not always represent requests",
 			CacheMissReasons:        "unavailable: provider diagnostics not captured",
@@ -173,12 +175,10 @@ func (out *sessionDiagnosis) readMessages(ctx context.Context, svc service.Sessi
 		if page == nil || len(page.Messages) == 0 {
 			break
 		}
+		out.Compactions = append(out.Compactions, ingest.ExtractCompactBoundaryOrdinals(page.Messages)...)
 		for _, m := range page.Messages {
 			if m.HasContextTokens {
 				out.Context = append(out.Context, diagnosisContext{m.Ordinal, m.Timestamp, m.Model, m.ContextTokens})
-			}
-			if m.IsCompactBoundary {
-				out.Compactions = append(out.Compactions, m.Ordinal)
 			}
 			for i, c := range m.ToolCalls {
 				if c.SubagentSessionID != "" && !linked[c.SubagentSessionID] {
@@ -214,7 +214,7 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if _, err := fmt.Fprintf(w, "Session: %s\nScope: %s\n", sanitizeTerminal(d.SessionID), d.Scope); err != nil {
 		return err
 	}
-	if err := renderSessionUsageHuman(w, &sessionUsageOutput{SessionUsageReport: *d.Usage}); err != nil {
+	if err := renderSessionUsageHuman(w, d.Usage); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "Observed usage rows: uncached input %d; cache read %d; cache write %d; output %d (coverage may be incomplete)\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {

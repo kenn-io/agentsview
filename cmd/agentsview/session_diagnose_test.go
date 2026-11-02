@@ -45,13 +45,7 @@ func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
 			ToolCalls:  []db.ToolCall{{SessionID: canonical, ToolUseID: strconv.Itoa(ordinal), ToolName: "read", InputJSON: "{}", ResultContentLength: 20}},
 		}}))
 	}
-	opened := 0
-	original := openPGReadStore
-	openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
-		opened++
-		return store, func() {}, nil
-	}
-	t.Cleanup(func() { openPGReadStore = original })
+	stub := stubPGReadStore(t, store)
 	out, err := executeCommand(newRootCommand(), "session", "diagnose", raw, "--pg", "--format", "json")
 	require.NoError(t, err)
 	var report sessionDiagnosis
@@ -63,7 +57,7 @@ func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
 	assert.Equal(t, []diagnosisRetry{{Tool: "read", Count: 3, FirstOrdinal: 0, LastOrdinal: 2}}, report.RetryRuns)
 	require.Len(t, report.LargeResults, 3)
 	assert.Equal(t, 20, report.LargeResults[0].ResultLength)
-	assert.Equal(t, 1, opened)
+	assert.Equal(t, 1, stub.OpenCount)
 	out, err = executeCommand(newRootCommand(), "session", "diagnose", canonical, "--pg", "--own-only", "--format", "json")
 	require.NoError(t, err)
 	report = sessionDiagnosis{}
@@ -72,7 +66,7 @@ func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
 	assert.Zero(t, report.Usage.SubagentCount)
 	assert.Equal(t, []diagnosisChildLink{{SessionID: "child"}}, report.ChildLinks)
 	assert.Contains(t, report.Scope, "child links remain listed")
-	assert.Equal(t, 2, opened)
+	assert.Equal(t, 2, stub.OpenCount)
 	out, err = executeCommand(newRootCommand(), "session", "diagnose", canonical, "--pg")
 	require.NoError(t, err)
 	assert.Contains(t, out, "  Child: child\n")
@@ -85,6 +79,92 @@ func TestSessionDiagnoseMissingSession(t *testing.T) {
 	var stderr strings.Builder
 	assert.Equal(t, 1, reportCLIError(err, &stderr))
 	assert.Contains(t, stderr.String(), "session not found: missing-session")
+}
+
+func TestSessionDiagnoseRefreshFailure(t *testing.T) {
+	for _, format := range []string{"json", "human"} {
+		t.Run(format, func(t *testing.T) {
+			testDataDir(t)
+			refreshes := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/version":
+					_, _ = w.Write([]byte(`{"api_version":999}`))
+				case "/api/v1/sessions/remote":
+					_, _ = w.Write([]byte(`{"id":"remote","agent":"codex"}`))
+				case "/api/v1/sessions/sync":
+					assert.Equal(t, http.MethodPost, r.Method)
+					refreshes++
+					http.Error(w, `{"error":"refresh failed"}`, http.StatusServiceUnavailable)
+				case "/api/v1/sessions/remote/usage":
+					_, _ = w.Write([]byte(`{"session_id":"remote","has_token_data":true,"total_output_tokens":42}`))
+				case "/api/v1/sessions/remote/messages":
+					_, _ = w.Write([]byte(`{"messages":[]}`))
+				case "/api/v1/sessions/remote/children":
+					_, _ = w.Write([]byte(`[]`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
+			args := []string{"session", "diagnose", "remote", "--server", ts.URL}
+			if format == "json" {
+				args = append(args, "--format", "json")
+			}
+			out, err := executeCommand(newRootCommand(), args...)
+			require.NoError(t, err)
+			assert.Equal(t, 1, refreshes)
+			if format == "json" {
+				var report struct {
+					Usage sessionUsageOutput `json:"usage"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(out), &report))
+				assert.Equal(t, 42, report.Usage.TotalOutputTokens)
+				assert.True(t, report.Usage.RefreshIncomplete)
+			} else {
+				assert.Contains(t, out, "Usage refresh: incomplete; showing archived totals")
+			}
+		})
+	}
+}
+
+func TestSessionDiagnoseNoSync(t *testing.T) {
+	testDataDir(t)
+	refreshes := 0
+	usageReads := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/version":
+			_, _ = w.Write([]byte(`{"api_version":999}`))
+		case "/api/v1/sessions/remote":
+			_, _ = w.Write([]byte(`{"id":"remote","agent":"codex"}`))
+		case "/api/v1/sessions/sync":
+			refreshes++
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/v1/sessions/remote/usage":
+			usageReads++
+			assert.Equal(t, "true", r.URL.Query().Get("subagents"))
+			_, _ = w.Write([]byte(`{"session_id":"remote","has_token_data":true,"total_output_tokens":42,"subagent_count":1}`))
+		case "/api/v1/sessions/remote/messages":
+			_, _ = w.Write([]byte(`{"messages":[{"ordinal":7,"is_compact_boundary":true}]}`))
+		case "/api/v1/sessions/remote/children":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	out, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--server", ts.URL, "--no-sync", "--format", "json")
+	require.NoError(t, err)
+	var report sessionDiagnosis
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
+	assert.Equal(t, 1, report.Usage.SubagentCount)
+	assert.Equal(t, []int{7}, report.Compactions)
+	assert.Equal(t, 1, usageReads)
+	assert.Zero(t, refreshes)
 }
 
 func TestSessionDiagnosisHumanBoundsContext(t *testing.T) {
