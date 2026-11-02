@@ -142,6 +142,8 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"JSON workdir", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser", "/repo"},
 		{"JSON workdir before message text", `{"cmd":"git commit -m \"Document cwd: '/wrong'\"","workdir":"/repo"}`, "[main abc1234] Document cwd: '/wrong'", "/repo"},
 		{"JSON cwd before message text", `{"cmd":"git commit -m \"Document workdir: '/wrong'\"","cwd":"/repo"}`, "[main abc1234] Document workdir: '/wrong'", "/repo"},
+		{"JSON without directory ignores cwd in message", `{"cmd":"git commit -m \"Document cwd: '/wrong'\""}`, "[main abc1234] Document cwd: '/wrong'", "/work"},
+		{"JSON without directory ignores workdir in message", `{"cmd":"git commit -m \"Document workdir: '/wrong'\""}`, "[main abc1234] Document workdir: '/wrong'", "/work"},
 		{"JSON cwd", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser", "/work/sub"},
 		{"JavaScript cwd", `text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`, "/repo"},
 	} {

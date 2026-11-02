@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -128,7 +129,7 @@ func commitRepository(input, cwd string) string {
 	if dir == "" {
 		dir = fields.Cwd
 	}
-	if dir == "" {
+	if dir == "" && !jsontext.Value(input).IsValid() {
 		if match := commitWorkdirRE.FindStringSubmatch(input); match != nil {
 			dir = match[1]
 			if strings.HasPrefix(dir, "\"") {
