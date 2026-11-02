@@ -202,3 +202,16 @@ func TestLoadRawParitySnapshotsContentProperty(t *testing.T) {
 		assert.Equal(ht, tokens, message.OutputTokens)
 	}, hegel.WithTestCases(1000))
 }
+
+func TestLoadRawParitySessionAccounting(t *testing.T) {
+	f := newProjectionFixture(t)
+	_, err := f.runtime.Exec(`INSERT INTO sessions(id,agent,machine,project,total_output_tokens,peak_context_tokens,has_total_output_tokens,has_peak_context_tokens) VALUES('accounting','codex','m','p',17,23,true,true)`)
+	require.NoError(t, err)
+	got, err := LoadRawParitySnapshots(t.Context(), parityTx(t, f.runtime), []string{"accounting"})
+	require.NoError(t, err)
+	session := got["accounting"].Session
+	assert.Equal(t, 17, session.TotalOutputTokens)
+	assert.Equal(t, 23, session.PeakContextTokens)
+	assert.True(t, session.HasTotalOutputTokens)
+	assert.True(t, session.HasPeakContextTokens)
+}

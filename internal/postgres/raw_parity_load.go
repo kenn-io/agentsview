@@ -61,9 +61,9 @@ func checkRawParityTransaction(ctx context.Context, tx *sql.Tx) error {
 func loadRawParitySnapshot(ctx context.Context, tx *sql.Tx, id string) (rawparity.Snapshot, error) {
 	var s rawparity.Snapshot
 	var start, end *time.Time
-	err := tx.QueryRowContext(ctx, `SELECT id,agent,project,cwd,first_message,started_at,ended_at,message_count,user_message_count,parent_session_id,relationship_type
+	err := tx.QueryRowContext(ctx, `SELECT id,agent,project,cwd,first_message,started_at,ended_at,message_count,user_message_count,parent_session_id,relationship_type,total_output_tokens,peak_context_tokens,has_total_output_tokens,has_peak_context_tokens
 	 FROM sessions WHERE id=$1`, id).Scan(&s.Session.ID, &s.Session.Agent, &s.Session.Project, &s.Session.Cwd,
-		&s.Session.FirstMessage, &start, &end, &s.Session.MessageCount, &s.Session.UserMessageCount, &s.Session.ParentSessionID, &s.Session.RelationshipType)
+		&s.Session.FirstMessage, &start, &end, &s.Session.MessageCount, &s.Session.UserMessageCount, &s.Session.ParentSessionID, &s.Session.RelationshipType, &s.Session.TotalOutputTokens, &s.Session.PeakContextTokens, &s.Session.HasTotalOutputTokens, &s.Session.HasPeakContextTokens)
 	if err != nil {
 		return s, err
 	}
