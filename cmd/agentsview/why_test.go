@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -172,6 +173,9 @@ func TestWhyRecordedPrompts(t *testing.T) {
 		assert.Len(t, got.Commits, 2)
 	})
 	t.Run("parent of symlink uses target repository", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows resolves link/.. before following directory symlinks")
+		}
 		otherRepo := initGitRepoOnBranch(t, "main")
 		runGit(t, otherRepo, "config", "user.name", "Test User")
 		runGit(t, otherRepo, "config", "user.email", "test@example.com")
