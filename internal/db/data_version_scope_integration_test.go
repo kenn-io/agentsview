@@ -337,7 +337,7 @@ func TestCodexParentInventoryUpgradeRepairsUnchangedForks(t *testing.T) {
 	version := db.CurrentDataVersion()
 	oldVersion := version - 1
 	agents := []parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}
-	require.ElementsMatch(t, agents, db.ScopedDataVersionProviders(160, 161))
+	require.ElementsMatch(t, agents, db.ScopedDataVersionProviders(161, 162))
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: agents}))
 	for _, agent := range agents {
 		t.Run(string(agent), func(t *testing.T) {

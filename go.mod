@@ -7,7 +7,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.50.0
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/ccoveille/go-safecast/v2 v2.0.1
-	github.com/cenkalti/backoff/v7 v7.0.1
+	github.com/cenkalti/backoff/v7 v7.0.2
 	github.com/coder/websocket v1.8.15
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/dlclark/regexp2/v2 v2.11.0
