@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, TextInput } from "@kenn-io/kit-ui";
-  import type { FrictionIssueItem } from "../../api/generated/index.js";
+  import type { FrictionFilingItem, FrictionIssueItem } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
   import { friction } from "../../stores/friction.svelte.js";
   import { fileableKind } from "./frictionView.js";
@@ -9,16 +9,30 @@
     fingerprint: string;
     kind: string;
     issue?: FrictionIssueItem | null;
+    // Why automatic filing has not linked the pattern.
+    filing?: FrictionFilingItem | null;
     // The server accepts filing from this page and Kata is ready.
     canFile: boolean;
   }
 
-  let { fingerprint, kind, issue = null, canFile }: Props = $props();
+  let { fingerprint, kind, issue = null, filing = null, canFile }: Props = $props();
 
   let linking = $state(false);
   let ref = $state("");
   const busy = $derived(friction.issueBusy[fingerprint] === true);
   const error = $derived(friction.issueErrors[fingerprint]);
+  const filingNote = $derived.by(() => {
+    switch (filing?.state) {
+      case "retry":
+        return { label: m.friction_filing_retry(), title: filing.last_error };
+      case "needs_person":
+        return { label: m.friction_filing_needs_person(), title: filing.last_error };
+      case "paused":
+        return { label: m.friction_filing_paused(), title: m.friction_filing_paused_title() };
+      default:
+        return null;
+    }
+  });
 
   async function link() {
     const value = ref.trim();
@@ -61,8 +75,11 @@
         onclick={() => void friction.unlinkIssue(fingerprint)}
       />
     {/if}
-  {:else if canFile && fileableKind(kind)}
-    {#if linking}
+  {:else}
+    {#if filingNote}
+      <span class="filing-note" title={filingNote.title}>{filingNote.label}</span>
+    {/if}
+    {#if canFile && fileableKind(kind) && linking}
       <TextInput
         size="sm"
         bind:value={ref}
@@ -76,7 +93,7 @@
       />
       <Button size="sm" label={m.friction_issue_link_submit()} {busy} onclick={() => void link()} />
       <Button size="sm" surface="outline" label={m.friction_issue_cancel()} onclick={cancel} />
-    {:else}
+    {:else if canFile && fileableKind(kind)}
       <Button
         size="sm"
         label={m.friction_issue_file()}
@@ -109,6 +126,10 @@
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--accent-blue);
+  }
+  .filing-note {
+    font-size: 12px;
+    color: var(--text-muted);
   }
   .issue-error {
     flex-basis: 100%;

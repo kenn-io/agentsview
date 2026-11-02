@@ -3,7 +3,6 @@ package filing
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -16,16 +15,6 @@ import (
 // pattern. Filing looks it up before creating, so a pattern filed from any
 // archive or by hand earlier maps to one issue.
 const MetadataFingerprint = "friction.fingerprint"
-
-// fileableKinds can be filed. Frustration quotes the user's own words and an
-// interruption carries no text, so neither leaves the archive.
-var fileableKinds = []friction.Kind{
-	friction.KindCorrection, friction.KindError, friction.KindWorkaround,
-	friction.KindDeferral, friction.KindPattern,
-}
-
-// Fileable reports whether patterns of kind k may be filed to Kata.
-func Fileable(k friction.Kind) bool { return slices.Contains(fileableKinds, k) }
 
 // issueContext is what the issue says about the pattern beyond its signal.
 type issueContext struct {

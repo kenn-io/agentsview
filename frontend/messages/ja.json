@@ -3007,6 +3007,10 @@
   "friction_issue_cancel": "キャンセル",
   "friction_issue_unlink": "リンク解除",
   "friction_issue_unlink_title": "リンクを削除します。Kata の課題はそのまま残ります",
+  "friction_filing_retry": "登録に失敗しました。再試行します",
+  "friction_filing_needs_person": "登録を停止しました",
+  "friction_filing_paused": "自動登録を一時停止中",
+  "friction_filing_paused_title": "リンクが削除されたため、自動登録はこのパターンをスキップします。登録またはリンクすると再開します。",
   "friction_digest_heading": "フリクションログ — {date}",
   "friction_digest_built": "{when} に作成（{timezone}）",
   "friction_p0_failed": [

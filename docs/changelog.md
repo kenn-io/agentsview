@@ -18,6 +18,12 @@ The latest release is
   and MCP results. `friction link` and `friction unlink` manage a link by hand.
   See [Kata](/docs/kata/#file-friction-log-patterns).
 
+- The hub can file Friction Log patterns to Kata on its own. With
+  `[friction.kata] auto_file = true`, the hourly Friction Log job files recent
+  unlinked patterns, retries failures for up to 14 days, and leaves a pattern
+  alone after you unlink it. Each unlinked pattern shows why it has no issue.
+  See [File patterns automatically](/docs/kata/#file-patterns-automatically).
+
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
   this executable's processing version a fresh attempt budget.

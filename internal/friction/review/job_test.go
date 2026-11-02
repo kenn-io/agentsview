@@ -1,6 +1,8 @@
 package review_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,4 +60,30 @@ func TestJobYieldsBetweenDates(t *testing.T) {
 	got := stored(t, d, "2026-09-21")
 	require.NotNil(t, got)
 	assert.Equal(t, 1, got.SessionsScanned)
+}
+
+func TestJobRunsAfterCatchUpWork(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seed(t, d, subject{id: "s", ended: "2026-09-21T10:00:00Z"})
+	r := newRunner(d)
+	r.BackfillDays = 1
+	job := review.Job(r, nil)
+	require.NoError(t, job.Run(t.Context()), "nothing installed yet")
+
+	inExclusive := false
+	job = review.Job(r, func(work func() error) error {
+		inExclusive = true
+		defer func() { inExclusive = false }()
+		return work()
+	})
+	var sawDigest, sawExclusive bool
+	r.SetAfterCatchUp(func(ctx context.Context) error {
+		sawDigest = stored(t, d, "2026-09-21") != nil
+		sawExclusive = inExclusive
+		return errors.New("kata went away")
+	})
+	err := job.Run(t.Context())
+	require.EqualError(t, err, "kata went away", "the job reports the work's failure")
+	assert.True(t, sawDigest, "the work runs after the day's digest is stored")
+	assert.False(t, sawExclusive, "the work runs outside the exclusive section")
 }

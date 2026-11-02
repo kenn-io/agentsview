@@ -3030,6 +3030,10 @@
   "friction_issue_cancel": "Ləğv et",
   "friction_issue_unlink": "Bağlantını sil",
   "friction_issue_unlink_title": "Bağlantını sil; Kata tapşırığı olduğu kimi qalır",
+  "friction_filing_retry": "Göndərmə alınmadı, yenidən cəhd ediləcək",
+  "friction_filing_needs_person": "Göndərmə dayandı",
+  "friction_filing_paused": "Avtomatik göndərmə dayandırılıb",
+  "friction_filing_paused_title": "Bağlantı silindiyi üçün avtomatik göndərmə bu nümunəni ötürür. Davam etmək üçün göndərin və ya bağlayın.",
   "friction_digest_heading": "Sürtünmə jurnalı — {date}",
   "friction_digest_built": "{when} tarixində yaradılıb ({timezone})",
   "friction_p0_failed": [

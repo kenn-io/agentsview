@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -55,6 +56,23 @@ type Runner struct {
 	Now          func() time.Time
 	BackfillDays int
 	SeatPatterns []friction.SeatPattern
+
+	// afterCatchUp runs after each scheduled catch-up; see SetAfterCatchUp.
+	afterCatchUp atomic.Pointer[func(context.Context) error]
+}
+
+// SetAfterCatchUp installs work the hourly job runs after catching up, such
+// as automatic filing. The server installs it once it has the Kata
+// connection, which can be after the job's first run; that run skips it.
+func (r *Runner) SetAfterCatchUp(f func(context.Context) error) {
+	r.afterCatchUp.Store(&f)
+}
+
+func (r *Runner) runAfterCatchUp(ctx context.Context) error {
+	if f := r.afterCatchUp.Load(); f != nil && *f != nil {
+		return (*f)(ctx)
+	}
+	return nil
 }
 
 type BuildOptions struct{ Rebuild, DryRun bool }

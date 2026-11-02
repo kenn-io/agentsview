@@ -221,7 +221,7 @@ class FrictionStore {
         { fingerprint },
         {},
       );
-      return { issue: res.issue ?? undefined };
+      return { issue: res.issue ?? undefined, filing: undefined };
     });
   }
 
@@ -231,19 +231,21 @@ class FrictionStore {
         { fingerprint },
         { issue },
       );
-      return { issue: res.issue };
+      return { issue: res.issue, filing: undefined };
     });
   }
 
   unlinkIssue(fingerprint: string): Promise<void> {
     return this.#issueAction(fingerprint, async () => {
       await FrictionService.deleteApiV1FrictionPatternsByFingerprintIssue({ fingerprint });
-      return { issue: undefined };
+      // The server pauses automatic filing for a pattern a person unlinked.
+      return { issue: undefined, filing: { state: "paused", attempts: 0 } };
     });
   }
 
   // The server owns filing; on success the digest on screen shows the new
-  // link without reloading, and a failure stays with its pattern.
+  // link and filing state without reloading, and a failure stays with its
+  // pattern.
   async #issueAction(fingerprint: string, act: () => Promise<IssueChange>): Promise<void> {
     if (this.issueBusy[fingerprint]) return;
     this.issueBusy[fingerprint] = true;

@@ -424,8 +424,12 @@ func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error
 	_, _ = fmt.Fprintln(tw, "COUNT\tSESSIONS\tLAST SEEN\tKIND\tFINGERPRINT\tISSUE\tTITLE")
 	for _, p := range page.Patterns {
 		issue := "-"
-		if p.Issue != nil {
+		switch {
+		case p.Issue != nil:
 			issue = p.Issue.QualifiedID
+		case p.Filing != nil:
+			// Why automatic filing has not linked it: retry, needs_person or paused.
+			issue = "(" + p.Filing.State + ")"
 		}
 		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\n", p.OccurrenceCount, p.SessionCount,
 			sanitizeTerminal(p.LastSeenDate), sanitizeTerminal(p.Kind),

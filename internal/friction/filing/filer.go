@@ -207,7 +207,9 @@ func (f *Filer) Link(ctx context.Context, fingerprint, ref string) (db.FrictionI
 	return f.save(ctx, fingerprint, is, db.FrictionIssueSourceManual)
 }
 
-// Unlink removes the local link. The Kata issue is left as it is.
+// Unlink removes the local link and pauses automatic filing for the
+// pattern, which would otherwise link the same issue again. Filing or
+// linking it by hand clears the pause. The Kata issue is left as it is.
 func (f *Filer) Unlink(ctx context.Context, fingerprint string) error {
 	removed, err := f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
 	if err != nil {
@@ -216,7 +218,9 @@ func (f *Filer) Unlink(ctx context.Context, fingerprint string) error {
 	if !removed {
 		return ErrNotLinked
 	}
-	return nil
+	return f.Store.SaveFrictionFilingState(ctx, db.FrictionFilingState{
+		Fingerprint: fingerprint, State: db.FrictionFilingPaused, UpdatedAt: f.now().UTC(),
+	})
 }
 
 func (f *Filer) ready(ctx context.Context) error {
@@ -259,7 +263,7 @@ func (f *Filer) fileablePattern(ctx context.Context, fingerprint string) (db.Fri
 	if err != nil {
 		return p, friction.Signal{}, "", err
 	}
-	if !Fileable(friction.Kind(p.Kind)) {
+	if !friction.Fileable(friction.Kind(p.Kind)) {
 		return p, friction.Signal{}, "", fmt.Errorf("%w: %s", ErrNotFileable, p.Kind)
 	}
 	d, err := f.Store.GetFrictionDigest(ctx, p.LastSeenDate)

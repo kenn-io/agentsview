@@ -63,10 +63,11 @@ Kata, even when it shares the hub's `[kata]` config.
 
 ## File Friction Log patterns
 
-Filing is manual. On the hub's Friction Log page, each pattern under **Needs
-attention** offers **File to Kata** and **Link issue** once Kata is ready, and a
-linked pattern shows its issue with **Unlink**. The actions appear only where
-the server accepts writes, the same as **Build now**.
+File a pattern by hand, or let the hub file recent patterns every hour. On the
+hub's Friction Log page, each pattern under **Needs attention** offers **File to
+Kata** and **Link issue** once Kata is ready, and a linked pattern shows its
+issue with **Unlink**. The actions appear only where the server accepts writes,
+the same as **Build now**.
 
 From the command line, pick a pattern's fingerprint from
 `agentsview friction patterns`, then file it from the hub:
@@ -100,6 +101,32 @@ digest's `patterns`. Stored digests are not rewritten. Links survive a full
 resync. The same actions are available over HTTP as `POST`, `PUT`, and `DELETE`
 on `/api/v1/friction/patterns/{fingerprint}/issue`; they require auth or a
 localhost request, like `friction run`.
+
+### File patterns automatically
+
+Turn on automatic filing in the hub's configuration, then restart the daemon:
+
+```toml
+[friction.kata]
+auto_file = true
+kinds = ["correction", "pattern"] # Optional; empty means every kind that can be filed.
+```
+
+- Each hour, after it builds digests, the Friction Log job files every unlinked
+  pattern of a chosen kind last seen within `[friction] backfill_days`. It
+  uses the same lookup as `friction file`, so it links an issue Kata already
+  holds instead of filing a duplicate.
+- While Kata is not ready, the job files nothing and records no failures.
+- After a failed request, the job tries again in 1 hour, then doubles the wait
+  up to 24 hours. After 14 days of failures, or when Kata rejects the request
+  or holds several candidate issues, the pattern waits for you to file or link
+  it.
+- Unlinking a pattern stops automatic filing for it. Filing or linking it by
+  hand starts it again.
+
+A pattern without an issue shows why: a note on the Friction Log page,
+`(retry)`, `(needs_person)`, or `(paused)` in the `ISSUE` column of
+`friction patterns`, and the `filing` field in API and MCP results.
 
 ## Limits
 

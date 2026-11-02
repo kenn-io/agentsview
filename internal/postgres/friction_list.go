@@ -156,8 +156,7 @@ func (s *Store) ListFrictionPatterns(
 		SELECT p.fingerprint, p.kind, p.title, p.first_seen_date,
 			p.last_seen_date, p.occurrence_count, p.session_count,
 			p.last_subject_id, p.last_ordinal, `+frictionIssueColumns+`
-		FROM friction_patterns p
-		LEFT JOIN friction_issue_links l ON l.fingerprint = p.fingerprint `+where+`
+		FROM friction_patterns p `+frictionIssueJoins+` `+where+`
 		ORDER BY p.occurrence_count DESC, p.last_seen_date DESC, p.fingerprint ASC
 		LIMIT `+limitParam+` OFFSET `+offsetParam, pb.args...)
 	if err != nil {
@@ -180,6 +179,7 @@ func (s *Store) ListFrictionPatterns(
 		}
 		p.LastOrdinal = pgNullIntPtr(ordinal)
 		p.Issue = issue.link(p.Fingerprint)
+		p.Filing = issue.filing(p.Fingerprint)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {

@@ -221,6 +221,8 @@ export * from "./frictionDigestResponseSessions.ts";
 export * from "./frictionDigestsResponse.ts";
 export * from "./frictionFileInputBody.ts";
 export * from "./frictionFileResponse.ts";
+export * from "./frictionFilingItem.ts";
+export * from "./frictionFilingItemState.ts";
 export * from "./frictionFindingItem.ts";
 export * from "./frictionFindingsResponse.ts";
 export * from "./frictionIssueItem.ts";

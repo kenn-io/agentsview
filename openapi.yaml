@@ -5080,6 +5080,28 @@ components:
       required:
         - created
       type: object
+    FrictionFilingItem:
+      additionalProperties: false
+      properties:
+        attempts:
+          format: int64
+          type: integer
+        last_error:
+          type: string
+        next_attempt_at:
+          format: date-time
+          type: string
+        state:
+          description: "retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link"
+          enum:
+            - retry
+            - needs_person
+            - paused
+          type: string
+      required:
+        - state
+        - attempts
+      type: object
     FrictionFindingItem:
       additionalProperties: false
       properties:
@@ -5231,6 +5253,8 @@ components:
     FrictionPatternItem:
       additionalProperties: false
       properties:
+        filing:
+          $ref: "#/components/schemas/FrictionFilingItem"
         fingerprint:
           type: string
         first_seen_date:

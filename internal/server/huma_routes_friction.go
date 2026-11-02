@@ -199,6 +199,8 @@ type frictionPatternItem struct {
 	LastOrdinal     *int   `json:"last_ordinal"`
 	// Issue is the Kata issue filed or linked for this pattern.
 	Issue *frictionIssueItem `json:"issue,omitempty"`
+	// Filing is set while automatic filing has not linked the pattern.
+	Filing *frictionFilingItem `json:"filing,omitempty"`
 }
 
 type frictionRunResponse struct {
@@ -381,7 +383,7 @@ func frictionPatternItems(rows []db.FrictionPattern) []frictionPatternItem {
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
-			Issue: frictionIssueItemFrom(p.Issue),
+			Issue: frictionIssueItemFrom(p.Issue), Filing: frictionFilingItemFrom(p.Filing),
 		})
 	}
 	return out
