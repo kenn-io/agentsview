@@ -26,7 +26,7 @@ func newRawSyncServerStatusCommand() *cobra.Command {
 		Short: "Show hosted raw-sync status",
 		Long: "Show hosted raw-sync status. The device credential is read only from " +
 			"AGENTSVIEW_RAW_SYNC_CREDENTIAL; it cannot be passed as an argument. " +
-			"An HTTP 404 is an error; use 'raw-sync status' for local state.",
+			"An HTTP 404 is an error; use 'source raw status' for local state.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -73,7 +73,7 @@ func runRawSyncServerStatus(
 			apiErr.Code = strings.ReplaceAll(apiErr.Code, credential, "[redacted]")
 			apiErr.Message = strings.ReplaceAll(apiErr.Message, credential, "[redacted]")
 			if apiErr.Status == http.StatusNotFound {
-				return fmt.Errorf("server does not provide raw-sync status (HTTP 404); use 'raw-sync status' for local state: %w", &apiErr)
+				return fmt.Errorf("server does not provide raw-sync status (HTTP 404); use 'source raw status' for local state: %w", &apiErr)
 			}
 			return fmt.Errorf("server status request failed (HTTP %d): %w", apiErr.Status, &apiErr)
 		}

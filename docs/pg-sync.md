@@ -446,7 +446,7 @@ Supported service managers:
 | macOS    | launchd LaunchAgent   |
 | Linux    | `systemd --user` unit |
 
-The generated unit keeps the compatible `agentsview pg push --watch` launch path.
+The generated unit runs `agentsview replica pg push --watch`.
 It pins `AGENTSVIEW_DATA_DIR` to the data directory used at install time and
 writes logs to
 `~/.agentsview/pg-watch.log` unless you changed the data directory.

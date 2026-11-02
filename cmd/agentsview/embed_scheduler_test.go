@@ -736,7 +736,7 @@ func TestTranslateRecallSearchErrorUsesRecallRemediation(t *testing.T) {
 
 		require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 		assert.Contains(t, err.Error(), "recall index is building: 37% complete")
-		assert.NotContains(t, err.Error(), "agentsview embeddings build",
+		assert.NotContains(t, err.Error(), "agentsview index embeddings build",
 			"an in-progress Recall build should not recommend another store build")
 	})
 }

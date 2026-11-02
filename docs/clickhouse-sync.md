@@ -3,10 +3,10 @@ title: ClickHouse Sync
 description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
 ---
 
-AgentsView stores sessions locally in SQLite. `agentsview replica clickhouse push`
-copies those sessions into ClickHouse. `agentsview replica clickhouse serve` runs the
-web UI by querying that copy. Keep the copy current with `push --watch` or
-`clickhouse service`.
+AgentsView stores sessions locally in SQLite.
+`agentsview replica clickhouse push` copies those sessions into ClickHouse.
+`agentsview replica clickhouse serve` runs the web UI by querying that copy.
+Keep the copy current with `push --watch` or `clickhouse service`.
 
 Each machine pushes its own sessions. SQLite stays the archive. ClickHouse is a
 remote copy, the same operator story as [PostgreSQL sync](/docs/pg-sync/), not a
@@ -171,8 +171,8 @@ otherwise.
 
 #### Automatic Push Watcher
 
-`agentsview replica clickhouse push --watch` runs a long-lived auto-push daemon in the
-foreground:
+`agentsview replica clickhouse push --watch` runs a long-lived auto-push daemon
+in the foreground:
 
 ```bash
 agentsview replica clickhouse push --watch
@@ -229,8 +229,8 @@ projects = ["alpha", "beta"]
 ```
 
 CLI flags override config values. Use
-[`agentsview project list`](/docs/commands/#agentsview-projects) to list available
-project names.
+[`agentsview project list`](/docs/commands/#agentsview-projects) to list
+available project names.
 
 #### Push Batch Size
 
@@ -287,11 +287,11 @@ local download in the CLI before running builds unattended.
     enabled = true
     ```
 
-1. Restart the daemon, then build the local index. The CLI asks before the
-   first download; declining stops the download and build. `--yes` skips rebuild
+1. Restart the daemon, then build the local index. The CLI asks before the first
+   download; declining stops the download and build. `--yes` skips rebuild
    confirmation but does not approve this download. Approve the first install
-   interactively before running unattended builds. Confirm an active generation
-   exists:
+   interactively before running unattended builds. Confirm an active
+   generation exists:
 
     ```bash
     agentsview index embeddings build --yes
@@ -344,11 +344,12 @@ local download in the CLI before running builds unattended.
 Keeping vectors current is two jobs. Embedding new sessions happens locally: the
 `agentsview` daemon does it after each sync while `[vector.embed]`
 `run_after_sync` is on (the default), and without a running daemon you run
-`agentsview index embeddings build --yes` before each push. Replicating the result is
-the vector phase inside every `clickhouse push`, so the same watcher or service
-as the session push (`clickhouse push --watch` or `clickhouse service install`)
-carries new vectors once they exist locally. There is no separate vector command
-to schedule, and the watcher never generates embeddings itself.
+`agentsview index embeddings build --yes` before each push. Replicating the
+result is the vector phase inside every `clickhouse push`, so the same watcher
+or service as the session push (`clickhouse push --watch` or
+`clickhouse service install`) carries new vectors once they exist locally. There
+is no separate vector command to schedule, and the watcher never generates
+embeddings itself.
 
 <a id="agentsview-clickhouse-status"></a>
 
@@ -438,15 +439,15 @@ Supported service managers:
 | macOS    | launchd LaunchAgent |
 | Linux    | `systemd --user`    |
 
-The generated unit keeps the compatible `agentsview clickhouse push --watch` launch path, pins
+The generated unit runs `agentsview replica clickhouse push --watch`, pins
 `AGENTSVIEW_DATA_DIR` to the data directory used at install time, and writes
 logs to `~/.agentsview/clickhouse-watch.log` unless you changed the data
 directory.
 
 If you run your own collector service, use
-`agentsview replica clickhouse service install --no-start-daemon`. The push service
-exits if no writable daemon is running, and the service manager restarts it
-until the collector answers. It retries pushes while the collector restarts,
+`agentsview replica clickhouse service install --no-start-daemon`. The push
+service exits if no writable daemon is running, and the service manager restarts
+it until the collector answers. It retries pushes while the collector restarts,
 without starting a daemon or opening the archive directly. Reinstalling restarts
 the service with the new flag. The default installation still starts a missing
 daemon for hosts that run only the push service.
@@ -488,17 +489,17 @@ Activity report reads these instead of parsing usage JSON and scanning tool
 events on every request. The fill runs once per mirror, keeps the source tables
 unchanged, and resumes from the start if interrupted. Until it completes, a
 read-only serve role fails the compatibility check with a message naming the
-missing fill; run `agentsview replica clickhouse push` with a role that can create
-tables to finish it.
+missing fill; run `agentsview replica clickhouse push` with a role that can
+create tables to finish it.
 
 If `clickhouse serve` runs with a read-only role, upgrade the machine that
-pushes first, run `agentsview replica clickhouse push` once, then upgrade the machines
-that serve. This release adds the `session_plan_usage` table, which holds Codex
-Cloud plan usage, and a read-only role cannot create it. Until a push creates
-it, an upgraded `clickhouse serve` with that role fails to start with
-"clickhouse mirror schema is missing session_plan_usage". A serve role that can
-create tables adds the table itself at startup, so the order does not matter for
-it.
+pushes first, run `agentsview replica clickhouse push` once, then upgrade the
+machines that serve. This release adds the `session_plan_usage` table, which
+holds Codex Cloud plan usage, and a read-only role cannot create it. Until a
+push creates it, an upgraded `clickhouse serve` with that role fails to start
+with "clickhouse mirror schema is missing session_plan_usage". A serve role that
+can create tables adds the table itself at startup, so the order does not matter
+for it.
 
 #### Required system-table permissions
 

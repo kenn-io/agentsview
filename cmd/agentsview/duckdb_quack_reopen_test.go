@@ -194,5 +194,5 @@ func TestProbeDuckDBMirrorForServeMissingFileIsActionable(t *testing.T) {
 	err := probeDuckDBMirrorForServe(t.Context(), path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not exist")
-	assert.Contains(t, err.Error(), "agentsview duckdb push --full")
+	assert.Contains(t, err.Error(), "agentsview replica duckdb push --full")
 }

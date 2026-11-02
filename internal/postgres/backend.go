@@ -145,7 +145,7 @@ func serveSchemaError(err error, schema string) error {
 	return fmt.Errorf(
 		"schema incompatible: %w\n"+
 			"Drop and recreate the PG schema, then run "+
-			"'agentsview pg push --full' to repopulate",
+			"'agentsview replica pg push --full' to repopulate",
 		err,
 	)
 }
@@ -165,7 +165,7 @@ func serveGrantError(err error, schema string) error {
 			"USAGE on the schema and SELECT on its tables:\n"+
 			"  GRANT USAGE ON SCHEMA %s TO <serve role>;\n"+
 			"  GRANT SELECT ON ALL TABLES IN SCHEMA %s TO <serve role>;\n"+
-			"then run 'agentsview pg serve' again",
+			"then run 'agentsview replica pg serve' again",
 		err, ident, ident,
 	)
 }

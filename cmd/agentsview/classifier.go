@@ -84,7 +84,7 @@ func guardClassifierRebuild(tr transport) error {
 		return errors.New(
 			"local daemon is serving on " + tr.URL +
 				"; stop 'agentsview serve' or the read-only mirror serve " +
-				"before running 'classifier rebuild'",
+				"before running 'index classifier rebuild'",
 		)
 	}
 	if tr.Mode == transportDirect && tr.DirectReadOnly {
@@ -144,8 +144,8 @@ func runClassifierRebuild(
 			return fmt.Errorf(
 				"clearing PG hash: %w (SQLite was cleared "+
 					"successfully; once PG is reachable, retry "+
-					"'agentsview classifier rebuild', or run "+
-					"'agentsview pg push --full' to repopulate "+
+					"'agentsview index classifier rebuild', or run "+
+					"'agentsview replica pg push --full' to repopulate "+
 					"PG from the corrected SQLite side)",
 				err,
 			)

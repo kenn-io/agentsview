@@ -148,7 +148,7 @@ func TestLocalEmbeddingsResolution(t *testing.T) {
 		encoders, err := vectorDocumentEncoderSet(c)
 		require.NoError(t, err)
 		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
-		require.EqualError(t, err, "local embeddings: run agentsview embeddings build to approve the first download")
+		require.EqualError(t, err, "local embeddings: run agentsview index embeddings build to approve the first download")
 		cause := errors.New("install lock failed")
 		installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
 			return embedlocal.Installation{}, fmt.Errorf("install interrupted: %w", cause)

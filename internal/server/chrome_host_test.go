@@ -134,7 +134,7 @@ func TestChromeHostAbsent(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 	srv.mux.ServeHTTP(response, req)
 	assert.Equal(t, http.StatusConflict, response.Code)
-	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup, restart AgentsView, and keep Chrome open, then Sync again"}`, response.Body.String())
+	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again"}`, response.Body.String())
 }
 
 func TestClaudeAIChromeStatus(t *testing.T) {
@@ -264,7 +264,7 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				require.FailNow(t, "incompatible host did not stop Sync")
 			}
-			assert.Contains(t, response.Body.String(), "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again.")
+			assert.Contains(t, response.Body.String(), "Restart AgentsView if you upgraded it, run agentsview source chrome setup, reload the extension at chrome://extensions, then Sync again.")
 			assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
 			assert.NotContains(t, response.Body.String(), "event: done")
 			assert.NotContains(t, response.Body.String(), "private")
