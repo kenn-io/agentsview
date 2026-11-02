@@ -44,6 +44,40 @@ launch paths.
 inherited `--server`, `--server-token-file`, `--pg`, `--json`, and `--format`
 flags before accessing storage. Use `--dry-run` to inspect the selection.
 
+### `agentsview git-hook`
+
+Add the current agent session to commits in a repository:
+
+```sh
+agentsview git-hook install
+```
+
+The optional `commit-msg` hook adds `Agent-Session: <agent>:<session-id>` to
+commits made without an editor, including `-m`, `-F`, `-C`, and
+`--amend --no-edit`. Editor commits keep their original messages. Git still
+rejects empty messages. Rebase picks keep their existing trailers.
+
+AgentsView must be on `PATH`. A missing or failing binary, or a missing,
+invalid, or ambiguous session, leaves the commit message unchanged.
+
+Discovery uses `CLAUDE_CODE_SESSION_ID` for Claude and `CODEX_THREAD_ID` or
+`CODEX_SESSION_ID` for Codex. Native IDs must be UUIDs. Every nonempty source
+must agree. Set both `AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to
+override discovery. Other agent names accept lowercase letters, digits, and
+hyphens, up to 32 characters, starting with a letter or digit. Their IDs accept
+letters, digits, dots, underscores, and hyphens, up to 128 characters, starting
+with a letter or digit.
+
+Installation honors `core.hooksPath` and refuses to replace an existing hook.
+Add this line to an existing `commit-msg` hook instead:
+
+```sh
+command -v agentsview >/dev/null 2>&1 || exit 0; agentsview git-trailer "$1" || :
+```
+
+Run `agentsview git-hook uninstall` to remove an unchanged installed hook. For a
+modified or shared hook, remove the added line manually.
+
 ### `agentsview archive`
 
 Available in 0.46.0 and later, these commands retain captures from several
