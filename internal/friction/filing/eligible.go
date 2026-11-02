@@ -1,5 +1,6 @@
-// Package filing files Friction Log patterns to Kata. Only the agentsview
-// hub files; the rest of this package arrives with filing.
+// Package filing files Friction Log patterns to Kata and keeps each
+// pattern's issue link. Only the AgentsView hub files, so two machines that
+// share an archive never file the same pattern twice.
 package filing
 
 // EligibleHost reports whether this process is the filing hub. A pg serve

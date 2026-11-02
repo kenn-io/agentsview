@@ -11,6 +11,13 @@ The latest release is
 
 **New features**
 
+- Friction Log patterns can be filed as Kata issues from the hub with
+  `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
+  already holds for a pattern instead of filing a duplicate, masks secrets in
+  what it sends, and shows each pattern's issue in `friction patterns`, the API,
+  and MCP results. `friction link` and `friction unlink` manage a link by hand.
+  See [Kata](/docs/kata/#file-friction-log-patterns).
+
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
   this executable's processing version a fresh attempt budget.
@@ -83,8 +90,8 @@ The latest release is
 
 - AgentsView can check an optional Kata issue tracker connection, through a
   local daemon or an HTTPS hub. Configure `[kata]`, then run
-  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
-  not available yet. See [Kata](/docs/kata/).
+  `agentsview kata status` or request `GET /api/v1/kata/status`. See
+  [Kata](/docs/kata/).
 
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.

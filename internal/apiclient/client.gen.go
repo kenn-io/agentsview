@@ -858,6 +858,156 @@ func (o *GetAPIV1FrictionPatternsRequestOptions) GetHeader() (map[string]string,
 	return nil, nil
 }
 
+// DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions is the options needed to make a request to DeleteAPIV1FrictionPatternsFingerprintIssue.
+type DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions struct {
+	PathParams *DeleteAPIV1FrictionPatternsFingerprintIssuePath
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// PostAPIV1FrictionPatternsFingerprintIssueRequestOptions is the options needed to make a request to PostAPIV1FrictionPatternsFingerprintIssue.
+type PostAPIV1FrictionPatternsFingerprintIssueRequestOptions struct {
+	PathParams *PostAPIV1FrictionPatternsFingerprintIssuePath
+	Body       *PostAPIV1FrictionPatternsFingerprintIssueBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// PutAPIV1FrictionPatternsFingerprintIssueRequestOptions is the options needed to make a request to PutAPIV1FrictionPatternsFingerprintIssue.
+type PutAPIV1FrictionPatternsFingerprintIssueRequestOptions struct {
+	PathParams *PutAPIV1FrictionPatternsFingerprintIssuePath
+	Body       *PutAPIV1FrictionPatternsFingerprintIssueBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // PostAPIV1FrictionRunRequestOptions is the options needed to make a request to PostAPIV1FrictionRun.
 type PostAPIV1FrictionRunRequestOptions struct {
 	Body *PostAPIV1FrictionRunBody
@@ -5451,6 +5601,9 @@ type ClientInterface interface {
 	GetAPIV1FrictionDigestsDateMdWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsDateMdRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsDateMdResp, error)
 	GetAPIV1FrictionFindingsWithResponse(ctx context.Context, options *GetAPIV1FrictionFindingsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionFindingsResp, error)
 	GetAPIV1FrictionPatternsWithResponse(ctx context.Context, options *GetAPIV1FrictionPatternsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionPatternsResp, error)
+	DeleteAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*DeleteAPIV1FrictionPatternsFingerprintIssueResp, error)
+	PostAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionPatternsFingerprintIssueResp, error)
+	PutAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1FrictionPatternsFingerprintIssueResp, error)
 	PostAPIV1FrictionRunWithResponse(ctx context.Context, options *PostAPIV1FrictionRunRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionRunResp, error)
 	PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
 	PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
@@ -9577,6 +9730,663 @@ func (c *Client) GetAPIV1FrictionPatternsWithResponse(ctx context.Context, optio
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1FrictionPatternsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// DeleteAPIV1FrictionPatternsFingerprintIssue Remove a friction pattern's Kata issue link
+func (c *Client) DeleteAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *DeleteAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*DeleteAPIV1FrictionPatternsFingerprintIssueResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/friction/patterns/{fingerprint}/issue",
+		Method:     "DELETE",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/friction/patterns/{fingerprint}/issue")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &DeleteAPIV1FrictionPatternsFingerprintIssueResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 204:
+		return out, nil
+	case 400:
+		out.JSON400 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1FrictionPatternsFingerprintIssue File a friction pattern to Kata
+func (c *Client) PostAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionPatternsFingerprintIssueResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/friction/patterns/{fingerprint}/issue",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/friction/patterns/{fingerprint}/issue")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1FrictionPatternsFingerprintIssueResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1FrictionPatternsFingerprintIssueResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PutAPIV1FrictionPatternsFingerprintIssue Link a friction pattern to a Kata issue
+func (c *Client) PutAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1FrictionPatternsFingerprintIssueResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/friction/patterns/{fingerprint}/issue",
+		Method:      "PUT",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/friction/patterns/{fingerprint}/issue")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PutAPIV1FrictionPatternsFingerprintIssueResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PutAPIV1FrictionPatternsFingerprintIssueResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -20432,6 +21242,33 @@ func (g GetAPIV1FrictionDigestsDateMdPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
+type DeleteAPIV1FrictionPatternsFingerprintIssuePath struct {
+	// Fingerprint Pattern fingerprint (fl1:<sha256>)
+	Fingerprint string `json:"fingerprint" validate:"required"`
+}
+
+func (d DeleteAPIV1FrictionPatternsFingerprintIssuePath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
+type PostAPIV1FrictionPatternsFingerprintIssuePath struct {
+	// Fingerprint Pattern fingerprint (fl1:<sha256>)
+	Fingerprint string `json:"fingerprint" validate:"required"`
+}
+
+func (p PostAPIV1FrictionPatternsFingerprintIssuePath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
+
+type PutAPIV1FrictionPatternsFingerprintIssuePath struct {
+	// Fingerprint Pattern fingerprint (fl1:<sha256>)
+	Fingerprint string `json:"fingerprint" validate:"required"`
+}
+
+func (p PutAPIV1FrictionPatternsFingerprintIssuePath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
+
 type HeadAPIV1RawSyncUploadsUploadIDPath struct {
 	UploadID string `json:"upload_id" validate:"required"`
 }
@@ -20546,6 +21383,10 @@ type PostAPIV1EmbeddingsBuildBody = EmbeddingsBuildRequest
 type PostAPIV1EmbeddingsGenerationsIDActivateBody = EmbeddingsGenerationActionRequest
 
 type PostAPIV1EmbeddingsGenerationsIDRetireBody = EmbeddingsGenerationActionRequest
+
+type PostAPIV1FrictionPatternsFingerprintIssueBody = FrictionFileInputBody
+
+type PutAPIV1FrictionPatternsFingerprintIssueBody = FrictionLinkInputBody
 
 type PostAPIV1FrictionRunBody = FrictionRunRequest
 
@@ -22491,6 +23332,76 @@ type GetAPIV1FrictionPatternsErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1FrictionPatternsErrorResponseJSON504 = APIErrorResponse
 
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponse = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503 = APIErrorResponse
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueResponse = FrictionFileResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponse = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueResponse = FrictionLinkResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponse = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503 = APIErrorResponse
+
+type PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504 = APIErrorResponse
+
 type PostAPIV1FrictionRunResponse = FrictionRunResponse
 
 type PostAPIV1FrictionRunErrorResponse = APIErrorResponse
@@ -24003,6 +24914,59 @@ type GetAPIV1FrictionPatternsResp struct {
 	JSON502      *GetAPIV1FrictionPatternsErrorResponseJSON502
 	JSON503      *GetAPIV1FrictionPatternsErrorResponseJSON503
 	JSON504      *GetAPIV1FrictionPatternsErrorResponseJSON504
+}
+
+type DeleteAPIV1FrictionPatternsFingerprintIssueResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON400      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponse
+	JSON401      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON
+	JSON403      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403
+	JSON404      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404
+	JSON409      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409
+	JSON422      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422
+	JSON500      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500
+	JSON501      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501
+	JSON502      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502
+	JSON503      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503
+	JSON504      *DeleteAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504
+}
+
+type PostAPIV1FrictionPatternsFingerprintIssueResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1FrictionPatternsFingerprintIssueResponse
+	JSON400      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponse
+	JSON401      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON
+	JSON403      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403
+	JSON404      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404
+	JSON409      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409
+	JSON422      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422
+	JSON500      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500
+	JSON501      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501
+	JSON502      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502
+	JSON503      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503
+	JSON504      *PostAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504
+}
+
+type PutAPIV1FrictionPatternsFingerprintIssueResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PutAPIV1FrictionPatternsFingerprintIssueResponse
+	JSON400      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponse
+	JSON401      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON
+	JSON403      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON403
+	JSON404      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON404
+	JSON409      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON409
+	JSON422      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON422
+	JSON500      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON500
+	JSON501      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON501
+	JSON502      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON502
+	JSON503      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON503
+	JSON504      *PutAPIV1FrictionPatternsFingerprintIssueErrorResponseJSON504
 }
 
 type PostAPIV1FrictionRunResp struct {
@@ -26792,6 +27756,39 @@ func (f FrictionDigestsResponse) Validate() error {
 	return errors
 }
 
+type FrictionFileInputBody struct {
+	// DryRun Return the issue that would be filed without contacting Kata
+	DryRun *bool `json:"dry_run,omitempty"`
+}
+
+type FrictionFileResponse struct {
+	Created bool                  `json:"created"`
+	Issue   *FrictionIssueItem    `json:"issue,omitempty"`
+	Preview *FrictionIssuePreview `json:"preview,omitempty"`
+}
+
+func (f FrictionFileResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	if f.Issue != nil {
+		if v, ok := any(f.Issue).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Issue", err)
+			}
+		}
+	}
+	if f.Preview != nil {
+		if v, ok := any(f.Preview).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Preview", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type FrictionFindingItem struct {
 	CallIndex      *int64     `json:"call_index"`
 	Detector       string     `json:"detector" validate:"required"`
@@ -26839,6 +27836,62 @@ func (f FrictionFindingsResponse) Validate() error {
 	return errors
 }
 
+type FrictionIssueItem struct {
+	IssueUID string    `json:"issue_uid" validate:"required"`
+	LinkedAt time.Time `json:"linked_at" validate:"required"`
+
+	// QualifiedID Kata issue reference, such as agentsview#f001
+	QualifiedID string `json:"qualified_id" validate:"required"`
+
+	// Source created, found (Kata already held it) or manual
+	Source string `json:"source" validate:"required"`
+
+	// WebURL Kata issue page, when Kata reports one
+	WebURL *string `json:"web_url,omitempty"`
+}
+
+func (f FrictionIssueItem) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(f))
+}
+
+type FrictionIssuePreview struct {
+	Body     string              `json:"body" validate:"required"`
+	Labels   []string            `json:"labels" validate:"required"`
+	Metadata map[string]struct{} `json:"metadata"`
+	Priority int64               `json:"priority"`
+	Title    string              `json:"title" validate:"required"`
+}
+
+func (f FrictionIssuePreview) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(f))
+}
+
+type FrictionLinkInputBody struct {
+	// Issue Kata issue: qualified ID (agentsview#f001), short ID (f001) or UID
+	Issue string `json:"issue" validate:"required,min=1"`
+}
+
+func (f FrictionLinkInputBody) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(f))
+}
+
+type FrictionLinkResponse struct {
+	Issue FrictionIssueItem `json:"issue"`
+}
+
+func (f FrictionLinkResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(f.Issue).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Issue", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type FrictionP0Alert struct {
 	SubjectIds []string `json:"subject_ids" validate:"required"`
 	Tool       string   `json:"tool" validate:"required"`
@@ -26849,19 +27902,49 @@ func (f FrictionP0Alert) Validate() error {
 }
 
 type FrictionPatternItem struct {
-	Fingerprint     string `json:"fingerprint" validate:"required"`
-	FirstSeenDate   string `json:"first_seen_date" validate:"required"`
-	Kind            string `json:"kind" validate:"required"`
-	LastOrdinal     *int64 `json:"last_ordinal"`
-	LastSeenDate    string `json:"last_seen_date" validate:"required"`
-	LastSubjectID   string `json:"last_subject_id" validate:"required"`
-	OccurrenceCount int64  `json:"occurrence_count"`
-	SessionCount    int64  `json:"session_count"`
-	Title           string `json:"title" validate:"required"`
+	Fingerprint     string             `json:"fingerprint" validate:"required"`
+	FirstSeenDate   string             `json:"first_seen_date" validate:"required"`
+	Issue           *FrictionIssueItem `json:"issue,omitempty"`
+	Kind            string             `json:"kind" validate:"required"`
+	LastOrdinal     *int64             `json:"last_ordinal"`
+	LastSeenDate    string             `json:"last_seen_date" validate:"required"`
+	LastSubjectID   string             `json:"last_subject_id" validate:"required"`
+	OccurrenceCount int64              `json:"occurrence_count"`
+	SessionCount    int64              `json:"session_count"`
+	Title           string             `json:"title" validate:"required"`
 }
 
 func (f FrictionPatternItem) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(f))
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(f.Fingerprint, "required"); err != nil {
+		errors = errors.Append("Fingerprint", err)
+	}
+	if err := typesValidator.Var(f.FirstSeenDate, "required"); err != nil {
+		errors = errors.Append("FirstSeenDate", err)
+	}
+	if f.Issue != nil {
+		if v, ok := any(f.Issue).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Issue", err)
+			}
+		}
+	}
+	if err := typesValidator.Var(f.Kind, "required"); err != nil {
+		errors = errors.Append("Kind", err)
+	}
+	if err := typesValidator.Var(f.LastSeenDate, "required"); err != nil {
+		errors = errors.Append("LastSeenDate", err)
+	}
+	if err := typesValidator.Var(f.LastSubjectID, "required"); err != nil {
+		errors = errors.Append("LastSubjectID", err)
+	}
+	if err := typesValidator.Var(f.Title, "required"); err != nil {
+		errors = errors.Append("Title", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type FrictionPatternsResponse struct {

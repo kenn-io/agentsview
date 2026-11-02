@@ -77,6 +77,9 @@ filter:
       - get-api-v1-friction-digests-date-md
       - get-api-v1-friction-findings
       - get-api-v1-friction-patterns
+      - post-api-v1-friction-patterns-fingerprint-issue
+      - put-api-v1-friction-patterns-fingerprint-issue
+      - delete-api-v1-friction-patterns-fingerprint-issue
       - post-api-v1-friction-run
       - post-api-v1-raw-sync-manifests
 overlay:

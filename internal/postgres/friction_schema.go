@@ -34,6 +34,7 @@ var hostedFrictionTables = []HostedTable{
 	{Name: "friction_digests", Key: []string{"date"}},
 	{Name: "friction_digest_sessions", Key: []string{"subject_id"}},
 	{Name: "friction_patterns", Key: []string{"fingerprint"}},
+	{Name: "friction_issue_links", Key: []string{"fingerprint"}},
 }
 
 // installHostedFrictionUpgrade adds missing derived tables and repairs their
