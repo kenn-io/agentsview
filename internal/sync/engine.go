@@ -720,6 +720,9 @@ type Engine struct {
 	// changedPathListedHook is a test seam called after a changed-path
 	// listing and before its re-list check; nil in production.
 	changedPathListedHook func(path string)
+	// incrementalCommittedHook is a test seam called after an incremental
+	// session write commits; nil in production.
+	incrementalCommittedHook func(sessionID string)
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -20217,7 +20220,15 @@ func (e *Engine) writeIncremental(ctx context.Context,
 			inc.sessionID, err,
 		)
 	}
+	if e.incrementalCommittedHook != nil {
+		e.incrementalCommittedHook(inc.sessionID)
+	}
 
+	// The write has committed the new file size and offset, so a later sync
+	// sees no change and will not redo the project mapping or signal
+	// recompute below. Finish them even if the caller cancels now. The work
+	// covers this one session.
+	ctx = context.WithoutCancel(ctx)
 	finalProject, err := e.applyWorktreeMappingToSingleSession(
 		ctx, inc.sessionID,
 	)

@@ -543,6 +543,30 @@ func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 		"third secret must flush, proving the deferral was real")
 }
 
+func TestWriteIncrementalRecomputesSignalsWhenCanceledAfterCommit(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "sig-cancel.jsonl", "hello")
+	fx.engine.SyncAll(t.Context(), nil)
+	sid := fx.sessionIDFor(t, path)
+	require.Zero(t, secretLeakCount(t, fx, sid))
+
+	// The caller cancels once the append has committed. The file now
+	// matches the archive, so no later sync would recompute its signals.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	committed := 0
+	fx.engine.incrementalCommittedHook = func(string) {
+		committed++
+		cancel()
+	}
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	_ = fx.engine.SyncPathsContext(ctx, []string{path})
+	require.Equal(t, 1, committed, "the append must reach the incremental write")
+
+	assert.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"a committed append must still recompute signals")
+}
+
 func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "assistant-debounce.jsonl", "hello")
