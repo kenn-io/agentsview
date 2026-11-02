@@ -170,6 +170,18 @@ func (p *ProviderParser) prepareSource(
 	if err != nil {
 		return nil, parser.SourceRef{}, nil, nil, nil, err
 	}
+	// Logical source keys need the provider-owned primary selected after exact
+	// membership validation. Preserve existing suffix-based selection first.
+	if manifestPrimaryEntry(manifest) == "" {
+		for _, entry := range manifest.Manifest.Entries {
+			local, err := materialized.EntryPath(entry.Path)
+			if err == nil && sameMaterializedEntryFile(local, source.DisplayPath) {
+				// Keep the receiver used by the provider's PathRewriter closure.
+				*paths = *newStablePathMap(manifest, materialized, entry.Path)
+				break
+			}
+		}
+	}
 	paths.bindSource(source, manifest.Manifest.SourceKey)
 	return provider, source, discovery.Sources, members, paths, nil
 }
@@ -488,6 +500,7 @@ type stablePathMap struct {
 func newStablePathMap(
 	manifest rawsync.CanonicalManifest,
 	materialized *Materialization,
+	primaryEntries ...string,
 ) *stablePathMap {
 	paths := &stablePathMap{
 		root:    filepath.Clean(materialized.Root()),
@@ -495,7 +508,7 @@ func newStablePathMap(
 		reverse: make(map[string]string, len(manifest.Manifest.Entries)),
 		prefix:  "raw-manifest:" + manifest.ManifestID + ":",
 	}
-	sourceEntry := manifestPrimaryEntry(manifest)
+	sourceEntry := manifestPrimaryEntry(manifest, primaryEntries...)
 	for _, entry := range manifest.Manifest.Entries {
 		local, err := materialized.EntryPath(entry.Path)
 		if err != nil {
@@ -511,12 +524,19 @@ func newStablePathMap(
 	return paths
 }
 
-func manifestPrimaryEntry(manifest rawsync.CanonicalManifest) string {
+func manifestPrimaryEntry(manifest rawsync.CanonicalManifest, primaryEntries ...string) string {
 	primary := ""
 	for _, entry := range manifest.Manifest.Entries {
 		if sourceKeyEndsWithEntry(manifest.Manifest.SourceKey, entry.Path) &&
 			len(entry.Path) > len(primary) {
 			primary = entry.Path
+		}
+	}
+	if primary == "" && len(primaryEntries) == 1 {
+		for _, entry := range manifest.Manifest.Entries {
+			if entry.Path == primaryEntries[0] {
+				return entry.Path
+			}
 		}
 	}
 	return primary

@@ -376,3 +376,14 @@ func TestDoctorSyncArchiveOnlyReportsDecodedVersion(t *testing.T) {
 	assert.Contains(t, out, "Archive mode: archive-only")
 	assert.Contains(t, out, "Startup sync decision: archive-only; source sync is disabled")
 }
+
+func TestDoctorSyncMusePersonalExplicitRoot(t *testing.T) {
+	testDataDir(t)
+	root := filepath.Join(t.TempDir(), "explicit-agents")
+	require.NoError(t, os.MkdirAll(root, 0o700))
+	t.Setenv("MUSE_PERSONAL_AGENTS_DIR", root)
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err)
+	assert.Contains(t, out, "muse-personal")
+	assert.Contains(t, out, root)
+}

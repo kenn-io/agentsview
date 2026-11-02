@@ -38,6 +38,9 @@ The latest release is
 - `agentsview diagnostics append` records failures outside agent sessions in
   the daily Friction Log, grouping repeated messages with their count.
 
+- Muse Personal sessions can now appear beside your other agents and sync
+  through native raw capture, with tool results and compaction summaries.
+
 **Improvements**
 
 - Search and cold Trends visits open faster with DuckDB. After upgrading, run
