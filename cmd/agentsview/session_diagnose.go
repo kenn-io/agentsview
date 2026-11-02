@@ -50,17 +50,18 @@ type diagnosisTokens struct {
 }
 
 type sessionDiagnosis struct {
-	SchemaVersion int                  `json:"schema_version"`
-	SessionID     string               `json:"session_id"`
-	Scope         string               `json:"scope"`
-	Coverage      diagnosisCoverage    `json:"coverage"`
-	Usage         *sessionUsageOutput  `json:"usage"`
-	ObservedRows  diagnosisTokens      `json:"observed_usage_rows"`
-	Context       []diagnosisContext   `json:"context_timeline"`
-	Compactions   []int                `json:"compaction_ordinals"`
-	LargeResults  []diagnosisTool      `json:"largest_tool_results"`
-	RetryRuns     []diagnosisRetry     `json:"retry_runs"`
-	ChildLinks    []diagnosisChildLink `json:"child_links"`
+	SchemaVersion       int                  `json:"schema_version"`
+	SessionID           string               `json:"session_id"`
+	Scope               string               `json:"scope"`
+	Coverage            diagnosisCoverage    `json:"coverage"`
+	Usage               *sessionUsageOutput  `json:"usage"`
+	ObservedRows        diagnosisTokens      `json:"observed_usage_rows"`
+	Context             []diagnosisContext   `json:"context_timeline"`
+	Compactions         []int                `json:"compaction_ordinals"`
+	InferredCompactions int                  `json:"inferred_compaction_count"`
+	LargeResults        []diagnosisTool      `json:"largest_tool_results"`
+	RetryRuns           []diagnosisRetry     `json:"retry_runs"`
+	ChildLinks          []diagnosisChildLink `json:"child_links"`
 }
 type diagnosisCoverage struct {
 	RequestCount            *int   `json:"request_count"`
@@ -166,6 +167,7 @@ func buildSessionDiagnosis(id string, usage *service.SessionUsageReport) *sessio
 func (out *sessionDiagnosis) readMessages(ctx context.Context, svc service.SessionService) error {
 	from := 0
 	var calls []signals.ToolCallRow
+	var contextTokens []signals.ContextTokenRow
 	linked := make(map[string]bool)
 	for {
 		page, err := svc.Messages(ctx, out.SessionID, service.MessageFilter{From: &from, Limit: db.MaxMessageLimit, Direction: "asc"})
@@ -176,6 +178,7 @@ func (out *sessionDiagnosis) readMessages(ctx context.Context, svc service.Sessi
 			break
 		}
 		out.Compactions = append(out.Compactions, ingest.ExtractCompactBoundaryOrdinals(page.Messages)...)
+		contextTokens = append(contextTokens, ingest.ExtractContextTokens(page.Messages)...)
 		for _, m := range page.Messages {
 			if m.HasContextTokens {
 				out.Context = append(out.Context, diagnosisContext{m.Ordinal, m.Timestamp, m.Model, m.ContextTokens})
@@ -204,10 +207,17 @@ func (out *sessionDiagnosis) readMessages(ctx context.Context, svc service.Sessi
 		}
 		from = next
 	}
+	out.addSequenceSignals(calls, contextTokens)
+	return nil
+}
+
+func (out *sessionDiagnosis) addSequenceSignals(calls []signals.ToolCallRow, contextTokens []signals.ContextTokenRow) {
+	if len(out.Compactions) == 0 {
+		out.InferredCompactions = signals.ComputeContextPressure(contextTokens, 0, "").CompactionCount
+	}
 	for _, run := range signals.RetryRuns(calls) {
 		out.RetryRuns = append(out.RetryRuns, diagnosisRetry{run.ToolName, run.Count, run.First.MessageOrdinal, run.Last.MessageOrdinal})
 	}
-	return nil
 }
 
 func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
@@ -220,7 +230,7 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if _, err := fmt.Fprintf(w, "Observed usage rows: uncached input %d; cache read %d; cache write %d; output %d (coverage may be incomplete)\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(w, "Request count: unavailable (usage rows may not be requests)\nCache miss reasons: unavailable\nContext observations: %d; compactions: %v; retry runs: %d\n", len(d.Context), d.Compactions, len(d.RetryRuns))
+	_, err := fmt.Fprintf(w, "Request count: unavailable (usage rows may not be requests)\nCache miss reasons: unavailable\nContext observations: %d; compactions: %v; inferred compactions: %d; retry runs: %d\n", len(d.Context), d.Compactions, d.InferredCompactions, len(d.RetryRuns))
 	if err != nil {
 		return err
 	}

@@ -977,7 +977,8 @@ Missing sessions and read failures return exit 1.
 
 The versioned JSON includes the usage breakdown, totals of its normalized
 uncached input, cache-read, cache-write and output rows, context observations,
-compaction ordinals, the ten largest recorded tool-result lengths, and runs of
+compaction ordinals and inferred counts, the ten largest recorded tool-result
+lengths, and runs of
 three or more consecutive calls with identical recorded arguments. Tool and
 context evidence covers the named session only; child links are shown when
 recorded. Retry candidates use the same recorded-argument comparison as the
@@ -994,6 +995,13 @@ reflect a different archive revision if ingestion runs concurrently. Message
 pages share no snapshot, so a transcript rewritten during the scan can mix
 revisions; run the command again after the rewrite for a stable result.
 `schema_version` versions the output shape, not the archive snapshot.
+
+Compactions follow ingestion's detection rules. Explicit boundary markers appear
+in `compaction_ordinals`. When there are no explicit markers,
+`inferred_compaction_count` counts drops greater than 30% between successive
+reported assistant context measurements, including across message pages. Missing
+measurements are skipped. Explicit markers take precedence and leave the
+inferred count at zero.
 
 ### `agentsview session usage`
 

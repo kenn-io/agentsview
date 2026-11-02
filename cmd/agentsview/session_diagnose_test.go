@@ -195,6 +195,46 @@ func TestSessionDiagnosisMissingEvidence(t *testing.T) {
 	assert.Nil(t, got.Coverage.RequestCount)
 }
 
+func TestSessionDiagnosisInferredCompactions(t *testing.T) {
+	messages := make([]db.Message, db.MaxMessageLimit+1)
+	for i := range messages {
+		messages[i].Ordinal = i
+	}
+	messages[db.MaxMessageLimit-1] = db.Message{Ordinal: db.MaxMessageLimit - 1, Role: "assistant", HasContextTokens: true, ContextTokens: 100000}
+	messages[db.MaxMessageLimit] = db.Message{Ordinal: db.MaxMessageLimit, Role: "assistant", HasContextTokens: true, ContextTokens: 20000}
+	for _, tt := range []struct {
+		name     string
+		boundary bool
+		role     string
+		want     int
+	}{
+		{name: "context drop across pages", role: "assistant", want: 1},
+		{name: "explicit boundary takes precedence", boundary: true, role: "assistant", want: 0},
+		{name: "user context ignored", role: "user", want: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			messages[0].IsCompactBoundary = tt.boundary
+			messages[db.MaxMessageLimit].Role = tt.role
+			got := testSessionDiagnosis(t, "root", &service.SessionUsageReport{}, messages)
+			encoded, err := json.Marshal(got)
+			require.NoError(t, err)
+			var report struct {
+				InferredCompactions int `json:"inferred_compaction_count"`
+			}
+			require.NoError(t, json.Unmarshal(encoded, &report))
+			assert.Equal(t, tt.want, report.InferredCompactions)
+			if tt.boundary {
+				assert.Equal(t, []int{0}, got.Compactions)
+			} else {
+				assert.Empty(t, got.Compactions)
+			}
+			var human strings.Builder
+			require.NoError(t, renderSessionDiagnosis(&human, got))
+			assert.Contains(t, human.String(), "inferred compactions: "+strconv.Itoa(tt.want))
+		})
+	}
+}
+
 func TestSessionDiagnoseRemoteUsesUsageTransport(t *testing.T) {
 	for _, discovered := range []bool{false, true} {
 		t.Run(strconv.FormatBool(discovered), func(t *testing.T) {
@@ -403,8 +443,9 @@ type diagnosisMessageService struct {
 	messages []db.Message
 }
 
-func (s diagnosisMessageService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
-	return &service.MessageList{Messages: s.messages}, nil
+func (s diagnosisMessageService) Messages(_ context.Context, _ string, filter service.MessageFilter) (*service.MessageList, error) {
+	from := min(*filter.From, len(s.messages))
+	return &service.MessageList{Messages: s.messages[from:min(from+filter.Limit, len(s.messages))]}, nil
 }
 
 func testSessionDiagnosis(t *testing.T, id string, usage *service.SessionUsageReport, messages []db.Message) *sessionDiagnosis {
