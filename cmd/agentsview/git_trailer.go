@@ -36,10 +36,6 @@ func newGitHookCommand() *cobra.Command {
 			Use: "install", Short: "Install in the current repository", Args: cobra.NoArgs,
 			RunE: func(_ *cobra.Command, _ []string) error { return gittrailer.Install(".") },
 		},
-		&cobra.Command{
-			Use: "uninstall", Short: "Remove the installed hook", Args: cobra.NoArgs,
-			RunE: func(_ *cobra.Command, _ []string) error { return gittrailer.Uninstall(".") },
-		},
 	)
 	return cmd
 }

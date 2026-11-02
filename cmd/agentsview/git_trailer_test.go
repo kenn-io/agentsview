@@ -178,7 +178,7 @@ func TestGitTrailerUnavailable(t *testing.T) {
 	}
 }
 
-func TestGitHookLifecycle(t *testing.T) {
+func TestGitHookInstall(t *testing.T) {
 	for _, custom := range []bool{false, true} {
 		t.Run(map[bool]string{false: "default", true: "hooksPath"}[custom], func(t *testing.T) {
 			f := newGitTrailerFixture(t)
@@ -192,16 +192,18 @@ func TestGitHookLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			out, err := f.run(t, f.bin, "git-hook", "install")
 			require.Error(t, err)
-			assert.Contains(t, out, `agentsview git-trailer "$1"`)
-			f.hook(t, "uninstall")
-			assert.NoFileExists(t, path)
-			f.hook(t, "install")
-			require.NoError(t, os.WriteFile(path, append(original, []byte("# custom\n")...), 0o755))
-			_, err = f.run(t, f.bin, "git-hook", "uninstall")
-			require.Error(t, err)
+			assert.Contains(t, out, `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
-			assert.Equal(t, string(original)+"# custom\n", string(data))
+			assert.Equal(t, original, data)
+			_, line, ok := strings.Cut(out, "add this line to it:\n")
+			require.True(t, ok)
+			require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+strings.TrimSpace(line)+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
+			require.NoError(t, os.Remove(f.bin))
+			f.setenv("PATH", filepath.Dir(f.bin))
+			out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "rejected by later check")
+			require.Error(t, err, out)
+			assert.Contains(t, out, "later check")
 		})
 	}
 }

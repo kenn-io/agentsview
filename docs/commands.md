@@ -53,9 +53,15 @@ agentsview git-hook install
 ```
 
 The optional `commit-msg` hook adds `Agent-Session: <agent>:<session-id>` to
-commits made without an editor, including `-m`, `-F`, `-C`, and
-`--amend --no-edit`. Editor commits keep their original messages. Git still
-rejects empty messages. Rebase picks keep their existing trailers.
+commits made without an editor, including `-m`, `-F`, `-C`,
+`--amend --no-edit`, and `merge --no-edit`. A conflicted cherry-pick finished
+with `--no-edit` or `--continue` also carries the current session. Editor
+commits keep their original messages. Rebase picks keep their existing trailers.
+
+Git still rejects empty messages, including comment-only messages when
+`commit.cleanup=strip` is configured. The hook cannot detect `--cleanup=strip`
+passed on the command line, so a comment-only `-m` message can become a commit
+containing only the trailer.
 
 AgentsView must be on `PATH`. A missing or failing binary, or a missing,
 invalid, or ambiguous session, leaves the commit message unchanged.
@@ -72,11 +78,11 @@ Installation honors `core.hooksPath` and refuses to replace an existing hook.
 Add this line to an existing `commit-msg` hook instead:
 
 ```sh
-command -v agentsview >/dev/null 2>&1 || exit 0; agentsview git-trailer "$1" || :
+if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi
 ```
 
-Run `agentsview git-hook uninstall` to remove an unchanged installed hook. For a
-modified or shared hook, remove the added line manually.
+To remove the hook, delete the installed `commit-msg` file. For a shared hook,
+remove the added line.
 
 ### `agentsview archive`
 

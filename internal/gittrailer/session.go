@@ -4,6 +4,7 @@ package gittrailer
 import (
 	"errors"
 	"regexp"
+	"strings"
 )
 
 var (
@@ -48,8 +49,11 @@ func Discover(getenv func(string) string) (Session, error) {
 			continue
 		}
 		candidate := Session{v.agent, id}
-		if current.ID != "" && current != candidate {
-			return Session{}, errors.New("ambiguous current session; set the explicit override pair")
+		if current.ID != "" {
+			if current.Agent != candidate.Agent || !strings.EqualFold(current.ID, candidate.ID) {
+				return Session{}, errors.New("ambiguous current session; set the explicit override pair")
+			}
+			continue
 		}
 		current = candidate
 	}

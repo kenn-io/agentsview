@@ -13,9 +13,6 @@ func Stamp(ctx context.Context, file string, session Session) error {
 	if os.Getenv("GIT_EDITOR") != ":" || session.ID == "" {
 		return nil
 	}
-	if err := session.validate(); err != nil {
-		return err
-	}
 	message, err := os.ReadFile(file)
 	if err != nil {
 		return err

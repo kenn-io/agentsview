@@ -1,7 +1,6 @@
 package gittrailer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	gitcmd "go.kenn.io/kit/git/cmd"
 )
 
-const hookLine = `command -v agentsview >/dev/null 2>&1 || exit 0; agentsview git-trailer "$1" || :`
+const hookLine = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
 const hookScript = "#!/bin/sh\n" + hookLine + "\nexit 0\n"
 
 func hookPath(repoDir string) (string, error) {
@@ -45,23 +44,4 @@ func Install(repoDir string) error {
 	}
 	_, err = file.WriteString(hookScript)
 	return errors.Join(err, file.Close())
-}
-
-// Uninstall removes only the unchanged hook installed by Install.
-func Uninstall(repoDir string) error {
-	path, err := hookPath(repoDir)
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(data, []byte(hookScript)) {
-		return errors.New("commit-msg has other contents; remove the agentsview git-trailer line manually")
-	}
-	return os.Remove(path)
 }
