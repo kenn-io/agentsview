@@ -24,11 +24,17 @@ func (e *Engine) ReconcileCommitTrailers(ctx context.Context) {
 }
 
 func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) {
+	e.reconcileCommitTrailersWithBudget(ctx, 60*time.Second)
+}
+
+// A nonpositive budget permits one repository attempt before yielding.
+func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget time.Duration) {
 	if e.ephemeral || e.forceParse {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	start := time.Now()
 	repositories, err := e.db.TrailerRepositories(ctx)
 	if err != nil {
 		log.Printf("trailer repositories: %v", err)
@@ -61,6 +67,9 @@ func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) {
 		e.trailerScanAttempts[repo] = time.Now()
 		if err := e.reconcileRepositoryTrailers(ctx, repo, paths[repo]); err != nil {
 			log.Printf("commit trailers in %s: %v", repo, err)
+		}
+		if time.Since(start) >= budget {
+			return
 		}
 	}
 }
