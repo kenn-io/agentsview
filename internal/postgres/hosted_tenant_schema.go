@@ -43,6 +43,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "starred_sessions", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "excluded_sessions", Key: []string{"id"}},
 	{Name: "session_aliases", Key: []string{"session_id", "alias_id"}, ForeignKeys: sessionHostedFK()},
+	{Name: "commit_links", Key: []string{"session_id", "sha"}},
 	{Name: "pinned_messages", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "tool_calls", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "tool_result_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},

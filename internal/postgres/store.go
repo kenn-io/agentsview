@@ -719,10 +719,16 @@ func deletePGTrashedSessionRows(
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE commit_links
-		SET retained=TRUE,turn_ordinal=NULL,turn_text=''
-		WHERE session_id = ANY($1)`, ids); err != nil {
+	var hasCommitLinks bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('commit_links') IS NOT NULL`).Scan(&hasCommitLinks); err != nil {
 		return 0, err
+	}
+	if hasCommitLinks {
+		if _, err := tx.ExecContext(ctx, `UPDATE commit_links
+			SET retained=TRUE,turn_ordinal=NULL,turn_text=''
+			WHERE session_id = ANY($1)`, ids); err != nil {
+			return 0, err
+		}
 	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM sessions
