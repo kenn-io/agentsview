@@ -171,6 +171,27 @@ func TestWhyRecordedPrompts(t *testing.T) {
 		got := decodeCLIJSON[whyResult](t, outText)
 		assert.Len(t, got.Commits, 2)
 	})
+	t.Run("parent of symlink uses target repository", func(t *testing.T) {
+		otherRepo := initGitRepoOnBranch(t, "main")
+		runGit(t, otherRepo, "config", "user.name", "Test User")
+		runGit(t, otherRepo, "config", "user.email", "test@example.com")
+		runGit(t, otherRepo, "config", "commit.gpgsign", "false")
+		require.NoError(t, os.WriteFile(filepath.Join(otherRepo, "file.go"), []byte("unrelated\nfile\nlines\n"), 0o600))
+		runGit(t, otherRepo, "add", "file.go")
+		runGit(t, otherRepo, "commit", "-qm", "Unrelated file")
+		subdir := filepath.Join(repo, "subdir")
+		require.NoError(t, os.Mkdir(subdir, 0o700))
+		requireSymlinkOrSkip(t, subdir, filepath.Join(otherRepo, "link"))
+		t.Chdir(otherRepo)
+
+		// Keep .. intact so the filesystem traverses the symlink first.
+		outText, err := executeCommand(newRootCommand(), "why", "link/../file.go:2-3", "--json")
+		require.NoError(t, err)
+		got := decodeCLIJSON[whyResult](t, outText)
+		require.Len(t, got.Commits, 2)
+		assert.Equal(t, firstSHA, got.Commits[0].SHA)
+		assert.Equal(t, secondSHA, got.Commits[1].SHA)
+	})
 	t.Run("argument validation", func(t *testing.T) {
 		_, err := executeCommand(newRootCommand(), "why", "--commit", "invalid")
 		require.ErrorIs(t, err, db.ErrInvalidCommitSHA)

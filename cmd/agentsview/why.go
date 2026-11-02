@@ -67,11 +67,8 @@ func newWhyCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				abs, err := filepath.Abs(path)
-				if err != nil {
-					return err
-				}
-				blame, err := gitdb.BlameCommits(cmd.Context(), filepath.Dir(abs), filepath.Base(abs), start, end)
+				dir, file := filepath.Split(path)
+				blame, err := gitdb.BlameCommits(cmd.Context(), dir, file, start, end)
 				if err != nil {
 					return err
 				}
