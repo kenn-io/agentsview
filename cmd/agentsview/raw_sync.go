@@ -494,9 +494,17 @@ func runRawSyncStatus(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return runRawSyncStatusWith(ctx, out, cfg)
+}
+
+func runRawSyncStatusWith(ctx context.Context, out io.Writer, cfg config.Config) error {
+	report := struct {
+		rawcheckpoint.ClientStatus
+		UnsupportedEnabledProviders []string `json:"unsupported_enabled_providers,omitempty"`
+	}{UnsupportedEnabledProviders: unsupportedRawSyncProviders(cfg)}
 	path := rawSyncCheckpointPath(cfg.DataDir)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return writeRawSyncStatus(out, rawcheckpoint.ClientStatus{})
+		return writeRawSyncStatus(out, report)
 	} else if err != nil {
 		return err
 	}
@@ -509,7 +517,8 @@ func runRawSyncStatus(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return writeRawSyncStatus(out, status)
+	report.ClientStatus = status
+	return writeRawSyncStatus(out, report)
 }
 
 func writeRawSyncStatus(out io.Writer, status any) error {

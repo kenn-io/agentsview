@@ -86,6 +86,9 @@ func resolveArchiveQueryBackendWithConfig(
 	cfg config.Config,
 	policy archiveQueryPolicy,
 ) (archiveQueryBackend, func(), error) {
+	if cfg.HostedRawMode() {
+		policy.NoSync = true
+	}
 	if !policy.Offline {
 		tr, err := resolveArchiveQueryTransport(ctx, &cfg, policy)
 		if err != nil {
@@ -104,7 +107,7 @@ func resolveArchiveQueryBackendWithConfig(
 						return nil, nil, fmt.Errorf("waiting for startup sync: %w", err)
 					}
 				}
-				return daemonArchiveQueryBackend{tr: tr, authToken: cfg.AuthToken},
+				return daemonArchiveQueryBackend{tr: tr, authToken: cfg.AuthToken, noSync: policy.NoSync},
 					func() {}, nil
 			case policy.ReadOnlyDaemon == archiveQueryRejectReadOnlyDaemon:
 				return nil, nil, readOnlySessionUsageDaemonError(tr.URL)
@@ -190,7 +193,7 @@ func openArchiveQueryDB(
 	cfg config.Config,
 	readOnly bool,
 ) (*db.DB, *writeOwnerLock, error) {
-	if readOnly {
+	if readOnly || cfg.HostedRawMode() {
 		database, err := openReadOnlyDB(ctx, cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening database: %w", err)
@@ -207,6 +210,7 @@ func openArchiveQueryDB(
 type daemonArchiveQueryBackend struct {
 	tr        transport
 	authToken string
+	noSync    bool
 }
 
 func (b daemonArchiveQueryBackend) ActivityReport(
@@ -233,6 +237,7 @@ func (b daemonArchiveQueryBackend) SessionUsage(
 	ctx context.Context,
 	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
+	query.NoSync = query.NoSync || b.noSync
 	return httpSessionUsageData(ctx, b.tr.URL, b.authToken, query)
 }
 

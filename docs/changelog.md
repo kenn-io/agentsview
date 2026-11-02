@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- Workstations can stop local parsing and embedding with `[raw_sync] hosted`
+  while continuing raw uploads. Existing local history stays readable; status
+  and diagnostics identify enabled providers that cannot upload raw sources.
+
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
   this executable's processing version a fresh attempt budget.

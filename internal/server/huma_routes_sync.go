@@ -223,12 +223,15 @@ func (s *Server) syncStatusEngine() *syncpkg.Engine {
 // requireSourceSync also covers --no-sync daemons, which otherwise create an
 // on-demand engine for a manual request. Archive custody has no such override.
 func (s *Server) requireSourceSync(ctx context.Context) error {
+	if s.cfg.HostedRawMode() {
+		return apiError(http.StatusForbidden, config.ErrHostedRawMode.Error())
+	}
 	if local, ok := s.db.(*db.DB); ok {
 		if err := local.RequireSourceSync(ctx); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-			if errors.Is(err, db.ErrArchiveOnly) {
+			if errors.Is(err, db.ErrArchiveOnly) || errors.Is(err, config.ErrHostedRawMode) {
 				return apiError(http.StatusForbidden, err.Error())
 			}
 			return apiError(http.StatusInternalServerError, err.Error())

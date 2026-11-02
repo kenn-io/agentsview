@@ -47,6 +47,9 @@ func NewDiffEngine(ctx context.Context, database *db.DB, cfg EngineConfig) *Engi
 // no skip cache, no sync state. It holds the engine's sync mutex for
 // the duration.
 func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDiffReport, error) {
+	if e.sourceSyncErr != nil {
+		return nil, e.sourceSyncErr
+	}
 	ctx = e.parsePolicyContext(ctx)
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
