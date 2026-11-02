@@ -46,6 +46,7 @@ func promoteRawMemberState(ctx context.Context, tx *sql.Tx, previous rawBranch, 
 		`INSERT INTO raw_session_public_aliases(alias_id,group_id,anchor_branch)
  SELECT alias_id,$3,CASE WHEN anchor_branch='' THEN '' ELSE $4 END FROM raw_session_public_aliases WHERE group_id=$1 AND anchor_branch IN ('',$2)
  ON CONFLICT(alias_id,group_id) DO NOTHING`,
+		`UPDATE raw_legacy_supersessions SET group_id=$3 WHERE group_id=$1`,
 		`UPDATE raw_session_branches SET active=false WHERE branch_id=$2 AND group_id=$1`,
 	} {
 		// Supplying unused numbered parameters is valid when all four types are

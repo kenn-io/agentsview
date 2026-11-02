@@ -14,11 +14,10 @@ import (
 
 func TestRawSupersessionSchemaFreshUpgradeAndPrivileges(t *testing.T) {
 	f := newProjectionFixture(t)
-	m, _ := f.accept(t, "device-a", "schema", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("raw")))
-	var group string
-	require.NoError(t, f.runtime.QueryRow(`SELECT group_id FROM raw_session_groups`).Scan(&group))
-	_, err := f.runtime.Exec(`INSERT INTO sessions(id,project,machine,agent) VALUES('legacy','retained','device','codex')`)
+	const group = "supersession-only"
+	_, err := f.runtime.Exec(`INSERT INTO raw_session_groups(group_id,provider,logical_key,base_alias) VALUES($1,'codex','portable','codex:portable')`, group)
+	require.NoError(t, err)
+	_, err = f.runtime.Exec(`INSERT INTO sessions(id,project,machine,agent) VALUES('legacy','retained','device','codex')`)
 	require.NoError(t, err)
 	for _, phase := range []string{"fresh", "upgrade"} {
 		t.Run(phase, func(t *testing.T) {
@@ -36,7 +35,7 @@ func TestRawSupersessionSchemaFreshUpgradeAndPrivileges(t *testing.T) {
 				_, err = f.runtime.Exec(`INSERT INTO raw_legacy_supersessions(tenant_id,legacy_session_id,group_id) VALUES($1,$2,$3) ON CONFLICT(tenant_id,legacy_session_id) DO UPDATE SET group_id=EXCLUDED.group_id`, args[0], args[1], args[2])
 				require.Error(t, err)
 			}
-			_, err = f.runtime.Exec(`DELETE FROM raw_session_groups WHERE group_id=$1`, group)
+			_, err = f.admin.Exec(`DELETE FROM raw_session_groups WHERE group_id=$1`, group)
 			require.Error(t, err)
 			_, err = f.runtime.Exec(`DELETE FROM sessions WHERE id='legacy'`)
 			require.Error(t, err)
