@@ -41,6 +41,26 @@ func frictionIssueItemFrom(l *db.FrictionIssueLink) *frictionIssueItem {
 	}
 }
 
+// frictionFilingItem says why automatic filing has not linked a pattern.
+type frictionFilingItem struct {
+	State         string     `json:"state" enum:"retry,needs_person,paused" doc:"retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link"`
+	Attempts      int        `json:"attempts"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
+}
+
+func frictionFilingItemFrom(st *db.FrictionFilingState) *frictionFilingItem {
+	if st == nil {
+		return nil
+	}
+	item := &frictionFilingItem{State: st.State, Attempts: st.Attempts, LastError: st.LastError}
+	if st.NextAttemptAt != nil {
+		next := st.NextAttemptAt.UTC()
+		item.NextAttemptAt = &next
+	}
+	return item
+}
+
 type frictionPatternPathInput struct {
 	Fingerprint string `path:"fingerprint" required:"true" doc:"Pattern fingerprint (fl1:<sha256>)"`
 }

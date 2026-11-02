@@ -284,6 +284,10 @@ describe("FrictionStore Kata issues", () => {
     return friction.digest?.patterns?.find((p) => p.fingerprint === fp)?.issue;
   }
 
+  function filingOf(fp: string) {
+    return friction.digest?.patterns?.find((p) => p.fingerprint === fp)?.filing;
+  }
+
   it("shows a filed issue on its pattern without reloading the digest", async () => {
     service.postApiV1FrictionPatternsByFingerprintIssue.mockResolvedValue({ issue, created: true });
     await friction.fileIssue(FP);
@@ -337,6 +341,10 @@ describe("FrictionStore Kata issues", () => {
     service.deleteApiV1FrictionPatternsByFingerprintIssue.mockResolvedValue(undefined);
     await friction.unlinkIssue(FP);
     expect(issueOf(FP)).toBeUndefined();
+    expect(filingOf(FP)?.state, "the server pauses automatic filing on unlink").toBe("paused");
+
+    await friction.linkIssue(FP, "agentsview#f001");
+    expect(filingOf(FP), "linking resumes it").toBeUndefined();
   });
 
   it("keeps a failure with its pattern and clears it on the next try", async () => {

@@ -3028,6 +3028,10 @@
   "friction_issue_cancel": "Cancel",
   "friction_issue_unlink": "Unlink",
   "friction_issue_unlink_title": "Remove the link; the Kata issue stays as it is",
+  "friction_filing_retry": "Filing failed, will retry",
+  "friction_filing_needs_person": "Filing stopped",
+  "friction_filing_paused": "Auto-filing paused",
+  "friction_filing_paused_title": "Automatic filing skips this pattern because its link was removed. File or link it to resume.",
   "friction_digest_heading": "Friction Log — {date}",
   "friction_digest_built": "Built {when} ({timezone})",
   "friction_p0_failed": [

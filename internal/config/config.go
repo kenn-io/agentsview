@@ -692,6 +692,30 @@ type FrictionConfig struct {
 	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
 	// SeatPatterns are globs over session file paths with one {seat} capture.
 	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+	// Kata is the hub's automatic filing policy.
+	Kata FrictionKataConfig `json:"kata,omitzero" toml:"kata"`
+}
+
+// FrictionKataConfig controls automatic filing of Friction Log patterns to
+// Kata. Only the filing hub with [kata] enabled acts on it.
+type FrictionKataConfig struct {
+	// AutoFile files recent unlinked patterns every hour.
+	AutoFile bool `json:"auto_file,omitempty" toml:"auto_file"`
+	// Kinds limits automatic filing to these kinds; empty means every kind
+	// that can be filed.
+	Kinds []string `json:"kinds,omitempty" toml:"kinds"`
+}
+
+// FileKinds returns the kinds automatic filing considers.
+func (c FrictionKataConfig) FileKinds() []friction.Kind {
+	if len(c.Kinds) == 0 {
+		return friction.FileableKinds
+	}
+	out := make([]friction.Kind, 0, len(c.Kinds))
+	for _, k := range c.Kinds {
+		out = append(out, friction.Kind(k))
+	}
+	return out
 }
 
 // Validate checks the zone name, backfill bound, and seat patterns.
@@ -714,6 +738,16 @@ func (c FrictionConfig) Validate() error {
 	}
 	if _, err := friction.CompileSeatPatterns(c.SeatPatterns); err != nil {
 		return fmt.Errorf("[friction] seat_patterns: %w", err)
+	}
+	seen := make(map[string]bool, len(c.Kata.Kinds))
+	for _, k := range c.Kata.Kinds {
+		if !friction.Fileable(friction.Kind(k)) {
+			return fmt.Errorf("[friction.kata] kinds entry %q cannot be filed; use correction, error, workaround, deferral or pattern", k)
+		}
+		if seen[k] {
+			return fmt.Errorf("[friction.kata] kinds entry %q repeats", k)
+		}
+		seen[k] = true
 	}
 	return nil
 }
@@ -2191,6 +2225,15 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("friction", "backfill_days") {
 		c.Friction.BackfillDays = file.Friction.BackfillDays
+	}
+	if meta.IsDefined("friction", "kata", "auto_file") {
+		c.Friction.Kata.AutoFile = file.Friction.Kata.AutoFile
+	}
+	if meta.IsDefined("friction", "kata", "kinds") {
+		c.Friction.Kata.Kinds = make([]string, 0, len(file.Friction.Kata.Kinds))
+		for _, k := range file.Friction.Kata.Kinds {
+			c.Friction.Kata.Kinds = append(c.Friction.Kata.Kinds, strings.TrimSpace(k))
+		}
 	}
 	if meta.IsDefined("friction", "seat_patterns") {
 		c.Friction.SeatPatterns = make([]string, 0, len(file.Friction.SeatPatterns))

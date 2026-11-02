@@ -603,6 +603,9 @@ func WithFriction(runner *review.Runner, exclusive func(func() error) error) Opt
 	return func(s *Server) {
 		s.frictionRunner = runner
 		s.frictionExclusive = exclusive
+		if runner != nil {
+			runner.SetAfterCatchUp(s.autoFileFriction)
+		}
 	}
 }
 

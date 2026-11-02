@@ -2197,6 +2197,10 @@ enabled = true
 backfill_days = 7
 timezone = "" # Local time on SQLite, UTC on PostgreSQL; or an IANA zone.
 seat_patterns = [] # Optional path globs with one whole-segment {seat} capture.
+
+[friction.kata]
+auto_file = false # The hub files recent patterns to Kata every hour.
+kinds = [] # Kinds to file automatically; empty means all that can be filed.
 ```
 
 Restart the daemon after changing this setting. When enabled:
@@ -2219,6 +2223,8 @@ An hourly job builds one stored digest per completed local day, catching up
 within `backfill_days` (1–3650, default 7). It never builds today. Set
 `AGENTSVIEW_FRICTION_TZ` to override the configured timezone. Seat patterns label
 digest findings from session paths without changing the stored detections.
+`[friction.kata]` needs `[kata]` enabled on the hub; see
+[File patterns automatically](/docs/kata/#file-patterns-automatically).
 
 Digests keep Markdown, schema 1 summary JSON, frozen findings and usage,
 session membership, and pattern recurrence. SQLite keeps this state through a

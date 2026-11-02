@@ -2935,6 +2935,10 @@
   "friction_issue_cancel": "取消",
   "friction_issue_unlink": "取消連結",
   "friction_issue_unlink_title": "移除連結；Kata 問題保持不變",
+  "friction_filing_retry": "提交失敗，將重試",
+  "friction_filing_needs_person": "提交已停止",
+  "friction_filing_paused": "自動提交已暫停",
+  "friction_filing_paused_title": "此模式的連結已被移除，自動提交會略過它。提交或連結後即可恢復。",
   "friction_digest_heading": "摩擦日誌 — {date}",
   "friction_digest_built": "產生於 {when}（{timezone}）",
   "friction_p0_failed": [

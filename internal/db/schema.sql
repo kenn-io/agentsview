@@ -1446,6 +1446,18 @@ CREATE TABLE IF NOT EXISTS friction_issue_links (
     linked_at         TEXT NOT NULL
 );
 
+-- Why automatic filing has not linked a pattern: a failure to retry, a case
+-- a person must settle, or a link a person removed. Linking clears the row.
+CREATE TABLE IF NOT EXISTS friction_filing_state (
+    fingerprint     TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TEXT,
+    next_attempt_at TEXT,
+    last_error      TEXT NOT NULL DEFAULT '',
+    updated_at      TEXT NOT NULL
+);
+
 -- Durable normalized-artifact import claims. Artifact kinds evolve
 -- independently, so each claim retains a separate version gate.
 CREATE TABLE IF NOT EXISTS artifact_import_queue (

@@ -451,6 +451,19 @@ describe("FrictionPage", () => {
       )!;
       expect(finding.querySelector(".row-issue")?.textContent?.trim()).toBe("agentsview#f001");
     });
+
+    it("says why automatic filing has not linked a pattern", async () => {
+      sync.serverVersion = version({ friction_build_allowed: false });
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint
+          ? { ...p, filing: { state: "needs_person", attempts: 1, last_error: "kata: HTTP 422" } }
+          : p,
+      );
+      await render();
+      const note = headlineRow("command not found").querySelector<HTMLElement>(".filing-note");
+      expect(note?.textContent?.trim()).toBe("Filing stopped");
+      expect(note?.title).toBe("kata: HTTP 422");
+    });
   });
 
   it("renders hostile transcript text as text", async () => {

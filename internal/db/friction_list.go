@@ -39,6 +39,8 @@ type FrictionPattern struct {
 	LastOrdinal     *int   `json:"last_ordinal"`
 	// Issue is the linked Kata issue, or nil.
 	Issue *FrictionIssueLink `json:"issue,omitempty"`
+	// Filing is why automatic filing has not linked the pattern, or nil.
+	Filing *FrictionFilingState `json:"filing,omitempty"`
 }
 
 // FrictionFindingFilter narrows ListFrictionFindings. Date selects the
@@ -267,8 +269,7 @@ func (db *DB) ListFrictionPatterns(
 		SELECT p.fingerprint, p.kind, p.title, p.first_seen_date,
 			p.last_seen_date, p.occurrence_count, p.session_count,
 			p.last_subject_id, p.last_ordinal, `+frictionIssueColumns+`
-		FROM friction_patterns p
-		LEFT JOIN friction_issue_links l ON l.fingerprint = p.fingerprint `+where+`
+		FROM friction_patterns p `+frictionIssueJoins+` `+where+`
 		ORDER BY p.occurrence_count DESC, p.last_seen_date DESC, p.fingerprint ASC
 		LIMIT ? OFFSET ?`, args...)
 	if err != nil {
@@ -291,6 +292,9 @@ func (db *DB) ListFrictionPatterns(
 		}
 		p.LastOrdinal = nullIntPtr(ordinal)
 		if p.Issue, err = issue.link(p.Fingerprint); err != nil {
+			return nil, "", err
+		}
+		if p.Filing, err = issue.filing(p.Fingerprint); err != nil {
 			return nil, "", err
 		}
 		out = append(out, p)

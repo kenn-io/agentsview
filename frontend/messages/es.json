@@ -3052,6 +3052,10 @@
   "friction_issue_cancel": "Cancelar",
   "friction_issue_unlink": "Desvincular",
   "friction_issue_unlink_title": "Quitar el vínculo; la incidencia de Kata no cambia",
+  "friction_filing_retry": "Error al registrar, se reintentará",
+  "friction_filing_needs_person": "Registro detenido",
+  "friction_filing_paused": "Registro automático en pausa",
+  "friction_filing_paused_title": "El registro automático omite este patrón porque se quitó su vínculo. Regístrelo o vincúlelo para reanudarlo.",
   "friction_digest_heading": "Registro de fricción — {date}",
   "friction_digest_built": "Generado el {when} ({timezone})",
   "friction_p0_failed": [

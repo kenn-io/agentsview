@@ -20777,6 +20777,25 @@ func (c *Client) GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...
 
 var _ ClientInterface = (*Client)(nil)
 
+// FrictionFilingItemState retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link
+type FrictionFilingItemState string
+
+const (
+	NeedsPerson FrictionFilingItemState = "needs_person"
+	Paused      FrictionFilingItemState = "paused"
+	Retry       FrictionFilingItemState = "retry"
+)
+
+// Validate checks if the FrictionFilingItemState value is valid
+func (f FrictionFilingItemState) Validate() error {
+	switch f {
+	case NeedsPerson, Paused, Retry:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid FrictionFilingItemState value, got: %v", f))
+	}
+}
+
 type ServiceMemoryCapabilityStatusStatus string
 
 const (
@@ -27789,6 +27808,28 @@ func (f FrictionFileResponse) Validate() error {
 	return errors
 }
 
+type FrictionFilingItem struct {
+	Attempts      int64      `json:"attempts"`
+	LastError     *string    `json:"last_error,omitempty"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+
+	// State retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link
+	State FrictionFilingItemState `json:"state" validate:"required"`
+}
+
+func (f FrictionFilingItem) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(f.State).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("State", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type FrictionFindingItem struct {
 	CallIndex      *int64     `json:"call_index"`
 	Detector       string     `json:"detector" validate:"required"`
@@ -27902,20 +27943,28 @@ func (f FrictionP0Alert) Validate() error {
 }
 
 type FrictionPatternItem struct {
-	Fingerprint     string             `json:"fingerprint" validate:"required"`
-	FirstSeenDate   string             `json:"first_seen_date" validate:"required"`
-	Issue           *FrictionIssueItem `json:"issue,omitempty"`
-	Kind            string             `json:"kind" validate:"required"`
-	LastOrdinal     *int64             `json:"last_ordinal"`
-	LastSeenDate    string             `json:"last_seen_date" validate:"required"`
-	LastSubjectID   string             `json:"last_subject_id" validate:"required"`
-	OccurrenceCount int64              `json:"occurrence_count"`
-	SessionCount    int64              `json:"session_count"`
-	Title           string             `json:"title" validate:"required"`
+	Filing          *FrictionFilingItem `json:"filing,omitempty"`
+	Fingerprint     string              `json:"fingerprint" validate:"required"`
+	FirstSeenDate   string              `json:"first_seen_date" validate:"required"`
+	Issue           *FrictionIssueItem  `json:"issue,omitempty"`
+	Kind            string              `json:"kind" validate:"required"`
+	LastOrdinal     *int64              `json:"last_ordinal"`
+	LastSeenDate    string              `json:"last_seen_date" validate:"required"`
+	LastSubjectID   string              `json:"last_subject_id" validate:"required"`
+	OccurrenceCount int64               `json:"occurrence_count"`
+	SessionCount    int64               `json:"session_count"`
+	Title           string              `json:"title" validate:"required"`
 }
 
 func (f FrictionPatternItem) Validate() error {
 	var errors runtime.ValidationErrors
+	if f.Filing != nil {
+		if v, ok := any(f.Filing).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Filing", err)
+			}
+		}
+	}
 	if err := typesValidator.Var(f.Fingerprint, "required"); err != nil {
 		errors = errors.Append("Fingerprint", err)
 	}
