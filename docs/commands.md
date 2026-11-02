@@ -333,6 +333,34 @@ upload spool.
 
 ______________________________________________________________________
 
+### `agentsview why`
+
+Find recorded sessions and prompts behind a commit or file lines:
+
+```bash
+agentsview why internal/db/messages.go:120-140
+agentsview why --commit 1a2b3c4
+agentsview why main.go --format json
+```
+
+Use `path:N` for one line, `path:N-M` for an inclusive range, or `path` for the
+whole file. Line numbers start at 1. The file is blamed in its own Git
+repository, including when you run the command from another directory.
+Whitespace changes count, and uncommitted lines appear as a separate count. A
+file name ending in `:digits` is interpreted as a line range and can't be blamed
+by that name.
+
+`--commit` accepts a SHA or prefix and works outside a checkout. Ambiguous
+prefixes return all recorded candidates. Add `--format json` or `--json` for
+scripts. Each commit keeps its own session links and the prompt before each
+commit call, even when one session made several commits.
+
+The command reads the archive through an existing daemon or opens SQLite
+read-only. It starts no daemon and calls no model. Run `agentsview sync` first
+if you need newer records. A transcript link identifies the session that ran the
+commit; it doesn't prove who wrote each line. Deleted or trashed sessions appear
+as missing records without a prompt.
+
 ### `agentsview daemon`
 
 Manage the writable SQLite server. The daemon provides the web UI, API, session

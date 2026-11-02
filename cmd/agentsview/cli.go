@@ -109,6 +109,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newServeCommand())
 	root.AddCommand(newDaemonCommand())
 	root.AddCommand(newSyncCommand())
+	root.AddCommand(newWhyCommand())
 	root.AddCommand(newSyncWorkerCommand())
 	root.AddCommand(newPruneCommand())
 	root.AddCommand(newDBCommand())
