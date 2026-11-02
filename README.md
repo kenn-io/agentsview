@@ -278,6 +278,12 @@ agentsview session usage <id>
 agentsview session usage <id> --format json
 ```
 
+To investigate an expensive archived session, run
+`agentsview session diagnose <id>`. It combines usage with context growth,
+compactions, large tool results, retry candidates, and child links. See the
+[diagnosis contract](https://agentsview.io/docs/session-api/#agentsview-session-diagnose)
+for coverage and output options.
+
 The same per-session usage data is available from the REST API:
 
 ```bash

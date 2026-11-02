@@ -3,16 +3,14 @@
 package main
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/signals"
@@ -74,42 +72,42 @@ type diagnosisCoverage struct {
 
 func newSessionDiagnoseCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "diagnose <id>", Short: "Diagnose archived session usage and tool activity", Args: cobra.ExactArgs(1), SilenceUsage: true,
+		Use:          "diagnose <id>",
+		Short:        "Diagnose archived session usage and tool activity",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if noSync, _ := cmd.Flags().GetBool("no-sync"); !noSync {
-				return errors.New("diagnose only reads archived usage")
-			}
-			// Config only applies explicitly set flags, including defaults that
-			// must reach transport resolution before it can start a daemon.
-			if err := cmd.Flags().Set("no-sync", "true"); err != nil {
-				return err
-			}
-			svc, cleanup, err := resolveService(cmd)
+			svc, id, cleanup, err := resolveDiagnosisSession(cmd, args[0])
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			id, err := resolveServiceSessionID(cmd.Context(), svc, args[0])
-			if err != nil {
-				return err
-			}
-			usage, _, err := sessionUsageDataForCommand(cmd, id)
+			ownOnly, _ := cmd.Flags().GetBool("own-only")
+			usage, err := svc.SessionUsage(cmd.Context(), service.SessionUsageRequest{ID: id, OwnOnly: ownOnly})
 			if err != nil {
 				return err
 			}
 			if usage == nil {
 				return fmt.Errorf("session usage unavailable for %s", id)
 			}
-			messages, complete, err := diagnosisMessages(cmd.Context(), svc, id)
+			messages, complete, err := loadSessionMessages(cmd.Context(), svc, id, 10000)
 			if err != nil {
 				return err
 			}
-			calls, err := svc.ToolCalls(cmd.Context(), id)
-			if err != nil {
-				return err
+			var calls []service.ToolCall
+			for _, m := range messages {
+				for _, c := range m.ToolCalls {
+					calls = append(calls, service.ToolCall{
+						Ordinal:           m.Ordinal,
+						ToolName:          c.ToolName,
+						InputJSON:         c.InputJSON,
+						ResultLength:      c.ResultContentLength,
+						SubagentSessionID: c.SubagentSessionID,
+					})
+				}
 			}
-			out := buildSessionDiagnosis(id, usage, messages, calls.ToolCalls, complete)
-			if ownOnly, _ := cmd.Flags().GetBool("own-only"); ownOnly {
+			out := buildSessionDiagnosis(id, &sessionUsageOutput{SessionUsageReport: *usage}, messages, calls, complete)
+			if ownOnly {
 				out.Scope = "usage, tool and context evidence cover the named session only"
 			}
 			if outputFormat(cmd) == "json" {
@@ -118,40 +116,60 @@ func newSessionDiagnoseCommand() *cobra.Command {
 			return renderSessionDiagnosis(cmd.OutOrStdout(), out)
 		},
 	}
-	// Always query the archive; usage's refresh path can write to it.
-	cmd.Flags().Bool("no-sync", true, "Use archived usage without refreshing sources")
-	_ = cmd.Flags().MarkHidden("no-sync")
 	cmd.Flags().Bool("own-only", false, "Exclude subagent usage")
 	return cmd
 }
 
-func diagnosisMessages(ctx context.Context, svc service.SessionService, id string) ([]db.Message, bool, error) {
-	const maxMessages = 10000
-	var all []db.Message
-	from := 0
-	revision, source := "", ""
-	for len(all) < maxMessages {
-		page, err := svc.Messages(ctx, id, service.MessageFilter{From: &from, Limit: db.MaxMessageLimit, Direction: "asc", ExpectedRevision: revision, EvidenceSource: source})
+func resolveDiagnosisSession(cmd *cobra.Command, rawID string) (service.SessionService, string, func(), error) {
+	if pgReadRequested(cmd) {
+		remote, _ := cmd.Flags().GetString("server")
+		if remote != "" {
+			return nil, "", nil, fmt.Errorf("--server and --pg are mutually exclusive")
+		}
+		cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 		if err != nil {
-			return nil, false, err
+			return nil, "", nil, err
 		}
-		if len(page.Messages) == 0 {
-			return all, true, nil
+		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
+		if err != nil {
+			return nil, "", nil, err
 		}
-		if revision == "" {
-			revision, source = page.TranscriptRevision, page.EvidenceSource
+		store, cleanup, err := openPGReadStore(cfg, pgCfg)
+		if err != nil {
+			closeArchiveQueryBackend(cleanup)
+			return nil, "", nil, err
 		}
-		all = append(all, page.Messages...)
-		if len(page.Messages) < db.MaxMessageLimit {
-			return all, true, nil
+		id, err := resolveStoreSessionID(cmd.Context(), store, rawID)
+		if err != nil {
+			closeArchiveQueryBackend(cleanup)
+			return nil, "", nil, err
 		}
-		next := page.Messages[len(page.Messages)-1].Ordinal + 1
-		if next <= from {
-			return nil, false, errors.New("message pagination did not advance")
+		if priced, ok := store.(customPricingStore); ok {
+			priced.SetCustomPricing(cfg.CustomModelPricing)
 		}
-		from = next
+		return service.NewReadOnlyBackend(store), id, cleanup, nil
 	}
-	return all, false, nil
+	ownOnly, _ := cmd.Flags().GetBool("own-only")
+	remote, _ := cmd.Flags().GetString("server")
+	if remote != "" && !ownOnly {
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		if err := requireRemoteSubagentUsageSupport(cmd.Context(), remote, token, false); err != nil {
+			return nil, "", nil, err
+		}
+	}
+	svc, cleanup, err := resolveServiceWithNoSync(cmd, true)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	id, err := resolveServiceSessionID(cmd.Context(), svc, rawID)
+	if err != nil {
+		cleanup()
+		return nil, "", nil, err
+	}
+	return svc, id, cleanup, nil
 }
 
 func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.Message, calls []service.ToolCall, complete bool) *sessionDiagnosis {
@@ -159,9 +177,23 @@ func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.M
 	safeUsage := *usage
 	safeUsage.Project = ""
 	out := &sessionDiagnosis{
-		SchemaVersion: 1, SessionID: id, Scope: "usage includes linked subagents; tool and context evidence is the named session only", Usage: &safeUsage,
-		Coverage: diagnosisCoverage{RequestCountStatus: "unavailable: usage rows do not always represent requests", CacheMissReasons: "unavailable: provider diagnostics not captured", ToolEvidenceScope: "named session only; lengths are not billed tokens", MessagesComplete: complete, UsageStatus: "archived; completeness unknown", CacheBucketAvailability: "unknown: zero can mean missing or unreported"},
-		Context:  []diagnosisContext{}, Compactions: []int{}, LargeResults: []diagnosisTool{}, RetryRuns: []diagnosisRetry{}, ChildLinks: []diagnosisChildLink{},
+		SchemaVersion: 1,
+		SessionID:     id,
+		Scope:         "usage includes linked subagents; tool and context evidence is the named session only",
+		Usage:         &safeUsage,
+		Coverage: diagnosisCoverage{
+			RequestCountStatus:      "unavailable: usage rows do not always represent requests",
+			CacheMissReasons:        "unavailable: provider diagnostics not captured",
+			ToolEvidenceScope:       "named session only; lengths are not billed tokens",
+			MessagesComplete:        complete,
+			UsageStatus:             "archived; completeness unknown",
+			CacheBucketAvailability: "unknown: zero can mean missing or unreported",
+		},
+		Context:      []diagnosisContext{},
+		Compactions:  []int{},
+		LargeResults: []diagnosisTool{},
+		RetryRuns:    []diagnosisRetry{},
+		ChildLinks:   []diagnosisChildLink{},
 	}
 	if !usage.HasTokenData {
 		out.Coverage.UsageStatus = "no token data reported"
@@ -188,13 +220,7 @@ func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.M
 		if c.ResultLength > 0 {
 			out.LargeResults = append(out.LargeResults, diagnosisTool{c.Ordinal, c.ToolName, c.ResultLength, c.SubagentSessionID})
 		}
-		// Missing and empty-object arguments may be parser placeholders.
-		// Unique placeholders prevent them from forming a retry run.
-		input := c.InputJSON
-		if strings.TrimSpace(input) == "" || strings.TrimSpace(input) == "{}" {
-			input = fmt.Sprintf("\x00missing:%d", i)
-		}
-		rows = append(rows, signals.ToolCallRow{ToolName: c.ToolName, InputJSON: input, MessageOrdinal: c.Ordinal, CallIndex: i})
+		rows = append(rows, signals.ToolCallRow{ToolName: c.ToolName, InputJSON: c.InputJSON, MessageOrdinal: c.Ordinal, CallIndex: i})
 	}
 	sort.SliceStable(out.LargeResults, func(i, j int) bool { return out.LargeResults[i].ResultLength > out.LargeResults[j].ResultLength })
 	if len(out.LargeResults) > 10 {
@@ -220,7 +246,11 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if err != nil {
 		return err
 	}
-	for _, c := range d.Context {
+	context := d.Context
+	if len(context) > 10 {
+		context = context[len(context)-10:]
+	}
+	for _, c := range context {
 		if _, err := fmt.Fprintf(w, "  Context #%d: %d tokens (%s)\n", c.Ordinal, c.ContextTokens, sanitizeTerminal(c.Model)); err != nil {
 			return err
 		}

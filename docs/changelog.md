@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Investigate an expensive archived session with `session diagnose <id>`. The
+  report combines usage, context growth, compactions, large tool results, retry
+  candidates, and child links. Use `--format json` for scripts or `--pg` to read
+  a PostgreSQL archive. Transcript text and tool arguments stay out of the
+  report.
+
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
   this executable's processing version a fresh attempt budget.

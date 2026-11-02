@@ -630,28 +630,8 @@ func loadRecallExtractionMessages(
 	svc service.SessionService,
 	sessionID string,
 ) ([]db.Message, error) {
-	var messages []db.Message
-	from := 0
-	for {
-		page, err := svc.Messages(ctx, sessionID, service.MessageFilter{
-			From:      &from,
-			Limit:     db.MaxMessageLimit,
-			Direction: "asc",
-		})
-		if err != nil {
-			return nil, err
-		}
-		if page == nil || len(page.Messages) == 0 {
-			break
-		}
-		messages = append(messages, page.Messages...)
-		last := page.Messages[len(page.Messages)-1].Ordinal
-		if len(page.Messages) < db.MaxMessageLimit {
-			break
-		}
-		from = last + 1
-	}
-	return messages, nil
+	messages, _, err := loadSessionMessages(ctx, svc, sessionID, 0)
+	return messages, err
 }
 
 func printRecallExtractDryRunHuman(

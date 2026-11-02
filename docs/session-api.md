@@ -967,25 +967,29 @@ failures. Backend setup or output failures exit 1. The existing
 `agentsview session diagnose <id> --json` reports archived usage and evidence
 for investigating an expensive task. It uses the same pricing and linked
 subagent accounting as `session usage`, without refreshing source files. Pass
-`--own-only` to exclude subagent usage. Human output is the default; `--pg`
-and `--server` select the same read transports as other session commands.
+`--own-only` to exclude subagent usage. Human output is the default; `--pg` and
+`--server` select the same read transports as other session commands.
+Missing sessions and read failures return exit 1.
 
 The versioned JSON includes the usage breakdown, totals of its normalized
 uncached input, cache-read, cache-write and output rows, context observations,
 compaction ordinals, the ten largest recorded tool-result lengths, and runs of
 three or more consecutive calls with identical recorded arguments. Tool and
 context evidence covers the named session only; child links are shown when
-recorded. Missing arguments and empty JSON objects do not count as identical,
-because some parsers use empty objects when arguments are unknown. This can
-omit retries with genuinely empty arguments. These observations can
-be incomplete: usage rows are not always
-requests, request counts and provider cache-miss reasons are unavailable, and
-result lengths are not billed tokens. Cost is reported or estimated according
-to the existing usage contract; no causal savings or invoice total is inferred.
-The report omits transcript content and tool arguments. Message evidence is
-limited to 10,000 rows and reports whether that limit was reached. Usage,
-messages and tool calls are separate reads and can reflect different archive
-revisions if ingestion runs concurrently.
+recorded. Retry candidates use the same recorded-argument comparison as the
+`tool_retry_count` signal. Empty or placeholder arguments can form candidates;
+they do not prove that a provider retried a request. These observations can be
+incomplete: usage rows are not always requests, request counts and provider
+cache-miss reasons are unavailable, and result lengths are not billed tokens.
+Cost is reported or estimated according to the existing usage contract; no
+causal savings or invoice total is inferred. The report omits transcript content
+and tool arguments. Context, compaction, and tool evidence comes from one
+revision-bound message scan, limited to 10,000 rows. `messages_complete`
+describes that scan only. Human output shows the latest ten context
+observations; JSON includes every observation within the scan limit. Usage is a
+separate read and can reflect a different archive revision if ingestion runs
+concurrently. `schema_version` versions the output shape, not the archive
+snapshot.
 
 ### `agentsview session usage`
 

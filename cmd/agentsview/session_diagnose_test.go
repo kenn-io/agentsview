@@ -19,9 +19,80 @@ import (
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
+
+func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+	store := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
+	const raw = "019da6a6-8c67-7c23-b102-ef48502852d0"
+	const canonical = "host-a~codex:" + raw
+	seedUsageSession(t, store, canonical, "project", "codex", 42)
+	parentID := canonical
+	require.NoError(t, store.UpsertSession(t.Context(), db.Session{
+		ID: "child", Agent: "codex", Project: "project", Machine: "host-a",
+		ParentSessionID:   &parentID,
+		RelationshipType:  "subagent",
+		TotalOutputTokens: 5, HasTotalOutputTokens: true,
+	}))
+	for ordinal := range 3 {
+		require.NoError(t, store.InsertMessages(t.Context(), []db.Message{{
+			SessionID: canonical, Ordinal: ordinal, Role: "assistant",
+			HasToolUse: true,
+			ToolCalls:  []db.ToolCall{{SessionID: canonical, ToolUseID: strconv.Itoa(ordinal), ToolName: "read", InputJSON: "{}", ResultContentLength: 20}},
+		}}))
+	}
+	opened := 0
+	original := openPGReadStore
+	openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
+		opened++
+		return store, func() {}, nil
+	}
+	t.Cleanup(func() { openPGReadStore = original })
+	out, err := executeCommand(newRootCommand(), "session", "diagnose", raw, "--pg", "--format", "json")
+	require.NoError(t, err)
+	var report sessionDiagnosis
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	assert.Equal(t, canonical, report.SessionID)
+	assert.Equal(t, 47, report.Usage.TotalOutputTokens)
+	assert.Equal(t, 1, report.Usage.SubagentCount)
+	assert.Equal(t, []diagnosisRetry{{Tool: "read", Count: 3, FirstOrdinal: 0, LastOrdinal: 2}}, report.RetryRuns)
+	require.Len(t, report.LargeResults, 3)
+	assert.Equal(t, 20, report.LargeResults[0].ResultLength)
+	assert.Equal(t, 1, opened)
+	out, err = executeCommand(newRootCommand(), "session", "diagnose", canonical, "--pg", "--own-only", "--format", "json")
+	require.NoError(t, err)
+	report = sessionDiagnosis{}
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
+	assert.Zero(t, report.Usage.SubagentCount)
+	assert.Equal(t, 2, opened)
+}
+
+func TestSessionDiagnoseMissingSession(t *testing.T) {
+	seedEmptyArchive(t, newAgentDataDir(t))
+	_, err := executeCommand(newRootCommand(), "session", "diagnose", "missing-session", "--format", "json")
+	require.ErrorIs(t, err, errSessionNotFound)
+	var stderr strings.Builder
+	assert.Equal(t, 1, reportCLIError(err, &stderr))
+	assert.Contains(t, stderr.String(), "session not found: missing-session")
+}
+
+func TestSessionDiagnosisHumanBoundsContext(t *testing.T) {
+	messages := make([]db.Message, 100)
+	for i := range messages {
+		messages[i] = db.Message{Ordinal: i, HasContextTokens: true, ContextTokens: i * 100}
+	}
+	report := buildSessionDiagnosis("root", &sessionUsageOutput{}, messages, nil, true)
+	var out strings.Builder
+	require.NoError(t, renderSessionDiagnosis(&out, report))
+	assert.Equal(t, 10, strings.Count(out.String(), "  Context #"))
+	assert.Contains(t, out.String(), "Context #99: 9900 tokens")
+	assert.Len(t, report.Context, 100)
+}
 
 func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	ordinal := 3
@@ -57,7 +128,7 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 func TestSessionDiagnosisMissingEvidence(t *testing.T) {
 	calls := []service.ToolCall{{ToolName: "read"}, {ToolName: "read"}, {ToolName: "read"}}
 	got := buildSessionDiagnosis("root", &sessionUsageOutput{}, nil, calls, false)
-	assert.Empty(t, got.RetryRuns)
+	assert.Equal(t, []diagnosisRetry{{Tool: "read", Count: 3}}, got.RetryRuns)
 	assert.False(t, got.Coverage.MessagesComplete)
 	assert.Equal(t, "no token data reported", got.Coverage.UsageStatus)
 	assert.Nil(t, got.Coverage.RequestCount)
@@ -82,7 +153,7 @@ func (s *diagnosisPageService) Messages(_ context.Context, _ string, f service.M
 
 func TestDiagnosisMessagesPagesAndPinsRevision(t *testing.T) {
 	svc := &diagnosisPageService{}
-	messages, complete, err := diagnosisMessages(t.Context(), svc, "session")
+	messages, complete, err := loadSessionMessages(t.Context(), svc, "session", 10000)
 	require.NoError(t, err)
 	assert.True(t, complete)
 	require.Len(t, messages, 1001)
@@ -90,6 +161,21 @@ func TestDiagnosisMessagesPagesAndPinsRevision(t *testing.T) {
 	assert.Equal(t, 1000, *svc.filters[1].From)
 	assert.Equal(t, "rev", svc.filters[1].ExpectedRevision)
 	assert.Equal(t, "archive", svc.filters[1].EvidenceSource)
+}
+
+func TestDiagnosisMessagesCapAndRecallPagination(t *testing.T) {
+	svc := &diagnosisPageService{}
+	messages, complete, err := loadSessionMessages(t.Context(), svc, "session", 1000)
+	require.NoError(t, err)
+	assert.Len(t, messages, 1000)
+	assert.False(t, complete)
+	assert.Len(t, svc.filters, 1)
+
+	svc = &diagnosisPageService{}
+	messages, err = loadRecallExtractionMessages(t.Context(), svc, "session")
+	require.NoError(t, err)
+	assert.Len(t, messages, 1001)
+	assert.Len(t, svc.filters, 2)
 }
 
 func TestSessionDiagnoseReadsSQLiteWithoutContent(t *testing.T) {
@@ -121,7 +207,7 @@ func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
 			assert.Equal(t, "true", r.URL.Query().Get("breakdown"))
 			_, _ = w.Write([]byte(`{"session_id":"remote","agent":"codex","has_token_data":true,"total_output_tokens":2,"peak_context_tokens":10,"cost":{"microdollars":0},"has_cost":false,"models":[],"breakdown":[{"ordinal":1,"source":"message","label":"Prompt 1","timestamp":"","model":"x","input_tokens":7,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":0,"cost":{"microdollars":0},"has_cost":false}],"breakdown_count":1}`))
 		case "/api/v1/sessions/remote/messages":
-			_, _ = w.Write([]byte(`{"messages":[{"ordinal":1,"role":"assistant","content":"private text","has_context_tokens":true,"context_tokens":10}],"count":1}`))
+			_, _ = w.Write([]byte(`{"messages":[{"ordinal":1,"role":"assistant","content":"private text","has_context_tokens":true,"context_tokens":10,"tool_calls":[{"tool_name":"read","input_json":"private args","result_content_length":12}]}],"count":1}`))
 		case "/api/v1/sessions/remote/tool-calls":
 			_, _ = w.Write([]byte(`{"tool_calls":[{"ordinal":1,"tool_name":"read","input_json":"private args","result_length":12}],"count":1}`))
 		default:
@@ -140,6 +226,7 @@ func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
 	assert.NotContains(t, out, "private")
 	for _, request := range requests {
 		assert.True(t, strings.HasPrefix(request, "GET "), request)
+		assert.NotContains(t, request, "/tool-calls")
 	}
 }
 
@@ -219,19 +306,7 @@ func TestSessionDiagnoseColdStartDisablesSourceSync(t *testing.T) {
 	}
 }
 
-func TestSessionDiagnoseRejectsSyncBeforeStartingDaemon(t *testing.T) {
-	testDataDir(t)
-	started := false
-	stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
-		started = true
-		return nil, nil
-	})
-	_, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--no-sync=false")
-	require.ErrorContains(t, err, "diagnose only reads archived usage")
-	assert.False(t, started)
-}
-
-func TestSessionDiagnosisCodexCloudPlaceholderIsNotRetryEvidence(t *testing.T) {
+func TestSessionDiagnosisRetryCandidatesIncludeRecordedPlaceholders(t *testing.T) {
 	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	records := []mirror.Record{{Kind: mirror.KindThread, FetchedAt: fetched, Data: jsontext.Value(`{"id":"thread-a","createdAt":1,"updatedAt":2}`)}}
 	for _, id := range []string{"a", "b", "c"} {
@@ -254,5 +329,6 @@ func TestSessionDiagnosisCodexCloudPlaceholderIsNotRetryEvidence(t *testing.T) {
 		assert.Equal(t, "{}", c.InputJSON)
 	}
 	report := buildSessionDiagnosis(parsed.Session.ID, &sessionUsageOutput{}, nil, calls, true)
-	assert.Empty(t, report.RetryRuns)
+	require.Len(t, report.RetryRuns, 1)
+	assert.Equal(t, 3, report.RetryRuns[0].Count)
 }
