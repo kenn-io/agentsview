@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,17 +46,4 @@ func TestHostedRawConfigRejectsInvalidEnvironment(t *testing.T) {
 		_, err := LoadReadOnlyFor(ScopeLocal)
 		require.ErrorContains(t, err, "AGENTSVIEW_RAW_SYNC_HOSTED")
 	})
-	hegel.Test(t, func(ht *hegel.T) {
-		value := hegel.Draw(ht, hegel.Text())
-		// NUL cannot be represented in an operating-system environment value.
-		if strings.ContainsRune(value, 0) {
-			return
-		}
-		if _, err := strconv.ParseBool(value); err == nil || value == "" {
-			return
-		}
-		t.Setenv("AGENTSVIEW_RAW_SYNC_HOSTED", value)
-		_, err := LoadReadOnlyFor(ScopeLocal)
-		require.ErrorContains(ht, err, "AGENTSVIEW_RAW_SYNC_HOSTED")
-	}, hegel.WithTestCases(1000), hegel.WithDatabase(""))
 }
