@@ -7,7 +7,7 @@
 //	metadata       Agent, project, cwd, first message, start/end, message counts
 //	messages       All persisted message fields, including model and usage flags
 //	tool_calls     Calls (including input, target path and call index) and results
-//	usage          Token events, plan reports, credits, outcomes and capture coverage
+//	usage          Session totals, token events, plan reports, credits, outcomes and coverage
 //	findings       Secret and friction findings, including natural coordinates
 //	relationships  Parent set/type and call/result subagent targets via MatchIDs
 //
@@ -140,6 +140,7 @@ func digests(s Snapshot) (map[string]string, error) {
 			}
 		}
 	}
+	rows["usage"] = []any{[]any{"session", session.TotalOutputTokens, session.PeakContextTokens, session.HasTotalOutputTokens, session.HasPeakContextTokens}}
 	for _, e := range s.Usage {
 		e.ID = 0
 		e.SessionID = ""
