@@ -31,12 +31,11 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context, version uint64) e
 	if err := insertRows(ctx, s.conn, "commit_links", block); err != nil {
 		return err
 	}
-	for batch := range idBatches(append(ids, s.deletedCommitSessions...)) {
+	for batch := range idBatches(ids) {
 		ph, args := inArgs(batch)
 		if _, err := s.conn.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id IN ("+ph+") AND push_version < ?", append(args, version)...); err != nil {
 			return err
 		}
 	}
-	s.deletedCommitSessions = nil
 	return nil
 }

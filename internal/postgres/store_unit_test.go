@@ -288,6 +288,8 @@ func (c *emptyTrashProbeConn) ExecContext(
 	defer c.state.mu.Unlock()
 
 	switch {
+	case strings.Contains(normalized, "update commit_links"):
+		return driver.RowsAffected(0), nil
 	case strings.Contains(normalized, "set deleted_at = deleted_at"):
 		return driver.RowsAffected(c.state.trashedCountLocked()), nil
 	case strings.Contains(normalized, "insert into excluded_sessions"):

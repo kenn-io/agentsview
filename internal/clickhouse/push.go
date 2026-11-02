@@ -566,10 +566,6 @@ func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
 		for _, table := range slices.Concat(dependentTables, derivedSessionTables, []string{"starred_sessions"}) {
-			// Retained refresh needs the project even after the session is gone.
-			if table == "commit_links" {
-				continue
-			}
 			if _, err := s.conn.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE session_id IN ("+placeholders+")", args...); err != nil {
 				return fmt.Errorf("deleting clickhouse %s rows: %w", table, err)
@@ -582,7 +578,6 @@ func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 			}
 		}
 	}
-	s.deletedCommitSessions = append(s.deletedCommitSessions, ids...)
 	return nil
 }
 

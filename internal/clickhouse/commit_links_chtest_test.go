@@ -12,6 +12,27 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+func TestClickHouseCommitScopeCleanupAfterRestart(t *testing.T) {
+	local, target := seedFixture(t)
+	dbtest.SeedCommitLinks(t, local)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"commit-project"}})
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	session, err := local.GetSession(t.Context(), "commit-live")
+	require.NoError(t, err)
+	session.Project = "other"
+	require.NoError(t, local.UpsertSession(t.Context(), *session))
+	// Stop at the scope-deletion boundary, before retained links refresh.
+	require.NoError(t, syncer.deleteResidentSessions(t.Context(), []string{"commit-live"}, &storage.PushResult{}))
+	require.NoError(t, syncer.Close())
+	syncer = newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"commit-project"}})
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, syncer.conn.QueryRowContext(t.Context(), `SELECT count(*) FROM commit_links WHERE session_id='commit-live'`).Scan(&count))
+	assert.Zero(t, count, "scope removal must erase the copied prompt across restarts")
+}
+
 func TestClickHouseCommitLinkParity(t *testing.T) {
 	local, target := seedFixture(t)
 	dbtest.SeedCommitLinks(t, local)

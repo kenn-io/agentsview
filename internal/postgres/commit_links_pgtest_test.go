@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,48 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 )
+
+func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
+	for _, emptyTrash := range []bool{false, true} {
+		t.Run(map[bool]string{false: "delete-session", true: "empty-trash"}[emptyTrash], func(t *testing.T) {
+			syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_purge_test")
+			dbtest.SeedCommitLinks(t, local)
+			_, err := syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			store, err := NewStore(testPGURL(t), syncer.schema, true)
+			require.NoError(t, err)
+			defer store.Close()
+			err = store.SoftDeleteSession(ctx, "commit-live")
+			require.NoError(t, err)
+			if emptyTrash {
+				_, err = store.EmptyTrash(ctx)
+			} else {
+				_, err = store.DeleteSessionIfTrashed(ctx, "commit-live")
+			}
+			require.NoError(t, err)
+			for _, afterPush := range []bool{false, true} {
+				if afterPush {
+					_, err = syncer.Push(ctx, true, nil)
+					require.NoError(t, err)
+				}
+				links, err := store.SessionCommitLinks(ctx, "commit-live")
+				require.NoError(t, err)
+				require.Len(t, links.Commits, 1)
+				assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
+				assert.True(t, links.Commits[0].Missing)
+				assert.Nil(t, links.Commits[0].Turn)
+				matches, err := store.CommitSessionLinks(ctx, []string{"abc1234567890123456789012345678901234567"})
+				require.NoError(t, err)
+				assert.Contains(t, matches.Commits[0].Links, links.Commits[0])
+				var ordinal sql.NullInt64
+				var prompt string
+				require.NoError(t, pg.QueryRowContext(ctx, `SELECT turn_ordinal,turn_text FROM commit_links WHERE session_id='commit-live'`).Scan(&ordinal, &prompt))
+				assert.False(t, ordinal.Valid)
+				assert.Empty(t, prompt)
+			}
+		})
+	}
+}
 
 func TestPGCommitLinkParity(t *testing.T) {
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_links_test")

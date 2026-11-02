@@ -49,9 +49,6 @@ type Sync struct {
 	// holds. Pushes always record their archive, so no new ones appear.
 	unownedPruned bool
 
-	// deletedCommitSessions are ids whose links outlived their mirror session.
-	deletedCommitSessions []string
-
 	// hooks is nil in production; tests inject failures at push boundaries.
 	hooks *pushHooks
 	// vectorBatchSessions overrides the vector flush session bound when
