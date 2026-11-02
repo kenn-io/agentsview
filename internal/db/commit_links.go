@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	gitlog "go.kenn.io/agentsview/internal/db/git"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
@@ -54,8 +56,9 @@ type CommitLinkReader interface {
 }
 
 type CommitTurn struct {
-	Ordinal int    `json:"ordinal"`
-	Text    string `json:"text"`
+	Heuristic bool   `json:"heuristic"`
+	Ordinal   int    `json:"ordinal"`
+	Text      string `json:"text"`
 }
 
 type CommitLink struct {
@@ -446,15 +449,66 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	return tx.Commit()
 }
 
-const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
+// The time fallback adapts Pando's turnThatWrote; see
+// docs/internal/pando-adaptation.md for attribution and changes.
+const commitUserPrompt = `m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''`
+
+const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.source,
  (s.id IS NULL OR s.deleted_at IS NOT NULL),
  turn.ordinal, turn.content
- FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
+ FROM (
+ SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,'transcript' AS source FROM commit_links
+ UNION ALL
+ SELECT t.session_id,t.sha,t.branch,t.subject,t.repository,
+ COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=t.session_id AND ` + commitUserPrompt + `
+ AND julianday(m.timestamp)<=julianday(t.committed_at,'+5 minutes') ORDER BY m.ordinal DESC LIMIT 1),-1),
+ -1,'',t.committed_at,'trailer' FROM commit_trailers t
+ WHERE NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.session_id AND substr(t.sha,1,length(c.sha))=c.sha)
+ ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
- AND m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''
+ AND ` + commitUserPrompt + `
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
+
+// StoreTrailerCommitLinks retains Git evidence even when transcripts are rewritten.
+func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) error {
+	return d.Update(ctx, func(tx *sql.Tx) error {
+		for _, c := range commits {
+			for _, value := range c.Sessions {
+				agent, id, ok := strings.Cut(value, ":")
+				def, known := parser.AgentByType(parser.AgentType(agent))
+				if !ok || !known {
+					continue
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
+ ON CONFLICT(session_id,sha) DO UPDATE SET branch=excluded.branch,subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at`, def.IDPrefix+id, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+type TrailerRepository struct{ Machine, Cwd string }
+
+func (d *DB) TrailerRepositories(ctx context.Context) ([]TrailerRepository, error) {
+	rows, err := d.getReader().QueryContext(ctx, `SELECT DISTINCT machine,cwd FROM sessions WHERE cwd<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var repos []TrailerRepository
+	for rows.Next() {
+		var r TrailerRepository
+		if err := rows.Scan(&r.Machine, &r.Cwd); err != nil {
+			return nil, err
+		}
+		repos = append(repos, r)
+	}
+	return repos, rows.Err()
+}
 
 func readCommitLinks(ctx context.Context, tx *sql.Tx, where string, args ...any) ([]CommitLink, error) {
 	rows, err := tx.QueryContext(ctx, commitLinkSelect+where+` ORDER BY l.session_id,l.message_ordinal,l.call_index,l.sha`, args...)
@@ -467,12 +521,11 @@ func readCommitLinks(ctx context.Context, tx *sql.Tx, where string, args ...any)
 		var l CommitLink
 		var ordinal sql.NullInt64
 		var text sql.NullString
-		if err := rows.Scan(&l.SessionID, &l.SHA, &l.Branch, &l.Subject, &l.Repository, &l.MessageOrdinal, &l.CallIndex, &l.ToolUseID, &l.CommittedAt, &l.Missing, &ordinal, &text); err != nil {
+		if err := rows.Scan(&l.SessionID, &l.SHA, &l.Branch, &l.Subject, &l.Repository, &l.MessageOrdinal, &l.CallIndex, &l.ToolUseID, &l.CommittedAt, &l.Source, &l.Missing, &ordinal, &text); err != nil {
 			return nil, err
 		}
-		l.Source = "transcript"
 		if !l.Missing && ordinal.Valid {
-			l.Turn = &CommitTurn{Ordinal: int(ordinal.Int64), Text: stringutil.SafeTruncate(text.String, 2000)}
+			l.Turn = &CommitTurn{Heuristic: l.Source == "trailer", Ordinal: int(ordinal.Int64), Text: stringutil.SafeTruncate(text.String, 2000)}
 		}
 		links = append(links, l)
 	}

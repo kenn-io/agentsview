@@ -3220,6 +3220,7 @@ func startPeriodicSync(
 				log.Printf("archive sources: %v", err)
 			}
 			recomputePendingSessions(engine, database)
+			engine.ReconcileCommitTrailers(ctx)
 			recomputeStaleFriction(ctx, engine)
 		})
 	}

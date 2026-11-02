@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- Find editor commits through `Agent-Session` trailers in local Git history.
+  Session commit lookups show the source and mark suggested prompts as
+  heuristic. Trailer links survive transcript rewrites and checkout removal.
+
 - Find the session and prompt behind a Git commit through the session API, or
   list a session's commits with `agentsview session commits <id>`. Links come
   from stored Git summaries, including Codex output received through later

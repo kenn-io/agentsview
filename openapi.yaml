@@ -1236,12 +1236,15 @@ components:
     DbCommitTurn:
       additionalProperties: false
       properties:
+        heuristic:
+          type: boolean
         ordinal:
           format: int64
           type: integer
         text:
           type: string
       required:
+        - heuristic
         - ordinal
         - text
       type: object

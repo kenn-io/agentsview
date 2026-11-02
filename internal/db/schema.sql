@@ -1706,3 +1706,15 @@ CREATE TABLE IF NOT EXISTS commit_links (
     PRIMARY KEY (session_id, sha)
 );
 CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);
+
+-- Git trailer evidence survives transcript rewrites and checkout removal.
+CREATE TABLE IF NOT EXISTS commit_trailers (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_trailers_sha ON commit_trailers(sha);

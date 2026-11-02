@@ -37,7 +37,7 @@ func newSessionCommitsCommand() *cobra.Command {
 				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), list)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "SESSION\tORDINAL\tCALL\tTOOL USE ID\tTIME\tSHA\tBRANCH\tSUBJECT\tUSER TURN")
+			fmt.Fprintln(tw, "SESSION\tORDINAL\tCALL\tTOOL USE ID\tTIME\tSOURCE\tSHA\tBRANCH\tSUBJECT\tUSER TURN")
 			for _, l := range list.Commits {
 				subject := l.Subject
 				if l.Missing {
@@ -47,7 +47,7 @@ func newSessionCommitsCommand() *cobra.Command {
 				if l.Turn != nil {
 					turn = fmt.Sprintf("%d: %s", l.Turn.Ordinal, truncCell(sanitizeTerminal(l.Turn.Text), 100))
 				}
-				fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n", sanitizeTerminal(l.SessionID), l.MessageOrdinal, l.CallIndex, sanitizeTerminal(l.ToolUseID), sanitizeTerminal(l.CommittedAt), sanitizeTerminal(l.SHA), sanitizeTerminal(l.Branch), sanitizeTerminal(subject), turn)
+				fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sanitizeTerminal(l.SessionID), l.MessageOrdinal, l.CallIndex, sanitizeTerminal(l.ToolUseID), sanitizeTerminal(l.CommittedAt), sanitizeTerminal(l.Source), sanitizeTerminal(l.SHA), sanitizeTerminal(l.Branch), sanitizeTerminal(subject), turn)
 			}
 			return tw.Flush()
 		},

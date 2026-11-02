@@ -8642,6 +8642,7 @@ func (e *Engine) syncAllLocked(
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
 	}
+	e.reconcileCommitTrailersLocked(ctx)
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats

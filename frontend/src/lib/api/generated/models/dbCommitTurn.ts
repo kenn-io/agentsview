@@ -3,6 +3,7 @@
  */
 
 export interface DbCommitTurn {
+  heuristic: boolean;
   ordinal: number;
   text: string;
 }

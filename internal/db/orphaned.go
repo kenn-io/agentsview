@@ -1221,6 +1221,15 @@ func (d *DB) CopyExcludedSessionsFrom(
 			}
 		}
 	}
+	var hasTrailers bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_trailers')`).Scan(&hasTrailers); err != nil {
+		return err
+	}
+	if hasTrailers {
+		if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailers SELECT * FROM old_db.commit_trailers`); err != nil {
+			return fmt.Errorf("copying commit trailers: %w", err)
+		}
+	}
 	if d.ArchiveContent() == config.ArchiveContentFull {
 		var hasLinks bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_links')`).Scan(&hasLinks); err != nil {

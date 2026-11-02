@@ -1515,11 +1515,11 @@ HTTP 400. Mirrors return HTTP 501 until they support commit links.
 
 Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 `repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
-and `source: "transcript"`. `committed_at` is the tool call's message time. The
-SHA is exactly as Git printed it, usually a short prefix. Full SHAs match stored
-prefixes. `turn` contains the preceding nonempty, non-system user prompt's
-`ordinal` and `text`, limited to 2,000 UTF-8 bytes. It is omitted when the
-archive has no preceding user prompt.
+and `source`. For `source: "transcript"`, `committed_at` is the tool call's
+message time. The SHA is exactly as Git printed it, usually a short prefix. Full
+SHAs match stored prefixes. `turn` contains the preceding nonempty, non-system
+user prompt's `ordinal`, `text`, limited to 2,000 UTF-8 bytes, and
+`heuristic: false`. It is omitted when the archive has no preceding user prompt.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link
@@ -1527,15 +1527,15 @@ carries `ambiguous: true` when a query matches distinct commits whose SHAs are
 not prefixes of each other. Several sessions recording the same commit do not
 make it ambiguous.
 
-Sessions permanently deleted before this release have no links because their
-stored tool calls are already gone.
+Sessions permanently deleted before this release have no transcript links
+because their stored tool calls are already gone.
 
-Links require a `git commit` invocation, allowing Git global options, or a
-helper's `["git", "commit", ...]` argument list, and Git's commit summary in
-the call's stored output. Codex output received through a later `write_stdin`
+Transcript links require a `git commit` invocation, allowing Git global options,
+or a helper's `["git", "commit", ...]` argument list, and Git's commit summary
+in the call's stored output. Codex output received through a later `write_stdin`
 poll links to the original commit call when its process ID matches. Polls with
-no originating commit call produce no links. Each session records a SHA once,
-at its first matching call.
+no originating commit call produce no links. Each session records a SHA once, at
+its first matching call.
 
 Quiet commits link only when the same call prints exactly one SHA through
 `git rev-parse HEAD` or `git log -1 --oneline`, including the equivalent
@@ -1552,5 +1552,34 @@ paths join onto the base using the transcript's path style; `~` paths stay
 literal. A later `cd` is ignored. A call that commits in two repositories
 records the first directory for both commits.
 
-Archives using `archive_content = "transcripts"` or `"usage"` retain no commit
-links because they omit tool output.
+Archives using `archive_content = "transcripts"` or `"usage"` omit transcript
+links because they omit tool output. They retain trailer links.
+
+### Git trailer links
+
+Commits ending in `Agent-Session: <agent>:<session-id>` trailers appear with
+`source: "trailer"`, a full SHA, Git's committer time, and a repository path.
+Claude IDs omit the `claude:` prefix in the archive; other agents use their
+registered prefix. Unknown agents and invalid trailer values are ignored. Git
+parses the final trailer block, so inline mentions and body prose don't create
+links. Merge commits count.
+
+`agentsview sync` scans repositories used by local sessions. Under
+`agentsview serve`, editor commits appear at the next scheduled pass, within 15
+minutes. Changed refs trigger incremental history reads, including fetched older
+branches. Only checkouts a local session ran in are read. If a checkout has
+disappeared, another session must still resolve to its repository to read new
+commits. Stored rows survive checkout removal, rebases, and archive rebuilds
+under every archive policy.
+
+Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
+Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other
+sources, such as tags and stash, leave it empty. Git does not record which
+branch originally created a commit.
+
+The suggested `turn` is the last real user prompt in transcript order with a
+usable timestamp at or before commit time plus five minutes. It carries
+`heuristic: true`; no eligible prompt means no turn. This time rule adapts
+[Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
+A transcript link for the same session and a matching SHA prefix takes
+precedence over a trailer link. Other sessions' trailer links remain visible.
