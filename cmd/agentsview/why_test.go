@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,42 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/testutil"
 )
+
+func TestWhyJSONWithGitOutputEncoding(t *testing.T) {
+	testutil.IsolateGitEnv(t)
+	_, err := exec.LookPath("git")
+	require.NoError(t, err)
+	repo := initGitRepoOnBranch(t, "main")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "commit.gpgsign", "false")
+	runGit(t, repo, "config", "i18n.logOutputEncoding", "ISO-8859-1")
+	path := filepath.Join(repo, "a.txt")
+	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
+	runGit(t, repo, "add", "a.txt")
+	runGit(t, repo, "commit", "-qm", "Fix café")
+	dataDir := newAgentDataDir(t)
+	seedSessionArchiveRows(t, dataDir, sessionSeed{id: "claude:encoding", project: "project-a"})
+	out, err := executeCommand(newRootCommand(), "why", path, "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[whyResult](t, out)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "Fix café", got.Commits[0].Subject)
+}
+
+func TestWhyWriteFailure(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionArchiveRows(t, dataDir, sessionSeed{id: "claude:writer", project: "project-a"})
+	for _, format := range []string{"human", "json"} {
+		t.Run(format, func(t *testing.T) {
+			sentinel := errors.New("output unavailable")
+			root := newRootCommand()
+			root.SetOut(&failingRawSyncWriter{err: sentinel})
+			root.SetArgs([]string{"why", "--commit", "abcdef1234", "--format", format})
+			require.ErrorIs(t, root.Execute(), sentinel)
+		})
+	}
+}
 
 func TestSplitWhyPath(t *testing.T) {
 	for _, tc := range []struct {

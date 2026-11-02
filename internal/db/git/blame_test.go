@@ -1,11 +1,35 @@
 package git
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBlameFixtureGlobalIsolation(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	config := []byte("[blame]\n\tignoreRevsFile = missing-revisions\n")
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), config, 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(xdg, "git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(xdg, "git", "config"), config, 0o600))
+
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	writeFile(t, repo, "a.txt", []byte("first\n"))
+	commitAs(t, repo, "test@example.com", "Test User", "Initial lines")
+	got, err := BlameCommits(t.Context(), repo, "a.txt", 0, 0)
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "Initial lines", got.Commits[0].Subject)
+}
 
 func TestBlameCommits(t *testing.T) {
 	skipIfNoGit(t)
@@ -24,6 +48,7 @@ func TestBlameCommits(t *testing.T) {
 	assert.NotEqual(t, got.Commits[0].SHA, got.Commits[1].SHA)
 	_, err = BlameCommits(t.Context(), repo, "a.txt", 20, 30)
 	require.ErrorContains(t, err, "has only 3 lines")
+	assert.Equal(t, 1, strings.Count(err.Error(), "has only 3 lines"))
 }
 
 func TestBlameCommitsSHA256(t *testing.T) {

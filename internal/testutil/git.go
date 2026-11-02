@@ -19,7 +19,13 @@ func IsolateGitEnv(t *testing.T) {
 			require.NoError(t, os.Unsetenv(key))
 		}
 	}
-	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	// Production Git runners strip GIT_CONFIG_GLOBAL, so isolate the
+	// default config locations they read after sanitizing the environment.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	globalConfig := filepath.Join(home, ".gitconfig")
 	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")

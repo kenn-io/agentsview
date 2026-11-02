@@ -110,7 +110,7 @@ func newWhyCommand() *cobra.Command {
 			if outputFormat(cmd) == "json" {
 				return json.MarshalWrite(cmd.OutOrStdout(), result)
 			}
-			w := cmd.OutOrStdout()
+			w := &errWriter{w: cmd.OutOrStdout()}
 			for _, c := range result.Commits {
 				header := commit
 				if c.Lines != nil {
@@ -141,7 +141,7 @@ func newWhyCommand() *cobra.Command {
 			if result.Uncommitted != nil && *result.Uncommitted > 0 {
 				fmt.Fprintf(w, "%d selected lines are not committed yet.\n", *result.Uncommitted)
 			}
-			return nil
+			return w.err
 		},
 	}
 	cmd.Flags().StringVar(&commit, "commit", "", "Commit SHA or prefix")

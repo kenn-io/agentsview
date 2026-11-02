@@ -24,16 +24,16 @@ type BlameResult struct {
 // BlameCommits reads local blame, including uncommitted working tree edits.
 // dir is the file's directory and path is its base name.
 func BlameCommits(ctx context.Context, dir, path string, start, end int) (BlameResult, error) {
-	args := []string{"blame", "--porcelain"}
+	args := []string{"blame", "--porcelain", "--encoding=UTF-8"}
 	if start > 0 {
 		args = append(args, "-L", fmt.Sprintf("%d,%d", start, end))
 	}
 	args = append(args, "--", path)
 	runner := gitcmd.New()
 	runner.NullGlobalConfig = false
-	out, stderr, err := runner.Run(ctx, dir, nil, args...)
+	out, _, err := runner.Run(ctx, dir, nil, args...)
 	if err != nil {
-		return BlameResult{}, fmt.Errorf("git blame: %w: %s", err, strings.TrimSpace(string(stderr)))
+		return BlameResult{}, err
 	}
 	result := BlameResult{}
 	indices := make(map[string]int)
