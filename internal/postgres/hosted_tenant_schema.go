@@ -83,6 +83,7 @@ var hostedTables = append([]HostedTable{
 // schemas were first provisioned, with the DDL that creates each one.
 var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"session_plan_usage", sessionPlanUsageDDL},
+	{"commit_links", commitLinksDDL},
 }
 
 // installHostedCoreUpgrade adds only missing upgrade tables to an already

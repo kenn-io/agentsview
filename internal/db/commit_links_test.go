@@ -374,6 +374,49 @@ func TestCommitLinksBackfill(t *testing.T) {
 	assert.Equal(t, "abc1234", got.Commits[0].SHA)
 }
 
+func TestCommitLinksProjectColumnMigration(t *testing.T) {
+	for _, backfillDone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "backfill-pending", true: "backfill-done"}[backfillDone], func(t *testing.T) {
+			d := testDB(t)
+			path := d.Path()
+			for _, id := range []string{"live", "deleted"} {
+				insertSession(t, d, id, "project-a")
+				insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			}
+			require.NoError(t, d.DeleteSession(t.Context(), "deleted"))
+			if !backfillDone {
+				_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='live'; DELETE FROM stats WHERE key='commit_links_backfill_v1'`)
+				require.NoError(t, err)
+			}
+			// Reproduce the base schema, which retained links without a project.
+			_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER trg_commit_links_deletion_project; ALTER TABLE commit_links DROP COLUMN project`)
+			require.NoError(t, err)
+			require.NoError(t, d.Close())
+
+			d, err = Open(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			var sha, project string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT sha,project FROM commit_links WHERE session_id='live'`).Scan(&sha, &project))
+			assert.Equal(t, "project-a", project)
+			assert.Equal(t, "abc1234", sha)
+
+			require.NoError(t, d.DeleteSession(t.Context(), "live"))
+			fresh := testDB(t)
+			require.NoError(t, fresh.CopyExcludedSessionsFrom(path))
+			retained, err := fresh.RetainedCommitLinkRows(t.Context())
+			require.NoError(t, err)
+			require.Len(t, retained, 2)
+			projects := make(map[string]string)
+			for _, link := range retained {
+				assert.Equal(t, "abc1234", link.SHA)
+				projects[link.SessionID] = link.Project
+			}
+			assert.Equal(t, map[string]string{"live": "project-a", "deleted": ""}, projects)
+		})
+	}
+}
+
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
 	for _, id := range []string{"orphan", "trash", "deleted"} {
