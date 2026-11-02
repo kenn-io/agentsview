@@ -1743,6 +1743,13 @@ func openReadOnlyDB(ctx context.Context, cfg config.Config) (*db.DB, error) {
 	applyClassifierConfig(cfg)
 	database, err := db.OpenReadOnly(ctx, cfg.DBPath)
 	if cfg.HostedRawMode() && errors.Is(err, os.ErrNotExist) {
+		pending, recoveryErr := db.CompactRecoveryPending(cfg.DBPath)
+		if recoveryErr != nil {
+			return nil, fmt.Errorf("checking archive compaction recovery: %w", recoveryErr)
+		}
+		if pending {
+			return nil, errors.New("interrupted archive compaction requires recovery; disable raw_sync.hosted (including AGENTSVIEW_RAW_SYNC_HOSTED) and restart local ingestion once before retrying hosted mode")
+		}
 		database, err = db.OpenEmptyReadOnly(ctx)
 	}
 	if err != nil {

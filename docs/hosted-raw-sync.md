@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-01
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -68,9 +68,13 @@ document encoding is disabled.
 The local server opens an existing archive read-only, without classifier audits
 or parser upgrades. If its data version is stale, it serves the stored history
 with a notice. A missing archive serves an empty catalog without creating an
-archive. An incompatible schema still needs its normal upgrade. This setting
-never converts the archive to archive-only mode, so raw capture remains
-available.
+archive, unless an interrupted compaction still needs recovery. In that case,
+startup asks you to disable `raw_sync.hosted` and its environment override, then
+restart local ingestion once to recover the retained archive before retrying.
+An incompatible schema still needs its normal upgrade. This setting never
+converts the archive to archive-only mode, so raw capture remains available.
+Session-usage queries through the local daemon also keep this no-refresh policy,
+including when a session is missing from a stale archive.
 
 To restore local operation, stop the intended services, remove or disable
 `[raw_sync] hosted` and its environment override, then restart ingestion and
