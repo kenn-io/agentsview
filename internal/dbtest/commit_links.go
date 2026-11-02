@@ -87,6 +87,7 @@ func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.
 	// Move after the last publication, then delete without another live push.
 	session, err := local.GetSession(t.Context(), "commit-live")
 	require.NoError(t, err)
+	require.NotNil(t, session)
 	session.Project = "other"
 	require.NoError(t, local.UpsertSession(t.Context(), *session))
 	require.NoError(t, local.DeleteSession(t.Context(), "commit-live"))
