@@ -2238,6 +2238,56 @@ still needs `--server` unless the baked examples supply it.
 
 ______________________________________________________________________
 
+### `agentsview completion`
+
+Generate a completion script for Bash, Fish, PowerShell, or Zsh. The command
+writes the script to standard output; it does not modify shell startup files.
+Pass `--no-descriptions` after the shell name to omit command descriptions.
+
+Load completion for the current shell session:
+
+=== "Bash"
+
+    ```bash
+    source <(agentsview completion bash)
+    ```
+
+=== "Fish"
+
+    ```fish
+    agentsview completion fish | source
+    ```
+
+=== "PowerShell"
+
+    ```powershell
+    agentsview completion powershell | Out-String | Invoke-Expression
+    ```
+
+=== "Zsh"
+
+    ```zsh
+    source <(agentsview completion zsh)
+    ```
+
+For persistent completion, install the generated script in the location for the
+shell:
+
+- Bash requires the `bash-completion` package. Write the script to
+  `/etc/bash_completion.d/agentsview` on Linux or
+  `$(brew --prefix)/etc/bash_completion.d/agentsview` on macOS.
+- Fish loads `~/.config/fish/completions/agentsview.fish` automatically.
+- Zsh requires completion to be enabled with `compinit`. Write the script to
+  `${fpath[1]}/_agentsview` on Linux or
+  `$(brew --prefix)/share/zsh/site-functions/_agentsview` on macOS.
+- PowerShell users can add the current-session command above to their profile.
+
+Run `agentsview completion <shell> --help` for the exact installation command
+and shell-specific prerequisites. Start a new shell after installing a generated
+script.
+
+______________________________________________________________________
+
 ### `agentsview help`
 
 Print usage information.
