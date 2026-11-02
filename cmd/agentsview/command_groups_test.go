@@ -153,10 +153,8 @@ func TestCommandGroupsHealthUsesSessionTransport(t *testing.T) {
 		requests++
 		writeJSONResponse(w, `{"sessions":[],"total":0}`)
 	})
-	out := captureStdout(t, func() {
-		_, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--json", "health", "--limit", "7")
-		require.NoError(t, err)
-	})
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--json", "health", "--limit", "7")
+	require.NoError(t, err)
 	assert.JSONEq(t, `[]`, out)
 	assert.Equal(t, 1, requests)
 	assertNoLocalSessionsDB(t, dir)

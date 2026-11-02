@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const legacyCommandAnnotation = "agentsview.legacy-command"
+
 type commandMove struct {
 	legacy    string
 	canonical string
@@ -107,6 +109,7 @@ func groupCommands(root *cobra.Command) {
 		panic("missing legacy CLI command: token-use")
 	}
 	tokenUse.Hidden = true
+	tokenUse.Annotations = map[string]string{legacyCommandAnnotation: "session usage"}
 	tokenUse.Long = "Deprecated: use 'agentsview session usage ID --json'.\n" +
 		"This spelling retains its JSON-only output and existing exit codes."
 }
@@ -144,6 +147,12 @@ func addCanonicalCommand(root *cobra.Command, path string, cmd *cobra.Command) {
 }
 
 func markLegacyCommand(cmd *cobra.Command, legacy, replacement string) {
+	if !cmd.Hidden {
+		if cmd.Annotations == nil {
+			cmd.Annotations = make(map[string]string)
+		}
+		cmd.Annotations[legacyCommandAnnotation] = replacement
+	}
 	// These old subtrees change shape in the canonical grammar.
 	switch legacy {
 	case "activity report":
@@ -159,16 +168,20 @@ func markLegacyCommand(cmd *cobra.Command, legacy, replacement string) {
 	cmd.Long = long + "\n\nDeprecated: use 'agentsview " + replacement + "'."
 	// Cobra's Deprecated field prints through OutOrStderr, which inherits this
 	// CLI's stdout writer. Wrap handlers instead so JSON stdout stays intact.
+	// Warn after success so a failure's JSON diagnostic stays parseable on stderr.
 	if run := cmd.Run; run != nil {
 		cmd.Run = func(cmd *cobra.Command, args []string) {
-			fmt.Fprint(cmd.ErrOrStderr(), notice)
 			run(cmd, args)
+			fmt.Fprint(cmd.ErrOrStderr(), notice)
 		}
 	}
 	if run := cmd.RunE; run != nil {
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			fmt.Fprint(cmd.ErrOrStderr(), notice)
-			return run(cmd, args)
+			err := run(cmd, args)
+			if err == nil {
+				fmt.Fprint(cmd.ErrOrStderr(), notice)
+			}
+			return err
 		}
 	}
 	for _, child := range cmd.Commands() {

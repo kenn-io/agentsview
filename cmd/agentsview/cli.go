@@ -159,9 +159,6 @@ func newRootCommand() *cobra.Command {
 		defaultHelp(cmd, args)
 	})
 
-	root.InitDefaultHelpCmd()
-	root.InitDefaultCompletionCmd()
-	installCLIDiagnostics(root)
 	return root
 }
 

@@ -16,6 +16,9 @@ func executeCLIWithLegacyFlagCompat(args []string, stdout, stderr io.Writer) err
 	cmd := newRootCommand()
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
+	cmd.InitDefaultHelpCmd()
+	cmd.InitDefaultCompletionCmd()
+	installCLIDiagnostics(cmd)
 
 	normalized, rewrites := normalizeLegacyLongFlags(args, collectLongFlags(cmd))
 	if len(rewrites) > 0 {

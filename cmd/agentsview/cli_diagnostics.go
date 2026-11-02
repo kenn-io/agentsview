@@ -76,15 +76,16 @@ func commandHelpHint(cmd *cobra.Command) string {
 
 func isProtocolCommand(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
-		if c.Hidden {
+		if c.Hidden && c.Annotations[legacyCommandAnnotation] == "" {
 			return true
 		}
 	}
 	return false
 }
 
-// installCLIDiagnostics wraps only visible command syntax validators. Runtime
-// failures, including pre-run failures, are handled at ExecuteContextC's boundary.
+// installCLIDiagnostics wraps public command syntax validators, including legacy
+// aliases. Runtime failures, including pre-run failures, are handled at
+// ExecuteContextC's boundary.
 func installCLIDiagnostics(root *cobra.Command) {
 	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
 		if isProtocolCommand(cmd) {
@@ -103,7 +104,7 @@ func installCLIDiagnostics(root *cobra.Command) {
 	})
 	var visit func(*cobra.Command)
 	visit = func(cmd *cobra.Command) {
-		if cmd.Hidden {
+		if isProtocolCommand(cmd) {
 			return
 		}
 		if cmd.SuggestionsMinimumDistance <= 0 {
