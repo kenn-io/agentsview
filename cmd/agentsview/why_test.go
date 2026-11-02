@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestSplitWhyPath(t *testing.T) {
@@ -42,17 +43,7 @@ func TestSplitWhyPath(t *testing.T) {
 }
 
 func TestWhyRecordedPrompts(t *testing.T) {
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "GIT_") {
-			t.Setenv(key, "")
-			require.NoError(t, os.Unsetenv(key))
-		}
-	}
-	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(gitConfig, nil, 0o600))
-	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	testutil.IsolateGitEnv(t)
 	_, err := exec.LookPath("git")
 	require.NoError(t, err)
 	repo := initGitRepoOnBranch(t, "main")
@@ -122,6 +113,22 @@ func TestWhyRecordedPrompts(t *testing.T) {
 	assert.Equal(t, 1, *got.Uncommitted)
 	assert.Len(t, got.Commits, 3)
 
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			// Leave Cobra's output unset to exercise the CLI's default streams.
+			root := newRootCommand()
+			root.SetArgs([]string{"why", "file.go"})
+			require.NoError(t, root.Execute())
+		})
+	})
+	assert.Contains(t, stdout, "Initial lines")
+	assert.Contains(t, stdout, "    Change the second line")
+	assert.Contains(t, stdout, "    Indent the third line")
+	assert.Contains(t, stdout, "No recorded session.")
+	assert.Contains(t, stdout, "1 selected lines are not committed yet.")
+	assert.Empty(t, stderr)
+
 	t.Chdir(t.TempDir())
 	outText, err = executeCommand(newRootCommand(), "why", "--commit", firstSHA[:7], "--json")
 	require.NoError(t, err)
@@ -152,4 +159,25 @@ func TestWhyRecordedPrompts(t *testing.T) {
 	require.Len(t, got.Commits[0].Links, 1)
 	require.NotNil(t, got.Commits[0].Links[0].Turn)
 	assert.Equal(t, "Indent the third line", got.Commits[0].Links[0].Turn.Text)
+}
+
+func TestWhyCommitEvidence(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionArchiveRows(t, dataDir, sessionSeed{id: "claude:evidence", project: "project-a"})
+	d, err := db.Open(t.Context(), sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	recordFixtureInstallation(t, d)
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "claude:evidence", Ordinal: 0, Role: "user", Content: "Fix parser handling"},
+		{SessionID: "claude:evidence", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{
+			SessionID: "claude:evidence", ToolName: "Bash", Category: "Bash", ToolUseID: "commit",
+			InputJSON:     `{"command":"git commit -am change","workdir":"/work/example"}`,
+			ResultContent: "[main abcdef1234] Accept late parser results",
+		}}},
+	}))
+	out, err := executeCommand(newRootCommand(), "why", "--commit", "abcdef1234")
+	require.NoError(t, err)
+	assert.Contains(t, out, "/work/example")
+	assert.Contains(t, out, "Accept late parser results")
 }

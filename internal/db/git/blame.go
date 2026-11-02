@@ -43,7 +43,7 @@ func BlameCommits(ctx context.Context, dir, path string, start, end int) (BlameR
 		if len(fields) >= 3 && len(fields) <= 4 && isSHALine(fields[0]) && !strings.HasPrefix(line, "\t") {
 			sha := fields[0]
 			current = -1
-			if sha == strings.Repeat("0", 40) {
+			if sha == strings.Repeat("0", len(sha)) {
 				result.Uncommitted++
 				continue
 			}

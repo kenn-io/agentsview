@@ -110,35 +110,36 @@ func newWhyCommand() *cobra.Command {
 			if outputFormat(cmd) == "json" {
 				return json.MarshalWrite(cmd.OutOrStdout(), result)
 			}
+			w := cmd.OutOrStdout()
 			for _, c := range result.Commits {
 				header := commit
 				if c.Lines != nil {
 					header = fmt.Sprintf("%.12s  %s  (%d lines)", c.SHA, c.Subject, *c.Lines)
 				}
-				cmd.Println(sanitizeTerminal(header))
+				fmt.Fprintln(w, sanitizeTerminal(header))
 				if len(c.Links) == 0 {
-					cmd.Println("  No recorded session.")
+					fmt.Fprintln(w, "  No recorded session.")
 				}
 				for _, link := range c.Links {
-					line := fmt.Sprintf("  %s  %s", link.Source, link.SessionID)
+					line := fmt.Sprintf("  %s  %s  %s  %s", link.Source, link.SessionID, link.Repository, link.Subject)
 					if link.Ambiguous {
 						line += fmt.Sprintf("  (ambiguous: prefix matches several commits)  %s", link.SHA)
 					}
 					if link.Missing {
-						cmd.Println(sanitizeTerminal(line + "  (deleted or in trash)"))
+						fmt.Fprintln(w, sanitizeTerminal(line+"  (deleted or in trash)"))
 						continue
 					}
 					line += fmt.Sprintf("  %s  %s  message %d", link.Branch, link.CommittedAt, link.MessageOrdinal)
-					cmd.Println(sanitizeTerminal(line))
+					fmt.Fprintln(w, sanitizeTerminal(line))
 					if link.Turn != nil {
 						for text := range strings.SplitSeq(sanitizeTerminal(link.Turn.Text), "\n") {
-							cmd.Println("    " + text)
+							fmt.Fprintln(w, "    "+text)
 						}
 					}
 				}
 			}
 			if result.Uncommitted != nil && *result.Uncommitted > 0 {
-				cmd.Printf("%d selected lines are not committed yet.\n", *result.Uncommitted)
+				fmt.Fprintf(w, "%d selected lines are not committed yet.\n", *result.Uncommitted)
 			}
 			return nil
 		},
