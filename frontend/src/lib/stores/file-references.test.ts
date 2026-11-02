@@ -70,7 +70,41 @@ describe("file references store", () => {
       }
     },
   );
-  it("ignores superseded requests and resets on session changes", async () => {
+  it("finishes a slow first lookup while the transcript keeps growing", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolve!: (value: unknown) => void;
+      lookup.mockReset().mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      );
+      const store = new FileReferencesStore();
+      store.enabled = true;
+      const first = store.track("a", "1");
+      const signal = lookup.mock.calls[0]![1]!.signal;
+      // Both calls hand back the lookup still in flight.
+      void store.track("a", "2");
+      void store.track("a", "3");
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(signal.aborted).toBe(false);
+
+      resolve(result);
+      await first;
+      expect(store.status).toBe("ok");
+      expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
+
+      // The latest revision follows once the interval has passed.
+      lookup.mockResolvedValue({ ...result, transcript_revision: "3" });
+      await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS);
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(store.result?.transcript_revision).toBe("3");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("ignores a lookup for a session the user left", async () => {
     let resolve!: (value: unknown) => void;
     lookup.mockReset().mockImplementationOnce(
       () =>
@@ -82,15 +116,12 @@ describe("file references store", () => {
     store.enabled = true;
     const old = store.track("a", "1");
     const signal = lookup.mock.calls[0]![1]!.signal;
-    lookup.mockResolvedValueOnce({ ...result, transcript_revision: "2" });
-    await store.track("a", "2");
-    expect(signal.aborted).toBe(true);
-    resolve(result);
-    await old;
-    expect(store.result?.transcript_revision).toBe("2");
     lookup.mockResolvedValueOnce(result);
     const next = store.track("b", "1");
+    expect(signal.aborted).toBe(true);
     expect(store.result).toBeUndefined();
+    resolve(result);
+    await old;
     await next;
     expect(store.forMessage("a", 0)).toEqual([]);
     expect(store.forMessage("b", 0)).toEqual([imageOccurrence]);

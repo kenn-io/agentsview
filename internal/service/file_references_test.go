@@ -199,13 +199,28 @@ func TestFileReferencesRequestBudget(t *testing.T) {
 	}
 	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "images", ToolCalls: calls}}))
 	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	// Every answer arrives inside the per-request timeout, but four waves of
+	// four lookups take longer than the whole request may spend on Docbank.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(1500 * time.Millisecond):
+			_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+		case <-r.Context().Done():
+		}
+	}))
 	defer stub.Close()
 	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
-	start := time.Now()
-	_, err := service.FileReferences(t.Context(), svc, id)
+	out, err := service.FileReferences(t.Context(), svc, id)
 	require.NoError(t, err)
-	assert.Less(t, time.Since(start), 7*time.Second)
+	assert.True(t, out.LookupFailed)
+	answered := 0
+	for _, occurrence := range out.Occurrences {
+		if occurrence.State == "not_found" {
+			answered++
+		}
+	}
+	assert.Positive(t, answered)
+	assert.Less(t, answered, len(calls))
 }
 
 type replacingFileReferenceStore struct {

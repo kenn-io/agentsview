@@ -21,21 +21,24 @@ export class FileReferencesStore {
   private pending: Promise<void> = Promise.resolve();
   private lastRefresh = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  // The revision on screen when the lookup in flight started.
+  private requested: string | null = null;
 
   track(id: string | null, revision: string | null): Promise<void> {
     if (!this.enabled) return Promise.resolve();
     if (this.sessionId === id && this.revision === revision) return this.pending;
-    if (this.sessionId !== id || !revision || !this.result) {
+    if (this.sessionId !== id || !revision) {
       this.reset();
       [this.sessionId, this.revision] = [id, revision];
       return revision ? this.refresh() : this.pending;
     }
-    // Same session, new revision: keep the current matches on screen and
-    // refresh no more often than MIN_REFRESH_INTERVAL_MS.
+    // Same session, new revision. A lookup in flight finishes and schedules
+    // the next one; otherwise keep the current matches on screen and refresh
+    // no more often than MIN_REFRESH_INTERVAL_MS.
     this.revision = revision;
-    const wait = this.lastRefresh + MIN_REFRESH_INTERVAL_MS - Date.now();
-    if (wait <= 0) return this.refresh();
-    this.timer ??= setTimeout(() => void this.refresh(), wait);
+    if (this.status === "loading") return this.pending;
+    if (!this.result) return this.refresh();
+    this.schedule();
     return this.pending;
   }
 
@@ -53,6 +56,7 @@ export class FileReferencesStore {
   refresh(retryStale = true): Promise<void> {
     this.cancelTimer();
     this.lastRefresh = Date.now();
+    this.requested = this.revision;
     const signal = this.read.begin();
     if (!this.enabled || !this.sessionId) {
       this.status = "idle";
@@ -64,6 +68,12 @@ export class FileReferencesStore {
       .then((result) => this.accept(result, signal, retryStale))
       .catch((error) => this.reject(error, signal, retryStale));
     return this.pending;
+  }
+
+  private schedule(): void {
+    const wait = this.lastRefresh + MIN_REFRESH_INTERVAL_MS - Date.now();
+    if (wait <= 0) void this.refresh();
+    else this.timer ??= setTimeout(() => void this.refresh(), wait);
   }
 
   private cancelTimer(): void {
@@ -85,11 +95,16 @@ export class FileReferencesStore {
     retryStale: boolean,
   ): void | Promise<void> {
     if (!this.read.isCurrent(signal)) return;
-    if (!this.revision || result.transcript_revision !== this.revision) {
+    // A transcript that grew during the lookup still gets the answer for the
+    // revision that was asked about; the latest revision follows on schedule.
+    const superseded =
+      result.transcript_revision === this.requested && this.requested !== this.revision;
+    if (!this.revision || (result.transcript_revision !== this.revision && !superseded)) {
       return this.stale(retryStale);
     }
     this.result = result;
     this.status = "ok";
+    if (superseded) this.schedule();
   }
 
   private stale(retryStale: boolean): void | Promise<void> {
