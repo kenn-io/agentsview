@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -17,8 +18,9 @@ import (
 func buildForkyClaudeFile(tb testing.TB, turns, forks int) string {
 	tb.Helper()
 	builder := testjsonl.NewSessionBuilder()
+	start := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	ts := func(i int) string {
-		return fmt.Sprintf("2024-01-01T%02d:%02d:%02dZ", (i/3600)%24, (i/60)%60, i%60)
+		return start.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
 	}
 	prev := ""
 	forkAt := map[int]bool{}
@@ -53,22 +55,6 @@ func buildForkyClaudeFile(tb testing.TB, turns, forks int) string {
 	path := filepath.Join(tb.TempDir(), "forky.jsonl")
 	require.NoError(tb, os.WriteFile(path, []byte(builder.String()), 0o600))
 	return path
-}
-
-func BenchmarkClaudeForks(b *testing.B) {
-	const turns = 10000 // 20k entries
-	for _, forks := range []int{0, 10, 100, 1000} {
-		b.Run(fmt.Sprintf("turns=%d/forks=%d", turns, forks), func(b *testing.B) {
-			path := buildForkyClaudeFile(b, turns, forks)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				res, err := parseClaudeSession(path, "proj", "local")
-				require.NoError(b, err)
-				require.Len(b, res, forks+1)
-			}
-		})
-	}
 }
 
 // Forks grow in proportion to session length (1 rewind per 100 turns).

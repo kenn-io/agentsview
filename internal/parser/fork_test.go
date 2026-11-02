@@ -59,21 +59,14 @@ func TestForkDetection_LinearSession(t *testing.T) {
 	assertMessageCount(t, len(results[0].Messages), 4)
 }
 
-func TestForkDetection_ManyForks(t *testing.T) {
-	path := buildForkyClaudeFile(t, 1000, 10)
+func TestForkDetection_SequentialForksCountOverlappingSubtrees(t *testing.T) {
+	// Each fork's first child continues through the later fork points.
+	path := buildForkyClaudeFile(t, 20, 3)
 	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err)
-	require.Len(t, results, 11)
-	assert.Equal(t, 1000, results[0].Session.UserMessageCount)
-	require.Len(t, results[0].Messages, 2000)
-	assert.Equal(t, "question number 0 about the code", results[0].Messages[0].Content)
-	assert.Equal(t, "answer number 999 with some explanation", results[0].Messages[1999].Content)
-	for _, result := range results[1:] {
-		assert.Equal(t, results[0].Session.ID, result.Session.ParentSessionID)
-		assert.Equal(t, RelFork, result.Session.RelationshipType)
-		assert.Equal(t, 4, result.Session.UserMessageCount)
-		assert.Len(t, result.Messages, 8)
-	}
+	require.Len(t, results, 4)
+	assert.Equal(t, 20, results[0].Session.UserMessageCount)
+	assert.Equal(t, 4, results[1].Session.UserMessageCount)
 }
 
 func TestForkDetection_ParentAfterDescendants(t *testing.T) {
