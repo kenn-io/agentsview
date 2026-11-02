@@ -58,7 +58,7 @@ func (s *Store) ListSecretFindings(
 				pb.add(f.DateTo)+"::date")
 	}
 
-	where := "s.deleted_at IS NULL"
+	where := "s.deleted_at IS NULL AND NOT s.rollout_hidden"
 	if len(preds) > 0 {
 		where += " AND " + strings.Join(preds, " AND ")
 	}

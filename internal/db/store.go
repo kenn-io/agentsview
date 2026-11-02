@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -11,6 +12,10 @@ import (
 // ErrReadOnly is returned by write methods on read-only store
 // implementations (e.g. the PostgreSQL reader).
 var ErrReadOnly = readOnlyError{}
+
+// ErrProtectedSessionPurge reports a purge that would also exclude a protected
+// session. The store must refuse it before recording exclusions or deleting rows.
+var ErrProtectedSessionPurge = errors.New("purge conflicts with a protected session identity")
 
 type readOnlyError struct{}
 
