@@ -108,11 +108,12 @@
                     />
                   {/if}
                 </span>
-                {#if p.issue || canFile}
+                {#if p.issue || p.filing || canFile}
                   <FrictionIssueControl
                     fingerprint={p.fingerprint}
                     kind={p.kind}
                     issue={p.issue}
+                    filing={p.filing}
                     {canFile}
                   />
                 {/if}

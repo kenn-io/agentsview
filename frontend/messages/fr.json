@@ -3052,6 +3052,10 @@
   "friction_issue_cancel": "Annuler",
   "friction_issue_unlink": "Délier",
   "friction_issue_unlink_title": "Supprimer le lien ; le ticket Kata reste inchangé",
+  "friction_filing_retry": "Échec de la création, nouvel essai prévu",
+  "friction_filing_needs_person": "Création arrêtée",
+  "friction_filing_paused": "Création automatique en pause",
+  "friction_filing_paused_title": "La création automatique ignore ce motif, car son lien a été supprimé. Créez ou liez un ticket pour la reprendre.",
   "friction_digest_heading": "Journal des frictions — {date}",
   "friction_digest_built": "Généré le {when} ({timezone})",
   "friction_p0_failed": [

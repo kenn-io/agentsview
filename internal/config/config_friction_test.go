@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/friction"
 )
 
 func TestFrictionConfigValidate(t *testing.T) {
@@ -29,6 +31,15 @@ func TestFrictionConfigValidate(t *testing.T) {
 		{
 			name: "seat pattern with two captures", config: FrictionConfig{BackfillDays: 7, SeatPatterns: []string{"{seat}/{seat}"}},
 			wantErr: `[friction] seat_patterns entry "{seat}/{seat}" must contain exactly one {seat}`,
+		},
+		{name: "filing kinds", config: FrictionConfig{BackfillDays: 7, Kata: FrictionKataConfig{AutoFile: true, Kinds: []string{"correction", "pattern"}}}},
+		{
+			name: "kind that cannot be filed", config: FrictionConfig{BackfillDays: 7, Kata: FrictionKataConfig{Kinds: []string{"frustration"}}},
+			wantErr: `[friction.kata] kinds entry "frustration" cannot be filed; use correction, error, workaround, deferral or pattern`,
+		},
+		{
+			name: "repeated kind", config: FrictionConfig{BackfillDays: 7, Kata: FrictionKataConfig{Kinds: []string{"error", "error"}}},
+			wantErr: `[friction.kata] kinds entry "error" repeats`,
 		},
 	}
 	for _, tt := range tests {
@@ -75,6 +86,15 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 			data: map[string]any{"friction": map[string]any{"enabled": false}},
 			want: FrictionConfig{Enabled: false, BackfillDays: DefaultFrictionBackfillDays},
 		},
+		{
+			name: "automatic filing",
+			data: map[string]any{"friction": map[string]any{"kata": map[string]any{
+				"auto_file": true, "kinds": []any{" correction ", "error"},
+			}}},
+			want: FrictionConfig{BackfillDays: DefaultFrictionBackfillDays, Kata: FrictionKataConfig{
+				AutoFile: true, Kinds: []string{"correction", "error"},
+			}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -88,4 +108,15 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `[friction] timezone "Nowhere/Land" is not an IANA zone`)
+
+	err = loadMinimalErrWithConfig(t, map[string]any{
+		"friction": map[string]any{"kata": map[string]any{"kinds": []any{"frustration"}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `[friction.kata] kinds entry "frustration" cannot be filed`)
+}
+
+func TestFrictionKataFileKinds(t *testing.T) {
+	assert.Equal(t, friction.FileableKinds, FrictionKataConfig{}.FileKinds(), "no kinds means every fileable kind")
+	assert.Equal(t, []friction.Kind{friction.KindError}, FrictionKataConfig{Kinds: []string{"error"}}.FileKinds())
 }

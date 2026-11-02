@@ -180,6 +180,7 @@ func (s *Store) ListFrictionPatterns(
 		}
 		p.LastOrdinal = pgNullIntPtr(ordinal)
 		p.Issue = issue.link(p.Fingerprint)
+		p.Filing = issue.filing(p.Fingerprint)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {

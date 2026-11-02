@@ -2938,6 +2938,10 @@
   "friction_issue_cancel": "취소",
   "friction_issue_unlink": "연결 해제",
   "friction_issue_unlink_title": "연결을 제거합니다. Kata 이슈는 그대로 남습니다",
+  "friction_filing_retry": "등록 실패, 다시 시도 예정",
+  "friction_filing_needs_person": "등록 중단됨",
+  "friction_filing_paused": "자동 등록 일시 중지됨",
+  "friction_filing_paused_title": "연결이 해제되어 자동 등록에서 이 패턴을 건너뜁니다. 등록하거나 연결하면 다시 시작됩니다.",
   "friction_digest_heading": "마찰 로그 — {date}",
   "friction_digest_built": "{when}에 생성됨 ({timezone})",
   "friction_p0_failed": [

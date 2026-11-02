@@ -117,6 +117,17 @@ type FrictionPatternView struct {
 	LastSessionURL  string `json:"last_session_url,omitempty"`
 	// Issue is the Kata issue filed or linked for this pattern.
 	Issue *FrictionIssueView `json:"issue,omitempty"`
+	// Filing is set while automatic filing has not linked the pattern.
+	Filing *FrictionFilingView `json:"filing,omitempty"`
+}
+
+// FrictionFilingView says why automatic filing has not linked a pattern:
+// State is retry, needs_person or paused.
+type FrictionFilingView struct {
+	State         string     `json:"state"`
+	Attempts      int        `json:"attempts"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
 }
 
 // FrictionIssueView is a pattern's Kata issue. Kata owns its state.

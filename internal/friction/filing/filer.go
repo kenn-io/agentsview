@@ -85,7 +85,7 @@ type Filer struct {
 	// bodies link back to the session and digest only when it is set.
 	PublicURL string
 	Now       func() time.Time
-	// Exclusive, when set, runs each link write. The server passes its
+	// Exclusive, when set, runs each link and filing-state write. The server passes its
 	// archive write barrier, so a write that meets archive maintenance waits
 	// for it instead of failing after Kata created the issue.
 	Exclusive func(func() error) error
@@ -225,20 +225,22 @@ func (f *Filer) Link(ctx context.Context, fingerprint, ref string) (db.FrictionI
 	return link, f.write(func() error { return f.Store.SaveFrictionIssueLink(ctx, link) })
 }
 
-// Unlink removes the local link. The Kata issue is left as it is.
+// Unlink removes the local link and pauses automatic filing for the
+// pattern, which would otherwise link the same issue again. Filing or
+// linking it by hand clears the pause. The Kata issue is left as it is.
 func (f *Filer) Unlink(ctx context.Context, fingerprint string) error {
-	var removed bool
-	err := f.write(func() (err error) {
-		removed, err = f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
-		return err
+	return f.write(func() error {
+		removed, err := f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
+		if err != nil {
+			return err
+		}
+		if !removed {
+			return ErrNotLinked
+		}
+		return f.Store.SaveFrictionFilingState(ctx, db.FrictionFilingState{
+			Fingerprint: fingerprint, State: db.FrictionFilingPaused, UpdatedAt: f.now().UTC(),
+		})
 	})
-	if err != nil {
-		return err
-	}
-	if !removed {
-		return ErrNotLinked
-	}
-	return nil
 }
 
 func (f *Filer) ready(ctx context.Context) error {
@@ -298,7 +300,7 @@ func (f *Filer) pattern(ctx context.Context, fingerprint string) (db.FrictionPat
 // lastSignal loads the signal a fileable pattern was last seen as, from the
 // digest of its last-seen date, and that date.
 func (f *Filer) lastSignal(ctx context.Context, p db.FrictionPattern) (friction.Signal, string, error) {
-	if !Fileable(friction.Kind(p.Kind)) {
+	if !friction.Fileable(friction.Kind(p.Kind)) {
 		return friction.Signal{}, "", fmt.Errorf("%w: %s", ErrNotFileable, p.Kind)
 	}
 	d, err := f.Store.GetFrictionDigest(ctx, p.LastSeenDate)

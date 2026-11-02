@@ -47,6 +47,8 @@ type storeRuntime struct {
 	// frictionIssueLinksWritable is set when startup proved this role can
 	// write friction_issue_links.
 	frictionIssueLinksWritable atomic.Bool
+	// frictionFilingStatePresent is the same for friction_filing_state.
+	frictionFilingStatePresent atomic.Bool
 
 	pricingMu     sync.Mutex
 	pricingLoadMu sync.Mutex

@@ -2019,6 +2019,7 @@ var readOnlyRequiredTables = []string{
 	"friction_digest_sessions",
 	"friction_patterns",
 	"friction_issue_links",
+	"friction_filing_state",
 	"recall_entries",
 	"recall_evidence",
 	"recall_query_events",
