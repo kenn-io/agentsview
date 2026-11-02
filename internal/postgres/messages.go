@@ -411,7 +411,7 @@ func (s *Store) Search(
 			FROM messages m
 			JOIN sessions s ON m.session_id = s.id
 			WHERE %s
-				AND s.deleted_at IS NULL
+				AND s.deleted_at IS NULL AND NOT s.rollout_hidden
 				AND m.is_system = FALSE
 				AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`
 				%s
@@ -439,7 +439,7 @@ func (s *Store) Search(
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 				OR s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\')
-				AND s.deleted_at IS NULL
+				AND s.deleted_at IS NULL AND NOT s.rollout_hidden
 				AND EXISTS (
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
