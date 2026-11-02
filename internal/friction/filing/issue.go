@@ -32,11 +32,16 @@ type issueContext struct {
 	Date      string
 	PublicURL string
 	Pattern   db.FrictionPattern
+	// sessionURL links to the signal's session; buildIssue sets it from the
+	// unredacted subject.
+	sessionURL string
 }
 
-// buildIssue is the create request for sig. Title and body pass through
-// redact, which masks secrets and home directories before they leave the
-// machine.
+// buildIssue is the create request for sig. The title and body come from a
+// copy of sig whose text fields passed through redact, which masks secrets
+// and home directories before they leave the machine. Redacting the whole
+// fields first keeps truncation and Markdown quoting from hiding a secret
+// from the scanner.
 func buildIssue(sig friction.Signal, ic issueContext) kata.CreateIssue {
 	md := map[string]any{
 		MetadataFingerprint:      sig.Fingerprint(),
@@ -44,13 +49,18 @@ func buildIssue(sig friction.Signal, ic issueContext) kata.CreateIssue {
 		"friction.rules_version": friction.RulesVersion,
 	}
 	if sig.SubjectKind != friction.SubjectDiagnostic {
-		if u := friction.SessionURL(ic.PublicURL, sig.SubjectID, sig.Ordinal); u != "" {
-			md["agentsview.session_url"] = u
+		ic.sessionURL = friction.SessionURL(ic.PublicURL, sig.SubjectID, sig.Ordinal)
+		if ic.sessionURL != "" {
+			md["agentsview.session_url"] = ic.sessionURL
 		}
 	}
+	shown := sig
+	for _, f := range []*string{&shown.SubjectID, &shown.Text, &shown.ToolName, &shown.Label, &shown.Evidence} {
+		*f = redact(*f)
+	}
 	return kata.CreateIssue{
-		Title:    redact(sig.Title()),
-		Body:     redact(issueBody(sig, ic)),
+		Title:    shown.Title(),
+		Body:     issueBody(shown, ic),
 		Priority: priority(sig.Kind),
 		Labels:   []string{"friction", "friction:" + string(sig.Kind)},
 		Metadata: md,
@@ -78,8 +88,8 @@ func issueBody(sig friction.Signal, ic issueContext) string {
 		fmt.Fprintf(&b, "- Source: %s\n", oneLine(sig.SubjectID))
 	} else {
 		fmt.Fprintf(&b, "- Session: %s\n", oneLine(sig.SubjectID))
-		if u := friction.SessionURL(ic.PublicURL, sig.SubjectID, sig.Ordinal); u != "" {
-			fmt.Fprintf(&b, "- Open in AgentsView: %s\n", u)
+		if ic.sessionURL != "" {
+			fmt.Fprintf(&b, "- Open in AgentsView: %s\n", ic.sessionURL)
 		}
 	}
 	if u := friction.DigestURL(ic.PublicURL, ic.Date); u != "" {

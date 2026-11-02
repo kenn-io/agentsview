@@ -3,6 +3,7 @@ package filing_test
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,12 +72,17 @@ func newFiler(t *testing.T, s *katatest.Server, project string, sigs ...friction
 	}, d
 }
 
-func patternIssue(t *testing.T, d *db.DB, fingerprint string) *db.FrictionIssueLink {
+func patternRow(t *testing.T, d *db.DB, fingerprint string) db.FrictionPattern {
 	t.Helper()
 	rows, _, err := d.ListFrictionPatterns(t.Context(), db.FrictionPatternFilter{Fingerprints: []string{fingerprint}, Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	return rows[0].Issue
+	return rows[0]
+}
+
+func patternIssue(t *testing.T, d *db.DB, fingerprint string) *db.FrictionIssueLink {
+	t.Helper()
+	return patternRow(t, d, fingerprint).Issue
 }
 
 func TestFileCreatesTheIssueOnceAndLinksIt(t *testing.T) {
@@ -177,6 +183,60 @@ func TestFileRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreviewMasksSecretsThatTruncationOrQuotingWouldHide(t *testing.T) {
+	const pemBody = "MC4CAQAwBQYDK2VwBCIEIHNhJUCu8VvJCV4O++0jHhjsfn4SwMjf3+3zctpGdZMe"
+	tests := []struct {
+		name, text, secret string
+	}{
+		{
+			// The title keeps 80 runes of text: the password fits, the host
+			// that marks it as a credential does not.
+			name:   "credential_crossing_the_title_cutoff",
+			text:   strings.Repeat("x", 54) + "postgres://user:s3cretP4ss@db.example.test:5432/app",
+			secret: "s3cretP4ss",
+		},
+		{
+			// The body quotes text line by line, which breaks the PEM block.
+			name:   "multiline_private_key",
+			text:   "use this key:\n-----BEGIN PRIVATE KEY-----\n" + pemBody + "\n-----END PRIVATE KEY-----",
+			secret: pemBody,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sig := correction
+			sig.Text = tt.text
+			s := katatest.New(t)
+			f, _ := newFiler(t, s, katatest.DefaultProjectName, sig)
+
+			req, err := f.Preview(t.Context(), sig.Fingerprint())
+			require.NoError(t, err)
+			assert.NotContains(t, req.Title, tt.secret)
+			assert.NotContains(t, req.Body, tt.secret)
+			assert.Equal(t, sig.Fingerprint(), req.Metadata[filing.MetadataFingerprint], "the fingerprint is the unredacted pattern's")
+		})
+	}
+}
+
+func TestPreviewDescribesThePatternsLastOccurrence(t *testing.T) {
+	first := friction.Signal{
+		Kind: friction.KindError, SubjectID: "claude:s1", SubjectKind: friction.SubjectSession,
+		Detector: "error", ToolName: "Bash", Text: "go: cannot find main module", Ordinal: new(4),
+	}
+	last := first
+	last.SubjectID, last.Ordinal = "claude:s2", new(9)
+	require.Equal(t, first.Fingerprint(), last.Fingerprint(), "error fingerprints span sessions")
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, first, last)
+	require.Equal(t, "claude:s2", patternRow(t, d, first.Fingerprint()).LastSubjectID)
+
+	req, err := f.Preview(t.Context(), first.Fingerprint())
+	require.NoError(t, err)
+	assert.Contains(t, req.Body, "Session: claude:s2")
+	assert.Contains(t, req.Body, "/sessions/claude/s2?msg=9")
+	assert.NotContains(t, req.Body, "claude:s1")
 }
 
 func TestPreviewDiagnosticSkipsLookAlikeCheckAndSessionLink(t *testing.T) {

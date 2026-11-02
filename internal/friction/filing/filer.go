@@ -273,10 +273,39 @@ func (f *Filer) fileablePattern(ctx context.Context, fingerprint string) (db.Fri
 	if err != nil {
 		return p, friction.Signal{}, "", err
 	}
-	for _, sig := range snap.Signals {
-		if sig.Fingerprint() == fingerprint {
-			return p, sig, d.Date, nil
+	sig, ok := lastOccurrence(snap.Signals, p)
+	if !ok {
+		return p, friction.Signal{}, "", fmt.Errorf("%w: not in the %s digest", ErrPatternNotFound, d.Date)
+	}
+	return p, sig, d.Date, nil
+}
+
+// lastOccurrence picks the signal p was last seen as. Error and workaround
+// fingerprints span sessions, so a digest can hold several signals for one
+// pattern. Recurrence records the subject and ordinal of the last one in
+// digest order; when nothing matches both, prefer the subject, then the
+// last signal with the fingerprint.
+func lastOccurrence(sigs []friction.Signal, p db.FrictionPattern) (friction.Signal, bool) {
+	var best friction.Signal
+	bestScore := -1
+	for _, sig := range sigs {
+		if sig.Fingerprint() != p.Fingerprint {
+			continue
+		}
+		score := 0
+		if sig.SubjectID == p.LastSubjectID {
+			score = 1
+			if equalOrdinal(sig.Ordinal, p.LastOrdinal) {
+				score = 2
+			}
+		}
+		if score >= bestScore {
+			best, bestScore = sig, score
 		}
 	}
-	return p, friction.Signal{}, "", fmt.Errorf("%w: not in the %s digest", ErrPatternNotFound, d.Date)
+	return best, bestScore >= 0
+}
+
+func equalOrdinal(a, b *int) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
