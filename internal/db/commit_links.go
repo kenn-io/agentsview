@@ -36,7 +36,8 @@ var (
 	commitPollRE              = regexp.MustCompile(`\bwrite_stdin\s*\(\s*\{\s*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
-	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+(?:[^;&|\n"'\\]|"(?:\\.|[^"\\])*"|'[^']*')*&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
+	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\.|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
+	commitArgumentRE          = regexp.MustCompile(commitCommandToken)
 	commitRevParseRE          = regexp.MustCompile(`\bgit\s+rev-parse\s+HEAD(?:\s|[;&|"']|\\[nrt]|$)`)
 	commitLogRE               = regexp.MustCompile(`\bgit\s+log\s+(?:-1\s+--oneline|--oneline\s+(?:-1|-n\s+1)|-n\s+1\s+--oneline)\b`)
 	commitFullLineRE          = regexp.MustCompile(`(?m)^([0-9a-f]{40}|[0-9a-f]{64})\r?$`)
@@ -170,6 +171,23 @@ func callOutput(result string) (string, int64) {
 	return result, 0
 }
 
+func commitMessageSubject(arguments string) string {
+	tokens := commitArgumentRE.FindAllString(arguments, -1)
+	for i, token := range tokens {
+		if (token == "-m" || token == "--message") && i+1 < len(tokens) {
+			message := tokens[i+1]
+			if unquoted, err := strconv.Unquote(message); err == nil {
+				message = unquoted
+			} else if len(message) >= 2 && strings.ContainsAny(message[:1], "\"'") {
+				message = message[1 : len(message)-1]
+			}
+			subject, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
+			return strings.TrimSpace(subject)
+		}
+	}
+	return ""
+}
+
 func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	var links []CommitLink
 	pending := map[string]commitCall{}
@@ -208,9 +226,9 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		readback := commitReadbackRE.FindStringSubmatch(command)
 		if len(matches) == 0 && commitQuietRE.MatchString(command) && readback != nil {
 			var quiet [][]string
-			if commitRevParseRE.MatchString(readback[1]) {
+			if commitRevParseRE.MatchString(readback[2]) {
 				quiet = commitFullLineRE.FindAllStringSubmatch(output, -1)
-			} else if commitLogRE.MatchString(readback[1]) {
+			} else if commitLogRE.MatchString(readback[2]) {
 				quiet = commitLogLineRE.FindAllStringSubmatch(output, -1)
 			}
 			if len(quiet) == 1 {
@@ -218,7 +236,10 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				if len(quiet[0]) > 2 {
 					subject = quiet[0][2]
 				}
-				matches = [][]string{{"", "", quiet[0][1], subject}}
+				if subject == "" {
+					subject = commitMessageSubject(readback[1])
+				}
+				matches = [][]string{{"", owner.Branch, quiet[0][1], subject}}
 			}
 		}
 		if running != 0 {
@@ -240,7 +261,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
 	rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
- COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
+ COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), COALESCE(s.git_branch,''), t.tool_name
  FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
  WHERE t.session_id=? AND t.category='Bash' AND ((t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%') OR t.input_json LIKE '%write_stdin%' OR t.tool_name='write_stdin')
  ORDER BY m.ordinal,t.call_index`, sessionID)
@@ -252,7 +273,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	var cwd string
 	for rows.Next() {
 		var call commitCall
-		if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd, &call.toolName); err != nil {
+		if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd, &call.Branch, &call.toolName); err != nil {
 			return err
 		}
 		calls = append(calls, call)

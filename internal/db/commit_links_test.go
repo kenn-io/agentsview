@@ -171,12 +171,64 @@ func TestCommitLinksPurgeExcludedPages(t *testing.T) {
 	_, err := d.getWriter().ExecContext(t.Context(), `INSERT INTO excluded_sessions(id, include_codex_pages) VALUES (?, 1)`, thread)
 	require.NoError(t, err)
 	require.NoError(t, d.PurgeExcludedSessions(t.Context()))
-	var count int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM commit_links WHERE session_id=?`, page).Scan(&count))
-	assert.Zero(t, count)
+	deleted, err := d.SessionCommitLinks(t.Context(), page)
+	require.NoError(t, err)
+	require.Len(t, deleted.Commits, 1)
+	assert.True(t, deleted.Commits[0].Missing)
+	assert.Nil(t, deleted.Commits[0].Turn)
 	got, err := d.SessionCommitLinks(t.Context(), "retained")
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 1)
+}
+
+func TestCommitLinksDeleteCodexThread(t *testing.T) {
+	d := testDB(t)
+	const thread = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const page = thread + "_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	for _, id := range []string{thread, page} {
+		insertSession(t, d, id, "project-a", func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	}
+	require.NoError(t, d.SoftDeleteSession(t.Context(), thread))
+	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET trash_includes_codex_pages=1 WHERE id=?`, thread)
+	require.NoError(t, err)
+	require.NoError(t, d.DeleteSession(t.Context(), thread))
+	got, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+	require.NoError(t, err)
+	require.Len(t, got.Commits[0].Links, 2)
+	for _, link := range got.Commits[0].Links {
+		assert.True(t, link.Missing)
+		assert.Nil(t, link.Turn)
+		session, err := d.GetSession(t.Context(), link.SessionID)
+		require.NoError(t, err)
+		assert.Nil(t, session)
+	}
+}
+
+func TestCommitLinksQuietMetadata(t *testing.T) {
+	for _, tt := range []struct{ name, command, result, branch, subject string }{
+		{"HEAD", `git commit -q -m "Fix parser" && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", "Fix parser"},
+		{"single quotes", `git commit -q -m 'Fix parser' && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", "Fix parser"},
+		{"quoted subject", `git commit -q -m 'Fix "parser"' && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", `Fix "parser"`},
+		{"escaped quotes", `git commit -q -m "Fix \"parser\"" && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", `Fix "parser"`},
+		{"own message", `echo -m unrelated; git commit -q -m fix && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", "fix"},
+		{"first message", "git commit -q -m 'Fix parser\n\nDetails' -m 'More details' && git rev-parse HEAD", "abc1234000000000000000000000000000000000\n", "feature/parser", "Fix parser"},
+		{"readback subject", `git commit -q -m fix && git log -1 --oneline`, "abc1234 Fix parser\n", "feature/parser", "Fix parser"},
+		{"no branch", `git commit -q -m fix && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "", "fix"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.GitBranch = tt.branch })
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.branch, got.Commits[0].Branch)
+			assert.Equal(t, tt.subject, got.Commits[0].Subject)
+		})
+	}
 }
 
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {

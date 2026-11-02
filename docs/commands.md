@@ -1931,8 +1931,9 @@ deleted sessions carry `missing: true` and omit the turn. See
 retention and lookup limits. Links use stored Git summaries, including Codex
 poll results paired with the original call. Quiet commits require the same
 call's `git rev-parse HEAD` or single-entry `git log --oneline` output, chained
-directly after the commit with `&&`, and have an empty branch. Calls spanning
-repositories use the first directory; only a
+directly after the commit with `&&`. These links use the session's recorded Git
+branch when available and the commit's own `-m` message when the readback has
+no subject. Calls spanning repositories use the first directory; only a
 leading `cd` adjusts it. Archives retaining only transcripts or usage have no
 links, and mirrors return HTTP 501. Sessions permanently deleted before this
 release have no links.
