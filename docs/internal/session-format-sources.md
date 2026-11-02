@@ -831,8 +831,10 @@ fixtures retain this field; missing identities remain source-local.
   2026-11-01: Linux reads native directory-name notifications synchronously,
   sharing one descriptor across the factory's cached roots. Only notified
   directories refresh their filenames. Overflow rebuilds the notification
-  instance; notification or registration failures keep forks eligible for
-  retry. Invalidation, eviction and runtime cleanup release descriptors. Stable source snapshots
+  instance; notification read failures keep forks eligible for retry. If
+  notification initialization or registration fails, readable directories are
+  enumerated on every lookup and registration is retried later. Invalidation,
+  eviction and runtime cleanup release descriptors. Stable source snapshots
   enumerate once per parse without notifications, including inside the
   read-only hosted parser sandbox.
   Data version 162 reparses Codex, TraeX and Augure Code sources in place to

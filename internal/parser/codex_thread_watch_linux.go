@@ -14,6 +14,10 @@ import (
 // The inventory mutex protects the descriptor and all directory watch states.
 type codexThreadWatchCache struct {
 	set *codexThreadWatchSet
+	// Nil boundaries use native syscalls; overrides stay local to this cache.
+	initialize func(int) (int, error)
+	addWatch   func(int, string, uint32) (int, error)
+	readEvents func(int, []byte) (int, error)
 }
 
 type codexThreadWatchSet struct {
@@ -40,7 +44,11 @@ func (c *codexThreadWatchCache) instance() (*codexThreadWatchSet, error) {
 	if c.set != nil && c.set.fd >= 0 {
 		return c.set, nil
 	}
-	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
+	initialize := unix.InotifyInit1
+	if c.initialize != nil {
+		initialize = c.initialize
+	}
+	fd, err := initialize(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +64,11 @@ func (c *codexThreadWatchCache) prepare() error {
 	if c.set == nil || c.set.fd < 0 {
 		return nil
 	}
-	if err := c.set.poll(); err != nil {
+	read := unix.Read
+	if c.readEvents != nil {
+		read = c.readEvents
+	}
+	if err := c.set.poll(read); err != nil {
 		// Overflow can hide removed watches too. Rebuild the instance on the
 		// next lookup, rather than trusting permanently silent descriptors.
 		c.set.close()
@@ -73,15 +85,23 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo, cache *codexThread
 	if w.state == nil {
 		set, err := cache.instance()
 		if err != nil {
-			return &os.PathError{Op: "watch", Path: d.path, Err: err}
+			// Notifications are optional: enumerate readable directories on
+			// every lookup until registration succeeds again.
+			d.info = nil
+			return nil
 		}
 		defer runtime.KeepAlive(set)
-		wd, err := unix.InotifyAddWatch(set.fd, d.path, unix.IN_ONLYDIR|unix.IN_CREATE|unix.IN_DELETE|unix.IN_MOVED_FROM|unix.IN_MOVED_TO|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF)
+		addWatch := unix.InotifyAddWatch
+		if cache.addWatch != nil {
+			addWatch = cache.addWatch
+		}
+		wd, err := addWatch(set.fd, d.path, unix.IN_ONLYDIR|unix.IN_CREATE|unix.IN_DELETE|unix.IN_MOVED_FROM|unix.IN_MOVED_TO|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF)
 		if err != nil {
 			if len(set.states) == 0 {
 				set.close()
 			}
-			return &os.PathError{Op: "watch", Path: d.path, Err: err}
+			d.info = nil
+			return nil
 		}
 		state := set.states[wd]
 		if state == nil {
@@ -98,7 +118,7 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo, cache *codexThread
 	return nil
 }
 
-func (s *codexThreadWatchSet) poll() error {
+func (s *codexThreadWatchSet) poll(read func(int, []byte) (int, error)) error {
 	defer runtime.KeepAlive(s)
 	// Bound this refresh to notifications already queued. A busy producer
 	// must not keep a synchronous inventory lookup draining indefinitely.
@@ -108,7 +128,7 @@ func (s *codexThreadWatchSet) poll() error {
 	}
 	var buffer [4096]byte
 	for remaining > 0 {
-		n, err := unix.Read(s.fd, buffer[:])
+		n, err := read(s.fd, buffer[:])
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}
