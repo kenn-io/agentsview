@@ -27426,6 +27426,7 @@ func (i IntegrationsdocbankMatch) Validate() error {
 	}
 	return errors
 }
+
 type KataStatus = kata.Status
 
 type MachinesResponse struct {
