@@ -48,6 +48,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	160: {parser.AgentAntigravityCLI},
 	161: {parser.AgentPositAssistant},
 	162: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+	163: {parser.AgentCopilot},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

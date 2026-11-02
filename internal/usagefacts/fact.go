@@ -298,7 +298,7 @@ const CodexCloudRequestSource = "codex-cloud-request"
 // provider request, so the whole prefix is request-scoped.
 func SourceIsRequestScoped(source string) bool {
 	return source == "message" || source == "goose-request" || source == "session-store" ||
-		source == "deepseek-harness" || source == CodexCloudRequestSource ||
+		source == "usage-record" || source == "deepseek-harness" || source == CodexCloudRequestSource ||
 		strings.HasPrefix(source, "posit-assistant-")
 }
 
