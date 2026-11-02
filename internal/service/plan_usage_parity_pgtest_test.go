@@ -170,10 +170,12 @@ func TestPlanUsageCountsParity(t *testing.T) {
 
 	if pgURL := os.Getenv("TEST_PG_URL"); pgURL != "" {
 		dropSchema := func() {
-			store, err := postgresstore.NewStore(t.Context(), pgURL, planUsageParitySchema, true)
+			// Also runs from t.Cleanup, where t.Context() is already canceled.
+			dropCtx := context.WithoutCancel(ctx)
+			store, err := postgresstore.NewStore(dropCtx, pgURL, planUsageParitySchema, true)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, store.Close()) }()
-			_, err = store.DB().ExecContext(context.WithoutCancel(ctx), "DROP SCHEMA IF EXISTS "+planUsageParitySchema+" CASCADE")
+			_, err = store.DB().ExecContext(dropCtx, "DROP SCHEMA IF EXISTS "+planUsageParitySchema+" CASCADE")
 			require.NoError(t, err)
 		}
 		dropSchema()
