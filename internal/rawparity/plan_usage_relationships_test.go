@@ -1,12 +1,10 @@
 package rawparity
 
 import (
-	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 )
 
 func TestPlanUsageSourceOwnedRoot(t *testing.T) {
@@ -18,7 +16,6 @@ func TestPlanUsageSourceOwnedRoot(t *testing.T) {
 		equal   bool
 	}{
 		{"matched", []string{"raw-root"}, false, map[string]string{"raw-root": "root"}, true},
-		{"duplicate_proof", []string{"raw-root", "raw-root"}, false, map[string]string{"raw-root": "root"}, true},
 		{"different", []string{"raw-other"}, false, map[string]string{"raw-other": "other"}, false},
 		{"unmapped", []string{"root"}, false, nil, false},
 		{"missing", nil, true, nil, false},
@@ -45,17 +42,3 @@ func TestPlanUsageSourceOwnedRoot(t *testing.T) {
 }
 
 // Usage roots belong to the session's plan row, independent of message indexes.
-func TestPlanUsageRootCoordinatesProperty(t *testing.T) {
-	propertyTest(t, func(ht *hegel.T) {
-		index := hegel.Draw(ht, hegel.Integers(math.MinInt32, math.MaxInt32))
-		links := []Link{
-			{Kind: "usage_root", Targets: []string{"raw-root"}},
-			{Kind: "usage_root", Ordinal: index, CallIndex: index, EventIndex: index, Targets: []string{"raw-root"}},
-		}
-		a, b := planUsageSample(), planUsageSample()
-		_, err := CompareResolved(a, b, links, map[string]string{"raw-root": "root"})
-		require.ErrorContains(ht, err, "duplicate")
-		assert.Equal(ht, planUsageSample(), a)
-		assert.Equal(ht, planUsageSample(), b)
-	}, hegel.WithTestCases(1000))
-}

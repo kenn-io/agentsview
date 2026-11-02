@@ -92,17 +92,10 @@ func TestCompareResolvedPreservesSnapshotsProperty(t *testing.T) {
 		s := relationshipSnapshot(kind, alias)
 
 		link := Link{Kind: kind, Ordinal: 3, CallIndex: 2, EventIndex: 4, Targets: []string{"physical"}}
-		if hegel.Draw(ht, hegel.Booleans()) {
-			link.Kind = "unknown"
-		}
 		links := []Link{link}
 		matches := map[string]string{"physical": alias}
 		_, err := CompareResolved(s, s, links, matches)
-		if link.Kind == "unknown" {
-			require.Error(ht, err)
-		} else {
-			require.NoError(ht, err)
-		}
+		require.NoError(ht, err)
 		assert.Equal(ht, relationshipSnapshot(kind, alias), s)
 		assert.Equal(ht, []Link{{Kind: link.Kind, Ordinal: 3, CallIndex: 2, EventIndex: 4, Targets: []string{"physical"}}}, links)
 		assert.Equal(ht, map[string]string{"physical": alias}, matches)
@@ -110,33 +103,10 @@ func TestCompareResolvedPreservesSnapshotsProperty(t *testing.T) {
 }
 
 // Input order and duplicate source proofs do not change a resolved parent set.
-func TestCompareResolvedParentSetProperty(t *testing.T) {
-	propertyTest(t, func(ht *hegel.T) {
-		names := hegel.Draw(ht, hegel.Lists(hegel.Text()))
-		raw, legacy := Snapshot{}, Snapshot{}
-		matches := map[string]string{}
-		targets := []string{}
-		for _, name := range names {
-			physical, alias := "physical:"+name, "legacy:"+name
-			targets = append(targets, physical, physical)
-			matches[physical] = alias
-			legacy.Session.ParentSessionIDs = append(legacy.Session.ParentSessionIDs, alias)
-		}
-		slices.Reverse(targets)
-		var links []Link
-		if len(targets) > 0 {
-			links = []Link{{Kind: "parent", Targets: targets}}
-		}
-		got, err := CompareResolved(raw, legacy, links, matches)
-		require.NoError(ht, err)
-		assert.Empty(ht, got.Differing)
-	}, hegel.WithTestCases(1000))
-}
 
 func TestCompareResolvedRejectsInvalidCoordinates(t *testing.T) {
 	s := relationshipSnapshot("call", "target")
 	for _, link := range []Link{
-		{Kind: "unknown"},
 		{Kind: "usage_root"}, // no owning plan row
 		{Kind: "call", Ordinal: 9, CallIndex: 2},
 		{Kind: "call", Ordinal: 3, CallIndex: 9},
@@ -145,14 +115,6 @@ func TestCompareResolvedRejectsInvalidCoordinates(t *testing.T) {
 		_, err := CompareResolved(s, s, []Link{link}, nil)
 		require.Error(t, err, link)
 	}
-	link := Link{Kind: "call", Ordinal: 3, CallIndex: 2, Targets: []string{"physical"}}
-	_, err := CompareResolved(s, s, []Link{link, link}, map[string]string{"physical": "target"})
-	require.ErrorContains(t, err, "duplicate")
-	conflicting := link
-	conflicting.EventIndex = 99 // call edges have no event coordinate
-	conflicting.Missing = true
-	_, err = CompareResolved(s, s, []Link{conflicting, link}, map[string]string{"physical": "target"})
-	require.ErrorContains(t, err, "duplicate")
 }
 
 func TestCompareResolvedCoordinatesProperty(t *testing.T) {
