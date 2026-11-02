@@ -75,31 +75,32 @@ func TestSignalSchedulerDoesNotRetryFailedShutdownFlush(t *testing.T) {
 	require.Equal(t, 2, runs, "failed shutdown work must not remain queued")
 }
 
-func TestSignalSchedulerInlineRecomputeHonorsCallerCancellation(t *testing.T) {
-	database := openTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{})
-	t.Cleanup(engine.Close)
-	const sessionID = "inline-cancel"
-	_, err := database.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session:         db.Session{ID: sessionID, Project: "project", Machine: "local", Agent: "claude"},
-		ReplaceMessages: true,
-		Messages:        []db.Message{{SessionID: sessionID, Ordinal: 0, Role: "user", Content: "hello"}},
-	}}, nil)
-	require.NoError(t, err)
+// A push can be canceled while it flushes deferred signal recomputes. The
+// flush must stop, and the recompute must stay queued for a later flush.
+func TestCanceledPushFlushKeepsSignalRecomputeQueued(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "sig-flush-cancel.jsonl", "hello")
+	fx.engine.SyncAll(t.Context(), nil)
+	sid := fx.sessionIDFor(t, path)
+
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"second write within interval should defer the recompute")
 
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
-	engine.signalSched.markDirty(canceled, sessionID)
-	stored, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.NotEqual(t, db.CurrentQualitySignalVersion, stored.QualitySignalVersion,
-		"a cancelled caller must stop the inline recompute")
+	seen := -1
+	require.NoError(t, fx.engine.RunExclusiveFlushed(canceled, func() error {
+		seen = secretLeakCount(t, fx, sid)
+		return nil
+	}))
+	assert.Equal(t, 1, seen, "a canceled push must stop the flush")
 
-	engine.signalSched.flushAll()
-	stored, err = database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, db.CurrentQualitySignalVersion, stored.QualitySignalVersion,
-		"the cancelled recompute must stay queued for the next flush")
+	fx.engine.FlushSignals()
+	assert.Equal(t, 2, secretLeakCount(t, fx, sid),
+		"the canceled recompute must stay queued for the next flush")
 }
