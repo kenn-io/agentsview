@@ -72,15 +72,20 @@ func TestCommitTrailersSHA256(t *testing.T) {
 	assert.Len(t, commits[0].SHA, 64)
 }
 
-func TestCommitTrailersColonSessionIDs(t *testing.T) {
+func TestCommitTrailersParsing(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initRepo(t)
 	sessions := []string{"kimi:wd_abc:agent-a:session_uuid-1", "codebuff:project-a:session-1", "devin:build:session-1"}
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: "+strings.Join(sessions, "\nAgent-Session: "))
+	for _, key := range []string{"agent-session", "AGENT-SESSION", "aGeNt-SeSsIoN"} {
+		gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-11-01T10:00:00Z"}, "commit", "--allow-empty", "-qm", "Editor\n\n"+key+": "+strings.Join(sessions, "\n"+key+": "))
+	}
 	commits, err := ScanCommitTrailers(t.Context(), repo, nil)
 	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	assert.Equal(t, sessions, commits[0].Sessions)
+	require.Len(t, commits, 3)
+	for _, commit := range commits {
+		assert.Equal(t, sessions, commit.Sessions)
+		assert.Equal(t, "2026-10-30T10:10:00Z", commit.CommittedAt)
+	}
 }
 
 func TestCommitTrailersDetachedWorktree(t *testing.T) {
@@ -104,28 +109,4 @@ func TestCommitTrailersDetachedWorktree(t *testing.T) {
 	commits, err = ScanCommitTrailers(t.Context(), repo, tips)
 	require.NoError(t, err)
 	assert.Empty(t, commits)
-}
-
-func TestCommitTrailersKeyCase(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initRepo(t)
-	for _, key := range []string{"agent-session", "AGENT-SESSION", "aGeNt-SeSsIoN"} {
-		gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\n"+key+": claude:editor")
-	}
-	commits, err := ScanCommitTrailers(t.Context(), repo, nil)
-	require.NoError(t, err)
-	require.Len(t, commits, 3)
-	for _, commit := range commits {
-		assert.Equal(t, []string{"claude:editor"}, commit.Sessions)
-	}
-}
-
-func TestCommitTrailersUTC(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initRepo(t)
-	gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-10-30T12:10:00+02:00"}, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:editor")
-	commits, err := ScanCommitTrailers(t.Context(), repo, nil)
-	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	assert.Equal(t, "2026-10-30T10:10:00Z", commits[0].CommittedAt)
 }

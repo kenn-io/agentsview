@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
 
 func commitMessages(id, input, result string) []Message {
@@ -380,17 +381,29 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 		insertSession(t, old, id, "project-a")
 		insertMessages(t, old, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
 	}
+	require.NoError(t, old.StoreTrailerCommitLinks(t.Context(), "gone", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:orphan"}, CommittedAt: tsZero}}))
 	require.NoError(t, old.SoftDeleteSession(t.Context(), "trash"))
 	require.NoError(t, old.DeleteSession(t.Context(), "deleted"))
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			fresh := testDB(t)
 			fresh.SetArchiveContent(policy)
-			_, err := fresh.CopyTrashedDataFrom(old.Path())
+			insertSession(t, fresh, "written", "project-a")
+			require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:written"}, CommittedAt: tsZero}}))
+			written, err := fresh.SessionCommitLinks(t.Context(), "written")
+			require.NoError(t, err)
+			require.Len(t, written.Commits, 1)
+			assert.Equal(t, "trailer", written.Commits[0].Source)
+			_, err = fresh.CopyTrashedDataFrom(old.Path())
 			require.NoError(t, err)
 			_, err = fresh.CopyOrphanedDataFrom(old.Path())
 			require.NoError(t, err)
 			require.NoError(t, fresh.CopyExcludedSessionsFrom(old.Path()))
+			trailers, err := fresh.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
+			require.NoError(t, err)
+			require.Len(t, trailers.Commits[0].Links, 1)
+			assert.Equal(t, "orphan", trailers.Commits[0].Links[0].SessionID)
+			assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
 			got, err := fresh.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {

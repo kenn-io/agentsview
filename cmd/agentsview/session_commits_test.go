@@ -18,13 +18,14 @@ func TestSessionCommits(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"},
-		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{
+		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Tidy docs", Timestamp: "2026-10-30T10:00:00Z"},
+		{SessionID: "s-commit", Ordinal: 1, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END", Timestamp: "2026-10-30T11:00:00Z"},
+		{SessionID: "s-commit", Ordinal: 2, Role: "assistant", ToolCalls: []db.ToolCall{
 			{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`},
 			{SessionID: "s-commit", CallIndex: 1, ToolName: "Bash", Category: "Bash", ToolUseID: "exact-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}},
 		}},
 	}))
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", Sessions: []string{"claude:s-commit"}}}))
+	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:s-commit"}}}))
 	require.NoError(t, d.Close())
 	for _, format := range []string{"json", "human"} {
 		t.Run(format, func(t *testing.T) {
@@ -54,27 +55,14 @@ func TestSessionCommits(t *testing.T) {
 			assert.Contains(t, out, "Editor commit")
 			assert.Contains(t, out, "SOURCE")
 			assert.Contains(t, out, "transcript")
-			assert.Regexp(t, `s-commit\s+1\s+1\s+exact-call`, out)
+			assert.Regexp(t, `s-commit\s+2\s+1\s+exact-call`, out)
 			assert.Contains(t, out, "abc1234")
 			assert.Contains(t, out, "Fix parser")
-			assert.Contains(t, out, "0: Fix parser ")
+			assert.Contains(t, out, "1: Fix parser ")
+			assert.Contains(t, out, "0: Tidy docs (heuristic)")
 			assert.Contains(t, out, "…")
 			assert.NotContains(t, out, "END")
 			assert.NotContains(t, out, "\x1b")
 		})
 	}
-}
-
-func TestSessionCommitsHeuristicPrompt(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSession(t, dataDir, "editor", "project-a")
-	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = d.Close() })
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "editor", Ordinal: 0, Role: "user", Content: "Tidy docs", Timestamp: "2026-10-30T10:00:00Z"}}))
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:editor"}}}))
-	require.NoError(t, d.Close())
-	out, err := executeCommand(newRootCommand(), "session", "commits", "editor")
-	require.NoError(t, err)
-	assert.Contains(t, out, "0: Tidy docs (heuristic)")
 }

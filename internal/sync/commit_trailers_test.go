@@ -13,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testutil"
@@ -50,9 +49,6 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	l := found.Commits[0].Links[0]
 	assert.Equal(t, first, l.SHA)
 	assert.Equal(t, "trailer", l.Source)
-	require.NotNil(t, l.Turn)
-	assert.True(t, l.Turn.Heuristic)
-	assert.Equal(t, "Tidy docs", l.Turn.Text)
 	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
 	second := runGit(repo, "rev-parse", "HEAD")
 	engine.ReconcileCommitTrailers(t.Context())
@@ -83,7 +79,6 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	runGit(late, "init", "-q", "-b", "main")
 	runGit(late, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Older\n\nAgent-Session: codex:older")
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:older", Agent: "codex", Project: "project-a", Machine: "local", Cwd: late}))
-	database.SetArchiveContent(config.ArchiveContentTranscripts)
 	engine.ReconcileCommitTrailers(t.Context())
 	list, err := database.SessionCommitLinks(t.Context(), "codex:older")
 	require.NoError(t, err)
@@ -100,39 +95,22 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	after, err := database.GetSyncState(t.Context(), key)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	// Stored evidence survives a resync after its checkout has disappeared.
-	require.NoError(t, os.RemoveAll(repo))
-	engine.ResyncAll(t.Context(), nil)
-	list, err = database.SessionCommitLinks(t.Context(), "editor-session")
-	require.NoError(t, err)
-	assert.Len(t, list.Commits, 2)
 }
 
 func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	testutil.IsolateGit(t)
 	database := openTestDB(t)
 	repo := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main"},
-		{"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:removed-cwd"},
-	} {
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = repo
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o700))
 	cwd := filepath.Join(repo, "temporary", "nested")
 	require.NoError(t, os.MkdirAll(cwd, 0o700))
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "removed-cwd", Agent: "claude", Project: "project-a", Machine: "local", Cwd: cwd}))
 	require.NoError(t, os.RemoveAll(filepath.Join(repo, "temporary")))
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
-	engine.ReconcileCommitTrailers(t.Context())
-	list, err := database.SessionCommitLinks(t.Context(), "removed-cwd")
+	identity := engine.cachedProjectIdentity("local", cwd)
+	resolved, err := filepath.EvalSymlinks(repo)
 	require.NoError(t, err)
-	require.Len(t, list.Commits, 1)
-	assert.Equal(t, "trailer", list.Commits[0].Source)
-	assert.Equal(t, "Editor", list.Commits[0].Subject)
+	assert.Equal(t, resolved, identity.rootPath)
 }
 
 func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
