@@ -93,7 +93,7 @@ func main() {
 // reported it, and returns the process exit code.
 func reportCLIError(err error, stderr io.Writer) int {
 	if !isSilentExitError(err) {
-		fmt.Fprintf(stderr, "fatal: %v\n", err)
+		writeCLIDiagnostic(stderr, err)
 	}
 	return exitCodeFromError(err)
 }
@@ -179,7 +179,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// general API auth is disabled. Ensure a token exists before publishing
 	// startup state so daemon probes and remote collectors share one token.
 	if err := ensureServeAuthToken(&cfg); err != nil {
-		log.Fatalf("Failed to generate auth token: %v", err)
+		fatal("Failed to generate auth token: %v", withCLIHint(err, "check write permissions for AGENTSVIEW_DATA_DIR and the configured auth token file; run `agentsview serve --help`"))
 	}
 	if cfg.RequireAuth {
 		// Startup output may be captured by service managers or log files,
@@ -1573,10 +1573,10 @@ func runDailyTelemetryPings(ctx context.Context, interval time.Duration, cfg con
 func mustLoadConfig(cmd *cobra.Command) config.Config {
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", withCLIHint(err, configRecoveryHint))
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		fatal("creating data dir: %v", withCLIHint(err, "check write permissions for AGENTSVIEW_DATA_DIR, or select a writable directory with that variable"))
 	}
 	return cfg
 }
@@ -1950,8 +1950,19 @@ func applyRequiredCursorSecret(database cursorSecretStore, cfg config.Config) er
 // Use instead of log.Fatalf after setupLogFile redirects
 // log output to the debug log file.
 func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "fatal: "+format+"\n", args...)
-	os.Exit(1)
+	message := fmt.Sprintf(format, args...)
+	cause := errors.New(message)
+	for _, arg := range args {
+		if err, ok := arg.(error); ok {
+			cause = err
+			break
+		}
+	}
+	err := processCLIError(cause)
+	if diagnostic, ok := errors.AsType[*cliDiagnosticError](err); ok && diagnostic.display == "" {
+		diagnostic.display = message
+	}
+	os.Exit(reportCLIError(withExitCode(err, 1), os.Stderr))
 }
 
 // cleanResyncTemp removes leftover temp database files from
