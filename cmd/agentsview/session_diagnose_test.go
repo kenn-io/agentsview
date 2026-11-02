@@ -70,6 +70,8 @@ func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
 	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
 	assert.Zero(t, report.Usage.SubagentCount)
+	assert.Equal(t, []diagnosisChildLink{{SessionID: "child"}}, report.ChildLinks)
+	assert.Contains(t, report.Scope, "child links remain listed")
 	assert.Equal(t, 2, opened)
 	out, err = executeCommand(newRootCommand(), "session", "diagnose", canonical, "--pg")
 	require.NoError(t, err)
@@ -189,7 +191,7 @@ func TestSessionDiagnoseReadsSQLiteWithoutContent(t *testing.T) {
 	assert.NotContains(t, out, "msg-1")
 }
 
-func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
+func TestSessionDiagnoseRemoteUsesUsageTransport(t *testing.T) {
 	for _, discovered := range []bool{false, true} {
 		t.Run(strconv.FormatBool(discovered), func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -198,6 +200,9 @@ func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
 				requests = append(requests, r.Method+" "+r.URL.Path)
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
+				case "/api/v1/sessions/sync":
+					assert.Equal(t, http.MethodPost, r.Method)
+					_, _ = w.Write([]byte(`{}`))
 				case "/api/v1/version":
 					_, _ = w.Write([]byte(`{"api_version":999}`))
 				case "/api/v1/sessions/remote":
@@ -207,9 +212,9 @@ func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
 					assert.Equal(t, "true", r.URL.Query().Get("breakdown"))
 					_, _ = w.Write([]byte(`{"session_id":"remote","agent":"codex","has_token_data":true,"total_output_tokens":2,"peak_context_tokens":10,"cost":{"microdollars":0},"has_cost":false,"models":[],"breakdown":[{"ordinal":1,"source":"message","label":"Prompt 1","timestamp":"","model":"x","input_tokens":7,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":0,"cost":{"microdollars":0},"has_cost":false}],"breakdown_count":1}`))
 				case "/api/v1/sessions/remote/children":
-					_, _ = w.Write([]byte(`[]`))
+					_, _ = w.Write([]byte(`[{"id":"child"},{"id":"unlinked-child"}]`))
 				case "/api/v1/sessions/remote/messages":
-					_, _ = w.Write([]byte(`{"messages":[{"ordinal":1,"role":"assistant","content":"private text","has_context_tokens":true,"context_tokens":10,"tool_calls":[{"tool_name":"read","input_json":"private args","result_content_length":12}]}],"count":1}`))
+					_, _ = w.Write([]byte(`{"messages":[{"ordinal":1,"role":"assistant","content":"private text","has_context_tokens":true,"context_tokens":10,"tool_calls":[{"tool_name":"read","input_json":"private args","result_content_length":12,"subagent_session_id":"child"},{"tool_name":"task","subagent_session_id":"child"}]}],"count":1}`))
 				case "/api/v1/sessions/remote/tool-calls":
 					_, _ = w.Write([]byte(`{"tool_calls":[{"ordinal":1,"tool_name":"read","input_json":"private args","result_length":12}],"count":1}`))
 				default:
@@ -233,8 +238,12 @@ func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
 			require.Len(t, report.LargeResults, 1)
 			assert.Equal(t, 12, report.LargeResults[0].ResultLength)
 			assert.NotContains(t, out, "private")
+			assert.Equal(t, []diagnosisChildLink{{Ordinal: new(1), Tool: "read", SessionID: "child"}, {SessionID: "unlinked-child"}}, report.ChildLinks)
+			assert.Contains(t, requests, "POST /api/v1/sessions/sync")
 			for _, request := range requests {
-				assert.True(t, strings.HasPrefix(request, "GET "), request)
+				if request != "POST /api/v1/sessions/sync" {
+					assert.True(t, strings.HasPrefix(request, "GET "), request)
+				}
 				assert.NotContains(t, request, "/tool-calls")
 			}
 		})
@@ -244,6 +253,8 @@ func TestSessionDiagnoseRemoteUsesReadOnlyEndpoints(t *testing.T) {
 func FuzzDiagnosisLargestResults(f *testing.F) {
 	f.Add([]byte{1, 200, 9, 4, 3, 8, 7, 6, 5, 2, 11, 10})
 	f.Add([]byte{})
+	f.Add([]byte{0, 7, 7, 0, 1})
+	f.Add([]byte{8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8})
 	f.Fuzz(func(t *testing.T, sizes []byte) {
 		if len(sizes) > 200 {
 			sizes = sizes[:200]
@@ -253,36 +264,38 @@ func FuzzDiagnosisLargestResults(f *testing.F) {
 			calls = append(calls, service.ToolCall{Ordinal: i, ToolName: "read", ResultLength: int(n)})
 		}
 		result := testSessionDiagnosis(t, "session", &service.SessionUsageReport{}, nil, calls)
-		assert.LessOrEqual(t, len(result.LargeResults), 10)
-		for i, c := range result.LargeResults {
-			if i > 0 {
-				assert.GreaterOrEqual(t, result.LargeResults[i-1].ResultLength, c.ResultLength)
+		var counts [256]int
+		for _, n := range sizes {
+			counts[n]++
+		}
+		expected := []int{}
+		for n := 255; n > 0 && len(expected) < 10; n-- {
+			for range min(counts[n], 10-len(expected)) {
+				expected = append(expected, n)
 			}
+		}
+		actual := []int{}
+		seen := make(map[int]bool)
+		for _, c := range result.LargeResults {
+			require.GreaterOrEqual(t, c.Ordinal, 0)
+			require.Less(t, c.Ordinal, len(sizes))
+			assert.False(t, seen[c.Ordinal], "a result must appear only once")
+			seen[c.Ordinal] = true
 			assert.Equal(t, int(sizes[c.Ordinal]), c.ResultLength)
+			actual = append(actual, c.ResultLength)
 		}
-		if len(result.LargeResults) == 10 {
-			cutoff := result.LargeResults[9].ResultLength
-			for _, n := range sizes {
-				if int(n) > cutoff {
-					found := false
-					for _, c := range result.LargeResults {
-						if c.ResultLength == int(n) {
-							found = true
-							break
-						}
-					}
-					assert.True(t, found)
-				}
-			}
-		}
+		assert.Equal(t, expected, actual)
 	})
 }
 
-func TestSessionDiagnoseColdStartDisablesSourceSync(t *testing.T) {
+func TestSessionDiagnoseColdStartPreservesSourceSync(t *testing.T) {
 	testDataDir(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/v1/sessions/sync":
+			assert.Equal(t, http.MethodPost, r.Method)
+			_, _ = w.Write([]byte(`{}`))
 		case "/api/v1/version":
 			_, _ = w.Write([]byte(`{"api_version":999}`))
 		case "/api/v1/sessions/remote":
@@ -315,8 +328,21 @@ func TestSessionDiagnoseColdStartDisablesSourceSync(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, noSync)
 	for _, value := range noSync {
-		assert.True(t, value, "every cold-start daemon must not sync sources")
+		assert.False(t, value, "diagnosis must preserve background ingestion for later commands")
 	}
+}
+
+func TestSessionUsageNoSyncRejectsVersionSkewWhenAutostartDisabled(t *testing.T) {
+	dataDir := testDataDir(t)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dataDir, host, port, "1.0.0", false)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	setTestVersion(t, "1.1.0")
+	forbidStartBackgroundServeForTransport(t, "autostart is disabled")
+
+	cmd := sessionUsageCommand(t, "session", "usage", "session", "--no-sync", "--json")
+	_, _, err := sessionUsageDataForCommand(cmd, "session")
+	require.ErrorContains(t, err, "daemon restart required")
 }
 
 func TestSessionDiagnosisRetryCandidatesIncludeRecordedPlaceholders(t *testing.T) {
@@ -356,7 +382,7 @@ func TestSessionDiagnoseDirectArchive(t *testing.T) {
 	var report sessionDiagnosis
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
 	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
-	cmd := sessionUsageCommand(t, "session", "usage", "codex:direct", "--no-sync")
+	cmd := sessionUsageCommand(t, "session", "usage", "codex:direct")
 	usage, _, err := sessionUsageDataForCommand(cmd, "codex:direct")
 	require.NoError(t, err)
 	require.NotNil(t, usage)
@@ -368,6 +394,9 @@ func TestSessionDiagnoseLongGrowingArchive(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/v1/sessions/sync":
+			assert.Equal(t, http.MethodPost, r.Method)
+			_, _ = w.Write([]byte(`{}`))
 		case "/api/v1/version":
 			_, _ = w.Write([]byte(`{"api_version":999}`))
 		case "/api/v1/sessions/long":

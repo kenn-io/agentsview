@@ -77,7 +77,7 @@ func newSessionDiagnoseCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			backend, err := resolveSessionUsageBackend(cmd, true)
+			backend, err := resolveSessionUsageBackend(cmd, false)
 			if err != nil {
 				return err
 			}
@@ -97,7 +97,7 @@ func newSessionDiagnoseCommand() *cobra.Command {
 			out := buildSessionDiagnosis(id, &usage.SessionUsageReport)
 			ownOnly, _ := cmd.Flags().GetBool("own-only")
 			if ownOnly {
-				out.Scope = "usage, tool and context evidence cover the named session only"
+				out.Scope = "usage, tool and context evidence cover the named session only; child links remain listed"
 			}
 			if err := out.readMessages(cmd.Context(), svc); err != nil {
 				return err
@@ -160,59 +160,51 @@ func buildSessionDiagnosis(id string, usage *service.SessionUsageReport) *sessio
 	return out
 }
 
-// readMessages reduces each page before fetching the next. Only the current
-// retry run retains recorded arguments, including when it spans pages.
+// readMessages scans archived evidence in pages and collects calls for retry detection.
 func (out *sessionDiagnosis) readMessages(ctx context.Context, svc service.SessionService) error {
 	from := 0
-	var readErr error
-	runs := signals.RetryRunsIter(func(yield func(signals.ToolCallRow) bool) {
-		for {
-			page, err := svc.Messages(ctx, out.SessionID, service.MessageFilter{From: &from, Limit: db.MaxMessageLimit, Direction: "asc"})
-			if err != nil {
-				readErr = err
-				return
-			}
-			if page == nil || len(page.Messages) == 0 {
-				break
-			}
-			for _, m := range page.Messages {
-				if m.HasContextTokens {
-					out.Context = append(out.Context, diagnosisContext{m.Ordinal, m.Timestamp, m.Model, m.ContextTokens})
-				}
-				if m.IsCompactBoundary {
-					out.Compactions = append(out.Compactions, m.Ordinal)
-				}
-				for i, c := range m.ToolCalls {
-					if c.SubagentSessionID != "" {
-						out.ChildLinks = append(out.ChildLinks, diagnosisChildLink{new(m.Ordinal), c.ToolName, c.SubagentSessionID})
-					}
-					if c.ResultContentLength > 0 {
-						out.LargeResults = append(out.LargeResults, diagnosisTool{m.Ordinal, c.ToolName, c.ResultContentLength, c.SubagentSessionID})
-						sort.SliceStable(out.LargeResults, func(i, j int) bool { return out.LargeResults[i].ResultLength > out.LargeResults[j].ResultLength })
-						if len(out.LargeResults) > 10 {
-							out.LargeResults = out.LargeResults[:10]
-						}
-					}
-					if !yield(signals.ToolCallRow{ToolName: c.ToolName, InputJSON: c.InputJSON, MessageOrdinal: m.Ordinal, CallIndex: i}) {
-						return
-					}
-				}
-			}
-			if len(page.Messages) < db.MaxMessageLimit {
-				break
-			}
-			next := page.Messages[len(page.Messages)-1].Ordinal + 1
-			if next <= from {
-				readErr = errors.New("message pagination did not advance")
-				return
-			}
-			from = next
+	var calls []signals.ToolCallRow
+	linked := make(map[string]bool)
+	for {
+		page, err := svc.Messages(ctx, out.SessionID, service.MessageFilter{From: &from, Limit: db.MaxMessageLimit, Direction: "asc"})
+		if err != nil {
+			return err
 		}
-	})
-	if readErr != nil {
-		return readErr
+		if page == nil || len(page.Messages) == 0 {
+			break
+		}
+		for _, m := range page.Messages {
+			if m.HasContextTokens {
+				out.Context = append(out.Context, diagnosisContext{m.Ordinal, m.Timestamp, m.Model, m.ContextTokens})
+			}
+			if m.IsCompactBoundary {
+				out.Compactions = append(out.Compactions, m.Ordinal)
+			}
+			for i, c := range m.ToolCalls {
+				if c.SubagentSessionID != "" && !linked[c.SubagentSessionID] {
+					out.ChildLinks = append(out.ChildLinks, diagnosisChildLink{new(m.Ordinal), c.ToolName, c.SubagentSessionID})
+					linked[c.SubagentSessionID] = true
+				}
+				if c.ResultContentLength > 0 {
+					out.LargeResults = append(out.LargeResults, diagnosisTool{m.Ordinal, c.ToolName, c.ResultContentLength, c.SubagentSessionID})
+					sort.SliceStable(out.LargeResults, func(i, j int) bool { return out.LargeResults[i].ResultLength > out.LargeResults[j].ResultLength })
+					if len(out.LargeResults) > 10 {
+						out.LargeResults = out.LargeResults[:10]
+					}
+				}
+				calls = append(calls, signals.ToolCallRow{ToolName: c.ToolName, InputJSON: c.InputJSON, MessageOrdinal: m.Ordinal, CallIndex: i})
+			}
+		}
+		if len(page.Messages) < db.MaxMessageLimit {
+			break
+		}
+		next := page.Messages[len(page.Messages)-1].Ordinal + 1
+		if next <= from {
+			return errors.New("message pagination did not advance")
+		}
+		from = next
 	}
-	for _, run := range runs {
+	for _, run := range signals.RetryRuns(calls) {
 		out.RetryRuns = append(out.RetryRuns, diagnosisRetry{run.ToolName, run.Count, run.First.MessageOrdinal, run.Last.MessageOrdinal})
 	}
 	return nil

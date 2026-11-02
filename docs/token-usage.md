@@ -1237,7 +1237,7 @@ archive; stop them to run a local online usage report.
 
 For an archived cost investigation, `session diagnose <id>` combines usage with
 context growth, compactions, large tool results, retry candidates, and child
-links. It reads stored evidence without refreshing sources. See the
+links. It uses the same source refresh as `session usage`. See the
 [diagnosis contract](https://agentsview.io/docs/session-api/#agentsview-session-diagnose)
 for coverage limits.
 

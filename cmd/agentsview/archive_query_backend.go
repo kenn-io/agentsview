@@ -156,9 +156,6 @@ func resolveArchiveQueryTransport(
 	}
 	if policy.NoSync {
 		cfg.NoSync = true
-		if daemonAutostartDisabled() {
-			return detectClientTransportContext(ctx, cfg, 0)
-		}
 	}
 	return ensureTransportContext(ctx, cfg, transportIntentRead, 0)
 }

@@ -967,9 +967,10 @@ failures. Backend setup or output failures exit 1. The existing
 
 `agentsview session diagnose <id> --json` reports archived usage and evidence
 for investigating an expensive task. It uses the same pricing and linked
-subagent accounting as `session usage`, without refreshing source files. Pass
-`--own-only` to exclude subagent usage. Human output is the default; `--pg` and
-`--server` select the same read transports as other session commands.
+subagent accounting and source refresh as `session usage`. Pass `--own-only`
+to exclude subagent usage; child links remain listed. Human output is the
+default; `--pg` and `--server` select the same read transports as other session
+commands.
 Missing sessions and read failures return exit 1.
 
 The versioned JSON includes the usage breakdown, totals of its normalized
@@ -987,7 +988,9 @@ causal savings or invoice total is inferred. The report omits transcript content
 and tool arguments. Context, compaction, and tool evidence comes from a paged
 scan of all archived messages. Human output shows the latest ten context
 observations; JSON includes every observation. Usage is a separate read and can
-reflect a different archive revision if ingestion runs concurrently.
+reflect a different archive revision if ingestion runs concurrently. Message
+pages share no snapshot, so a transcript rewritten during the scan can mix
+revisions; run the command again after the rewrite for a stable result.
 `schema_version` versions the output shape, not the archive snapshot.
 
 ### `agentsview session usage`
