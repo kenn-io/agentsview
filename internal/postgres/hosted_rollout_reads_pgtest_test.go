@@ -109,6 +109,7 @@ func TestHostedRolloutDirectIdentityReads(t *testing.T) {
 }
 
 func TestHostedRolloutEligibilityModel(t *testing.T) {
+	requireHegel(t)
 	f := newHostedFixture(t, "tenant-eligibility")
 	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
