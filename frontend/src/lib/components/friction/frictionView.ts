@@ -24,6 +24,12 @@ function byteCompare(a: string, b: string): number {
   return 0;
 }
 
+// fileableKind mirrors the server: frustration quotes the user and
+// interruptions carry no text, so neither is filed to Kata.
+export function fileableKind(kind: string): boolean {
+  return ["correction", "error", "workaround", "deferral", "pattern"].includes(kind);
+}
+
 // Diagnostic subjects carry a producer-chosen identity, not a
 // session id, so the page never deep-links them.
 export function isDiagnosticSubject(target: { subject_kind?: string | null }): boolean {
