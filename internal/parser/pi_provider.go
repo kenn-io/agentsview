@@ -246,7 +246,14 @@ func (p *piProvider) Parse(
 		return ParseOutcome{}, errors.New("pi source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := p.parseSession(ctx, path, req.Source.ProjectHint, machine)
+	resolver := req.StoredPathResolver
+	if resolver == nil {
+		resolver = p.Config.StoredPathResolver
+	}
+	if p.Config.PathRewriter != nil {
+		ctx = WithoutFilesystemProjectDiscovery(ctx)
+	}
+	sess, msgs, err := parsePiLikeSessionContext(ctx, path, req.Source.ProjectHint, machine, p.Def.Type, p.Def.IDPrefix, p.parentHeaderLookup(resolver), resolver)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -402,7 +409,8 @@ func piSessionIDFromPath(root, path string) string {
 
 func piProviderCapabilities(agent AgentType) Capabilities {
 	caps := Capabilities{
-		Source: jsonlFileProviderSourceCapabilities(),
+		RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany},
+		Source:     jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,
