@@ -731,10 +731,9 @@ row seeks its children. When few sessions have parents, startup statistics
 otherwise move a sessions scan outside that per-node lookup.
 
 PostgreSQL keeps `idx_sessions_parent` on `parent_session_id` alone. The wider
-SQLite index exists because, without it, SQLite builds a temporary
-`is_automated` index on every recursive step of the child lookup. PostgreSQL
-never builds temporary indexes, so it filters `is_automated` while it uses the
-parent-only index.
+SQLite index lets each recursive child lookup seek both `parent_session_id` and
+`is_automated` instead of filtering rows found by parent alone. PostgreSQL
+filters `is_automated` while it uses the parent-only index.
 
 Hosted PostgreSQL sidebar pages resolve contextual raw parent links and legacy
 parent edges once per statement. Root orphan checks and recursive child joins
