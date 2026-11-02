@@ -11,8 +11,8 @@ The latest release is
 
 **New features**
 
-- Friction Log patterns can be filed as Kata issues from the hub with
-  `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
+- Friction Log patterns can be filed as Kata issues from the hub, with **File
+  to Kata** on the Friction Log page or `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
   already holds for a pattern instead of filing a duplicate, masks secrets in
   what it sends, and shows each pattern's issue in `friction patterns`, the API,
   and MCP results. `friction link` and `friction unlink` manage a link by hand.

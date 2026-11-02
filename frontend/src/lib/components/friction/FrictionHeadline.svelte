@@ -7,6 +7,7 @@
   } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
   import FrictionFinding from "./FrictionFinding.svelte";
+  import FrictionIssueControl from "./FrictionIssueControl.svelte";
   import FrictionSessionRef from "./FrictionSessionRef.svelte";
   import {
     headlinePatterns,
@@ -22,9 +23,11 @@
     signals: FrictionSignal[];
     patterns: FrictionPatternItem[];
     sessions: FrictionSessions | null | undefined;
+    // This page may file to Kata: writes are allowed and Kata is ready.
+    canFile?: boolean;
   }
 
-  let { date, p0Alerts, signals, patterns, sessions }: Props = $props();
+  let { date, p0Alerts, signals, patterns, sessions, canFile = false }: Props = $props();
 
   const KIND_LABELS: Record<FrictionKind, () => string> = {
     correction: m.friction_kind_correction,
@@ -105,6 +108,14 @@
                     />
                   {/if}
                 </span>
+                {#if p.issue || canFile}
+                  <FrictionIssueControl
+                    fingerprint={p.fingerprint}
+                    kind={p.kind}
+                    issue={p.issue}
+                    {canFile}
+                  />
+                {/if}
               </li>
             {/each}
           </ul>

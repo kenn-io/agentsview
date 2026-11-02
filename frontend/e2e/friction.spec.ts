@@ -254,6 +254,61 @@ test.describe("Friction Log", () => {
     await expect(page.locator("pre.markdown-source")).toContainText(`# Friction Log — ${DATE}`);
   });
 
+  test("files a recurring pattern to Kata and shows the issue", async ({ page }) => {
+    const fingerprint = `fl1:${"b".repeat(64)}`;
+    const issue = {
+      qualified_id: "agentsview#f001",
+      web_url: "https://kata.example.test/issues/f001",
+      issue_uid: "01J0ABCDEF0000000000000001",
+      source: "created",
+      linked_at: `${DATE}T08:00:00Z`,
+    };
+    await page.route("**/api/v1/kata/status", (route: Route) =>
+      route.fulfill({ json: { state: "ready", project: "agentsview" } }),
+    );
+    await page.route(`**/api/v1/friction/digests/${DATE}`, (route: Route) =>
+      route.fulfill({
+        json: {
+          ...LATEST_DIGEST,
+          patterns: [
+            {
+              fingerprint,
+              kind: "error",
+              title: "[friction/error] bash: command not found",
+              first_seen_date: "2026-09-01",
+              last_seen_date: DATE,
+              occurrence_count: 3,
+              session_count: 2,
+              last_subject_id: SESSION_ID,
+              last_ordinal: 5,
+            },
+          ],
+        },
+      }),
+    );
+    let filed = "";
+    await page.route("**/api/v1/friction/patterns/*/issue", async (route: Route) => {
+      filed = decodeURIComponent(new URL(route.request().url()).pathname.split("/")[5] ?? "");
+      await route.fulfill({ json: { issue, created: true } });
+    });
+
+    await page.goto("/friction");
+    const row = page
+      .locator(".friction-headline .headline-row")
+      .filter({ hasText: "command not found" });
+    await row.getByRole("button", { name: "File to Kata" }).click();
+
+    await expect(row.locator("a.issue-link")).toHaveText("agentsview#f001");
+    await expect(row.getByRole("button", { name: "File to Kata" })).toHaveCount(0);
+    expect(filed).toBe(fingerprint);
+    await expect(
+      page
+        .locator("section#friction-section-error li")
+        .filter({ hasText: "command not found" })
+        .locator(".row-issue"),
+    ).toHaveText("agentsview#f001");
+  });
+
   test("falls back to the latest digest for an unknown date", async ({ page }) => {
     await page.goto("/friction?date=2020-01-01");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(`Friction Log — ${DATE}`);

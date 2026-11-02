@@ -63,7 +63,12 @@ Kata, even when it shares the hub's `[kata]` config.
 
 ## File Friction Log patterns
 
-Filing is manual. Pick a pattern's fingerprint from
+Filing is manual. On the hub's Friction Log page, each pattern under **Needs
+attention** offers **File to Kata** and **Link issue** once Kata is ready, and a
+linked pattern shows its issue with **Unlink**. The actions appear only where
+the server accepts writes, the same as **Build now**.
+
+From the command line, pick a pattern's fingerprint from
 `agentsview friction patterns`, then file it from the hub:
 
 ```bash

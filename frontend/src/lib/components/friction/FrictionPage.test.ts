@@ -388,6 +388,71 @@ describe("FrictionPage", () => {
     );
   });
 
+  describe("Kata issues", () => {
+    const issue = {
+      qualified_id: "agentsview#f001",
+      web_url: "https://kata.example.test/issues/f001",
+      issue_uid: "01J0ABCDEF0000000000000001",
+      source: "created",
+      linked_at: "2026-09-22T08:00:00Z",
+    };
+
+    function headlineRow(text: string): HTMLElement {
+      const row = Array.from(
+        document.querySelectorAll<HTMLElement>(".friction-headline .headline-row"),
+      ).find((r) => r.textContent?.includes(text));
+      expect(row, text).toBeDefined();
+      return row!;
+    }
+
+    function buttons(row: HTMLElement): string[] {
+      return Array.from(row.querySelectorAll("button")).map((b) => b.textContent?.trim() ?? "");
+    }
+
+    it("files a pattern once Kata is ready and this page may write", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = true;
+      });
+      const file = vi.spyOn(friction, "fileIssue").mockResolvedValue();
+      await render();
+      await tick();
+      const row = headlineRow("command not found");
+      expect(buttons(row)).toEqual(["File to Kata", "Link issue"]);
+      Array.from(row.querySelectorAll("button"))
+        .find((b) => b.textContent?.includes("File to Kata"))!
+        .click();
+      expect(file).toHaveBeenCalledWith(toolError.fingerprint);
+    });
+
+    it("offers no actions when Kata is not ready", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = false;
+      });
+      await render();
+      await tick();
+      expect(buttons(headlineRow("command not found"))).toEqual([]);
+    });
+
+    it("shows a linked issue on its pattern and findings without actions for a read-only page", async () => {
+      sync.serverVersion = version({ friction_build_allowed: false });
+      const check = vi.spyOn(friction, "checkKata");
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint ? { ...p, issue } : p,
+      );
+      await render();
+      const row = headlineRow("command not found");
+      const link = row.querySelector<HTMLAnchorElement>("a.issue-link")!;
+      expect(link.textContent?.trim()).toBe("agentsview#f001");
+      expect(link.getAttribute("href")).toBe(issue.web_url);
+      expect(buttons(row)).toEqual([]);
+      expect(check, "a page that cannot write never asks Kata").not.toHaveBeenCalled();
+      const finding = Array.from(section("error").querySelectorAll("li")).find((li) =>
+        li.textContent?.includes("command not found"),
+      )!;
+      expect(finding.querySelector(".row-issue")?.textContent?.trim()).toBe("agentsview#f001");
+    });
+  });
+
   it("renders hostile transcript text as text", async () => {
     await render();
     expect(document.querySelector(".friction-page img")).toBeNull();
