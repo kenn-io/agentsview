@@ -26,7 +26,7 @@ func TestCodexPagePublicationDuringThreadPurge(t *testing.T) {
 					defer workers.Wait()
 					defer cancel()
 					local, syncer, store := newCodexTrashMirror(t)
-					observer, writer := store.pg, store.pg
+					observer, writer := store.DB(), store.DB()
 					var schema, dsn, tenant string
 					dsn = testPGURL(t)
 					require.NoError(t, observer.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema))

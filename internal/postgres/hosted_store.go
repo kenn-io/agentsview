@@ -19,11 +19,18 @@ import (
 // HostedStore is the explicit public identity boundary around physical queries.
 // It deliberately does not embed Store: new capabilities require a mapping choice.
 type HostedStore struct {
-	physical  *Store
-	core      *RawProjectionStore
-	tenant    string
-	cursorMu  sync.RWMutex
-	cursorKey [32]byte
+	physical     *Store
+	core         *RawProjectionStore
+	tenant       string
+	cursor       *hostedCursorState
+	readTx       *sql.Tx
+	readRevision hostedRevision
+	owner        *HostedStore
+}
+
+type hostedCursorState struct {
+	mu  sync.RWMutex
+	key [32]byte
 }
 
 var _ db.Store = (*HostedStore)(nil)
@@ -69,9 +76,9 @@ func newHostedAdapter(pg *sql.DB, tenant string) (*HostedStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &HostedStore{physical: &Store{pg: pg, hostedRelations: true}, core: core, tenant: tenant}
+	h := &HostedStore{physical: &Store{pg: pg, ownedDB: pg, hostedRelations: true}, core: core, tenant: tenant, cursor: &hostedCursorState{}}
 	core.curationGuard = h.guardCurationIdentity
-	if _, err = rand.Read(h.cursorKey[:]); err != nil {
+	if _, err = rand.Read(h.cursor.key[:]); err != nil {
 		return nil, err
 	}
 	return h, nil
@@ -99,28 +106,67 @@ func (h *HostedStore) revision(ctx context.Context) (hostedRevision, error) {
 	return r, err
 }
 
-func hostedRead[T any](ctx context.Context, h *HostedStore, read func(hostedRevision) (T, error)) (T, error) {
-	return hostedReadWithScope(ctx, h, hostedPublishedRead, read)
+// Published rows, aliases and related data share one read-operation snapshot. A view
+// borrows the transaction and shared runtime state; it cannot close the pool.
+func hostedRead[T any](ctx context.Context, h *HostedStore, read func(*HostedStore, hostedRevision) (T, error)) (T, error) {
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	if h.readTx != nil {
+		value, err := read(h, h.readRevision)
+		if err != nil {
+			return zero, err
+		}
+		return value, nil
+	}
+	tx, err := h.physical.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return zero, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	view := &HostedStore{
+		physical: h.physical.readView(tx), tenant: h.tenant, cursor: h.cursor,
+		core:   &RawProjectionStore{readTx: tx, options: h.core.options},
+		readTx: tx, owner: h,
+	}
+	view.readRevision, err = view.revision(ctx)
+	if err != nil {
+		return zero, err
+	}
+	value, err := read(view, view.readRevision)
+	if err != nil {
+		return zero, err
+	}
+	if err = tx.Commit(); err != nil {
+		return zero, err
+	}
+	return value, nil
 }
 
 // Read failures are also revision checked: a disappearing physical row during
 // convergence must retry resolution, not report an accidental not-found result.
-func hostedReadWithScope[T any](ctx context.Context, h *HostedStore, scope hostedReadScope, read func(hostedRevision) (T, error)) (T, error) {
+func hostedReadWithScope[T any](ctx context.Context, h *HostedStore, scope hostedReadScope, read func(*HostedStore, hostedRevision) (T, error)) (T, error) {
+	if scope == hostedPublishedRead {
+		return hostedRead(ctx, h, read)
+	}
+	// Source probes must observe live selection changes, even when called from
+	// a published view. Comparing two reads of its snapshot would be vacuous.
+	if h.owner != nil {
+		h = h.owner
+	}
 	var zero T
 	for range 3 {
 		before, err := h.revision(ctx)
 		if err != nil {
 			return zero, err
 		}
-		value, readErr := read(before)
+		value, readErr := read(h, before)
 		after, err := h.revision(ctx)
 		if err != nil {
 			return zero, err
 		}
-		// Pending source-head selection does not change published rows or aliases.
-		// Source probes expose that selection and retain the stricter fence.
-		if before.Identity == after.Identity && before.Corpus == after.Corpus &&
-			(scope == hostedPublishedRead || before.Selection == after.Selection) {
+		if before == after {
 			return value, readErr
 		}
 	}
@@ -128,16 +174,16 @@ func hostedReadWithScope[T any](ctx context.Context, h *HostedStore, scope hoste
 }
 
 func (h *HostedStore) SetCursorSecret(secret []byte) {
-	h.cursorMu.Lock()
-	h.cursorKey = sha256.Sum256(secret)
-	h.cursorMu.Unlock()
+	h.cursor.mu.Lock()
+	h.cursor.key = sha256.Sum256(secret)
+	h.cursor.mu.Unlock()
 	h.physical.SetCursorSecret(secret)
 }
 
 func (h *HostedStore) cipher() (cipher.AEAD, error) {
-	h.cursorMu.RLock()
-	key := h.cursorKey
-	h.cursorMu.RUnlock()
+	h.cursor.mu.RLock()
+	key := h.cursor.key
+	h.cursor.mu.RUnlock()
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err
@@ -191,7 +237,7 @@ func (h *HostedStore) openCursor(token string, r hostedRevision) (string, error)
 // Public cursor helpers accept public coordinates only; physical cursor work
 // stays inside ListSessions/GetSidebarSessionIndex.
 func (h *HostedStore) EncodeCursor(c db.SessionCursor) string {
-	token, err := hostedRead(context.Background(), h, func(r hostedRevision) (string, error) {
+	token, err := hostedRead(context.Background(), h, func(h *HostedStore, r hostedRevision) (string, error) {
 		id, err := h.resolve(context.Background(), c.ID)
 		if err != nil {
 			return "", err
@@ -210,7 +256,7 @@ func (h *HostedStore) EncodeCursor(c db.SessionCursor) string {
 }
 
 func (h *HostedStore) DecodeCursor(token string) (db.SessionCursor, error) {
-	return hostedRead(context.Background(), h, func(r hostedRevision) (db.SessionCursor, error) {
+	return hostedRead(context.Background(), h, func(h *HostedStore, r hostedRevision) (db.SessionCursor, error) {
 		p, err := h.openCursor(token, r)
 		if err != nil {
 			return db.SessionCursor{}, err

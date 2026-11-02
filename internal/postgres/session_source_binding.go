@@ -17,7 +17,7 @@ func (h *HostedStore) SessionSourceChanged(err error) bool {
 
 // SessionSourceBinding names the physical session a hosted ID resolves to now.
 func (h *HostedStore) SessionSourceBinding(ctx context.Context, id string) (string, error) {
-	return hostedRead(ctx, h, func(revision hostedRevision) (string, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, revision hostedRevision) (string, error) {
 		source, err := h.resolve(ctx, id)
 		if err != nil || source.State == RawIdentityGone {
 			return "", err

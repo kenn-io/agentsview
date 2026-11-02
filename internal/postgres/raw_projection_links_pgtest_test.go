@@ -322,7 +322,7 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 		duration int64
 	}
 	reads := 0
-	result, err := hostedRead(t.Context(), h, func(_ hostedRevision) (snapshot, error) {
+	result, err := hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (snapshot, error) {
 		reads++
 		physical, err := h.physical.GetSessionFull(t.Context(), ownerIdentity.SessionID)
 		if err != nil {
@@ -344,8 +344,8 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 		return snapshot{physical, duration}, err
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, reads)
-	assert.Equal(t, int64(13000), result.duration)
+	assert.Equal(t, 1, reads)
+	assert.Equal(t, int64(7000), result.duration)
 	require.NotNil(t, result.session.ParentSessionID)
 	assert.Equal(t, "codex:portable", *result.session.ParentSessionID)
 	check(true, 13)

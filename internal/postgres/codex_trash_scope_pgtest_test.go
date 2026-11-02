@@ -199,7 +199,7 @@ func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
 				require.NotNil(t, returning)
 				marker, err := syncer.pushMarkerID(ctx)
 				require.NoError(t, err)
-				tx, err := store.pg.BeginTx(ctx, nil)
+				tx, err := store.DB().BeginTx(ctx, nil)
 				require.NoError(t, err)
 				err = syncer.pushSession(ctx, tx, *returning, marker, nil)
 				assert.ErrorIs(t, err, errSessionExcluded)
@@ -299,7 +299,7 @@ func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
  INSERT INTO excluded_sessions(id) VALUES('ordinary-exclusion')`)
 	require.NoError(t, err)
 	for range 2 {
-		require.NoError(t, EnsureSchema(ctx, store.pg, syncer.schema))
+		require.NoError(t, EnsureSchema(ctx, store.DB(), syncer.schema))
 	}
 	trash, err := store.ListTrashedSessions(ctx)
 	require.NoError(t, err)

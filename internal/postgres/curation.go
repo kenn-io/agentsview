@@ -108,7 +108,7 @@ func (s *Store) BulkStarSessions(ctx context.Context, sessionIDs []string) error
 		return nil
 	}
 
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning star transaction: %w", err)
 	}
@@ -142,7 +142,7 @@ func (s *Store) BulkStarSessions(ctx context.Context, sessionIDs []string) error
 func (s *Store) PinMessage(ctx context.Context,
 	sessionID string, messageID int64, note *string,
 ) (int64, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("beginning pin transaction: %w", err)
 	}
@@ -190,7 +190,7 @@ func pinMessageTx(ctx context.Context, tx *sql.Tx, sessionID string, messageID i
 
 // UnpinMessage removes a shared PG pin.
 func (s *Store) UnpinMessage(ctx context.Context, sessionID string, messageID int64) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning unpin transaction: %w", err)
 	}

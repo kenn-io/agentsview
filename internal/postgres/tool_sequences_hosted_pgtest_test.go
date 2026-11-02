@@ -50,7 +50,7 @@ func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	attempts := 0
-	_, exhausted := hostedRead(t.Context(), h, func(hostedRevision) (bool, error) {
+	_, exhausted := hostedReadWithScope(t.Context(), h, hostedAllRevisionsRead, func(_ *HostedStore, _ hostedRevision) (bool, error) {
 		attempts++
 		_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET corpus_revision=corpus_revision+1 WHERE singleton=1`)
 		return true, err

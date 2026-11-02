@@ -23,6 +23,7 @@ type RawProjectionOptions struct {
 type RawProjectionStore struct {
 	curationGuard func(context.Context, *sql.Tx, string, RawIdentity) error
 	db            *sql.DB
+	readTx        *sql.Tx
 	options       RawProjectionOptions
 }
 

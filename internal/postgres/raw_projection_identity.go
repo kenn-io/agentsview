@@ -25,16 +25,29 @@ type RawIdentity struct {
 }
 
 func (s *RawProjectionStore) Resolve(ctx context.Context, alias string) (RawIdentity, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	tx, owned, err := s.readTransaction(ctx)
 	if err != nil {
 		return RawIdentity{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if owned {
+		defer func() { _ = tx.Rollback() }()
+	}
 	result, err := resolveRawIdentity(ctx, tx, alias)
 	if err != nil {
 		return result, err
 	}
-	return result, tx.Commit()
+	if owned {
+		err = tx.Commit()
+	}
+	return result, err
+}
+
+func (s *RawProjectionStore) readTransaction(ctx context.Context) (*sql.Tx, bool, error) {
+	if s.readTx != nil {
+		return s.readTx, false, nil
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	return tx, true, err
 }
 
 func resolveRawIdentity(ctx context.Context, tx *sql.Tx, alias string) (RawIdentity, error) {

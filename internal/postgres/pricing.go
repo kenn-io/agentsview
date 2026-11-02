@@ -23,6 +23,14 @@ type pricingLoad struct {
 	err     error
 }
 
+// A borrowed view loads pricing synchronously on its existing connection.
+// It never waits for detached work that could need another pool slot, and
+// neither the transaction nor these immutable rows escape the operation.
+type pricingSnapshot struct {
+	loaded bool
+	rows   []export.EffectivePricingRow
+}
+
 func pricingRowsToMap(prices []db.ModelPricing) map[string]export.ModelRates {
 	fallback := db.FallbackRateMap()
 	out := make(map[string]export.ModelRates, len(prices))
@@ -55,6 +63,10 @@ type pgGenAIPricingQuerier interface {
 func loadPGGenAIPricing(
 	ctx context.Context, q pgGenAIPricingQuerier,
 ) (*db.GenAIPricingDocument, error) {
+	return queryPGGenAIPricing(ctx, q, true)
+}
+
+func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMissing bool) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, data_json, updated_at
@@ -62,13 +74,29 @@ func loadPGGenAIPricing(
 		&document.Version, &document.SourceRef, &document.Source,
 		&document.Data, &document.UpdatedAt,
 	)
-	if err == sql.ErrNoRows || isUndefinedTable(err) {
+	if err == sql.ErrNoRows || allowMissing && isUndefinedTable(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading pg GenAI pricing document: %w", err)
 	}
 	return &document, nil
+}
+
+// Optional-table fallbacks must not issue a failing statement in a transaction:
+// PostgreSQL keeps that transaction aborted even when its error is handled.
+func pricingTablesPresent(ctx context.Context, q pgGenAIPricingQuerier, tables ...string) (bool, error) {
+	pb := &paramBuilder{}
+	checks := make([]string, len(tables))
+	for i, table := range tables {
+		checks[i] = "to_regclass(" + pb.add(table) + ") IS NOT NULL"
+	}
+	var present bool
+	err := q.QueryRowContext(ctx, "SELECT "+strings.Join(checks, " AND "), pb.args...).Scan(&present)
+	if err != nil {
+		return false, fmt.Errorf("checking optional pg pricing tables: %w", err)
+	}
+	return present, nil
 }
 
 func pgGenAIEffectivePricingRow(
@@ -112,6 +140,17 @@ func (s *Store) loadPricingMap(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.readTx != nil {
+		if !s.pricingSnapshot.loaded {
+			rows, err := s.readPricingMap(ctx)
+			if err != nil {
+				return nil, err
+			}
+			s.pricingSnapshot.rows = rows
+			s.pricingSnapshot.loaded = true
+		}
+		return clonePricingRows(s.pricingSnapshot.rows), nil
+	}
 	load := s.startPricingLoad()
 	defer s.leavePricingLoad(load)
 
@@ -127,11 +166,11 @@ func (s *Store) loadPricingMap(
 }
 
 func (s *Store) startPricingLoad() *pricingLoad {
-	s.pricingLoadMu.Lock()
-	defer s.pricingLoadMu.Unlock()
-	if s.pricingLoad != nil {
-		s.pricingLoad.waiters++
-		return s.pricingLoad
+	s.runtimeState().pricingLoadMu.Lock()
+	defer s.runtimeState().pricingLoadMu.Unlock()
+	if s.runtimeState().pricingLoad != nil {
+		s.runtimeState().pricingLoad.waiters++
+		return s.runtimeState().pricingLoad
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -140,13 +179,25 @@ func (s *Store) startPricingLoad() *pricingLoad {
 		cancel:  cancel,
 		waiters: 1,
 	}
-	s.pricingLoad = load
+	s.runtimeState().pricingLoad = load
 	go s.runPricingLoad(ctx, load)
 	return load
 }
 
 func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
 	defer load.cancel()
+	prices, err := s.readPricingMap(ctx)
+	s.runtimeState().pricingLoadMu.Lock()
+	defer s.runtimeState().pricingLoadMu.Unlock()
+	load.err = err
+	load.prices = prices
+	if s.runtimeState().pricingLoad == load {
+		s.runtimeState().pricingLoad = nil
+	}
+	close(load.done)
+}
+
+func (s *Store) readPricingMap(ctx context.Context) ([]export.EffectivePricingRow, error) {
 	out := map[string]export.ModelRates{}
 	dbRows, err := s.mergeDBPricing(ctx, out)
 	if err == nil && dbRows == 0 {
@@ -154,12 +205,20 @@ func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
 	}
 	var prices []export.EffectivePricingRow
 	if err == nil {
-		s.pricingMu.Lock()
+		s.runtimeState().pricingMu.Lock()
 		s.applyCustomPricing(out)
-		s.pricingMu.Unlock()
+		s.runtimeState().pricingMu.Unlock()
 		prices = db.PricingMapRows(out)
 		var document *db.GenAIPricingDocument
-		document, err = loadPGGenAIPricing(ctx, s.pg)
+		if s.readTx == nil {
+			document, err = loadPGGenAIPricing(ctx, s.pg)
+		} else {
+			var present bool
+			present, err = pricingTablesPresent(ctx, s.pg, "genai_pricing")
+			if err == nil && present {
+				document, err = queryPGGenAIPricing(ctx, s.pg, false)
+			}
+		}
 		if err == nil {
 			var row export.EffectivePricingRow
 			row, err = pgGenAIEffectivePricingRow(document)
@@ -169,34 +228,27 @@ func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
 		}
 	}
 
-	s.pricingLoadMu.Lock()
-	defer s.pricingLoadMu.Unlock()
-	load.err = err
-	load.prices = prices
-	if s.pricingLoad == load {
-		s.pricingLoad = nil
-	}
-	close(load.done)
+	return prices, err
 }
 
 func (s *Store) leavePricingLoad(load *pricingLoad) {
 	var cancel context.CancelFunc
-	s.pricingLoadMu.Lock()
+	s.runtimeState().pricingLoadMu.Lock()
 	load.waiters--
-	if load.waiters == 0 && s.pricingLoad == load {
-		s.pricingLoad = nil
+	if load.waiters == 0 && s.runtimeState().pricingLoad == load {
+		s.runtimeState().pricingLoad = nil
 		cancel = load.cancel
 	}
-	s.pricingLoadMu.Unlock()
+	s.runtimeState().pricingLoadMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 }
 
 func (s *Store) forgetPricingLoad() {
-	s.pricingLoadMu.Lock()
-	defer s.pricingLoadMu.Unlock()
-	s.pricingLoad = nil
+	s.runtimeState().pricingLoadMu.Lock()
+	defer s.runtimeState().pricingLoadMu.Unlock()
+	s.runtimeState().pricingLoad = nil
 }
 
 // mergeDBPricing layers rows from the PG model_pricing table onto
@@ -206,12 +258,18 @@ func (s *Store) forgetPricingLoad() {
 func (s *Store) mergeDBPricing(
 	ctx context.Context, out map[string]export.ModelRates,
 ) (int, error) {
+	if s.readTx != nil {
+		present, err := pricingTablesPresent(ctx, s.pg, "model_pricing", "model_pricing_bands")
+		if err != nil || !present {
+			return 0, err
+		}
+	}
 	rows, err := s.pg.QueryContext(
 		ctx,
 		pgModelPricingSelect,
 	)
 	if err != nil {
-		if isUndefinedTable(err) {
+		if s.readTx == nil && isUndefinedTable(err) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("querying pg pricing: %w", err)
@@ -241,7 +299,7 @@ func (s *Store) mergeDBPricing(
 // model. Kept separate from loadPricingMap so unit tests can exercise
 // the override step without a live PostgreSQL connection.
 func (s *Store) applyCustomPricing(out map[string]export.ModelRates) {
-	for model, cp := range s.customPricing {
+	for model, cp := range s.runtimeState().customPricing {
 		rates := export.ModelRates{
 			InputPerMTok: money.Money{
 				Microdollars: cp.InputMicrodollarsPerMTok,
