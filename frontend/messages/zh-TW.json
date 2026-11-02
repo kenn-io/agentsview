@@ -97,6 +97,7 @@
   "header_actions_import_conversations": "匯入對話",
   "header_actions_import": "匯入",
   "header_actions_import_claude_syncing": "Claude.ai 同步正在執行。開啟匯入可查看進度或停止同步。",
+  "header_actions_import_chatgpt_syncing": "ChatGPT 同步正在執行。開啟匯入可查看進度或停止同步。",
   "header_actions_toggle_theme": "切換主題",
   "header_actions_settings": "設定",
   "header_actions_keyboard_shortcuts": "鍵盤快捷鍵",

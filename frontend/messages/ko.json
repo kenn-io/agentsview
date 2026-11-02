@@ -97,6 +97,7 @@
   "header_actions_import_conversations": "대화 가져오기",
   "header_actions_import": "가져오기",
   "header_actions_import_claude_syncing": "Claude.ai 동기화가 실행 중입니다. 가져오기를 열어 진행 상황을 확인하거나 중지하세요.",
+  "header_actions_import_chatgpt_syncing": "ChatGPT 동기화가 실행 중입니다. 가져오기를 열어 진행 상황을 확인하거나 중지하세요.",
   "header_actions_toggle_theme": "테마 전환",
   "header_actions_settings": "설정",
   "header_actions_keyboard_shortcuts": "키보드 단축키",

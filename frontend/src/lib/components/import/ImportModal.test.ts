@@ -84,7 +84,9 @@ it("disables Sync while checking, then shows the live connection", async () => {
 });
 
 it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure", async () => {
-  syncChatGPTChrome.mockRejectedValueOnce(new ApiError(0, "Sign in to ChatGPT, then Sync again", "chatgpt_auth_required"));
+  syncChatGPTChrome.mockRejectedValueOnce(
+    new ApiError(0, "Sign in to ChatGPT, then Sync again", "chatgpt_auth_required"),
+  );
   const open = vi.spyOn(window, "open").mockReturnValue(null);
   render(ImportModal, props());
   await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
@@ -92,9 +94,16 @@ it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure"
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
   expect(screen.getByText(m.import_chatgpt_signed_out())).toBeTruthy();
   expect(screen.queryByText(m.import_chatgpt_tab_note())).toBeNull();
-  expect(syncChatGPTChrome).toHaveBeenCalledWith(expect.objectContaining({ onProgress: expect.any(Function) }), expect.any(AbortSignal));
+  expect(syncChatGPTChrome).toHaveBeenCalledWith(
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
   await fireEvent.click(screen.getByRole("button", { name: m.import_chatgpt_signed_out() }));
-  expect(open).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/", "_blank", "noopener,noreferrer");
+  expect(open).toHaveBeenCalledExactlyOnceWith(
+    "https://chatgpt.com/",
+    "_blank",
+    "noopener,noreferrer",
+  );
   expect(syncClaudeAI).not.toHaveBeenCalled();
 });
 
@@ -499,6 +508,20 @@ it.each([new ApiError(503, "Temporarily unavailable"), new Error("Network interr
     expect(screen.queryByRole("alert")).toBeNull();
   },
 );
+
+it("clears a failed Sync when switching providers so Retry cannot cross providers", async () => {
+  syncClaudeAI.mockRejectedValueOnce(new Error("Claude.ai failed"));
+  render(ImportModal, props());
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("Claude.ai failed")).toBeTruthy());
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  await tick();
+  expect(screen.queryByText("Claude.ai failed")).toBeNull();
+  expect(screen.queryByRole("button", { name: m.shared_retry() })).toBeNull();
+  await clickSync();
+  expect(syncChatGPTChrome).toHaveBeenCalledOnce();
+  expect(syncClaudeAI).toHaveBeenCalledOnce();
+});
 
 it("localizes auth state from its code", async () => {
   void setLocale("fr", { reload: false });

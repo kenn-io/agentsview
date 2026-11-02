@@ -97,6 +97,7 @@
   "header_actions_import_conversations": "会話をインポートする",
   "header_actions_import": "インポート",
   "header_actions_import_claude_syncing": "Claude.ai の同期を実行中です。インポートを開くと、進行状況の確認や停止ができます。",
+  "header_actions_import_chatgpt_syncing": "ChatGPT の同期を実行中です。インポートを開くと、進行状況の確認や停止ができます。",
   "header_actions_toggle_theme": "テーマの切り替え",
   "header_actions_settings": "設定",
   "header_actions_keyboard_shortcuts": "キーボードショートカット",

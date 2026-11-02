@@ -99,6 +99,7 @@
   "header_actions_import_conversations": "Söhbətləri idxal et",
   "header_actions_import": "İdxal et",
   "header_actions_import_claude_syncing": "Claude.ai sinxronizasiyası işləyir. Gedişatı görmək və ya dayandırmaq üçün İdxal et pəncərəsini açın.",
+  "header_actions_import_chatgpt_syncing": "ChatGPT sinxronizasiyası işləyir. Gedişatı görmək və ya dayandırmaq üçün İdxal et pəncərəsini açın.",
   "header_actions_toggle_theme": "Temanı dəyişdir",
   "header_actions_settings": "Parametrlər",
   "header_actions_keyboard_shortcuts": "Klaviatura qısayolları",

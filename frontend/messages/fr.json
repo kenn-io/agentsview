@@ -97,6 +97,7 @@
   "header_actions_import_conversations": "Importer des conversations",
   "header_actions_import": "Importer",
   "header_actions_import_claude_syncing": "La synchronisation Claude.ai est en cours. Ouvrez Importer pour suivre la progression ou l'arrêter.",
+  "header_actions_import_chatgpt_syncing": "La synchronisation ChatGPT est en cours. Ouvrez Importer pour suivre la progression ou l'arrêter.",
   "header_actions_toggle_theme": "Changer de thème",
   "header_actions_settings": "Paramètres",
   "header_actions_keyboard_shortcuts": "Raccourcis clavier",

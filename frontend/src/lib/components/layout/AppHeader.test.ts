@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
   reportTelemetry: vi.fn(),
   syncClaudeAI: vi.fn(),
+  syncChatGPTChrome: vi.fn(),
 }));
 
 vi.mock("../../utils/telemetry.js", () => ({ reportTelemetry: mocks.reportTelemetry }));
@@ -15,6 +16,7 @@ vi.mock("../../api/client.js", () => ({
   downloadExport: mocks.downloadExport,
   getMarkdownExportUrl: mocks.getMarkdownExportUrl,
   syncClaudeAI: mocks.syncClaudeAI,
+  syncChatGPTChrome: mocks.syncChatGPTChrome,
 }));
 
 vi.mock("../../utils/clipboard.js", () => ({
@@ -124,23 +126,30 @@ describe("AppHeader export actions", () => {
     },
   );
 
-  it("marks the Import button while Claude.ai Sync runs with the dialog closed", async () => {
-    mocks.syncClaudeAI.mockReturnValue(new Promise(() => {}));
-    component = mount(AppHeader, { target: document.body });
-    await tick();
-    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
-    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
-    void claudeAISync.start("claude-ai", undefined, () => {});
-    await tick();
-    expect(importButton.getAttribute("aria-label")).toBe(
-      "Claude.ai Sync is running. Open Import to see progress or stop it.",
-    );
-    expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
-    claudeAISync.stop();
-    await tick();
-    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
-    expect(importButton.querySelector(".sync-spinner")).toBeNull();
-  });
+  it.each([
+    ["claude-ai", "Claude.ai"],
+    ["chatgpt", "ChatGPT"],
+  ] as const)(
+    "marks the Import button while %s Sync runs with the dialog closed",
+    async (provider, name) => {
+      mocks.syncClaudeAI.mockReturnValue(new Promise(() => {}));
+      mocks.syncChatGPTChrome.mockReturnValue(new Promise(() => {}));
+      component = mount(AppHeader, { target: document.body });
+      await tick();
+      const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
+      expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
+      void claudeAISync.start(provider, undefined, () => {});
+      await tick();
+      expect(importButton.getAttribute("aria-label")).toBe(
+        `${name} Sync is running. Open Import to see progress or stop it.`,
+      );
+      expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
+      claudeAISync.stop();
+      await tick();
+      expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
+      expect(importButton.querySelector(".sync-spinner")).toBeNull();
+    },
+  );
 
   it("copies markdown export link from export menu", async () => {
     component = mount(AppHeader, { target: document.body });

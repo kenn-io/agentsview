@@ -165,10 +165,10 @@
     error = null;
     untrack(() => {
       if (fileInput) fileInput.value = "";
+      // Sync is blocked while running, so any outcome here belongs to the
+      // previous provider.
       if (!claudeAISync.running) claudeAISync.dismiss();
       signInError = null;
-      chromeStatus = null;
-      chromeRefused = false;
     });
   });
 
