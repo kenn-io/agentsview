@@ -48,8 +48,13 @@ if [ -z "$dest" ]; then
   exit 1
 fi
 
-mkdir -p "$dest"
+mkdir -p "$dest/apprun-hooks"
 printf 'icon\n' > "$dest/AgentsView.png"
+printf '%s\n' \
+  'export GTK_PATH="$APPDIR//usr/lib/gtk-3.0"' \
+  "${TEST_HOOK_GDK_LINE-export GDK_BACKEND=x11 # Crash with Wayland backend on Wayland}" \
+  'export GIO_EXTRA_MODULES="$APPDIR/usr/lib/gio/modules"' \
+  > "$dest/apprun-hooks/linuxdeploy-plugin-gtk.sh"
 EOF
 chmod +x "$fake_bin/unsquashfs"
 
@@ -58,6 +63,7 @@ cat > "$fake_bin/mksquashfs" <<'EOF'
 set -euo pipefail
 
 printf 'patched-rootfs\n' > "$2"
+cp "$1/apprun-hooks/linuxdeploy-plugin-gtk.sh" "$TEST_HOOK_OUT"
 EOF
 chmod +x "$fake_bin/mksquashfs"
 
@@ -103,6 +109,9 @@ printf 'runtime hsqs old-rootfs\n' > "$appimage"
 chmod 0755 "$appimage"
 printf 'stale archive\n' > "$archive"
 
+hook_out="$tmp_root/hook.sh"
+
+TEST_HOOK_OUT="$hook_out" \
 TEST_ARCHIVE="$archive" \
 TAURI_SIGNING_PRIVATE_KEY="test-key" \
 PATH="$fake_bin:$PATH" \
@@ -125,4 +134,28 @@ assert_eq "$archived_mode" "-rwxr-xr-x" \
 assert_eq "$(cat "$signature")" "YWJjCg==" \
   "updater signature contains only the base64 public signature"
 
+# The hook must default to x11 yet honor a caller-provided GDK_BACKEND.
+grep -q '^export GDK_BACKEND="${GDK_BACKEND:-x11}" # Crash' "$hook_out" || {
+  echo "assertion failed: GDK_BACKEND hook not rewritten" >&2
+  exit 1
+}
+if grep -q '^export GDK_BACKEND=x11' "$hook_out"; then
+  echo "assertion failed: forced GDK_BACKEND=x11 still present" >&2
+  exit 1
+fi
+assert_eq "$(env -u GDK_BACKEND bash -c 'export GDK_BACKEND="${GDK_BACKEND:-x11}"; echo $GDK_BACKEND')" "x11" \
+  "unset GDK_BACKEND defaults to x11"
+assert_eq "$(GDK_BACKEND=wayland bash -c 'export GDK_BACKEND="${GDK_BACKEND:-x11}"; echo $GDK_BACKEND')" "wayland" \
+  "caller GDK_BACKEND=wayland is preserved"
+
+# A hook without the forced line means Tauri changed; fail instead of no-op.
+printf 'runtime hsqs old-rootfs\n' > "$appimage"
+if TEST_HOOK_GDK_LINE='# no forced backend' \
+  TEST_HOOK_OUT="$hook_out" \
+  TEST_ARCHIVE="$archive" \
+  PATH="$fake_bin:$PATH" \
+  bash "$SCRIPT_DIR/repair-appimage-diricon.sh" "$appimage" >/dev/null 2>&1; then
+  echo "assertion failed: missing forced GDK_BACKEND line should fail" >&2
+  exit 1
+fi
 echo "repair-appimage-diricon updater archive checks passed"

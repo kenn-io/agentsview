@@ -8,7 +8,7 @@ fi
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    echo "error: $1 is required to repair AppImage .DirIcon" >&2
+    echo "error: $1 is required to repair AppImage" >&2
     exit 1
   fi
 }
@@ -93,6 +93,31 @@ refresh_updater_archive() {
   fi
 }
 
+# Tauri's linuxdeploy GTK hook force-exports GDK_BACKEND=x11, which blocks
+# native Wayland and breaks hosts without XWayland. Make it a default so
+# `GDK_BACKEND=wayland ./AgentsView.AppImage` works while an unset variable
+# still selects x11.
+patch_gdk_backend_hook() {
+  local appdir="$1"
+  local hook="$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+
+  if [ ! -f "$hook" ]; then
+    echo "error: GTK apprun hook missing: $hook" >&2
+    exit 1
+  fi
+
+  if grep -q '^export GDK_BACKEND="${GDK_BACKEND:-x11}"' "$hook"; then
+    return 0
+  fi
+
+  if ! grep -q '^export GDK_BACKEND=x11' "$hook"; then
+    echo "error: forced GDK_BACKEND=x11 not found in $hook" >&2
+    exit 1
+  fi
+
+  sed -i 's/^export GDK_BACKEND=x11/export GDK_BACKEND="${GDK_BACKEND:-x11}"/' "$hook"
+}
+
 repair_one() {
   local appimage="$1"
 
@@ -125,6 +150,8 @@ repair_one() {
   cp "$appdir/AgentsView.png" "$appdir/.DirIcon"
   chmod 0644 "$appdir/.DirIcon"
 
+  patch_gdk_backend_hook "$appdir"
+
   head -c "$offset" "$appimage" > "$runtime"
   mksquashfs "$appdir" "$rootfs" -noappend -quiet >/dev/null
   cat "$runtime" "$rootfs" > "$patched"
@@ -134,7 +161,7 @@ repair_one() {
   mv "$patched" "$appimage"
 
   refresh_updater_archive "$appimage"
-  echo "Repaired AppImage .DirIcon: $appimage"
+  echo "Repaired AppImage (.DirIcon, GDK_BACKEND hook): $appimage"
 }
 
 for appimage in "$@"; do
