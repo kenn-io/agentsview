@@ -110,10 +110,69 @@ func TestCLIRecoverySelectorsIgnoreStringFlagValues(t *testing.T) {
 	}, hegel.WithTestCases(1000))
 }
 
-func TestCLIRecoveryNamespacedSyncAdvice(t *testing.T) {
-	cmd, _, err := newRootCommand().Find([]string{"session", "sync"})
+func TestCLIRecoveryGroupedCommandAdvice(t *testing.T) {
+	root := newRootCommand()
+	sessionSearch, _, err := root.Find([]string{"session", "search"})
 	require.NoError(t, err)
-	assert.NotContains(t, commandRecoveryHint(cmd), "--host")
+
+	semantic := &cliDiagnosticError{}
+	applyCLIRecovery(sessionSearch, db.ErrSemanticUnavailable, semantic)
+	assert.Equal(t, "unavailable", semantic.kind)
+	assert.Contains(t, semantic.hint, "agentsview index embeddings build")
+	assert.Contains(t, semantic.hint, "agentsview session search --help")
+	assert.Contains(t, semantic.hint, "--fts or --regex")
+
+	missingSession := &cliDiagnosticError{}
+	applyCLIRecovery(sessionSearch, errSessionNotFound, missingSession)
+	assert.Contains(t, missingSession.hint, "agentsview source sync")
+
+	sessionSync, _, err := root.Find([]string{"session", "sync"})
+	require.NoError(t, err)
+	assert.NotContains(t, commandRecoveryHint(sessionSync), "--host")
+
+	for _, tc := range []struct {
+		name   string
+		path   []string
+		want   string
+		reject string
+	}{
+		{name: "postgres", path: []string{"replica", "pg", "push"}, want: "AGENTSVIEW_PG_URL"},
+		{name: "duckdb", path: []string{"replica", "duckdb", "status"}, want: "AGENTSVIEW_DUCKDB_PATH"},
+		{name: "clickhouse", path: []string{"replica", "clickhouse", "status"}, want: "AGENTSVIEW_CLICKHOUSE_URL"},
+		{name: "raw sync", path: []string{"source", "raw", "status"}, want: "AGENTSVIEW_RAW_SYNC_URL"},
+		{name: "raw cleanup", path: []string{"source", "raw", "clean-uploads"}, want: "AGENTSVIEW_PG_URL", reject: "AGENTSVIEW_RAW_SYNC_URL"},
+		{name: "source sync", path: []string{"source", "sync"}, want: "[[remote_hosts]]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, err := root.Find(tc.path)
+			require.NoError(t, err)
+			hint := commandRecoveryHint(cmd)
+			assert.Contains(t, hint, tc.want)
+			if tc.reject != "" {
+				assert.NotContains(t, hint, tc.reject)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		path []string
+	}{
+		{name: "report stats", path: []string{"report", "stats"}},
+		{name: "report activity", path: []string{"report", "activity"}},
+		{name: "report usage", path: []string{"report", "usage", "daily"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, err := root.Find(tc.path)
+			require.NoError(t, err)
+			requestErr := &url.Error{Op: "Get", URL: "http://127.0.0.1:1", Err: errors.New("connection refused")}
+			d := &cliDiagnosticError{}
+			applyCLIRecovery(cmd, requestErr, d)
+			assert.Equal(t, "cannot reach server", d.display)
+			assert.Contains(t, d.hint, "agentsview daemon status")
+		})
+	}
+
 	hegel.Test(t, func(ht *hegel.T) {
 		name := "namespace-" + hex.EncodeToString([]byte(hegel.Draw(ht, hegel.Text())))
 		root := &cobra.Command{Use: "agentsview"}
@@ -154,11 +213,11 @@ func TestCLIRecoveryRemoteSentinelsHideURLSecrets(t *testing.T) {
 		assert.Equal(ht, 1, reportCLIError(err, &stderr))
 		assert.Empty(ht, stdout.String())
 		assert.Contains(ht, stderr.String(), "read-only")
+		assert.NotContains(ht, stderr.String(), "--host")
+		assert.NotContains(ht, stderr.String(), "daemon restart")
 		for _, part := range []string{"private-user-", "private-pass-", "private-path-", "private-token-", "/api/v1"} {
 			assert.NotContains(ht, stderr.String(), part)
 		}
-		assert.NotContains(ht, stderr.String(), "--host")
-		assert.NotContains(ht, stderr.String(), "daemon restart")
 	}, hegel.WithTestCases(1000))
 }
 

@@ -19,7 +19,7 @@ func newDBCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "db",
 		Short:   "Maintain the local archive",
-		GroupID: groupData,
+		GroupID: groupUsage,
 		Args:    cobra.NoArgs,
 	}
 	cmd.AddCommand(newDBCompactCommand())

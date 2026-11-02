@@ -22,8 +22,9 @@ import (
 func newSessionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "session",
+		Aliases:      []string{"sessions"},
 		Short:        "Programmatic access to session data",
-		GroupID:      groupData,
+		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

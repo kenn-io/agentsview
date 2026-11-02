@@ -17,6 +17,7 @@ import (
 func newSessionMessagesCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "messages <id>",
+		Aliases:      []string{"msgs"},
 		Short:        "Show a window of messages from a session",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,

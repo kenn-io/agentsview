@@ -102,16 +102,14 @@ func groupCommands(root *cobra.Command) {
 		markLegacyCommand(legacy, move.legacy, move.canonical)
 		legacy.Hidden = true
 	}
-	// This command already has its own JSON-only handler and deprecation notice.
-	// Keep it executable, but direct new clients to session usage --json.
+	// Keep this compatibility command visible and direct new clients to session
+	// usage --json.
 	tokenUse := directCLICommand(root, "token-use")
 	if tokenUse == nil {
 		panic("missing legacy CLI command: token-use")
 	}
-	tokenUse.Hidden = true
+	tokenUse.Hidden = false
 	tokenUse.Annotations = map[string]string{legacyCommandAnnotation: "session usage"}
-	tokenUse.Long = "Deprecated: use 'agentsview session usage ID --json'.\n" +
-		"This spelling retains its JSON-only output and existing exit codes."
 }
 
 func directCLICommand(parent *cobra.Command, name string) *cobra.Command {
@@ -192,6 +190,9 @@ func markLegacyCommand(cmd *cobra.Command, legacy, replacement string) {
 }
 
 func guardLocalPruneFlags(cmd *cobra.Command) {
+	markOmittedCommonFlagsForHelp(
+		cmd, "server", "server-token-file", "pg", "json", "format",
+	)
 	cmd.Long = "Prune sessions from the local archive using the selected filters.\n" +
 		"Use --dry-run to inspect the selection. Remote and output-format flags\n" +
 		"inherited from session are not supported by this local maintenance action."

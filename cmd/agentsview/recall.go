@@ -28,7 +28,7 @@ func newRecallCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "recall",
 		Short:        "Build and inspect recalled knowledge from past sessions",
-		GroupID:      groupData,
+		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

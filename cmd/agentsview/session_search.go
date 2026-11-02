@@ -34,6 +34,7 @@ func newSessionSearchCommand() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:          "search <pattern>",
+		Aliases:      []string{"find"},
 		Short:        "Search message and tool content across sessions",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,

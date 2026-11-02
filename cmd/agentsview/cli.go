@@ -91,10 +91,10 @@ func newRootCommand() *cobra.Command {
 		},
 	}
 	root.AddGroup(
-		&cobra.Group{ID: groupCore, Title: "Core Commands:"},
-		&cobra.Group{ID: groupData, Title: "Data Commands:"},
-		&cobra.Group{ID: groupUsage, Title: "Usage Commands:"},
-		&cobra.Group{ID: groupMeta, Title: "Other Commands:"},
+		&cobra.Group{ID: groupCore, Title: "Sessions, projects, and sources:"},
+		&cobra.Group{ID: groupData, Title: "Servers, mirrors, and indexes:"},
+		&cobra.Group{ID: groupUsage, Title: "Reports, usage, and archive:"},
+		&cobra.Group{ID: groupMeta, Title: "Tools and integrations:"},
 	)
 	root.SetCompletionCommandGroupID(groupMeta)
 	root.SetHelpCommandGroupID(groupMeta)
@@ -150,6 +150,8 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newRemoteSyncCommand())
 	groupCommands(root)
 
+	applyCLIHelp(root)
+
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		if cmd == root {
@@ -183,7 +185,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 			"If a compatible server is already running, serve reports its URL and exits\n" +
 			"with status 1 so a service manager retries; --background exits with status 0.\n" +
 			"Stopping the server also stops its background sync and file watchers.",
-		GroupID:      groupCore,
+		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -507,8 +509,10 @@ func newUpdateCommand() *cobra.Command {
 func newTokenUseCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "token-use <session-id>",
-		Short:        "Show token usage for a session (JSON)",
-		GroupID:      groupData,
+		Short:        "Show session token usage as JSON (deprecated; use session usage)",
+		Long:         "Deprecated: use 'agentsview session usage ID --json'.\nThis spelling retains its JSON-only output and existing exit codes.",
+		Example:      "  agentsview token-use <id>",
+		GroupID:      groupUsage,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -890,9 +894,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	renderRootUsage(w, root)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, rootAgentGuide)
 	renderRootCommands(w, root)
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Run 'agentsview <command> --help' to discover actions in a domain.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprint(w, root.Flags().FlagUsagesWrapped(flagHelpWidth(w)))
@@ -926,6 +929,14 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CODEBUDDY_DIR           CodeBuddy data directory")
 	fmt.Fprintln(w, "  PIEBALD_DIR             Piebald data directory")
 	fmt.Fprintln(w, "  AGENTSVIEW_DATA_DIR     Data directory (database, config)")
+	fmt.Fprintln(w, "  AGENTSVIEW_NO_DAEMON    Disable automatic daemon startup/replacement")
+	fmt.Fprintln(w, "  AGENTSVIEW_SERVER_TOKEN Bearer token for explicit --server requests")
+	fmt.Fprintln(w, "  AGENTSVIEW_AUTH_TOKEN   Bearer token for the local daemon and its clients")
+	fmt.Fprintln(w, "  AGENTSVIEW_MODE         Deployment default: serve or pg-serve")
+	fmt.Fprintln(w, "  AGENTSVIEW_AUTH_TOKEN_FILE")
+	fmt.Fprintln(w, "                          Daemon token file in deployment mode")
+	fmt.Fprintln(w, "  AGENTSVIEW_HOST, AGENTSVIEW_REQUIRE_AUTH, AGENTSVIEW_NO_BROWSER")
+	fmt.Fprintln(w, "                          Listener defaults when AGENTSVIEW_MODE is set")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_MACHINE   Machine name for PG sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_SCHEMA    PG schema name (default \"agentsview\")")

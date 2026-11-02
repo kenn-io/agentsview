@@ -41,7 +41,7 @@ func newInsightCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "insight",
 		Short:        "Generate and inspect stored Activity Insights",
-		GroupID:      groupData,
+		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

@@ -17,6 +17,7 @@ import (
 func newSessionToolCallsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "tool-calls <id>",
+		Aliases:      []string{"tools"},
 		Short:        "List tool calls made during a session",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,

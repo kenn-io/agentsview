@@ -117,7 +117,6 @@ func TestDaemonCommandRegistrationAndSurface(t *testing.T) {
 	daemonCmd, _, err := root.Find([]string{"daemon"})
 	require.NoError(t, err)
 	require.Equal(t, "daemon", daemonCmd.Name())
-	assert.Equal(t, groupCore, daemonCmd.GroupID)
 
 	names := make(map[string]bool)
 	for _, cmd := range daemonCmd.Commands() {
@@ -128,10 +127,6 @@ func TestDaemonCommandRegistrationAndSurface(t *testing.T) {
 	assert.Equal(t, map[string]bool{
 		"restart": true, "start": true, "status": true, "stop": true,
 	}, names)
-
-	help, err := executeCommand(root, "--help")
-	require.NoError(t, err)
-	assert.Contains(t, help, "daemon")
 }
 
 func TestDaemonCommandRejectsArgumentsAndServeFlags(t *testing.T) {

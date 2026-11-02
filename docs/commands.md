@@ -1,8 +1,25 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-03
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
+
+## Start from help
+
+On `main` (unreleased), `agentsview --help` includes a numbered workflow for
+syncing sources, finding sessions, reading transcripts, and checking usage.
+It explains session IDs, backend selection, output streams, exit codes, and
+environment variables. Run `agentsview source list --json` for the provider
+catalog, built-in source locations, and environment override names. It does not
+resolve configured directory arrays. Run `agentsview openapi` for the API schema.
+
+Use `agentsview session --help` for common backend and output flags; leaf help
+lists inherited flag names and points to the parent that explains them. Core
+commands include examples and describe their limits.
+
+The session group also accepts `sessions`. Its aliases are `ls` for `list`,
+`show` and `info` for `get`, `find` for `search`, `msgs` for `messages`, and
+`tools` for `tool-calls`.
 
 ## Recover from CLI errors
 
@@ -26,8 +43,9 @@ reports, transcript streams, and API response formats keep their existing
 formats on stdout.
 
 If a session is missing, copy a canonical ID from
-`agentsview session list --json`. For a new session, run `agentsview sync` on
-the archive host. If autostart is disabled with `AGENTSVIEW_NO_DAEMON=1`, run
+`agentsview session list --json`. For a new session, run
+`agentsview source sync` on the archive host. If autostart is disabled with
+`AGENTSVIEW_NO_DAEMON=1`, run
 `agentsview daemon start` before retrying a daemon read. An explicit remote
 `--server` needs that host's URL and token, supplied through
 `--server-token-file` or `AGENTSVIEW_SERVER_TOKEN`.
@@ -70,9 +88,11 @@ below.
 ### Command migration
 
 Related actions now share a noun. Existing command names continue to work for
-at least one release. They are hidden from root help and completion, and an
-invoked legacy action prints its replacement on stderr. Flags, arguments,
-stdout documents, exit codes, HTTP routes, and MCP tools keep their behavior.
+at least one release. Legacy names are hidden from root help and completion
+except for the visible, deprecated `token-use`, which points to
+`session usage ID --json`. An invoked legacy action prints its replacement
+on stderr. Flags, arguments, stdout documents, exit codes, HTTP routes, and
+MCP tools keep their behavior.
 Daemon, SSH sync, browser host, and parser child protocols keep their existing
 launch paths.
 

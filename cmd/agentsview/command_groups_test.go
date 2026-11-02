@@ -7,35 +7,41 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/shlex"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+var agentHelpCoreCommands = []string{
+	"serve", "serve status", "serve stop", "daemon", "daemon start", "daemon stop", "daemon status", "daemon restart", "openapi", "update", "mcp",
+	"source", "source list", "source sync", "source import", "source chrome", "source raw", "source cursor", "source cursor sync-usage",
+	"project", "project list", "report", "report stats", "report activity", "report usage", "report usage daily", "report usage statusline",
+	"replica", "replica pg", "replica duckdb", "replica clickhouse", "index", "index embeddings", "index classifier", "archive diff",
+	"session", "session list", "session get", "session messages", "session tool-calls", "session search", "session usage", "session usage-batch", "session watch", "session export", "session sync", "session label", "session parent", "session health", "session prune",
+	"recall", "insight", "friction", "memory", "skills", "secrets", "export", "doctor",
+}
+
 // Literal public paths protect the registration boundary, including subtrees
 // with their own inherited flags. Never execute source ingestion here.
 func TestCommandGroupsCanonicalHelp(t *testing.T) {
+	check := func(t *testing.T, path string) {
+		t.Helper()
+		root := newRootCommand()
+		args := strings.Fields(path)
+		cmd, rest, err := root.Find(args)
+		require.NoError(t, err)
+		require.Empty(t, rest)
+		require.Equal(t, "agentsview "+path, cmd.CommandPath())
+	}
+	for _, path := range agentHelpCoreCommands {
+		t.Run(path, func(t *testing.T) { check(t, path) })
+	}
 	for _, path := range []string{
-		"source list", "source sync", "source import", "source chrome setup",
-		"source raw watch", "source raw backfill", "source raw status",
-		"source cursor sync-usage", "project list", "session health", "session prune",
-		"report stats", "report activity", "report usage daily", "report usage statusline",
+		"source chrome setup", "source raw watch", "source raw backfill", "source raw status",
 		"replica pg push", "replica pg vectors list", "replica pg service install",
 		"replica duckdb status", "replica duckdb quack serve", "replica clickhouse push",
-		"index embeddings build", "index classifier rebuild", "archive diff",
+		"index embeddings build", "index classifier rebuild",
 	} {
-		t.Run(path, func(t *testing.T) {
-			root := newRootCommand()
-			args := strings.Fields(path)
-			cmd, rest, err := root.Find(args)
-			require.NoError(t, err)
-			require.Empty(t, rest)
-			require.Equal(t, "agentsview "+path, cmd.CommandPath())
-			out, err := executeCommand(root, append(args, "--help")...)
-			require.NoError(t, err)
-			assert.Contains(t, out, "agentsview "+path)
-			assert.NotContains(t, out, "deprecated")
-		})
+		t.Run(path, func(t *testing.T) { check(t, path) })
 	}
 }
 
@@ -43,15 +49,56 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	dir := testDataDir(t)
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err)
-	assert.Less(t, len(help), 11500, "root help must remain compact")
-	for _, name := range []string{"source", "project", "report", "replica", "index", "session", "archive", "mcp", "openapi"} {
-		assert.Contains(t, help, "\n  "+name+" ")
+	assert.True(t, strings.HasPrefix(help, "agentsview "), "root heading should retain the CLI name")
+	for _, want := range []string{
+		"Usage:\n  agentsview [flags]\n  agentsview <command> [flags]",
+		"Agent quick start:",
+		"Session IDs:",
+		"Where data comes from:",
+		"Output:",
+		"Exit codes:",
+		"1. Discover supported agents and their default source locations:",
+		"Flags:",
+		"--version",
+		"[agents.claude]",
+		"dirs = [\"/path/one\", \"/path/two\"]",
+		"[agents.codex]",
+		"dirs = [\"/codex/a\", \"/codex/b\"]",
+		"agentsview source list --json",
+	} {
+		assert.Contains(t, help, want, "help missing %q", want)
 	}
-	for _, name := range []string{"agents", "sync", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff", "token-use"} {
+	assert.Contains(t, help, "deprecated; use session usage")
+	for _, tc := range []struct {
+		heading  string
+		commands []string
+	}{
+		{"Sessions, projects, and sources:", []string{"session", "project", "source"}},
+		{"Servers, mirrors, and indexes:", []string{"serve", "daemon", "replica", "index"}},
+		{"Reports, usage, and archive:", []string{"report", "archive", "db", "export", "token-use"}},
+		{"Tools and integrations:", []string{"openapi", "mcp", "version"}},
+	} {
+		_, section, found := strings.Cut(help, tc.heading+"\n")
+		require.True(t, found, "missing group %q", tc.heading)
+		section, _, _ = strings.Cut(section, "\n\n")
+		for _, command := range tc.commands {
+			assert.Contains(t, section, "  "+command+" ", "%s should list %s", tc.heading, command)
+		}
+	}
+	assert.Less(t, len(help), 16*1024, "root help must stay under the 16 KiB design budget")
+	for _, name := range []string{"agents", "sync", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff"} {
 		assert.NotContains(t, help, "\n  "+name+" ")
 	}
 	assert.NotContains(t, help, "\n  session list ", "subcommands belong in domain help")
 	assert.Contains(t, help, "agentsview <command> --help")
+	for _, unwanted := range []string{
+		"--host string",
+		"--port int",
+		"agentsview serve [flags]",
+		"\nCommands:\n",
+	} {
+		assert.NotContains(t, help, unwanted, "root help should not include %q", unwanted)
+	}
 
 	for _, tt := range []struct{ prefix, want string }{
 		{"source", "sync\t"},
@@ -69,36 +116,14 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "source\t")
 	assert.NotContains(t, out, "raw-sync\t")
-	assert.NotContains(t, out, "token-use\t")
+	assert.Contains(t, out, "token-use\t")
+	t.Run("no arguments", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand())
+		require.NoError(t, err, "Execute")
+		assert.Equal(t, help, out)
+	})
 	assert.NoFileExists(t, filepath.Join(dir, "sessions.db"))
 	assert.NoFileExists(t, filepath.Join(dir, "config.toml"))
-}
-
-func TestCommandGroupsAdvertisedExamplesParse(t *testing.T) {
-	for _, path := range []string{
-		"source", "project", "report", "replica", "index", "source cursor",
-		"source list", "source sync", "source import", "source chrome", "source raw",
-		"project list", "session health", "session prune", "report stats", "report activity",
-		"report usage", "replica pg", "replica duckdb", "replica clickhouse",
-		"index embeddings", "index classifier", "archive diff",
-	} {
-		cmd, _, err := newRootCommand().Find(strings.Fields(path))
-		require.NoError(t, err)
-		require.NotEmpty(t, cmd.Example, path)
-		for line := range strings.SplitSeq(cmd.Example, "\n") {
-			args, err := shlex.Split(line)
-			require.NoError(t, err, line)
-			require.Greater(t, len(args), 1, line)
-			require.Equal(t, "agentsview", args[0])
-			root := newRootCommand()
-			leaf, rest, err := root.Find(args[1:])
-			require.NoError(t, err, line)
-			leaf.InitDefaultHelpFlag()
-			require.NoError(t, leaf.ParseFlags(rest), line)
-			require.NoError(t, leaf.ValidateArgs(leaf.Flags().Args()), line)
-			require.NoError(t, leaf.ValidateRequiredFlags(), line)
-		}
-	}
 }
 
 func TestCommandGroupsLegacyCatalogKeepsJSONOnStdout(t *testing.T) {

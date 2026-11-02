@@ -65,39 +65,6 @@ func executeCommandC(root *cobra.Command, args ...string) (*cobra.Command, strin
 	return cmd, buf.String(), err
 }
 
-func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"Usage:\n  agentsview [flags]\n  agentsview <command> [flags]",
-		"Core Commands:",
-		"Data Commands:",
-		"Usage Commands:",
-		"Other Commands:",
-		"serve                  Start the web UI and sync server",
-		"replica                Sync and serve database replicas",
-		"source                 Discover and ingest session sources",
-		"report                 Report activity, usage, and workspace statistics",
-		"index                  Build and manage derived search indexes",
-		"completion             Generate the autocompletion script for the specified shell",
-		"Flags:",
-		"--version",
-		"[agents.claude]",
-		"dirs = [\"/path/one\", \"/path/two\"]",
-		"[agents.codex]",
-		"dirs = [\"/codex/a\", \"/codex/b\"]",
-	} {
-		assert.Contains(t, help, want, "help missing %q", want)
-	}
-	for _, unwanted := range []string{
-		"--host string",
-		"--port int",
-	} {
-		assert.NotContains(t, help, unwanted,
-			"root help should not include serve flag %q", unwanted)
-	}
-}
-
 func TestPruneCommandAgentFilter(t *testing.T) {
 	var got []PruneConfig
 	cmd := newPruneCommandWithRunner(func(ctx context.Context, cfg PruneConfig) {
@@ -223,34 +190,6 @@ func TestServeCheckDataVersionDoesNotCreateConfig(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(dataDir, "config.toml"))
 	require.ErrorIs(t, statErr, os.ErrNotExist,
 		"preflight must not create config.toml")
-}
-
-func TestRootNoArgsShowsHelp(t *testing.T) {
-	out, err := executeCommand(newRootCommand())
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"Usage:\n  agentsview [flags]\n  agentsview <command> [flags]",
-		"Core Commands:",
-		"serve                  Start the web UI and sync server",
-	} {
-		assert.Contains(t, out, want, "output missing %q", want)
-	}
-}
-
-func TestRootHelpKeepsSummaryClean(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	for _, unwanted := range []string{
-		"agentsview serve [flags]",
-		"\nCommands:\n",
-		"completion bash",
-		"completion fish",
-		"completion powershell",
-		"completion zsh",
-	} {
-		assert.NotContains(t, help, unwanted,
-			"root help should not include %q", unwanted)
-	}
 }
 
 func TestNormalizeFlagHelpWidth(t *testing.T) {

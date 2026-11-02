@@ -26,7 +26,7 @@ func newCaptureCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "capture",
 		Short:        "Capture one non-interactive agent execution",
-		GroupID:      groupUsage,
+		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

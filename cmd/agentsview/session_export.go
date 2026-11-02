@@ -17,9 +17,9 @@ import (
 )
 
 func newSessionExportCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:          "export <id>",
-		Short:        "Stream the raw source JSONL for a session (local only)",
+		Short:        "Export provider-specific source content for a local session",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -203,6 +203,8 @@ func newSessionExportCommand() *cobra.Command {
 			return err
 		},
 	}
+	markOmittedCommonFlagsForHelp(cmd, "format", "json", "pg", "server", "server-token-file")
+	return cmd
 }
 
 func rawAiderSessionID(sessionID string) (string, bool) {
