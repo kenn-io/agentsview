@@ -13,9 +13,10 @@ import (
 )
 
 func TestReconcileProviderHistoryLazyContent(t *testing.T) {
+	const fingerprint = `opencode-storage:v1:{"messages":[{"id":"message-1","time":1,"hash":"old"}]}`
 	storedPath := "/synthetic/storage/session/session-1.json"
 	stored := ingest.PriorSession{
-		Session:  db.Session{SessionName: new("retained title"), GroupKey: "retained group", FilePath: &storedPath},
+		Session:  db.Session{SessionName: new("retained title"), GroupKey: "retained group", FilePath: &storedPath, FileHash: new(fingerprint)},
 		Messages: []db.Message{{Ordinal: 0, Role: "assistant", SourceUUID: "message-1", Content: "complete answer", ContentLength: len("complete answer")}},
 	}
 	candidate := func(agent parser.AgentType, messages bool) ingest.Candidate {
@@ -46,6 +47,7 @@ func TestReconcileProviderHistoryLazyContent(t *testing.T) {
 		{"empty cline", candidate(parser.AgentCline, false), 1},
 		{"copilot archive", candidate(parser.AgentVSCopilot, false), 1},
 		{"opencode archive", openCodeHistoryCandidate("", "short"), 1},
+		{"opencode complete fingerprint", openCodeHistoryCandidate(fingerprint, "short"), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eager, err := ingest.ReconcileProviderHistory(t.Context(), tc.candidate, &stored, ingest.ContentOptions{})
