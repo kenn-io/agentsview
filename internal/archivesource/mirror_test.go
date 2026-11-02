@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/storage"
@@ -28,6 +29,10 @@ func TestAttachedArchiveMirrorKeepsOriginalMachine(t *testing.T) {
 	defer manager.Close()
 	require.NoError(t, drainError(manager, t.Context(), nil))
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	// Avoid copying the full fallback pricing table on every push.
+	require.NoError(t, receiver.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "duckdb-test-seed",
+	}}))
 	result, err := duckdb.Push(t.Context(), path, receiver, "receiver", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)

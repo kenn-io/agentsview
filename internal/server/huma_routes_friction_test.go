@@ -359,6 +359,10 @@ func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
 	}
 	te := setup(t)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	// Avoid copying the full fallback pricing table on every push.
+	require.NoError(t, te.db.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "duckdb-test-seed",
+	}}))
 	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	store, err := duckdb.NewStore(t.Context(), path)
