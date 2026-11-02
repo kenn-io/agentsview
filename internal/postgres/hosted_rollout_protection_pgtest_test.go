@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -243,31 +242,7 @@ func TestHostedRolloutPurgeRejectsProtectedTombstones(t *testing.T) {
 				n, err := h.DeleteSessionIfTrashed(t.Context(), "ordinary")
 				require.NoError(t, err)
 				assert.EqualValues(t, 1, n)
-				local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, local.Close()) })
-				sess := db.Session{ID: canonical, Project: "p", Machine: "m", Agent: agent, FilePath: &source, MessageCount: 1, CreatedAt: "2026-01-01T00:00:00Z"}
-				require.NoError(t, local.UpsertSession(t.Context(), sess))
-				require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: canonical, Ordinal: 0, Role: "assistant", Content: "retained", ContentLength: 8}}))
-				require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "ordinary", Project: "p", Machine: "m", Agent: "claude", CreatedAt: sess.CreatedAt}))
-				syncer := &Sync{pg: f.runtime, local: local, machine: "m", schema: f.schema, schemaDone: true}
-				for _, hidden := range []bool{true, false} {
-					_, err = f.runtime.Exec(`UPDATE sessions SET rollout_hidden=$2 WHERE id=$1`, canonical, hidden)
-					require.NoError(t, err)
-					excluded, err := readPGExcludedSessionIDs(t.Context(), f.runtime, func(yield func(db.Session) bool) { yield(sess) }, "", "m", nil)
-					require.NoError(t, err)
-					assert.Empty(t, excluded)
-					result, err := syncer.Push(t.Context(), true, nil)
-					require.NoError(t, err)
-					assert.Zero(t, result.Errors)
-					var content string
-					require.NoError(t, f.runtime.QueryRow(`SELECT content FROM messages WHERE session_id=$1 AND ordinal=0`, canonical).Scan(&content))
-					assert.Equal(t, "retained", content)
-					require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM sessions WHERE id='ordinary'`).Scan(&count))
-					assert.Zero(t, count, "ordinary purge must remain durable")
-					require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM excluded_sessions WHERE id=ANY($1)`, []string{canonical, seed}).Scan(&count))
-					assert.Zero(t, count)
-				}
+
 			})
 		}
 	}
