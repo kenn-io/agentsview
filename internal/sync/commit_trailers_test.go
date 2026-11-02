@@ -73,7 +73,8 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 		assert.NotContains(t, string(traced), "log --all")
 	}
 	// This checkout's commit predates every scan of the first checkout.
-	late := t.TempDir()
+	late, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	runGit(late, "init", "-q", "-b", "main")
 	runGit(late, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Older\n\nAgent-Session: codex:older")
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:older", Agent: "codex", Project: "project-a", Machine: "local", Cwd: late}))
@@ -114,7 +115,8 @@ func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 	testutil.IsolateGit(t)
 	database := openTestDB(t)
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	first := filepath.Join(root, "a-first")
 	later := filepath.Join(root, "z-later")
 	for _, repo := range []string{first, later} {
