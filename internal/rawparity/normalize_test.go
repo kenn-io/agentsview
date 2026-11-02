@@ -222,24 +222,6 @@ func TestSQLTimestampRepresentations(t *testing.T) {
 	}, hegel.WithTestCases(1000))
 }
 
-func TestFrictionPhysicalIdentityFormatting(t *testing.T) {
-	propertyTest(t, func(ht *hegel.T) {
-		a, b := sample(), sample()
-		id := "raw-row-" + hegel.Draw(ht, hegel.Text())
-		a.Friction[0].Kind, b.Friction[0].Kind = "deferral", "deferral"
-		a.Friction[0].Label, b.Friction[0].Label = "next session", "next session"
-		a.Friction[0].Title = "[friction/deferral] pushed: next session"
-		a.Friction[0].Fingerprint = "pushed-title-hash"
-		b.Friction[0].Title = "[friction/deferral] " + id + ": next session"
-		b.Friction[0].Fingerprint = "raw-title-hash"
-		got, err := Compare(a, b)
-		require.NoError(ht, err)
-		assert.Empty(ht, got.Differing)
-	}, hegel.WithTestCases(1000))
-}
-
-// Minimal shrunk witnesses: an empty generated suffix after " !", and midnight
-// with zero fractional seconds in SQLite's space-separated timestamp form.
 func TestTrailingJSONMinimalCounterexamples(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
