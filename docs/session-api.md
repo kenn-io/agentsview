@@ -1534,8 +1534,8 @@ Transcript links require a `git commit` invocation, allowing Git global options,
 or a helper's `["git", "commit", ...]` argument list, and Git's commit summary
 in the call's stored output. Codex output received through a later `write_stdin`
 poll links to the original commit call when its process ID matches. Polls with
-no originating commit call produce no links. Each session records a SHA once, at
-its first matching call.
+no originating commit call produce no links. Each session records a SHA once,
+at its first matching call.
 
 Quiet commits link only when the same call prints exactly one SHA through
 `git rev-parse HEAD` or `git log -1 --oneline`, including the equivalent
@@ -1574,8 +1574,7 @@ under every archive policy.
 
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other
-sources, such as tags and stash, leave it empty. Git does not record which
-branch originally created a commit.
+sources, such as tags and stash, leave it empty.
 
 The suggested `turn` is the last real user prompt in transcript order with a
 usable timestamp at or before commit time plus five minutes. It carries

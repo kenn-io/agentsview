@@ -1923,8 +1923,7 @@ agentsview session parent <id> <parent>  # record the launching session
 ```
 
 `agentsview session commits <id>` lists transcript and Git trailer commits linked
-to a session. The `SOURCE` column distinguishes `transcript` from `trailer`.
-Trailer links use a full SHA, committer time, and a heuristic prompt. Use
+to a session. The `SOURCE` column distinguishes `transcript` from `trailer`. Use
 `--format json` for structured output. The table shows the session, exact message
 ordinal, call index, tool-use ID, time, source, recorded SHA, branch, subject, and
 preceding user turn, shortened to 100 terminal columns. Trashed or permanently

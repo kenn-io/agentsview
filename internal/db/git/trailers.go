@@ -23,25 +23,17 @@ var trailerSHARE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 // RefsFingerprint returns both the fingerprint and its reachable tips for the
 // next incremental scan. An unborn repository has neither.
 func RefsFingerprint(ctx context.Context, repo string) (string, []string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	runner := gitcmd.New()
-	runner.StdoutLimit = 32 << 20
-	out, stderr, err := runner.Run(ctx, repo, nil, "show-ref", "--head")
+	out, stderr, err := gitcmd.New().Run(ctx, repo, nil, "show-ref", "--head")
+	if gitcmd.IsExitCode(err, 1) {
+		return "", nil, nil
+	}
 	if err != nil {
-		if gitcmd.IsExitCode(err, 1) && len(out) == 0 && len(stderr) == 0 && ctx.Err() == nil {
-			return "", nil, nil
-		}
 		return "", nil, fmt.Errorf("git show-ref: %w: %s", err, stderr)
 	}
-	tips := []string{}
-	seen := map[string]bool{}
+	var tips []string
 	for line := range strings.Lines(string(out)) {
 		sha, _, _ := strings.Cut(line, " ")
-		if trailerSHARE.MatchString(sha) && !seen[sha] {
-			tips = append(tips, sha)
-			seen[sha] = true
-		}
+		tips = append(tips, sha)
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(out)), tips, nil
 }
@@ -59,13 +51,13 @@ func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]
 	}
 	args := []string{"log", "--all", "--stdin", "--source", "-E", "--grep=^Agent-Session:", "--format=%H%x1f%cI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
 	out, stderr, err := runner.Run(ctx, repo, strings.NewReader(revisions), args...)
-	if err != nil && len(previous) > 0 && strings.Contains(string(stderr), "bad object") {
+	if err != nil && strings.Contains(string(stderr), "bad object") {
 		out, stderr, err = runner.Run(ctx, repo, nil, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("git trailer log: %w: %s", err, stderr)
 	}
-	commits := []TrailerCommit{}
+	var commits []TrailerCommit
 	for _, record := range strings.Split(string(out), "\x1d") {
 		fields := strings.Split(strings.TrimSpace(record), "\x1f")
 		if len(fields) != 5 || !trailerSHARE.MatchString(fields[0]) {
@@ -78,7 +70,6 @@ func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]
 			}
 		}
 		for _, value := range strings.Split(fields[4], "\x1e") {
-			value = strings.TrimSpace(value)
 			if trailerValueRE.MatchString(value) {
 				c.Sessions = append(c.Sessions, value)
 			}

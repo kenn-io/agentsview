@@ -47,9 +47,6 @@ func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) {
 		paths[key] = identity.rootPath
 	}
 	for _, repo := range slices.Sorted(maps.Keys(paths)) {
-		if ctx.Err() != nil {
-			return
-		}
 		if err := e.reconcileRepositoryTrailers(ctx, repo, paths[repo]); err != nil {
 			log.Printf("commit trailers in %s: %v", repo, err)
 		}
