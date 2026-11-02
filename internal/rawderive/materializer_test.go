@@ -170,6 +170,7 @@ func TestMaterializerEnforcesAggregateLimitBeforeOpeningObjects(t *testing.T) {
 		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: int64(len(data) - 1),
 	}).Materialize(t.Context(), manifest)
 	require.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, ErrSizeLimit)
 	assert.Empty(t, store.opened)
 }
 

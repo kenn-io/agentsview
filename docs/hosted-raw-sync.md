@@ -214,14 +214,20 @@ thread creation. No external sandbox helper is required.
 | Attempts per selected generation             | Default 5; maximum 10; 6 / 11 after interruption |
 | Retry backoff                                | Exponential from 1 second, capped at 60 seconds |
 | Lease / heartbeat                            | 60 seconds / 10 seconds                         |
-| Materialized source bytes                    | 512 MiB                                         |
-| Parser stdout / stderr                       | 32 MiB / 64 KiB                                 |
-| Child address space / data                   | 2 GiB / 512 MiB                                 |
+| Materialized source bytes                    | 1 GiB                                           |
+| Parser stdout / stderr                       | 512 MiB / 64 KiB                                |
+| Child address space / data                   | 4 GiB / 1 GiB                                   |
+| Child Go memory target                      | 768 MiB                                         |
 | Child CPU / open descriptors                 | 30 seconds / 64                                 |
 | Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                          |
 
 Custody may accept files larger than the materialization limit. Such captures
-remain retained but cannot be projected by this worker. Accepted source bytes
+remain retained but cannot be projected by this worker. Materialization or
+parser-output byte-limit rejection fails that selected generation immediately
+with a `size_limit` diagnostic. Other failures retain bounded retries. Streaming
+the parser result avoids a separate complete JSON buffer; the parser, hosting
+process and projection still retain normalized content in memory. The child
+memory limits do not bound the hosting process. Accepted source bytes
 are untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
@@ -289,8 +295,9 @@ and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version or the Friction Log
-rules, schedule current heads explicitly in bounded batches:
+After an executable upgrade changes the parser data version, Friction Log
+rules or hosted parser runtime version, schedule current heads explicitly in
+bounded batches:
 
 ```bash
 agentsview pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
@@ -301,6 +308,8 @@ selects at most 1–256 heads and atomically saves its keyset checkpoint. The ru
 ID is bound to the executable's processing version. Equal manifest/version
 selection is idempotent: a new run ID does not resurrect completed or exhausted
 jobs for that same selection. Startup and idle polls perform no reparse scan.
+Use a new run ID after the processing version changes; an earlier run is bound
+to its original version. Upgrading alone does not reselect retained failures.
 
 After fixing the cause of a failed job, give it a fresh attempt budget:
 

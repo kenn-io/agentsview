@@ -41,7 +41,7 @@ func (s *RawProjectionStore) ExcludeTrashedSession(ctx context.Context, alias st
 	if err != nil {
 		return false, err
 	}
-	changes, err := s.materializeGroup(ctx, tx, target.GroupID)
+	changes, err := s.materializeGroup(ctx, tx, target.GroupID, nil)
 	if err != nil {
 		return false, err
 	}
@@ -107,7 +107,7 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 			count++
 		}
 		if len(ids) > 0 {
-			changes, err := s.materializeGroup(ctx, tx, group)
+			changes, err := s.materializeGroup(ctx, tx, group, nil)
 			if err != nil {
 				return 0, err
 			}

@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -10,17 +11,18 @@ import (
 )
 
 func shouldPreserveOpenCodeFormatArchive(
+	ctx context.Context,
 	agent parser.AgentType,
 	candidate Candidate,
-	prior PriorSession,
+	prior *PriorSession,
 	options ContentOptions,
-) bool {
+) (bool, error) {
 	path := candidate.Parsed.Session.File.Path
 	if path == "" {
 		path = derefString(candidate.Session.FilePath)
 	}
 	if IsClaudeFormatTranscript(agent, path) {
-		return false
+		return false, nil
 	}
 	storedHash := derefString(prior.Session.FileHash)
 	storedPath := derefString(prior.Session.FilePath)
@@ -40,7 +42,7 @@ func shouldPreserveOpenCodeFormatArchive(
 		IsOpenCodeFormatSQLiteVirtualPath(agent, storedPath) ||
 		(storedPath == "" && storedHasStorageFingerprint)
 	if !currentIsStorage && !storedIsStorage {
-		return false
+		return false, nil
 	}
 	storedIsSQLiteVirtual := IsOpenCodeFormatSQLiteVirtualPath(agent, storedPath)
 	storedIsStorageArchive := IsOpenCodeFormatStoragePath(agent, storedPath) ||
@@ -49,20 +51,23 @@ func shouldPreserveOpenCodeFormatArchive(
 		storedIsStorageArchive = false
 	}
 	if IsOpenCodeFormatSQLiteVirtualPath(agent, path) && !storedIsStorageArchive {
-		return false
-	}
-	if len(prior.Messages) == 0 {
-		return false
+		return false, nil
 	}
 	if storedHasStorageFingerprint &&
 		parser.HasOpenCodeStorageFingerprint(currentHash) &&
 		!parser.OpenCodeStorageFingerprintMissing(storedHash, currentHash) {
-		return false
+		return false, nil
+	}
+	if err := prior.loadMessages(ctx); err != nil {
+		return false, err
+	}
+	if len(prior.Messages) == 0 {
+		return false, nil
 	}
 	if storedIsStorageArchive &&
 		IsOpenCodeFormatSQLiteVirtualPath(agent, path) &&
 		currentMtime != 0 && storedMtime != 0 && currentMtime <= storedMtime {
-		return true
+		return true, nil
 	}
 	if options.ArchiveContent.UsageOnly() {
 		_, currentMessages := db.ProjectSessionForStoragePolicy(
@@ -73,11 +78,11 @@ func shouldPreserveOpenCodeFormatArchive(
 		)
 		return OpenCodeUsageOnlyArchiveLooksIncomplete(
 			currentMessages, storedMessages,
-		)
+		), nil
 	}
 	return OpenCodeLegacyArchiveLooksIncomplete(
 		candidate.Messages, prior.Messages,
-	)
+	), nil
 }
 
 // IsClaudeFormatTranscript reports whether path is a session-bearing Claude
