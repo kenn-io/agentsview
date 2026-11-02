@@ -206,10 +206,17 @@ func TestRawContentRevisionIgnoresFrictionSubjectIDs(t *testing.T) {
 
 func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	p := ingest.PreparedSession{Messages: []db.Message{{
+		ID:         41,
+		SessionID:  "capture-session",
 		Role:       "assistant",
 		Content:    "<>&\u2028\u2029",
 		TokenUsage: []byte(`{"input_tokens":9007199254740993,"output_tokens":0}`),
-		ToolCalls:  []db.ToolCall{{InputJSON: `{"large":9007199254740993,"fraction":1.2500,"exponent":1e+03,"negative_zero":-0,"text":"<>&\u2028\u2029","duplicate":0,"duplicate":1,"null":null}`}},
+		ToolCalls: []db.ToolCall{{
+			MessageID: 41,
+			SessionID: "capture-session",
+			Rendering: "tool rendering",
+			InputJSON: `{"large":9007199254740993,"fraction":1.2500,"exponent":1e+03,"negative_zero":-0,"text":"<>&\u2028\u2029","duplicate":0,"duplicate":1,"null":null}`,
+		}},
 	}}}
 	before, err := encodeRawPayload(p)
 	require.NoError(t, err)
