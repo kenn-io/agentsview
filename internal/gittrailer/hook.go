@@ -54,7 +54,7 @@ func checkExistingHook(path string) error {
 		return err
 	}
 	if string(data) == hookScript {
-		return nil
+		return os.Chmod(path, 0o755)
 	}
 	return fmt.Errorf("commit-msg already exists; add this line to it:\n%s", hookLine)
 }

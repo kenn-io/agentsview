@@ -28,10 +28,10 @@ func (s Session) validate() error {
 	return nil
 }
 
-// Discover follows Kata's close-transcript discovery rules: an explicit pair
-// overrides discovery; otherwise Claude and Codex together are ambiguous.
-// Codex's current thread takes precedence over its root session. No source is
-// a silent absence. It never looks for transcripts or another session.
+// Discover prefers an explicit pair; otherwise Claude and Codex together are ambiguous.
+// CODEX_THREAD_ID identifies the current thread and wins over CODEX_SESSION_ID,
+// the shared root session. No source is a silent absence.
+// It never looks for transcripts or another session.
 func Discover(getenv func(string) string) (Session, error) {
 	current := Session{getenv("AGENTSVIEW_SESSION_AGENT"), getenv("AGENTSVIEW_SESSION_ID")}
 	if current.Agent != "" || current.ID != "" {
