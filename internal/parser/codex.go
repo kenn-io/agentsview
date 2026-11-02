@@ -2147,6 +2147,12 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	if sessionID == "" {
 		sessionID = codexRolloutStem(filepath.Base(path))
 	}
+	// Native metadata, including a verified revert-page key, is portable
+	// identity evidence. A filename alone remains local to its capture source.
+	sourceSessionID := ""
+	if b.sessionID != "" {
+		sourceSessionID = sessionID
+	}
 	sessionID = "codex:" + sessionID
 
 	userCount := 0
@@ -2179,6 +2185,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 
 	sess := &ParsedSession{
 		ID:                 sessionID,
+		SourceSessionID:    sourceSessionID,
 		Project:            b.project,
 		Machine:            machine,
 		Agent:              AgentCodex,

@@ -633,6 +633,17 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Native identity (reverified 2026-11-01):** The pinned
+  [session metadata schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/protocol.rs#L3359-L3368)
+  records the stable thread ID in `session_meta.id`. The parser keeps this
+  evidence in `SourceSessionID`; a verified revert page keeps its complete
+  `<thread>_<rollout>` key so it cannot merge into the thread. Filename-only
+  fallback IDs leave that evidence empty. TraeX and Augure Code share these
+  rules. Data version 159 reparses these sources in place without changing
+  their stored session IDs. `TestCodexFormatRetainsNativeIdentityEvidence`
+  covers native, filename-only, current-page and older-page shapes, and
+  `TestRawParityNativeParserWithRetainedPush` covers real parsing, retained
+  pushed history and captures from two devices.
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -4909,6 +4920,13 @@ schemas keep their existing ordering behavior.
 
 ## Evener (`evener`)
 
+- **Native identity (reverified 2026-11-01):** The pinned
+  [transcript header](https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go#L41-L56)
+  records `session_id`. The parser now retains it in `SourceSessionID`, letting
+  identical native captures share a group across devices. Data version 159
+  reparses Evener sources without changing their archive IDs or source paths.
+  `TestEvenerSemanticSession`, `TestRawParityNativeParserWithRetainedPush` and
+  `TestNativeIdentityUpgradePreservesArchiveSessions` cover those boundaries.
 - **Format:** newline-framed semantic transcript v2; header followed by entries
   containing a sequence number and semantic turn. Optional metadata is a
   sibling `<session-id>.meta.json`.

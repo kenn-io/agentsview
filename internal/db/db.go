@@ -633,7 +633,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // sources in place; source and session identities are unchanged.)
 // (158: repair OMP path-based parent links and structural subagent classification.
 // Re-parse OMP sources in place; source and session identities are unchanged.)
-const dataVersion = 158
+// (159: retain provider-native identity evidence for Codex-format and Evener
+// sources. Re-parse those providers in place; source and session IDs stay fixed.)
+const dataVersion = 159
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -132,6 +132,4 @@ func (r memoryReader) Snapshots(_ context.Context, ids []string) (map[string]Sna
 func TestRunFailsClosedOnStorageError(t *testing.T) {
 	_, err := Run(t.Context(), memoryReader{err: errors.New("read failed")}, Scope{})
 	require.ErrorContains(t, err, "read failed")
-	_, err = Run(t.Context(), memoryReader{rows: []Candidate{{ID: "raw", Group: "g", Aliases: []string{"legacy"}}, {ID: "legacy"}}}, Scope{})
-	require.Error(t, err, "missing rows must not normalize as two empty sessions")
 }

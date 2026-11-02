@@ -122,7 +122,7 @@ func parseEvenerSession(ctx context.Context, path, machine string) (*ParsedSessi
 	if meta.ParentSessionID != "" {
 		parentID = meta.ParentSessionID
 	}
-	sess := &ParsedSession{ID: "evener:" + h.SessionID, Agent: AgentEvener, Machine: machine, Cwd: h.WorkingDir, SourceVersion: h.BuildVersion, StartedAt: h.CreatedAt, File: transcript.file, IsTruncated: transcript.truncated, SessionName: meta.Name, SessionNamePresent: metaPresent}
+	sess := &ParsedSession{ID: "evener:" + h.SessionID, SourceSessionID: h.SessionID, Agent: AgentEvener, Machine: machine, Cwd: h.WorkingDir, SourceVersion: h.BuildVersion, StartedAt: h.CreatedAt, File: transcript.file, IsTruncated: transcript.truncated, SessionName: meta.Name, SessionNamePresent: metaPresent}
 	sess.Project = ExtractProjectFromCwdWithBranchContext(ctx, h.WorkingDir, "")
 	if parentID != "" {
 		sess.ParentSessionID = "evener:" + parentID
