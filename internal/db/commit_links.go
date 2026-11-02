@@ -160,7 +160,7 @@ func commitOperations(call commitCall) []commitCall {
 		if json.Unmarshal([]byte(call.result), &blocks) != nil || len(blocks) != len(operations) {
 			return nil
 		}
-		results = nil
+		results = make([]string, 0, len(blocks))
 		for _, block := range blocks {
 			if block.Type != "input_text" {
 				return nil
