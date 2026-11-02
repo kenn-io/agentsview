@@ -40,6 +40,43 @@ func TestForkDetection_LinearSession(t *testing.T) {
 	assertMessageCount(t, len(results[0].Messages), 4)
 }
 
+func TestForkDetection_ManyForks(t *testing.T) {
+	path := buildForkyClaudeFile(t, 1000, 10)
+	results, err := parseClaudeSession(path, "proj", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 11)
+	assert.Equal(t, 1000, results[0].Session.UserMessageCount)
+	require.Len(t, results[0].Messages, 2000)
+	assert.Equal(t, "question number 0 about the code", results[0].Messages[0].Content)
+	assert.Equal(t, "answer number 999 with some explanation", results[0].Messages[1999].Content)
+	for _, result := range results[1:] {
+		assert.Equal(t, results[0].Session.ID, result.Session.ParentSessionID)
+		assert.Equal(t, RelFork, result.Session.RelationshipType)
+		assert.Equal(t, 4, result.Session.UserMessageCount)
+		assert.Len(t, result.Messages, 8)
+	}
+}
+
+func TestForkDetection_ParentAfterDescendants(t *testing.T) {
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "a", "").
+		AddClaudeUserWithUUID("2024-01-01T10:00:01Z", "main1", "b", "a").
+		AddClaudeUserWithUUID("2024-01-01T10:00:03Z", "main2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "main3", "e", "d").
+		AddClaudeUserWithUUID("2024-01-01T10:00:05Z", "main4", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "retry", "z", "a").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:02Z", "reply", "c", "b").
+		String()
+
+	results := parseTestContent(t, "unordered.jsonl", content, 2)
+	assert.Equal(t, 5, results[0].Session.UserMessageCount)
+	require.Len(t, results[0].Messages, 6)
+	assert.Equal(t, "main4", results[0].Messages[5].Content)
+	assert.Equal(t, "unordered-z", results[1].Session.ID)
+	assert.Equal(t, "unordered", results[1].Session.ParentSessionID)
+	assert.Equal(t, 1, results[1].Session.UserMessageCount)
+}
+
 func TestForkDetection_LargeGapForkPropagatesPRLinks(t *testing.T) {
 	// Main branch: a->b->c->d->e->f->g->h (4+ user turns after fork)
 	// Fork from b: i->j

@@ -104,6 +104,21 @@ func TestClaudeDAGPostProcessingStopsAfterContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestClaudeSubtreeUserTurnsStopsAfterContextCancellation(t *testing.T) {
+	entries := make([]dagEntry, 1024)
+	children := make(map[string][]int, len(entries))
+	for i := range entries {
+		entries[i] = dagEntry{uuid: fmt.Sprintf("entry-%d", i), entryType: "assistant"}
+		if i > 0 {
+			children[entries[i-1].uuid] = []int{i}
+		}
+	}
+	// Four checks traverse the tree; the fifth cancels during counting.
+	_, _, err := subtreeUserTurnsContext(newCancelOnErrCheckContext(t, 5), entries, children, 0)
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestCodexPostReadUsageAccumulationStopsAfterContextCancellation(t *testing.T) {
 	// Ordinal normalization now lives in the sink's Finalize; the post-read
 	// work the parser still owns is the per-message usage accumulation.

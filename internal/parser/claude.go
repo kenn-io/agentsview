@@ -1643,6 +1643,7 @@ func parseDAG(
 	// ownerID is the session ID of the branch that owns this walk.
 	var walkBranch func(startIdx int, ownerID string) ([]int, error)
 	var forkBranches []branch
+	var subtreeTurns, subtreeChannel []int
 
 	walkBranch = func(startIdx int, ownerID string) ([]int, error) {
 		var path []int
@@ -1663,13 +1664,15 @@ func parseDAG(
 				continue
 			}
 
-			// Fork point: count user turns on first child's branch.
-			firstChildTurns, channelTurns, err := countUserTurnsContext(
-				ctx, entries, children, kids[0],
-			)
-			if err != nil {
-				return nil, err
+			// Build counts once, only if this transcript has a fork.
+			if subtreeTurns == nil {
+				var err error
+				subtreeTurns, subtreeChannel, err = subtreeUserTurnsContext(ctx, entries, children, roots[0])
+				if err != nil {
+					return nil, err
+				}
 			}
+			firstChildTurns, channelTurns := subtreeTurns[kids[0]], subtreeChannel[kids[0]]
 			if firstChildTurns <= forkThreshold {
 				// Small-gap retry: follow the last child.
 				current = kids[len(kids)-1]
@@ -2596,35 +2599,46 @@ func pathWithinDir(path, dir string) bool {
 		rel != ".."
 }
 
-// countUserTurns counts real user entries reachable from a starting index
-// by traversing the entire subtree. System-injected user records must not
-// influence branch selection because they are promoted to system metadata
-// when messages are extracted.
-func countUserTurnsContext(
+// subtreeUserTurnsContext counts real user and channel turns for every subtree
+// in post-order, so fork decisions can reuse counts for overlapping branches.
+// System-injected user records do not influence branch selection.
+func subtreeUserTurnsContext(
 	ctx context.Context,
 	entries []dagEntry,
 	children map[string][]int,
-	startIdx int,
-) (int, int, error) {
-	count, channelCount := 0, 0
-	stack := []int{startIdx}
-	visited := 0
+	root int,
+) ([]int, []int, error) {
+	turns := make([]int, len(entries))
+	channel := make([]int, len(entries))
+	order := make([]int, 0, len(entries))
+	stack := []int{root}
 	for len(stack) > 0 {
-		if err := contextErrEvery(ctx, visited); err != nil {
-			return 0, 0, err
+		if err := contextErrEvery(ctx, len(order)); err != nil {
+			return nil, nil, err
 		}
-		visited++
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if isCountedClaudeUserTurn(ctx, entries[current]) {
-			count++
-			if gjson.Get(entries[current].line, "isMeta").Bool() {
-				channelCount++
-			}
-		}
+		order = append(order, current)
 		stack = append(stack, children[entries[current].uuid]...)
 	}
-	return count, channelCount, ctx.Err()
+	// Reverse traversal order puts children before their parents even when
+	// transcript entries arrive out of parent order.
+	for i, current := range slices.Backward(order) {
+		if err := contextErrEvery(ctx, len(order)-1-i); err != nil {
+			return nil, nil, err
+		}
+		if isCountedClaudeUserTurn(ctx, entries[current]) {
+			turns[current]++
+			if gjson.Get(entries[current].line, "isMeta").Bool() {
+				channel[current]++
+			}
+		}
+		for _, kid := range children[entries[current].uuid] {
+			turns[current] += turns[kid]
+			channel[current] += channel[kid]
+		}
+	}
+	return turns, channel, ctx.Err()
 }
 
 func isCountedClaudeUserTurn(ctx context.Context, entry dagEntry) bool {
