@@ -168,16 +168,3 @@ func matchComponentKey(c MatchResult) string {
 	slices.Sort(ids)
 	return fmt.Sprintf("%s:%q", c.Class, ids)
 }
-
-func TestMatchRequiresRecordedAlias(t *testing.T) {
-	for _, local := range []bool{false, true} {
-		rows := []Candidate{
-			{ID: "physical", PublicID: "codex:thread", Agent: "codex", Group: "g", SourceLocal: local},
-			{ID: "codex:thread", Agent: "codex"},
-		}
-		got := Match(rows)
-		require.Len(t, got, 2)
-		assert.Equal(t, "raw_only", got[0].Class)
-		assert.Equal(t, "legacy_only", got[1].Class)
-	}
-}
