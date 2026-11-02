@@ -124,10 +124,10 @@ func pgAnalyticsToolSessionWindow(f db.AnalyticsFilter, pb *paramBuilder) string
 func buildAnalyticsWhere(
 	f db.AnalyticsFilter,
 	dateCol string,
-	pb *paramBuilder,
+	pb *paramBuilder, dialect db.QueryDialect,
 ) string {
 	return buildAnalyticsWhereWithDate(
-		f, dateCol, pb, true, "id",
+		f, dateCol, pb, true, "id", dialect,
 	)
 }
 
@@ -137,15 +137,15 @@ func buildAnalyticsWhere(
 // against message timestamps instead of session timestamps.
 func buildAnalyticsWhereWithoutDate(
 	f db.AnalyticsFilter,
-	pb *paramBuilder,
+	pb *paramBuilder, dialect db.QueryDialect,
 ) string {
 	return buildAnalyticsWhereWithDate(
-		f, "", pb, false, "id",
+		f, "", pb, false, "id", dialect,
 	)
 }
 
-func buildAnalyticsWhereWithDate(f db.AnalyticsFilter, dateCol string, pb *paramBuilder, includeDate bool, sessionIDExpr string) string {
-	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+func buildAnalyticsWhereWithDate(f db.AnalyticsFilter, dateCol string, pb *paramBuilder, includeDate bool, sessionIDExpr string, dialect db.QueryDialect) string {
+	b := db.NewQueryBuilder(dialect, pb.n)
 	var dates []string
 	if includeDate {
 		from, to := analyticsUTCRange(f)
@@ -269,7 +269,7 @@ func (s *Store) filteredSessionIDs(
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
-		f, pgDateColS, pb, true, "s.id",
+		f, pgDateColS, pb, true, "s.id", s.sessionDialect(),
 	)
 	preds := []string{
 		where,
@@ -414,7 +414,7 @@ func (s *Store) getAnalyticsActivityFilteredByModelTime(
 ) (db.ActivityResponse, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
 		var err error
@@ -657,7 +657,7 @@ func (s *Store) GetAnalyticsSummary(
 	f.IncludeSubagents = true
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -869,7 +869,7 @@ func (s *Store) GetAnalyticsActivity(
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
-		f, pgDateColS, pb, true, "s.id",
+		f, pgDateColS, pb, true, "s.id", s.sessionDialect(),
 	)
 	preds := appendPGAnalyticsCSVFilter(
 		[]string{where}, "m.model", f.Model, pb,
@@ -1063,7 +1063,7 @@ func (s *Store) GetAnalyticsHeatmap(
 
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -1184,7 +1184,7 @@ func (s *Store) GetAnalyticsProjects(
 	f.IncludeSubagents = true
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -1371,7 +1371,7 @@ func (s *Store) GetAnalyticsHourOfWeek(
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
-		f, pgDateColS, pb, true, "s.id",
+		f, pgDateColS, pb, true, "s.id", s.sessionDialect(),
 	)
 	preds := []string{where, "m.timestamp IS NOT NULL"}
 
@@ -1444,7 +1444,7 @@ func (s *Store) analyticsModelCandidateSessionIDs(
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
-		f, pgDateCol, pb, true, "id",
+		f, pgDateCol, pb, true, "id", s.sessionDialect(),
 	)
 
 	rows, err := s.pg.QueryContext(ctx, `SELECT id, `+pgDateCol+`
@@ -1515,7 +1515,7 @@ func (s *Store) GetAnalyticsSessionShape(
 	loc := analyticsLocation(f)
 	modelFilter := strings.TrimSpace(f.Model) != ""
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -1704,10 +1704,11 @@ func pgAnalyticsZone(f db.AnalyticsFilter) string {
 // to a generic plan. With an inlined CTE, that plan joins every tool call
 // to every message before it applies a narrow project filter.
 func pgAnalyticsCallsSQL(
+	dialect db.QueryDialect,
 	f db.AnalyticsFilter, pb *paramBuilder,
 	sessionCols, callCols string, callPreds ...string,
 ) string {
-	where := buildAnalyticsWhereWithoutDate(f, pb)
+	where := buildAnalyticsWhereWithoutDate(f, pb, dialect)
 	if pred := pgAnalyticsToolSessionWindow(f, pb); pred != "" {
 		where += " AND " + pred
 	}
@@ -1787,7 +1788,7 @@ func (s *Store) analyticsToolRows(
 ) ([]db.ToolAnalyticsRow, error) {
 	pb := &paramBuilder{}
 	predicates := db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { return pb.add(value) })
-	q := pgAnalyticsCallsSQL(f, pb, ", agent, project, quality_signal_version",
+	q := pgAnalyticsCallsSQL(s.sessionDialect(), f, pb, ", agent, project, quality_signal_version",
 		`, tc.category,
 			TRIM(COALESCE(tc.tool_name, '')) AS tool_name, s.agent, s.project, m.ordinal, s.quality_signal_version, tc.observed_outcome, tc.observed_repeat, tc.sequence_ending`, predicates...) + `
 	SELECT session_id, category, tool_name, agent,
@@ -1844,7 +1845,7 @@ func (s *Store) GetAnalyticsSkills(
 	ctx context.Context, f db.AnalyticsFilter, granularity string,
 ) (db.SkillsAnalyticsResponse, error) {
 	pb := &paramBuilder{}
-	q := pgAnalyticsCallsSQL(f, pb, ", agent, project",
+	q := pgAnalyticsCallsSQL(s.sessionDialect(), f, pb, ", agent, project",
 		`, TRIM(tc.skill_name) AS skill_name, s.agent, s.project`,
 		"TRIM(COALESCE(tc.skill_name, '')) != ''") + `
 	SELECT session_id, skill_name, agent, project,
@@ -2037,7 +2038,7 @@ func (s *Store) GetAnalyticsVelocity(
 ) (db.VelocityResponse, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -2359,7 +2360,7 @@ func (s *Store) GetAnalyticsTopSessions(
 	}
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -2547,7 +2548,7 @@ func (s *Store) GetAnalyticsSignals(
 ) (db.SignalsAnalyticsResponse, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -2673,7 +2674,7 @@ func (s *Store) signalRows(
 ) ([]db.SignalRow, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
 		var err error

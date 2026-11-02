@@ -57,7 +57,7 @@ func writeRawLinks(ctx context.Context, tx *sql.Tx, branch string, p ingest.Prep
 // that historical authority may use a unique materialized content cohort from
 // the same immutable capture scope. Count per owner edge before merging owners:
 // equal proofs coalesce, while independently proven plural parents survive.
-const hostedLinkFromSQL = ` FROM raw_session_links e
+var hostedLinkFromSQL = ` FROM raw_session_links e
  JOIN raw_session_branches owner ON owner.branch_id=e.branch_id AND owner.active
  JOIN sessions own_session ON own_session.id=owner.session_id
  JOIN raw_source_projections owner_source ON owner_source.source_id=owner.source_id
@@ -83,19 +83,18 @@ const hostedLinkFromSQL = ` FROM raw_session_links e
          AND target_source.device_id=owner_source.device_id
          AND target_source.provider=owner_source.provider
          AND target_source.configured_root_id=owner_source.configured_root_id))
-       AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c
-         WHERE c.group_id=b.group_id AND c.field='excluded' AND c.branch_id IN ('',b.branch_id)
-         ORDER BY c.branch_id DESC LIMIT 1),false)
+       AND NOT COALESCE(` + rawBranchExclusionSQL("b", "") + `,false)
    ) candidates
  ) target ON authority.exact OR target.cohort_count=1
  JOIN sessions target_session ON target_session.id=target.session_id
- WHERE NOT COALESCE((SELECT c.value::boolean FROM raw_curation c WHERE c.group_id=owner.group_id AND c.field='excluded' AND c.branch_id IN ('',owner.branch_id) ORDER BY c.branch_id DESC LIMIT 1),false) `
+ WHERE NOT COALESCE(` + rawBranchExclusionSQL("owner", "") + `,false) `
 
 func (s *Store) sessionDialect() db.QueryDialect {
 	d := db.PostgresQueryDialect()
 	if !s.hostedRelations {
 		return d
 	}
+	d = d.WithMachinePredicate(hostedMachinePredicate)
 	return d.WithParentRelation(func(child, parent string) string {
 		return "((" + child + ".provenance_kind='legacy' AND " + child + ".parent_session_id=" + parent + ".id) OR (" + child + ".provenance_kind='raw' AND EXISTS(SELECT 1 " + hostedLinkFromSQL + " AND e.kind='parent' AND owner.session_id=" + child + ".id AND target.session_id=" + parent + ".id)))"
 	})

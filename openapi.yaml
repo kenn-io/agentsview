@@ -1272,6 +1272,11 @@ components:
           type: string
         snippet:
           type: string
+        source_machines:
+          description: Contributing hosted device machine IDs; omitted for sessions without hosted provenance.
+          items:
+            type: string
+          type: array
         subordinate:
           type: boolean
         timestamp:
@@ -2490,6 +2495,11 @@ components:
           type: string
         snippet:
           type: string
+        source_machines:
+          description: Contributing hosted device machine IDs; omitted for sessions without hosted provenance.
+          items:
+            type: string
+          type: array
         web_url:
           type: string
       required:
@@ -2680,6 +2690,11 @@ components:
           type: string
         signals_pending_since:
           type: string
+        source_machines:
+          description: Contributing hosted device machine IDs; omitted for sessions without hosted provenance.
+          items:
+            type: string
+          type: array
         source_session_id:
           type: string
         source_version:
@@ -3079,6 +3094,11 @@ components:
           type: string
         session_kind:
           type: string
+        source_machines:
+          description: Contributing hosted device machine IDs; omitted for sessions without hosted provenance.
+          items:
+            type: string
+          type: array
         started_at:
           type:
             - string
@@ -7241,6 +7261,11 @@ components:
           type: string
         signals_pending_since:
           type: string
+        source_machines:
+          description: Contributing hosted device machine IDs; omitted for sessions without hosted provenance.
+          items:
+            type: string
+          type: array
         source_session_id:
           type: string
         source_version:

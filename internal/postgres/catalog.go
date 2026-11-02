@@ -48,7 +48,7 @@ func (s catalogSQL) CandidateRowsSQL(machine *string) (string, []any) {
 }
 
 func (s catalogSQL) ArchiveSessionsSQL(filter db.ProjectDateFilter) (string, []any) {
-	return readbase.ArchiveSessionsSQL(filter, db.PostgresQueryDialect())
+	return readbase.ArchiveSessionsSQL(filter, s.store.sessionDialect())
 }
 
 func (s catalogSQL) ListProjectIdentityObservations(ctx context.Context, labels []string) ([]export.ProjectIdentityObservation, error) {

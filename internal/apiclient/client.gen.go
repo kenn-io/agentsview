@@ -25418,17 +25418,20 @@ type DBContentMatch struct {
 	IsSidechain   *bool       `json:"is_sidechain,omitempty"`
 
 	// Location Where the match occurred: message, thinking, tool_input, or tool_result.
-	Location           string   `json:"location" validate:"required"`
-	Machine            string   `json:"machine" validate:"required"`
-	Ordinal            int64    `json:"ordinal"`
-	OrdinalRange       []int64  `json:"ordinal_range" validate:"required"`
-	ParentSessionID    *string  `json:"parent_session_id,omitempty"`
-	Project            string   `json:"project" validate:"required"`
-	Relationship       *string  `json:"relationship,omitempty"`
-	Role               string   `json:"role" validate:"required"`
-	Score              *float64 `json:"score,omitempty"`
-	SessionID          string   `json:"session_id" validate:"required"`
-	Snippet            string   `json:"snippet" validate:"required"`
+	Location        string   `json:"location" validate:"required"`
+	Machine         string   `json:"machine" validate:"required"`
+	Ordinal         int64    `json:"ordinal"`
+	OrdinalRange    []int64  `json:"ordinal_range" validate:"required"`
+	ParentSessionID *string  `json:"parent_session_id,omitempty"`
+	Project         string   `json:"project" validate:"required"`
+	Relationship    *string  `json:"relationship,omitempty"`
+	Role            string   `json:"role" validate:"required"`
+	Score           *float64 `json:"score,omitempty"`
+	SessionID       string   `json:"session_id" validate:"required"`
+	Snippet         string   `json:"snippet" validate:"required"`
+
+	// SourceMachines Contributing hosted device machine IDs; omitted for sessions without hosted provenance.
+	SourceMachines     []string `json:"source_machines,omitempty"`
 	Subordinate        *bool    `json:"subordinate,omitempty"`
 	Timestamp          string   `json:"timestamp" validate:"required"`
 	ToolName           *string  `json:"tool_name,omitempty"`
