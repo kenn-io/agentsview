@@ -116,6 +116,10 @@ The latest release is
 
 **Bug fixes**
 
+- DeepSeek Harness sessions that were missing from the archive now import. This
+  covers compressed session logs written without zstd content checksums, and
+  sessions that ran shell commands, which log `job/registered` and
+  `job/settled` events. The next sync picks up the affected sessions.
 - Codex fork imports notice new or moved parent pages on Linux even when the
   directory timestamps stay unchanged. Unchanged folders keep their cached
   filenames. Available Codex, TraeX and Augure Code sources are reprocessed on

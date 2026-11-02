@@ -826,7 +826,8 @@ fixtures retain this field; missing identities remain source-local.
   modification time, and metadata change time refresh changed folders when
   pages appear or move, while file identity still validates cached turn IDs.
   Linux can retain both directory timestamps for changes within one kernel
-  clock tick ([kernel timestamp documentation](https://docs.kernel.org/filesystems/multigrain-ts.html)).
+  clock tick
+  ([kernel timestamp documentation](https://docs.kernel.org/filesystems/multigrain-ts.html)).
   Reverified the pinned archival producer and inventory regressions on
   2026-11-01: Linux reads native directory-name notifications synchronously,
   sharing one descriptor across the factory's cached roots. Only notified
@@ -836,18 +837,16 @@ fixtures retain this field; missing identities remain source-local.
   enumerated on every lookup and registration is retried later. Invalidation,
   eviction and runtime cleanup release descriptors. Stable source snapshots
   enumerate once per parse without notifications, including inside the
-  read-only hosted parser sandbox.
-  Data version 162 reparses Codex, TraeX and Augure Code sources in place to
-  repair already-current forks that missed a parent page. The persisted archive
-  upgrade regression keeps child bytes and their saved stat digest unchanged,
-  and verifies repaired messages, stable session and source identities, and
-  retained answer pins.
-  Reverified on 2026-10-11 with 10 and 1,000 unrelated files and dated
-  directories, page discovery across batches, and parent edits and removal
-  within a batch. On Windows, directory metadata comes from one open handle,
-  but both timestamps can remain unchanged after entries move or appear, as
-  observed in the Windows inventory test on 2026-10-10. Each cached directory
-  therefore owns a
+  read-only hosted parser sandbox. Data version 162 reparses Codex, TraeX and
+  Augure Code sources in place to repair already-current forks that missed a
+  parent page. The persisted archive upgrade regression keeps child bytes and
+  their saved stat digest unchanged, and verifies repaired messages, stable
+  session and source identities, and retained answer pins. Reverified on
+  2026-10-11 with 10 and 1,000 unrelated files and dated directories, page
+  discovery across batches, and parent edits and removal within a batch. On
+  Windows, directory metadata comes from one open handle, but both timestamps
+  can remain unchanged after entries move or appear, as observed in the Windows
+  inventory test on 2026-10-10. Each cached directory therefore owns a
   [name-change notification](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstchangenotificationw).
   Long drive and UNC paths use extended Windows syntax because this API can
   retain the `MAX_PATH` limit even when Go's file APIs can read the directory.
@@ -3135,18 +3134,18 @@ schemas keep their existing ordering behavior.
 
 - **Format:** Released session generations `0` through `4` are stored as JSONL
   under `<sessions-root>/<project>/<encoded-session-id>/`. Generation zero
-  uses the suffix-only `session.jsonl` (or the default checksummed multi-frame
-  zstd encoding at `session.jsonl.zstd`); generation `N > 0` carries a
-  lowercase numeric component at `session.vN.jsonl[.zstd]`. One session
-  directory can retain several immutable generations; the numerically newest
-  canonical generation is current. The immutable header records session
-  identity, cwd, creation time, seed lineage, delegation origin, and agent
-  preset. Event rows carry a contiguous `seq`. Generations 0 and 1 may encode
-  runs of assistant deltas with the `text-chunks`, `reasoning-chunks`, and
-  `tool-call-chunks` packed storage rows, and their `sourceEventSeqs` uses
-  non-negative safe integers and inclusive `[start, end]` ranges, mixed entry
-  by entry: `[[138, 144]]` represents seven sequences. This provenance
-  compression was introduced in upstream commit
+  uses the suffix-only `session.jsonl` (or the default multi-frame zstd
+  encoding at `session.jsonl.zstd`); generation `N > 0` carries a lowercase
+  numeric component at `session.vN.jsonl[.zstd]`. One session directory can
+  retain several immutable generations; the numerically newest canonical
+  generation is current. The immutable header records session identity, cwd,
+  creation time, seed lineage, delegation origin, and agent preset. Event rows
+  carry a contiguous `seq`. Generations 0 and 1 may encode runs of assistant
+  deltas with the `text-chunks`, `reasoning-chunks`, and `tool-call-chunks`
+  packed storage rows, and their `sourceEventSeqs` uses non-negative safe
+  integers and inclusive `[start, end]` ranges, mixed entry by entry:
+  `[[138, 144]]` represents seven sequences. This provenance compression was
+  introduced in upstream commit
   [df76bc6](https://github.com/deepseek-ai/deepseek-harness/commit/df76bc695b4bdff093369ab22a506cd37ca087c1).
   Generation 2 embeds the timed assistant stream in `assistant/message` and
   records settled non-surface attempts as `assistant/attempt`; generation 3
@@ -3228,6 +3227,15 @@ schemas keep their existing ordering behavior.
     They carry job identity, the creating tool call, timing, and the terminal
     status, but no model-visible output, so they are metadata. The tool output
     remains in the paired `tool/result`.
+
+    Physical framing was reverified 2026-11-02 at commit
+    `ce7073d51254c26cd63b22a60835b8f948deb447`. The
+    [frame writer](https://github.com/deepseek-ai/deepseek-harness/blob/ce7073d51254c26cd63b22a60835b8f948deb447/packages/session/session-persistence-jsonl/src/zstd.ts#L18-L20)
+    requests a content checksum, but the
+    [frame scanner](https://github.com/deepseek-ai/deepseek-harness/blob/ce7073d51254c26cd63b22a60835b8f948deb447/packages/session/session-persistence-jsonl/src/zstd.ts#L69-L98)
+    reads the checksum flag frame by frame and accepts frames without one.
+    Users report v4 logs whose frames carry no checksum, so Agentsview also
+    treats the checksum as optional per frame.
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
