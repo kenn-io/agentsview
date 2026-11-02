@@ -1445,6 +1445,9 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
 		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=?", id); err != nil {
+			return 0, fmt.Errorf("deleting excluded session commit links: %w", err)
+		}
 	}
 	if err := deleteSessionAnnotationsTx(ctx, tx, excluded); err != nil {
 		return 0, err

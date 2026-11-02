@@ -80,6 +80,10 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"quiet multiple lines", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\ndef5678 Other commit\n", "", 0},
 		{"failed", "git commit -m fix", "nothing to commit", "", 0},
 		{"printed", "cat out.txt", "[main abc1234] Fix parser", "", 0},
+		{"printed commit documentation", "cat docs/git-commit.md", "[main abc1234] Fix parser", "", 0},
+		{"shown commit documentation", "git show HEAD:docs/commit.md", "[main abc1234] Fix parser", "", 0},
+		{"log grep", "git log --grep=commit", "[main abc1234] Fix parser", "", 0},
+		{"commit filename", "git commit.md", "[main abc1234] Fix parser", "", 0},
 		{"quoted directory", `git -C "/tmp/my repo" commit -m fix`, "[main abc1234] Fix parser", "/tmp/my repo", 1},
 		{"cd", "cd /repo && git commit -m fix", "[main abc1234] Fix parser", "/repo", 1},
 		{"newline", "git add .\ngit commit -m fix", "[main abc1234] Fix parser", "/work", 1},
@@ -89,6 +93,8 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"quoted operators", `git -C "/tmp/a;b" commit -m "x && y"`, "[feature/x abc1234] Fix parser", "/tmp/a;b", 1},
 		{"relative directory", "cd sub && git -C child commit -m fix", "[main abc1234] Fix parser", "/work/sub/child", 1},
 		{"global option", `git -c user.name=Example --no-pager commit -m fix`, "[main abc1234] Fix parser", "/work", 1},
+		{"quoted global option", `git -c 'user.name=Example User' commit -m fix`, "[main abc1234] Fix parser", "/work", 1},
+		{"global directory option", `git --git-dir=/repo/.git commit -m fix`, "[main abc1234] Fix parser", "/work", 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -124,6 +130,53 @@ func TestCommitLinksParsing(t *testing.T) {
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
 		})
 	}
+}
+
+func TestCommitLinksRepositoryPathStyle(t *testing.T) {
+	for _, tt := range []struct{ name, cwd, command, repository string }{
+		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
+		{"POSIX relative", "/work", "cd sub && git -C ../child commit -m fix", "/work/child"},
+		{"Windows absolute", `C:\work`, `cd D:\repo && git commit -m fix`, `D:\repo`},
+		{"Windows relative", `C:\work`, `cd sub && git -C child commit -m fix`, `C:\work\sub\child`},
+		{"Windows backslash relative", `C:\work`, `git -C sub\child commit -m fix`, `C:\work\sub\child`},
+		{"Windows parent", `C:\work`, `git -C ..\repo commit -m fix`, `C:\repo`},
+		{"Windows rooted", `C:\work`, `git -C \repo commit -m fix`, `C:\repo`},
+		{"Windows slash drive", "C:/work", "cd D:/repo && git commit -m fix", "D:/repo"},
+		{"Windows slash relative", "C:/work", "git -C sub commit -m fix", "C:/work/sub"},
+		{"Windows UNC", `C:\work`, `cd \\server\share\repo && git commit -m fix`, `\\server\share\repo`},
+		{"Windows UNC relative", `\\server\share\repo`, `git -C ..\child commit -m fix`, `\\server\share\child`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = tt.cwd })
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), "[main abc1234] Fix parser")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+		})
+	}
+}
+
+func TestCommitLinksPurgeExcludedPages(t *testing.T) {
+	d := testDB(t)
+	const thread = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const page = thread + "_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	for _, id := range []string{page, "retained"} {
+		insertSession(t, d, id, "project-a")
+		insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	}
+	_, err := d.getWriter().ExecContext(t.Context(), `INSERT INTO excluded_sessions(id, include_codex_pages) VALUES (?, 1)`, thread)
+	require.NoError(t, err)
+	require.NoError(t, d.PurgeExcludedSessions(t.Context()))
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM commit_links WHERE session_id=?`, page).Scan(&count))
+	assert.Zero(t, count)
+	got, err := d.SessionCommitLinks(t.Context(), "retained")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
 }
 
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {

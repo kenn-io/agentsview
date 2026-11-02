@@ -1530,9 +1530,9 @@ make it ambiguous.
 Sessions permanently deleted before this release have no links because their
 stored tool calls are already gone.
 
-Links require the words `git` and `commit` in a shell call's input and Git's
-commit summary in its stored output. This includes commits made through shell
-wrappers or Python helpers. Codex output received through a later `write_stdin`
+Links require a `git commit` invocation, allowing Git global options, or a
+helper's `["git", "commit", ...]` argument list, and Git's commit summary in
+the call's stored output. Codex output received through a later `write_stdin`
 poll links to the original commit call when its process ID matches. Polls with
 no originating commit call produce no links. Each session records a SHA once,
 at its first matching call.
@@ -1545,9 +1545,9 @@ directly with `&&`. Without that evidence, quiet commits have no link.
 
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
 directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative
-paths join onto the base; `~` paths stay literal. A later `cd` is ignored. A
-call that commits in two repositories records the first directory for both
-commits.
+paths join onto the base using the transcript's path style; `~` paths stay
+literal. A later `cd` is ignored. A call that commits in two repositories
+records the first directory for both commits.
 
 Archives using `archive_content = "transcripts"` or `"usage"` retain no commit
 links because they omit tool output.

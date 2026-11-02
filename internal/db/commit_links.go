@@ -6,7 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +18,8 @@ import (
 const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v1"
+	commitCommandToken     = `(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
 )
 
 var (
@@ -25,8 +27,9 @@ var (
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
-	commitGitWordRE           = regexp.MustCompile(`(?:\b|\\[nrt])git\b`)
-	commitWordRE              = regexp.MustCompile(`(?:\b|\\[nrt])commit\b`)
+	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|('"/]|\\[nrt])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\\])`)
+	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
+	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGitDirRE            = regexp.MustCompile(`\bgit\s+-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
@@ -82,10 +85,36 @@ type CommitSessionList struct {
 func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
 		dir = strings.Trim(dir, "\"'")
-		if filepath.IsAbs(dir) || strings.HasPrefix(dir, "~") {
+		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
-		return filepath.Join(base, dir)
+		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
+			return path.Join(base, dir)
+		}
+		// filepath follows the host OS; transcript paths can come from any OS.
+		backslashes := strings.ContainsAny(base+dir, `\`)
+		base = strings.ReplaceAll(base, `\`, "/")
+		dir = strings.ReplaceAll(dir, `\`, "/")
+		volume := ""
+		if commitWindowsDriveRE.MatchString(base) {
+			volume, base = base[:2], base[2:]
+		} else if strings.HasPrefix(base, "//") {
+			parts := strings.SplitN(base[2:], "/", 3)
+			if len(parts) >= 2 {
+				volume, base = "//"+parts[0]+"/"+parts[1], "/"
+				if len(parts) == 3 {
+					base += parts[2]
+				}
+			}
+		}
+		if path.IsAbs(dir) {
+			base = ""
+		}
+		joined := volume + path.Join(base, dir)
+		if backslashes {
+			joined = strings.ReplaceAll(joined, "/", `\`)
+		}
+		return joined
 	}
 	if match := commitWorkdirRE.FindStringSubmatch(input); match != nil {
 		dir := match[1]
@@ -149,7 +178,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		output, running := callOutput(call.result)
 		owner := call
 		command := signals.CommandText(call.input)
-		isCommit := commitGitWordRE.MatchString(command) && commitWordRE.MatchString(command)
+		isCommit := commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command)
 		pollID := ""
 		isPoll := call.toolName == "write_stdin"
 		if isPoll {
