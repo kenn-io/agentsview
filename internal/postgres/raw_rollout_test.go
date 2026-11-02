@@ -10,6 +10,7 @@ import (
 // The independent model scores matching selectors rather than following the
 // implementation's lookup order. Removing device precedence must break it.
 func TestRawRolloutPrecedence(t *testing.T) {
+	requireHegel(t)
 	hegel.Test(t, func(ht *hegel.T) {
 		if hegel.Draw(ht, hegel.Booleans()) {
 			require.Equal(ht, "active", effectiveRawRollout(nil, "device-a", "codex"))
