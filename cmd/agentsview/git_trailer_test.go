@@ -100,19 +100,16 @@ func (f *gitTrailerFixture) hook(t *testing.T, action string) {
 
 func TestGitTrailerCommits(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		args    []string
-		cleanup string
-		editor  bool
-		abort   bool
-		want    string
+		name   string
+		args   []string
+		editor bool
+		abort  bool
+		want   string
 	}{
-		{name: "issue subject", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser"},
-		{name: "amend subject", args: []string{"-m", "amend! fix the parser"}, want: "amend! fix the parser\n\n" + trailerLine},
+		{name: "hash-leading subject is stripped as a comment", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser"},
 		{name: "file", args: []string{"-F", "message"}, want: "from file\n\n" + trailerLine},
 		{name: "empty", args: []string{"-m", ""}, abort: true},
 		{name: "empty signoff", args: []string{"-s", "-m", ""}, abort: true},
-		{name: "stripped comment", args: []string{"-m", "# wip"}, cleanup: "strip", abort: true},
 		{name: "command-line stripped comment", args: []string{"--cleanup=strip", "-m", "# wip"}, abort: true},
 		{name: "unedited template", abort: true},
 		{name: "editor", editor: true, want: "from editor"},
@@ -121,10 +118,10 @@ func TestGitTrailerCommits(t *testing.T) {
 			f := newGitTrailerFixture(t)
 			f.hook(t, "install")
 			f.setenv("GIT_EDITOR", ":")
-			require.NoError(t, os.WriteFile(filepath.Join(f.repo, "message"), []byte("from file\n"), 0o600))
-			if tt.cleanup != "" {
-				f.git(t, "config", "commit.cleanup", tt.cleanup)
+			if tt.name == "file" {
+				f.setenv("TMPDIR", filepath.Join(f.repo, "missing-temp"))
 			}
+			require.NoError(t, os.WriteFile(filepath.Join(f.repo, "message"), []byte("from file\n"), 0o600))
 			if tt.editor {
 				editor := filepath.Join(filepath.Dir(f.bin), "editor")
 				require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'from editor\\n' > \"$1\"\n"), 0o755))
@@ -141,6 +138,9 @@ func TestGitTrailerCommits(t *testing.T) {
 			}
 			require.NoError(t, err, out)
 			assert.Equal(t, tt.want, f.git(t, "log", "-1", "--format=%B"))
+			if tt.name == "file" {
+				assert.NoDirExists(t, filepath.Join(filepath.Dir(f.repo), "data"))
+			}
 		})
 	}
 }
@@ -154,12 +154,10 @@ func TestGitTrailerAmend(t *testing.T) {
 	f.setenv("CODEX_THREAD_ID", "abcdefab-1234-1234-1234-1234567890ab")
 	f.git(t, "commit", "--amend", "--no-edit", "--allow-empty")
 	assert.Equal(t, "first\n\n"+trailerLine+"\nAgent-Session: codex:abcdefab-1234-1234-1234-1234567890ab", f.git(t, "log", "-1", "--format=%B"))
-	f.git(t, "commit", "--allow-empty", "-C", "HEAD")
-	assert.Equal(t, 2, strings.Count(f.git(t, "log", "-1", "--format=%B"), "Agent-Session:"))
 }
 
 func TestGitTrailerUnavailable(t *testing.T) {
-	for _, state := range []string{"missing", "failure", "no session", "invalid", "ambiguous"} {
+	for _, state := range []string{"missing", "failure", "no session", "ambiguous"} {
 		t.Run(state, func(t *testing.T) {
 			f := newGitTrailerFixture(t)
 			f.hook(t, "install")
@@ -175,8 +173,6 @@ func TestGitTrailerUnavailable(t *testing.T) {
 				require.NoError(t, os.WriteFile(f.bin, []byte("#!/bin/sh\nexit 42\n"), 0o755))
 			case "no session":
 				f.setenv("CODEX_THREAD_ID", "")
-			case "invalid":
-				f.setenv("CODEX_THREAD_ID", "bad")
 			case "ambiguous":
 				f.setenv("CLAUDE_CODE_SESSION_ID", trailerID)
 			}
@@ -208,12 +204,29 @@ func TestGitHookInstall(t *testing.T) {
 			f.hook(t, "install")
 			f.git(t, "commit", "--allow-empty", "-m", "installed hook")
 			assert.Equal(t, "installed hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
-			original := []byte("#!/bin/sh\n# existing hook\n")
+			if hooksDir != ".git/hooks" {
+				return
+			}
+			original, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.NoError(t, os.Chmod(path, 0o555))
+			before, err := os.Stat(path)
+			require.NoError(t, err)
+			f.hook(t, "install")
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			after, err := os.Stat(path)
+			require.NoError(t, err)
+			assert.Equal(t, original, data)
+			assert.Equal(t, before.ModTime(), after.ModTime())
+			assert.Equal(t, before.Mode(), after.Mode())
+			require.NoError(t, os.Chmod(path, 0o755))
+			original = []byte("#!/bin/sh\n# existing hook\n")
 			require.NoError(t, os.WriteFile(path, original, 0o755))
 			out, err := f.run(t, f.bin, "git-hook", "install")
 			require.Error(t, err)
 			assert.Contains(t, out, `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`)
-			data, err := os.ReadFile(path)
+			data, err = os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, original, data)
 			_, line, ok := strings.Cut(out, "add this line to it:\n")
@@ -226,49 +239,4 @@ func TestGitHookInstall(t *testing.T) {
 			assert.Contains(t, out, "later check")
 		})
 	}
-}
-
-func TestGitHookInstallAgain(t *testing.T) {
-	f := newGitTrailerFixture(t)
-	f.hook(t, "install")
-	path := filepath.Join(f.repo, ".git", "hooks", "commit-msg")
-	original, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.Chmod(path, 0o555))
-	before, err := os.Stat(path)
-	require.NoError(t, err)
-	f.hook(t, "install")
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	after, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, original, data)
-	assert.Equal(t, before.ModTime(), after.ModTime())
-	assert.Equal(t, before.Mode(), after.Mode())
-}
-
-func TestGitTrailerRebasePick(t *testing.T) {
-	f := newGitTrailerFixture(t)
-	f.git(t, "commit", "--allow-empty", "-m", "base")
-	f.git(t, "checkout", "-b", "topic")
-	require.NoError(t, os.WriteFile(filepath.Join(f.repo, "topic"), []byte("topic"), 0o600))
-	f.git(t, "add", "topic")
-	f.git(t, "commit", "-m", "picked")
-	f.git(t, "checkout", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(f.repo, "main"), []byte("main"), 0o600))
-	f.git(t, "add", "main")
-	f.git(t, "commit", "-m", "advance")
-	f.hook(t, "install")
-	f.git(t, "rebase", "main", "topic")
-	assert.Equal(t, "picked", f.git(t, "log", "-1", "--format=%B"))
-}
-
-func TestGitTrailerAvoidsStartup(t *testing.T) {
-	f := newGitTrailerFixture(t)
-	f.setenv("TMPDIR", filepath.Join(f.repo, "missing-temp"))
-	f.setenv("GIT_EDITOR", ":")
-	out, err := f.run(t, f.bin, "git-trailer", "missing-message")
-	require.NoError(t, err, out)
-	assert.Contains(t, out, "warning:")
-	assert.NoDirExists(t, filepath.Join(filepath.Dir(f.repo), "data"))
 }

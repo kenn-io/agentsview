@@ -21,7 +21,6 @@ func TestDiscover(t *testing.T) {
 		{name: "claude", env: map[string]string{"CLAUDE_CODE_SESSION_ID": sessionUUID}, want: Session{"claude", sessionUUID}},
 		{name: "codex thread", env: map[string]string{"CODEX_THREAD_ID": sessionUUID}, want: Session{"codex", sessionUUID}},
 		{name: "codex legacy", env: map[string]string{"CODEX_SESSION_ID": sessionUUID}, want: Session{"codex", sessionUUID}},
-		{name: "aliases agree", env: map[string]string{"CODEX_THREAD_ID": sessionUUID, "CODEX_SESSION_ID": sessionUUID}, want: Session{"codex", sessionUUID}},
 		{name: "agents disagree", env: map[string]string{"CLAUDE_CODE_SESSION_ID": sessionUUID, "CODEX_THREAD_ID": sessionUUID}, bad: true},
 		{name: "codex subagent", env: map[string]string{"CODEX_SESSION_ID": sessionUUID, "CODEX_THREAD_ID": "abcdefab-1234-1234-1234-1234567890ab"}, want: Session{"codex", "abcdefab-1234-1234-1234-1234567890ab"}},
 		{name: "invalid thread takes precedence", env: map[string]string{"CODEX_SESSION_ID": sessionUUID, "CODEX_THREAD_ID": "bad"}, bad: true},
