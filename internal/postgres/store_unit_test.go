@@ -289,7 +289,8 @@ func (c *emptyTrashProbeConn) ExecContext(
 
 	switch {
 	case strings.Contains(normalized, "pg_advisory_xact_lock_shared"):
-		return driver.RowsAffected(0), nil
+		// Ordinary stores also support databases without advisory locks.
+		return nil, &pgconn.PgError{Code: "42883", Message: "advisory locks unavailable"}
 	case strings.Contains(normalized, "set deleted_at = deleted_at"):
 		return driver.RowsAffected(c.state.trashedCountLocked()), nil
 	case strings.Contains(normalized, "insert into excluded_sessions"):
