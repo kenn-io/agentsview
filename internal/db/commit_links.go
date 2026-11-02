@@ -139,14 +139,20 @@ type commitCall struct {
 	input, result, toolName string
 }
 
-// callOutput decodes Codex results and their running process IDs.
+// callOutput decodes shell results and their running process IDs.
 func callOutput(result string) (string, int64) {
 	var payload struct {
-		Output    *string `json:"output"`
-		SessionID int64   `json:"session_id"`
+		Output      *string `json:"output"`
+		OutputDelta *string `json:"output_delta"`
+		SessionID   int64   `json:"session_id"`
 	}
-	if json.Unmarshal([]byte(result), &payload) == nil && payload.Output != nil {
-		return *payload.Output, payload.SessionID
+	if json.Unmarshal([]byte(result), &payload) == nil {
+		if payload.Output != nil {
+			return *payload.Output, payload.SessionID
+		}
+		if payload.OutputDelta != nil {
+			return *payload.OutputDelta, payload.SessionID
+		}
 	}
 	var blocks []struct {
 		Type string `json:"type"`

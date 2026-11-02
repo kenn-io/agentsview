@@ -1413,13 +1413,13 @@ func (db *DB) PurgeExcludedSessions(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := purgeExcludedSessionsTx(ctx, tx); err != nil {
+	if _, err := purgeExcludedSessionsTx(ctx, tx, false); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx, permanentDelete bool) (int64, error) {
 	const excluded = `EXISTS (
 		SELECT 1 FROM excluded_sessions excluded
 		WHERE excluded.id = sessions.id OR (
@@ -1445,9 +1445,11 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
 		}
-		// Preserve an exact deletion record for pages covered by a thread exclusion.
-		if err := excludeSessionIDTx(ctx, tx, id, sql.NullString{}); err != nil {
-			return 0, fmt.Errorf("recording excluded session deletion: %w", err)
+		if permanentDelete {
+			// Preserve page links only when the user permanently deletes the thread.
+			if err := excludeSessionIDTx(ctx, tx, id, sql.NullString{}); err != nil {
+				return 0, fmt.Errorf("recording excluded session deletion: %w", err)
+			}
 		}
 	}
 	if err := deleteSessionAnnotationsTx(ctx, tx, excluded); err != nil {
@@ -5781,7 +5783,7 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 		return 0, err
 	}
 	if threadScope {
-		pages, err := purgeExcludedSessionsTx(ctx, tx)
+		pages, err := purgeExcludedSessionsTx(ctx, tx, true)
 		if err != nil {
 			return 0, err
 		}

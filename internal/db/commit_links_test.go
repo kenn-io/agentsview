@@ -50,6 +50,20 @@ func TestCommitLinksLateResult(t *testing.T) {
 	}
 }
 
+func TestCommitLinksFXOutputDelta(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "fx:commit", "project-a", func(s *Session) { s.Agent = "fx" })
+	messages := commitMessages("fx:commit", `{"command":"git commit -m fix"}`, `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`)
+	messages[2].ToolCalls[0].ToolName = "shell"
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "fx:commit")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.Equal(t, "main", got.Commits[0].Branch)
+	assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+}
+
 func TestCommitLinksParsing(t *testing.T) {
 	for _, tt := range []struct {
 		name, command, result, repository string
@@ -171,11 +185,20 @@ func TestCommitLinksPurgeExcludedPages(t *testing.T) {
 	_, err := d.getWriter().ExecContext(t.Context(), `INSERT INTO excluded_sessions(id, include_codex_pages) VALUES (?, 1)`, thread)
 	require.NoError(t, err)
 	require.NoError(t, d.PurgeExcludedSessions(t.Context()))
+	var excludedIDs []string
+	rows, err := d.getReader().QueryContext(t.Context(), "SELECT id FROM excluded_sessions ORDER BY id")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		excludedIDs = append(excludedIDs, id)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{thread}, excludedIDs)
 	deleted, err := d.SessionCommitLinks(t.Context(), page)
 	require.NoError(t, err)
-	require.Len(t, deleted.Commits, 1)
-	assert.True(t, deleted.Commits[0].Missing)
-	assert.Nil(t, deleted.Commits[0].Turn)
+	assert.Empty(t, deleted.Commits)
 	got, err := d.SessionCommitLinks(t.Context(), "retained")
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 1)
