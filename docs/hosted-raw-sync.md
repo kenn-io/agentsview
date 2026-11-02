@@ -147,10 +147,11 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   TO hosted_runtime;
 ```
 
-For an existing deployment, run `agentsview replica pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+For an existing deployment, run
+`agentsview replica pg hosted-provision provision`, then apply the
+`raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as the owner.
+`ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
+fails startup until provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.
@@ -206,19 +207,19 @@ read-only jail. Filesystem escape, networking and process creation are denied;
 seccomp applies to every existing thread and allows only constrained runtime
 thread creation. No external sandbox helper is required.
 
-| Limit                                        | Value                                           |
-| -------------------------------------------- | ----------------------------------------------- |
-| Worker concurrency                           | One sequential job per instance                 |
-| Poll interval                                | Default 5 seconds; maximum 60                   |
-| Whole attempt wall time                      | Default 60 seconds; maximum 300                 |
+| Limit                                        | Value                                            |
+| -------------------------------------------- | ------------------------------------------------ |
+| Worker concurrency                           | One sequential job per instance                  |
+| Poll interval                                | Default 5 seconds; maximum 60                    |
+| Whole attempt wall time                      | Default 60 seconds; maximum 300                  |
 | Attempts per selected generation             | Default 5; maximum 10; 6 / 11 after interruption |
-| Retry backoff                                | Exponential from 1 second, capped at 60 seconds |
-| Lease / heartbeat                            | 60 seconds / 10 seconds                         |
-| Materialized source bytes                    | 512 MiB                                         |
-| Parser stdout / stderr                       | 32 MiB / 64 KiB                                 |
-| Child address space / data                   | 2 GiB / 512 MiB                                 |
-| Child CPU / open descriptors                 | 30 seconds / 64                                 |
-| Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                          |
+| Retry backoff                                | Exponential from 1 second, capped at 60 seconds  |
+| Lease / heartbeat                            | 60 seconds / 10 seconds                          |
+| Materialized source bytes                    | 512 MiB                                          |
+| Parser stdout / stderr                       | 32 MiB / 64 KiB                                  |
+| Child address space / data                   | 2 GiB / 512 MiB                                  |
+| Child CPU / open descriptors                 | 30 seconds / 64                                  |
+| Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                           |
 
 Custody may accept files larger than the materialization limit. Such captures
 remain retained but cannot be projected by this worker. Accepted source bytes
@@ -268,6 +269,10 @@ retry their transaction on serialization failure (`SQLSTATE 40001`) if
 publication or curation holds a conflicting identity lock. Ordinary legacy
 content and curation writes do not take those identity locks.
 
+Search and session reads use the published sessions while new raw captures wait
+for processing. Reads retry if published content or public identities change
+during the read.
+
 Selecting a parser job does not expire browsing cursors. Publishing changed
 identities does; the sidebar and activity report reload when their next page
 uses an expired cursor. The API returns a bad-request response for invalid or
@@ -307,10 +312,10 @@ agentsview pg raw-reparse hosted --repair --batch-size 64
 Repeat until the command prints `Rescheduled 0 failed jobs`. If the count stops
 reaching zero while health still lists the same failures, those jobs are failing
 again. Fix their cause or raise `--batch-size` (up to 256). Repair uses this
-executable's processing version and is safe to repeat.
-It only reschedules failed jobs still selected for current heads, leaving
-healthy jobs, in-progress jobs, and heads at other versions unchanged. `--repair`
-and `--run-id` are mutually exclusive.
+executable's processing version and is safe to repeat. It only reschedules
+failed jobs still selected for current heads, leaving healthy jobs, in-progress
+jobs, and heads at other versions unchanged. `--repair` and `--run-id` are
+mutually exclusive.
 
 A source whose file has left its device has a tombstone as its current head.
 Reparsing it changes nothing, so its retained sessions keep the output of the
@@ -448,9 +453,9 @@ doing so intentionally creates two watchers over the same provider roots.
 
 ## Upload maintenance
 
-When raw-sync routes are active, `agentsview replica pg serve` cleans upload sessions
-and the private `raw-upload-spool` directory during startup and every 15
-minutes. It expires due open sessions, removes due terminal sessions, and
+When raw-sync routes are active, `agentsview replica pg serve` cleans upload
+sessions and the private `raw-upload-spool` directory during startup and every
+15 minutes. It expires due open sessions, removes due terminal sessions, and
 reconciles orphaned `.part` files through the existing PostgreSQL upload store.
 Each pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
 entries per directory scan. The server keeps its spool cursor between passes.
@@ -504,10 +509,10 @@ and its older signal version, so its calls stay not analyzed.
 This release stores Codex Cloud plan usage in a new `session_plan_usage` table.
 A `GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so
 earlier grants do not reach this table. After
-`agentsview replica pg hosted-provision provision` or `agentsview replica pg push` creates the
-table, run the grants below as the schema owner. Replace the schema names
-(`hosted_sessions`, `agentsview`) and the role names (`hosted_runtime`,
-`agentsview_reader`) with your own.
+`agentsview replica pg hosted-provision provision` or
+`agentsview replica pg push` creates the table, run the grants below as the
+schema owner. Replace the schema names (`hosted_sessions`, `agentsview`) and the
+role names (`hosted_runtime`, `agentsview_reader`) with your own.
 
 In explicit hosted mode, the runtime role needs `SELECT` and `INSERT`. Until it
 has them, hosted startup fails with
@@ -518,8 +523,8 @@ GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
 ```
 
 Each read-only role that serves the PostgreSQL UI, such as the reader of a
-legacy schema, needs `SELECT`. Until it has it, `agentsview replica pg serve` with that
-role fails to start with `serve role cannot read the schema` and
+legacy schema, needs `SELECT`. Until it has it, `agentsview replica pg serve`
+with that role fails to start with `serve role cannot read the schema` and
 `permission denied for table session_plan_usage`. The schema owner or a database
 administrator grants it:
 

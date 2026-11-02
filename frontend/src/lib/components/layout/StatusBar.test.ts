@@ -107,6 +107,7 @@ describe("StatusBar", () => {
       friction_available: false,
       friction_build_allowed: false,
       session_stats_available: false,
+      kata_available: false,
       read_only: true,
     };
     const component = mount(StatusBar, { target: document.body });

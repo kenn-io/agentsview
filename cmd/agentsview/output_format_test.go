@@ -48,6 +48,7 @@ func TestOutputFormat_RejectsInvalid(t *testing.T) {
 // openapi (spec-only) are deliberately excluded.
 var machineOutputCommandPaths = [][]string{
 	{"version"},
+	{"kata", "status"},
 	{"project", "list"},
 	{"session", "health"},
 	{"report", "usage", "daily"},

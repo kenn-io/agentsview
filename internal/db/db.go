@@ -637,7 +637,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // repair; source and session identities are unchanged.)
 // (160: remove injected Antigravity CLI prompt envelopes from stored user
 // messages and titles. Re-parse unchanged CLI sources in place.)
-const dataVersion = 160
+// (161: record Posit Assistant per-message thinking effort as reasoning
+// effort. Re-parse Posit Assistant sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 161
 
 const archiveOnlyVersionBase = 1 << 20
 
