@@ -5296,11 +5296,11 @@ schemas keep their existing ordering behavior.
   allows 1 to 255 ASCII letters, digits, dots, underscores, or hyphens in
   session and parent IDs, excluding `.` and `..` and the reserved `v2` name in
   any case.
-- **Evidence:** `source`. Shell result `output_delta` reverified 2026-11-02
-  against `internal/parser/testdata/fx/parent-session/events.jsonl`.
+- **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/vercel-labs/fx.git` at
   `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-13. Fixtures
-  were captured with fx v0.0.13.
+  were captured with fx v0.0.13. Shell result `output_delta` reverified
+  2026-11-02 against `internal/parser/testdata/fx/parent-session/events.jsonl`.
 - **Usage and cost:**
   [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
   stores cumulative per-model totals in `usage-v2.json` under
