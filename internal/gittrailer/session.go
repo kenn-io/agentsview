@@ -4,7 +4,6 @@ package gittrailer
 import (
 	"errors"
 	"regexp"
-	"strings"
 )
 
 var (
@@ -17,9 +16,11 @@ var (
 type Session struct{ Agent, ID string }
 
 func (s Session) validate() error {
-	validID := tokenPattern.MatchString(s.ID)
+	var validID bool
 	if s.Agent == "claude" || s.Agent == "codex" {
 		validID = uuidPattern.MatchString(s.ID)
+	} else {
+		validID = tokenPattern.MatchString(s.ID)
 	}
 	if !agentPattern.MatchString(s.Agent) || !validID {
 		return errors.New("invalid current session identifier")
@@ -28,8 +29,9 @@ func (s Session) validate() error {
 }
 
 // Discover follows Kata's close-transcript discovery rules: an explicit pair
-// overrides discovery; otherwise every nonempty source must agree. No source
-// is a silent absence. It never looks for transcripts or another session.
+// overrides discovery; otherwise Claude and Codex together are ambiguous.
+// Codex's current thread takes precedence over its root session. No source is
+// a silent absence. It never looks for transcripts or another session.
 func Discover(getenv func(string) string) (Session, error) {
 	current := Session{getenv("AGENTSVIEW_SESSION_AGENT"), getenv("AGENTSVIEW_SESSION_ID")}
 	if current.Agent != "" || current.ID != "" {
@@ -38,22 +40,19 @@ func Discover(getenv func(string) string) (Session, error) {
 		}
 		return current, nil
 	}
-	variables := []struct{ agent, name string }{
-		{"claude", "CLAUDE_CODE_SESSION_ID"},
-		{"codex", "CODEX_THREAD_ID"},
-		{"codex", "CODEX_SESSION_ID"},
+	codexID := getenv("CODEX_THREAD_ID")
+	if codexID == "" {
+		codexID = getenv("CODEX_SESSION_ID")
 	}
-	for _, v := range variables {
-		id := getenv(v.name)
-		if id == "" {
+	for _, candidate := range []Session{
+		{"claude", getenv("CLAUDE_CODE_SESSION_ID")},
+		{"codex", codexID},
+	} {
+		if candidate.ID == "" {
 			continue
 		}
-		candidate := Session{v.agent, id}
 		if current.ID != "" {
-			if current.Agent != candidate.Agent || !strings.EqualFold(current.ID, candidate.ID) {
-				return Session{}, errors.New("ambiguous current session; set the explicit override pair")
-			}
-			continue
+			return Session{}, errors.New("ambiguous current session; set the explicit override pair")
 		}
 		current = candidate
 	}

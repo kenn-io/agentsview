@@ -11,22 +11,24 @@ import (
 	gitcmd "go.kenn.io/kit/git/cmd"
 )
 
-const hookLine = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
-const hookScript = "#!/bin/sh\n" + hookLine + "\nexit 0\n"
+const (
+	hookLine   = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
+	hookScript = "#!/bin/sh\n" + hookLine + "\n"
+)
 
 func hookPath(repoDir string) (string, error) {
 	out, err := (gitcmd.Runner{}).Output(context.Background(), repoDir, "rev-parse", "--git-path", "hooks")
 	if err != nil {
 		return "", err
 	}
-	dir := strings.TrimSpace(string(out))
+	dir := strings.TrimSuffix(strings.TrimSuffix(string(out), "\n"), "\r")
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(repoDir, dir)
 	}
 	return filepath.Join(dir, "commit-msg"), nil
 }
 
-// Install opts this repository into session trailers without replacing a hook.
+// Install adds session trailers in Git's hooks directory without replacing a hook.
 func Install(repoDir string) error {
 	path, err := hookPath(repoDir)
 	if err != nil {

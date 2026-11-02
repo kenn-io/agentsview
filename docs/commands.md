@@ -57,24 +57,28 @@ commits made without an editor, including `-m`, `-F`, `-C`,
 `--amend --no-edit`, and `merge --no-edit`. A conflicted cherry-pick finished
 with `--no-edit` or `--continue` also carries the current session. Editor
 commits keep their original messages. Rebase picks keep their existing trailers.
+Amending from a different session adds a second `Agent-Session` line.
 
-Git still rejects empty messages, including comment-only messages when
-`commit.cleanup=strip` is configured. The hook cannot detect `--cleanup=strip`
-passed on the command line, so a comment-only `-m` message can become a commit
-containing only the trailer.
+The hook skips messages containing only blank lines, Git comments, or signoffs.
+Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
+can still commit when Git retains comments, but gets no trailer.
 
 AgentsView must be on `PATH`. A missing or failing binary, or a missing,
 invalid, or ambiguous session, leaves the commit message unchanged.
 
-Discovery uses `CLAUDE_CODE_SESSION_ID` for Claude and `CODEX_THREAD_ID` or
-`CODEX_SESSION_ID` for Codex. Native IDs must be UUIDs. Every nonempty source
-must agree. Set both `AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to
-override discovery. Other agent names accept lowercase letters, digits, and
+Discovery uses `CLAUDE_CODE_SESSION_ID` for Claude and `CODEX_THREAD_ID` for
+Codex, falling back to `CODEX_SESSION_ID` only when `CODEX_THREAD_ID` is unset
+or empty. Native IDs must be UUIDs. When both Claude and Codex variables are
+set, the hook leaves the message unchanged and prints a warning. Set both
+`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this ambiguity
+or override discovery. Other agent names accept lowercase letters, digits, and
 hyphens, up to 32 characters, starting with a letter or digit. Their IDs accept
 letters, digits, dots, underscores, and hyphens, up to 128 characters, starting
 with a letter or digit.
 
-Installation honors `core.hooksPath` and refuses to replace an existing hook.
+Installation writes into the hooks directory Git uses and refuses to replace
+an existing hook. A `core.hooksPath` setting, including a global one, makes
+installation apply to every repository sharing that path.
 Add this line to an existing `commit-msg` hook instead:
 
 ```sh

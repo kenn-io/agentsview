@@ -13,8 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const trailerID = "12345678-1234-1234-1234-1234567890ab"
-const trailerLine = "Agent-Session: codex:" + trailerID
+const (
+	trailerID   = "12345678-1234-1234-1234-1234567890ab"
+	trailerLine = "Agent-Session: codex:" + trailerID
+)
 
 // Reuse the test executable, as main_test.go does, rather than building in tests.
 func TestGitTrailerCLIProcess(t *testing.T) {
@@ -105,17 +107,20 @@ func TestGitTrailerCommits(t *testing.T) {
 		abort   bool
 		want    string
 	}{
-		{name: "issue subject", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser\n\n" + trailerLine},
+		{name: "issue subject", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser"},
 		{name: "amend subject", args: []string{"-m", "amend! fix the parser"}, want: "amend! fix the parser\n\n" + trailerLine},
 		{name: "file", args: []string{"-F", "message"}, want: "from file\n\n" + trailerLine},
 		{name: "empty", args: []string{"-m", ""}, abort: true},
 		{name: "empty signoff", args: []string{"-s", "-m", ""}, abort: true},
 		{name: "stripped comment", args: []string{"-m", "# wip"}, cleanup: "strip", abort: true},
+		{name: "command-line stripped comment", args: []string{"--cleanup=strip", "-m", "# wip"}, abort: true},
+		{name: "unedited template", abort: true},
 		{name: "editor", editor: true, want: "from editor"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newGitTrailerFixture(t)
 			f.hook(t, "install")
+			f.setenv("GIT_EDITOR", ":")
 			require.NoError(t, os.WriteFile(filepath.Join(f.repo, "message"), []byte("from file\n"), 0o600))
 			if tt.cleanup != "" {
 				f.git(t, "config", "commit.cleanup", tt.cleanup)
@@ -129,6 +134,9 @@ func TestGitTrailerCommits(t *testing.T) {
 			if tt.abort {
 				require.Error(t, err, out)
 				assert.Contains(t, out, "empty commit message")
+				message, readErr := os.ReadFile(filepath.Join(f.repo, ".git", "COMMIT_EDITMSG"))
+				require.NoError(t, readErr)
+				assert.NotContains(t, string(message), "Agent-Session:")
 				return
 			}
 			require.NoError(t, err, out)
@@ -172,22 +180,27 @@ func TestGitTrailerUnavailable(t *testing.T) {
 			case "ambiguous":
 				f.setenv("CLAUDE_CODE_SESSION_ID", trailerID)
 			}
-			f.git(t, "commit", "--allow-empty", "-m", "unchanged")
+			out, err := f.run(t, "git", "commit", "--allow-empty", "-m", "unchanged")
+			require.NoError(t, err, out)
+			if state == "ambiguous" {
+				assert.Contains(t, out, "warning: ambiguous current session")
+			}
 			assert.Equal(t, "unchanged", f.git(t, "log", "-1", "--format=%B"))
 		})
 	}
 }
 
 func TestGitHookInstall(t *testing.T) {
-	for _, custom := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default", true: "hooksPath"}[custom], func(t *testing.T) {
+	for _, hooksDir := range []string{".git/hooks", "custom-hooks", "custom-hooks "} {
+		t.Run(hooksDir, func(t *testing.T) {
 			f := newGitTrailerFixture(t)
-			if custom {
-				f.git(t, "config", "core.hooksPath", "custom-hooks")
+			if hooksDir != ".git/hooks" {
+				f.git(t, "config", "core.hooksPath", hooksDir)
 			}
-			path := f.git(t, "rev-parse", "--git-path", "hooks")
-			path = filepath.Join(f.repo, path, "commit-msg")
+			path := filepath.Join(f.repo, hooksDir, "commit-msg")
 			f.hook(t, "install")
+			f.git(t, "commit", "--allow-empty", "-m", "installed hook")
+			assert.Equal(t, "installed hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
 			original, err := os.ReadFile(path)
 			require.NoError(t, err)
 			out, err := f.run(t, f.bin, "git-hook", "install")

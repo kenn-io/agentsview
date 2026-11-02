@@ -19,15 +19,9 @@ func Stamp(ctx context.Context, file string, session Session) error {
 	}
 	// Keep the hook's repository environment and the user's Git configuration.
 	runner := gitcmd.Runner{}
-	cleanup, _, err := runner.Run(ctx, "", nil, "config", "--default", "default", "--get", "commit.cleanup")
+	message, _, err = runner.Run(ctx, "", strings.NewReader(string(message)), "stripspace", "--strip-comments")
 	if err != nil {
 		return err
-	}
-	if strings.TrimSpace(string(cleanup)) == "strip" {
-		message, _, err = runner.Run(ctx, "", strings.NewReader(string(message)), "stripspace", "--strip-comments")
-		if err != nil {
-			return err
-		}
 	}
 	empty := true
 	for line := range strings.SplitSeq(string(message), "\n") {
