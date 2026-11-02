@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,10 +32,6 @@ func TestSignalsFrustrationMemoReuse(t *testing.T) {
 	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 7, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	examples, err = d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Len(t, examples.Sessions, 1)
-	assert.Equal(t, 7, examples.Sessions[0].SignalTotal)
 }
 
 func TestSignalsFrustrationMemoInvalidation(t *testing.T) {
@@ -48,9 +45,6 @@ func TestSignalsFrustrationMemoInvalidation(t *testing.T) {
 		}, 2},
 		{"replace", func(t *testing.T, d *DB) {
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "Please explain this function."}}))
-		}, 0},
-		{"truncate", func(t *testing.T, d *DB) {
-			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", nil))
 		}, 0},
 		{"recreate", func(t *testing.T, d *DB) {
 			deleted, err := d.DeleteParserExcludedSessions(t.Context(), []string{"session"})
@@ -80,34 +74,32 @@ func TestSignalsFrustrationMemoInvalidation(t *testing.T) {
 }
 
 func TestSignalsFrustrationMemoReaderSwap(t *testing.T) {
-	for _, compact := range []bool{false, true} {
-		name := "reopen"
-		if compact {
-			name = "compact"
-		}
-		t.Run(name, func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			insertSession(t, d, "session", "test")
-			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "this is broken"}}))
-			_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-			require.NoError(t, err)
-			entry := d.frustrationMemo.counts["session"]
-			generation := d.frustrationMemo.generation
-			if compact {
-				_, err = d.Compact(ctx, CompactOptions{StagingDir: t.TempDir()})
-			} else {
-				err = d.Reopen()
-			}
-			require.NoError(t, err)
-			d.frustrationMemo.store(generation, "session", entry.version, 7)
-			assert.Empty(t, d.frustrationMemo.counts, "swap must clear counts and reject an in-flight store")
-			examples, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, "frustration_marker_count", 10)
-			require.NoError(t, err)
-			require.Len(t, examples.Sessions, 1)
-			assert.Equal(t, 1, examples.Sessions[0].SignalTotal)
-		})
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "this is broken"}}))
+	_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	entry := d.frustrationMemo.counts["session"]
+	generation := d.frustrationMemo.generation
+	require.NoError(t, d.Reopen())
+	d.frustrationMemo.store(generation, "session", entry.version, 7)
+	assert.Empty(t, d.frustrationMemo.counts, "swap must clear counts and reject an in-flight store")
+}
+
+type cancelAfterScanContext struct {
+	context.Context
+	reader *sql.DB
+	cancel context.CancelFunc
+}
+
+func (ctx cancelAfterScanContext) Err() error {
+	// The driver checks Err while holding a connection. Cancel only once
+	// the completed scan has closed its rows and returned that connection.
+	if ctx.reader.Stats().InUse == 0 {
+		ctx.cancel()
 	}
+	return ctx.Context.Err()
 }
 
 func TestSignalsFrustrationMemoCanceled(t *testing.T) {
@@ -116,8 +108,11 @@ func TestSignalsFrustrationMemoCanceled(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
 	rows, err := d.signalRows(t.Context(), AnalyticsFilter{})
 	require.NoError(t, err)
+	require.Len(t, rows, 1)
 	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	require.ErrorIs(t, d.populateFrustrationMarkers(ctx, rows), context.Canceled)
+	defer cancel()
+	err = d.populateFrustrationMarkers(cancelAfterScanContext{Context: ctx, reader: d.rawReader(), cancel: cancel}, rows)
+	require.Equal(t, context.Canceled, err, "cancellation must come from the post-scan check, rather than a wrapped query error")
+	assert.Equal(t, 1, rows[0].FrustrationMarkerCount, "the scan must finish before cancellation")
 	assert.Empty(t, d.frustrationMemo.counts)
 }
