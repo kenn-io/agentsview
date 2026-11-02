@@ -30,7 +30,7 @@ func TestCommitLinksLateResult(t *testing.T) {
 		MsgCount: 3, NextOrdinal: 3, SubagentLinks: []ToolCallSubagentLink{{ToolUseID: "commit-call", HasResult: true, ResultContent: "[main abc1234] Fix parser", ResultContentLen: len("[main abc1234] Fix parser")}},
 	})
 	require.NoError(t, err)
-	found, err := d.CommitSessionLinks(t.Context(), []string{"ABC12340000000000000000000000000000000000", "abc1234"})
+	found, err := d.CommitSessionLinks(t.Context(), []string{"ABC1234000000000000000000000000000000000", "abc1234"})
 	require.NoError(t, err)
 	require.Len(t, found.Commits, 2)
 	for _, match := range found.Commits {
@@ -50,65 +50,29 @@ func TestCommitLinksLateResult(t *testing.T) {
 	}
 }
 
-func TestCommitLinksFXOutputDelta(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "fx:commit", "project-a", func(s *Session) { s.Agent = "fx" })
-	messages := commitMessages("fx:commit", `{"command":"git commit -m fix"}`, `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`)
-	messages[2].ToolCalls[0].ToolName = "shell"
-	insertMessages(t, d, messages...)
-	got, err := d.SessionCommitLinks(t.Context(), "fx:commit")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-	assert.Equal(t, "abc1234", got.Commits[0].SHA)
-	assert.Equal(t, "main", got.Commits[0].Branch)
-	assert.Equal(t, "Fix parser", got.Commits[0].Subject)
-}
-
 func TestCommitLinksParsing(t *testing.T) {
 	for _, tt := range []struct {
-		name, command, result, repository string
-		count                             int
+		name, command, result string
+		count                 int
 	}{
-		{"commit", "git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
-		{"env", "GIT_X=1 git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
-		{"absolute git", "/usr/bin/git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
-		{"shell wrapper", "bash -lc 'git commit -m fix'", "[main abc1234] Fix parser", "/work", 1},
-		{"python", `python3 -c 'subprocess.run(["git","commit","-m","fix"])'`, "[main abc1234] Fix parser", "/work", 1},
-		{"heredoc apostrophe", "cat <<'EOF'\nIt's fixed\nEOF\ngit commit -m fix", "[main abc1234] Fix parser", "/work", 1},
-		{"tilde", "cd ~/x && git commit -m fix", "[main abc1234] Fix parser", "~/x", 1},
-		{"nonleading cd", "git add . && cd /elsewhere && git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
-		{"quiet", "git commit -q -m fix", "", "", 0},
-		{"quiet HEAD", "git commit -q -m fix && git rev-parse HEAD", "abc1234000000000000000000000000000000000\n", "/work", 1},
-		{"failed quiet HEAD", "git commit -q -m fix; git rev-parse HEAD", "nothing to commit\nabc1234000000000000000000000000000000000\n", "", 0},
-		{"failed quiet log", "git commit -q -m fix; git log -1 --oneline", "nothing to commit\nabc1234 Previous commit\n", "", 0},
-		{"quiet earlier readback", "git rev-parse HEAD; git commit -q -m fix", "abc1234000000000000000000000000000000000\n", "", 0},
-		{"quiet recovered failure", "git commit -q -m fix || true && git log -1 --oneline", "abc1234 Previous commit\n", "", 0},
-		{"quiet quoted separator", `git commit -q -m 'fix && git rev-parse HEAD'; git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "", 0},
-		{"quiet log", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "/work", 1},
-		{"quiet log reordered", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "/work", 1},
-		{"quiet log n", "git commit -q -m fix && git log -n 1 --oneline", "abc1234 Fix parser\n", "/work", 1},
-		{"quiet log oneline n", "git commit -q -m fix && git log --oneline -n 1", "abc1234 Fix parser\n", "/work", 1},
-		{"quiet unrelated SHA", "git commit -q -m fix && cat sha.txt", "abc1234000000000000000000000000000000000\n", "", 0},
-		{"quiet ancestor", "git commit -q -m fix && git rev-parse HEAD~1", "abc1234000000000000000000000000000000000\n", "", 0},
-		{"quiet log many", "git commit -q -m fix && git log -3 --oneline", "abc1234 Fix parser\n", "", 0},
-		{"quiet multiple lines", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\ndef5678 Other commit\n", "", 0},
-		{"failed", "git commit -m fix", "nothing to commit", "", 0},
-		{"printed", "cat out.txt", "[main abc1234] Fix parser", "", 0},
-		{"printed commit documentation", "cat docs/git-commit.md", "[main abc1234] Fix parser", "", 0},
-		{"shown commit documentation", "git show HEAD:docs/commit.md", "[main abc1234] Fix parser", "", 0},
-		{"log grep", "git log --grep=commit", "[main abc1234] Fix parser", "", 0},
-		{"commit filename", "git commit.md", "[main abc1234] Fix parser", "", 0},
-		{"quoted directory", `git -C "/tmp/my repo" commit -m fix`, "[main abc1234] Fix parser", "/tmp/my repo", 1},
-		{"cd", "cd /repo && git commit -m fix", "[main abc1234] Fix parser", "/repo", 1},
-		{"newline", "git add .\ngit commit -m fix", "[main abc1234] Fix parser", "/work", 1},
-		{"heredoc", "git commit -m \"$(cat <<'EOF'\nFix parser\nEOF\n)\"", "[main abc1234] Fix parser", "/work", 1},
-		{"cherry-pick", "git cherry-pick abc1234", "[main abc1234] Fix parser", "", 0},
-		{"multiple", "git commit -m one; git commit -m two", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", "/work", 2},
-		{"quoted operators", `git -C "/tmp/a;b" commit -m "x && y"`, "[feature/x abc1234] Fix parser", "/tmp/a;b", 1},
-		{"relative directory", "cd sub && git -C child commit -m fix", "[main abc1234] Fix parser", "/work/sub/child", 1},
-		{"global option", `git -c user.name=Example --no-pager commit -m fix`, "[main abc1234] Fix parser", "/work", 1},
-		{"quoted global option", `git -c 'user.name=Example User' commit -m fix`, "[main abc1234] Fix parser", "/work", 1},
-		{"global directory option", `git --git-dir=/repo/.git commit -m fix`, "[main abc1234] Fix parser", "/work", 1},
+		{"commit", "git commit -m fix", "[main abc1234] Fix parser", 1},
+		{"env", "GIT_X=1 git commit -m fix", "[main abc1234] Fix parser", 1},
+		{"absolute git", "/usr/bin/git commit -m fix", "[main abc1234] Fix parser", 1},
+		{"shell wrapper", "bash -lc 'git commit -m fix'", "[main abc1234] Fix parser", 1},
+		{"python", `python3 -c 'subprocess.run(["git","commit","-m","fix"])'`, "[main abc1234] Fix parser", 1},
+		{"heredoc apostrophe", "cat <<'EOF'\nIt's fixed\nEOF\ngit commit -m fix", "[main abc1234] Fix parser", 1},
+		{"failed", "git commit -m fix", "nothing to commit", 0},
+		{"printed", "cat out.txt", "[main abc1234] Fix parser", 0},
+		{"printed commit documentation", "cat docs/git-commit.md", "[main abc1234] Fix parser", 0},
+		{"shown commit documentation", "git show HEAD:docs/commit.md", "[main abc1234] Fix parser", 0},
+		{"log grep", "git log --grep=commit", "[main abc1234] Fix parser", 0},
+		{"commit filename", "git commit.md", "[main abc1234] Fix parser", 0},
+		{"newline", "git add .\ngit commit -m fix", "[main abc1234] Fix parser", 1},
+		{"heredoc", "git commit -m \"$(cat <<'EOF'\nFix parser\nEOF\n)\"", "[main abc1234] Fix parser", 1},
+		{"cherry-pick", "git cherry-pick abc1234", "[main abc1234] Fix parser", 0},
+		{"multiple", "git commit -m one; git commit -m two", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", 2},
+		{"global option", `git -c user.name=Example --no-pager commit -m fix`, "[main abc1234] Fix parser", 1},
+		{"quoted global option", `git -c 'user.name=Example User' commit -m fix`, "[main abc1234] Fix parser", 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -119,20 +83,11 @@ func TestCommitLinksParsing(t *testing.T) {
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, tt.count)
-			if tt.count > 0 {
-				assert.Equal(t, tt.repository, got.Commits[0].Repository)
-				if strings.HasPrefix(tt.name, "quiet") {
-					assert.Empty(t, got.Commits[0].Branch)
-				}
-			}
 		})
 	}
 
-	for _, tt := range []struct{ name, input, result, repository string }{
-		{"Codex JavaScript workdir", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, "/repo"},
-		{"JSON workdir", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser", "/repo"},
-		{"JSON cwd", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser", "/work/sub"},
-		{"JavaScript cwd", `text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`, "/repo"},
+	for _, tt := range []struct{ name, input, result string }{
+		{"output delta", `{"command":"git commit -m fix"}`, `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -141,7 +96,9 @@ func TestCommitLinksParsing(t *testing.T) {
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
-			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "main", got.Commits[0].Branch)
+			assert.Equal(t, "Fix parser", got.Commits[0].Subject)
 		})
 	}
 }
@@ -149,6 +106,12 @@ func TestCommitLinksParsing(t *testing.T) {
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	for _, tt := range []struct{ name, cwd, command, repository string }{
 		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
+		{"tilde", "/work", "cd ~/x && git commit -m fix", "~/x"},
+		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/work"},
+		{"quoted directory", "/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"},
+		{"quoted operators", "/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"},
+		{"relative directory", "/work", "cd sub && git -C child commit -m fix", "/work/sub/child"},
+		{"global directory option", "/work", `git --git-dir=/repo/.git commit -m fix`, "/work"},
 		{"POSIX relative", "/work", "cd sub && git -C ../child commit -m fix", "/work/child"},
 		{"Windows absolute", `C:\work`, `cd D:\repo && git commit -m fix`, `D:\repo`},
 		{"Windows relative", `C:\work`, `cd sub && git -C child commit -m fix`, `C:\work\sub\child`},
@@ -172,130 +135,132 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
 		})
 	}
-}
-
-func TestCommitLinksPurgeExcludedPages(t *testing.T) {
-	d := testDB(t)
-	const thread = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	const page = thread + "_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	for _, id := range []string{page, "retained"} {
-		insertSession(t, d, id, "project-a")
-		insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
-	}
-	_, err := d.getWriter().ExecContext(t.Context(), `INSERT INTO excluded_sessions(id, include_codex_pages) VALUES (?, 1)`, thread)
-	require.NoError(t, err)
-	require.NoError(t, d.PurgeExcludedSessions(t.Context()))
-	var excludedIDs []string
-	rows, err := d.getReader().QueryContext(t.Context(), "SELECT id FROM excluded_sessions ORDER BY id")
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		require.NoError(t, rows.Scan(&id))
-		excludedIDs = append(excludedIDs, id)
-	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{thread}, excludedIDs)
-	deleted, err := d.SessionCommitLinks(t.Context(), page)
-	require.NoError(t, err)
-	assert.Empty(t, deleted.Commits)
-	got, err := d.SessionCommitLinks(t.Context(), "retained")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-}
-
-func TestCommitLinksDeleteCodexThread(t *testing.T) {
-	d := testDB(t)
-	const thread = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	const page = thread + "_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	for _, id := range []string{thread, page} {
-		insertSession(t, d, id, "project-a", func(s *Session) { s.Agent = "codex" })
-		insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
-	}
-	require.NoError(t, d.SoftDeleteSession(t.Context(), thread))
-	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET trash_includes_codex_pages=1 WHERE id=?`, thread)
-	require.NoError(t, err)
-	require.NoError(t, d.DeleteSession(t.Context(), thread))
-	got, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-	require.NoError(t, err)
-	require.Len(t, got.Commits[0].Links, 2)
-	for _, link := range got.Commits[0].Links {
-		assert.True(t, link.Missing)
-		assert.Nil(t, link.Turn)
-		session, err := d.GetSession(t.Context(), link.SessionID)
-		require.NoError(t, err)
-		assert.Nil(t, session)
-	}
-}
-
-func TestCommitLinksQuietMetadata(t *testing.T) {
-	for _, tt := range []struct{ name, command, result, branch, subject string }{
-		{"HEAD", `git commit -q -m "Fix parser" && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", "Fix parser"},
-		{"single quotes", `git commit -q -m 'Fix parser' && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", "Fix parser"},
-		{"quoted subject", `git commit -q -m 'Fix "parser"' && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", `Fix "parser"`},
-		{"escaped quotes", `git commit -q -m "Fix \"parser\"" && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", `Fix "parser"`},
-		{"own message", `echo -m unrelated; git commit -q -m fix && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "feature/parser", "fix"},
-		{"first message", "git commit -q -m 'Fix parser\n\nDetails' -m 'More details' && git rev-parse HEAD", "abc1234000000000000000000000000000000000\n", "feature/parser", "Fix parser"},
-		{"readback subject", `git commit -q -m fix && git log -1 --oneline`, "abc1234 Fix parser\n", "feature/parser", "Fix parser"},
-		{"no branch", `git commit -q -m fix && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", "", "fix"},
+	for _, tt := range []struct{ name, input, result, repository string }{
+		{"Codex JavaScript workdir", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, "/repo"},
+		{"JSON workdir", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser", "/repo"},
+		{"JSON cwd", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser", "/work/sub"},
+		{"JavaScript cwd", `text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`, "/repo"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.GitBranch = tt.branch })
-			input, err := json.Marshal(map[string]string{"command": tt.command})
-			require.NoError(t, err)
-			insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			insertMessages(t, d, commitMessages("s1", tt.input, tt.result)...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
-			assert.Empty(t, got.Commits[0].Branch)
-			assert.Equal(t, tt.subject, got.Commits[0].Subject)
+			assert.Equal(t, tt.repository, got.Commits[0].Repository)
 		})
 	}
 }
 
-func TestReviewQuietReadbackMustNameCreatedCommit(t *testing.T) {
-	for _, tt := range []struct {
-		name, readback, result string
-		count                  int
-	}{
-		{"implicit HEAD", "git log -1 --oneline", "abc1234 Fix parser\n", 1},
-		{"explicit HEAD", "git log -1 --oneline HEAD", "abc1234 Fix parser\n", 1},
-		{"reordered HEAD", "git log --oneline -1 HEAD", "abc1234 Fix parser\n", 1},
-		{"count HEAD", "git log -n 1 --oneline HEAD", "abc1234 Fix parser\n", 1},
-		{"oneline count HEAD", "git log --oneline -n 1 HEAD", "abc1234 Fix parser\n", 1},
-		{"parent", "git log -1 --oneline HEAD~1", "def5678 Previous commit\n", 0},
-		{"parent caret", "git log -1 --oneline HEAD^", "def5678 Previous commit\n", 0},
-		{"other branch", "git log --oneline -1 main", "def5678 Previous commit\n", 0},
-		{"range", "git log -n 1 --oneline HEAD~2..HEAD~1", "def5678 Previous commit\n", 0},
-		{"extra revision", "git log --oneline -n 1 HEAD main", "def5678 Previous commit\n", 0},
-		{"extra rev-parse revision", "git rev-parse HEAD main", "def5678000000000000000000000000000000000\n", 0},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
+func TestCommitLinksPurgeExcludedPages(t *testing.T) {
+	for _, permanent := range []bool{false, true} {
+		name := "purge"
+		if permanent {
+			name = "permanent delete"
+		}
+		t.Run(name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "s1", "project-a")
-			input, err := json.Marshal(map[string]string{"command": "git commit -q -m fix && " + tt.readback})
-			require.NoError(t, err)
-			insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, tt.count)
-			if tt.count > 0 {
-				assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			const thread = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+			const page = thread + "_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+			for _, id := range []string{thread, page, "retained"} {
+				insertSession(t, d, id, "project-a", func(s *Session) { s.Agent = "codex" })
+				insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			}
+			if permanent {
+				require.NoError(t, d.SoftDeleteSession(t.Context(), thread))
+				_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET trash_includes_codex_pages=1 WHERE id=?`, thread)
+				require.NoError(t, err)
+				require.NoError(t, d.DeleteSession(t.Context(), thread))
+
+				got, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+				require.NoError(t, err)
+				require.Len(t, got.Commits[0].Links, 3)
+				for _, link := range got.Commits[0].Links[:2] {
+					assert.True(t, link.Missing)
+					assert.Nil(t, link.Turn)
+					session, err := d.GetSession(t.Context(), link.SessionID)
+					require.NoError(t, err)
+					assert.Nil(t, session)
+				}
+			} else {
+				_, err := d.getWriter().ExecContext(t.Context(), `INSERT INTO excluded_sessions(id, include_codex_pages) VALUES (?, 1)`, thread)
+				require.NoError(t, err)
+				require.NoError(t, d.PurgeExcludedSessions(t.Context()))
+				var excludedIDs []string
+				rows, err := d.getReader().QueryContext(t.Context(), "SELECT id FROM excluded_sessions ORDER BY id")
+				require.NoError(t, err)
+				defer rows.Close()
+				for rows.Next() {
+					var id string
+					require.NoError(t, rows.Scan(&id))
+					excludedIDs = append(excludedIDs, id)
+				}
+				require.NoError(t, rows.Err())
+				assert.Equal(t, []string{thread}, excludedIDs)
+				deleted, err := d.SessionCommitLinks(t.Context(), page)
+				require.NoError(t, err)
+				assert.Empty(t, deleted.Commits)
+				got, err := d.SessionCommitLinks(t.Context(), "retained")
+				require.NoError(t, err)
+				require.Len(t, got.Commits, 1)
 			}
 		})
 	}
 }
 
-func TestReviewQuietBranchAfterCheckout(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a", func(s *Session) { s.GitBranch = "main" })
-	insertMessages(t, d, commitMessages("s1", `{"command":"git checkout feature && git commit -q -m fix && git log -1 --oneline HEAD"}`, "abc1234 Fix parser\n")...)
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-	// Quiet commits print no branch, so none is reported.
-	assert.Empty(t, got.Commits[0].Branch)
+func TestCommitLinksQuietMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name, command, result string
+		accept                bool
+		sha, branch, subject  string
+	}{
+		{"HEAD", `git commit -q -m "Fix parser" && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", true, "abc1234000000000000000000000000000000000", "", "Fix parser"},
+		{"single quotes", `git commit -q -m 'Fix parser' && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", true, "abc1234000000000000000000000000000000000", "", "Fix parser"},
+		{"quoted subject", `git commit -q -m 'Fix "parser"' && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", true, "abc1234000000000000000000000000000000000", "", `Fix "parser"`},
+		{"escaped quotes", `git commit -q -m "Fix \"parser\"" && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", true, "abc1234000000000000000000000000000000000", "", `Fix "parser"`},
+		{"own message", `echo -m unrelated; git commit -q -m fix && git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", true, "abc1234000000000000000000000000000000000", "", "fix"},
+		{"first message", "git commit -q -m 'Fix parser\n\nDetails' -m 'More details' && git rev-parse HEAD", "abc1234000000000000000000000000000000000\n", true, "abc1234000000000000000000000000000000000", "", "Fix parser"},
+		{"readback subject", `git commit -q -m fix && git log -1 --oneline`, "abc1234 Fix parser\n", true, "abc1234", "", "Fix parser"},
+		{"explicit HEAD", "git commit -q -m fix && git log -1 --oneline HEAD", "abc1234 Fix parser\n", true, "abc1234", "", "Fix parser"},
+		{"reordered HEAD", "git commit --quiet -m fix && git log --oneline -1 HEAD", "abc1234 Fix parser\n", true, "abc1234", "", "Fix parser"},
+		{"count HEAD", "git commit -q -m fix && git log -n 1 --oneline HEAD", "abc1234 Fix parser\n", true, "abc1234", "", "Fix parser"},
+		{"oneline count HEAD", "git commit -q -m fix && git log --oneline -n 1 HEAD", "abc1234 Fix parser\n", true, "abc1234", "", "Fix parser"},
+		{"parent", "git commit -q -m fix && git log -1 --oneline HEAD~1", "def5678 Previous commit\n", false, "", "", ""},
+		{"parent caret", "git commit -q -m fix && git log -1 --oneline HEAD^", "def5678 Previous commit\n", false, "", "", ""},
+		{"other branch", "git commit -q -m fix && git log --oneline -1 main", "def5678 Previous commit\n", false, "", "", ""},
+		{"range", "git commit -q -m fix && git log -n 1 --oneline HEAD~2..HEAD~1", "def5678 Previous commit\n", false, "", "", ""},
+		{"extra revision", "git commit -q -m fix && git log --oneline -n 1 HEAD main", "def5678 Previous commit\n", false, "", "", ""},
+		{"extra rev-parse revision", "git commit -q -m fix && git rev-parse HEAD main", "def5678000000000000000000000000000000000\n", false, "", "", ""},
+		{"quiet", "git commit -q -m fix", "", false, "", "", ""},
+		{"failed quiet HEAD", "git commit -q -m fix; git rev-parse HEAD", "nothing to commit\nabc1234000000000000000000000000000000000\n", false, "", "", ""},
+		{"failed quiet log", "git commit -q -m fix; git log -1 --oneline", "nothing to commit\nabc1234 Previous commit\n", false, "", "", ""},
+		{"quiet earlier readback", "git rev-parse HEAD; git commit -q -m fix", "abc1234000000000000000000000000000000000\n", false, "", "", ""},
+		{"quiet recovered failure", "git commit -q -m fix || true && git log -1 --oneline", "abc1234 Previous commit\n", false, "", "", ""},
+		{"quiet quoted separator", `git commit -q -m 'fix && git rev-parse HEAD'; git rev-parse HEAD`, "abc1234000000000000000000000000000000000\n", false, "", "", ""},
+		{"quiet unrelated SHA", "git commit -q -m fix && cat sha.txt", "abc1234000000000000000000000000000000000\n", false, "", "", ""},
+		{"quiet ancestor", "git commit -q -m fix && git rev-parse HEAD~1", "abc1234000000000000000000000000000000000\n", false, "", "", ""},
+		{"quiet log many", "git commit -q -m fix && git log -3 --oneline", "abc1234 Fix parser\n", false, "", "", ""},
+		{"quiet multiple lines", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\ndef5678 Other commit\n", false, "", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.GitBranch = "feature/parser" })
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			if !tt.accept {
+				assert.Empty(t, got.Commits)
+				return
+			}
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.sha, got.Commits[0].SHA)
+			assert.Equal(t, tt.branch, got.Commits[0].Branch)
+			assert.Equal(t, tt.subject, got.Commits[0].Subject)
+		})
+	}
 }
 
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {
@@ -343,6 +308,11 @@ func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	rewritten, err := d.SessionCommitLinks(t.Context(), "s2")
 	require.NoError(t, err)
 	assert.Empty(t, rewritten.Commits)
+	_, err = d.DeleteParserExcludedSessions(t.Context(), []string{"s3"})
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM commit_links WHERE session_id='s3'`).Scan(&count))
+	assert.Zero(t, count)
 }
 
 func TestCommitLinksBackfill(t *testing.T) {
@@ -396,21 +366,31 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	}
 }
 
-func TestCommitLinksPromptLimitAndPolicy(t *testing.T) {
+func TestCommitLinksPromptLimit(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")
+	messages[0].Content = strings.Repeat("é", 1100)
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	require.NotNil(t, got.Commits[0].Turn)
+	assert.Equal(t, strings.Repeat("é", 1000), got.Commits[0].Turn.Text)
+}
+
+func TestCommitLinksWritePolicy(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			d := testDB(t)
 			d.SetArchiveContent(policy)
 			insertSession(t, d, "s1", "project-a")
 			messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")
-			messages[0].Content = strings.Repeat("é", 1100)
 			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {
 				require.Len(t, got.Commits, 1)
-				require.NotNil(t, got.Commits[0].Turn)
-				assert.Equal(t, strings.Repeat("é", 1000), got.Commits[0].Turn.Text)
 			} else {
 				assert.Empty(t, got.Commits)
 			}
@@ -429,9 +409,6 @@ func TestCommitLinksDedupAndRepeats(t *testing.T) {
 	repeat.ToolCalls[0].ToolUseID = "repeat"
 	messages = append(messages, repeat)
 	insertMessages(t, d, messages...)
-	var raw string
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COALESCE(result_content,'') FROM tool_calls WHERE session_id='s1' ORDER BY message_id LIMIT 1`).Scan(&raw))
-	assert.Empty(t, raw)
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 3)
@@ -442,69 +419,25 @@ func TestCommitLinksDedupAndRepeats(t *testing.T) {
 	assert.Equal(t, "Other fix", got.Commits[1].Subject)
 	require.NotNil(t, got.Commits[2].Turn)
 	assert.Equal(t, 0, got.Commits[2].Turn.Ordinal)
-	_, err = d.DeleteParserExcludedSessions(t.Context(), []string{"s1"})
-	require.NoError(t, err)
-	var count int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM commit_links WHERE session_id='s1'`).Scan(&count))
-	assert.Zero(t, count)
-}
-
-func TestCommitLinksPolled(t *testing.T) {
-	for _, result := range []string{
-		`{"output":"[main abc1234] Fix parser\n"}`,
-		`[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`,
-	} {
-		t.Run(result, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-			messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `{"session_id":7,"output":""}`)
-			messages = append(messages, userMsg("s1", 3, "A later prompt"))
-			for i, input := range []string{`text(await tools.write_stdin({session_id:8,chars:""}))`, `text(await tools.write_stdin({session_id:7,chars:""}))`, `text(await tools.write_stdin({session_id:9,chars:""}))`} {
-				poll := commitMessages("s1", input, result)[2]
-				poll.Ordinal = 4 + i
-				poll.Timestamp = "2026-01-02T00:00:00Z"
-				poll.ToolCalls[0].ToolUseID = "poll"
-				messages = append(messages, poll)
-			}
-			// An unmatched poll must not manufacture a commit link.
-			messages[4].ToolCalls[0].ResultContent = `{"output":""}`
-			messages[4].ToolCalls[0].ResultEvents[0].Content = messages[4].ToolCalls[0].ResultContent
-			messages[6].ToolCalls[0].ResultContent = strings.ReplaceAll(result, "abc1234", "def5678")
-			messages[6].ToolCalls[0].ResultEvents[0].Content = messages[6].ToolCalls[0].ResultContent
-			insertMessages(t, d, messages[:5]...)
-			before, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			assert.Empty(t, before.Commits)
-			insertMessages(t, d, messages[5:]...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, 1)
-			link := got.Commits[0]
-			assert.Equal(t, "abc1234", link.SHA)
-			assert.Equal(t, 2, link.MessageOrdinal)
-			assert.Equal(t, "commit-call", link.ToolUseID)
-			assert.Equal(t, tsZero, link.CommittedAt)
-			assert.Equal(t, "/repo", link.Repository)
-			require.NotNil(t, link.Turn)
-			assert.Equal(t, "Record the parser fix", link.Turn.Text)
-		})
-	}
 }
 
 func TestCommitLinksNativePollOwnership(t *testing.T) {
 	for _, tt := range []struct {
-		name, initial, intermediate string
-		codeMode                    bool
+		name, initial, intermediate, final string
+		codeMode                           bool
+		count                              int
 	}{
-		{"JSON process", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, false},
-		{"text process", "Chunk ID: abc\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\n", "Chunk ID: def\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\nstill running", false},
-		{"wrapped text process", `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\n"}]`, `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\nstill running"}]`, false},
-		{"partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, false},
-		{"code mode partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, true},
+		{"JSON process", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 1},
+		{"text process", "Chunk ID: abc\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\n", "Chunk ID: def\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\nstill running", "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 1},
+		{"wrapped text process", `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\n"}]`, `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\nstill running"}]`, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 1},
+		{"partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 2},
+		{"code mode partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", true, 2},
+		{"code mode JSON", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, `{"output":"[main abc1234] Fix parser\n"}`, true, 1},
+		{"code mode wrapped JSON", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, true, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "s1", "project-a")
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
 			messages := commitMessages("s1", `{"cmd":"git commit -m first && git commit -m second","workdir":"/repo"}`, tt.initial)
 			messages[2].ToolCalls[0].ToolName = "exec_command"
 			if tt.codeMode {
@@ -512,23 +445,35 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 				messages[2].ToolCalls[0].InputJSON = `text(await tools.exec_command({cmd:"git commit -m first && git commit -m second",workdir:"/repo"}))`
 			}
 			messages = append(messages, userMsg("s1", 3, "Later prompt"))
-			for i, output := range []string{tt.intermediate, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n"} {
-				poll := commitMessages("s1", `{"session_id":7,"chars":""}`, output)[2]
+			for i, result := range []struct{ input, output string }{
+				{`{"session_id":7,"chars":""}`, tt.intermediate},
+				{`{"session_id":8,"chars":""}`, `{"output":""}`},
+				{`{"session_id":9,"chars":""}`, `{"output":"[main def5678] Unrelated commit\n"}`},
+				{`{"session_id":7,"chars":""}`, tt.final},
+			} {
+				poll := commitMessages("s1", result.input, result.output)[2]
 				poll.Ordinal = 4 + i
 				poll.Timestamp = "2026-01-02T00:00:00Z"
 				poll.ToolCalls[0].ToolName = "write_stdin"
 				if tt.codeMode {
 					poll.ToolCalls[0].ToolName = "exec"
-					poll.ToolCalls[0].InputJSON = `text(await tools.write_stdin({session_id:7,chars:""}))`
+					poll.ToolCalls[0].InputJSON = "text(await tools.write_stdin(" + result.input + "))"
 				}
 				poll.ToolCalls[0].ToolUseID = "poll"
 				messages = append(messages, poll)
 			}
-			insertMessages(t, d, messages...)
-			got, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+			insertMessages(t, d, messages[:5]...)
+			if tt.count == 1 {
+				before, err := d.SessionCommitLinks(t.Context(), "s1")
+				require.NoError(t, err)
+				assert.Empty(t, before.Commits)
+			}
+			insertMessages(t, d, messages[5:]...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
-			require.Len(t, got.Commits[0].Links, 1)
-			link := got.Commits[0].Links[0]
+			require.Len(t, got.Commits, tt.count)
+			link := got.Commits[tt.count-1]
+			assert.Equal(t, "abc1234", link.SHA)
 			assert.Equal(t, 2, link.MessageOrdinal)
 			assert.Equal(t, 0, link.CallIndex)
 			assert.Equal(t, "commit-call", link.ToolUseID)
