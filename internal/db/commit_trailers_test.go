@@ -11,6 +11,39 @@ import (
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
 
+func TestTrailerCommitLinksAuthorDateAfterAmend(t *testing.T) {
+	skipIfNoGit(t)
+	repo := t.TempDir()
+	statsInitRepoAt(t, repo)
+	statsRunGit(t, repo, []string{"GIT_AUTHOR_DATE=2026-01-01T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-01-01T12:10:00+02:00"}, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:session-a")
+	d := testDB(t)
+	insertSession(t, d, "session-a", "project-a")
+	insertMessages(t, d,
+		Message{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Write the change", Timestamp: "2026-01-01T10:00:00Z"},
+		Message{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Later task", Timestamp: "2026-02-01T10:00:00Z"},
+	)
+	for _, phase := range []string{"original", "amended"} {
+		t.Run(phase, func(t *testing.T) {
+			if phase == "amended" {
+				statsRunGit(t, repo, []string{"GIT_COMMITTER_DATE=2026-03-01T10:00:00Z"}, "commit", "--amend", "--no-edit", "--allow-empty", "-q")
+			}
+			commits, err := gitlog.ScanCommitTrailers(t.Context(), repo, nil)
+			require.NoError(t, err)
+			require.Len(t, commits, 1)
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, commits))
+			found, err := d.CommitSessionLinks(t.Context(), []string{commits[0].SHA})
+			require.NoError(t, err)
+			require.Len(t, found.Commits, 1)
+			require.Len(t, found.Commits[0].Links, 1)
+			link := found.Commits[0].Links[0]
+			assert.Equal(t, "2026-01-01T10:10:00Z", link.CommittedAt)
+			require.NotNil(t, link.Turn)
+			assert.True(t, link.Turn.Heuristic)
+			assert.Equal(t, "Write the change", link.Turn.Text)
+		})
+	}
+}
+
 func TestTrailerCommitLinksPromptAndPrecedence(t *testing.T) {
 	for _, sha := range []string{"abc1234", "abc1234" + strings.Repeat("0", 33)} {
 		for _, trailerFirst := range []bool{false, true} {

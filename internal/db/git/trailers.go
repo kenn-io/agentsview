@@ -62,7 +62,7 @@ func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]
 		revisions += "^" + tip + "\n"
 	}
 	// --all includes HEAD from every worktree, including detached worktrees.
-	args := []string{"log", "--all", "--stdin", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session:", "--format=%H%x1f%cI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
+	args := []string{"log", "--all", "--stdin", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session:", "--format=%H%x1f%aI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
 	out, stderr, err := runner.Run(ctx, repo, strings.NewReader(revisions), args...)
 	if err != nil && strings.Contains(string(stderr), "bad object") {
 		out, stderr, err = runner.Run(ctx, repo, nil, args...)
