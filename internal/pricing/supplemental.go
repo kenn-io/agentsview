@@ -90,6 +90,7 @@ type FixedPricingAlias struct {
 // catalog rows, so they map to Meta's own rows. A static supplemental rate
 // row for these names would hide later catalog updates for the canonical
 // model, including Pydantic time-window rates for GPT-5.6 Luna.
+// The guarded Sol aliases use their base model's existing rate policy.
 var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "k2d6-agent", Canonical: KimiK26Canonical},
 	{Name: GPTReserveModelName, Canonical: GPT56LunaCanonical},
@@ -103,6 +104,9 @@ var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "muse-spark-1.3", Canonical: "meta/muse-spark-1.3", Exact: true},
 	{Name: "muse-spark-1.2-contributor", Canonical: "meta/muse-spark-1.2-contributor", Exact: true},
 	{Name: "muse-spark-1.3-contributor", Canonical: "meta/muse-spark-1.3-contributor", Exact: true},
+	{Name: "gpt-5.6-sol-latest-guardrails-defaultv2", Canonical: "gpt-5.6-sol"},
+	{Name: "gpt-6-sol-latest-guardrails-defaultv2", Canonical: "gpt-6-sol"},
+	{Name: "gpt-6.1-sol-latest-guardrails-defaultv2", Canonical: "gpt-6.1-sol"},
 }
 
 // DateAliasedModels returns the sorted unqualified date-ambiguous

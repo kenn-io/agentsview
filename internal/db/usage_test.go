@@ -5608,6 +5608,96 @@ func TestGetDailyUsage_CodexAutoReviewLunaPricing(t *testing.T) {
 	assert.Empty(t, session.UnpricedModels, "UnpricedModels")
 }
 
+func TestGetDailyUsage_GuardedGPTPricing(t *testing.T) {
+	for _, canonical := range []string{"gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol"} {
+		t.Run(canonical, func(t *testing.T) {
+			d := testDB(t)
+			d.SetEmptyCatalogPricing(FallbackRateMap())
+			ctx := t.Context()
+			alias := canonical + "-latest-guardrails-defaultv2"
+			ts := "2026-10-01T12:00:00Z"
+			models := []string{canonical, alias, "usai/" + alias}
+			for modelIndex, model := range models {
+				for request, input := range []int{272_000, 272_001} {
+					id := fmt.Sprintf("guarded-%d-%d", modelIndex, request)
+					insertSession(t, d, id, "proj", func(s *Session) {
+						s.Agent = "pi"
+						s.StartedAt = new(ts)
+					})
+					insertMessages(t, d, Message{
+						SessionID: id, Ordinal: 0, Role: "assistant",
+						Timestamp: ts, Model: model,
+						OutputTokens: 1000, HasOutputTokens: true,
+						ContextTokens: input, HasContextTokens: true,
+						TokenUsage: jsontext.Value(fmt.Sprintf(
+							`{"input_tokens":%d,"output_tokens":1000}`, input)),
+					})
+				}
+			}
+
+			base, err := d.GetDailyUsage(ctx, UsageFilter{
+				From: "2026-10-01", To: "2026-10-01", Timezone: "UTC", Model: canonical,
+			})
+			require.NoError(t, err)
+			require.Positive(t, base.Totals.TotalCost.Microdollars)
+			for modelIndex, model := range models[1:] {
+				got, err := d.GetDailyUsage(ctx, UsageFilter{
+					From: "2026-10-01", To: "2026-10-01", Timezone: "UTC", Model: model,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, base.Totals.TotalCost, got.Totals.TotalCost)
+				assert.Equal(t, base.Totals.InputTokens, got.Totals.InputTokens)
+				require.NotNil(t, got.Pricing)
+				resolutions := got.Pricing.Models[model].Resolutions
+				require.Len(t, resolutions, 1)
+				assert.Equal(t, canonical, resolutions[0].PricedModel)
+				require.NotNil(t, resolutions[0].MatchedPattern)
+				assert.NotEmpty(t, resolutions[0].Bands)
+				assert.NotContains(t, got.Pricing.Models, canonical)
+				for request := range 2 {
+					aliasUsage, err := d.GetSessionUsage(ctx,
+						fmt.Sprintf("guarded-%d-%d", modelIndex+1, request), false)
+					require.NoError(t, err)
+					baseUsage, err := d.GetSessionUsage(ctx,
+						fmt.Sprintf("guarded-0-%d", request), false)
+					require.NoError(t, err)
+					assert.True(t, aliasUsage.HasCost)
+					assert.Empty(t, aliasUsage.UnpricedModels)
+					assert.Equal(t, baseUsage.Cost, aliasUsage.Cost)
+				}
+			}
+
+			d.SetCustomPricing(map[string]config.CustomModelRate{
+				alias: {InputMicrodollarsPerMTok: 1_000_000},
+			})
+			custom, err := d.GetSessionUsage(ctx, "guarded-1-0", false)
+			require.NoError(t, err)
+			assert.True(t, custom.HasCost)
+			assert.Equal(t, money.MustParseDollars("0.272"), custom.Cost)
+
+			unknown := canonical + "-latest-guardrails-defaultv3"
+			insertSession(t, d, "unknown-guarded", "proj", func(s *Session) {
+				s.Agent = "pi"
+				s.StartedAt = new(ts)
+				s.TotalOutputTokens = 10
+				s.HasTotalOutputTokens = true
+			})
+			insertMessages(t, d, Message{
+				SessionID: "unknown-guarded", Ordinal: 0, Role: "assistant",
+				Timestamp: ts, Model: unknown,
+				OutputTokens: 10, HasOutputTokens: true,
+				ContextTokens: 1000, HasContextTokens: true,
+				TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":10}`),
+			})
+			unpriced, err := d.GetSessionUsage(ctx, "unknown-guarded", false)
+			require.NoError(t, err)
+			assert.True(t, unpriced.HasTokenData)
+			assert.False(t, unpriced.HasCost)
+			assert.Equal(t, []string{unknown}, unpriced.UnpricedModels)
+		})
+	}
+}
+
 func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {
 	d := testDB(t)
 	d.SetEmptyCatalogPricing(FallbackRateMap())

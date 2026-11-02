@@ -1067,6 +1067,16 @@ Ordinary models have one resolution whose `priced_model` is the reported model.
 Fixed aliases such as `k2d6-agent`, `gpt-reserve`, and `codex-auto-review` keep
 that reported name and resolve `priced_model` to a catalog row
 (`moonshot/kimi-k2.6`, and `gpt-5.6-luna` for both Codex names).
+The exact guarded aliases `gpt-5.6-sol-latest-guardrails-defaultv2`,
+`gpt-6-sol-latest-guardrails-defaultv2` and
+`gpt-6.1-sol-latest-guardrails-defaultv2`, including their `usai/`-prefixed
+forms, estimate costs using `gpt-5.6-sol`, `gpt-6-sol` and `gpt-6.1-sol`
+respectively.
+They inherit the base model's historical rates, request bands, and catalog
+updates; no flat rate is copied. Archived model names remain unchanged.
+An exact custom rate for the reported alias still overrides this estimate.
+Other guardrail suffixes are not inferred.
+
 Timestamp-aware aliases can have more than one resolution in a report. For
 example, one `kimi-for-coding` entry can contain both `moonshot/kimi-k2.6` and
 `kimi-k3` resolutions when its rows span the pricing cutoff. An exact

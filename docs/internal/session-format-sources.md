@@ -76,6 +76,14 @@ $0.10 below or at 272k and $0.20 above it. The current flat `gpt-5.6-sol` row
 uses $4 input and $20 output; timestamped usage still uses matching GenAI price
 history first.
 
+The exact deployment aliases `gpt-5.6-sol-latest-guardrails-defaultv2`,
+`gpt-6-sol-latest-guardrails-defaultv2` and
+`gpt-6.1-sol-latest-guardrails-defaultv2` use the corresponding base model's
+pricing as an explicit estimate policy. The mappings reuse the catalog and
+historical resolver above, including request bands; they are not independent
+provider rate cards. Other suffixes remain unpriced unless separately known.
+Exact custom rates for a reported alias take precedence.
+
 LiteLLM's
 [`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/litellm/litellm_core_utils/llm_cost_calc/utils.py)
 shows that these catalog fields are request-pricing thresholds rather than
