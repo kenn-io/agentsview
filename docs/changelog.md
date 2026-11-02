@@ -144,6 +144,8 @@ The latest release is
 - Hosted imports avoid fetching a transcript from PostgreSQL again when the same
   transaction has just saved that captured version.
   Existing content identities are preserved.
+- Hosted updates load prior transcript content only when provider history needs
+  it, retaining metadata without decoding an unused older transcript.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are

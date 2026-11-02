@@ -161,16 +161,36 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		var old ingest.PreparedSession
 		var history *ingest.PriorSession
 		if exists {
-			old, err = loadRawPayload(ctx, tx, previous.CapturedSession)
-			if err != nil {
-				return err
-			}
 			metadata, decodeErr := decodeRawPayload(previous.Payload)
 			if decodeErr != nil {
 				return decodeErr
 			}
 			old.Session = metadata.Session
-			history = &ingest.PriorSession{Session: old.Session, Messages: old.Messages}
+		}
+		oldLoaded := false
+		loadOld := func(ctx context.Context) error {
+			if oldLoaded {
+				return nil
+			}
+			payload, loadErr := loadRawPayload(ctx, tx, previous.CapturedSession)
+			if loadErr != nil {
+				return loadErr
+			}
+			payload.Session = old.Session
+			old = payload
+			oldLoaded = true
+			return nil
+		}
+		if exists {
+			history = &ingest.PriorSession{
+				Session: old.Session,
+				LoadMessages: func(ctx context.Context) ([]db.Message, error) {
+					if err := loadOld(ctx); err != nil {
+						return nil, err
+					}
+					return old.Messages, nil
+				},
+			}
 		}
 		decision, err := ingest.ReconcileProviderHistory(ctx, c, history, s.options.Content)
 		if err != nil {
@@ -178,6 +198,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		var codexCloud *ingest.CodexCloudPrior
 		if exists && c.Session.Agent == string(parser.AgentCodexCloud) {
+			if err := loadOld(ctx); err != nil {
+				return err
+			}
 			codexCloud = &ingest.CodexCloudPrior{
 				Session: old.Session, UsageEvents: old.UsageEvents, PlanUsage: old.PlanUsage,
 				Current: previous.Version == lease.ProcessingVersion,
@@ -189,6 +212,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		var prepared ingest.PreparedSession
 		if decision.Action == ingest.HistoryPreserve {
+			if err := loadOld(ctx); err != nil {
+				return err
+			}
 			prepared = old
 			if s.options.Content.ArchiveContent.OmitsToolContent() {
 				prepared.Signals.ToolObservations = []db.ToolObservation{}
