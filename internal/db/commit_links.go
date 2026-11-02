@@ -119,11 +119,24 @@ func commitRepository(input, cwd string) string {
 		}
 		return joined
 	}
-	if match := commitWorkdirRE.FindStringSubmatch(input); match != nil {
-		dir := match[1]
-		if strings.HasPrefix(dir, "\"") {
-			_ = json.Unmarshal([]byte(match[1]), &dir)
+	var fields struct {
+		Workdir string `json:"workdir"`
+		Cwd     string `json:"cwd"`
+	}
+	_ = json.Unmarshal([]byte(input), &fields)
+	dir := fields.Workdir
+	if dir == "" {
+		dir = fields.Cwd
+	}
+	if dir == "" {
+		if match := commitWorkdirRE.FindStringSubmatch(input); match != nil {
+			dir = match[1]
+			if strings.HasPrefix(dir, "\"") {
+				_ = json.Unmarshal([]byte(match[1]), &dir)
+			}
 		}
+	}
+	if dir != "" {
 		cwd = resolve(cwd, dir)
 	}
 	command := signals.CommandText(input)
