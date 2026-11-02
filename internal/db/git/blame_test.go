@@ -8,9 +8,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestBlameFixtureGlobalIsolation(t *testing.T) {
+	skipIfNoGit(t)
 	home := t.TempDir()
 	xdg := t.TempDir()
 	t.Setenv("HOME", home)
@@ -21,10 +23,13 @@ func TestBlameFixtureGlobalIsolation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(xdg, "git"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(xdg, "git", "config"), config, 0o600))
 
-	skipIfNoGit(t)
 	repo := initRepo(t)
 	writeFile(t, repo, "a.txt", []byte("first\n"))
 	commitAs(t, repo, "test@example.com", "Test User", "Initial lines")
+	_, err := BlameCommits(t.Context(), repo, "a.txt", 0, 0)
+	require.ErrorContains(t, err, "missing-revisions")
+
+	testutil.IsolateGitEnv(t)
 	got, err := BlameCommits(t.Context(), repo, "a.txt", 0, 0)
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 1)
