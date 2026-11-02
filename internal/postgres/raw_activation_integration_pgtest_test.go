@@ -69,6 +69,7 @@ func activationLegacySnapshot(t require.TestingT, f projectionFixture) string {
 // legacy curation in shadow, and the latest raw edit in active. IDs, pins, trash,
 // revisions and retained bytes are checked through storage/public boundaries.
 func TestRawActivationRoundTripModel(t *testing.T) {
+	requireHegel(t)
 	hegel.Test(t, func(ht *hegel.T) {
 		ct := &activationCaseT{T: ht}
 		defer ct.close()

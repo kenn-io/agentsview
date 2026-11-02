@@ -8,6 +8,7 @@ import (
 	"database/sql/driver"
 	"encoding/json/v2"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,7 @@ import (
 type activationConnectionProbe struct {
 	driver.Connector
 	mu                     sync.Mutex
+	rows                   map[string]int
 	connections            []*activationObservedConn
 	acquisitions, commits  int
 	loseCommit, loseUnlock bool
@@ -39,7 +41,7 @@ func activationObservedPool(t *testing.T, f projectionFixture, owner bool) (*sql
 	require.NoError(t, err)
 	cfg.RuntimeParams["search_path"] = `"` + f.schema + `", pg_temp`
 	cfg.RuntimeParams["agentsview.tenant_id"] = f.tenant
-	probe := &activationConnectionProbe{Connector: stdlib.GetConnector(*cfg)}
+	probe := &activationConnectionProbe{Connector: stdlib.GetConnector(*cfg), rows: map[string]int{}}
 	pool := sql.OpenDB(probe)
 	pool.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, pool.Close()) })
@@ -103,7 +105,37 @@ func (c *activationObservedConn) QueryContext(ctx context.Context, query string,
 		}
 		return nil, io.ErrUnexpectedEOF
 	}
-	return rows, nil
+	return &activationObservedRows{Rows: rows.(*stdlib.Rows), probe: c.probe}, nil
+}
+
+type activationObservedRows struct {
+	*stdlib.Rows
+	probe *activationConnectionProbe
+}
+
+// Preserve pgx's column scanner so the observer sees the same typed array
+// transport as production connections on Go 1.27.
+func (r *activationObservedRows) NextRow() error {
+	err := r.Rows.NextRow()
+	if err != nil {
+		return err
+	}
+	columns := r.Columns()
+	kind := ""
+	switch {
+	case len(columns) >= 4 && slices.Equal(columns[:4], []string{"id", "agent", "machine", "raw_group_id"}):
+		kind = "candidates"
+	case slices.Equal(columns, []string{"group_id", "device_id", "provider"}):
+		kind = "eligibility"
+	case slices.Equal(columns, []string{"legacy_session_id", "group_id"}):
+		kind = "previous"
+	}
+	if kind != "" {
+		r.probe.mu.Lock()
+		r.probe.rows[kind]++
+		r.probe.mu.Unlock()
+	}
+	return nil
 }
 
 type activationObservedTx struct {
