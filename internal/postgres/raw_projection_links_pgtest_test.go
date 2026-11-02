@@ -58,7 +58,11 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 				if mode == "ambiguous" || mode == "hidden_competitor" {
 					text = "different parent"
 				}
-				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome(text)))
+				competitor := projectionOutcome(text)
+				if mode == "hidden_competitor" {
+					competitor.Outcome.Results[0].Result.Session.SourceSessionID = "competitor"
+				}
+				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, competitor))
 				if mode == "hidden_competitor" {
 					_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=true WHERE id IN (SELECT session_id FROM messages WHERE content='different parent')`)
 					require.NoError(t, err)
