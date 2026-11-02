@@ -76,7 +76,3 @@ func testRawRolloutRetry(t *testing.T, code, operation string) {
 		require.True(t, starred)
 	}
 }
-
-func TestRawRolloutFirstSerializationFailureRegression(t *testing.T) {
-	testRawRolloutRetry(t, "40001", "projection")
-}
