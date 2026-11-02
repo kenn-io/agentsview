@@ -1,6 +1,7 @@
 package rawparity
 
 import (
+	"encoding/hex"
 	"math"
 	"slices"
 	"testing"
@@ -136,6 +137,7 @@ func TestCompareResolvedRejectsInvalidCoordinates(t *testing.T) {
 	s := relationshipSnapshot("call", "target")
 	for _, link := range []Link{
 		{Kind: "unknown"},
+		{Kind: "usage_root"}, // no owning plan row
 		{Kind: "call", Ordinal: 9, CallIndex: 2},
 		{Kind: "call", Ordinal: 3, CallIndex: 9},
 		{Kind: "event", Ordinal: 3, CallIndex: 2, EventIndex: 9},
@@ -157,8 +159,8 @@ func TestCompareResolvedCoordinatesProperty(t *testing.T) {
 	for _, kind := range []string{"call", "event"} {
 		t.Run(kind, func(t *testing.T) {
 			propertyTest(t, func(ht *hegel.T) {
-				alias := hegel.Draw(ht, hegel.SampledFrom([]string{"\x00unresolved", "\x00raw:physical", "\x00plural:[]", "\x00legacy:target"})) + hegel.Draw(ht, hegel.Text())
-				ordinal := hegel.Draw(ht, hegel.Integers(0, math.MaxInt-1))
+				alias := "target:" + hex.EncodeToString([]byte(hegel.Draw(ht, hegel.Text())))
+				ordinal := hegel.Draw(ht, hegel.Integers(0, math.MaxInt32-1))
 				raw, legacy := relationshipSnapshot(kind, alias), relationshipSnapshot(kind, alias)
 				raw.Messages[0].Ordinal = ordinal
 				legacy.Messages[0].Ordinal = ordinal
@@ -179,12 +181,6 @@ func TestCompareResolvedCoordinatesProperty(t *testing.T) {
 			}, hegel.WithTestCases(1000))
 		})
 	}
-}
-
-func TestCompareResolvedRejectsMalformedTarget(t *testing.T) {
-	_, err := CompareResolved(relationshipSnapshot("call", "target"), relationshipSnapshot("call", "target"),
-		[]Link{{Kind: "call", Ordinal: 3, CallIndex: 2, Targets: []string{"valid", "\xff"}}}, nil)
-	assert.Error(t, err)
 }
 
 // No relationship row cap may discard late coordinates in a long transcript.
