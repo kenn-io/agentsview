@@ -114,9 +114,11 @@ func TestClaudeSubtreeUserTurnsStopsAfterContextCancellation(t *testing.T) {
 		}
 	}
 	// Four checks traverse the tree; the fifth cancels during counting.
-	_, _, err := subtreeUserTurnsContext(newCancelOnErrCheckContext(t, 5), entries, children, 0)
+	turns, channel, err := subtreeUserTurnsContext(newCancelOnErrCheckContext(t, 5), entries, children, 0)
 
 	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, turns, "counting must stop before returning completed counts")
+	assert.Nil(t, channel, "counting must stop before returning completed counts")
 }
 
 func TestCodexPostReadUsageAccumulationStopsAfterContextCancellation(t *testing.T) {

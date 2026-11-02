@@ -2627,6 +2627,8 @@ func subtreeUserTurnsContext(
 		if err := contextErrEvery(ctx, len(order)-1-i); err != nil {
 			return nil, nil, err
 		}
+		// Repeated UUIDs can put the same entry in order more than once.
+		turns[current], channel[current] = 0, 0
 		if isCountedClaudeUserTurn(ctx, entries[current]) {
 			turns[current]++
 			if gjson.Get(entries[current].line, "isMeta").Bool() {

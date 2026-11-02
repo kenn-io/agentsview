@@ -155,14 +155,6 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Fork turn counts (2026-11-02):** Reverified against the synthetic DAG
-  fixtures in `internal/parser/fork_test.go` and
-  `internal/parser/claude_channel_test.go`. Fork selection counts real user
-  turns throughout the first child's subtree, including nested forks, while
-  tracking channel turns separately to preserve retry identity. Counts are built
-  once in post-order when the first fork is reached. This changes parser cost,
-  not the producer format or branch-selection rules.
-
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies

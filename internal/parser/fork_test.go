@@ -24,6 +24,25 @@ func formatTime(ts time.Time) string {
 	return ts.Format(time.RFC3339)
 }
 
+func TestForkDetection_RepeatedUUIDKeepsSmallGapRetry(t *testing.T) {
+	// Each c record reaches d, so b has three user turns. Repeated visits
+	// to d must not inflate that count past the small-gap retry threshold.
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "r", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "reply", "b", "r").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:02Z", "part one", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "part two", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:04Z", "part three", "c", "b").
+		AddClaudeUserWithUUID("2024-01-01T10:00:05Z", "follow-up", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "retry", "z", "r").
+		String()
+
+	results := parseTestContent(t, "repeated-uuid-retry.jsonl", content, 1)
+	require.Len(t, results[0].Messages, 2)
+	assertMessage(t, results[0].Messages[0], RoleUser, "start")
+	assertMessage(t, results[0].Messages[1], RoleUser, "retry")
+}
+
 func TestForkDetection_LinearSession(t *testing.T) {
 	// Linear chain: a -> b -> c -> d, all with uuid/parentUuid.
 	// Should return 1 result with 4 messages.
