@@ -73,7 +73,7 @@ failed, so partial totals are visible.
 The panel reports when the backend or selected filters cannot provide outcome
 totals. Clear machine, model, termination, minimum-message, recent-activity, and
 time-of-day filters to use it. The CLI exposes the same metrics through
-[`agentsview stats`](/docs/stats/).
+[`agentsview report stats`](/docs/stats/).
 
 ### Date Range Picker
 
@@ -297,7 +297,7 @@ session-intelligence signals. It shows:
 ![Session Health section on the dashboard](/docs/assets/generated/screenshots/session-health.png)
 
 See [Session Intelligence](/docs/session-intelligence/#outcome-classification)
-for the full four-outcome model that both this section and `agentsview stats`
+for the full four-outcome model that both this section and `agentsview report stats`
 derive from.
 
 ### CSV Export
@@ -428,7 +428,7 @@ Each session item shows:
 
 Antigravity sessions show the conversation title Antigravity saves in
 `conversation_summaries.db`. Renames appear shortly after that file changes,
-or on the next `agentsview sync`. Names set in AgentsView still win.
+or on the next `agentsview source sync`. Names set in AgentsView still win.
 
 Qoder's database title lookup applies to `~/.qoder/projects` and
 `~/.qoder-cn/projects`. The Qoder app stores titles in `main.sqlite` under
@@ -443,7 +443,7 @@ precedence in this order:
 3. A file-side name, with a sidecar title ahead of an in-chat rename.
 
 Renames appear at the next sync pass: a watched change in any agent root,
-manual `agentsview sync`, or startup. For these two roots, blank database
+manual `agentsview source sync`, or startup. For these two roots, blank database
 titles or read errors preserve the archived name. A missing database, schema,
 or session row uses non-empty file-side names; an empty file-side name
 preserves the archived title. Other Qoder roots use file-side names, including
@@ -918,7 +918,7 @@ with `?breakdown=true` — see
 
 For aggregate token usage and estimated cost reports across all sessions, see
 the [Token Usage & Costs](/docs/token-usage/) page and the
-[`agentsview usage daily`](/docs/commands/#agentsview-usage-daily) CLI command.
+[`agentsview report usage daily`](/docs/commands/#agentsview-usage-daily) CLI command.
 
 For a scriptable report on the current session, use
 [`agentsview session usage <id>`](/docs/session-api/#agentsview-session-usage)

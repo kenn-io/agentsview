@@ -185,7 +185,7 @@ func runServiceInstall(kind serviceKind, noStartDaemon bool) {
 
 	fmt.Println()
 	fmt.Println("Service installed and started.")
-	fmt.Printf("View logs with: agentsview %s service logs -f\n", kind.Name)
+	fmt.Printf("View logs with: agentsview replica %s service logs -f\n", kind.Name)
 }
 
 func runServiceStatus(kind serviceKind) {

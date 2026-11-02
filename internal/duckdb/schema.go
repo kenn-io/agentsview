@@ -1100,7 +1100,7 @@ func checkSchemaShapeCompat(
 			)
 		}
 		return fmt.Errorf(
-			"duckdb schema incompatible; rebuild with 'agentsview duckdb push --full'; missing: %s",
+			"duckdb schema incompatible; rebuild with 'agentsview replica duckdb push --full'; missing: %s",
 			strings.Join(missing, ", "),
 		)
 	}
@@ -1137,7 +1137,7 @@ func checkSchemaShapeCompat(
 	if got != SchemaVersion {
 		return fmt.Errorf(
 			"mirror schema version %d does not match this build's %d; "+
-				"rebuild with 'agentsview duckdb push --full'",
+				"rebuild with 'agentsview replica duckdb push --full'",
 			got, SchemaVersion,
 		)
 	}

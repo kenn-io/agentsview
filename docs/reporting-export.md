@@ -47,7 +47,7 @@ Each hour adds `local_machine_id` and a `machines` object. Its keys are the
 originating machine identities, and each value is a complete schema 5 hour
 without nested machine metadata. The local identity comes from the archive's
 recorded installation, not its display label. Recorded machine aliases resolve
-to their canonical identities. Run `agentsview sync` first if the archive has
+to their canonical identities. Run `agentsview source sync` first if the archive has
 not recorded its installation identity.
 
 All machine snapshots use the same read transaction, bucket resolution, project

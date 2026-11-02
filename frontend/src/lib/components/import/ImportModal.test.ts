@@ -91,7 +91,7 @@ it("shows setup instructions when disconnected", async () => {
     ),
   ).toBeTruthy();
   expect(screen.getByText("Terminal")).toBeTruthy();
-  expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
+  expect(screen.getByText("agentsview source chrome setup")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
   expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
 });
@@ -297,7 +297,7 @@ it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])(
       await fireEvent.focus(window);
       await tick();
       expect(screen.getByText("Restart AgentsView if you upgraded it.")).toBeTruthy();
-      expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
+      expect(screen.getByText("agentsview source chrome setup")).toBeTruthy();
     }
     expect(syncButton().disabled).toBe(false);
     await clickSync();

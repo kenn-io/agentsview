@@ -203,6 +203,7 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// DialogueText is a derived search projection; reparses refresh it in place.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
 				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
+				(v.Type() == rawSessionType && f.Name == "SourceMachines") ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
 				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) ||
 				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "PlanUsage" && v.Field(i).IsZero()) {

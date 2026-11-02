@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-10-31
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
 ---
@@ -31,7 +31,7 @@ dashboard as well.
 ## Hosted raw processing
 
 For uploads that the server parses itself, provision a schema and tenant with
-`agentsview pg hosted-provision <owner-target>`, then serve with a separate
+`agentsview replica pg hosted-provision <owner-target>`, then serve with a separate
 restricted runtime role. The selected PG target needs `raw_tenant`, an explicit
 schema and `raw_derivation = true`; the server also requires authentication, a
 stable cursor secret and a supported Linux/cgo sandbox. Runtime startup checks
@@ -81,7 +81,7 @@ names.
 ### 2. Push Sessions
 
 ```bash
-agentsview pg push
+agentsview replica pg push
 ```
 
 This one-shot command syncs all local sessions, messages, and tool calls to
@@ -90,19 +90,19 @@ PostgreSQL. The schema is created automatically on first push.
 To keep PostgreSQL current automatically, run the foreground watcher:
 
 ```bash
-agentsview pg push --watch
+agentsview replica pg push --watch
 ```
 
 Or install it as a per-user background service on macOS or Linux:
 
 ```bash
-agentsview pg service install
+agentsview replica pg service install
 ```
 
 ### 3. Serve the Dashboard
 
 ```bash
-agentsview pg serve
+agentsview replica pg serve
 ```
 
 Opens the read-only web UI at `http://127.0.0.1:8080`, backed entirely by
@@ -115,12 +115,14 @@ ______________________________________________________________________
 
 ## Commands
 
-### `agentsview pg push`
+<a id="agentsview-pg-push"></a>
+
+### `agentsview replica pg push`
 
 Sync sessions from the local SQLite database to PostgreSQL.
 
 ```bash
-agentsview pg push [target] [flags]
+agentsview replica pg push [target] [flags]
 ```
 
 | Flag                 | Default | Description                                                                                                                    |
@@ -208,13 +210,13 @@ catch up.
 
 #### Automatic Push Watcher
 
-As of 0.32.0, `agentsview pg push --watch` runs a long-lived auto-push daemon in
-the foreground:
+Auto-push watching has been available since 0.32.0. On `main`, start it in
+the foreground with `agentsview replica pg push --watch`:
 
 ```bash
-agentsview pg push --watch
-agentsview pg push --watch --debounce 1m
-agentsview pg push --watch --interval 5m
+agentsview replica pg push --watch
+agentsview replica pg push --watch --debounce 1m
+agentsview replica pg push --watch --interval 5m
 ```
 
 The watcher performs one initial local sync plus PostgreSQL push, then pushes
@@ -254,13 +256,13 @@ By default, `pg push` syncs all projects. Use project filters to push a subset:
 
 ```bash
 # Push only these projects
-agentsview pg push --projects alpha,beta
+agentsview replica pg push --projects alpha,beta
 
 # Push everything except this project
-agentsview pg push --exclude-projects scratch
+agentsview replica pg push --exclude-projects scratch
 
 # Ignore config-file filters for this run
-agentsview pg push --all-projects
+agentsview replica pg push --all-projects
 ```
 
 `--projects` and `--exclude-projects` are mutually exclusive. `--all-projects`
@@ -277,13 +279,13 @@ projects = ["alpha", "beta"]
 ```
 
 CLI flags override config values. Use
-[`agentsview projects`](/docs/commands/#agentsview-projects) to list available
+[`agentsview project list`](/docs/commands/#agentsview-projects) to list available
 project names.
 
 Filtered pushes keep their own local push watermark for each target/filter set.
-For example, repeated `agentsview pg push --projects alpha,beta` runs use a
+For example, repeated `agentsview replica pg push --projects alpha,beta` runs use a
 different watermark from unfiltered pushes and from
-`agentsview pg push --projects gamma`. This keeps allow-list pushes incremental
+`agentsview replica pg push --projects gamma`. This keeps allow-list pushes incremental
 without advancing the unfiltered/global cursor.
 
 After upgrading from an older version, the first filtered push for a given
@@ -355,7 +357,7 @@ embeddings current. Built vectors reach PostgreSQL on the next interval push.
 Until the recipe's own generation is built, the watcher pushes no vectors, even
 when an older generation is still active locally.
 While another process holds `vectors.write.lock`, such as a direct
-`agentsview embeddings build`, the watcher keeps pushing sessions, logs that
+`agentsview index embeddings build`, the watcher keeps pushing sessions, logs that
 embeddings have not started, and starts them on the first push after the lock
 frees.
 
@@ -371,7 +373,7 @@ A watcher started before the first recipe is published adopts it on a later
 push, checking PostgreSQL at most once per `--interval`.
 If `pg serve` starts before a workstation pushes its first generation, restart `pg serve` after that push to enable semantic search.
 After changing the recipe, stop the hub's `pg push --watch --embed`, run
-`agentsview pg vectors drop <old>`, then start the watcher and restart `pg serve`
+`agentsview replica pg vectors drop <old>`, then start the watcher and restart `pg serve`
 to adopt the new recipe. A running watcher keeps pushing the generation it
 adopted and recreates the dropped row.
 `--embed` cannot be combined with `--no-vectors`, `--all`,
@@ -380,14 +382,16 @@ adopted and recreates the dropped row.
 To keep the database password out of the URL, mount a passfile and set
 `PGPASSFILE`; see [container deployment](/docs/configuration/#container-deployment).
 
-### `agentsview pg status`
+<a id="agentsview-pg-status"></a>
+
+### `agentsview replica pg status`
 
 Show the current sync state.
 
 ```bash
-agentsview pg status [target] [flags]
-agentsview pg status --all
-agentsview pg status --projects alpha,beta
+agentsview replica pg status [target] [flags]
+agentsview replica pg status --all
+agentsview replica pg status --projects alpha,beta
 ```
 
 Without a target name, `pg status` uses the effective default target. Pass one
@@ -419,18 +423,20 @@ PG messages: 47291
 | PG sessions | Total session count in PostgreSQL (all machines)           |
 | PG messages | Total message count in PostgreSQL (all machines)           |
 
-### `agentsview pg service`
+<a id="agentsview-pg-service"></a>
+
+### `agentsview replica pg service`
 
 Install and manage the [`pg push --watch`](#automatic-push-watcher) auto-push
 daemon as a per-user OS service.
 
 ```bash
-agentsview pg service install
-agentsview pg service status
-agentsview pg service logs -f
-agentsview pg service stop
-agentsview pg service start
-agentsview pg service uninstall
+agentsview replica pg service install
+agentsview replica pg service status
+agentsview replica pg service logs -f
+agentsview replica pg service stop
+agentsview replica pg service start
+agentsview replica pg service uninstall
 ```
 
 Supported service managers:
@@ -440,12 +446,13 @@ Supported service managers:
 | macOS    | launchd LaunchAgent   |
 | Linux    | `systemd --user` unit |
 
-The generated unit runs `agentsview pg push --watch`, pins `AGENTSVIEW_DATA_DIR`
-to the data directory used at install time, and writes logs to
+The generated unit runs `agentsview replica pg push --watch`.
+It pins `AGENTSVIEW_DATA_DIR` to the data directory used at install time and
+writes logs to
 `~/.agentsview/pg-watch.log` unless you changed the data directory.
 
 If you run your own collector service, use
-`agentsview pg service install --no-start-daemon`. The push service exits if no
+`agentsview replica pg service install --no-start-daemon`. The push service exits if no
 writable daemon is running, and the service manager restarts it until the
 collector answers. It retries pushes while the collector restarts, without
 starting a daemon or opening the archive directly. Reinstalling restarts the
@@ -465,13 +472,15 @@ start at boot unless user lingering is enabled. If lingering is disabled,
 `install` prints the exact `loginctl enable-linger "$USER"` command and offers
 to run it.
 
-### `agentsview pg serve`
+<a id="agentsview-pg-serve"></a>
+
+### `agentsview replica pg serve`
 
 Start the PostgreSQL web UI. Legacy mode reads pushed sessions; an explicitly
 provisioned hosted target can also derive sessions from accepted raw captures.
 
 ```bash
-agentsview pg serve [flags]
+agentsview replica pg serve [flags]
 ```
 
 | Flag                | Default     | Description                                         |
@@ -495,7 +504,7 @@ view. The same deployment also serves the analytics dashboard and the Usage page
 from PostgreSQL-backed queries.
 
 ```bash
-AGENTSVIEW_DATA_DIR=/data agentsview pg serve --push-watch
+AGENTSVIEW_DATA_DIR=/data agentsview replica pg serve --push-watch
 # Add --embed to build and publish embeddings.
 ```
 
@@ -543,7 +552,7 @@ their own device credentials and operation-scoped tokens as described in the
 [hosted raw-sync security boundary](/docs/hosted-raw-sync/#security-and-deployment-boundary).
 
 For LAN access, combine `require_auth = true` with a non-loopback bind such as
-`agentsview pg serve --host 0.0.0.0`, or keep the backend on loopback and expose
+`agentsview replica pg serve --host 0.0.0.0`, or keep the backend on loopback and expose
 it through a proxy.
 
 `pg serve` does **not** expose the global live-refresh event stream used by
@@ -604,11 +613,11 @@ can coexist on one host.
 
 ```bash
 # Local development — loopback, no auth required
-agentsview pg serve
+agentsview replica pg serve
 
 # Team viewer with managed Caddy and TLS
 # Requires require_auth = true in config.toml
-agentsview pg serve \
+agentsview replica pg serve \
   --proxy caddy \
   --public-url https://viewer.example.com \
   --public-port 8443 \
@@ -618,11 +627,11 @@ agentsview pg serve \
 # Remote access on a trusted private network (no TLS)
 # Requires require_auth = true; only use behind a VPN or on a
 # private LAN because tokens cross the wire in cleartext.
-agentsview pg serve --host 0.0.0.0 --port 8080
+agentsview replica pg serve --host 0.0.0.0 --port 8080
 
 # External reverse proxy under a subpath; the browser origin
 # and the proxy's upstream origin are different.
-agentsview pg serve \
+agentsview replica pg serve \
   --host 0.0.0.0 \
   --base-path /agentsview \
   --public-url https://console.example.com \
@@ -685,11 +694,11 @@ url = "postgres://user:pass@archive-db:5432/agentsview?sslmode=require"
 exclude_projects = ["scratch"]
 ```
 
-`agentsview pg push` and `agentsview pg status` use the effective default target
+`agentsview replica pg push` and `agentsview replica pg status` use the effective default target
 when no target name is passed, accept one target name explicitly, and also
-support `--all` for sequential multi-target runs. `agentsview pg push --watch`
+support `--all` for sequential multi-target runs. `agentsview replica pg push --watch`
 follows the effective default target unless you pass one named target
-explicitly. `agentsview pg serve` and `agentsview pg service` stay on the
+explicitly. `agentsview replica pg serve` and `agentsview replica pg service` stay on the
 effective default target in this release, and `--all --watch` is rejected.
 
 !!! warning
@@ -730,19 +739,19 @@ A typical team setup:
 1. **Each developer** configures `[pg]` in their local `config.toml`. The
    installation ID identifies their sessions; `local_machine_name` sets the
    display label
-1. **Each developer** installs `agentsview pg service` or runs
-   `agentsview pg push --watch` to sync their sessions
-1. **One server** runs `agentsview pg serve` pointed at the shared PostgreSQL
+1. **Each developer** installs `agentsview replica pg service` or runs
+   `agentsview replica pg push --watch` to sync their sessions
+1. **One server** runs `agentsview replica pg serve` pointed at the shared PostgreSQL
    database
 1. **The team** opens the shared dashboard to browse everyone's sessions,
    filtered by machine if needed
 
 ```bash
 # Developer A's machine
-agentsview pg service install
+agentsview replica pg service install
 
 # Team server behind an external reverse proxy
-agentsview pg serve \
+agentsview replica pg serve \
   --host 0.0.0.0 \
   --base-path /agentsview \
   --public-url https://console.example.com \
@@ -755,13 +764,13 @@ ______________________________________________________________________
 
 - **One-way sync** — sessions flow from SQLite to PostgreSQL only. Changes in
   PostgreSQL do not propagate back to local machines.
-- **Permanent deletes not propagated** — sessions removed via `agentsview prune`
+- **Permanent deletes not propagated** — sessions removed via `agentsview session prune`
   are not deleted from PostgreSQL because the local rows no longer exist at
   push time. Use a direct SQL DELETE to clean up PostgreSQL if needed.
   Soft-deleted sessions (trash) sync correctly.
 - **Schema compatibility** — legacy `pg serve` automatically applies pending schema
   migrations on startup. If the PostgreSQL role lacks DDL permissions, run
-  `agentsview pg push` from a machine with write access to update the schema.
+  `agentsview replica pg push` from a machine with write access to update the schema.
 - **Trigram index bloat on pre-0.33.0 schemas** — the content search index was
   created with GIN `fastupdate` on, which let a pending-insert list grow
   unbounded under continuous ingest. 0.33.0 creates the index with

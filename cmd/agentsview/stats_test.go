@@ -64,14 +64,14 @@ func setupGoldenStatsDataDir(t *testing.T) string {
 	return dataDir
 }
 
-// runDefaultStatsJSON runs the `stats --format json` CLI path over the
+// runDefaultStatsJSON runs the `report stats --format json` CLI path over the
 // golden fixture window and returns the raw JSON output. Callers
 // unmarshal into whichever shape they need.
 func runDefaultStatsJSON(t *testing.T) string {
 	t.Helper()
 	registerSQLiteDaemonRuntime(t, os.Getenv("AGENTSVIEW_DATA_DIR"))
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--since", "2026-04-01",
 		"--until", "2026-04-15",
@@ -357,7 +357,7 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--since", "2026-04-01",
 		"--until", "2026-04-15",
@@ -390,7 +390,7 @@ func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--timezone", "Fake/Zone",
 	)
@@ -414,7 +414,7 @@ func TestStatsCommandUsesReadOnlyDaemon(t *testing.T) {
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--since", "2026-04-01",
 		"--until", "2026-04-15",

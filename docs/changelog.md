@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-30
+last_edited: 2026-11-01
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -81,6 +81,11 @@ The latest release is
   is labeled as model-written, and cannot change findings, digests, or
   recurrence.
 
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
+  not available yet. See [Kata](/docs/kata/).
+
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
   Setting it together with `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup.
@@ -89,6 +94,10 @@ The latest release is
   rename that variable.
 
 **Improvements**
+
+- Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
+  parent links when counting roots and loading child trees, including pages
+  filtered by labels or pull requests.
 
 - The Recall corpus pane uses the shared page header for its title, description,
   entry count, and refresh control. The title stays a second-level heading under
@@ -110,6 +119,11 @@ The latest release is
 - Hosted PostgreSQL searches and session reads stay available while raw captures
   arrive and transcripts are published. Each hosted read uses one database
   snapshot for its content, public identities and related data.
+- Codex fork imports notice new or moved parent pages on Linux even when the
+  directory timestamps stay unchanged. Unchanged folders keep their cached
+  filenames. Available Codex, TraeX and Augure Code sources are reprocessed on
+  upgrade to repair previously copied parent messages in place. Imports continue
+  by reading directory listings when Linux cannot allocate notifications.
 - Hosted transcript jobs whose workers keep stopping now fail with error class
   `lease` after one run past `raw_max_attempts`, instead of retrying forever.
   Workers from an older processing generation can no longer change a newer lease.

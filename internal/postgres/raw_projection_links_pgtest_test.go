@@ -95,6 +95,14 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 				assert.Nil(t, got.ParentSessionID)
 				assert.Empty(t, got.ParentSessionIDs)
 			}
+			h.SetCursorSecret([]byte("synthetic scoped sidebar cursor"))
+			roots := 2
+			if mode == "unique" || mode == "equal_cohort" {
+				roots = 1
+			} else if mode == "ambiguous" {
+				roots = 3
+			}
+			checkHostedSidebarPages(t, h, db.SessionFilter{}, roots, nil)
 		})
 	}
 }

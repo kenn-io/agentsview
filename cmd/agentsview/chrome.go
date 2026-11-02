@@ -262,6 +262,6 @@ func warnStaleChromeLauncher(dataDir, socket string) {
 		return
 	}
 	if !chromehost.LauncherTargets(string(launcher), socket, runtime.GOOS) {
-		log.Printf("Chrome sync will not connect: %s points to a different socket than %s. Run `agentsview chrome setup`, then reload the extension at chrome://extensions", path, socket)
+		log.Printf("Chrome sync will not connect: %s points to a different socket than %s. Run `agentsview source chrome setup`, then reload the extension at chrome://extensions", path, socket)
 	}
 }

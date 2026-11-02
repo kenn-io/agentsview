@@ -333,6 +333,109 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	assert.Equal(t, 2, sessions, "the reparse must keep the existing session identities")
 }
 
+func TestCodexParentInventoryUpgradeRepairsUnchangedForks(t *testing.T) {
+	version := db.CurrentDataVersion()
+	oldVersion := version - 1
+	agents := []parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}
+	require.ElementsMatch(t, agents, db.ScopedDataVersionProviders(161, 162))
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: agents}))
+	for _, agent := range agents {
+		t.Run(string(agent), func(t *testing.T) {
+			ctx := t.Context()
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			const parent = "11111111-1111-4111-8111-111111111111"
+			const child = "22222222-2222-4222-8222-222222222222"
+			const page = "44444444-4444-4444-8444-444444444444"
+			const stamp = "2026-09-01T10:00:00Z"
+			source := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+			body := testjsonl.JoinJSONL(
+				testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", stamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", stamp),
+				testjsonl.CodexMsgJSON("assistant", "copied page", stamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", stamp),
+				testjsonl.CodexMsgJSON("assistant", "new answer", stamp),
+			)
+			dbtest.WriteTestFile(t, source, []byte(body))
+			dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl"), []byte(testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", stamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", stamp),
+			)))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{agent: {root}}}
+			engine := sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(ctx, nil).Failed)
+			engine.Close()
+			id := string(agent) + ":" + child
+			messages, err := database.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			require.Equal(t, "new answer", messages[1].Content)
+			note := "Keep the child answer"
+			_, err = database.PinMessage(ctx, id, messages[1].ID, &note)
+			require.NoError(t, err)
+			before, err := database.GetSessionFull(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			digest, found, err := database.GetProviderStatHash(ctx, agent, source)
+			require.NoError(t, err)
+			require.True(t, found, "the persisted stat gate must be populated")
+
+			// Reproduce an old archive that missed this page while retaining
+			// its fork's current version, unchanged bytes and freshness digest.
+			dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2026-09-01T12-00-00-"+parent+"_"+page+".jsonl"), []byte(testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", stamp),
+			)))
+			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version=?", oldVersion); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", oldVersion))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err = db.OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+			require.NoError(t, err)
+			require.True(t, needsSync)
+			require.False(t, fullRebuild)
+			require.Equal(t, oldVersion, database.GetSessionDataVersion(ctx, id))
+			afterDigest, found, err := database.GetProviderStatHash(ctx, agent, source)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, digest, afterDigest, "repair must bypass an unchanged persisted digest")
+			engine = sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
+			stats := engine.SyncAll(ctx, nil)
+			require.Zero(t, stats.Failed)
+			after, err := database.GetSessionFull(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.ID, after.ID)
+			assert.Equal(t, before.SourceSessionID, after.SourceSessionID)
+			assert.Equal(t, before.FilePath, after.FilePath)
+			assert.Equal(t, before.FileHash, after.FileHash)
+			assert.Equal(t, db.CurrentDataVersion(), after.DataVersion)
+			messages, err = database.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "new answer", messages[0].Content)
+			pins, err := database.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, messages[0].ID, pins[0].MessageID)
+			assert.Equal(t, &note, pins[0].Note)
+			assert.Equal(t, &messages[0].Content, pins[0].Content)
+			needsSync, _, err = db.ArchiveResyncState(ctx, path)
+			require.NoError(t, err)
+			assert.False(t, needsSync)
+		})
+	}
+}
+
 func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	version := db.CurrentDataVersion()
 	scope := db.ScopedDataVersionProviders(154, 155)
