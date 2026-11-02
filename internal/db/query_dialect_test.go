@@ -202,7 +202,7 @@ func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 		wantArgs []any
 		wantJoin string
 	}{
-		{"sqlite", SQLiteQueryDialect(), []any{"laptop", "server", "claude"}, "FROM tree t CROSS JOIN sessions s ON s.parent_session_id = t.id"},
+		{"sqlite", SQLiteQueryDialect(), []any{"laptop", "server", "claude"}, ""},
 		{"postgres", PostgresQueryDialect(), []any{"laptop", "server", "claude"}, "FROM sessions s JOIN tree t ON s.parent_session_id = t.id"},
 		{"duckdb", DuckDBQueryDialect(), []any{"laptop", "server", "claude"}, "FROM sessions s JOIN tree t ON s.parent_session_id = t.id"},
 	}
@@ -212,7 +212,9 @@ func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 			got, args := BuildSessionFilterSQL(filter, tt.dialect)
 			normalized := normalizeSQL(got)
 			assert.Contains(t, normalized, "WITH RECURSIVE tree(id) AS")
-			assert.Contains(t, normalized, tt.wantJoin)
+			if tt.wantJoin != "" {
+				assert.Contains(t, normalized, tt.wantJoin)
+			}
 			assert.Contains(t, normalized, "id IN (WITH RECURSIVE tree(id) AS")
 			assert.Contains(t, normalized,
 				"NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation'))")

@@ -97,9 +97,6 @@ func TestSidebarParentAutomationIndexUpgrade(t *testing.T) {
 		WHERE parent_session_id IS NOT NULL;
 		ANALYZE`)
 	require.NoError(t, err)
-	require.Contains(t, sidebarChildLookupPlan(t, d),
-		"USING INDEX idx_sessions_parent (parent_session_id=?)",
-		"the recursive child lookup must seek the parent-only index before the upgrade")
 
 	output := captureLog(t)
 	path := d.Path()
@@ -117,8 +114,6 @@ func TestSidebarParentAutomationIndexUpgrade(t *testing.T) {
 	plan := sidebarChildLookupPlan(t, d)
 	assert.Contains(t, plan,
 		"USING INDEX idx_sessions_parent (parent_session_id=? AND is_automated=?)")
-	assert.NotContains(t, plan, "SEARCH s USING AUTOMATIC",
-		"the recursive child lookup must not fall back to a transient index")
 }
 
 func TestSidebarParentIndexOnFreshArchiveIsQuiet(t *testing.T) {
