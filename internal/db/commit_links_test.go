@@ -553,6 +553,36 @@ func TestCommitLinksWrappedCommands(t *testing.T) {
 	}
 }
 
+func TestCommitLinksTemplateLiterals(t *testing.T) {
+	for _, tt := range []struct {
+		name, input string
+		count       int
+	}{
+		{"command", "text(await tools.exec_command({cmd:`git commit -m fix`,workdir:\"/repo\"}))", 1},
+		{"multiline and directory", "text(await tools.exec_command({cmd:`git add .\ngit commit -m \"fix\"`,workdir:`/repo`}))", 1},
+		{"escaped backticks", "text(await tools.exec_command({cmd:`git commit -m 'fix \\`parser\\`'`,workdir:`/repo`}))", 1},
+		{"escaped interpolation marker", "text(await tools.exec_command({cmd:`git commit -m 'fix \\${parser}'`,workdir:`/repo`}))", 1},
+		{"command interpolation", "text(await tools.exec_command({cmd:`git commit -m ${message}`,workdir:\"/repo\"}))", 0},
+		{"directory interpolation", "text(await tools.exec_command({cmd:`git commit -m fix`,workdir:`/${repo}`}))", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", tt.input, `{"output":"[main abc1234] Fix parser\n"}`)
+			messages[2].ToolCalls[0].ToolName = "exec"
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, tt.count)
+			if tt.count > 0 {
+				assert.Equal(t, "abc1234", got.Commits[0].SHA)
+				assert.Equal(t, "/repo", got.Commits[0].Repository)
+				assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+			}
+		})
+	}
+}
+
 func TestCommitLinksCodeModeOperations(t *testing.T) {
 	for _, tt := range []struct{ name, input, result string }{
 		{"reordered poll", `text(await tools.write_stdin({chars:"",yield_time_ms:1000,session_id:7}))`, `{"output":"[main abc1234] Old commit\n"}`},

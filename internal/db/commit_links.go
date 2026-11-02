@@ -21,7 +21,7 @@ const (
 	commitLinksBackfillKey = "commit_links_backfill_v1"
 	commitCommandToken     = `(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
 	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
-	commitJSString         = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`
+	commitJSString         = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|` + "`(?:\\\\.|[^`\\\\])*`)"
 )
 
 var (
@@ -35,7 +35,7 @@ var (
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
-	commitOperationRE         = regexp.MustCompile(`\btools\.(exec_command|write_stdin)\s*\(\s*(\{(?:` + commitJSString + `|[^{}"'])*\})\s*\)`)
+	commitOperationRE         = regexp.MustCompile(`\btools\.(exec_command|write_stdin)\s*\(\s*(\{(?:` + commitJSString + "|[^{}\"'`])*\\})\\s*\\)")
 	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
@@ -187,11 +187,21 @@ func commitOperations(call commitCall) []commitCall {
 		args := map[string]any{}
 		for _, property := range commitPropertyRE.FindAllStringSubmatch(operation[2], -1) {
 			key, value := strings.Trim(property[1], `"'`), property[2]
-			if value[0] == '"' || value[0] == '\'' {
+			if value[0] == '"' || value[0] == '\'' || value[0] == '`' {
 				quote := value[0]
 				rest := value[1 : len(value)-1]
 				var decoded strings.Builder
 				for rest != "" {
+					if quote == '`' {
+						if strings.HasPrefix(rest, "${") {
+							return nil
+						}
+						if strings.HasPrefix(rest, "\\`") || strings.HasPrefix(rest, `\$`) {
+							decoded.WriteByte(rest[1])
+							rest = rest[2:]
+							continue
+						}
+					}
 					r, _, tail, err := strconv.UnquoteChar(rest, quote)
 					if err != nil {
 						return nil
