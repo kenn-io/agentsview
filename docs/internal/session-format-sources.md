@@ -656,6 +656,10 @@ fixtures retain this field; missing identities remain source-local.
   covers native, filename-only, current-page and older-page shapes, and
   `TestRawParityNativeParserWithRetainedPush` covers real parsing, retained
   pushed history and captures from two devices.
+  `TestRawNativeIdentityUpgradePreservesCuration` verifies that a hosted
+  reparse promotes a source-local identity while retaining names, stars, pins,
+  trash, purge decisions, old variant URLs and contribution history. Conflicting
+  saved names or pin notes abort the promotion atomically.
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -5027,6 +5031,9 @@ schemas keep their existing ordering behavior.
   reparses Evener sources without changing their archive IDs or source paths.
   `TestEvenerSemanticSession`, `TestRawParityNativeParserWithRetainedPush` and
   `TestNativeIdentityUpgradePreservesArchiveSessions` cover those boundaries.
+  The shared hosted promotion path is covered by
+  `TestRawNativeIdentityUpgradePreservesCuration`, including saved curation,
+  deletion decisions and conflicting names or pin notes.
 - **Format:** newline-framed semantic transcript v2; header followed by entries
   containing a sequence number and semantic turn. Optional metadata is a
   sibling `<session-id>.meta.json`.

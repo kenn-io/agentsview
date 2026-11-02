@@ -73,6 +73,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		priorByGroup[b.Group] = b
 	}
 	candidates := map[string]ingest.Candidate{}
+	promotions := map[string]rawBranch{}
 	for _, r := range parsed.Outcome.Results {
 		c, err := ingest.PrepareCandidate(ctx, r.Result, s.options.Content)
 		if err != nil {
@@ -87,6 +88,26 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		group, key := rawGroupID(m, c.Session)
 		if _, duplicate := candidates[group]; duplicate {
 			return errors.New("duplicate raw projection member")
+		}
+		// Native evidence can arrive on a later parse of the same source/member.
+		// Recover history from its source-local branch before changing groups.
+		if c.Session.SourceSessionID != "" {
+			local := c.Session
+			local.SourceSessionID = ""
+			localGroup, _ := rawGroupID(m, local)
+			if previous, ok := priorByGroup[localGroup]; ok && localGroup != group && previous.Member == c.Session.ID {
+				metadata, err := decodeRawPayload(previous.Payload)
+				if err != nil {
+					return err
+				}
+				if metadata.Session.SourceSessionID == "" && metadata.Session.Agent == c.Session.Agent {
+					if _, exists := priorByGroup[group]; exists {
+						return errors.New("native identity promotion conflicts with existing source member")
+					}
+					promotions[group] = previous
+					priorByGroup[group] = previous
+				}
+			}
 		}
 		groups[group] = rawBaseAlias(m, c.Session)
 		keys[group] = key
@@ -166,6 +187,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				return decodeErr
 			}
 			old.Session = metadata.Session
+			if _, promoting := promotions[group]; promoting {
+				old.Session.SourceSessionID = c.Session.SourceSessionID
+			}
 		}
 		oldLoaded := false
 		loadOld := func(ctx context.Context) error {
@@ -286,6 +310,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
  captured_session_id=EXCLUDED.captured_session_id,manifest_id=EXCLUDED.manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,active=true,prior_payload=EXCLUDED.prior_payload`, branchID, source, group, c.Session.ID, sessionID, revision, m.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration, metadata)
 		if err != nil {
 			return err
+		}
+		if previous, promoting := promotions[group]; promoting {
+			if err = promoteRawMemberState(ctx, tx, previous, group, branchID); err != nil {
+				return err
+			}
 		}
 		if err = writeRawLinks(ctx, tx, branchID, prepared); err != nil {
 			return err

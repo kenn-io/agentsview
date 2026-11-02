@@ -36,6 +36,11 @@ in [issue #1352](https://github.com/kenn-io/agentsview/issues/1352), including
 embedding consumption, accepted-generation retention and garbage collection, and
 disaster rebuilds.
 
+When a reparse first discovers a provider's native session ID, hosted processing
+keeps the saved names, stars, pins, trash and purge decisions from that source.
+Existing variant URLs continue to resolve. Conflicting saved names or pin notes
+stop publication with an error; reconcile the saved curation before retrying.
+
 ## Provision a hosted instance
 
 Use one PostgreSQL schema, restricted runtime role and server instance per
