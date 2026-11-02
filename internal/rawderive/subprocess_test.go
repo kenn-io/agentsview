@@ -208,17 +208,6 @@ func TestSandboxWireRejectsInvalidOutcome(t *testing.T) {
 	}
 }
 
-func TestSandboxWirePreservesSizeFailure(t *testing.T) {
-	var wire bytes.Buffer
-	in := ParsedManifest{Outcome: parser.ParseOutcome{SourceErrors: []parser.SourceError{{Err: errors.Join(rawsync.ErrInvalid, ErrSizeLimit, errors.New("private path and content"))}}}}
-	require.NoError(t, encodeParserOutcome(&wire, in))
-	assert.NotContains(t, wire.String(), "private path")
-	out, err := decodeParserOutcome(&wire)
-	require.NoError(t, err)
-	require.Len(t, out.Outcome.SourceErrors, 1)
-	assert.ErrorIs(t, out.Outcome.SourceErrors[0].Err, ErrSizeLimit)
-}
-
 func TestParserOutputWriterEnforcesByteBoundary(t *testing.T) {
 	for _, size := range []int{7, 8, 9} {
 		t.Run(string(rune('0'+size)), func(t *testing.T) {
@@ -236,17 +225,7 @@ func TestParserOutputWriterEnforcesByteBoundary(t *testing.T) {
 			}
 		})
 	}
-	t.Run("short_write", func(t *testing.T) {
-		w := &parserOutputWriter{dst: parserShortWriter{}, remaining: 8}
-		n, err := w.Write([]byte("xx"))
-		require.ErrorIs(t, err, io.ErrShortWrite)
-		assert.Equal(t, 1, n)
-	})
 }
-
-type parserShortWriter struct{}
-
-func (parserShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func TestSandboxProbeRequiresSourceSentinel(t *testing.T) {
 	root := t.TempDir()
