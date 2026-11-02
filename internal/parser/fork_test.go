@@ -423,7 +423,7 @@ func TestSessionBoundsStartedAtFromLeadingEvent(t *testing.T) {
 func TestForkDetection_NestedForkCountsFullSubtree(t *testing.T) {
 	// Regression test: when the first child at a fork point
 	// itself contains nested forks early in its chain, the
-	// old first-child-only countUserTurns would see only 1
+	// old first-child-only user-turn count would see only 1
 	// user turn (following first children that dead-end
 	// quickly) and treat the entire large branch as a small
 	// retry, discarding it.
@@ -449,9 +449,9 @@ func TestForkDetection_NestedForkCountsFullSubtree(t *testing.T) {
 	//                        i(asst) -> j(user) -> k(asst)
 	//   Second child: z(user, 1 msg)
 	//
-	// Old countUserTurns for c: c(user,1) -> d(asst) ->
+	// Old first-child-only user-turn count for c: c(user,1) -> d(asst) ->
 	//   e(asst, no children) = 1 user turn <= 3 -> retry!
-	// New countUserTurns for c: 1+0+1+0+1+0+1+0 = 4 > 3
+	// Full subtree user-turn count for c: 1+0+1+0+1+0+1+0 = 4 > 3
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "a", "").
 		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "ok", "b", "a").
