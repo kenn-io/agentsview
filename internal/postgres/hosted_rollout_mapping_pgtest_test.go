@@ -4,9 +4,11 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -80,4 +82,62 @@ func TestHostedRolloutReturnedRowsKeepPublicIDs(t *testing.T) {
 	read()
 	require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow"))
 	read()
+}
+
+// Each report must filter hidden rows before ID mapping, including map keys.
+func TestHostedRolloutReportRowsKeepPublicIDs(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "report-mapping", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("report mapping")))
+	_, err := f.runtime.Exec(`INSERT INTO sessions(id,project,machine,agent,message_count,user_message_count,started_at) VALUES('visible','p','m','claude',2,1,'2026-01-01T00:00:00Z');
+ INSERT INTO messages(session_id,ordinal,role,content,timestamp) VALUES('visible',0,'user','question','2026-01-01T00:00:00Z'),('visible',1,'assistant','answer','2026-01-01T00:01:00Z');
+ INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,cost_microdollars,cost_status,cost_source,occurred_at) VALUES('visible','api','synthetic-model',11,7,10,'known','provider','2026-01-01T00:01:00Z');
+ INSERT INTO tool_calls(session_id,message_ordinal,call_index,tool_name,category,file_path) VALUES('visible',1,0,'Edit','Edit','visible.go');
+ UPDATE usage_events SET cost_microdollars=10,cost_status='known',cost_source='provider',occurred_at='2026-01-01T00:01:00Z';
+ UPDATE messages SET timestamp=CASE WHEN ordinal=0 THEN '2026-01-01T00:00:00Z'::timestamptz ELSE '2026-01-01T00:01:00Z'::timestamptz END;
+ UPDATE tool_calls SET category='Edit',file_path='raw.go' WHERE session_id<>'visible'`)
+	require.NoError(t, err)
+	h, err := newHostedAdapter(f.runtime, f.tenant)
+	require.NoError(t, err)
+	af := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
+	uf := db.UsageFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	check := func(want []string) {
+		t.Helper()
+		top, err := h.GetAnalyticsTopSessions(t.Context(), af, "messages")
+		require.NoError(t, err)
+		var ids []string
+		for _, row := range top.Sessions {
+			ids = append(ids, row.ID)
+		}
+		assert.ElementsMatch(t, want, ids, "analytics IDs")
+		costs, err := h.GetTopSessionsByCost(t.Context(), uf, 10)
+		require.NoError(t, err)
+		ids = nil
+		for _, row := range costs {
+			ids = append(ids, row.SessionID)
+		}
+		assert.ElementsMatch(t, want, ids, "cost IDs")
+		edits, err := h.RecentEdits(t.Context(), db.RecentEditsParams{})
+		require.NoError(t, err)
+		ids = nil
+		for _, file := range edits.Files {
+			ids = append(ids, file.LastSessionID)
+			for _, edit := range file.Edits {
+				assert.NotEmpty(t, edit.SessionID)
+			}
+		}
+		assert.ElementsMatch(t, want, ids, "edit IDs")
+		artifacts, err := h.BuildActivityReportArtifacts(t.Context(), af, q, nil)
+		require.NoError(t, err)
+		ids = nil
+		for id := range artifacts.Membership {
+			ids = append(ids, id)
+		}
+		assert.ElementsMatch(t, want, ids, "activity membership keys")
+	}
+	check([]string{"codex:portable", "visible"})
+	require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow"))
+	check([]string{"visible"})
 }
