@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { cpSync } from "node:fs";
+import { cpSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
@@ -14,6 +14,11 @@ function gitCommit(): string {
     return "unknown";
   }
 }
+
+// Inlined verbatim: the Go server's CSP allows this script by the SHA-256
+// of the file's bytes (holdFirstPaintScriptHash in internal/server).
+const holdFirstPaint = readFileSync(new URL("./src/hold-first-paint.js", import.meta.url), "utf-8");
+const charsetTag = '<meta charset="UTF-8" />';
 
 const apiTarget = process.env.VITE_API_TARGET ?? "http://127.0.0.1:8080";
 const apiTargetOrigin = new URL(apiTarget).origin;
@@ -61,9 +66,14 @@ export default defineConfig(({ command }) => {
         "**/*.md",
         // Tests assert this captured payload's exact bytes.
         "src/lib/utils/__fixtures__/retained-tool-image-1735.json",
+        // Copied verbatim from kenn-io/actions; the CSP pins its hash.
+        "src/hold-first-paint.js",
       ],
     },
     lint: {
+      // Copied verbatim from kenn-io/actions, and the CSP pins its hash, so
+      // findings belong upstream.
+      ignorePatterns: ["src/hold-first-paint.js"],
       jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
       rules: {
         "vite-plus/prefer-vite-plus-imports": "error",
@@ -96,6 +106,21 @@ export default defineConfig(({ command }) => {
       exclude: ["@kenn-io/kit-ui"],
     },
     plugins: [
+      {
+        // Hide the page until its stylesheets and fonts load. The script must
+        // run before any stylesheet, and the charset must stay first.
+        name: "hold-first-paint",
+        transformIndexHtml(html) {
+          const at = html.indexOf(charsetTag);
+          if (at === -1 || html.indexOf(charsetTag, at + 1) !== -1) {
+            throw new Error(`index.html must contain ${charsetTag} exactly once`);
+          }
+          return html.replace(
+            charsetTag,
+            () => `${charsetTag}\n    <script>${holdFirstPaint}</script>`,
+          );
+        },
+      },
       {
         name: "chrome-extension",
         apply: "build",
@@ -163,6 +188,9 @@ export default defineConfig(({ command }) => {
       // cytoscape) are already lazy chunks; the main entry sits just above
       // the default 500 kB threshold.
       chunkSizeWarningLimit: 1200,
+      // Embed the woff2 faces in the render-blocking stylesheet so text
+      // first paints in its final typeface instead of a fallback face.
+      assetsInlineLimit: (file: string) => (file.endsWith(".woff2") ? true : undefined),
       rolldownOptions: {
         checks: {
           // Plugin time is dominated by vite-plus's internal vitest-resolver
