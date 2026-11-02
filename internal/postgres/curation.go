@@ -82,9 +82,10 @@ func (s *Store) ListStarredSessionIDs(
 	ctx context.Context,
 ) ([]string, error) {
 	rows, err := s.pg.QueryContext(ctx, `
-		SELECT session_id
-		FROM starred_sessions
-		ORDER BY created_at DESC, session_id DESC`)
+		SELECT st.session_id
+		FROM starred_sessions st JOIN sessions s ON s.id=st.session_id
+		WHERE NOT s.rollout_hidden
+		ORDER BY st.created_at DESC, st.session_id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("listing starred sessions: %w", err)
 	}
@@ -237,7 +238,7 @@ func (s *Store) ListPinnedMessages(
 			FROM pinned_messages p
 			JOIN sessions s
 				ON p.session_id = s.id
-				AND s.deleted_at IS NULL
+				AND s.deleted_at IS NULL AND NOT s.rollout_hidden
 			LEFT JOIN messages m
 				ON m.session_id = p.session_id
 				AND m.ordinal = p.message_id`

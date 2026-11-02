@@ -33,6 +33,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "vector_generation_machines", Key: []string{"generation_id", "machine"}},
 	{Name: "vector_documents", Key: []string{"doc_key"}},
 	{Name: "vector_push_state", Key: []string{"generation_id", "session_id"}},
+	{Name: "raw_rollout_scopes", Key: []string{"device_id", "provider"}},
 	{Name: "hosted_tenant_binding", Key: []string{"singleton"}},
 	{Name: "sync_metadata", Key: []string{"key"}},
 	{Name: "sessions", Key: []string{"id"}},
@@ -82,6 +83,7 @@ var hostedTables = append([]HostedTable{
 // schemas were first provisioned, with the DDL that creates each one.
 var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"session_plan_usage", sessionPlanUsageDDL},
+	{"raw_rollout_scopes", rawRolloutDDL},
 }
 
 // installHostedCoreUpgrade adds only missing upgrade tables to an already
