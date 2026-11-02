@@ -569,8 +569,10 @@ type EngineConfig struct {
 
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
-	sourceSyncErr  error
-	rebuildSources func(context.Context) (RebuildOptions, error)
+	sourceSyncErr error
+	// localDerivationErr is fixed at construction; db may change during resync.
+	localDerivationErr error
+	rebuildSources     func(context.Context) (RebuildOptions, error)
 
 	db    *db.DB
 	stat  func(string) (os.FileInfo, error)
@@ -1070,6 +1072,7 @@ func NewEngine(ctx context.Context,
 		},
 	}
 	e.sourceSyncErr = sourceSyncErr
+	e.localDerivationErr = database.RequireLocalDerivation()
 	e.sourceSet.Store(newEngineSources(providerFactories, SourceConfig{
 		AgentDirs:        cfg.AgentDirs,
 		SourceMachines:   cfg.SourceMachines,
@@ -4990,8 +4993,8 @@ func (stats *SyncStats) ProcessingComplete() bool {
 func (e *Engine) RunStartupMaintenance(
 	ctx context.Context, work func() error,
 ) error {
-	if err := e.db.RequireLocalDerivation(); err != nil {
-		return err
+	if e.localDerivationErr != nil {
+		return e.localDerivationErr
 	}
 	if e.startupMaintenanceReady != nil {
 		select {
@@ -5044,8 +5047,8 @@ func (e *Engine) RunStartupSyncFallback(
 // sync and resync operations. Use this for daemon-owned maintenance operations
 // that must serialize with sync but should not force a local sync first.
 func (e *Engine) RunExclusive(work func() error) error {
-	if err := e.db.RequireLocalDerivation(); err != nil {
-		return err
+	if e.localDerivationErr != nil {
+		return e.localDerivationErr
 	}
 	if e.refuseWriteInForceParse("RunExclusive") {
 		return errors.New(
@@ -5061,8 +5064,8 @@ func (e *Engine) RunExclusive(work func() error) error {
 // lock when ctx ends, such as a push holding the daemon's push turn. It
 // returns ctx.Err() without running work if ctx ends before the lock is free.
 func (e *Engine) RunExclusiveCtx(ctx context.Context, work func() error) error {
-	if err := e.db.RequireLocalDerivation(); err != nil {
-		return err
+	if e.localDerivationErr != nil {
+		return e.localDerivationErr
 	}
 	if e.refuseWriteInForceParse("RunExclusiveCtx") {
 		return errors.New(
@@ -5096,8 +5099,8 @@ func (e *Engine) lockSync(try bool) error {
 // lost; user-triggered sync requests use this method to fail promptly instead
 // of waiting behind a filesystem operation that may be stalled.
 func (e *Engine) TryRunExclusive(work func() error) error {
-	if err := e.db.RequireLocalDerivation(); err != nil {
-		return err
+	if e.localDerivationErr != nil {
+		return e.localDerivationErr
 	}
 	if e.refuseWriteInForceParse("TryRunExclusive") {
 		return errors.New(
@@ -5118,8 +5121,8 @@ func (e *Engine) TryRunExclusive(work func() error) error {
 // recomputes must land first or pushed sessions could carry stale
 // signal/secret fields.
 func (e *Engine) RunExclusiveFlushed(work func() error) error {
-	if err := e.db.RequireLocalDerivation(); err != nil {
-		return err
+	if e.localDerivationErr != nil {
+		return e.localDerivationErr
 	}
 	if e.refuseWriteInForceParse("RunExclusiveFlushed") {
 		return errors.New(
