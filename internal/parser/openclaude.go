@@ -413,7 +413,7 @@ func parseOpenClaudeSession(
 	ordinal := 0
 	var (
 		messages       []ParsedMessage
-		queuedCommands []claudeQueuedCommand
+		queuedCommands []claudeAttachment
 		startedAt      time.Time
 		endedAt        time.Time
 		firstUser      string
@@ -680,30 +680,31 @@ func openClaudeSemanticMessages(messages []ParsedMessage) []ParsedMessage {
 	return filtered
 }
 
-func extractOpenClaudeQueuedCommand(ctx context.Context, line string) (claudeQueuedCommand, bool) {
+func extractOpenClaudeQueuedCommand(ctx context.Context, line string) (claudeAttachment, bool) {
 	attachment := gjson.Get(line, "attachment")
 	if attachment.Get("type").Str != "queued_command" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
 	if attachment.Get("commandMode").Str != "prompt" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
 	if attachment.Get("isMeta").Bool() || attachment.Get("origin").Exists() {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
 
 	prompt, _, _, _, _, _, _ := ExtractTextContent(ctx, attachment.Get("prompt"))
 	if strings.TrimSpace(prompt) == "" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
 
-	return claudeQueuedCommand{
+	return claudeAttachment{
+		kind:      claudeAttachmentQueuedCommand,
 		prompt:    prompt,
 		timestamp: extractTimestamp(line),
 	}, true
 }
 
-func openClaudeQueuedCommandMessage(q claudeQueuedCommand) ParsedMessage {
+func openClaudeQueuedCommandMessage(q claudeAttachment) ParsedMessage {
 	return ParsedMessage{
 		Role:          RoleUser,
 		Content:       q.prompt,

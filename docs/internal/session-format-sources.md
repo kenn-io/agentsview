@@ -155,7 +155,7 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Hook success attachments (checked 2026-11-02):** A bounded decoder reads the
+- **Hook success attachments (checked 2026-11-02):** The parser reads the
   `hook_success` attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`, and
   in two first-hand reports with `stdout` and `stderr`:
@@ -167,9 +167,18 @@ evidence; they do not establish whether a tool helped the task.
   channel's text as written. These are reported transcript shapes, not a public
   producer source or an authoritative persistence schema. The
   [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
-  protocol's stdout and stderr, not transcript persistence. Only payload
-  decoding is in place, with synthetic coverage: full and incremental import,
-  archive storage, and the transcript view stay unimplemented here.
+  protocol's stdout and stderr, not transcript persistence. Full and incremental
+  parsing emit system rows with an explicitly empty dialogue field. The plain
+  body separates hook name, hook event, content, stdout, and stderr without
+  trimming or interpreting their text. Native identity fields are retained only
+  when supplied. Unparented hooks stay on the original result; a known unique
+  parent routes a hook, including a chain of hooks, to its owning fork. A parent
+  that cannot be resolved safely during incremental parsing requires a full
+  parse. Synthetic tests cover ordering with queued prompts, assistant snapshot
+  merging, counts, usage, and native identity. This parser stage uses existing
+  message fields; archive resume cursors, upgrades, shared-provider and mirror
+  parity, and the dedicated transcript control still need integration before
+  the feature is ready to publish.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies
