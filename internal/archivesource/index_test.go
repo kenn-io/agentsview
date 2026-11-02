@@ -2,11 +2,11 @@ package archivesource
 
 import (
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,7 +28,6 @@ type archiveFixtureTemplate struct {
 
 var (
 	archiveFixtureRoot      string
-	archiveFixtureMu        sync.Mutex
 	archiveFixtureTemplates = make(map[string]archiveFixtureTemplate)
 )
 
@@ -36,7 +35,8 @@ func TestMain(m *testing.M) {
 	var err error
 	archiveFixtureRoot, err = os.MkdirTemp("", "agentsview-archive-fixtures-*")
 	if err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	code := m.Run()
 	_ = os.RemoveAll(archiveFixtureRoot)
@@ -45,8 +45,6 @@ func TestMain(m *testing.M) {
 
 func archiveFixture(t *testing.T, excluded ...string) (config.ArchiveSource, string) {
 	t.Helper()
-	archiveFixtureMu.Lock()
-	defer archiveFixtureMu.Unlock()
 	key := strings.Join(excluded, "\x00")
 	template, ok := archiveFixtureTemplates[key]
 	if !ok {
