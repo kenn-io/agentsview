@@ -110,6 +110,6 @@ func hostedSidebarParentEdgesSQL() string {
 		SELECT child.id,parent.id
 		FROM sessions child
 		JOIN sessions parent ON parent.id=child.parent_session_id
-		WHERE child.provenance_kind='legacy'
+		WHERE child.provenance_kind='legacy' AND NOT child.rollout_hidden AND NOT parent.rollout_hidden
 	)`
 }
