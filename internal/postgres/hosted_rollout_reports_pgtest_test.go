@@ -184,22 +184,25 @@ func TestHostedRolloutReadInventory(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { assert.JSONEq(t, empty[i], read(tc)) })
 	}
-	hegel.Test(t, func(ht *hegel.T) {
-		i := hegel.Draw(ht, hegel.Integers(0, len(cases)-1))
-		hidden := hegel.Draw(ht, hegel.Booleans())
-		_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=$1`, hidden)
-		require.NoError(ht, err)
-		got := read(cases[i])
-		want := empty[i]
-		if !hidden {
-			want = visible[i]
-		}
-		if hidden || !cases[i].positive {
-			require.JSONEq(ht, want, got, cases[i].name)
-		} else {
-			require.NotEqual(ht, empty[i], got, cases[i].name)
-		}
-	}, hegel.WithTestCases(1000))
+	t.Run("eligibility_property", func(t *testing.T) {
+		requireHegel(t)
+		hegel.Test(t, func(ht *hegel.T) {
+			i := hegel.Draw(ht, hegel.Integers(0, len(cases)-1))
+			hidden := hegel.Draw(ht, hegel.Booleans())
+			_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=$1`, hidden)
+			require.NoError(ht, err)
+			got := read(cases[i])
+			want := empty[i]
+			if !hidden {
+				want = visible[i]
+			}
+			if hidden || !cases[i].positive {
+				require.JSONEq(ht, want, got, cases[i].name)
+			} else {
+				require.NotEqual(ht, empty[i], got, cases[i].name)
+			}
+		}, hegel.WithTestCases(1000))
+	})
 }
 
 // Findings, signals, trends and activity must retain a visible peer while
