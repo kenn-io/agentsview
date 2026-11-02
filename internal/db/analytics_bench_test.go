@@ -70,14 +70,14 @@ func BenchmarkSignalsFrustration(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for b.Loop() {
+						if mode == "cold" || mode == "tool_retries" {
+							d.frustrationMemo.swap(func() {})
+						}
 						if mode == "tool_retries" {
 							resp, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, mode, 10)
 							require.NoError(b, err)
 							require.Len(b, resp.Sessions, 10)
 						} else {
-							if mode == "cold" {
-								d.frustrationMemo.swap(func() {})
-							}
 							resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 							require.NoError(b, err)
 							require.Equal(b, size.sessions*10, resp.QualityHealth.Totals.FrustrationMarkerCount)
