@@ -672,6 +672,7 @@ func TestCommitLinkMirrorRows(t *testing.T) {
 	require.NotNil(t, rows[0].TurnOrdinal)
 	assert.Equal(t, 0, *rows[0].TurnOrdinal)
 	assert.Equal(t, "Record the parser fix", rows[0].TurnText)
+	assert.Equal(t, "project-a", rows[0].Project)
 	retained, err := d.RetainedCommitLinkRows(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, retained)
@@ -683,6 +684,26 @@ func TestCommitLinkMirrorRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, retained, 1)
 	assert.Equal(t, "abc1234", retained[0].SHA)
+	assert.Equal(t, "project-a", retained[0].Project)
 	assert.Nil(t, retained[0].TurnOrdinal)
 	assert.Empty(t, retained[0].TurnText)
+}
+
+func TestCommitLinkProjectSurvivesMoveDeletionAndResync(t *testing.T) {
+	old := testDB(t)
+	insertSession(t, old, "s1", "project-a")
+	insertMessages(t, old, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	session, err := old.GetSession(t.Context(), "s1")
+	require.NoError(t, err)
+	session.Project = "project-b"
+	require.NoError(t, old.UpsertSession(t.Context(), *session))
+	require.NoError(t, old.DeleteSession(t.Context(), "s1"))
+
+	fresh := testDB(t)
+	require.NoError(t, fresh.CopyExcludedSessionsFrom(old.Path()))
+	retained, err := fresh.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	require.Len(t, retained, 1)
+	assert.Equal(t, "project-b", retained[0].Project)
+	assert.Equal(t, "abc1234", retained[0].SHA)
 }

@@ -2589,8 +2589,8 @@ func copySessionDataForIDs(
 
 	if oldDBHasTable(ctx, tx, "commit_links") {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
-   (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at)
-   SELECT `+sessionID+`,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at
+   (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
+   SELECT `+sessionID+`,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project
    FROM old_db.commit_links WHERE session_id IN (SELECT source_id FROM `+tempIDsTable+`)`); err != nil {
 			return fmt.Errorf("copying commit links: %w", err)
 		}

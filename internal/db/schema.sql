@@ -1703,6 +1703,14 @@ CREATE TABLE IF NOT EXISTS commit_links (
     call_index INTEGER NOT NULL,
     tool_use_id TEXT NOT NULL,
     committed_at TEXT NOT NULL,
+    project TEXT NOT NULL,
     PRIMARY KEY (session_id, sha)
 );
 CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);
+
+-- Capture moves since the last transcript write before losing the session row.
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_deletion_project
+BEFORE DELETE ON sessions
+BEGIN
+    UPDATE commit_links SET project=OLD.project WHERE session_id=OLD.id;
+END;

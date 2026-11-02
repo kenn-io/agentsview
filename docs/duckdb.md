@@ -31,9 +31,9 @@ reads with a schema compatibility error naming `messages.dialogue_text`. Run
 Commit lookups return the copied links and prompts.
 The first push after upgrading rebuilds the mirror to copy existing commit
 links. Serve requires that rebuild before opening an older mirror.
-A deleted session remains visible as a missing record. Project filters use its
-project from the last push. A session deleted before the mirror's last rebuild
-has no project evidence, so a filtered replica omits its retained links.
+A deleted session remains visible as a missing record. Project filters use the
+project saved with its links in SQLite, including after a rebuild or a deletion
+before the first push.
 
 ## Quick Start
 

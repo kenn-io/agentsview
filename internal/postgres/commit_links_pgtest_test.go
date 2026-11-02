@@ -106,3 +106,17 @@ func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, links.Commits)
 }
+
+func TestPGRetainedCommitLinkScope(t *testing.T) {
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_retained_commit_scope_test")
+	dbtest.SeedCommitLinks(t, local)
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	dbtest.AssertRetainedCommitLinkScope(t, local, func() db.CommitLinkReader { return store }, func(projects, exclude []string) {
+		syncer.projects, syncer.excludeProjects = projects, exclude
+		_, err := syncer.Push(ctx, true, nil)
+		require.NoError(t, err)
+	})
+}

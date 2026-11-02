@@ -89,28 +89,25 @@ func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier,
 			ids = append(ids, r.SessionID)
 		}
 	}
-	stored := make(map[string]string)
 	live := make(map[string]bool)
 	err = db.QueryChunkedSize(ids, 200, func(batch []string) error {
 		b := db.NewQueryBuilder(dialect, 0)
-		ph := make([]string, 0, 2*len(batch))
-		for _, id := range slices.Concat(batch, batch) {
+		ph := make([]string, 0, len(batch))
+		for _, id := range batch {
 			ph = append(ph, b.Add(id))
 		}
-		// The session half also protects another archive's row without any links.
-		rows, err := q.QueryContext(ctx, `SELECT session_id,project,false FROM commit_links WHERE session_id IN (`+strings.Join(ph[:len(batch)], ",")+`) UNION ALL SELECT id,project,true FROM sessions WHERE id IN (`+strings.Join(ph[len(batch):], ",")+`)`, b.Args()...)
+		// Protect another archive's session, including one without any links.
+		rows, err := q.QueryContext(ctx, `SELECT id FROM sessions WHERE id IN (`+strings.Join(ph, ",")+`)`, b.Args()...)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, project string
-			var exists bool
-			if err := rows.Scan(&id, &project, &exists); err != nil {
+			var id string
+			if err := rows.Scan(&id); err != nil {
 				return err
 			}
-			stored[id] = project
-			live[id] = live[id] || exists
+			live[id] = true
 		}
 		return rows.Err()
 	})
@@ -120,11 +117,9 @@ func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier,
 	ids = slices.DeleteFunc(ids, func(id string) bool { return live[id] })
 	out := []db.CommitLinkRow{}
 	for _, r := range retained {
-		project, known := stored[r.SessionID]
-		if live[r.SessionID] || len(projects)+len(exclude) > 0 && (!known || !db.ProjectMatchesPushScope(project, projects, exclude)) {
+		if live[r.SessionID] || !db.ProjectMatchesPushScope(r.Project, projects, exclude) {
 			continue
 		}
-		r.Project = project
 		out = append(out, r)
 	}
 	return ids, out, nil

@@ -58,3 +58,51 @@ func AssertCommitLinkParity(t *testing.T, local *db.DB, store db.CommitLinkReade
 		require.ErrorIs(t, err, db.ErrInvalidCommitSHA)
 	}
 }
+
+// AssertRetainedCommitLinkScope checks that an archive can reproduce filtered
+// retained links even when the replica has no previous project evidence.
+func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.CommitLinkReader, push func(projects, exclude []string)) {
+	t.Helper()
+	require.NoError(t, local.DeleteSession(t.Context(), "commit-delete"))
+	for _, step := range []struct {
+		name              string
+		projects, exclude []string
+		want              bool
+	}{
+		{name: "delete before first push", projects: []string{"commit-project"}, want: true},
+		{name: "narrow scope", projects: []string{"other"}},
+		{name: "widen scope", projects: []string{"commit-project"}, want: true},
+		{name: "exclude project", exclude: []string{"commit-project"}},
+		{name: "include after exclusion", exclude: []string{"other"}, want: true},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			push(step.projects, step.exclude)
+			links, err := reader().SessionCommitLinks(t.Context(), "commit-delete")
+			require.NoError(t, err)
+			if !step.want {
+				assert.Empty(t, links.Commits)
+				return
+			}
+			require.Len(t, links.Commits, 1)
+			assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
+			assert.True(t, links.Commits[0].Missing)
+			assert.Nil(t, links.Commits[0].Turn)
+		})
+	}
+	// Move after the last publication, then delete without another live push.
+	session, err := local.GetSession(t.Context(), "commit-live")
+	require.NoError(t, err)
+	session.Project = "other"
+	require.NoError(t, local.UpsertSession(t.Context(), *session))
+	require.NoError(t, local.DeleteSession(t.Context(), "commit-live"))
+	push([]string{"commit-project"}, nil)
+	links, err := reader().SessionCommitLinks(t.Context(), "commit-live")
+	require.NoError(t, err)
+	assert.Empty(t, links.Commits, "the old project must not retain the moved session")
+	push([]string{"other"}, nil)
+	links, err = reader().SessionCommitLinks(t.Context(), "commit-live")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 1)
+	assert.True(t, links.Commits[0].Missing)
+	assert.Equal(t, "Save the change", links.Commits[0].Subject)
+}

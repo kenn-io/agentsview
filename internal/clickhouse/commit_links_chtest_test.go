@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -48,4 +49,19 @@ func TestClickHouseCommitLinkParity(t *testing.T) {
 	var count int
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_links WHERE session_id='commit-clash'").Scan(&count))
 	assert.Zero(t, count, "scope narrowing must remove copied prompt text too")
+}
+
+func TestClickHouseRetainedCommitLinkScope(t *testing.T) {
+	local, target := seedFixture(t)
+	dbtest.SeedCommitLinks(t, local)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	require.NoError(t, syncer.EnsureSchema(t.Context()))
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	dbtest.AssertRetainedCommitLinkScope(t, local, func() db.CommitLinkReader { return store }, func(projects, exclude []string) {
+		syncer.projects, syncer.excludeProjects = projects, exclude
+		_, err := syncer.Push(t.Context(), true, nil)
+		require.NoError(t, err)
+	})
 }

@@ -397,7 +397,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		return err
 	}
 	for _, l := range commitLinks(calls, cwd) {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES (?,?,?,?,?,?,?,?,?)`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project) SELECT ?,?,?,?,?,?,?,?,?,project FROM sessions WHERE id=?`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt, sessionID); err != nil {
 			return err
 		}
 	}
@@ -447,7 +447,7 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 }
 
 const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
- (s.id IS NULL OR s.deleted_at IS NOT NULL),COALESCE(s.project,''),
+ (s.id IS NULL OR s.deleted_at IS NOT NULL),COALESCE(s.project,l.project),
  turn.ordinal, turn.content
  FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(

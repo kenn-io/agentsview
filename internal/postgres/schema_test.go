@@ -631,6 +631,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"commit_links":                                    true,
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
 		"genai_pricing":                                   true,
@@ -946,6 +947,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 		},
 	})
 	state.existingTables = map[string]bool{
+		"commit_links":        true,
 		"model_pricing":       true,
 		"cursor_usage_events": true,
 	}
@@ -983,6 +985,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 	// absent: the read probe passes yet a push would fail on model_pricing,
 	// so the fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
+		"commit_links":        true,
 		"cursor_usage_events": true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
@@ -1012,6 +1015,7 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	// fast path must fall back to EnsureSchema so mapping publication has
 	// a table to write into.
 	state.existingTables = map[string]bool{
+		"commit_links":                              true,
 		"model_pricing":                             true,
 		"model_pricing_bands":                       true,
 		"genai_pricing":                             true,
@@ -1050,6 +1054,7 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 	// read probe passes yet ON CONFLICT DO NOTHING would not dedup cursor
 	// usage rows. The fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
+		"commit_links":        true,
 		"model_pricing":       true,
 		"model_pricing_bands": true,
 		"genai_pricing":       true,
