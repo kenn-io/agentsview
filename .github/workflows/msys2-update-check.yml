@@ -73,7 +73,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.5
 
       - name: Restore pricing snapshot
         shell: bash
