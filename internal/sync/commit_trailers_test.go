@@ -108,6 +108,33 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	assert.Len(t, list.Commits, 2)
 }
 
+func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
+	testutil.IsolateGit(t)
+	database := openTestDB(t)
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:removed-cwd"},
+	} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	}
+	cwd := filepath.Join(repo, "temporary", "nested")
+	require.NoError(t, os.MkdirAll(cwd, 0o700))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "removed-cwd", Agent: "claude", Project: "project-a", Machine: "local", Cwd: cwd}))
+	require.NoError(t, os.RemoveAll(filepath.Join(repo, "temporary")))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	engine.ReconcileCommitTrailers(t.Context())
+	list, err := database.SessionCommitLinks(t.Context(), "removed-cwd")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 1)
+	assert.Equal(t, "trailer", list.Commits[0].Source)
+	assert.Equal(t, "Editor", list.Commits[0].Subject)
+}
+
 func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires a shell Git wrapper")

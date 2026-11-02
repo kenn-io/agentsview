@@ -19697,7 +19697,23 @@ func discoverLocalGitIdentity(
 	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(cwd)) {
 		return localGitIdentity{}
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
+	// Archived sessions can name temporary subdirectories that were removed.
+	// Resolve from the nearest surviving ancestor, as git.DiscoverRepos does.
+	start := filepath.Clean(cwd)
+	for {
+		if !mayProbe(start) {
+			return localGitIdentity{}
+		}
+		if _, err := os.Stat(start); !os.IsNotExist(err) {
+			break
+		}
+		parent := filepath.Dir(start)
+		if parent == start {
+			return localGitIdentity{}
+		}
+		start = parent
+	}
+	resolved, err := filepath.EvalSymlinks(start)
 	if err != nil {
 		return localGitIdentity{}
 	}

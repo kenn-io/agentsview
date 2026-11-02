@@ -18,7 +18,8 @@ type TrailerCommit struct {
 	Sessions                          []string
 }
 
-var trailerValueRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var trailerAgentRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var trailerIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$`)
 var trailerSHARE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // RefsFingerprint returns both the fingerprint and its reachable tips for the
@@ -86,7 +87,8 @@ func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]
 			}
 		}
 		for _, value := range strings.Split(fields[4], "\x1e") {
-			if trailerValueRE.MatchString(value) {
+			agent, id, ok := strings.Cut(value, ":")
+			if ok && trailerAgentRE.MatchString(agent) && trailerIDRE.MatchString(id) {
 				c.Sessions = append(c.Sessions, value)
 			}
 		}
