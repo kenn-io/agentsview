@@ -122,9 +122,9 @@ func hostedSidebarParentEdgesSQL() string {
 		SELECT own_session.id,target.session_id ` + hostedLinkFromSQL + `
 		  AND e.kind='parent' AND own_session.provenance_kind='raw'
 		UNION
-		SELECT child.id,parent.id
+		SELECT child.id,parent.session_id
 		FROM sessions child
-		JOIN sessions parent ON parent.id=child.parent_session_id
-		WHERE child.provenance_kind='legacy' AND NOT child.rollout_hidden AND NOT parent.rollout_hidden
+		JOIN ` + hostedLegacyTargetsSQL + ` parent ON parent.legacy_id=child.parent_session_id
+		WHERE child.provenance_kind='legacy' AND NOT child.rollout_hidden
 	)`
 }
