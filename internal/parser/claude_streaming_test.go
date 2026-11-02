@@ -63,7 +63,7 @@ func TestClaudeFullParseDoesNotAllocateDiscardedProgressBytes(t *testing.T) {
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	results, excluded, err := claudeParseWithExclusions(path, "project", "local")
+	results, excluded, err := claudeParseWithExclusions(t.Context(), path, "project", "local")
 	require.NoError(t, err)
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)

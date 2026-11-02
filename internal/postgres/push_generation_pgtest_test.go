@@ -87,15 +87,15 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 			rebuilt, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, rebuilt.Close()) })
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(f.local.Path()))
-			require.NoError(t, rebuilt.CopySyncStateFrom(f.local.Path()))
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), f.local.Path()))
+			require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), f.local.Path()))
 			require.NoError(t, f.local.CloseConnections(t.Context()))
 			omitted := []string{"old", "mid", "foreign", "legacy", "outside"}
 			if tc.empty {
 				omitted = append(omitted, "new")
 			}
 			// Parser exclusions during resync omit rows without adding user deletions.
-			_, err = rebuilt.CopyOrphanedDataFromExcluding(f.local.Path(), omitted)
+			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), f.local.Path(), omitted)
 			require.NoError(t, err)
 			f.local = rebuilt
 			s = f.sync()

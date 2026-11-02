@@ -40,7 +40,7 @@ func newProjectionFixture(t *testing.T) projectionFixture {
 	require.NoError(t, err)
 	custody, err := rawsync.NewService(objects, jobs, rawsync.DefaultManifestLimits(), "parser-1")
 	require.NoError(t, err)
-	sink, err := NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	sink, err := NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	require.NoError(t, err)
 	return projectionFixture{f, sink, custody, jobs, objects}
 }
@@ -185,9 +185,9 @@ func TestRawProjectionFrictionUsesFinalSessionIdentity(t *testing.T) {
 func TestRawProjectionRefreshesFrictionForExistingPhysicalSession(t *testing.T) {
 	f := newProjectionFixture(t)
 	for _, table := range []string{"friction_findings"} {
-		_, err := f.admin.Exec(`REVOKE ALL PRIVILEGES ON "` + table + `" FROM "` + f.role + `"`)
+		_, err := f.admin.ExecContext(t.Context(), `REVOKE ALL PRIVILEGES ON "`+table+`" FROM "`+f.role+`"`)
 		require.NoError(t, err)
-		_, err = f.admin.Exec(`GRANT SELECT,INSERT,DELETE ON "` + table + `" TO "` + f.role + `"`)
+		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON "`+table+`" TO "`+f.role+`"`)
 		require.NoError(t, err)
 	}
 	require.NoError(t, CheckHostedRuntimeWritable(

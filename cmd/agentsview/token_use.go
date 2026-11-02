@@ -105,7 +105,7 @@ func resolveRawSessionID(
 		}
 		bareID := strings.TrimPrefix(input, def.IDPrefix)
 		for _, dir := range agentDirs[def.Type] {
-			if findAgentSourceFile(def, dir, bareID) != "" {
+			if findAgentSourceFile(ctx, def, dir, bareID) != "" {
 				return input, true
 			}
 		}
@@ -121,7 +121,7 @@ func resolveRawSessionID(
 			continue
 		}
 		for _, dir := range agentDirs[def.Type] {
-			if findAgentSourceFile(def, dir, input) != "" {
+			if findAgentSourceFile(ctx, def, dir, input) != "" {
 				return def.IDPrefix + input, true
 			}
 		}
@@ -148,14 +148,14 @@ func agentHasDiskSourceLookup(def parser.AgentDef) bool {
 // findAgentSourceFile resolves a raw agent session ID to an on-disk source path
 // under dir via the provider's FindSource (RawSessionID lookup). Returns ""
 // when no source resolves or the agent has no on-disk lookup.
-func findAgentSourceFile(def parser.AgentDef, dir, rawID string) string {
+func findAgentSourceFile(ctx context.Context, def parser.AgentDef, dir, rawID string) string {
 	factory, ok := parser.ProviderFactoryByType(def.Type)
 	if !ok {
 		return ""
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{dir}})
 	source, found, err := provider.FindSource(
-		context.Background(),
+		ctx,
 		parser.FindSourceRequest{RawSessionID: rawID},
 	)
 	if err != nil || !found {

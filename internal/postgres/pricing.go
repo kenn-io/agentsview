@@ -134,6 +134,8 @@ func (s *Store) startPricingLoad() *pricingLoad {
 		return s.pricingLoad
 	}
 
+	// The shared load belongs to no single waiter, so it carries none of
+	// their request values. The last waiter to leave cancels it.
 	ctx, cancel := context.WithCancel(context.Background())
 	load := &pricingLoad{
 		done:    make(chan struct{}),

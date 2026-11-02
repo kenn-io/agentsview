@@ -85,7 +85,7 @@ func TestParseRooCodeSession(t *testing.T) {
 	))
 
 	// Parse
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Assertions
@@ -169,7 +169,7 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 	))
 
 	// Parse
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Partial message should be skipped: user task + complete = 2
@@ -223,7 +223,7 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// User task + thinking message + assistant answer = 3
@@ -281,7 +281,7 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Usage event should have the model, tokens, and cost.
@@ -378,7 +378,7 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 				messagesJSON, 0o644,
 			))
 
-			sess, _, err := parseRooCodeSession(taskDir, "", "")
+			sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -441,7 +441,7 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, sess.UsageEvents, 1)
@@ -490,7 +490,7 @@ func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Project should be derived from workspace.
@@ -520,7 +520,7 @@ func TestParseRooCodeSessionWithoutMessages(t *testing.T) {
 	))
 
 	// No ui_messages.json - should still parse successfully.
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, sess.MessageCount)
@@ -583,7 +583,7 @@ func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Metadata messages should be skipped: user task + assistant = 2
@@ -655,7 +655,7 @@ func TestParseRooCodeSessionToolCalls(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// User task (1) + assistant text (1) + readFile tool call (1) +
@@ -748,7 +748,7 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	var toolCallMsgs []ParsedMessage
@@ -817,7 +817,7 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// User task + command output (user/system with tool result) = 2
@@ -884,7 +884,7 @@ func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// The execute_command tool call must pair with the empty
@@ -945,7 +945,7 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// The paired result timestamp must be recorded on the event.
@@ -1002,7 +1002,7 @@ func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// readFile with an explicit empty "content" must still produce a
@@ -1057,7 +1057,7 @@ func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// User task + command tool call = 2
@@ -1124,7 +1124,7 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// User task + thinking message + assistant text = 3
@@ -1179,7 +1179,7 @@ func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Should be wired as a subagent of the parent task.
@@ -1223,7 +1223,7 @@ func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// No parent — should not have a relationship.
@@ -1291,7 +1291,7 @@ func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + error (system) + subtask_result (system) +
@@ -1351,7 +1351,7 @@ func TestParseRooCodeSessionSkillTool(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, sess.MessageCount)
@@ -1408,7 +1408,7 @@ func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -1457,7 +1457,7 @@ func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// readFile to SKILL.md should be detected as a skill via
@@ -1510,7 +1510,7 @@ func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + MCP tool call = 2
@@ -1604,7 +1604,7 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// No parent — this is the orchestrator.
@@ -1693,7 +1693,7 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// The subtask_result must resolve the newTask call as completed,
@@ -1773,7 +1773,7 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	var newTask *ParsedToolCall
@@ -1836,7 +1836,7 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// newTask call should exist but have no SubagentSessionID.
@@ -1900,7 +1900,7 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// First newTask should link; second should not crash and have empty link.
@@ -1988,7 +1988,7 @@ func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// PeakContextTokens should be the max of tokensIn + cacheReads
@@ -2041,7 +2041,7 @@ func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// No api_req_started = no peak context data available.
@@ -2090,7 +2090,7 @@ func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Peak context = tokensIn + cacheReads + cacheWrites = 5000 + 3000 + 2000.
@@ -2153,7 +2153,7 @@ func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + execute_command tool call = 2 (command_output
@@ -2217,7 +2217,7 @@ func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, sess.MessageCount)
@@ -2306,7 +2306,7 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + execute_command + readFile + standalone late
@@ -2389,7 +2389,7 @@ func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 2)
@@ -2446,7 +2446,7 @@ func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// readFile should have ResultEvents with the embedded content.
@@ -2536,7 +2536,7 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 				messagesJSON, 0o644,
 			))
 
-			_, msgs, err := parseRooCodeSession(taskDir, "", "")
+			_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 			require.NoError(t, err)
 
 			require.Len(t, msgs[1].ToolCalls, 1)
@@ -2599,7 +2599,7 @@ func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// writeToFile content is input, not a result — no ResultEvents.
@@ -2657,7 +2657,7 @@ func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// newTask should NOT have ResultEvents (content is task prompt,
@@ -2794,7 +2794,7 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + 4 error/warning system messages + assistant text = 6
@@ -2898,7 +2898,7 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 				messagesJSON, 0o644,
 			))
 
-			sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+			sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 			require.NoError(t, err)
 
 			// The tool-specific error must be paired onto the preceding
@@ -2997,7 +2997,7 @@ func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 4, sess.MessageCount)
@@ -3048,7 +3048,7 @@ func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, sess.MessageCount)
@@ -3109,7 +3109,7 @@ func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + execute_command tool call = 2
@@ -3171,7 +3171,7 @@ func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + error system msg = 2
@@ -3233,7 +3233,7 @@ func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// Empty error should be filtered: user task + assistant = 2
@@ -3491,7 +3491,7 @@ func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 3)
@@ -3561,7 +3561,7 @@ func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + newTask call = 2; no standalone message for the
@@ -3621,7 +3621,7 @@ func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
 				historyJSON, 0o644,
 			))
 
-			sess, _, err := parseRooCodeSession(taskDir, "", "")
+			sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.want, sess.SessionName)
@@ -3685,7 +3685,7 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// The newTask keeps only its errored event.
@@ -3762,7 +3762,7 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	var newTasks []*ParsedToolCall
@@ -3792,7 +3792,7 @@ func TestParseRooCodeSessionEmptyHistoryIDFallsBackToDirName(t *testing.T) {
 		[]byte(`{"ts":1688836851000,"task":"No ID recorded"}`), 0o644,
 	))
 
-	sess, _, err := parseRooCodeSession(taskDir, "", "")
+	sess, _, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// The directory name (the on-disk task ID) keeps the session
@@ -3823,7 +3823,7 @@ func TestParseRooCodeSessionMarksSearchResultsAsToolOutput(t *testing.T) {
 		filepath.Join(taskDir, "ui_messages.json"), messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, RoleAssistant, msgs[1].Role)

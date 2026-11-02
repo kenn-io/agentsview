@@ -91,7 +91,7 @@ func newSyncWorkerCommand() *cobra.Command {
 			// log.Printf diagnostics would otherwise flood the serve
 			// console instead of landing in the debug log.
 			setupLogFile(cfg.DataDir)
-			return runSyncWorker(cfg, request, cmd.OutOrStdout())
+			return runSyncWorkerContext(cmd.Context(), cfg, request, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().StringVar(
@@ -106,11 +106,6 @@ func newSyncWorkerCommand() *cobra.Command {
 	// Register the serve config flags so forwarded overrides parse and apply.
 	config.RegisterServePFlags(cmd.Flags())
 	return cmd
-}
-
-// runSyncWorker runs one worker pass with a background context.
-func runSyncWorker(cfg config.Config, request syncWorkerRequest, out io.Writer) error {
-	return runSyncWorkerContext(context.Background(), cfg, request, out)
 }
 
 // runSyncWorkerContext dispatches on mode, streaming NDJSON progress and exactly

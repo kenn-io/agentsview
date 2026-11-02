@@ -56,7 +56,7 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, source.EnableArchiveOnly(ctx))
 	replacement := testDB(t)
-	require.NoError(t, replacement.CopySessionMetadataFrom(source.Path()))
+	require.NoError(t, replacement.CopySessionMetadataFrom(t.Context(), source.Path()))
 	require.NoError(t, replacement.setDataVersion(ctx))
 	path := replacement.Path()
 	require.NoError(t, replacement.Close())

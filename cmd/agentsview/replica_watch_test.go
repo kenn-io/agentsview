@@ -14,7 +14,7 @@ func TestReplicaWatchLockLeavesDataDirUntouched(t *testing.T) {
 	dir, lockPath := replicaWatchLockFixture(t)
 	check := replicaWatchDataDirCheck(t, dir)
 
-	err := runReplicaPushWatch(pgReplica{}, ReplicaPushConfig{}, "")
+	err := runReplicaPushWatch(t.Context(), pgReplica{}, ReplicaPushConfig{}, "")
 	require.EqualError(t, err, "already locked ("+lockPath+")")
 	check()
 }

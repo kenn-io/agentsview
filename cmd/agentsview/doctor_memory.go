@@ -126,7 +126,7 @@ func resolveDoctorMemoryService(
 		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
 			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newPGReadService(cmd.Context(), cfg, pgCfg)
 	}
 	// A direct read-only archive handle exposes the same bounded readiness
 	// provider without starting a daemon or scheduling sync work.

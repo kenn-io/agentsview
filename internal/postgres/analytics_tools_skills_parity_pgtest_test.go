@@ -34,14 +34,14 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 	seedToolsSkillsParityFixture(t, local)
 
 	syncer, err := New(
-		pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
+		t.Context(), pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "create PostgreSQL sync")
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err, "push parity fixture")
 
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "open PostgreSQL store")
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -441,12 +441,12 @@ func TestToolEffectivenessSQLitePGParity(t *testing.T) {
 		update, findings := ingest.ComputeSignalsAndSecrets(session, calls)
 		require.NoError(t, local.ReplaceSessionContent(t.Context(), session.ID, calls, update, findings))
 	}
-	syncer, err := New(url, schema, local, "fixture", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "fixture", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	remote, err := NewStore(url, schema, true)
+	remote, err := NewStore(t.Context(), url, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 	for _, f := range []db.AnalyticsFilter{

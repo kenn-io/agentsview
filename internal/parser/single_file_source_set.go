@@ -49,15 +49,15 @@ type singleFileConfig struct {
 	// tombstones.
 	classifyPath func(root, path string, allowMissing bool) (singleFileMatch, bool)
 	// findFile resolves a raw session ID to its source under one root.
-	findFile func(root, rawID string) (singleFileMatch, bool)
+	findFile func(ctx context.Context, root, rawID string) (singleFileMatch, bool)
 	// fingerprint returns the source freshness fingerprint (Size/MTime/Hash);
 	// the base supplies the Key. Sidecar/composite folding lives here.
-	fingerprint func(src singleFileSource) (SourceFingerprint, error)
+	fingerprint func(ctx context.Context, src singleFileSource) (SourceFingerprint, error)
 	// parseFile parses the single file into zero or more sessions plus the IDs
 	// of any sessions to exclude (remove). Empty results with no exclusions is a
 	// clean no-session. The full ParseRequest is passed so the closure can apply
 	// its own fingerprint stamping and project-hint fallback.
-	parseFile func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error)
+	parseFile func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error)
 	// alwaysComplete reports the result set as complete even when parseFile
 	// yields nothing, instead of emitting SkipNoSession. Providers whose parse
 	// drives session removal through exclusions (cowork) set this.
@@ -96,19 +96,19 @@ func WithFileChangedPathClassifier(
 }
 
 func WithFileLookup(
-	fn func(root, rawID string) (singleFileMatch, bool),
+	fn func(ctx context.Context, root, rawID string) (singleFileMatch, bool),
 ) SingleFileOption {
 	return func(c *singleFileConfig) { c.findFile = fn }
 }
 
 func WithFileFingerprint(
-	fn func(src singleFileSource) (SourceFingerprint, error),
+	fn func(ctx context.Context, src singleFileSource) (SourceFingerprint, error),
 ) SingleFileOption {
 	return func(c *singleFileConfig) { c.fingerprint = fn }
 }
 
 func WithFileParse(
-	fn func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error),
+	fn func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error),
 ) SingleFileOption {
 	return func(c *singleFileConfig) { c.parseFile = fn }
 }
@@ -305,7 +305,7 @@ func (s singleFileSourceSet) FindSource(
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
-		if match, ok := s.cfg.findFile(root, req.RawSessionID); ok {
+		if match, ok := s.cfg.findFile(ctx, root, req.RawSessionID); ok {
 			return s.sourceRef(root, match), true, nil
 		}
 	}
@@ -325,7 +325,7 @@ func (s singleFileSourceSet) Fingerprint(
 			"%s source path unavailable", s.agent,
 		)
 	}
-	fingerprint, err := s.cfg.fingerprint(src)
+	fingerprint, err := s.cfg.fingerprint(ctx, src)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -350,7 +350,7 @@ func (s singleFileSourceSet) Parse(
 	if !ok {
 		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", s.agent)
 	}
-	results, excluded, err := s.cfg.parseFile(src, req)
+	results, excluded, err := s.cfg.parseFile(ctx, src, req)
 	if err != nil {
 		return ParseOutcome{}, err
 	}

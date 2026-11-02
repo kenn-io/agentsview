@@ -140,7 +140,7 @@ func (e *Engine) codexCheckpointFingerprint(
 	if e.pathNeedsProjectReparse(ctx, file.Agent, path) {
 		return res, nil
 	}
-	if file.Agent == parser.AgentCodex && e.codexIndexSessionNameChanged(path) {
+	if file.Agent == parser.AgentCodex && e.codexIndexSessionNameChanged(ctx, path) {
 		return res, nil
 	}
 

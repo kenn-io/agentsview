@@ -29,7 +29,7 @@ type Replay struct {
 
 // InitReplay creates new state exclusively. Recovery must rotate all accepted
 // keys before initializing a new file; it cannot overwrite existing state.
-func InitReplay(path string) error {
+func InitReplay(ctx context.Context, path string) error {
 	f, err := createPrivateFile(path)
 	if err != nil {
 		return errors.New("creating signing replay state failed; existing state must be retained")
@@ -46,7 +46,7 @@ func InitReplay(path string) error {
 		return err
 	}
 	defer db.Close()
-	if _, err = db.ExecContext(context.Background(), replaySchema); err != nil {
+	if _, err = db.ExecContext(ctx, replaySchema); err != nil {
 		return errors.New("initializing signing replay state failed")
 	}
 	// EXTRA commits sync the database and journal directory where supported.
@@ -70,7 +70,7 @@ func openReplayDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func OpenReplay(path string) (*Replay, error) {
+func OpenReplay(ctx context.Context, path string) (*Replay, error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("signing replay state is missing or not private; initialize explicitly")
@@ -95,7 +95,7 @@ func OpenReplay(path string) (*Replay, error) {
 		return nil, ErrReplay
 	}
 	var applicationID int
-	err = probe.QueryRowContext(context.Background(), "PRAGMA application_id").Scan(&applicationID)
+	err = probe.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID)
 	_ = probe.Close()
 	if err != nil || applicationID != replayApplicationID {
 		return nil, ErrReplay
@@ -107,17 +107,17 @@ func OpenReplay(path string) (*Replay, error) {
 	fail := func() (*Replay, error) { _ = db.Close(); return nil, ErrReplay }
 	var version, count int
 	var highwater int64
-	if db.QueryRowContext(context.Background(), "SELECT version, highwater FROM signing_state").Scan(&version, &highwater) != nil || version != 1 || highwater < 0 {
+	if db.QueryRowContext(ctx, "SELECT version, highwater FROM signing_state").Scan(&version, &highwater) != nil || version != 1 || highwater < 0 {
 		return fail()
 	}
-	if db.QueryRowContext(context.Background(), "SELECT count(*) FROM signing_state").Scan(&count) != nil || count != 1 {
+	if db.QueryRowContext(ctx, "SELECT count(*) FROM signing_state").Scan(&count) != nil || count != 1 {
 		return fail()
 	}
-	if db.QueryRowContext(context.Background(), "SELECT count(*) FROM signing_nonces").Scan(&count) != nil || count > 100000 {
+	if db.QueryRowContext(ctx, "SELECT count(*) FROM signing_nonces").Scan(&count) != nil || count > 100000 {
 		return fail()
 	}
 	var integrity string
-	if db.QueryRowContext(context.Background(), "PRAGMA quick_check").Scan(&integrity) != nil || integrity != "ok" {
+	if db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&integrity) != nil || integrity != "ok" {
 		return fail()
 	}
 	return &Replay{db: db, limit: 100000}, nil

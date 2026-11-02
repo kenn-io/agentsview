@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -16,7 +17,7 @@ import (
 // message per line with role/content/timestamp fields. Assistant messages
 // carry an optional metadata object with model and usage sub-fields.
 func (p *gptmeProvider) parseSession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -28,7 +29,7 @@ func (p *gptmeProvider) parseSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 
 	sessionName := filepath.Base(filepath.Dir(path))

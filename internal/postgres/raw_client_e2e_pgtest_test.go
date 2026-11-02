@@ -62,7 +62,7 @@ func newPGE2ETestDatabase(t *testing.T) (*sql.DB, string) {
 	}
 	pgE2ECleanSchema(t, pgURL)
 	t.Cleanup(func() { pgE2ECleanSchema(t, pgURL) })
-	pg, err := postgres.Open(pgURL, pgE2ESchema, true)
+	pg, err := postgres.Open(t.Context(), pgURL, pgE2ESchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, postgres.EnsureSchema(t.Context(), pg, pgE2ESchema))
@@ -74,7 +74,7 @@ func pgE2ECleanSchema(t *testing.T, pgURL string) {
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, err = pg.Exec("DROP SCHEMA IF EXISTS " + pgE2ESchema + " CASCADE")
+	_, err = pg.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+pgE2ESchema+" CASCADE")
 	require.NoError(t, err, "dropping test schema")
 }
 
@@ -100,7 +100,7 @@ func TestRawClientPostgresEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	authStore, err := postgres.NewRawDeviceAuthStore(pg)
 	require.NoError(t, err)
-	sessions, err := postgres.NewRawUploadStore(pg, dataDir)
+	sessions, err := postgres.NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Close()) })
 

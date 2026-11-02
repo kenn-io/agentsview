@@ -355,7 +355,7 @@ func makeRawSyncBackfillRetryDue(t *testing.T, checkpointPath string) {
 	t.Helper()
 	database, err := sql.Open("sqlite3", checkpointPath)
 	require.NoError(t, err)
-	result, err := database.Exec(`UPDATE outbox_generations SET retry_at='' WHERE retry_at!=''`)
+	result, err := database.ExecContext(t.Context(), `UPDATE outbox_generations SET retry_at='' WHERE retry_at!=''`)
 	require.NoError(t, err)
 	changed, err := result.RowsAffected()
 	require.NoError(t, err)

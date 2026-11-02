@@ -167,7 +167,7 @@ type Replica interface {
 		opts PusherOptions,
 	) (Pusher, error)
 	// OpenStore connects for CLI reads without touching the schema.
-	OpenStore(target ReplicaTarget) (ReplicaStore, error)
+	OpenStore(ctx context.Context, target ReplicaTarget) (ReplicaStore, error)
 	// OpenServeStore connects for `<backend> serve`: it brings the schema
 	// current when the role may write, verifies compatibility, and probes
 	// optional capabilities such as insight generation.

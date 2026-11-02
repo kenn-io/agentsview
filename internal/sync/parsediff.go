@@ -123,7 +123,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 
 	// The worktree resolver caches are not thread-safe; everything
 	// below runs in this single collector goroutine.
-	resolver := e.loadWorktreeProjectResolver()
+	resolver := e.loadWorktreeProjectResolverContext(ctx)
 	visited := make(map[string]bool)
 	var presencePaths []string
 

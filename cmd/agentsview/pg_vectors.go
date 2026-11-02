@@ -43,7 +43,7 @@ func newPGVectorsListCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := runPGVectorsList(cmd.OutOrStdout(), targetName); err != nil {
+			if err := runPGVectorsList(cmd.Context(), cmd.OutOrStdout(), targetName); err != nil {
 				return fmt.Errorf("pg vectors list: %w", err)
 			}
 			return nil
@@ -68,7 +68,7 @@ func newPGVectorsDropCommand() *cobra.Command {
 				return err
 			}
 			if err := runPGVectorsDrop(
-				cmd.InOrStdin(), cmd.OutOrStdout(), targetName, id, yes,
+				cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), targetName, id, yes,
 			); err != nil {
 				return fmt.Errorf("pg vectors drop: %w", err)
 			}
@@ -84,7 +84,7 @@ func newPGVectorsDropCommand() *cobra.Command {
 // openPGVectorTarget resolves a single PG target the same way `pg status` does
 // (storage.SelectTargets + postgres.Open, no --all), opening a connection
 // to it. The returned cleanup closes the pool.
-func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
+func openPGVectorTarget(ctx context.Context, targetName string) (*sql.DB, func(), error) {
 	appCfg, err := config.LoadMinimalFor(config.ScopePG)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
@@ -108,7 +108,7 @@ func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
 	}
 	applyClassifierConfig(appCfg)
 	pg, err := postgres.Open(
-		target.Target.URL, target.Target.Schema, target.Target.AllowInsecure,
+		ctx, target.Target.URL, target.Target.Schema, target.Target.AllowInsecure,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -116,14 +116,14 @@ func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
 	return pg, func() { _ = pg.Close() }, nil
 }
 
-func runPGVectorsList(out io.Writer, targetName string) error {
-	pg, cleanup, err := openPGVectorTarget(targetName)
+func runPGVectorsList(ctx context.Context, out io.Writer, targetName string) error {
+	pg, cleanup, err := openPGVectorTarget(ctx, targetName)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	gens, err := postgres.ListVectorGenerations(context.Background(), pg)
+	gens, err := postgres.ListVectorGenerations(ctx, pg)
 	if err != nil {
 		return err
 	}
@@ -150,9 +150,9 @@ func printPGVectorGenerations(out io.Writer, gens []postgres.VectorGenerationRow
 }
 
 func runPGVectorsDrop(
-	in io.Reader, out io.Writer, targetName string, id int64, yes bool,
+	ctx context.Context, in io.Reader, out io.Writer, targetName string, id int64, yes bool,
 ) error {
-	pg, cleanup, err := openPGVectorTarget(targetName)
+	pg, cleanup, err := openPGVectorTarget(ctx, targetName)
 	if err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func runPGVectorsDrop(
 			return nil
 		}
 	}
-	if err := postgres.DropVectorGeneration(context.Background(), pg, id); err != nil {
+	if err := postgres.DropVectorGeneration(ctx, pg, id); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Dropped vector generation %d.\n", id)

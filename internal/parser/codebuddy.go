@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -30,7 +31,7 @@ func codebuddyDefaultDirs() []string {
 
 // parseCodeBuddySession parses a CodeBuddy session given its manifest file at
 // .../history/<ws_hash>/<session_id>/index.json.
-func parseCodeBuddySession(indexPath, projectHint, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseCodeBuddySession(ctx context.Context, indexPath, projectHint, machine string) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(indexPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", indexPath, err)
@@ -191,7 +192,7 @@ func parseCodeBuddySession(indexPath, projectHint, machine string) (*ParsedSessi
 
 	project := projectHint
 	if cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 	if project == "" {
 		project = filepath.Base(wsDir)

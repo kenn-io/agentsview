@@ -201,7 +201,7 @@ func (p *openHandsProvider) parseSession(
 		switch ev.Get("kind").Str {
 		case openHandsMessageEvent:
 			msg, ok, discovered = parseOpenHandsMessageEvent(
-				ev, ordinal, model, ts,
+				ctx, ev, ordinal, model, ts,
 			)
 			if ok && msg.Role == RoleUser &&
 				strings.TrimSpace(msg.Content) != "" {
@@ -217,7 +217,7 @@ func (p *openHandsProvider) parseSession(
 			}
 		case openHandsActionEvent:
 			msg, ok, discovered = parseOpenHandsActionEvent(
-				ev, ordinal, model, ts,
+				ctx, ev, ordinal, model, ts,
 			)
 		case openHandsObservationEvent:
 			msg, ok, discovered = parseOpenHandsObservationEvent(
@@ -264,6 +264,7 @@ func (p *openHandsProvider) parseSession(
 }
 
 func parseOpenHandsMessageEvent(
+	ctx context.Context,
 	ev gjson.Result,
 	ordinal int,
 	model string,
@@ -275,7 +276,7 @@ func parseOpenHandsMessageEvent(
 		return ParsedMessage{}, false, ""
 	}
 
-	content, thinking, dialogue, blockThinking, _, toolCalls, toolResults := ExtractTextContent(context.Background(), llmMessage.Get("content"))
+	content, thinking, dialogue, blockThinking, _, toolCalls, toolResults := ExtractTextContent(ctx, llmMessage.Get("content"))
 	eventThinking := openHandsThinkingText(ev)
 	content, hasThinking := openHandsAppendThinking(
 		content, eventThinking,
@@ -307,6 +308,7 @@ func parseOpenHandsMessageEvent(
 }
 
 func parseOpenHandsActionEvent(
+	ctx context.Context,
 	ev gjson.Result,
 	ordinal int,
 	model string,
@@ -328,7 +330,7 @@ func parseOpenHandsActionEvent(
 		inputJSON = action.Raw
 	}
 
-	content, thinking, dialogue, blockThinking, _, _, _ := ExtractTextContent(context.Background(), ev.Get("thought"))
+	content, thinking, dialogue, blockThinking, _, _, _ := ExtractTextContent(ctx, ev.Get("thought"))
 	rendering := formatOpenHandsAction(
 		toolName, action, ev.Get("summary").Str,
 	)

@@ -20,8 +20,8 @@ import (
 func TestVerifierBoundsEventStreamsAndRejectUndeclaredTrailers(t *testing.T) {
 	key := signingKey(t)
 	state := filepath.Join(t.TempDir(), "replay.db")
-	require.NoError(t, InitReplay(state))
-	replay, err := OpenReplay(state)
+	require.NoError(t, InitReplay(t.Context(), state))
+	replay, err := OpenReplay(t.Context(), state)
 	require.NoError(t, err)
 	defer replay.Close()
 	streamExited := make(chan struct{}, 9)

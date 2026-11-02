@@ -329,7 +329,7 @@ func (s windsurfSourceSet) SourcesForChangedPath(
 	for _, root := range s.roots {
 		if ref, ok := s.sourceRef(root, req.Path); ok {
 			src := ref.Opaque.(windsurfSource)
-			exists, err := windsurfDBHasSession(src.DBPath, src.SessionID)
+			exists, err := windsurfDBHasSession(ctx, src.DBPath, src.SessionID)
 			if err != nil {
 				return nil, err
 			}
@@ -430,7 +430,7 @@ func (s windsurfSourceSet) FindSource(
 				return ref, true, nil
 			}
 			src := ref.Opaque.(windsurfSource)
-			exists, err := windsurfDBHasSession(src.DBPath, src.SessionID)
+			exists, err := windsurfDBHasSession(ctx, src.DBPath, src.SessionID)
 			if err != nil {
 				return SourceRef{}, false, err
 			}
@@ -444,7 +444,7 @@ func (s windsurfSourceSet) FindSource(
 	}
 	for _, root := range s.roots {
 		for _, db := range s.workspaceDBs(root) {
-			exists, err := windsurfDBHasSession(db.DBPath, req.RawSessionID)
+			exists, err := windsurfDBHasSession(ctx, db.DBPath, req.RawSessionID)
 			if err != nil {
 				return SourceRef{}, false, err
 			}
@@ -495,7 +495,7 @@ func (s windsurfSourceSet) Fingerprint(
 		return fingerprint, nil
 	}
 	workspacePath := windsurfWorkspaceManifestPath(src.DBPath)
-	record, err := loadWindsurfSessionRecord(src.DBPath, src.SessionID)
+	record, err := loadWindsurfSessionRecord(ctx, src.DBPath, src.SessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
@@ -947,8 +947,8 @@ func skipJSONValue(dec *jsontext.Decoder) error {
 	return dec.SkipValue()
 }
 
-func windsurfDBHasSession(dbPath, sessionID string) (bool, error) {
-	_, err := loadWindsurfSessionRecord(dbPath, sessionID)
+func windsurfDBHasSession(ctx context.Context, dbPath, sessionID string) (bool, error) {
+	_, err := loadWindsurfSessionRecord(ctx, dbPath, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -980,7 +980,7 @@ func parseWindsurfSessionContext(
 		defer observeStreamingRetainedBytes(ctx, -retained)
 		observeReconciliationRetainedMember(ctx, AgentWindsurf, retained)
 	} else {
-		record, err = loadWindsurfSessionRecord(dbPath, sessionID)
+		record, err = loadWindsurfSessionRecord(ctx, dbPath, sessionID)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -1022,11 +1022,11 @@ func parseWindsurfSessionContext(
 }
 
 func loadWindsurfSessionRecord(
-	dbPath, sessionID string,
+	ctx context.Context, dbPath, sessionID string,
 ) (windsurfSessionRecord, error) {
 	var found windsurfSessionRecord
 	errFound := errors.New("windsurf session found")
-	err := forEachWindsurfSessionRecord(context.Background(), dbPath, func(record windsurfSessionRecord) error {
+	err := forEachWindsurfSessionRecord(ctx, dbPath, func(record windsurfSessionRecord) error {
 		if record.SessionID != sessionID {
 			return nil
 		}
@@ -1217,8 +1217,8 @@ func splitWindsurfVirtualPath(path string) (string, string, bool) {
 	return ParseVirtualSourcePathForBase(path, windsurfStateDBName)
 }
 
-func WriteWindsurfSessionJSON(w io.Writer, dbPath, sessionID string) error {
-	record, err := loadWindsurfSessionRecord(dbPath, sessionID)
+func WriteWindsurfSessionJSON(ctx context.Context, w io.Writer, dbPath, sessionID string) error {
+	record, err := loadWindsurfSessionRecord(ctx, dbPath, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf(
 			"windsurf session %s not found in %s: %w",

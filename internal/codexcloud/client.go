@@ -254,6 +254,8 @@ func (c *Conn) readLoop() {
 		defer close(c.notes)
 	}
 	for {
+		// The connection owns this loop: Close and fail close the socket,
+		// which ends the read.
 		_, data, err := c.ws.Read(context.Background())
 		if err != nil {
 			if errors.Is(err, websocket.ErrMessageTooBig) {

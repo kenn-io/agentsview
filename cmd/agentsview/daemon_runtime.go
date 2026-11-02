@@ -1112,16 +1112,8 @@ func IsLocalDaemonActive(dataDir string, authToken ...string) bool {
 		IsDaemonStarting(dataDir)
 }
 
-// WaitForDaemonStartup polls until the daemon start lock clears or a running daemon is
-// detected, up to the given timeout.
-func WaitForDaemonStartup(
-	dataDir string, timeout time.Duration, authToken ...string,
-) bool {
-	return WaitForDaemonStartupContext(
-		context.Background(), dataDir, timeout, authToken...,
-	)
-}
-
+// WaitForDaemonStartupContext polls until the daemon start lock clears or a
+// running daemon is detected, up to the given timeout or until ctx ends.
 func WaitForDaemonStartupContext(
 	ctx context.Context,
 	dataDir string,

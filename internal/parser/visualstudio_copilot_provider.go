@@ -37,7 +37,7 @@ func newVisualStudioCopilotProviderFactory(def AgentDef) ProviderFactory {
 				WithChangedPathClassifier(vsCopilotClassifyPath),
 				WithMemberLookup(vsCopilotFindMember),
 				WithContextFingerprint(vsCopilotFingerprintSourceContext),
-				WithContainerParse(vsCopilotParseContainer),
+				WithContextContainerParse(vsCopilotParseContainer),
 				WithContextMemberParse(vsCopilotParseMemberContext),
 				// Every conversation in a trace shares the trace's content hash.
 				WithContainerHashStamping(),
@@ -864,13 +864,13 @@ func visualStudioCopilotVS2026RootKind(
 }
 
 func vsCopilotFingerprintSource(
-	src multiSessionSource,
+	ctx context.Context, src multiSessionSource,
 ) (SourceFingerprint, error) {
 	size, mtime, err := VisualStudioCopilotTraceFingerprintStrict(src.Container)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
-	hash, err := hashJSONLSourceFile(src.Container)
+	hash, err := hashJSONLSourceFileContext(ctx, src.Container)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -895,7 +895,7 @@ func vsCopilotFingerprintSourceContext(
 		return SourceFingerprint{}, err
 	}
 	if !found {
-		return vsCopilotFingerprintSource(src)
+		return vsCopilotFingerprintSource(ctx, src)
 	}
 	var fingerprint SourceFingerprint
 	if err := json.Unmarshal([]byte(encoded), &fingerprint); err != nil {
@@ -905,11 +905,11 @@ func vsCopilotFingerprintSourceContext(
 }
 
 func vsCopilotParseMember(
-	src multiSessionSource, req ParseRequest,
+	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) (*ParseResult, error) {
 	project := firstNonEmptyJSONLString(req.Source.ProjectHint, "visualstudio")
 	sess, msgs, err := parseVisualStudioCopilotConversation(
-		src.Container, src.MemberID, project, req.Machine,
+		ctx, src.Container, src.MemberID, project, req.Machine,
 	)
 	if err != nil {
 		return nil, err
@@ -930,7 +930,7 @@ func vsCopilotParseMemberContext(
 		return nil, err
 	}
 	if !found || isVisualStudioCopilotVS2026SessionPath(src.Container) {
-		return vsCopilotParseMember(src, req)
+		return vsCopilotParseMember(ctx, src, req)
 	}
 	retained := conservativeDecodedRetainedBytes(int64(len(encoded)))
 	observeStreamingRetainedBytes(ctx, retained)
@@ -956,9 +956,19 @@ func vsCopilotParseMemberContext(
 }
 
 func vsCopilotParseContainer(
-	src multiSessionSource, req ParseRequest,
+	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) ([]ParseResult, error) {
-	ids, err := VisualStudioCopilotFileConversationIDs(src.Container)
+	seen := map[string]struct{}{}
+	var ids []string
+	err := ForEachVisualStudioCopilotFileConversationID(
+		ctx, src.Container, func(id string) error {
+			if _, ok := seen[id]; ok {
+				return nil
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -966,7 +976,7 @@ func vsCopilotParseContainer(
 	results := make([]ParseResult, 0, len(ids))
 	for _, id := range ids {
 		sess, msgs, err := parseVisualStudioCopilotConversation(
-			src.Container, id, project, req.Machine,
+			ctx, src.Container, id, project, req.Machine,
 		)
 		if err != nil {
 			return nil, err

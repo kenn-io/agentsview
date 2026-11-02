@@ -490,14 +490,13 @@ func (db *DB) SetPricingMetaContext(ctx context.Context, key, value string) erro
 // Called during a resync so the rebuilt DB keeps pricing across the
 // swap; without it every usage cost reads as zero until the next
 // daemon startup re-seeds the table.
-func (db *DB) CopyModelPricingFrom(sourcePath string) error {
+func (db *DB) CopyModelPricingFrom(ctx context.Context, sourcePath string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	// Pin a single connection: ATTACH is connection-scoped and
 	// database/sql's pool doesn't guarantee the same underlying
 	// connection across separate Exec calls.
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -510,7 +509,7 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
+		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

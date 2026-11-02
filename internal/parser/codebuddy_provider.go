@@ -94,9 +94,9 @@ func (s codeBuddySourceSet) SourcesForChangedPath(ctx context.Context, req Chang
 }
 
 func codeBuddyParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseCodeBuddySession(path, req.Source.ProjectHint, req.Machine)
+	sess, msgs, err := parseCodeBuddySession(ctx, path, req.Source.ProjectHint, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

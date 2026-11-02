@@ -156,7 +156,7 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
+	tr, err := ensureTransportContext(cmd.Context(), &cfg, transportIntentRead, 0)
 	if err != nil {
 		return nil, nil, err
 	}

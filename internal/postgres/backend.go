@@ -87,7 +87,7 @@ func ReplicaTarget(pg config.PGConfig) storage.ReplicaTarget {
 func (Backend) ValidateTarget(storage.ReplicaTarget) error { return nil }
 
 func (Backend) NewPusher(
-	_ context.Context, target storage.ReplicaTarget, local *db.DB,
+	ctx context.Context, target storage.ReplicaTarget, local *db.DB,
 	opts storage.PusherOptions,
 ) (storage.Pusher, error) {
 	// The PostgreSQL push has a fixed batch size, so a requested one would
@@ -99,7 +99,7 @@ func (Backend) NewPusher(
 		)
 	}
 	s, err := New(
-		target.URL, target.Schema, local,
+		ctx, target.URL, target.Schema, local,
 		target.MachineName, target.AllowInsecure, opts,
 	)
 	if err != nil {
@@ -109,9 +109,9 @@ func (Backend) NewPusher(
 }
 
 func (Backend) OpenStore(
-	target storage.ReplicaTarget,
+	ctx context.Context, target storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
-	store, err := NewStore(target.URL, target.Schema, target.AllowInsecure)
+	store, err := NewStore(ctx, target.URL, target.Schema, target.AllowInsecure)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func (Backend) OpenStore(
 func (Backend) OpenServeStore(
 	ctx context.Context, target storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
-	store, err := NewStore(target.URL, target.Schema, target.AllowInsecure)
+	store, err := NewStore(ctx, target.URL, target.Schema, target.AllowInsecure)
 	if err != nil {
 		return nil, err
 	}

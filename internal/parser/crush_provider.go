@@ -532,7 +532,7 @@ func crushSessionFingerprint(
 	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 	childCache *crushChildRelationshipsCache,
 ) (string, bool, error) {
-	db, err := openCrushDB(dbPath, stableSnapshot)
+	db, err := openCrushDB(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return "", false, err
 	}

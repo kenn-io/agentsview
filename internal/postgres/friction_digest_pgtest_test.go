@@ -27,7 +27,7 @@ func TestFrictionSessionVersionPreventsStaleSave(t *testing.T) {
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	_, err = pg.ExecContext(ctx, "CREATE SCHEMA "+schema)
@@ -91,7 +91,7 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -130,7 +130,7 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return local, store

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -18,7 +17,7 @@ import (
 // (and cascades to messages and tool_calls) so each test starts clean.
 func timingResetSession(t *testing.T, pg *sql.DB, sessionID string) {
 	t.Helper()
-	_, err := pg.Exec(`DELETE FROM sessions WHERE id = $1`, sessionID)
+	_, err := pg.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = $1`, sessionID)
 	require.NoError(t, err, "reset session")
 }
 
@@ -34,7 +33,7 @@ func timingInsertSessionPG(
 	if started != "" {
 		startedAt = started
 	}
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, started_at, ended_at,
 			 message_count, user_message_count)
@@ -49,7 +48,7 @@ func timingInsertMessagePG(
 	role, content, ts string, hasToolUse bool,
 ) {
 	t.Helper()
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
 			 has_tool_use, content_length)
@@ -68,7 +67,7 @@ func timingInsertToolCallPG(
 	if subagentSessionID != "" {
 		sub = subagentSessionID
 	}
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, tool_name, category, call_index,
 			 tool_use_id, input_json,
@@ -83,7 +82,7 @@ func TestPGGetSessionTiming_Solo(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
@@ -99,12 +98,12 @@ func TestPGGetSessionTiming_Solo(t *testing.T) {
 	timingInsertMessagePG(t, pg, "timing-solo", 2, "user",
 		"ok", "2026-04-26T10:00:30Z", false)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "timing-solo",
+		t.Context(), "timing-solo",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	require.NotNil(t, got, "GetSessionTiming returned nil, want timing")
@@ -122,7 +121,7 @@ func TestPGGetSessionTiming_LastMessageFallsBackToSessionEnd(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
@@ -136,12 +135,12 @@ func TestPGGetSessionTiming_LastMessageFallsBackToSessionEnd(t *testing.T) {
 	timingInsertToolCallPG(t, pg, "timing-fallback", 1, 0,
 		"tu_1", "Bash", "Bash", "")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "timing-fallback",
+		t.Context(), "timing-fallback",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	require.NotNil(t, got.Turns[0].DurationMs,
@@ -155,7 +154,7 @@ func TestPGGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
@@ -169,12 +168,12 @@ func TestPGGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
 	timingInsertToolCallPG(t, pg, "timing-running", 1, 0,
 		"tu_1", "Bash", "Bash", "")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "timing-running",
+		t.Context(), "timing-running",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	assert.True(t, got.Running)
@@ -185,7 +184,7 @@ func TestPGGetSessionTiming_NonMonotonicTimestampClampsNull(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
@@ -201,12 +200,12 @@ func TestPGGetSessionTiming_NonMonotonicTimestampClampsNull(t *testing.T) {
 	timingInsertMessagePG(t, pg, "timing-nonmono", 2, "user",
 		"ok", "2026-04-26T10:00:00Z", false)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "timing-nonmono",
+		t.Context(), "timing-nonmono",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	assert.Nil(t, got.Turns[0].DurationMs, "turn duration should be nil (clamp)")
@@ -216,7 +215,7 @@ func TestPGGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
@@ -228,12 +227,12 @@ func TestPGGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
 	timingInsertMessagePG(t, pg, "timing-notool", 1, "assistant",
 		"hi back", "2026-04-26T10:00:01Z", false)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "timing-notool",
+		t.Context(), "timing-notool",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	assert.Equal(t, 0, got.TurnCount)
@@ -243,7 +242,7 @@ func TestPGGetSessionTiming_ClosedSubagentTimestampsMeasureExecution(t *testing.
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
@@ -262,12 +261,12 @@ func TestPGGetSessionTiming_ClosedSubagentTimestampsMeasureExecution(t *testing.
 	timingInsertMessagePG(t, pg, "timing-parent", 2, "user",
 		"done", "2026-04-26T10:02:16Z", false)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "timing-parent",
+		t.Context(), "timing-parent",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
@@ -283,12 +282,12 @@ func TestPGGetSessionTiming_MissingSessionReturnsNil(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	got, err := store.GetSessionTiming(
-		context.Background(), "no-such-session",
+		t.Context(), "no-such-session",
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	assert.Nil(t, got)
@@ -297,10 +296,10 @@ func TestPGGetSessionTiming_MissingSessionReturnsNil(t *testing.T) {
 func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
-	pg, err := Open(pgURL, testSchema, true)
+	pg, err := Open(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -343,7 +342,7 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 			}
 			timingInsertMessagePG(t, pg, sessionID, 0, role, "go", "2026-04-26T10:00:00Z", false)
 			timingInsertMessagePG(t, pg, sessionID, 1, "assistant", "thinking then tools", "2026-04-26T10:00:01Z", true)
-			_, err = pg.Exec(`UPDATE messages SET has_thinking = TRUE, thinking_text = 'considering' WHERE session_id = $1 AND ordinal = 1`, sessionID)
+			_, err = pg.ExecContext(t.Context(), `UPDATE messages SET has_thinking = TRUE, thinking_text = 'considering' WHERE session_id = $1 AND ordinal = 1`, sessionID)
 			require.NoError(t, err)
 			if !tc.noPrompt && !tc.staleEnd {
 				timingInsertMessagePG(t, pg, sessionID, 5, "user", "next", "2026-04-26T10:00:06Z", false)
@@ -355,7 +354,7 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 				timingInsertMessagePG(t, pg, sessionID, 2, "user", "system", "2026-04-26T10:00:02Z", false)
 				timingInsertMessagePG(t, pg, sessionID, 3, "user", "result", "2026-04-26T10:00:03Z", false)
 				timingInsertMessagePG(t, pg, sessionID, 4, "user", "", "2026-04-26T10:00:04Z", false)
-				_, err = pg.Exec(`UPDATE messages SET is_system = ordinal = 2, source_subtype = CASE WHEN ordinal = 3 THEN 'tool_result' ELSE '' END WHERE session_id = $1 AND ordinal IN (2,3)`, sessionID)
+				_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_system = ordinal = 2, source_subtype = CASE WHEN ordinal = 3 THEN 'tool_result' ELSE '' END WHERE session_id = $1 AND ordinal IN (2,3)`, sessionID)
 				require.NoError(t, err)
 			}
 			child := ""
@@ -374,11 +373,11 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 					if event.timestamp == "" {
 						continue
 					}
-					_, err = pg.Exec(`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, call_index, tool_use_id, source, status, content, timestamp, event_index) VALUES ($1, 1, $2, $3, 'tool_execution', $4, '', $5::timestamptz, $6)`, sessionID, i, id, event.status, "2026-04-26T10:00:"+event.timestamp+"Z", j)
+					_, err = pg.ExecContext(t.Context(), `INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, call_index, tool_use_id, source, status, content, timestamp, event_index) VALUES ($1, 1, $2, $3, 'tool_execution', $4, '', $5::timestamptz, $6)`, sessionID, i, id, event.status, "2026-04-26T10:00:"+event.timestamp+"Z", j)
 					require.NoError(t, err)
 				}
 			}
-			got, err := store.GetSessionTiming(context.Background(), sessionID)
+			got, err := store.GetSessionTiming(t.Context(), sessionID)
 			require.NoError(t, err)
 			require.NotNil(t, got)
 			assert.Equal(t, tc.wantTool, got.ToolDurationMs)

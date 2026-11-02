@@ -125,7 +125,7 @@ func newFixtureVectorSource() *fakeVectorSource {
 }
 
 func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -215,7 +215,7 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 		{name: "one flush per session", batchSessions: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local, target := seedFixture(t)
 			source := newFixtureVectorSource()
 			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -269,7 +269,7 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 // after its rows land records no push state for any of its sessions, so the
 // next push repeats them instead of trusting the half-finished write.
 func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -306,7 +306,7 @@ func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
 }
 
 func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 
 	plain := newTestSync(t, local, target, storage.PusherOptions{})
@@ -331,7 +331,7 @@ func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {
 // project scope) gets no vectors, and a mirrored session that later leaves
 // the scope has its vectors evicted with it.
 func TestVectorPushFollowsMirrorResidency(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	source.hashes["ghost"] = "g-v1"
@@ -364,7 +364,7 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 // the marker (an interrupted pass) promotes a scoped push again even though
 // the generation row itself is registered.
 func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -404,7 +404,7 @@ func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 // promotion to generation-wide finds the local index not ready reports the
 // phase skipped instead of failing or panicking on the unopened export.
 func TestVectorPushPromotedExportNotReady(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -451,7 +451,7 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local, target := seedFixture(t)
 			source := newFixtureVectorSource()
 			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -500,7 +500,7 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 // archive recorded, whether or not a vector source is still attached, and
 // leaves another archive's rows for the same session alone.
 func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -562,7 +562,7 @@ func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 }
 
 func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	source.hashes[fixtureChildID] = "child-v1"
@@ -699,7 +699,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 }
 
 func TestVectorPushRepairsNamedSessions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})

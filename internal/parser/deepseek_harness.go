@@ -437,8 +437,11 @@ func parseDeepSeekHarnessSession(
 		return usageEvents[i].DedupKey < usageEvents[j].DedupKey
 	})
 
-	firstMessage, userCount := firstMessageAndUserCount(messages)
-	project := ExtractProjectFromCwd(scan.Header.Cwd)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, messages)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	project := ExtractProjectFromCwdWithBranchContext(ctx, scan.Header.Cwd, "")
 	if project == "" {
 		project = "deepseek_harness"
 	}

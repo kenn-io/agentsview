@@ -1894,14 +1894,14 @@ func TestWaitForDaemonStartup_AlreadyRunning(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeLiveRuntime(t, dir, false, withRuntimeVersion("1.0.0"))
 
-	assert.True(t, WaitForDaemonStartup(dir, time.Second),
+	assert.True(t, WaitForDaemonStartupContext(t.Context(), dir, time.Second),
 		"expected true, server is running")
 }
 
 func TestWaitForDaemonStartup_LockClearsNoServer(t *testing.T) {
 	dir := runtimeTestDir(t)
 
-	assert.False(t, WaitForDaemonStartup(dir, time.Second),
+	assert.False(t, WaitForDaemonStartupContext(t.Context(), dir, time.Second),
 		"expected false, no start lock and no server")
 }
 

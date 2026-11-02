@@ -53,9 +53,9 @@ func devinDBPath(root string) string {
 
 // ListDevinSessionMeta returns lightweight metadata for all non-hidden Devin
 // sessions without parsing transcripts.
-func ListDevinSessionMeta(dbPath string) ([]DevinSessionMeta, error) {
+func ListDevinSessionMeta(ctx context.Context, dbPath string) ([]DevinSessionMeta, error) {
 	var metas []DevinSessionMeta
-	err := ForEachDevinSessionMeta(context.Background(), dbPath, func(meta DevinSessionMeta) error {
+	err := ForEachDevinSessionMeta(ctx, dbPath, func(meta DevinSessionMeta) error {
 		metas = append(metas, meta)
 		return nil
 	})
@@ -363,7 +363,7 @@ func parseDevinSession(ctx context.Context, dbPath, rawSessionID, machine string
 	)
 
 	steps.ForEach(func(_, step gjson.Result) bool {
-		msg, ok := parseDevinStep(rawSessionID, step, stepOrdinal, model)
+		msg, ok := parseDevinStep(ctx, rawSessionID, step, stepOrdinal, model)
 		stepOrdinal++
 		if !ok {
 			return true
@@ -401,7 +401,7 @@ func parseDevinSession(ctx context.Context, dbPath, rawSessionID, machine string
 	fileInfo.Mtime = info.ModTime().UnixNano()
 	devinApplyFileInfoTimes(&fileInfo, meta, endedAt)
 
-	sess := buildDevinParsedSession(meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
+	sess := buildDevinParsedSession(ctx, meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
 	accumulateMessageTokenUsage(sess, messages)
 	applyDevinFinalMetrics(sess, root.Get("final_metrics"))
 	return sess, messages, nil
@@ -432,7 +432,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 		userMsgCount int
 	)
 	for _, row := range chain {
-		msg, ok, err := parseDevinDBMessageNode(rawSessionID, row, len(messages), model)
+		msg, ok, err := parseDevinDBMessageNode(ctx, rawSessionID, row, len(messages), model)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -469,7 +469,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 
 	fileInfo := devinBaseFileInfo(dbPath, rawSessionID)
 	devinApplyFileInfoTimes(&fileInfo, meta, endedAt)
-	sess := buildDevinParsedSession(meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
+	sess := buildDevinParsedSession(ctx, meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
 	accumulateMessageTokenUsage(sess, messages)
 	return sess, messages, true, nil
 }
@@ -565,6 +565,7 @@ func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]
 }
 
 func parseDevinDBMessageNode(
+	ctx context.Context,
 	rawSessionID string,
 	row devinMessageNodeRow,
 	ordinal int,
@@ -579,7 +580,7 @@ func parseDevinDBMessageNode(
 		return ParsedMessage{}, false, nil
 	}
 
-	content, thinking, dialogue, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), root.Get("content"))
+	content, thinking, dialogue, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(ctx, root.Get("content"))
 	topThinking := strings.TrimSpace(root.Get("thinking").Str)
 	if topThinking != "" && topThinking != thinking {
 		thinking = joinNonEmpty(thinking, topThinking)
@@ -587,7 +588,7 @@ func parseDevinDBMessageNode(
 		hasThinking = true
 	}
 
-	topLevelToolCalls, topLevelToolText := parseDevinDBToolCalls(root.Get("tool_calls"))
+	topLevelToolCalls, topLevelToolText := parseDevinDBToolCalls(ctx, root.Get("tool_calls"))
 	if len(topLevelToolCalls) > 0 {
 		toolCalls = append(toolCalls, topLevelToolCalls...)
 		hasToolUse = true
@@ -719,7 +720,7 @@ func devinMetricInt(value gjson.Result) (int, bool) {
 	return 0, true
 }
 
-func parseDevinDBToolCalls(toolCalls gjson.Result) ([]ParsedToolCall, string) {
+func parseDevinDBToolCalls(ctx context.Context, toolCalls gjson.Result) ([]ParsedToolCall, string) {
 	if !toolCalls.IsArray() {
 		return nil, ""
 	}
@@ -728,7 +729,7 @@ func parseDevinDBToolCalls(toolCalls gjson.Result) ([]ParsedToolCall, string) {
 		parts  []string
 	)
 	toolCalls.ForEach(func(_, tc gjson.Result) bool {
-		parsedCall, ok := parseDevinDBToolCall(tc)
+		parsedCall, ok := parseDevinDBToolCall(ctx, tc)
 		if ok {
 			if text := formatDevinDBToolCall(parsedCall); text != "" {
 				parsedCall.Rendering = text
@@ -741,8 +742,8 @@ func parseDevinDBToolCalls(toolCalls gjson.Result) ([]ParsedToolCall, string) {
 	return parsed, strings.Join(parts, "\n")
 }
 
-func parseDevinDBToolCall(tc gjson.Result) (ParsedToolCall, bool) {
-	if parsed, ok := parseToolCall(context.Background(), tc); ok {
+func parseDevinDBToolCall(ctx context.Context, tc gjson.Result) (ParsedToolCall, bool) {
+	if parsed, ok := parseToolCall(ctx, tc); ok {
 		return parsed, true
 	}
 	name := firstNonEmpty(tc.Get("function.name").Str, tc.Get("name").Str)
@@ -824,6 +825,7 @@ func devinApplyFileInfoTimes(fileInfo *FileInfo, meta *DevinSessionMeta, endedAt
 }
 
 func buildDevinParsedSession(
+	ctx context.Context,
 	meta *DevinSessionMeta,
 	rawSessionID, machine, cwd, firstMessage string,
 	startedAt, endedAt time.Time,
@@ -837,7 +839,7 @@ func buildDevinParsedSession(
 	)
 	return &ParsedSession{
 		ID:               "devin:" + rawSessionID,
-		Project:          ExtractProjectFromCwd(cwd),
+		Project:          ExtractProjectFromCwdWithBranchContext(ctx, cwd, ""),
 		Machine:          machine,
 		Agent:            AgentDevin,
 		Cwd:              cwd,
@@ -967,14 +969,14 @@ func positiveGJSONInt(value gjson.Result) (int, bool) {
 	return 0, false
 }
 
-func parseDevinStep(rawSessionID string, step gjson.Result, ordinal int, model string) (ParsedMessage, bool) {
+func parseDevinStep(ctx context.Context, rawSessionID string, step gjson.Result, ordinal int, model string) (ParsedMessage, bool) {
 	role, isSystem, ok := devinRoleForSource(step.Get("source").Str)
 	if !ok {
 		return ParsedMessage{}, false
 	}
 
-	content, thinking, dialogue, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), step.Get("message"))
-	topLevelToolText, topLevelToolCalls := formatTopLevelToolUses(step.Get("tool_use"))
+	content, thinking, dialogue, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(ctx, step.Get("message"))
+	topLevelToolText, topLevelToolCalls := formatTopLevelToolUses(ctx, step.Get("tool_use"))
 	if topLevelToolText != "" {
 		content = joinNonEmpty(content, topLevelToolText)
 		hasToolUse = true
@@ -1093,7 +1095,7 @@ func devinStepID(stepID gjson.Result) string {
 	}
 }
 
-func formatTopLevelToolUses(toolUses gjson.Result) (string, []ParsedToolCall) {
+func formatTopLevelToolUses(ctx context.Context, toolUses gjson.Result) (string, []ParsedToolCall) {
 	if !toolUses.IsArray() {
 		return "", nil
 	}
@@ -1106,7 +1108,7 @@ func formatTopLevelToolUses(toolUses gjson.Result) (string, []ParsedToolCall) {
 		if text != "" {
 			parts = append(parts, text)
 		}
-		if tc, ok := parseToolCall(context.Background(), toolUse); ok {
+		if tc, ok := parseToolCall(ctx, toolUse); ok {
 			tc.Rendering = text
 			calls = append(calls, tc)
 		}

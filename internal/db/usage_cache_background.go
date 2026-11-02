@@ -64,6 +64,7 @@ func (db *DB) startUsageCacheBackfill(ctx context.Context, rerunIfActive bool) e
 	db.usageBackfillMu.Unlock()
 
 	go func() {
+		defer cancel()
 		for {
 			err := db.runUsageCacheBackfill(workerCtx)
 			db.usageBackfillMu.Lock()
@@ -141,6 +142,8 @@ func (db *DB) restartUsageCacheBackfillIfEnabled() error {
 	if !db.isUsageBackfillEnabled() {
 		return nil
 	}
+	// The pass belongs to the archive, not to the reopen; StopUsageCacheBackfill
+	// cancels and joins it.
 	return db.StartUsageCacheBackfill(context.Background())
 }
 
@@ -158,6 +161,8 @@ func (db *DB) RewarmUsageCache() error {
 	if !db.isUsageBackfillEnabled() {
 		return nil
 	}
+	// The pass outlives the refresh that requested it; StopUsageCacheBackfill
+	// cancels and joins it.
 	return db.startUsageCacheBackfill(context.Background(), true)
 }
 
@@ -498,7 +503,8 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even after cancellation so the pooled connection is clean.
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
 	tombstoneIDs := make([]string, 0, len(tombstones))

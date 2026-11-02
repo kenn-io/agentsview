@@ -37,7 +37,7 @@ func TestListDevinSessionMeta(t *testing.T) {
 		devinSessionRow{ID: "session-newest", Title: "Newest title", WorkingDirectory: "/cwd/newest", Model: "model-newest", CreatedAt: new(int64(1_700_000_040)), LastActivityAt: new(int64(1_700_000_095))},
 	)
 
-	metas, err := ListDevinSessionMeta(fixture.DBPath)
+	metas, err := ListDevinSessionMeta(t.Context(), fixture.DBPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 3)
 
@@ -63,7 +63,7 @@ func TestListDevinSessionMetaAllowsMissingTimestamps(t *testing.T) {
 		devinSessionRow{ID: "session-missing-times", Title: "Partial row", WorkingDirectory: "/cwd/partial", Model: "model-partial"},
 	)
 
-	metas, err := ListDevinSessionMeta(fixture.DBPath)
+	metas, err := ListDevinSessionMeta(t.Context(), fixture.DBPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
 
@@ -124,7 +124,7 @@ func TestListDevinSessionMetaRejectsImplausibleTimestamps(t *testing.T) {
 				},
 			)
 
-			metas, err := ListDevinSessionMeta(fixture.DBPath)
+			metas, err := ListDevinSessionMeta(t.Context(), fixture.DBPath)
 			require.NoError(t, err)
 			require.Len(t, metas, 1)
 
@@ -137,7 +137,7 @@ func TestListDevinSessionMetaRejectsImplausibleTimestamps(t *testing.T) {
 }
 
 func TestListDevinSessionMetaMissingDB(t *testing.T) {
-	metas, err := ListDevinSessionMeta(filepath.Join(t.TempDir(), "cli", devinDBFilename))
+	metas, err := ListDevinSessionMeta(t.Context(), filepath.Join(t.TempDir(), "cli", devinDBFilename))
 	require.NoError(t, err)
 	assert.Nil(t, metas)
 }
@@ -153,7 +153,7 @@ func TestListDevinSessionMetaMalformedSchema(t *testing.T) {
 	`)
 	execDevinTestSQL(t, dbPath, `INSERT INTO sessions (id, payload) VALUES ('secret-session', 'top-secret-row-content')`)
 
-	metas, err := ListDevinSessionMeta(dbPath)
+	metas, err := ListDevinSessionMeta(t.Context(), dbPath)
 	assert.Nil(t, metas)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "listing devin sessions")
@@ -182,7 +182,7 @@ func TestOpenDevinDBUsesReadOnlyMode(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sessions`).Scan(&count))
 	assert.Equal(t, 1, count)
 
-	metas, err := ListDevinSessionMeta(fixture.DBPath)
+	metas, err := ListDevinSessionMeta(t.Context(), fixture.DBPath)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"session-readonly"}, devinMetaIDs(metas))
 	assert.NotEmpty(t, journalMode)

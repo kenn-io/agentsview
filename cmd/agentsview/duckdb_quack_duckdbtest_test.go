@@ -18,7 +18,7 @@ import (
 
 func TestStartQuackServerAllowsAuthenticatedAttach(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "serve.duckdb")
 	bind := "quack:127.0.0.1:" + freeQuackServePort(t)
 	const token = "agentsview-quack-serve-test-token"
@@ -46,7 +46,7 @@ func TestStartQuackServerAllowsAuthenticatedAttach(t *testing.T) {
 	info, err := startQuackServer(ctx, server, bind, token, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, stopErr := server.ExecContext(context.Background(),
+		_, stopErr := server.ExecContext(context.WithoutCancel(t.Context()),
 			`CALL quack_stop(?)`, bind)
 		require.NoError(t, stopErr)
 	})
@@ -90,7 +90,7 @@ func TestStartQuackServerAllowsAuthenticatedAttach(t *testing.T) {
 
 func TestStartQuackServerServesAgentsviewMirror(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "serve-agentsview.duckdb")
 	bind := "quack:127.0.0.1:" + freeQuackServePort(t)
 	const token = "agentsview-quack-serve-test-token"
@@ -123,7 +123,7 @@ func TestStartQuackServerServesAgentsviewMirror(t *testing.T) {
 	info, err := startQuackServer(ctx, server, bind, token, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, stopErr := server.ExecContext(context.Background(),
+		_, stopErr := server.ExecContext(context.WithoutCancel(t.Context()),
 			`CALL quack_stop(?)`, bind)
 		require.NoError(t, stopErr)
 	})
@@ -166,7 +166,7 @@ func TestStartQuackServerServesAgentsviewMirror(t *testing.T) {
 
 func freeQuackServePort(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, ln.Close())

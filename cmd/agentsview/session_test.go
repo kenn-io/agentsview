@@ -120,7 +120,7 @@ func stubPGReadStore(t *testing.T, store db.Store) *pgReadStoreStub {
 	stub := &pgReadStoreStub{}
 	orig := openPGReadStore
 	openPGReadStore = func(
-		_ config.Config, pgCfg config.PGConfig,
+		_ context.Context, _ config.Config, pgCfg config.PGConfig,
 	) (db.Store, func(), error) {
 		stub.Opened = true
 		stub.PG = pgCfg
@@ -136,7 +136,7 @@ func forbidPGReadStore(t *testing.T) {
 	t.Helper()
 	orig := openPGReadStore
 	openPGReadStore = func(
-		config.Config, config.PGConfig,
+		context.Context, config.Config, config.PGConfig,
 	) (db.Store, func(), error) {
 		return nil, nil, errors.New("openPGReadStore should not be called without --pg")
 	}
@@ -848,7 +848,7 @@ func TestPGReadServiceClosesStoreWhenOpenFailsAfterCleanupProvided(t *testing.T)
 	closed := false
 	orig := openPGReadStore
 	openPGReadStore = func(
-		config.Config, config.PGConfig,
+		context.Context, config.Config, config.PGConfig,
 	) (db.Store, func(), error) {
 		return nil, func() { closed = true },
 			errors.New("schema check failed")
@@ -857,7 +857,7 @@ func TestPGReadServiceClosesStoreWhenOpenFailsAfterCleanupProvided(t *testing.T)
 		openPGReadStore = orig
 	})
 
-	_, _, err := newPGReadService(config.Config{}, config.PGConfig{
+	_, _, err := newPGReadService(t.Context(), config.Config{}, config.PGConfig{
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
 	})

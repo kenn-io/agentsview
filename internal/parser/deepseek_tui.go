@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -13,7 +14,7 @@ import (
 const deepSeekTUIPrefix = "deepseek-tui:"
 
 func parseDeepSeekTUISession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -39,7 +40,7 @@ func parseDeepSeekTUISession(
 
 	metadata := root.Get("metadata")
 	workspace := metadata.Get("workspace").Str
-	project := ExtractProjectFromCwd(workspace)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, workspace, "")
 	if project == "" {
 		project = "deepseek_tui"
 	}

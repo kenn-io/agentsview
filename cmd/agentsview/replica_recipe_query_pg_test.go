@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -30,15 +31,15 @@ func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 		t.Skip("TEST_PG_URL not set; skipping PG tests")
 	}
 	const schema = "agentsview_recipe_query_test"
-	admin, err := postgres.Open(pgURL, schema, true)
+	admin, err := postgres.Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
-	_, err = admin.Exec("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
+	_, err = admin.ExecContext(t.Context(), "CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 		_ = admin.Close()
 	})
-	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+	_, err = admin.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 	require.NoError(t, err)
 
 	type call struct{ auth, model, input string }
@@ -88,7 +89,7 @@ func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 		vector.BuildRequest{}))
 	source := newVectorPushSource(workstation)
 	t.Cleanup(func() { closeVectorPushSource(source) })
-	sync, err := postgres.New(pgURL, schema, local, "workstation", true,
+	sync, err := postgres.New(t.Context(), pgURL, schema, local, "workstation", true,
 		storage.PusherOptions{VectorSource: source})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sync.Close() })
@@ -119,7 +120,7 @@ SELECT EXISTS (
 	require.NoError(t, err)
 	require.False(t, container.Vector.Enabled)
 
-	store, err := postgres.NewStore(pgURL, schema, true)
+	store, err := postgres.NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	mu.Lock()

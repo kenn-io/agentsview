@@ -66,7 +66,8 @@ func (s *Store) withImmediateWrite(
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even when ctx ended; the connection returns to the pool.
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
 	if err := fn(conn); err != nil {

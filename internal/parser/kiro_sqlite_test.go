@@ -102,7 +102,7 @@ func TestListKiroSQLiteSessionMetaUsesNewestLogicalRow(t *testing.T) {
 		1, 9,
 	)
 
-	metas, err := ListKiroSQLiteSessionMeta(dbPath)
+	metas, err := ListKiroSQLiteSessionMeta(t.Context(), dbPath)
 	require.NoError(t, err, "ListKiroSQLiteSessionMeta")
 	require.Len(t, metas, 1, "metas len")
 	assert.Equal(t, int64(9_000_000), metas[0].FileMtime, "meta mtime")

@@ -341,9 +341,9 @@ func parseIcodemateCLISession(
 	persistedOutputPathResolver func(string) (string, bool),
 ) ([]ParseResult, []string, error) {
 	results, excluded, err := claudeParseFile(
-		path, project, machine,
+		ctx, path, project, machine,
 		claudeParseOptions{
-			ctx: ctx, compatibleTitleEvents: true,
+			compatibleTitleEvents:       true,
 			persistedOutputPathResolver: persistedOutputPathResolver,
 		},
 	)

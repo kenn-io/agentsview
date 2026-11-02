@@ -66,7 +66,7 @@ type DuckDBQuackServeConfig struct {
 	AllowInsecure bool
 }
 
-func runDuckDBPush(cfg DuckDBPushConfig) {
+func runDuckDBPush(ctx context.Context, cfg DuckDBPushConfig) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -90,7 +90,7 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	writeDuckDBPushPlan(os.Stdout, duckCfg, cfg, projects, excludeProjects)
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), duckDBLongRunningSignals()...,
+		ctx, duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
@@ -263,7 +263,7 @@ func duckDBLongRunningSignals() []os.Signal {
 	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
-func runDuckDBStatus() {
+func runDuckDBStatus(ctx context.Context) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -278,7 +278,7 @@ func runDuckDBStatus() {
 		fatal("duckdb status: %v", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
 	status, err := duckdbsync.ReadStatusFromConfig(ctx, duckCfg)
@@ -324,7 +324,7 @@ func loadDuckDBServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 	return cfg, basePath, nil
 }
 
-func runDuckDBServe(appCfg config.Config, basePath string) {
+func runDuckDBServe(ctx context.Context, appCfg config.Config, basePath string) {
 	setupLogFile(appCfg.DataDir)
 	if appCfg.RequireAuth {
 		if err := appCfg.EnsureAuthToken(); err != nil {
@@ -344,7 +344,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 	}
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), duckDBLongRunningSignals()...,
+		ctx, duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
@@ -530,7 +530,7 @@ func duckDBMirrorProbeFailureReason(probe duckdbsync.MirrorProbe) string {
 	}
 }
 
-func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
+func runDuckDBQuackServe(ctx context.Context, cfg DuckDBQuackServeConfig) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -564,7 +564,7 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 	}
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), duckDBLongRunningSignals()...,
+		ctx, duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
@@ -681,8 +681,9 @@ func serveQuackOnce(
 	})
 
 	stop := func() {
+		// Stopping runs after ctx is canceled at shutdown.
 		if _, stopErr := conn.ExecContext(
-			context.Background(), `CALL quack_stop(?)`, cfg.Bind,
+			context.WithoutCancel(ctx), `CALL quack_stop(?)`, cfg.Bind,
 		); stopErr != nil {
 			log.Printf("warning: could not stop Quack server: %v", stopErr)
 		}

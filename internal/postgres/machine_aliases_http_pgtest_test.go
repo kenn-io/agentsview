@@ -33,10 +33,10 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 	})
 	require.NoError(t, local.SetSyncState(t.Context(), "artifact_local_machine_name", "old-owner"))
 	const schema = pgE2ESchema
-	store, err := postgres.NewStore(pgURL, schema, true)
+	store, err := postgres.NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	syncer, err := postgres.New(pgURL, schema, local, "old-owner", true, storage.PusherOptions{})
+	syncer, err := postgres.New(t.Context(), pgURL, schema, local, "old-owner", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
@@ -44,7 +44,7 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 	require.NoError(t, err)
 	_, err = local.EnsureInstallationIdentity(t.Context(), "installation-a")
 	require.NoError(t, err)
-	upgraded, err := postgres.New(pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
+	upgraded, err := postgres.New(t.Context(), pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	result, err := upgraded.Push(t.Context(), false, nil)
@@ -52,7 +52,7 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 	assert.Equal(t, 1, result.SessionsPushed, "existing history is republished by an incremental push")
 	cfg := config.Config{Host: "127.0.0.1", DataDir: dataDir, InstallationID: "server-installation"}
 	handler := server.New(cfg, store, nil).Handler()
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions?machine=old-owner", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions?machine=old-owner", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -62,7 +62,7 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "current", page.Sessions[0].ID)
 	assert.Equal(t, "installation-a", page.Sessions[0].Machine)
-	req = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/machines", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/machines", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

@@ -174,7 +174,6 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	assert.True(t, gotPolicy.ConfigOnly)
 	assert.Equal(t, "daemon start", gotPolicy.Operation)
 	assert.True(t, gotPolicy.Attached)
-	assert.NotNil(t, gotPolicy.Context)
 	assert.NotNil(t, gotPolicy.OnLaunch)
 	assert.NotNil(t, gotPolicy.OnProgress)
 	assert.Contains(t, out.String(), "already running")
@@ -188,7 +187,6 @@ func TestDaemonStartStreamsProgressUntilReady(t *testing.T) {
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
 		assert.True(t, policy.Attached)
-		require.NotNil(t, policy.Context)
 		require.NotNil(t, policy.OnLaunch)
 		require.NotNil(t, policy.OnProgress)
 
@@ -812,7 +810,6 @@ func TestDaemonRestartStreamsProgressUntilReady(t *testing.T) {
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
 		assert.True(t, policy.Attached)
-		require.NotNil(t, policy.Context)
 		require.NotNil(t, policy.OnLaunch)
 		require.NotNil(t, policy.OnProgress)
 
@@ -988,7 +985,6 @@ func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
 	assert.True(t, gotPolicy.ConfigOnly)
 	assert.Equal(t, "daemon restart", gotPolicy.Operation)
 	assert.False(t, gotPolicy.Attached)
-	assert.Nil(t, gotPolicy.Context)
 	assert.Nil(t, gotPolicy.OnLaunch)
 	assert.Nil(t, gotPolicy.OnProgress)
 	assert.Contains(t, out.String(), "started (was not running)")

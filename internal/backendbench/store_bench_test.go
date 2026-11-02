@@ -297,7 +297,7 @@ func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store
 	}
 
 	syncer, err := postgres.New(
-		pgURL,
+		ctx, pgURL,
 		benchmarkSchema,
 		local,
 		benchmarkMachine,
@@ -321,7 +321,7 @@ func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store
 		b.Fatalf("postgres fixture push wrote no rows: %+v", result)
 	}
 
-	store, err := postgres.NewStore(pgURL, benchmarkSchema, true)
+	store, err := postgres.NewStore(ctx, pgURL, benchmarkSchema, true)
 	if err != nil {
 		b.Fatalf("open postgres store: %v", err)
 	}

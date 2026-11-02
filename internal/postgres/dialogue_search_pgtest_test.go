@@ -16,7 +16,7 @@ func TestPGDialogueSearchParity(t *testing.T) {
 	dbtest.SeedDialogueSearch(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")

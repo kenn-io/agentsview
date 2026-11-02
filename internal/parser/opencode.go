@@ -92,11 +92,11 @@ func OpenCodeSQLiteSessionExists(ctx context.Context, dbPath, sessionID string) 
 // all sessions without parsing messages or parts. Used by
 // the sync engine to detect which sessions have changed.
 func ListOpenCodeSessionMeta(
-	dbPath string,
+	ctx context.Context, dbPath string,
 ) ([]OpenCodeSessionMeta, error) {
 	var metas []OpenCodeSessionMeta
 	err := ForEachOpenCodeSessionMeta(
-		context.Background(), dbPath,
+		ctx, dbPath,
 		func(meta OpenCodeSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -130,11 +130,11 @@ func OpenCodeSessionChildLookups() int64 {
 // ListOpenCodeSessionWatermarkMeta is the materialized form of
 // ForEachOpenCodeSessionWatermarkMeta.
 func ListOpenCodeSessionWatermarkMeta(
-	dbPath string,
+	ctx context.Context, dbPath string,
 ) ([]OpenCodeSessionMeta, error) {
 	var metas []OpenCodeSessionMeta
 	err := ForEachOpenCodeSessionWatermarkMeta(
-		context.Background(), dbPath,
+		ctx, dbPath,
 		func(meta OpenCodeSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -1376,7 +1376,7 @@ func buildOpenCodeParsedSessionContext(
 		})
 
 		pm := buildOpenCodeMessage(
-			ordinal, m.id, role, m.timeCreated, msgParts, cwd,
+			ctx, ordinal, m.id, role, m.timeCreated, msgParts, cwd,
 		)
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
@@ -1590,6 +1590,7 @@ func normalizeOpenCodeRole(role string) RoleType {
 }
 
 func buildOpenCodeMessage(
+	ctx context.Context,
 	ordinal int,
 	messageID string,
 	role RoleType,
@@ -1614,7 +1615,7 @@ func buildOpenCodeMessage(
 			}
 		case "tool":
 			hasToolUse = true
-			tc := extractOpenCodeToolCall(p.data, cwd)
+			tc := extractOpenCodeToolCall(ctx, p.data, cwd)
 			if tc.ToolName != "" {
 				toolCalls = append(toolCalls, tc)
 			}
@@ -1700,7 +1701,7 @@ type openCodeToolMetadata struct {
 	Interrupted bool `json:"interrupted"`
 }
 
-func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
+func extractOpenCodeToolCall(ctx context.Context, data, cwd string) ParsedToolCall {
 	var d openCodeToolData
 	if err := json.Unmarshal([]byte(data), &d); err != nil {
 		return ParsedToolCall{}
@@ -1743,7 +1744,7 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 			skillName = gjson.Get(inputJSON, "name").Str
 		}
 	default:
-		skillName = inferOpenCodeSkillName(d.ToolName, inputJSON, cwd)
+		skillName = inferOpenCodeSkillName(ctx, d.ToolName, inputJSON, cwd)
 	}
 
 	tc := ParsedToolCall{
@@ -1797,20 +1798,20 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 	return tc
 }
 
-func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
+func inferOpenCodeSkillName(ctx context.Context, toolName, inputJSON, cwd string) string {
 	if isCursorSkillReadTool(toolName) {
 		// OpenCode's read-tool input carries no cwd/workdir key, so
 		// inferSkillNameFromJSONPaths can't resolve relative SKILL.md
 		// paths and falls back to the parent directory name. Try the
 		// file_path directly against the session worktree first.
 		if fp := gjson.Get(inputJSON, "file_path").Str; fp != "" && cwd != "" {
-			if name := skillNameFromPath(context.Background(), fp, cwd); name != "" {
+			if name := skillNameFromPath(ctx, fp, cwd); name != "" {
 				return name
 			}
 		}
-		return inferSkillNameFromJSONPaths(context.Background(), inputJSON)
+		return inferSkillNameFromJSONPaths(ctx, inputJSON)
 	}
-	return inferCodexSkillNameWithBase(context.Background(), toolName, inputJSON, cwd)
+	return inferCodexSkillNameWithBase(ctx, toolName, inputJSON, cwd)
 }
 
 type openCodeStorageTime struct {

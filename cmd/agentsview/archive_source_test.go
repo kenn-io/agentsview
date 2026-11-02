@@ -219,7 +219,7 @@ func TestArchiveSourceWorkerRebuildAfterStartupSchemaUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	closeWriteDB(database, lock)
 	var output bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &output))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &output))
 	assert.Equal(t, 3, decodeSingleResult(t, &output).Synced)
 }
 
@@ -292,7 +292,7 @@ func TestArchiveSourceDirectSyncAndWorkerRebuild(t *testing.T) {
 	require.Len(t, before, 1)
 	require.NoError(t, database.Close())
 	var output bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &output))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &output))
 	result := decodeSingleResult(t, &output)
 	assert.Equal(t, 4, result.Synced, "both local and attached sources are rebuilt")
 	replacement, err := db.OpenReadOnly(t.Context(), cfg.DBPath+"-resync")

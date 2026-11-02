@@ -72,7 +72,10 @@ func (db *DB) applyArtifactImportedSession(
 			"artifact imported session write does not match provenance",
 		)
 	}
-	write = sanitizeSessionBatchWrite(write)
+	write, err := sanitizeSessionBatchWriteContext(ctx, write)
+	if err != nil {
+		return result, err
+	}
 	write.Messages = db.projectSessionBatchMessages(write)
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(
 		write.Session, write.Messages,

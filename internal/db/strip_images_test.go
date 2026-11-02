@@ -382,11 +382,11 @@ func TestStripToolImagesCopiedSessionsOnly(t *testing.T) {
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	trashedIDs, err := destination.CopyTrashedDataFrom(sourcePath)
+	trashedIDs, err := destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	insertSession(t, destination, "fresh", "project")
 	insertMessages(t, destination, testImageMessage("fresh"))
-	orphanIDs, err := destination.CopyOrphanedDataFromExcluding(sourcePath, []string{"excluded"})
+	orphanIDs, err := destination.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, []string{"excluded"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"trashed"}, trashedIDs)
 	assert.Equal(t, []string{"orphan"}, orphanIDs)

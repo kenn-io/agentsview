@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -27,7 +26,7 @@ func insertSemDoc(
 	offsets, content string,
 ) {
 	t.Helper()
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 INSERT INTO vector_documents (
     doc_key, session_id, source_uuid, ordinal, ordinal_end,
     subordinate, offsets, content, content_hash)
@@ -54,11 +53,11 @@ func setupSemanticSearch(t *testing.T) (*Store, int64, string) {
 	t.Helper()
 	pgURL := testPGURL(t)
 
-	pg, err := Open(pgURL, semanticSearchSchema, true)
+	pg, err := Open(t.Context(), pgURL, semanticSearchSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + semanticSearchSchema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+semanticSearchSchema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, semanticSearchSchema), "EnsureSchema")
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
@@ -67,7 +66,7 @@ func setupSemanticSearch(t *testing.T) (*Store, int64, string) {
 		t.Skip(unavailable)
 	}
 
-	store, err := NewStore(pgURL, semanticSearchSchema, true)
+	store, err := NewStore(t.Context(), pgURL, semanticSearchSchema, true)
 	require.NoError(t, err, "NewStore")
 	t.Cleanup(func() { store.Close() })
 
@@ -80,7 +79,7 @@ func setupSemanticSearch(t *testing.T) (*Store, int64, string) {
 // chunk table.
 func seedSemanticFixture(t *testing.T, store *Store) (int64, string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	pg := store.DB()
 
 	const start, end = "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z"
@@ -153,7 +152,7 @@ func TestPGSemanticSearchRankedResults(t *testing.T) {
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "content", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent semantic")
@@ -200,7 +199,7 @@ func TestPGSemanticSearchProjectFilter(t *testing.T) {
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "content", Mode: "semantic", Limit: 50, Project: "alpha",
 	})
 	require.NoError(t, err, "SearchContent semantic")
@@ -216,7 +215,7 @@ func TestPGSemanticSearchProjectFilter(t *testing.T) {
 func TestPGSemanticSearchScope(t *testing.T) {
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	top, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "content", Mode: "semantic", Limit: 50, Scope: "top",
@@ -240,24 +239,24 @@ func TestPGSemanticSearchScope(t *testing.T) {
 func TestPGSearchAuditPromotionPreservesCachedSubordination(t *testing.T) {
 	store, genID, table := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
-	ctx := context.Background()
+	ctx := t.Context()
 	pg := store.DB()
-	_, err := pg.Exec(`UPDATE sessions SET session_kind = 'non-interactive',
+	_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET session_kind = 'non-interactive',
 		is_automated = true WHERE id = 'S2'`)
 	require.NoError(t, err)
 	// A sidechain's cached flag remains true even when its session is top-level.
-	_, err = pg.Exec(`UPDATE sessions SET relationship_type = '',
+	_, err = pg.ExecContext(t.Context(), `UPDATE sessions SET relationship_type = '',
 		parent_session_id = NULL WHERE id = 'Ssub'`)
 	require.NoError(t, err)
-	_, err = pg.Exec(`UPDATE messages SET is_sidechain = true WHERE session_id = 'Ssub'`)
+	_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_sidechain = true WHERE session_id = 'Ssub'`)
 	require.NoError(t, err)
 	_, err = backfillIsAutomatedPGWithProgress(ctx, pg)
 	require.NoError(t, err)
 	var relationship string
-	require.NoError(t, pg.QueryRow(`SELECT relationship_type FROM sessions WHERE id = 'S2'`).Scan(&relationship))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT relationship_type FROM sessions WHERE id = 'S2'`).Scan(&relationship))
 	assert.Equal(t, "subagent", relationship)
 	var cached bool
-	require.NoError(t, pg.QueryRow(`SELECT subordinate FROM vector_documents WHERE doc_key = 'd2'`).Scan(&cached))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT subordinate FROM vector_documents WHERE doc_key = 'd2'`).Scan(&cached))
 	assert.False(t, cached, "audit leaves the old vector cache untouched")
 
 	for _, mode := range []string{"semantic", "hybrid", "hybrid keyword only"} {
@@ -265,7 +264,7 @@ func TestPGSearchAuditPromotionPreservesCachedSubordination(t *testing.T) {
 			searchMode := mode
 			if mode == "hybrid keyword only" {
 				searchMode = "hybrid"
-				_, err := pg.Exec(`DELETE FROM ` + table + ` WHERE doc_key IN ('d2', 'dsub')`)
+				_, err := pg.ExecContext(t.Context(), `DELETE FROM `+table+` WHERE doc_key IN ('d2', 'dsub')`)
 				require.NoError(t, err)
 			}
 			for _, scope := range []string{"", "top", "subordinate"} {
@@ -309,7 +308,7 @@ func TestPGSemanticSearchSubordinatePenaltyReorders(t *testing.T) {
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "content", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent semantic")
@@ -332,7 +331,7 @@ func TestPGSemanticSearchNoSearcherUnavailable(t *testing.T) {
 	store := setupContentSearch(t)
 	store.SetSemanticUnavailableReason("no embeddings generation built")
 
-	_, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic", Limit: 50,
 	})
 	require.Error(t, err)
@@ -349,7 +348,7 @@ func TestPGSemanticSearchNoSearcherUnavailable(t *testing.T) {
 func TestPGSemanticSearchInvalidInput(t *testing.T) {
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cases := map[string]db.ContentSearchFilter{
 		"cursor": {Pattern: "x", Mode: "semantic", Cursor: 1, Limit: 50},

@@ -246,7 +246,7 @@ func (p *piProvider) Parse(
 		return ParseOutcome{}, errors.New("pi source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine)
+	sess, msgs, err := p.parseSession(ctx, path, req.Source.ProjectHint, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}

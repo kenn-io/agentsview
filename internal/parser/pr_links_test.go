@@ -104,7 +104,7 @@ func TestClaudePRLinksDeduplicateWithoutCappingDistinctLinks(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "pr-links.jsonl")
 			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
-			results, _, err := claudeParseWithExclusions(path, "project", "local")
+			results, _, err := claudeParseWithExclusions(t.Context(), path, "project", "local")
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			links := results[0].Session.PRLinks

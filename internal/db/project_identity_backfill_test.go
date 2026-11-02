@@ -127,10 +127,10 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 		Cwd: "/fresh/app",
 	}))
 
-	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	copied, err := destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Equal(t, 2, copied)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"known-orphan", "legacy-orphan", "live"},
@@ -193,10 +193,10 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 			ObservedAt: time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
 		}))
 
-	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	copied, err := destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Equal(t, 1, copied)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"live", "orphan"},
@@ -233,10 +233,10 @@ func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	copied, err := destination.CopyTrashedDataFrom(sourcePath)
+	copied, err := destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Len(t, copied, 1)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"legacy-trashed"},

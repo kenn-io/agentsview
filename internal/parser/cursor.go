@@ -25,7 +25,7 @@ const maxCursorTranscriptSize = 10 << 20
 // text with "user:" and "assistant:" role markers, tool calls, and thinking
 // blocks.
 func (p *cursorProvider) parseSession(
-	path, project, cwd, machine string,
+	ctx context.Context, path, project, cwd, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	// Open with O_NOFOLLOW (Unix) to reject symlinks at the
 	// final path component, closing the TOCTOU window between
@@ -67,10 +67,10 @@ func (p *cursorProvider) parseSession(
 	text := string(data)
 	var messages []ParsedMessage
 	if isCursorJSONL(text) {
-		messages = parseCursorJSONL(text)
+		messages = parseCursorJSONL(ctx, text)
 	} else {
 		lines := strings.Split(text, "\n")
-		messages = parseCursorMessages(lines)
+		messages = parseCursorMessages(ctx, lines)
 	}
 	if len(messages) == 0 {
 		return nil, nil, nil
@@ -130,13 +130,13 @@ type cursorBlock struct {
 
 // parseCursorMessages splits transcript lines on role markers
 // and converts each block into a ParsedMessage.
-func parseCursorMessages(lines []string) []ParsedMessage {
+func parseCursorMessages(ctx context.Context, lines []string) []ParsedMessage {
 	blocks := splitCursorBlocks(lines)
 	messages := make([]ParsedMessage, 0, len(blocks))
 
 	for i, block := range blocks {
 		content, timestamp, hasThinking, toolCalls := extractCursorContent(
-			block.role, block.lines,
+			ctx, block.role, block.lines,
 		)
 		content = strings.TrimSpace(content)
 		if content == "" && len(toolCalls) == 0 {
@@ -195,13 +195,13 @@ func splitCursorBlocks(lines []string) []cursorBlock {
 // block, returning the visible text content, whether thinking
 // was present, and any tool calls found.
 func extractCursorContent(
-	role RoleType, lines []string,
+	ctx context.Context, role RoleType, lines []string,
 ) (string, time.Time, bool, []ParsedToolCall) {
 	if role == RoleUser {
 		content, timestamp := extractCursorUserContent(lines)
 		return content, timestamp, false, nil
 	}
-	content, hasThinking, toolCalls := extractAssistantContent(lines)
+	content, hasThinking, toolCalls := extractAssistantContent(ctx, lines)
 	return content, time.Time{}, hasThinking, toolCalls
 }
 
@@ -325,7 +325,7 @@ func extractUserQuery(lines []string) string {
 // extractAssistantContent parses assistant message lines for
 // visible text, thinking blocks, and tool calls.
 func extractAssistantContent(
-	lines []string,
+	ctx context.Context, lines []string,
 ) (string, bool, []ParsedToolCall) {
 	var textParts []string
 	var toolCalls []ParsedToolCall
@@ -369,7 +369,7 @@ func extractAssistantContent(
 				ToolName:  toolName,
 				Category:  NormalizeToolCategory(toolName),
 				InputJSON: inputJSON,
-				SkillName: inferToolSkillName(context.Background(),
+				SkillName: inferToolSkillName(ctx,
 					toolName,
 					inputJSON,
 				),
@@ -560,7 +560,7 @@ func isCursorJSONL(data string) bool {
 // parseCursorJSONL parses a Cursor JSONL transcript where
 // each line is an Anthropic API message object with "role"
 // and "message.content" fields.
-func parseCursorJSONL(data string) []ParsedMessage {
+func parseCursorJSONL(ctx context.Context, data string) []ParsedMessage {
 	lines := strings.Split(data, "\n")
 	var messages []ParsedMessage
 	ordinal := 0
@@ -589,7 +589,7 @@ func parseCursorJSONL(data string) []ParsedMessage {
 			msg.Content, msg.Timestamp = extractJSONLUserContent(content)
 		} else {
 			msg.Role = RoleAssistant
-			text, thinkingText, dialogueText, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), content)
+			text, thinkingText, dialogueText, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(ctx, content)
 			msg.Content = text
 			msg.DialogueText = new(strings.TrimSpace(dialogueText))
 			msg.ThinkingText = thinkingText

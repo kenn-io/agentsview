@@ -38,13 +38,9 @@ type Catalog struct {
 	OpenRouter []ModelPricing
 }
 
-// FetchCatalog fetches GenAI Prices first, followed by LiteLLM and OpenRouter.
-// Successful earlier sources remain available when a later source fails.
-func FetchCatalog() (Catalog, error) {
-	return FetchCatalogContext(context.Background())
-}
-
-// FetchCatalogContext is FetchCatalog bound to ctx.
+// FetchCatalogContext fetches GenAI Prices first, followed by LiteLLM and
+// OpenRouter. Successful earlier sources remain available when a later source
+// fails.
 func FetchCatalogContext(ctx context.Context) (Catalog, error) {
 	return fetchCatalog(
 		ctx,

@@ -332,7 +332,7 @@ func (s *Sync) aliasBackfillSyncStateOrDefault() syncStateStore {
 // When allowInsecure is true, non-loopback connections without TLS
 // produce a warning instead of failing.
 func New(
-	pgURL, schema string, local *db.DB,
+	ctx context.Context, pgURL, schema string, local *db.DB,
 	machine string, allowInsecure bool,
 	opts storage.PusherOptions,
 ) (*Sync, error) {
@@ -359,11 +359,11 @@ func New(
 		return nil, err
 	}
 
-	pg, err := Open(pgURL, schema, allowInsecure)
+	pg, err := Open(ctx, pgURL, schema, allowInsecure)
 	if err != nil {
 		return nil, err
 	}
-	if err = RejectHostedPush(context.Background(), pg); err != nil {
+	if err = RejectHostedPush(ctx, pg); err != nil {
 		pg.Close()
 		return nil, err
 	}
@@ -582,7 +582,7 @@ func ReadStatus(
 			machine,
 		)
 	}
-	pg, err := Open(pgURL, schema, allowInsecure)
+	pg, err := Open(ctx, pgURL, schema, allowInsecure)
 	if err != nil {
 		return SyncStatus{}, err
 	}

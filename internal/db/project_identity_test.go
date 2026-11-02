@@ -108,7 +108,7 @@ func TestCopySessionMetadataPreservesRecordedMachineAttribution(
 		},
 	))
 
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	session, err := destination.GetSessionFull(
 		t.Context(), "resynced-session",
@@ -300,7 +300,7 @@ func TestCopyArchiveIdentityFromPreservesLogicalArchiveAndNewGeneration(
 	require.NoError(t, target.SetArchiveIdentityForTest(
 		ctx, "temporary-archive", strings.Repeat("b", 64),
 	))
-	require.NoError(t, target.CopyArchiveIdentityFrom(sourcePath))
+	require.NoError(t, target.CopyArchiveIdentityFrom(t.Context(), sourcePath))
 
 	archiveID, err := target.GetArchiveID(ctx)
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestCopyArchiveIdentityFromRejectsCorruptSalt(t *testing.T) {
 	require.NoError(t, source.Close())
 
 	target := testDB(t)
-	err = target.CopyArchiveIdentityFrom(sourcePath)
+	err = target.CopyArchiveIdentityFrom(t.Context(), sourcePath)
 	require.ErrorIs(t, err, ErrArchiveSaltInvalid)
 }
 
@@ -1103,10 +1103,10 @@ func TestResyncKeepsMappedProjectForTrashedSession(t *testing.T) {
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	copied, err := destination.CopyTrashedDataFrom(sourcePath)
+	copied, err := destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	require.Len(t, copied, 1)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	restoredProjects, err := destination.RestoreSessionProjectsFromIdentitySnapshots(ctx)
 	require.NoError(t, err)

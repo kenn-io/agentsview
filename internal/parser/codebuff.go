@@ -33,6 +33,7 @@ type codebuffSessionDir struct {
 // and returns the parsed session with messages, plus one linked child result
 // per nested subagent (see codebuffSubagentResults).
 func parseCodebuffSession(
+	ctx context.Context,
 	dir string,
 	projectHint string,
 	machine string,
@@ -181,7 +182,7 @@ func parseCodebuffSession(
 	// a Claude-style encoded project name.
 	project := projectHint
 	if rs.Cwd != "" {
-		if p := ExtractProjectFromCwd(rs.Cwd); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, rs.Cwd, ""); p != "" {
 			project = p
 		}
 	}

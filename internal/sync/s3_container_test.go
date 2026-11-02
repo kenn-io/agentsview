@@ -101,7 +101,7 @@ func putS3Object(
 // fetched, parsed, and persisted machine-namespaced under the s3 root's machine
 // segment -- the end-to-end path that has no other real-store coverage.
 func TestS3DiscoverySyncAgainstContainer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	endpoint := startS3Container(ctx, t)
 
 	// Point the production s3Client (env-driven) at the container. The endpoint

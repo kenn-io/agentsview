@@ -29,7 +29,7 @@ type fetchRecorder struct {
 	err   error
 }
 
-func (f *fetchRecorder) fetch() (pricing.Catalog, error) {
+func (f *fetchRecorder) fetch(context.Context) (pricing.Catalog, error) {
 	f.calls++
 	return pricing.Catalog{LiteLLM: f.rows}, f.err
 }
@@ -43,7 +43,7 @@ func TestEnsureSeedsFallbackAndFetchedModel(t *testing.T) {
 	}}}
 
 	refreshed, err := Ensure(
-		database, false, fetcher.fetch, pricingTestNow(),
+		t.Context(), database, false, fetcher.fetch, pricingTestNow(),
 	)
 	require.NoError(t, err)
 	assert.True(t, refreshed)
@@ -96,7 +96,7 @@ func TestRefreshIfStaleFreshAttemptSkipsFetch(t *testing.T) {
 	fetcher := &fetchRecorder{}
 
 	refreshed, err := RefreshIfStale(
-		database, fetcher.fetch, time.Hour, now,
+		t.Context(), database, fetcher.fetch, time.Hour, now,
 	)
 
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
 	}}}
 
 	refreshed, err := RefreshIfStale(
-		database, fetcher.fetch, time.Hour, now,
+		t.Context(), database, fetcher.fetch, time.Hour, now,
 	)
 
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestRefreshIfStaleNeverAttemptedTriggersFetch(t *testing.T) {
 	fetcher := &fetchRecorder{}
 
 	refreshed, err := RefreshIfStale(
-		database, fetcher.fetch, time.Hour, pricingTestNow(),
+		t.Context(), database, fetcher.fetch, time.Hour, pricingTestNow(),
 	)
 
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 	fetcher := &fetchRecorder{err: wantErr}
 
 	refreshed, err := RefreshIfStale(
-		database, fetcher.fetch, time.Hour, now,
+		t.Context(), database, fetcher.fetch, time.Hour, now,
 	)
 
 	require.ErrorIs(t, err, wantErr)
@@ -167,7 +167,7 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 
 	second := &fetchRecorder{}
 	_, err = RefreshIfStale(
-		database, second.fetch, time.Hour, now.Add(time.Minute),
+		t.Context(), database, second.fetch, time.Hour, now.Add(time.Minute),
 	)
 	require.NoError(t, err)
 	assert.Zero(t, second.calls)
@@ -186,7 +186,7 @@ func TestRefreshIfStaleStoresDegradedCatalog(t *testing.T) {
 	}
 
 	refreshed, err := RefreshIfStale(
-		database, fetcher.fetch, time.Hour, pricingTestNow(),
+		t.Context(), database, fetcher.fetch, time.Hour, pricingTestNow(),
 	)
 
 	require.ErrorIs(t, err, wantErr,
@@ -217,7 +217,7 @@ func TestRefreshIfStaleStoresGenAIDocumentWhenLiteLLMFails(t *testing.T) {
 	require.NoError(t, err)
 	wantErr := errors.New("LiteLLM unavailable")
 
-	refreshed, err := RefreshIfStale(database, func() (pricing.Catalog, error) {
+	refreshed, err := RefreshIfStale(t.Context(), database, func(context.Context) (pricing.Catalog, error) {
 		return pricing.Catalog{GenAI: &document}, wantErr
 	}, time.Hour, pricingTestNow())
 
@@ -238,7 +238,7 @@ func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
 	fetcher := &fetchRecorder{err: wantErr}
 
 	refreshed, err := Ensure(
-		database, false, fetcher.fetch, pricingTestNow(),
+		t.Context(), database, false, fetcher.fetch, pricingTestNow(),
 	)
 
 	require.ErrorIs(t, err, wantErr)
@@ -258,7 +258,7 @@ func TestEnsureSkipsFetchWithinCooldown(t *testing.T) {
 		OutputPerMTok: money.MustParseDollars("1"),
 	}}}
 
-	refreshed, err := Ensure(database, false, fetcher.fetch, now)
+	refreshed, err := Ensure(t.Context(), database, false, fetcher.fetch, now)
 
 	require.NoError(t, err)
 	assert.False(t, refreshed)
@@ -273,12 +273,12 @@ func TestEnsureSkipsFetchWithinCooldown(t *testing.T) {
 
 func TestEnsureOfflineSeedsFallbackWithoutFetch(t *testing.T) {
 	database := testDB(t)
-	fetch := func() (pricing.Catalog, error) {
+	fetch := func(context.Context) (pricing.Catalog, error) {
 		require.FailNow(t, "offline ensure must not fetch")
 		return pricing.Catalog{}, nil
 	}
 
-	refreshed, err := Ensure(database, true, fetch, pricingTestNow())
+	refreshed, err := Ensure(t.Context(), database, true, fetch, pricingTestNow())
 
 	require.NoError(t, err)
 	assert.False(t, refreshed)

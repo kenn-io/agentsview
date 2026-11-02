@@ -287,10 +287,10 @@ func TestConversationExportResyncKeepsIdentityAndOrphans(t *testing.T) {
 	destination, err := Open(t.Context(), filepath.Join(t.TempDir(), "rebuilt.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, destination.Close()) })
-	require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
+	require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), source.Path()))
 	require.NoError(t, destination.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
 	require.NoError(t, destination.InsertMessages(t.Context(), msgs))
-	_, err = destination.CopyOrphanedDataFrom(source.Path())
+	_, err = destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 	require.NoError(t, err)
 	rebuilt, err := destination.ExportConversationChanges(ctx, ConversationExportOptions{})
 	require.NoError(t, err)
@@ -418,9 +418,9 @@ func TestConversationExportCopiedUsagePolicyDropsBody(t *testing.T) {
 				require.NoError(t, err)
 			}
 			destination := testDB(t)
-			require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
+			require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), source.Path()))
 			destination.SetArchiveContent(config.ArchiveContentUsage)
-			_, err := destination.CopyOrphanedDataFrom(source.Path())
+			_, err := destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			result, err := destination.ExportConversationChanges(ctx, ConversationExportOptions{})
 			require.NoError(t, err)
@@ -460,11 +460,11 @@ func TestConversationExportUsesFinalCopiedContent(t *testing.T) {
 				require.NoError(t, source.SoftDeleteSession(t.Context(), "chat"))
 			}
 			destination := testDB(t)
-			require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
+			require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), source.Path()))
 			destination.SetArchiveContent(config.ArchiveContentTranscripts)
-			_, err = destination.CopyTrashedDataFrom(source.Path())
+			_, err = destination.CopyTrashedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
-			_, err = destination.CopyOrphanedDataFrom(source.Path())
+			_, err = destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			if trashed {
 				_, err = destination.RestoreSession(t.Context(), "chat")
@@ -510,11 +510,11 @@ func TestConversationExportCopyRefreshesSanitizedMessages(t *testing.T) {
 			path := source.Path()
 			require.NoError(t, source.Close())
 			destination := testDB(t)
-			require.NoError(t, destination.CopyArchiveIdentityFrom(path))
+			require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), path))
 			if trashed {
-				_, err = destination.CopyTrashedDataFrom(path)
+				_, err = destination.CopyTrashedDataFrom(t.Context(), path)
 			} else {
-				_, err = destination.CopyOrphanedDataFrom(path)
+				_, err = destination.CopyOrphanedDataFrom(t.Context(), path)
 			}
 			require.NoError(t, err)
 			if trashed {
@@ -553,9 +553,9 @@ func TestConversationExportResyncPreservesCopiedPolicyGap(t *testing.T) {
 				require.NoError(t, source.SoftDeleteSession(t.Context(), "chat"))
 			}
 			destination := testDB(t)
-			_, err := destination.CopyTrashedDataFrom(source.Path())
+			_, err := destination.CopyTrashedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
-			_, err = destination.CopyOrphanedDataFrom(source.Path())
+			_, err = destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			if trashed {
 				_, err = destination.RestoreSession(t.Context(), "chat")
@@ -643,10 +643,10 @@ func TestConversationExportUsageRewritePreservesPolicyGaps(t *testing.T) {
 				source := d
 				d = testDB(t)
 				d.SetArchiveContent(config.ArchiveContentUsage)
-				require.NoError(t, d.CopyArchiveIdentityFrom(source.Path()))
+				require.NoError(t, d.CopyArchiveIdentityFrom(t.Context(), source.Path()))
 				require.NoError(t, d.UpsertSession(t.Context(), session))
 				require.NoError(t, d.InsertMessages(t.Context(), msgs))
-				_, err = d.CopyOrphanedDataFrom(source.Path())
+				_, err = d.CopyOrphanedDataFrom(t.Context(), source.Path())
 				require.NoError(t, err)
 			} else {
 				d.SetArchiveContent(config.ArchiveContentUsage)
@@ -1041,8 +1041,8 @@ func TestConversationExportResyncRetainsHardDeletion(t *testing.T) {
 			require.NoError(t, source.DeleteSession(t.Context(), "chat"))
 			require.NoError(t, source.DeleteSession(t.Context(), "empty"))
 			destination := testDB(t)
-			require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
-			_, err := destination.CopyOrphanedDataFrom(source.Path())
+			require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), source.Path()))
+			_, err := destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			changes, err := destination.ExportConversationChanges(t.Context(), ConversationExportOptions{})
 			require.NoError(t, err)
@@ -1131,7 +1131,7 @@ func TestConversationExportInitializesFromStoredArchive(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, d.Close()) })
 			} else {
 				d = testDB(t)
-				_, err := d.CopyOrphanedDataFrom(path)
+				_, err := d.CopyOrphanedDataFrom(t.Context(), path)
 				require.NoError(t, err)
 			}
 			page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})
@@ -1241,8 +1241,8 @@ func TestConversationExportColdCopyKeepsSessionEvidence(t *testing.T) {
 	require.NoError(t, source.UpsertSession(ctx, Session{ID: "gone", Project: "sample", Machine: "local", Agent: "codex"}))
 	require.NoError(t, source.DeleteSession(ctx, "gone"))
 	destination := testDB(t)
-	require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
-	_, err := destination.CopyOrphanedDataFrom(source.Path())
+	require.NoError(t, destination.CopyArchiveIdentityFrom(t.Context(), source.Path()))
+	_, err := destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 	require.NoError(t, err)
 	// Neither archive has projected messages, yet the first export of the
 	// rebuild carries the source's policy gap and hard deletion.
@@ -1271,7 +1271,7 @@ func TestConversationExportCopyRejectsMismatchedState(t *testing.T) {
 	// Without the source's identity the destination stays cold, and copying
 	// active rows into it would publish them without their stored messages.
 	destination := testDB(t)
-	_, err = destination.CopyOrphanedDataFrom(source.Path())
+	_, err = destination.CopyOrphanedDataFrom(t.Context(), source.Path())
 	require.ErrorContains(t, err, "conversation export state differs")
 	session, err := destination.GetSession(ctx, "orphan")
 	require.NoError(t, err)

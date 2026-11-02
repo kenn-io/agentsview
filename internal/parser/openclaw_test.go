@@ -43,7 +43,7 @@ func parseOpenClawSessionForTest(
 	require.True(t, ok)
 	claw, ok := provider.(*openClawProvider)
 	require.True(t, ok)
-	return claw.parseSession(path, project, machine)
+	return claw.parseSession(t.Context(), path, project, machine)
 }
 
 func discoverOpenClawSessionsForTest(t *testing.T, root string) []SourceRef {

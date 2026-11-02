@@ -703,7 +703,7 @@ func (p *PreparedRemote) RebuildContributor(
 			return nil
 		}
 		if err := p.mirrorImport.pending.persistImportDataVersion(
-			context.Background(), database,
+			ctx, database,
 		); err != nil {
 			return &rebuildCachePersistError{err: err}
 		}

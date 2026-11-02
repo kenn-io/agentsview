@@ -198,7 +198,7 @@ func TestArchiveRebuildReservesAttachedSessionOwnership(t *testing.T) {
 			_, err := original.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 			require.NoError(t, err)
 			replacement := testDB(t)
-			require.NoError(t, replacement.CopyArchiveIdentityFrom(original.Path()))
+			require.NoError(t, replacement.CopyArchiveIdentityFrom(t.Context(), original.Path()))
 			require.NoError(t, replacement.CopyAttachedArchiveStateFrom(t.Context(), original.Path()))
 
 			write.ArchiveProvenance = nil
@@ -223,7 +223,7 @@ func TestArchiveRebuildReservesAttachedSessionOwnership(t *testing.T) {
 			}
 			require.ErrorIs(t, err, ErrArchiveSourceConflict)
 			require.NoError(t, original.CloseConnections(t.Context()))
-			_, err = replacement.CopyOrphanedDataFrom(original.Path())
+			_, err = replacement.CopyOrphanedDataFrom(t.Context(), original.Path())
 			require.NoError(t, err)
 			session, err := replacement.GetSessionFull(t.Context(), write.Session.ID)
 			require.NoError(t, err)

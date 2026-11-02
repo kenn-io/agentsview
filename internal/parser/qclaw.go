@@ -16,7 +16,7 @@ import (
 // QClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
 func (p *qClawProvider) parseSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -29,7 +29,7 @@ func (p *qClawProvider) parseSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	var (
 		messages      []ParsedMessage
@@ -95,7 +95,7 @@ func (p *qClawProvider) parseSession(
 		switch role {
 		case "user":
 			content := msg.Get("content")
-			text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+			text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 			text = strings.TrimSpace(text)
 			if text == "" && len(tcs) == 0 && len(trs) == 0 {
 				continue
@@ -128,7 +128,7 @@ func (p *qClawProvider) parseSession(
 
 		case "assistant":
 			content := msg.Get("content")
-			text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+			text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 			text = strings.TrimSpace(text)
 			if text == "" && len(tcs) == 0 && len(trs) == 0 {
 				continue
@@ -201,7 +201,7 @@ func (p *qClawProvider) parseSession(
 	fullID := "qclaw:" + agentID + ":" + sessionID
 
 	if project == "" && cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 	if project == "" {
 		project = "qclaw"

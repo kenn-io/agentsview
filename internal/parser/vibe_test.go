@@ -29,7 +29,7 @@ func newVibeTestProvider(t *testing.T, roots ...string) Provider {
 // package-level ParseVibeSession entrypoint.
 func parseVibeTestSession(t *testing.T, path string, fileInfo FileInfo) (ParseResult, error) {
 	t.Helper()
-	return parseVibeResultFile(path, fileInfo)
+	return parseVibeResultFile(t.Context(), path, fileInfo)
 }
 
 // discoverVibeTestSessions discovers Vibe sessions under root through the

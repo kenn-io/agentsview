@@ -65,7 +65,7 @@ func TestInferPiSkillNameReadSKILLMD(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := inferPiSkillName(tt.toolName, tt.inputJSON, tt.sessionCwd)
+			got := inferPiSkillName(t.Context(), tt.toolName, tt.inputJSON, tt.sessionCwd)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -79,7 +79,7 @@ func TestInferPiSkillNameReadFrontmatter(t *testing.T) {
 		"---\nname: canonical-deploy-docs\ndescription: Deployment guides\n---\n\nbody\n",
 	), 0o644))
 
-	got := inferPiSkillName(
+	got := inferPiSkillName(t.Context(),
 		"read", `{"path":`+strconv.Quote(skillFile)+`}`, "",
 	)
 	assert.Equal(t, "canonical-deploy-docs", got)
@@ -131,7 +131,7 @@ func TestInferPiSkillNameSkillURI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := inferPiSkillName(tt.toolName, tt.inputJSON, "")
+			got := inferPiSkillName(t.Context(), tt.toolName, tt.inputJSON, "")
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -183,7 +183,7 @@ func TestInferPiSkillNameShellCommand(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := inferPiSkillName(tt.toolName, tt.inputJSON, tt.sessionCwd)
+			got := inferPiSkillName(t.Context(), tt.toolName, tt.inputJSON, tt.sessionCwd)
 			assert.Equal(t, tt.want, got)
 		})
 	}

@@ -158,7 +158,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		// sub-agent transcript has no replayed project sibling to resolve.
 		siblingOpts.siblingLineage = false
 		siblingResults, _, err := claudeParseFile(
-			sibling, project, machine, siblingOpts,
+			ctx, sibling, project, machine, siblingOpts,
 		)
 		if err != nil {
 			return nil, false, err

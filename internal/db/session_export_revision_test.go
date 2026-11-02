@@ -146,7 +146,7 @@ func TestSessionSummaryExportTranscriptRevisionSurvivesResync(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, source.CloseConnections(t.Context()))
 			rebuilt := testDB(t)
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), source.Path()))
 			insertExportSession(t, rebuilt, session)
 			want := "7"
 			if changed {
@@ -154,9 +154,9 @@ func TestSessionSummaryExportTranscriptRevisionSurvivesResync(t *testing.T) {
 				want = "8"
 			}
 			insertMessages(t, rebuilt, message)
-			_, err = rebuilt.CopyOrphanedDataFrom(source.Path())
+			_, err = rebuilt.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
-			require.NoError(t, rebuilt.CopySessionMetadataFrom(source.Path()))
+			require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), source.Path()))
 			result, err := rebuilt.ExportSessionSummaries(t.Context(), SessionExportOptions{})
 			require.NoError(t, err)
 			require.Len(t, result.Rows, 1)

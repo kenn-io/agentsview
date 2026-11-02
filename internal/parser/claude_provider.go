@@ -306,12 +306,11 @@ func (p *claudeProvider) Parse(
 		}
 	}
 	opts := claudeParseOptions{
-		ctx:                         ctx,
 		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
 		persistedOutputPathResolver: persistedOutputPathResolver,
 		aiTitleFallback:             true,
 	}
-	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
+	results, excludedIDs, err := claudeParseFile(ctx, path, project, machine, opts)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -362,14 +361,14 @@ type ClaudeUploadParser interface {
 	// the discovered-session Parse path, it is not overridden by any cwd
 	// recorded in the transcript, because an upload is filed under a
 	// user-chosen project rather than a workspace path on this machine.
-	ParseUploadedTranscript(path, project, machine string) ([]ParseResult, error)
+	ParseUploadedTranscript(ctx context.Context, path, project, machine string) ([]ParseResult, error)
 }
 
 func (p *claudeProvider) ParseUploadedTranscript(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) ([]ParseResult, error) {
 	machine = firstNonEmptyJSONLString(machine, p.Config.Machine)
-	results, _, err := claudeParseFile(path, project, machine, claudeParseOptions{
+	results, _, err := claudeParseFile(ctx, path, project, machine, claudeParseOptions{
 		uploadIdentity: true,
 	})
 	if err != nil {
@@ -413,6 +412,7 @@ func (p *claudeProvider) ParseIncremental(
 			IncrementalNeedsFullParse, nil
 	}
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
+		ctx,
 		path,
 		req.Offset,
 		claudeIncrementalScan{

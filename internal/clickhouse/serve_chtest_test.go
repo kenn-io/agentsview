@@ -24,7 +24,7 @@ func TestServeSessionsMessagesAndSearch(t *testing.T) {
 
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0"+path, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)

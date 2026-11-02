@@ -21,7 +21,7 @@ func TestNewStoreRequiresActivityPartsRead(t *testing.T) {
 	_, err := admin.ExecContext(ctx, "CREATE USER "+user+" IDENTIFIED WITH no_password")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.Background(), "DROP USER "+user)
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), "DROP USER "+user)
 		require.NoError(t, err)
 	})
 	_, err = admin.ExecContext(ctx, "GRANT SELECT ON "+database+".* TO "+user)

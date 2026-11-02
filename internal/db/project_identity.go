@@ -306,11 +306,10 @@ func validateArchiveSalt(salt string) (string, error) {
 // CopyArchiveIdentityFrom preserves the logical archive identity in a fresh
 // resync database before any session is parsed. The database ID is deliberately
 // not copied because it identifies the new physical generation.
-func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
+func (db *DB) CopyArchiveIdentityFrom(ctx context.Context, sourcePath string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring archive identity connection: %w", err)
@@ -845,15 +844,15 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 		}
 	}
 	if obs.Project != "" {
-		if err := upsertProjectIdentityObservationWithSnapshotProjectTx(
-			tx, obs, snapshotProject, result.inserted, true,
+		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+			ctx, tx, obs, snapshotProject, result.inserted, true,
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
 	}
 	if !result.inserted && result.previousProject != result.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			context.Background(), tx, s.ID,
+			ctx, tx, s.ID,
 			[]string{result.previousProject, result.currentProject},
 		); err != nil {
 			return sessionUpsertResult{}, err
@@ -866,15 +865,6 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	return result, nil
 }
 
-func upsertProjectIdentityObservationTx(
-	tx *sql.Tx,
-	obs export.ProjectIdentityObservation,
-) error {
-	return upsertProjectIdentityObservationTxContext(
-		context.Background(), tx, obs,
-	)
-}
-
 func upsertProjectIdentityObservationTxContext(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -882,19 +872,6 @@ func upsertProjectIdentityObservationTxContext(
 ) error {
 	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		ctx, tx, obs, obs.Project, false, false,
-	)
-}
-
-func upsertProjectIdentityObservationWithSnapshotProjectTx(
-	tx *sql.Tx,
-	obs export.ProjectIdentityObservation,
-	snapshotProject string,
-	sessionInserted bool,
-	allowSnapshotProjectCorrection bool,
-) error {
-	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		context.Background(), tx, obs, snapshotProject, sessionInserted,
-		allowSnapshotProjectCorrection,
 	)
 }
 

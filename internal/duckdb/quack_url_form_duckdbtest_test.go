@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -21,7 +20,7 @@ import (
 // cannot parse them; if a future Quack version starts accepting them, this
 // test flags that the validator can be revisited.
 func TestQuackClientURLFormAttachBehavior(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	port := freeTCPPort(t)
 	nativeURI := "quack:127.0.0.1:" + port
 	const token = "agentsview-duckdbtest-token-urlform"

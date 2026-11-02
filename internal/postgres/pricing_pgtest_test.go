@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +22,7 @@ func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
 		t, "agentsview_pricing_missing_table_test",
 	)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx,
 		`DROP TABLE model_pricing_bands, model_pricing`)
 	require.NoError(t, err, "drop model_pricing")

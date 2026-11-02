@@ -85,14 +85,14 @@ func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
 						return codebuffClassifyPath(root, path, allowMissing)
 					},
 				),
-				WithFileLookup(func(root, rawID string) (singleFileMatch, bool) {
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
 					return codebuffFindFile(root, rawID)
 				}),
-				WithFileFingerprint(func(src singleFileSource) (SourceFingerprint, error) {
-					return codebuffFingerprintSource(src)
+				WithFileFingerprint(func(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
+					return codebuffFingerprintSource(ctx, src)
 				}),
-				WithFileParse(func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
-					return codebuffParseFile(src, req)
+				WithFileParse(func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
+					return codebuffParseFile(ctx, src, req)
 				}),
 			)
 			return codebuffSourceSet{inner}
@@ -380,7 +380,7 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 // computed when this function runs (for the skip cache key), but the
 // engine's providerSourceFreshBeforeFingerprint check ensures this
 // function is only called for sources that may have changed.
-func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
+func codebuffFingerprintSource(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.Path, err)
@@ -412,7 +412,7 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 	// skip without reading transcript bytes.
 	h := sha256.New()
 	if err := addSiblingMetadataFingerprintPart(
-		h, "chat-messages", src.Path, info,
+		ctx, h, "chat-messages", src.Path, info,
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -420,7 +420,7 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 		companion := filepath.Join(dir, name)
 		if ci, err := os.Stat(companion); err == nil {
 			if err := addSiblingMetadataFingerprintPart(
-				h, name, companion, ci,
+				ctx, h, name, companion, ci,
 			); err != nil {
 				return SourceFingerprint{}, err
 			}
@@ -435,7 +435,7 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 // linked child session per nested subagent, all sharing the transcript's
 // source identity.
 func codebuffParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	dir := filepath.Dir(src.Path)
 
@@ -445,7 +445,7 @@ func codebuffParseFile(
 	}
 
 	sess, msgs, children, err := parseCodebuffSession(
-		dir, projectHint, req.Machine,
+		ctx, dir, projectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err

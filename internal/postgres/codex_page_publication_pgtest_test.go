@@ -69,16 +69,16 @@ func TestCodexPagePublicationDuringThreadPurge(t *testing.T) {
 						require.NoError(t, err)
 						var pg *sql.DB
 						if hosted {
-							pg, err = OpenHosted(opDSN, schema, tenant, false)
+							pg, err = OpenHosted(t.Context(), opDSN, schema, tenant, false)
 						} else {
-							pg, err = Open(opDSN, schema, true)
+							pg, err = Open(t.Context(), opDSN, schema, true)
 						}
 						require.NoError(t, err)
 						t.Cleanup(func() { require.NoError(t, pg.Close()) })
 						if op == "push" {
 							syncer.pg = pg
 						} else if hosted {
-							endpoint, err = newHostedAdapter(pg, tenant)
+							endpoint, err = newHostedAdapter(t.Context(), pg, tenant)
 							require.NoError(t, err)
 						} else {
 							endpoint = &Store{pg: pg}

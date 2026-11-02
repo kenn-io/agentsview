@@ -116,11 +116,11 @@ func TestDuckInsertBatchStatementBounds(t *testing.T) {
 			_, err = conn.ExecContext(ctx, `CREATE TABLE batch_bounds (id INTEGER PRIMARY KEY, payload VARCHAR)`)
 			require.NoError(t, err)
 			exec := &duckBatchRecordingExecutor{db: conn}
-			batch := newDuckInsertBatch(ctx, exec, "INSERT INTO batch_bounds (id, payload) VALUES ", 2)
+			batch := newDuckInsertBatch(exec, "INSERT INTO batch_bounds (id, payload) VALUES ", 2)
 			for i, value := range tc.values {
-				require.NoError(t, batch.add(i, value))
+				require.NoError(t, batch.add(ctx, i, value))
 			}
-			require.NoError(t, batch.flush())
+			require.NoError(t, batch.flush(ctx))
 
 			var statementRows, statementPayloads []int
 			for _, args := range exec.calls {

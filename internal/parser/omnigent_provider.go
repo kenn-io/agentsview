@@ -347,7 +347,7 @@ func omnigentFingerprintSource(ctx context.Context, src multiSessionSource) (Sou
 		); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
-		fingerprint.Hash, err = hashJSONLSourceFile(src.Container)
+		fingerprint.Hash, err = hashJSONLSourceFileContext(ctx, src.Container)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}

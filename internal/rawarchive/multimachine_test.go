@@ -104,7 +104,7 @@ func TestMultipleMachinesKeepDistinctSessionIdentities(t *testing.T) {
 			assert.Equal(t, messages[0].Content, repeated[0].Content)
 			// Full resync copies source identity and suppression state into a fresh DB.
 			fresh := dbtest.OpenTestDB(t)
-			require.NoError(t, fresh.CopySyncStateFrom(database.Path()))
+			require.NoError(t, fresh.CopySyncStateFrom(t.Context(), database.Path()))
 			var mappings int
 			require.NoError(t, fresh.Reader().QueryRow(ctx, "SELECT count(*) FROM raw_archive_sessions").Scan(&mappings))
 			assert.Equal(t, 2, mappings)
@@ -150,7 +150,7 @@ func TestForeignCaptureHonorsSourceDeletions(t *testing.T) {
 	assert.Equal(t, 2, report.Parsed)
 	assert.Equal(t, 2, report.Suppressed)
 	copied := dbtest.OpenTestDB(t)
-	require.NoError(t, copied.CopySyncStateFrom(database.Path()))
+	require.NoError(t, copied.CopySyncStateFrom(t.Context(), database.Path()))
 	deletions, err := copied.RawArchiveSuppressions(ctx, foreign)
 	require.NoError(t, err)
 	assert.Equal(t, []db.RawArchiveSuppression{
