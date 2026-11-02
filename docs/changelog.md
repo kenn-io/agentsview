@@ -110,6 +110,10 @@ The latest release is
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
+- Hub containers can pull workstation transcripts over SSH. The image now
+  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
+  for dedicated-key mounts and connection checks.
+
 **Bug fixes**
 
 - Hosted transcript jobs whose workers keep stopping now fail with error class
