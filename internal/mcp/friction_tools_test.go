@@ -81,6 +81,10 @@ func TestFrictionTools(t *testing.T) {
 		Source: db.FrictionIssueSourceManual, LinkedAt: time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC),
 	}
 	require.NoError(t, d.SaveFrictionIssueLink(t.Context(), link))
+	require.NoError(t, d.SaveFrictionFilingState(t.Context(), db.FrictionFilingState{
+		Fingerprint: "fl1:a", State: db.FrictionFilingNeedsPerson, Attempts: 1,
+		LastError: "kata: HTTP 422", UpdatedAt: time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC),
+	}))
 
 	patternTests := []struct {
 		name string
@@ -108,8 +112,11 @@ func TestFrictionTools(t *testing.T) {
 			for _, p := range out.Patterns {
 				if p.Fingerprint != "fl1:b" {
 					assert.Nil(t, p.Issue, p.Fingerprint)
+					require.NotNil(t, p.Filing, "an unlinked pattern says why")
+					assert.Equal(t, db.FrictionFilingNeedsPerson, p.Filing.State)
 					continue
 				}
+				assert.Nil(t, p.Filing)
 				require.NotNil(t, p.Issue, "a linked pattern carries its issue")
 				assert.Equal(t, link.QualifiedID, p.Issue.QualifiedID)
 				assert.Equal(t, link.WebURL, p.Issue.WebURL)
