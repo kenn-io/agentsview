@@ -20,7 +20,11 @@ func TestHostedRolloutIdentityEligibility(t *testing.T) {
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, device, "")
-		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome(device)))
+		p := projectionOutcome(device)
+		if device == "device-b" {
+			p.Outcome.Results[0].Result.Session.SourceSessionID = "competitor"
+		}
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, p))
 	}
 	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
@@ -28,7 +32,7 @@ func TestHostedRolloutIdentityEligibility(t *testing.T) {
 	_, err = f.runtime.Exec(`INSERT INTO sessions(id,project,machine,agent,message_count) VALUES('codex:portable','legacy','m','codex',1)`)
 	require.NoError(t, err)
 	var visible string
-	require.NoError(t, f.runtime.QueryRow(`SELECT session_id FROM raw_session_branches ORDER BY branch_id LIMIT 1`).Scan(&visible))
+	require.NoError(t, f.runtime.QueryRow(`SELECT b.session_id FROM raw_session_branches b JOIN raw_source_projections s ON s.source_id=b.source_id WHERE s.device_id='device-a'`).Scan(&visible))
 	_, err = f.runtime.Exec(`UPDATE sessions SET rollout_hidden=(id<>$1)`, visible)
 	require.NoError(t, err)
 	raw, err := f.sink.Resolve(t.Context(), "codex:portable")
@@ -126,6 +130,7 @@ func TestHostedRolloutHiddenRawTrashRemainsRecoverable(t *testing.T) {
 }
 
 func TestHostedRolloutLegacyMembershipInvalidatesCursor(t *testing.T) {
+	requireHegel(t)
 	f := newHostedFixture(t, "tenant-cursor")
 	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)

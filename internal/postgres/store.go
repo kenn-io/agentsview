@@ -621,9 +621,6 @@ func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error
 func readPGTrashedSessionExclusions(
 	ctx context.Context, tx *sql.Tx, where string, args ...any,
 ) ([]string, []string, []string, error) {
-	if err := lockRawRolloutShared(ctx, tx); err != nil {
-		return nil, nil, nil, err
-	}
 	rows, err := tx.QueryContext(ctx,
 		`SELECT s.id, sa.alias_id, rsa.session_id, rsaa.alias_id, s.trash_includes_codex_pages
 		 FROM sessions s
