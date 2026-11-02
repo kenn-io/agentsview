@@ -41,12 +41,15 @@ func TestSignalsFrustrationMemoInvalidation(t *testing.T) {
 		want   int
 	}{
 		{"append", func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "user", Content: "this is broken"}}))
 		}, 2},
 		{"replace", func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "Please explain this function."}}))
 		}, 0},
 		{"recreate", func(t *testing.T, d *DB) {
+			t.Helper()
 			deleted, err := d.DeleteParserExcludedSessions(t.Context(), []string{"session"})
 			require.NoError(t, err)
 			require.Equal(t, 1, deleted)
