@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,81 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 )
+
+func TestMessageMetadataUpdateSkipsFTS(t *testing.T) {
+	for _, reopen := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reopen=%t", reopen), func(t *testing.T) {
+			var baseline [2]int64
+			for _, control := range []bool{true, false} {
+				d := testDB(t)
+				insertSession(t, d, "metadata", "project")
+				insertMessages(t, d,
+					Message{SessionID: "metadata", Role: "assistant", Content: "searchneedle"},
+					Message{SessionID: "metadata", Ordinal: 1, Role: "user", Content: "Thanks"})
+				if reopen {
+					// Simulate an archive with a current corpus marker and the old trigger.
+					_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_au;
+CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+ INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+ VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
+ INSERT INTO messages_fts(rowid, rendered, content)
+ VALUES(new.id, new.content, COALESCE(new.dialogue_text, new.content));
+END;`)
+					require.NoError(t, err)
+					path := d.Path()
+					require.NoError(t, d.Close())
+					d, err = Open(t.Context(), path)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, d.Close()) })
+				}
+				if control {
+					// Public writes also maintain session rows. Measure that bookkeeping
+					// on an identical fixture without message-update FTS triggers.
+					_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_au; DROP TRIGGER IF EXISTS temp.messages_cjk_au;`)
+					require.NoError(t, err)
+				}
+				before := totalWriterChanges(t, d)
+				_, err := d.WriteSessionIncremental(t.Context(), "metadata", nil, IncrementalSessionUpdate{
+					MsgCount: 2, NextOrdinal: 2,
+					MessageTokenUsageUpdates: []MessageTokenUsageUpdate{{
+						Ordinal: 0, TokenUsage: jsontext.Value(`{"output_tokens":7}`),
+						OutputTokens: 7, HasOutputTokens: true,
+					}},
+				})
+				require.NoError(t, err)
+				writes := totalWriterChanges(t, d) - before
+				if control {
+					baseline[0] = writes
+				} else {
+					assert.Equal(t, baseline[0], writes, "usage receipt must add no FTS writes")
+				}
+				messages, err := d.GetAllMessages(t.Context(), "metadata")
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, 7, messages[0].OutputTokens)
+				id := messages[0].ID
+				messages[0].OutputTokens = 9
+				messages[0].TokenUsage = jsontext.Value(`{"output_tokens":9}`)
+				before = totalWriterChanges(t, d)
+				require.NoError(t, d.ReplaceSessionMessages(t.Context(), "metadata", messages))
+				writes = totalWriterChanges(t, d) - before
+				if control {
+					baseline[1] = writes
+				} else {
+					assert.Equal(t, baseline[1], writes, "metadata diff must add no FTS writes")
+				}
+				stored, err := d.GetAllMessages(t.Context(), "metadata")
+				require.NoError(t, err)
+				require.Len(t, stored, 2)
+				assert.Equal(t, id, stored[0].ID)
+				assert.Equal(t, 9, stored[0].OutputTokens)
+				page, err := d.Search(t.Context(), SearchFilter{Query: "searchneedle"})
+				require.NoError(t, err)
+				assert.Len(t, page.Results, 1)
+			}
+		})
+	}
+}
 
 func TestDialogueFTSUpgradePreservesMessages(t *testing.T) {
 	const total, needle = 21, 12
@@ -178,11 +254,27 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 			if tc.dialogue != "" {
 				terms = append(terms, tc.dialogue)
 			}
-			for _, phase := range []string{"insert", "update", "delete"} {
+			dialogue, rendered := tc.dialogue, tc.hidden
+			for _, phase := range []string{"insert", "metadata", "update", "dialogue", "delete"} {
 				switch phase {
+				case "metadata":
+					messages[1].OutputTokens = 7
+					messages[1].HasOutputTokens = true
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
+					before := totalWriterChanges(t, d)
+					_, err := d.getWriter().Exec(t.Context(), `UPDATE messages
+SET content = content, dialogue_text = dialogue_text, output_tokens = output_tokens
+WHERE session_id = 'search' AND ordinal = 1`)
+					require.NoError(t, err)
+					assert.Equal(t, int64(1), totalWriterChanges(t, d)-before, "unchanged text must skip both FTS indexes")
 				case "update":
 					messages[1].Content = tc.dialogue + " [Thinking] " + tc.replacement
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
+					rendered = tc.replacement
+				case "dialogue":
+					messages[1].DialogueText = new(tc.replacement)
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
+					dialogue = tc.replacement
 				case "delete":
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", nil))
 				}
@@ -195,9 +287,9 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 				for _, term := range terms {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: term, Mode: "fts", Sources: []string{"messages"}})
 					require.NoError(t, err, "%s %s", phase, term)
-					if phase != "delete" && tc.dialogue != "" && term == tc.dialogue {
+					if phase != "delete" && dialogue != "" && term == dialogue {
 						require.Len(t, page.Matches, 1, "%s %s", phase, term)
-						assert.Equal(t, tc.dialogue, page.Matches[0].Snippet, phase)
+						assert.Equal(t, dialogue, page.Matches[0].Snippet, phase)
 					} else {
 						assert.Empty(t, page.Matches, "%s %s", phase, term)
 					}
@@ -205,7 +297,7 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 				for _, term := range []string{"Question", tc.hidden, tc.replacement} {
 					page, err := d.Search(t.Context(), SearchFilter{Query: term})
 					require.NoError(t, err, "%s %s", phase, term)
-					if phase != "delete" && (term == "Question" || phase == "insert" && term == tc.hidden || phase == "update" && term == tc.replacement) {
+					if phase != "delete" && (term == "Question" || term == rendered) {
 						require.Len(t, page.Results, 1, "%s %s", phase, term)
 						assert.Equal(t, "search", page.Results[0].SessionID, "%s %s", phase, term)
 					} else {

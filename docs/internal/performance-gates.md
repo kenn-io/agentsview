@@ -22,6 +22,7 @@ contracts are documented in
 | Event storms                   | One SSE emit per watcher flush drove ~1/s dashboard refetch; SQLite WAL sidecar events fanned out to every session in a shared DB.                                                                                                               | #367, #956                                     |
 | Per-row query shape            | `GetDailyUsage` ran 1.2M `json_extract` calls per scan and had no date pushdown.                                                                                                                                                                 | #309                                           |
 | Usage archive scaling          | Normalized facts removed JSON parsing but warm requests still ranked and priced hundreds of thousands of rows instead of reading daily aggregates.                                                                                               | Usage aggregate cache                          |
+| Metadata update reindexing     | Token receipts and coverage repairs re-tokenized unchanged message text, holding the writer longer as message bodies grew.                                                                                                                       | Guarded message update triggers                |
 
 ## Automated invariants and local benchmarks
 
@@ -30,6 +31,9 @@ contracts are documented in
 These count work units instead of measuring time, so they are immune to CI
 runner noise and fail loudly:
 
+- `TestMessageMetadataUpdateSkipsFTS` (`internal/db/dialogue_test.go`) checks
+  that usage receipts and metadata diffs add no search-index writes, including
+  after reopening an archive with the old trigger.
 - `TestWarmFullSyncDoesNoBulkWriteWork` (`internal/sync/perf_invariant_test.go`)
   — a second full sync over an unchanged Claude archive must skip everything
   and run zero bulk-write batches (`Engine.PhaseStats`).

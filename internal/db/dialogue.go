@@ -22,7 +22,16 @@ func refreshDialogueFTS(ctx context.Context, w *writerHandle, progress OpenProgr
 		stored, parseErr := strconv.Atoi(version)
 		current, _ := strconv.Atoi(searchCorpusVersion)
 		if parseErr == nil && stored >= current {
-			return nil
+			// Upgrade trigger behavior without rebuilding an already-current index.
+			tx, err := w.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS messages_au;"+messagesAUTriggerDDL); err != nil {
+				return fmt.Errorf("refreshing message update FTS trigger: %w", err)
+			}
+			return tx.Commit()
 		}
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

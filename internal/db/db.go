@@ -717,6 +717,16 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
 END;
 `
 
+const messagesAUTriggerDDL = `
+CREATE TRIGGER IF NOT EXISTS messages_au
+AFTER UPDATE OF content, dialogue_text ON messages
+WHEN old.content IS NOT new.content OR old.dialogue_text IS NOT new.dialogue_text BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+        VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
+END;
+`
+
 const cjkFTSRuntimeMatchesSQL = `EXISTS (
     SELECT 1 FROM main.stats
     WHERE key = '` + cjkFTSFingerprintStatsKey + `'
@@ -747,13 +757,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
 END;
-` + messagesADTriggerDDL + `
-CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
-        VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
-    INSERT INTO messages_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
-END;
-`
+` + messagesADTriggerDDL + messagesAUTriggerDDL
 
 const schemaCJKFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
@@ -772,8 +776,9 @@ WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
 END;
 ` + messagesCJKADTriggerDDL + `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_au
-AFTER UPDATE ON main.messages
-WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+AFTER UPDATE OF content, dialogue_text ON main.messages
+WHEN (old.content IS NOT new.content OR old.dialogue_text IS NOT new.dialogue_text)
+ AND ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content)
         VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
     INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
