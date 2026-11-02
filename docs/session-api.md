@@ -1558,7 +1558,7 @@ links because they omit tool output. They retain trailer links.
 ### Git trailer links
 
 Commits ending in `Agent-Session: <agent>:<session-id>` trailers appear with
-`source: "trailer"`, a full SHA, Git's committer time, and a repository path.
+`source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their
 registered prefix. Unknown agents and invalid trailer values are ignored. Git
 parses the final trailer block, so inline mentions and body prose don't create
@@ -1575,7 +1575,7 @@ under every archive policy.
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other
 sources, such as tags and stash, leave it empty.
-Their `committed_at` is the Git committer time in UTC. Their `message_ordinal`
+Their `committed_at` is the Git author time in UTC. Their `message_ordinal`
 is the suggested prompt's ordinal, or `-1` when no eligible prompt exists.
 
 The suggested `turn` is the last real user prompt in transcript order with a
