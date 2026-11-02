@@ -92,7 +92,7 @@ func resolveRawIdentity(ctx context.Context, tx *sql.Tx, alias string) (RawIdent
 
 	result.GroupID = targets[0].group
 	result.AnchorBranch = targets[0].anchor
-	branches, err := loadRawBranches(ctx, tx, "group_id", result.GroupID)
+	branches, err := loadRawBranches(ctx, tx, "session_id IN (SELECT id FROM sessions WHERE NOT rollout_hidden) AND group_id", result.GroupID)
 	if err != nil {
 		return result, err
 	}
@@ -142,7 +142,7 @@ func resolveRawIdentity(ctx context.Context, tx *sql.Tx, alias string) (RawIdent
 	result.ProjectionGeneration = anchor.Generation
 	result.PublicID = base
 	var aliases int
-	if err = tx.QueryRowContext(ctx, `SELECT count(DISTINCT a.group_id) FROM raw_session_public_aliases a JOIN sessions s ON s.raw_group_id=a.group_id WHERE a.alias_id=$1`, base).Scan(&aliases); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(DISTINCT a.group_id) FROM raw_session_public_aliases a JOIN sessions s ON s.raw_group_id=a.group_id WHERE a.alias_id=$1 AND NOT s.rollout_hidden`, base).Scan(&aliases); err != nil {
 		return result, err
 	}
 	if len(cohorts) > 1 || aliases > 1 {
@@ -153,7 +153,7 @@ func resolveRawIdentity(ctx context.Context, tx *sql.Tx, alias string) (RawIdent
 }
 
 func rawGroupVariants(ctx context.Context, tx *sql.Tx, group string) ([]string, error) {
-	branches, err := loadRawBranches(ctx, tx, "group_id", group)
+	branches, err := loadRawBranches(ctx, tx, "session_id IN (SELECT id FROM sessions WHERE NOT rollout_hidden) AND group_id", group)
 	if err != nil {
 		return nil, err
 	}

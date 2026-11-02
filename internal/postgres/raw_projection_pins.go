@@ -27,6 +27,10 @@ func (s *RawProjectionStore) SetPin(ctx context.Context, alias string, ordinal i
 // cohort. A later publication may replace materialized rows, but cannot turn a
 // committed pin into a failed response using an earlier physical identity.
 func (s *RawProjectionStore) SetPinReturningID(ctx context.Context, alias string, ordinal int, pinned bool, note string) (int64, error) {
+	return retryPGCuration(ctx, func() (int64, error) { return s.setPinReturningIDOnce(ctx, alias, ordinal, pinned, note) })
+}
+
+func (s *RawProjectionStore) setPinReturningIDOnce(ctx context.Context, alias string, ordinal int, pinned bool, note string) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -74,6 +78,11 @@ func (s *RawProjectionStore) SetPinReturningID(ctx context.Context, alias string
 // RemovePin removes a durable message identity even when no current ordinal
 // resolves it. Group and current-cohort overrides follow the same rules as SetPin.
 func (s *RawProjectionStore) RemovePin(ctx context.Context, alias, messageKey string) error {
+	_, err := retryPGCuration(ctx, func() (struct{}, error) { return struct{}{}, s.removePinOnce(ctx, alias, messageKey) })
+	return err
+}
+
+func (s *RawProjectionStore) removePinOnce(ctx context.Context, alias, messageKey string) error {
 	if messageKey == "" {
 		return errors.New("raw pin message key is required")
 	}
