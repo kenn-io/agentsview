@@ -452,6 +452,9 @@ func (c *Capturer) verifyCapturedFile(
 	if err != nil {
 		return fmt.Errorf("rawcapture: validate %q: %w", planned.Path, sanitizeFilesystemError(err))
 	}
+	if c.capturePhase != nil {
+		c.capturePhase(capturePhaseAfterRead, planned.LocalPath)
+	}
 	afterHandle, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("rawcapture: restat %q after final validation: filesystem error", planned.Path)

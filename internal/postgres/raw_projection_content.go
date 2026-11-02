@@ -42,18 +42,23 @@ func rawSourceID(m rawsync.CanonicalManifest) string {
 
 func rawGroupID(m rawsync.CanonicalManifest, s db.Session) (string, string) {
 	key := s.SourceSessionID
-	// Piebald chat and fork IDs are SQLite row IDs, local to one source.
-	if key == "" || s.Agent == string(parser.AgentPiebald) {
+	// Native Piebald and Hermes IDs are local to one database/home.
+	// Hermes transcript fallback must keep the same identity as its DB member.
+	if key == "" || rawSessionIdentityIsSourceLocal(s.Agent) {
 		key = rawDigest("source-local-v1", rawSourceID(m), s.ID)
 	}
 	return rawDigest("group-v1", m.Identity.TenantID, s.Agent, key), key
 }
 
 func rawBaseAlias(m rawsync.CanonicalManifest, s db.Session) string {
-	if s.Agent == string(parser.AgentPiebald) {
+	if rawSessionIdentityIsSourceLocal(s.Agent) {
 		return s.ID + "~source-" + rawSourceID(m)
 	}
 	return s.ID
+}
+
+func rawSessionIdentityIsSourceLocal(agent string) bool {
+	return agent == string(parser.AgentPiebald) || agent == string(parser.AgentHermes)
 }
 
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {

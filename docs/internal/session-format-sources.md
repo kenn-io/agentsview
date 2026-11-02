@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-04
 ---
 
 # Session Format Source Inventory
@@ -3896,6 +3896,20 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
+- **Raw capture check (2026-11-02):** Reverified
+  [hermes_state.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state.py)
+  and
+  [hermes_state_dbfile.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_dbfile.py),
+  and
+  [hermes_state_wal.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_wal.py).
+  The database lives at `get_hermes_home()/state.db`; a replaced database can
+  fall back to appending `HERMES_HOME/sessions/<id>.jsonl`. WAL/SHM belong to the
+  live database generation. AgentsView captures a standalone online backup with
+  committed WAL content and the JSONL/legacy JSON companions its parser reads.
+  Each configured home/profile keeps its own source identity, including homes
+  temporarily lacking a database. Hosted snapshots preserve omitted archived
+  members. See [Hermes raw capture](../hosted-raw-sync.md#hermes-homes-and-profiles)
+  for root availability, retention and timezone limits.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.

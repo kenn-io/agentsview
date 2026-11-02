@@ -496,22 +496,39 @@ func newStablePathMap(
 		prefix:  "raw-manifest:" + manifest.ManifestID + ":",
 	}
 	sourceEntry := manifestPrimaryEntry(manifest)
+	clientRoot, separator := clientSourceRoot(manifest.Manifest.SourceKey, sourceEntry)
 	for _, entry := range manifest.Manifest.Entries {
 		local, err := materialized.EntryPath(entry.Path)
 		if err != nil {
 			continue
 		}
 		stable := paths.prefix + entry.Path
-		if entry.Path == sourceEntry {
+		if manifest.Manifest.Provider == parser.AgentHermes && clientRoot != "" {
+			// Cron grouping belongs to the client home, never a generation's
+			// temporary materialization path or manifest ID.
+			stable = clientRoot + separator + strings.ReplaceAll(entry.Path, "/", separator)
+		} else if entry.Path == sourceEntry {
 			stable = manifest.Manifest.SourceKey
 		}
 		paths.bind(local, stable)
+		if manifest.Manifest.Provider == parser.AgentHermes {
+			// Hermes canonicalizes its physical homes during discovery.
+			// Bind that spelling too when the temp directory has an alias.
+			if canonical, err := filepath.EvalSymlinks(local); err == nil {
+				paths.bind(canonical, stable)
+			}
+		}
 	}
 	paths.bindClientAliases(manifest, sourceEntry, materialized)
 	return paths
 }
 
 func manifestPrimaryEntry(manifest rawsync.CanonicalManifest) string {
+	// File-only Hermes archives keep their absent database as a virtual
+	// primary anchor so DB appearance/removal cannot change source identity.
+	if manifest.Manifest.Provider == parser.AgentHermes && sourceKeyEndsWithEntry(manifest.Manifest.SourceKey, "state.db") {
+		return "state.db"
+	}
 	primary := ""
 	for _, entry := range manifest.Manifest.Entries {
 		if sourceKeyEndsWithEntry(manifest.Manifest.SourceKey, entry.Path) &&

@@ -79,14 +79,19 @@ func (f hermesProviderFactory) Definition() AgentDef {
 }
 
 func (f hermesProviderFactory) Capabilities() Capabilities {
-	return hermesProviderCapabilities()
+	return withHermesRawCapture(f.spec.agent, hermesProviderCapabilities())
 }
 
 func (f hermesProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	caps := withHermesRawCapture(f.spec.agent, hermesProviderCapabilities())
+	if f.spec.agent == AgentHermes && cfg.StableSourceSnapshots {
+		// Hosted snapshots refresh content; omission cannot erase the archive.
+		caps.Source.ExplicitDeletionOnly = CapabilitySupported
+	}
 	return &hermesProvider{
 		Def:     cloneAgentDef(f.def),
-		Caps:    hermesProviderCapabilities(),
+		Caps:    caps,
 		Config:  cfg,
 		spec:    f.spec,
 		sources: newHermesSourceSet(f.spec.agent, cfg.Roots),
@@ -259,13 +264,19 @@ func (p *hermesProvider) Parse(
 		} else if absolute, err := filepath.Abs(sourcePath); err == nil {
 			sourcePath = absolute
 		}
-		sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
-		home := filepath.Dir(sourcePath)
-		if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
-			home = filepath.Dir(home)
+		var home string
+		if p.Config.StableSourceSnapshots && p.Config.PathRewriter != nil {
+			home = hermesRawClientHome(sourcePath)
+		} else {
+			sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
+			home = filepath.Dir(sourcePath)
+			if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
+				home = filepath.Dir(home)
+			}
+			home = filepath.Clean(home)
 		}
 		// Legacy job IDs can repeat across homes on the same machine.
-		hash := sha256.Sum256([]byte(filepath.Clean(home)))
+		hash := sha256.Sum256([]byte(home))
 		for i := range outcome.Results {
 			sess := &outcome.Results[i].Result.Session
 			if sess.GroupKey != "" {

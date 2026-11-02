@@ -176,16 +176,27 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		}
 		finishPublication()
 	}()
-	snapshot := false
+	snapshotPath := ""
+	verifyOriginal := func() error { return nil }
 	var snapshotSourceModTimeNS int64
 	observationRecorded := false
 	var removeSnapshot func() error
 	switch {
 	case capabilities.Shape == parser.RawCaptureShapeFiles &&
 		capabilities.Snapshot == parser.RawCaptureSnapshotNone:
-	case capabilities.Shape == parser.RawCaptureShapeSQLite &&
+	case capabilities.Shape == parser.RawCaptureShapeSQLiteArchive && plan.SnapshotPath == "":
+	case (capabilities.Shape == parser.RawCaptureShapeSQLite || capabilities.Shape == parser.RawCaptureShapeSQLiteArchive) &&
 		capabilities.Snapshot == parser.RawCaptureSnapshotOnlineBackup:
-		sourcePath := plan.Entries[0].LocalPath
+		snapshotPath = plan.SnapshotPath
+		if snapshotPath == "" {
+			snapshotPath = plan.Entries[0].Path
+		}
+		var sourcePath string
+		for _, entry := range plan.Entries {
+			if entry.Path == snapshotPath {
+				sourcePath = entry.LocalPath
+			}
+		}
 		if c.capturePhase != nil {
 			c.capturePhase(capturePhaseBeforeRead, sourcePath)
 		}
@@ -199,17 +210,23 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 				result = Result{}
 			}
 		}()
-		sourceObserved, _, observeErr := c.observePlan(sourceScope)
+		sourceObserved, originalBytes, observeErr := c.observePlan(sourceScope)
 		if observeErr != nil {
 			return Result{}, observeErr
 		}
 		defer closeObservedEntries(sourceObserved)
-		if len(sourceObserved) != 1 {
+		var databaseEntry observedCaptureEntry
+		for _, entry := range sourceObserved {
+			if entry.planned.Path == snapshotPath {
+				databaseEntry = entry
+			}
+		}
+		if databaseEntry.info == nil {
 			return Result{}, ErrSourceChanged
 		}
-		snapshotSourceModTimeNS = sourceObserved[0].info.ModTime().UnixNano()
+		snapshotSourceModTimeNS = databaseEntry.info.ModTime().UnixNano()
 		sqliteSource, openErr := openSQLiteSnapshotSource(
-			ctx, sourcePath, sourceObserved[0].info,
+			ctx, sourcePath, databaseEntry.info,
 		)
 		if openErr != nil {
 			return Result{}, openErr
@@ -228,7 +245,8 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 			return Result{}, err
 		}
 		observationRecorded = true
-		reservationBytes := sqliteSnapshotReservationBytes(snapshotBytes)
+		companionBytes := originalBytes - databaseEntry.info.Size()
+		reservationBytes := sqliteArchiveReservationBytes(snapshotBytes, companionBytes, len(sourceObserved))
 		reservation, err = c.store.ReserveSourceCapture(ctx, identity, reservationBytes)
 		if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
 			return Result{Status: StatusDegraded, Source: identity}, nil
@@ -258,7 +276,24 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		if err := sqliteSource.verifyCurrent(); err != nil {
 			return Result{}, err
 		}
-		snapshot = true
+		verifyOriginal = func() error {
+			if err := validateCapturePlanStillCurrent(ctx, provider, source, originalPlan, sourceScope); err != nil {
+				return err
+			}
+			if err := sqliteSource.verifyCurrent(); err != nil {
+				return err
+			}
+			for _, entry := range sourceObserved {
+				if entry.planned.Path == snapshotPath {
+					continue
+				}
+				current, err := entry.root.Lstat(entry.relative)
+				if err != nil || !os.SameFile(entry.info, current) || !stableFileInfo(entry.info, current) {
+					return ErrSourceChanged
+				}
+			}
+			return nil
+		}
 	default:
 		return Result{}, ErrUnsupportedSnapshot
 	}
@@ -286,9 +321,9 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 	if err != nil {
 		return Result{}, err
 	}
-	if snapshot {
-		for i := range observed {
-			observed[i].checkpointIdentity = "sqlite-online-backup:" + observed[i].planned.Path
+	for i := range observed {
+		if observed[i].planned.Path == snapshotPath {
+			observed[i].checkpointIdentity = "sqlite-online-backup:" + snapshotPath
 		}
 	}
 	provisional := c.provisionalAssessment(observed, sourceBytes, base, hasBase)
@@ -310,7 +345,7 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		return Result{}, err
 	}
 	if assessment.unchanged && !base.PermanentlyRejected {
-		if !snapshot {
+		if snapshotPath == "" {
 			if err := validateCapturePlanStillCurrent(ctx, provider, source, originalPlan, scope); err != nil {
 				return Result{}, err
 			}
@@ -324,6 +359,14 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 			}); err != nil {
 				return Result{}, err
 			}
+		}
+		if capabilities.Shape == parser.RawCaptureShapeSQLiteArchive && snapshotPath == "" {
+			if err := validateCapturePlanStillCurrent(ctx, provider, source, originalPlan, scope); err != nil {
+				return Result{}, err
+			}
+		}
+		if err := verifyOriginal(); err != nil {
+			return Result{}, err
 		}
 		var publishErr error
 		if runID == "" {
@@ -403,7 +446,7 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		capturedIdentity := entry.FileIdentity
 		capturedModTimeNS := entry.ModTimeNS
 		entry.FileIdentity = observed[i].checkpointIdentity
-		if snapshot {
+		if planned.Path == snapshotPath {
 			entry.ModTimeNS = snapshotSourceModTimeNS
 		}
 		entries = append(entries, entry)
@@ -419,10 +462,13 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 			return Result{}, err
 		}
 	}
-	if !snapshot {
+	if snapshotPath == "" {
 		if err := validateCapturePlanStillCurrent(ctx, provider, source, originalPlan, scope); err != nil {
 			return Result{}, err
 		}
+	}
+	if err := verifyOriginal(); err != nil {
+		return Result{}, err
 	}
 	if err := c.validateForUpload(identity, captureID, capturedAt, entries); err != nil {
 		return Result{}, err
@@ -753,7 +799,7 @@ func cloneCapturedEntry(entry rawcheckpoint.CapturedEntry) rawcheckpoint.Capture
 
 func sameCapturePlan(a, b parser.RawCapturePlan) bool {
 	if a.ConfiguredRoot != b.ConfiguredRoot || a.CaptureRoot != b.CaptureRoot ||
-		a.SourceKey != b.SourceKey || len(a.Entries) != len(b.Entries) ||
+		a.SourceKey != b.SourceKey || a.SnapshotPath != b.SnapshotPath || len(a.Entries) != len(b.Entries) ||
 		!slices.Equal(a.SidecarRoots, b.SidecarRoots) {
 		return false
 	}
