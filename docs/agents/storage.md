@@ -725,6 +725,10 @@ after column migrations, and startup `PRAGMA optimize` gathers its statistics.
 Bulk imports retain the index, and widening it needs no parser resync. Read-only
 opens use whichever form the archive has until a writable open widens it.
 
+SQLite's recursive sidebar steps put the tree first with `CROSS JOIN` so each
+queued row seeks its children. When few sessions have parents, startup
+statistics otherwise move a sessions scan outside that per-node lookup.
+
 PostgreSQL keeps `idx_sessions_parent` on `parent_session_id` alone. The wider
 SQLite index exists because, without it, SQLite builds a temporary
 `is_automated` index on every recursive step of the child lookup. PostgreSQL

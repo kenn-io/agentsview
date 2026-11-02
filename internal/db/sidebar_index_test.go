@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,11 +32,45 @@ func sidebarChildLookupPlan(t *testing.T, d *DB) string {
 	return queryPlanOf(t, d, query, args...)
 }
 
+func TestSidebarTreeSeeksChildrenAfterOptimize(t *testing.T) {
+	d := testDB(t)
+	for i := range 20 {
+		insertSession(t, d, fmt.Sprintf("root-%02d", i), "project")
+	}
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	filter := SessionFilter{Project: "project", ExcludeAutomated: true, IncludeOrphans: true, Limit: 20}
+	predicates := buildSidebarPredicates(filter)
+	for _, tt := range []struct {
+		name string
+		plan func() string
+	}{
+		{"root page", func() string { return sidebarChildLookupPlan(t, d) }},
+		{"starred count", func() string {
+			return queryPlanOf(t, d, sidebarStarredRootCountQuery(predicates), predicates.rootArgs...)
+		}},
+		{"tree page", func() string {
+			return queryPlanOf(t, d, sidebarTreePageQuery(predicates, []string{"SELECT ? AS id, ? AS ord"}), "root-00", 0)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := tt.plan()
+			_, step, ok := strings.Cut(plan, "RECURSIVE STEP\n")
+			require.True(t, ok, "expected recursive child lookup\n%s", plan)
+			assert.True(t, strings.HasPrefix(step, "SCAN t\nSEARCH s USING INDEX idx_sessions_parent (parent_session_id=? AND is_automated=?)"),
+				"each queued tree row must seek its children\n%s", plan)
+		})
+	}
+}
+
 func TestSidebarParentAutomationIndexUpgrade(t *testing.T) {
 	d := testDB(t)
-	// A few parents with many mostly automated children reproduce the
-	// reported plan: the parent-only index loses to a transient
-	// is_automated index rebuilt on every recursive step.
+	// A few parents with many mostly automated children exercise both
+	// the parent-only lookup and the upgraded automation filter.
 	for i := range 40 {
 		parent := fmt.Sprintf("root-%02d", i)
 		insertSession(t, d, parent, "project")
@@ -58,8 +93,9 @@ func TestSidebarParentAutomationIndexUpgrade(t *testing.T) {
 		WHERE parent_session_id IS NOT NULL;
 		ANALYZE`)
 	require.NoError(t, err)
-	require.Contains(t, sidebarChildLookupPlan(t, d), "SEARCH s USING AUTOMATIC",
-		"fixture must reproduce the transient-index plan before the upgrade")
+	require.Contains(t, sidebarChildLookupPlan(t, d),
+		"USING INDEX idx_sessions_parent (parent_session_id=?)",
+		"the recursive child lookup must seek the parent-only index before the upgrade")
 
 	output := captureLog(t)
 	path := d.Path()
