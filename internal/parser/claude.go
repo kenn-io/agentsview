@@ -2610,35 +2610,33 @@ func subtreeUserTurnsContext(
 ) ([]int, []int, error) {
 	turns := make([]int, len(entries))
 	channel := make([]int, len(entries))
-	order := make([]int, 0, len(entries))
+	next := make([]int, len(entries))
 	stack := []int{root}
-	for len(stack) > 0 {
-		if err := contextErrEvery(ctx, len(order)); err != nil {
+	for visited := 0; len(stack) > 0; visited++ {
+		if err := contextErrEvery(ctx, visited); err != nil {
 			return nil, nil, err
 		}
 		current := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		order = append(order, current)
-		stack = append(stack, children[entries[current].uuid]...)
-	}
-	// Reverse traversal order puts children before their parents even when
-	// transcript entries arrive out of parent order.
-	for i, current := range slices.Backward(order) {
-		if err := contextErrEvery(ctx, len(order)-1-i); err != nil {
-			return nil, nil, err
+		kids := children[entries[current].uuid]
+		if next[current] < len(kids) {
+			kid := kids[next[current]]
+			if next[kid] <= len(children[entries[kid].uuid]) {
+				stack = append(stack, kid)
+				continue
+			}
+			turns[current] += turns[kid]
+			channel[current] += channel[kid]
+			next[current]++
+			continue
 		}
-		// Repeated UUIDs can put the same entry in order more than once.
-		turns[current], channel[current] = 0, 0
 		if isCountedClaudeUserTurn(ctx, entries[current]) {
 			turns[current]++
 			if gjson.Get(entries[current].line, "isMeta").Bool() {
 				channel[current]++
 			}
 		}
-		for _, kid := range children[entries[current].uuid] {
-			turns[current] += turns[kid]
-			channel[current] += channel[kid]
-		}
+		next[current]++
+		stack = stack[:len(stack)-1]
 	}
 	return turns, channel, ctx.Err()
 }
