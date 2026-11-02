@@ -3531,8 +3531,10 @@ schemas keep their existing ordering behavior.
   projection fixtures confirm plan reports remain separate from token events.
   Hosted parity loads the complete `session_plan_usage` row, including row
   presence, decimal credits, nullable percentages, groups, outcomes and live
-  capture coverage. `TestRawParityLoadsPlanUsage` covers this physical read;
-  this check adds no claim about new hosted-service fields.
+  capture coverage. The `counted_under` root resolves through source-owned
+  `usage_root` evidence before comparison. `TestRawParityLoadsPlanUsage` and
+  `TestRawParityPhysicalUsageRoot` cover these physical reads; this check adds
+  no claim about new hosted-service fields.
 - **Format:** AgentsView-written mirror files,
   `{dataDir}/sources/codex-cloud/<accountKey>/<threadId>.jsonl.zstd`. Each
   file holds JSON lines in independent zstd frames with content checksums.

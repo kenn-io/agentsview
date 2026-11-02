@@ -9,7 +9,7 @@ import (
 )
 
 // Link is one raw relationship coordinate resolved from source-owned physical
-// evidence. Kind is parent, call or event. Targets retain hidden/trashed rows.
+// evidence. Kind is parent, call, event or usage_root. Targets retain hidden/trashed rows.
 // Missing means at least one recorded owner edge
 // has no admissible target, including an ambiguous cross-source fallback.
 // A prefix owner without an edge makes no claim at that coordinate.
@@ -53,6 +53,9 @@ func legacyRelationshipIDs(s Snapshot) map[string]string {
 	for _, id := range s.Session.ParentSessionIDs {
 		add(id)
 	}
+	if s.PlanUsage != nil {
+		add(s.PlanUsage.CountedUnder)
+	}
 	for _, m := range s.Messages {
 		for _, c := range m.ToolCalls {
 			add(c.SubagentSessionID)
@@ -79,6 +82,13 @@ func resolvedRelationships(s Snapshot, links []Link, matches map[string]string) 
 		s.Session.ParentSessionIDs = []string{unresolved}
 	}
 	s.Session.ParentSessionID = nil
+	if s.PlanUsage != nil {
+		p := *s.PlanUsage
+		if p.CountedUnder != "" {
+			p.CountedUnder = unresolved
+		}
+		s.PlanUsage = &p
+	}
 	for mi := range s.Messages {
 		m := &s.Messages[mi]
 		m.ToolCalls = slices.Clone(m.ToolCalls)
@@ -100,7 +110,7 @@ func resolvedRelationships(s Snapshot, links []Link, matches map[string]string) 
 	seen := map[coordinate]bool{}
 	for _, link := range links {
 		key := coordinate{kind: link.Kind}
-		if link.Kind != "parent" {
+		if link.Kind == "call" || link.Kind == "event" {
 			key.ordinal = link.Ordinal
 			key.call = link.CallIndex
 		}
@@ -111,7 +121,7 @@ func resolvedRelationships(s Snapshot, links []Link, matches map[string]string) 
 			return Snapshot{}, errors.New("duplicate parity relationship coordinate")
 		}
 		seen[key] = true
-		if link.Kind != "parent" && link.Kind != "call" && link.Kind != "event" {
+		if link.Kind != "parent" && link.Kind != "call" && link.Kind != "event" && link.Kind != "usage_root" {
 			return Snapshot{}, errors.New("unknown parity relationship kind")
 		}
 		targets := []string{}
@@ -139,13 +149,19 @@ func resolvedRelationships(s Snapshot, links []Link, matches map[string]string) 
 			}
 			target = "\x00plural:" + string(encoded)
 		}
-		if link.Kind == "call" {
+		switch link.Kind {
+		case "usage_root":
+			if s.PlanUsage == nil {
+				return Snapshot{}, errors.New("parity usage root has no owning plan usage")
+			}
+			s.PlanUsage.CountedUnder = target
+		case "call":
 			c := calls[key]
 			if c == nil {
 				return Snapshot{}, errors.New("parity relationship has no owning coordinate")
 			}
 			c.SubagentSessionID = target
-		} else {
+		default:
 			e := events[key]
 			if e == nil {
 				return Snapshot{}, errors.New("parity relationship has no owning coordinate")

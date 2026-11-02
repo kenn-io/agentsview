@@ -50,7 +50,7 @@ func LoadRawParityLinks(ctx context.Context, tx *sql.Tx, id string) ([]rawparity
      ORDER BY c.branch_id DESC LIMIT 1),false)
   ) candidates
  ) target ON authority.exact OR target.cohort_count=1
- WHERE owner.session_id=$1 AND e.kind IN ('parent','call','event')
+ WHERE owner.session_id=$1 AND e.kind IN ('parent','call','event','usage_root')
   AND NOT COALESCE((SELECT c.value::boolean FROM raw_curation c
    WHERE c.group_id=owner.group_id AND c.field='excluded' AND c.branch_id IN ('',owner.branch_id)
    ORDER BY c.branch_id DESC LIMIT 1),false)
