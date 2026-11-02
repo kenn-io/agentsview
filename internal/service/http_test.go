@@ -1174,7 +1174,7 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 			name: "PostgreSQL vector disabled",
 			body: "semantic search not available: semantic search: PostgreSQL " +
 				"requires [vector] enabled with a matching [vector.embeddings] " +
-				"config and a generation pushed by 'agentsview pg push'",
+				"config and a generation pushed by 'agentsview replica pg push'",
 		},
 	}
 	for _, tt := range tests {
@@ -1198,7 +1198,7 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 			require.Error(t, err)
 			require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 			assert.Equal(t, tt.body, err.Error())
-			assert.NotContains(t, err.Error(), "agentsview embeddings build")
+			assert.NotContains(t, err.Error(), "agentsview index embeddings build")
 		})
 	}
 }

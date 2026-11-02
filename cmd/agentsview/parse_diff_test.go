@@ -144,7 +144,7 @@ func TestParseDiff_UnknownAgentListsSupported(t *testing.T) {
 	testDataDir(t)
 
 	_, err := executeCommand(newRootCommand(),
-		"parse-diff", "--agent", "definitely-not-an-agent")
+		"archive", "diff", "--agent", "definitely-not-an-agent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
 		`unknown agent "definitely-not-an-agent"`)
@@ -181,7 +181,7 @@ func TestParseDiff_RejectsAgentsWithoutOnDiskSource(t *testing.T) {
 			testDataDir(t)
 
 			_, err := executeCommand(newRootCommand(),
-				"parse-diff", "--agent", tc.agent)
+				"archive", "diff", "--agent", tc.agent)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), fmt.Sprintf(
 				"agent %q is not supported by parse-diff", tc.agent))
@@ -193,7 +193,7 @@ func TestParseDiff_RejectsNegativeLimit(t *testing.T) {
 	testDataDir(t)
 
 	_, err := executeCommand(newRootCommand(),
-		"parse-diff", "--limit", "-1")
+		"archive", "diff", "--limit", "-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--limit must be >= 0")
 }
@@ -324,7 +324,7 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
 	isolateParseDiffEnv(t)
 
-	out, err := executeCommand(newRootCommand(), "parse-diff")
+	out, err := executeCommand(newRootCommand(), "archive", "diff")
 	require.NoError(t, err)
 	assert.Contains(t, out, "Parse diff: 0 files re-parsed (all agents)")
 	assert.Contains(t, out, "Summary")
@@ -337,7 +337,7 @@ func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
 func TestParseDiff_JSONShape(t *testing.T) {
 	isolateParseDiffEnv(t)
 
-	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
+	out, err := executeCommand(newRootCommand(), "archive", "diff", "--json")
 	require.NoError(t, err)
 
 	var got map[string]any
@@ -942,7 +942,7 @@ func TestRenderParseDiffReport_PendingResyncVerbose(t *testing.T) {
 func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
 	isolateParseDiffEnv(t)
 
-	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
+	out, err := executeCommand(newRootCommand(), "archive", "diff", "--json")
 	require.NoError(t, err)
 
 	var got map[string]jsontext.Value

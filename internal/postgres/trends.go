@@ -28,7 +28,7 @@ func (s *Store) GetTrendsTerms(
 	sessionFilter.Model = ""
 	pb := &paramBuilder{}
 	preds := []string{buildAnalyticsWhereWithDate(
-		sessionFilter, "", pb, false, "s.id",
+		sessionFilter, "", pb, false, "s.id", s.sessionDialect(),
 	)}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0

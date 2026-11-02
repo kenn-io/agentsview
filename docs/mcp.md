@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-26
+last_edited: 2026-10-31
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -300,7 +300,7 @@ does not refresh source files first. It reports the archive as stored, like
 `agentsview session usage --no-sync`. It leaves out the CLI's deprecated
 `cost_usd`, `server_running`, and `refresh_incomplete` fields.
 
-`get_activity_report` returns the same totals as `agentsview activity report`:
+`get_activity_report` returns the same totals as `agentsview report activity`:
 agent minutes, sessions, tokens, and cost, the most agents running at once, and
 breakdowns by project, model, and agent. `preset` is `day` (default), `week`,
 `month`, or `custom` with RFC3339 `from` and `to`. `date` picks the day, week,
@@ -373,7 +373,7 @@ starts a local archive or reports that the remote corpus was refreshed.
 Contributor wake delivery is currently available on macOS and Linux.
 
 Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip this automatic lifecycle request.
-Explicit `agentsview sync` commands and existing-history searches remain
+Explicit `agentsview source sync` commands and existing-history searches remain
 available. A disabled or failed lifecycle request does not change archive data;
 the package hook is responsible for reporting the failure without blocking the
 agent session.
@@ -444,7 +444,7 @@ You can also expose PostgreSQL-backed session history through a read-only
 PostgreSQL daemon and point MCP at it:
 
 ```bash
-agentsview pg serve --port 8085
+agentsview replica pg serve --port 8085
 ```
 
 ```json

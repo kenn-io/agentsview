@@ -47,10 +47,10 @@ const pgUsageEventSourceEligibility = `
 const pgUsageSessionEligibility = `s.deleted_at IS NULL`
 
 func appendPGUsageBranchFilterClauses(
-	where string, pb *paramBuilder, f db.UsageFilter, modelCol string,
+	where string, pb *paramBuilder, f db.UsageFilter, modelCol string, dialect db.QueryDialect,
 ) string {
 	where = appendPGUsageSourceFilterClauses(where, pb, f, modelCol)
-	return appendPGUsageSessionFilterClauses(where, pb, f)
+	return appendPGUsageSessionFilterClauses(where, pb, f, dialect)
 }
 
 func appendPGUsageSourceFilterClauses(
@@ -65,9 +65,9 @@ func appendPGUsageSourceFilterClauses(
 }
 
 func appendPGUsageSessionFilterClauses(
-	where string, pb *paramBuilder, f db.UsageFilter,
+	where string, pb *paramBuilder, f db.UsageFilter, dialect db.QueryDialect,
 ) string {
-	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	b := db.NewQueryBuilder(dialect, pb.n)
 	preds := db.BuildUsageSessionFilter(f, b, "")
 	where = db.AppendUsagePredicates(where, preds, "\t")
 	pb.args = append(pb.args, b.Args()...)
@@ -606,18 +606,21 @@ func appendPGUsageColumnBounds(
 }
 
 func pgDailyUsageRowsSQLForBounds(
-	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
+	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds, dialect db.QueryDialect,
 ) string {
 	if !b.bounded() {
 		messageWhere := appendPGUsageBranchFilterClauses(
-			pgUsageMessageEligibility, pb, f, "m.model")
+			pgUsageMessageEligibility, pb, f, "m.model", dialect,
+		)
 		eventWhere := appendPGUsageBranchFilterClauses(
-			pgUsageEventEligibility, pb, f, "ue.model")
+			pgUsageEventEligibility, pb, f, "ue.model", dialect,
+		)
 		return pgDailyUsageRowsSQLWithWhere(messageWhere, eventWhere)
 	}
 
 	return pgBoundedDailyUsageRowsSQL(
-		pb, f, b, pgUsageMessageSourceEligibility, pgUsageMessageEligibility)
+		pb, f, b, pgUsageMessageSourceEligibility, pgUsageMessageEligibility, dialect,
+	)
 }
 
 // pgBoundedDailyUsageRowsSQL builds the bounded-branch CTE row source
@@ -626,7 +629,7 @@ func pgDailyUsageRowsSQLForBounds(
 // callers differ only in the message eligibility predicates.
 func pgBoundedDailyUsageRowsSQL(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
-	messageSourceEligibility, messageEligibility string,
+	messageSourceEligibility, messageEligibility string, dialect db.QueryDialect,
 ) string {
 	messageTimestampSourceWhere := messageSourceEligibility +
 		"\n\tAND m.timestamp IS NOT NULL"
@@ -643,20 +646,24 @@ func pgBoundedDailyUsageRowsSQL(
 		eventTimestampSourceWhere, "ue.occurred_at", b)
 
 	messageTimestampJoinWhere := appendPGUsageSessionFilterClauses(
-		pgUsageSessionEligibility, pb, f)
+		pgUsageSessionEligibility, pb, f, dialect,
+	)
 	eventTimestampJoinWhere := appendPGUsageSessionFilterClauses(
-		pgUsageSessionEligibility, pb, f)
+		pgUsageSessionEligibility, pb, f, dialect,
+	)
 
 	messageFallbackWhere := messageEligibility +
 		"\n\tAND m.timestamp IS NULL"
 	messageFallbackWhere = appendPGUsageBranchFilterClauses(
-		messageFallbackWhere, pb, f, "m.model")
+		messageFallbackWhere, pb, f, "m.model", dialect,
+	)
 	messageFallbackWhere = appendPGUsageColumnBounds(
 		messageFallbackWhere, "s.started_at", b)
 	eventFallbackWhere := pgUsageEventEligibility +
 		"\n\tAND ue.occurred_at IS NULL"
 	eventFallbackWhere = appendPGUsageBranchFilterClauses(
-		eventFallbackWhere, pb, f, "ue.model")
+		eventFallbackWhere, pb, f, "ue.model", dialect,
+	)
 	eventFallbackWhere = appendPGUsageColumnBounds(
 		eventFallbackWhere, "s.started_at", b)
 
@@ -676,17 +683,18 @@ func pgBoundedDailyUsageRowsSQL(
 // and model-presence requirements and keeps the same per-row
 // Model/ExcludeModel filtering as the normal bounded path.
 func pgMatchingUsageRowsSQLForBounds(
-	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
+	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds, dialect db.QueryDialect,
 ) string {
 	return pgBoundedDailyUsageRowsSQL(
 		pb, f, b,
-		pgUsageMatchingMessageSourceEligibility, pgUsageMatchingMessageEligibility)
+		pgUsageMatchingMessageSourceEligibility, pgUsageMatchingMessageEligibility, dialect,
+	)
 }
 
-func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
+func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter, dialect db.QueryDialect) string {
 	bounds := pgUsageBoundsForFilter(pb, f)
 	return pgDailyUsageRowSelectFromRows(pgDailyUsageRowsSQLForBounds(
-		pb, f, bounds,
+		pb, f, bounds, dialect,
 	))
 }
 
@@ -751,26 +759,28 @@ func pgCursorUsageRowsSQLForBounds(
 	return fmt.Sprintf(pgDailyCursorUsageRowsSQLTemplate, where), true
 }
 
-func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable bool) string {
+func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable bool, dialect db.QueryDialect) string {
 	bounds := pgUsageBoundsForFilter(pb, f)
 	rowsSQL := pgDailyUsageRowsSQLForBounds(
-		pb, pgUsageSnapshotInputFilter(f), bounds)
+		pb, pgUsageSnapshotInputFilter(f), bounds, dialect,
+	)
 	if hasCursorTable {
 		cursorRowsSQL, ok := pgCursorUsageRowsSQLForBounds(pb, f, bounds)
 		if ok {
 			rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
 		}
 	}
-	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f)
+	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
 	return pgDailyUsageRowSelectFromSnapshotRowsWithMachine(
 		rowsSQL, f.Breakdowns)
 }
 
-func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter, includeSessionGroups bool) string {
+func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter, includeSessionGroups bool, dialect db.QueryDialect) string {
 	bounds := pgUsageBoundsForFilter(pb, f)
 	rowsSQL := pgDailyUsageRowsSQLForBounds(
-		pb, pgUsageSnapshotInputFilter(f), bounds)
-	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f)
+		pb, pgUsageSnapshotInputFilter(f), bounds, dialect,
+	)
+	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
 	return pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, false, "u.snapshot_attribution_session_id", true, includeSessionGroups)
 }
 
@@ -796,7 +806,7 @@ func pgExactUsageUTCWindow(f db.UsageFilter) (from, to time.Time) {
 // maximum billed web-search count for each Claude request before rows cross
 // into Go. Rows without complete Claude request identity bypass the window.
 func pgSnapshotRankedDailyUsageRowsSQL(
-	pb *paramBuilder, rowsSQL string, f db.UsageFilter,
+	pb *paramBuilder, rowsSQL string, f db.UsageFilter, dialect db.QueryDialect,
 ) string {
 	from, to := pgExactUsageUTCWindow(f)
 	where := "TRUE"
@@ -808,7 +818,7 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 	}
 	filterWhere := appendPGUsageSourceFilterClauses(
 		"TRUE", pb, f, "survivor.model")
-	filterWhere = appendPGUsageSessionFilterClauses(filterWhere, pb, f)
+	filterWhere = appendPGUsageSessionFilterClauses(filterWhere, pb, f, dialect)
 	outputTokens := fmt.Sprintf(`CASE
 				WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
 					CAST(agentsview_json_integer(
@@ -1523,7 +1533,7 @@ func (s *Store) GetDailyUsage(
 	rateResolver := export.NewPricingResolver(pricing)
 
 	pb := &paramBuilder{}
-	query := pgDailyUsageRowQuery(pb, f, pgHasTable(ctx, s.pg, "cursor_usage_events"))
+	query := pgDailyUsageRowQuery(pb, f, pgHasTable(ctx, s.pg, "cursor_usage_events"), s.sessionDialect())
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -2107,7 +2117,7 @@ func (s *Store) GetTopSessionsByCost(
 	rateResolver := export.NewPricingResolver(pricing)
 
 	pb := &paramBuilder{}
-	query := pgTopSessionsUsageRowQuery(pb, f, f.TopSessionsByGroup)
+	query := pgTopSessionsUsageRowQuery(pb, f, f.TopSessionsByGroup, s.sessionDialect())
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -2253,7 +2263,7 @@ func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
 	pb := &paramBuilder{}
-	query := pgTopSessionsUsageRowQuery(pb, f, false)
+	query := pgTopSessionsUsageRowQuery(pb, f, false, s.sessionDialect())
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -2357,7 +2367,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 	pb := &paramBuilder{}
 
 	if f.From == "" && f.To == "" {
-		where := appendPGUsageSessionFilterClauses(pgUsageSessionEligibility, pb, f)
+		where := appendPGUsageSessionFilterClauses(pgUsageSessionEligibility, pb, f, s.sessionDialect())
 		where = appendPGUsageMatchingActivityClauses(where, pb, f)
 
 		var count int
@@ -2372,7 +2382,7 @@ WHERE `+where, pb.args...).Scan(&count)
 	}
 
 	bounds := pgUsageBoundsForFilter(pb, f)
-	rowsSQL := pgMatchingUsageRowsSQLForBounds(pb, f, bounds)
+	rowsSQL := pgMatchingUsageRowsSQLForBounds(pb, f, bounds, s.sessionDialect())
 
 	rows, err := s.pg.QueryContext(
 		ctx, pgDailyUsageRowSelectFromRows(rowsSQL), pb.args...)

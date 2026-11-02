@@ -731,6 +731,10 @@ SQLite index exists because, without it, SQLite builds a temporary
 never builds temporary indexes, so it filters `is_automated` while it uses the
 parent-only index.
 
+Hosted PostgreSQL sidebar pages resolve contextual raw parent links and legacy
+parent edges once per statement. Root orphan checks and recursive child joins
+use that query-local edge set without changing parent identity or visibility.
+
 ### Dashboard metadata index
 
 SQLite's summary and tool analytics can read model names and message timestamps

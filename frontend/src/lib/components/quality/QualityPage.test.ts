@@ -88,6 +88,7 @@ describe("QualityPage", () => {
       friction_build_allowed: true,
       friction_readable: true,
       session_stats_available: false,
+      kata_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",

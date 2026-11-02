@@ -342,6 +342,7 @@ export * from "./importerImportRefusal.ts";
 export * from "./importerImportRefusalReason.ts";
 export * from "./importerImportStats.ts";
 export * from "./insightsResponse.ts";
+export * from "./kataStatus.ts";
 export * from "./machinesResponse.ts";
 export * from "./machinesResponseMachineAliases.ts";
 export * from "./machinesResponseMachineLabels.ts";

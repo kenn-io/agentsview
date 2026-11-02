@@ -822,12 +822,28 @@ fixtures retain this field; missing identities remain source-local.
   Standalone parses refresh the inventory on every lookup. Directory identity,
   modification time, and metadata change time refresh changed folders when
   pages appear or move, while file identity still validates cached turn IDs.
-  Reverified on 2026-10-11 with 10 and 1,000 unrelated files and dated
-  directories, page discovery across batches, and parent edits and removal
-  within a batch. On Windows, directory metadata comes from one open handle,
-  but both timestamps can remain unchanged after entries move or appear, as
-  observed in the Windows inventory test on 2026-10-10. Each cached directory
-  therefore owns a
+  Linux can retain both directory timestamps for changes within one kernel
+  clock tick
+  ([kernel timestamp documentation](https://docs.kernel.org/filesystems/multigrain-ts.html)).
+  Reverified the pinned archival producer and inventory regressions on
+  2026-11-01: Linux reads native directory-name notifications synchronously,
+  sharing one descriptor across the factory's cached roots. Only notified
+  directories refresh their filenames. Overflow rebuilds the notification
+  instance; notification read failures keep forks eligible for retry. If
+  notification initialization or registration fails, readable directories are
+  enumerated on every lookup and registration is retried later. Invalidation,
+  eviction and runtime cleanup release descriptors. Stable source snapshots
+  enumerate once per parse without notifications, including inside the
+  read-only hosted parser sandbox. Data version 162 reparses Codex, TraeX and
+  Augure Code sources in place to repair already-current forks that missed a
+  parent page. The persisted archive upgrade regression keeps child bytes and
+  their saved stat digest unchanged, and verifies repaired messages, stable
+  session and source identities, and retained answer pins. Reverified on
+  2026-10-11 with 10 and 1,000 unrelated files and dated directories, page
+  discovery across batches, and parent edits and removal within a batch. On
+  Windows, directory metadata comes from one open handle, but both timestamps
+  can remain unchanged after entries move or appear, as observed in the Windows
+  inventory test on 2026-10-10. Each cached directory therefore owns a
   [name-change notification](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstchangenotificationw).
   Long drive and UNC paths use extended Windows syntax because this API can
   retain the `MAX_PATH` limit even when Go's file APIs can read the directory.
@@ -1436,12 +1452,30 @@ fixtures retain this field; missing identities remain source-local.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
 
-- **Usage and cost:** Assistant messages can persist model identity and output
-  tokens. Shutdown metrics can persist input, output, cache-read, cache-write,
-  and reasoning totals. When both shutdown and store usage are absent,
-  Agentsview records only known per-message output tokens; it does not infer
-  input, cache, reasoning, or credit totals. Known-model tokens use catalog
-  estimates; the existing shutdown reported-cost treatment is unchanged.
+- **Usage and cost:** Per-call store rows take precedence over
+  `session.usage_record` receipts and replace all shutdown token rollups.
+  Shutdown token rows before the first usable receipt are summed, just as in
+  sessions without receipts. Shutdowns written after that receipt are cumulative
+  snapshots of what receipts already record, so their token rows are dropped.
+  See the published schema evidence below. Receipts preserve each
+  request's timestamp, input, output, cache-read, cache-write, and reasoning
+  tokens. Without per-call usage, shutdown metrics supply totals, then known
+  per-message output is the fallback. Known-model tokens use catalog estimates.
+  A usable receipt after the latest reported-cost shutdown clears that stale
+  cost only when receipts supply the per-call usage.
+
+- **Receipt schema:** Reverified 2026-10-31 against the published
+  [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
+  (SHA1 `43322d0817b8564afcfe00f3929c00b033bca116`). The embedded schema
+  describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated" and
+  `accountingSnapshot` as "captured atomically with receipt watermarks". It defines
+  `session.usage_checkpoint` for "reconstructing aggregate accounting on resume".
+  It defines `session.usage_record` with `data.usage.model` and token fields
+  under `data.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`,
+  `cacheWriteTokens`, and `reasoningTokens`. Fresh input subtracts cache reads
+  and writes. Receipts use request pricing and their event timestamp without a
+  message ordinal. Data version 163 reparses available Copilot CLI sources in
+  place without changing session or source identities.
 
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
@@ -3115,18 +3149,18 @@ schemas keep their existing ordering behavior.
 
 - **Format:** Released session generations `0` through `4` are stored as JSONL
   under `<sessions-root>/<project>/<encoded-session-id>/`. Generation zero
-  uses the suffix-only `session.jsonl` (or the default checksummed multi-frame
-  zstd encoding at `session.jsonl.zstd`); generation `N > 0` carries a
-  lowercase numeric component at `session.vN.jsonl[.zstd]`. One session
-  directory can retain several immutable generations; the numerically newest
-  canonical generation is current. The immutable header records session
-  identity, cwd, creation time, seed lineage, delegation origin, and agent
-  preset. Event rows carry a contiguous `seq`. Generations 0 and 1 may encode
-  runs of assistant deltas with the `text-chunks`, `reasoning-chunks`, and
-  `tool-call-chunks` packed storage rows, and their `sourceEventSeqs` uses
-  non-negative safe integers and inclusive `[start, end]` ranges, mixed entry
-  by entry: `[[138, 144]]` represents seven sequences. This provenance
-  compression was introduced in upstream commit
+  uses the suffix-only `session.jsonl` (or the default multi-frame zstd
+  encoding at `session.jsonl.zstd`); generation `N > 0` carries a lowercase
+  numeric component at `session.vN.jsonl[.zstd]`. One session directory can
+  retain several immutable generations; the numerically newest canonical
+  generation is current. The immutable header records session identity, cwd,
+  creation time, seed lineage, delegation origin, and agent preset. Event rows
+  carry a contiguous `seq`. Generations 0 and 1 may encode runs of assistant
+  deltas with the `text-chunks`, `reasoning-chunks`, and `tool-call-chunks`
+  packed storage rows, and their `sourceEventSeqs` uses non-negative safe
+  integers and inclusive `[start, end]` ranges, mixed entry by entry:
+  `[[138, 144]]` represents seven sequences. This provenance compression was
+  introduced in upstream commit
   [df76bc6](https://github.com/deepseek-ai/deepseek-harness/commit/df76bc695b4bdff093369ab22a506cd37ca087c1).
   Generation 2 embeds the timed assistant stream in `assistant/message` and
   records settled non-surface attempts as `assistant/attempt`; generation 3
@@ -3208,6 +3242,15 @@ schemas keep their existing ordering behavior.
     They carry job identity, the creating tool call, timing, and the terminal
     status, but no model-visible output, so they are metadata. The tool output
     remains in the paired `tool/result`.
+
+    Physical framing was reverified 2026-11-02 at commit
+    `ce7073d51254c26cd63b22a60835b8f948deb447`. The
+    [frame writer](https://github.com/deepseek-ai/deepseek-harness/blob/ce7073d51254c26cd63b22a60835b8f948deb447/packages/session/session-persistence-jsonl/src/zstd.ts#L18-L20)
+    requests a content checksum, but the
+    [frame scanner](https://github.com/deepseek-ai/deepseek-harness/blob/ce7073d51254c26cd63b22a60835b8f948deb447/packages/session/session-persistence-jsonl/src/zstd.ts#L69-L98)
+    reads the checksum flag frame by frame and accepts frames without one.
+    Users report v4 logs whose frames carry no checksum, so Agentsview also
+    treats the checksum as optional per frame.
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
@@ -4096,6 +4139,26 @@ schemas keep their existing ordering behavior.
   newer sidecar timestamps extend the session end time. Data version 95 reparses
   existing archives so message and usage-event rows persist the row-level
   provider identity that drives the billing adjustment.
+- **Reasoning effort:** Assistant messages in `lm-messages.jsonl` store the
+  thinking effort the request used as
+  `message.providerOptions.providerMetadata.positai.thinkingEffort`. The field
+  is a plain string; the writer's current vocabulary is `off`, `minimal`,
+  `low`, `medium`, `high`, `xhigh`, and `max`, and model-specific levels such
+  as `adaptive` are also honored. Agentsview keeps whatever string was written
+  in `reasoning_effort`, including `off`. The value is resolved against the
+  selected model's supported levels before the request, so it reflects the
+  effective level, and it can change between messages. Only assistant messages
+  carry it; the field is omitted for models without thinking support and for
+  logs written before it existed, which leave `reasoning_effort` empty. There
+  is no fallback: `conversation.json` root `metadata.model.thinkingEffort`
+  holds only the latest preference for the whole conversation and has existed
+  only since the same change, so it would misdate mid-session changes. The
+  field was added to the Posit Assistant message metadata type in the
+  `posit-dev/databot` change "Make model preferences persistent
+  per-conversation and restructure settings" (#1081, commit `495f493cf`,
+  2026-04-21), first shipped in the Positron release `v0.3.3` (2026-04-24).
+  This is from a private repository, so the evidence level is unchanged. Data
+  version 161 reparses Posit Assistant archives to pick this up.
 
 ## Z Code (`zcode`)
 
@@ -4302,17 +4365,17 @@ schemas keep their existing ordering behavior.
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.
 - **Prompt envelope (checked 2026-11-01):** The brain transcript reported in
-  [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps CLI
-  prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>` and
-  `<USER_SETTINGS_CHANGE>` blocks. CLI-owned cleanup recognizes a complete
+  [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps
+  CLI prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>`
+  and `<USER_SETTINGS_CHANGE>` blocks. CLI-owned cleanup recognizes a complete
   leading request with an `<ADDITIONAL_METADATA>` tail and optional complete
-  `<USER_SETTINGS_CHANGE>`. It removes these blocks from producer user messages
-  and derived titles before history matching. Fixtures cover selected brain,
-  SQLite, and sidecar messages; sidecar fixtures establish consumer behavior,
-  rather than an observed producer emission. Raw history, system rows, literal
-  tags, incomplete envelopes, and empty requests retain their text. Evidence
-  remains `no-public-source`. Ordinary sync repairs existing CLI messages and
-  titles in place, even when source files are unchanged.
+  `<USER_SETTINGS_CHANGE>`. It removes these blocks from producer user
+  messages and derived titles before history matching. Fixtures cover selected
+  brain, SQLite, and sidecar messages; sidecar fixtures establish consumer
+  behavior, rather than an observed producer emission. Raw history, system
+  rows, literal tags, incomplete envelopes, and empty requests retain their
+  text. Evidence remains `no-public-source`. Ordinary sync repairs existing
+  CLI messages and titles in place, even when source files are unchanged.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and

@@ -54,6 +54,7 @@ func (c *Config) validateSections() error {
 		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
 		{ScopeInsights, "[insights]", c.Insights.Validate},
 		{ScopeServer, "[friction]", c.Friction.Validate},
+		{ScopeServer, "[kata]", c.Kata.Validate},
 		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
 		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
 	} {

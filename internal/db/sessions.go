@@ -334,10 +334,12 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Session struct {
 	// WebURL is a client-derived browser link, never persisted.
-	WebURL                string   `json:"web_url,omitempty"`
-	ID                    string   `json:"id"`
-	Project               string   `json:"project"`
-	Machine               string   `json:"machine"`
+	WebURL  string `json:"web_url,omitempty"`
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	Machine string `json:"machine"`
+	// SourceMachines lists contributing hosted device identities, derived on read.
+	SourceMachines        []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
 	Agent                 string   `json:"agent"`
 	AgentLabel            string   `json:"agent_label,omitempty"`
 	Entrypoint            string   `json:"entrypoint,omitempty"`
@@ -712,6 +714,7 @@ type SidebarSessionIndexRow struct {
 	Project            string   `json:"project"`
 	ProjectAssigned    bool     `json:"project_assigned,omitempty"`
 	Machine            string   `json:"machine"`
+	SourceMachines     []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
 	Agent              string   `json:"agent"`
 	AgentLabel         string   `json:"agent_label,omitempty"`
 	Entrypoint         string   `json:"entrypoint,omitempty"`

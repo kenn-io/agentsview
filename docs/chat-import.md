@@ -74,7 +74,7 @@ list refreshes automatically.
 Setup registers Google Chrome only. Chromium, Edge, and Brave aren't supported.
 Set up Chrome once:
 
-1. Run `agentsview chrome setup`.
+1. Run `agentsview source chrome setup`.
 2. If AgentsView is already running, restart it. AgentsView opens its Chrome
    connection only after setup, so a server started before setup can't reach
    Chrome.
@@ -101,7 +101,7 @@ after changing either. The server removes the socket and its directory when it
 stops.
 
 Earlier development builds put that socket in `~/av-chrome-<hash>/`. If you ran
-setup with one of them, rerun `agentsview chrome setup` and reload the
+setup with one of them, rerun `agentsview source chrome setup` and reload the
 extension; until you do, the server logs a warning at startup and Chrome stays
 disconnected. You can delete the old `~/av-chrome-<hash>/` directories.
 
@@ -146,7 +146,7 @@ button shows a spinner. Reopen the dialog to see progress, stop the run, or read
 a result or failure that arrived while it was closed. Reloading or closing the
 AgentsView page ends Sync.
 
-You can also run `agentsview import --type claude-ai --sync` while the server
+You can also run `agentsview source import --type claude-ai --sync` while the server
 and Chrome are running, with no AgentsView tab open.
 
 Sync reuses an open Claude.ai tab. When none is available, it opens a background
@@ -190,12 +190,12 @@ reports that your sign-in expired.
 
 ## Importing via the CLI
 
-Use `agentsview import` to import from the command line:
+Use `agentsview source import` to import from the command line:
 
 ```bash
-agentsview import --type claude-ai ~/Downloads/claude-export.zip
-agentsview import --type chatgpt ~/Downloads/chatgpt-export.zip
-agentsview import --type gemini-apps ~/Downloads/takeout.zip
+agentsview source import --type claude-ai ~/Downloads/claude-export.zip
+agentsview source import --type chatgpt ~/Downloads/chatgpt-export.zip
+agentsview source import --type gemini-apps ~/Downloads/takeout.zip
 ```
 
 | Flag | Description |
@@ -308,7 +308,7 @@ different set of messages than the archive. List each session to replace by
 its ID, `chatgpt:<conversation id>` or `claude-ai:<conversation uuid>`:
 
 ```bash
-agentsview import --type chatgpt --replace 'chatgpt:<conversation-id>' ~/Downloads/chatgpt-export.zip
+agentsview source import --type chatgpt --replace 'chatgpt:<conversation-id>' ~/Downloads/chatgpt-export.zip
 ```
 
 Repeat `--replace` for each session. The import API takes the same list as a

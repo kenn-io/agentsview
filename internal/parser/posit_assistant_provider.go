@@ -1121,6 +1121,9 @@ func positAssistantFillAssistant(
 	msg.HasToolUse = len(msg.ToolCalls) > 0
 	msg.Model = positai.Get("modelId").Str
 	msg.ProviderID = positai.Get("providerId").Str
+	// Posit Assistant stamps the thinking effort it requested on each
+	// assistant message. Keep the value as written, including "off".
+	msg.ReasoningEffort = positai.Get("thinkingEffort").Str
 	positAssistantFillTokenUsage(msg, positai.Get("usage"))
 }
 

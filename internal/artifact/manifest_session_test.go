@@ -35,13 +35,14 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	// manifest-level session_quality_signals field because db.Session's
 	// pointer is load-path-transient (see the manifestSession struct
 	// comment). project_assigned records database-only assignment provenance,
-	// and ParentSessionIDs describes hosted read context. The selected project
-	// and scalar ParentSessionID retain their existing wire contracts.
+	// and ParentSessionIDs and SourceMachines describe hosted read context.
+	// The selected project and scalar ParentSessionID retain their existing wire contracts.
 	reference := sess
 	reference.QualitySignals = nil
 	// Browser links belong to a client connection, not archived content.
 	reference.WebURL = ""
 	reference.ParentSessionIDs = nil
+	reference.SourceMachines = nil
 	type sessionAlias db.Session
 	artifactReference := func(s db.Session) ([]byte, error) {
 		data, err := canonicalJSON(sessionAlias(s))
@@ -69,7 +70,7 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	withoutReadMetadata, err := canonicalJSON(manifestSessionFromDB(reference))
 	require.NoError(t, err)
 	assert.Equal(t, string(got), string(withoutReadMetadata),
-		"manifest bytes must not depend on the transient quality_signals, web_url, or hosted plural parents")
+		"manifest bytes must not depend on the transient quality_signals, web_url, hosted plural parents, or source machines")
 
 	for _, parents := range [][]string{nil, {}, {"other-parent-a", "other-parent-b"}} {
 		changed := sess

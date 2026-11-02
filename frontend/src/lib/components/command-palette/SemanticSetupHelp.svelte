@@ -36,7 +36,7 @@
     // the search that failed.
     onResolved: () => void;
     // The search's own 501 message. Most carry the generic "enable [vector]
-    // ... run 'agentsview embeddings build'" remediation the panel replaces,
+    // ... run 'agentsview index embeddings build'" remediation the panel replaces,
     // but some name a specific recoverable state (stale index after an
     // embedding-config change, vectors.db schema mismatch) that the status
     // probe cannot distinguish — those are shown verbatim so their
@@ -50,7 +50,7 @@
   // more specific cause differ from it.
   const GENERIC_SEARCH_UNAVAILABLE =
     "semantic search not available: enable [vector] in config.toml and run " +
-    "'agentsview embeddings build'";
+    "'agentsview index embeddings build'";
 
   const specificSearchDetail = $derived(
     searchDetail !== null && searchDetail !== GENERIC_SEARCH_UNAVAILABLE
@@ -68,7 +68,7 @@
   const CONFIG_SNIPPET = `[vector]
 enabled = true`;
 
-  const BUILD_COMMAND = "agentsview embeddings build";
+  const BUILD_COMMAND = "agentsview index embeddings build";
   const BUILD_POLL_MS = 2000;
 
   type Phase =

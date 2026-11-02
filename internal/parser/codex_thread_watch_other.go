@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package parser
 
@@ -6,6 +6,12 @@ import "os"
 
 type codexThreadWatch struct{}
 
-func (d *codexThreadDirectory) refreshWatch(os.FileInfo) error { return nil }
+type codexThreadWatchCache struct{}
+
+func (*codexThreadWatchCache) prepare() error { return nil }
+
+func (d *codexThreadDirectory) refreshWatch(os.FileInfo, *codexThreadWatchCache) error {
+	return nil
+}
 
 func (*codexThreadWatch) close() {}

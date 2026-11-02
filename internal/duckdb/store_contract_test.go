@@ -231,7 +231,7 @@ func TestDuckDBSearchContentSemanticModesUnavailable(t *testing.T) {
 		assert.Contains(t, err.Error(),
 			"semantic search is not supported by the DuckDB backend",
 			"mode %q: backend-specific remediation", mode)
-		assert.NotContains(t, err.Error(), "agentsview embeddings build",
+		assert.NotContains(t, err.Error(), "agentsview index embeddings build",
 			"mode %q: local build guidance cannot enable DuckDB", mode)
 	}
 }

@@ -294,7 +294,7 @@ func ValidatePushTarget(cfg config.DuckDBConfig) error {
 		return errors.New("duckdb push writes the local mirror file and cannot " +
 			"push to a remote Quack endpoint; unset [duckdb].url / " +
 			"AGENTSVIEW_DUCKDB_URL for pushes and serve the mirror with " +
-			"'agentsview duckdb quack serve'")
+			"'agentsview replica duckdb quack serve'")
 	}
 	return nil
 }

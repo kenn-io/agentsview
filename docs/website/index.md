@@ -72,6 +72,10 @@ agentsview usage statusline     # $9.61 today
 agentsview capture run -- claude -p "fix the tests"
 ```
 
+On `main`, these reports use `agentsview report usage`. See the
+[command migration](/docs/commands/#command-migration) for release-compatible
+names.
+
 ## Search and score every transcript
 
 Find a conversation by project and date in the
