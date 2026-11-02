@@ -87,3 +87,27 @@ func TestRawNativeIdentityUpgradePreservesCuration(t *testing.T) {
 		})
 	}
 }
+
+func TestRawNativeIdentityUpgradeKeepsExistingNativeTrash(t *testing.T) {
+	f := newProjectionFixture(t)
+	native, _ := f.accept(t, "device-b", "native", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, native), native, projectionOutcome("hello")))
+	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "trashed", true))
+	old := projectionOutcome("hello")
+	old.Outcome.Results[0].Result.Session.SourceSessionID = ""
+	m, accepted := f.accept(t, "device-a", "old", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, old))
+	var group string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_id FROM raw_session_branches WHERE source_id=$1`, rawSourceID(m)).Scan(&group))
+	variant := "codex:portable~" + rawDigest("branch-v1", group, rawSourceID(m))
+	require.NoError(t, f.sink.SetCuration(t.Context(), variant, "trashed", false))
+	m, _ = f.accept(t, "device-a", "new", accepted.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("hello")))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, resolved.State)
+	session, err := (&Store{pg: f.runtime}).GetSessionFull(t.Context(), resolved.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.NotNil(t, session.DeletedAt)
+}

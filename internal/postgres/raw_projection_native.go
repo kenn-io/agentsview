@@ -36,7 +36,8 @@ func promoteRawMemberState(ctx context.Context, tx *sql.Tx, previous rawBranch, 
 	}
 	for _, query := range []string{
 		`INSERT INTO raw_curation(group_id,branch_id,field,value)
- SELECT $3,$4,field,value FROM (SELECT DISTINCT ON (field) field,value FROM raw_curation WHERE group_id=$1 AND branch_id IN ('',$2) ORDER BY field,branch_id DESC) old
+ SELECT $3,$4,field,CASE WHEN field IN ('trashed','excluded') AND EXISTS(SELECT 1 FROM raw_curation c WHERE c.group_id=$3 AND c.branch_id='' AND c.field=old.field AND c.value='true'::jsonb) THEN 'true'::jsonb ELSE value END
+ FROM (SELECT DISTINCT ON (field) field,value FROM raw_curation WHERE group_id=$1 AND branch_id IN ('',$2) ORDER BY field,branch_id DESC) old
  ON CONFLICT(group_id,branch_id,field) DO UPDATE SET value=EXCLUDED.value`,
 		`INSERT INTO raw_pins(group_id,branch_id,message_key,ordinal,content_revision,pinned,note,created_at)
  SELECT $3,$4,message_key,ordinal,content_revision,pinned,note,created_at FROM (SELECT DISTINCT ON (message_key) * FROM raw_pins WHERE group_id=$1 AND branch_id IN ('',$2) ORDER BY message_key,branch_id DESC) old
