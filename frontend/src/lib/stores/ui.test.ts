@@ -584,7 +584,7 @@ describe("UIStore", () => {
 
       const restored = parseBlockFilters(serializeBlockFilters(chosen));
 
-      expect([...restored].sort()).toEqual(["assistant", "code", "thinking", "user"]);
+      expect([...restored].sort()).toEqual(["assistant", "code", "hook", "thinking", "user"]);
     });
 
     it("shows every block when the stored payload is missing or unreadable", () => {

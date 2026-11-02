@@ -47,6 +47,20 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
 }
 
 /**
+ * Reports whether the message carries hook output that the parser kept
+ * as a non-dialogue system row. Only this exact shape counts: the row
+ * must be system-flagged, come from an attachment source and carry the
+ * hook_success subtype. Neither the role nor the body text implies a
+ * hook, and an unrelated source type is never promoted by sharing the
+ * subtype.
+ */
+export function isHookSuccessMessage(m: Message): boolean {
+  return (
+    m.is_system === true && m.source_type === "attachment" && m.source_subtype === "hook_success"
+  );
+}
+
+/**
  * Returns true if the message is system-injected and should be
  * hidden from the UI. Checks the backend is_system flag first,
  * then falls back to prefix detection for parsers that don't set it.
@@ -55,13 +69,15 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
  * (continuation, resume, interrupted, task_notification, stop_hook,
  * peer_message)
  * are system-flagged but rendered as dividers/cards, so they are
- * kept visible here.
+ * kept visible here. Hook output rows are system-flagged too and are
+ * rendered as their own card, so they stay visible as well.
  */
 export function isSystemMessage(m: Message): boolean {
   if (m.is_compact_boundary) return false;
   if (m.source_subtype && VISIBLE_SYSTEM_SUBTYPES.has(m.source_subtype)) {
     return false;
   }
+  if (isHookSuccessMessage(m)) return false;
   if (m.is_system) return true;
   if (m.role !== "user") return false;
   const { remainder, stripped } = stripLeadingReminderBlocks(m.content);

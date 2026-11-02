@@ -1,5 +1,6 @@
 import type { DisplayItem, MessageItem } from "./display-items.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
+import { isHookSuccessMessage } from "./messages.js";
 
 // System rows that arrive while the assistant is still working on the
 // current prompt. The Claude parser keeps them on role "user" so analytics
@@ -11,6 +12,10 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 const MID_TURN_SYSTEM_SUBTYPES = new Set(["task_notification", "stop_hook"]);
 
 function isMidTurnSystemMessage(m: Message): boolean {
+  // Hook output is tooling work in the middle of the turn, so focused mode
+  // drops it like the other mid-turn system rows. Normal mode still renders
+  // it as a card.
+  if (isHookSuccessMessage(m)) return true;
   return (
     m.is_system === true && !!m.source_subtype && MID_TURN_SYSTEM_SUBTYPES.has(m.source_subtype)
   );
