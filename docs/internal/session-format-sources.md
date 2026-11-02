@@ -635,7 +635,7 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Native identity (reverified 2026-11-01):** The pinned
+- **Native identity (reverified 2026-11-02):** The pinned
   [session metadata schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/protocol.rs#L3359-L3368)
   records the stable thread ID in `session_meta.id`. The parser keeps this
   evidence in `SourceSessionID`; a verified revert page keeps its complete
@@ -649,7 +649,11 @@ fixtures retain this field; missing identities remain source-local.
   `TestRawNativeIdentityUpgradePreservesCuration` verifies that a hosted
   reparse promotes a source-local identity while retaining names, stars, pins,
   trash, purge decisions, old variant URLs and contribution history. Conflicting
-  saved names or pin notes abort the promotion atomically.
+  saved names or pin notes abort the promotion atomically. Later captures use
+  the established native branch. Trash and purge decisions follow only the
+  promoted source member; they do not broaden to other destination branches.
+  `TestRawNativeIdentityUpgradeAcceptsLaterCapture` and
+  `TestRawNativeIdentityUpgradeKeepsOtherBranchesLive` verify these boundaries.
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)

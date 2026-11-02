@@ -111,3 +111,63 @@ func TestRawNativeIdentityUpgradeKeepsExistingNativeTrash(t *testing.T) {
 	require.NotNil(t, session)
 	assert.NotNil(t, session.DeletedAt)
 }
+
+func TestRawNativeIdentityUpgradeAcceptsLaterCapture(t *testing.T) {
+	f := newProjectionFixture(t)
+	old := projectionOutcome("before")
+	old.Outcome.Results[0].Result.Session.SourceSessionID = ""
+	m, accepted := f.accept(t, "device-a", "local", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, old))
+	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "display_name", "saved"))
+	m, accepted = f.accept(t, "device-a", "promoted", accepted.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("before")))
+	m, _ = f.accept(t, "device-a", "updated", accepted.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("after")))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, resolved.State)
+	session, err := (&Store{pg: f.runtime}).GetSessionFull(t.Context(), resolved.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.DisplayName)
+	assert.Equal(t, "saved", *session.DisplayName)
+	messages, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	assert.Equal(t, "after", messages[0].Content)
+}
+
+func TestRawNativeIdentityUpgradeKeepsOtherBranchesLive(t *testing.T) {
+	for _, mode := range []string{"trashed", "excluded"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			native, _ := f.accept(t, "device-b", "native", "")
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, native), native, projectionOutcome("legitimate")))
+			var nativeBranch, nativeSession string
+			require.NoError(t, f.runtime.QueryRow(`SELECT branch_id,session_id FROM raw_session_branches WHERE source_id=$1`, rawSourceID(native)).Scan(&nativeBranch, &nativeSession))
+			require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable~"+nativeBranch, "trashed", false))
+			old := projectionOutcome("divergent")
+			old.Outcome.Results[0].Result.Session.SourceSessionID = ""
+			m, accepted := f.accept(t, "device-a", "local", "")
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, old))
+			var oldGroup string
+			require.NoError(t, f.runtime.QueryRow(`SELECT group_id FROM raw_session_branches WHERE source_id=$1`, rawSourceID(m)).Scan(&oldGroup))
+			variant := "codex:portable~" + rawDigest("branch-v1", oldGroup, rawSourceID(m))
+			require.NoError(t, f.sink.SetCuration(t.Context(), variant, "trashed", true))
+			if mode == "excluded" {
+				removed, err := f.sink.ExcludeTrashedSession(t.Context(), variant)
+				require.NoError(t, err)
+				require.True(t, removed)
+			}
+			m, _ = f.accept(t, "device-a", "promoted", accepted.Receipt)
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("divergent")))
+			session, err := (&Store{pg: f.runtime}).GetSessionFull(t.Context(), nativeSession)
+			require.NoError(t, err)
+			require.NotNil(t, session, "another source's live cohort must survive promotion")
+			assert.Nil(t, session.DeletedAt)
+			var affected int
+			require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_curation WHERE group_id=(SELECT group_id FROM raw_session_branches WHERE branch_id=$1) AND branch_id IN ('',$1) AND field IN ('trashed','excluded') AND value='true'::jsonb`, nativeBranch).Scan(&affected))
+			assert.Zero(t, affected, "promotion must not widen a destructive decision")
+		})
+	}
+}

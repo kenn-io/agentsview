@@ -7,8 +7,9 @@ import (
 )
 
 // Promotion retains the old branch and contributions as history. Its effective
-// overlays move to the new source/member, and old variant URLs follow it. All
-// source, alias, group and session locks are already held by projection.
+// overlays move only to the new source/member, preserving destination defaults
+// and other branches. Old variant URLs follow it. Projection already holds
+// source, alias, group and session locks.
 func promoteRawMemberState(ctx context.Context, tx *sql.Tx, previous rawBranch, group, branch string) error {
 	var conflict bool
 	// Conflicting names and pin notes require an explicit user decision; never
@@ -42,11 +43,6 @@ func promoteRawMemberState(ctx context.Context, tx *sql.Tx, previous rawBranch, 
 		`INSERT INTO raw_pins(group_id,branch_id,message_key,ordinal,content_revision,pinned,note,created_at)
  SELECT $3,$4,message_key,ordinal,content_revision,pinned,note,created_at FROM (SELECT DISTINCT ON (message_key) * FROM raw_pins WHERE group_id=$1 AND branch_id IN ('',$2) ORDER BY message_key,branch_id DESC) old
  ON CONFLICT(group_id,branch_id,message_key) DO UPDATE SET ordinal=EXCLUDED.ordinal,content_revision=EXCLUDED.content_revision,pinned=EXCLUDED.pinned,note=EXCLUDED.note,created_at=EXCLUDED.created_at`,
-		// A new native copy must never resurrect a prior trash or purge decision.
-		`INSERT INTO raw_curation(group_id,branch_id,field,value)
- SELECT $3,'',field,value FROM raw_curation WHERE group_id=$3 AND branch_id=$4 AND field IN ('trashed','excluded') AND value='true'::jsonb
- ON CONFLICT(group_id,branch_id,field) DO UPDATE SET value='true'::jsonb`,
-		`UPDATE raw_curation c SET value='true'::jsonb WHERE c.group_id=$3 AND c.field IN ('trashed','excluded') AND EXISTS(SELECT 1 FROM raw_curation old WHERE old.group_id=$3 AND old.branch_id=$4 AND old.field=c.field AND old.value='true'::jsonb)`,
 		`INSERT INTO raw_session_public_aliases(alias_id,group_id,anchor_branch)
  SELECT alias_id,$3,CASE WHEN anchor_branch='' THEN '' ELSE $4 END FROM raw_session_public_aliases WHERE group_id=$1 AND anchor_branch IN ('',$2)
  ON CONFLICT(alias_id,group_id) DO NOTHING`,
