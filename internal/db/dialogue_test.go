@@ -150,11 +150,31 @@ func TestDialogueFTSCorpusVersion(t *testing.T) {
 			insertMessages(t, d, Message{SessionID: "version", Role: "user", Content: "needle"})
 			_, err := d.getWriter().Exec(t.Context(), "UPDATE stats SET value = ? WHERE key = ?", tc.marker, searchCorpusVersionStatsKey)
 			require.NoError(t, err)
+			var triggerBefore string
+			if tc.name == "newer" {
+				_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_au;
+CREATE TRIGGER messages_au AFTER UPDATE OF content, dialogue_text ON messages
+WHEN old.content IS NOT new.content OR old.dialogue_text IS NOT new.dialogue_text
+BEGIN
+ -- A distinct trigger installed by a newer build.
+ INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+ VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
+ INSERT INTO messages_fts(rowid, rendered, content)
+ VALUES(new.id, new.content, COALESCE(new.dialogue_text, new.content));
+END;`)
+				require.NoError(t, err)
+				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'messages_au'").Scan(&triggerBefore))
+			}
 			var details []string
 			err = refreshDialogueFTS(t.Context(), d.getWriter(), func(progress OpenProgress) {
 				details = append(details, progress.Detail)
 			})
 			require.NoError(t, err)
+			if tc.name == "newer" {
+				var triggerAfter string
+				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'messages_au'").Scan(&triggerAfter))
+				assert.Equal(t, triggerBefore, triggerAfter, "preserve the newer build's trigger")
+			}
 			var marker string
 			require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", searchCorpusVersionStatsKey).Scan(&marker))
 			if tc.rebuild {

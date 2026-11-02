@@ -158,6 +158,7 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkReplaceSessionMessagesStreamingMerge` — the streaming chunk-merge
   diff path (one UPDATE, not a full delete+reinsert).
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
+- `BenchmarkMessageTokenUsageUpdate` — token receipts over varied message sizes.
 - `BenchmarkCopySparseOrphan` — retain one missing session from archives of
   different sizes without scanning every old message to map its session ID.
 - `BenchmarkCopyMixedLegacyPageOrphans` — upgrade archived Codex pages alongside
