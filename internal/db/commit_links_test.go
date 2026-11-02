@@ -225,10 +225,54 @@ func TestCommitLinksQuietMetadata(t *testing.T) {
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
-			assert.Equal(t, tt.branch, got.Commits[0].Branch)
+			assert.Empty(t, got.Commits[0].Branch)
 			assert.Equal(t, tt.subject, got.Commits[0].Subject)
 		})
 	}
+}
+
+func TestReviewQuietReadbackMustNameCreatedCommit(t *testing.T) {
+	for _, tt := range []struct {
+		name, readback, result string
+		count                  int
+	}{
+		{"implicit HEAD", "git log -1 --oneline", "abc1234 Fix parser\n", 1},
+		{"explicit HEAD", "git log -1 --oneline HEAD", "abc1234 Fix parser\n", 1},
+		{"reordered HEAD", "git log --oneline -1 HEAD", "abc1234 Fix parser\n", 1},
+		{"count HEAD", "git log -n 1 --oneline HEAD", "abc1234 Fix parser\n", 1},
+		{"oneline count HEAD", "git log --oneline -n 1 HEAD", "abc1234 Fix parser\n", 1},
+		{"parent", "git log -1 --oneline HEAD~1", "def5678 Previous commit\n", 0},
+		{"parent caret", "git log -1 --oneline HEAD^", "def5678 Previous commit\n", 0},
+		{"other branch", "git log --oneline -1 main", "def5678 Previous commit\n", 0},
+		{"range", "git log -n 1 --oneline HEAD~2..HEAD~1", "def5678 Previous commit\n", 0},
+		{"extra revision", "git log --oneline -n 1 HEAD main", "def5678 Previous commit\n", 0},
+		{"extra rev-parse revision", "git rev-parse HEAD main", "def5678000000000000000000000000000000000\n", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			input, err := json.Marshal(map[string]string{"command": "git commit -q -m fix && " + tt.readback})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, tt.count)
+			if tt.count > 0 {
+				assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			}
+		})
+	}
+}
+
+func TestReviewQuietBranchAfterCheckout(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a", func(s *Session) { s.GitBranch = "main" })
+	insertMessages(t, d, commitMessages("s1", `{"command":"git checkout feature && git commit -q -m fix && git log -1 --oneline HEAD"}`, "abc1234 Fix parser\n")...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	// Quiet commits print no branch, so none is reported.
+	assert.Empty(t, got.Commits[0].Branch)
 }
 
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {

@@ -38,8 +38,8 @@ var (
 	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
 	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\.|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
 	commitArgumentRE          = regexp.MustCompile(commitCommandToken)
-	commitRevParseRE          = regexp.MustCompile(`\bgit\s+rev-parse\s+HEAD(?:\s|[;&|"']|\\[nrt]|$)`)
-	commitLogRE               = regexp.MustCompile(`\bgit\s+log\s+(?:-1\s+--oneline|--oneline\s+(?:-1|-n\s+1)|-n\s+1\s+--oneline)\b`)
+	commitRevParseRE          = regexp.MustCompile(`^git\s+rev-parse\s+HEAD\s*$`)
+	commitLogRE               = regexp.MustCompile(`^git\s+log\s+(?:-1\s+--oneline|--oneline\s+(?:-1|-n\s+1)|-n\s+1\s+--oneline)(?:\s+HEAD)?\s*$`)
 	commitFullLineRE          = regexp.MustCompile(`(?m)^([0-9a-f]{40}|[0-9a-f]{64})\r?$`)
 	commitLogLineRE           = regexp.MustCompile(`(?m)^([0-9a-f]{7,64}) ([^\r\n]*)\r?$`)
 )
@@ -239,7 +239,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				if subject == "" {
 					subject = commitMessageSubject(readback[1])
 				}
-				matches = [][]string{{"", owner.Branch, quiet[0][1], subject}}
+				matches = [][]string{{"", "", quiet[0][1], subject}}
 			}
 		}
 		if running != 0 {
@@ -261,7 +261,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
 	rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
- COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), COALESCE(s.git_branch,''), t.tool_name
+ COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
  FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
  WHERE t.session_id=? AND t.category='Bash' AND ((t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%') OR t.input_json LIKE '%write_stdin%' OR t.tool_name='write_stdin')
  ORDER BY m.ordinal,t.call_index`, sessionID)
@@ -273,7 +273,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	var cwd string
 	for rows.Next() {
 		var call commitCall
-		if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd, &call.Branch, &call.toolName); err != nil {
+		if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd, &call.toolName); err != nil {
 			return err
 		}
 		calls = append(calls, call)
