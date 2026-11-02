@@ -190,6 +190,13 @@ func TestGitTrailerUnavailable(t *testing.T) {
 	}
 }
 
+func TestGitHookRejectsUnknownAction(t *testing.T) {
+	_, err := executeCommand(newRootCommand(), "git-hook", "instal")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `unknown command "instal"`)
+}
+
 func TestGitHookInstall(t *testing.T) {
 	for _, hooksDir := range []string{".git/hooks", "custom-hooks", "custom-hooks "} {
 		t.Run(hooksDir, func(t *testing.T) {

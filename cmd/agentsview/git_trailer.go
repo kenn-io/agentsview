@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,7 +15,7 @@ func newGitTrailerCommand() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			var err error
 			if len(args) != 1 {
-				err = fmt.Errorf("usage: agentsview git-trailer <file>")
+				err = errors.New("usage: agentsview git-trailer <file>")
 			} else {
 				var session gittrailer.Session
 				session, err = gittrailer.Discover(os.Getenv)
@@ -30,7 +31,13 @@ func newGitTrailerCommand() *cobra.Command {
 }
 
 func newGitHookCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "git-hook", Short: "Manage the optional agent session trailer hook", GroupID: groupMeta}
+	cmd := &cobra.Command{
+		Use: "git-hook", Short: "Manage the optional agent session trailer hook", GroupID: groupMeta,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "install", Short: "Install in the current repository", Args: cobra.NoArgs,
