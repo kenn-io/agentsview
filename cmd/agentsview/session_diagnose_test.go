@@ -378,7 +378,9 @@ func TestSessionDiagnoseLongGrowingArchive(t *testing.T) {
 				}
 				messages = append(messages, m)
 			}
-			require.NoError(t, json.MarshalWrite(w, service.MessageList{Messages: messages, TranscriptRevision: strconv.Itoa(from)}))
+			if !assert.NoError(t, json.MarshalWrite(w, service.MessageList{Messages: messages, TranscriptRevision: strconv.Itoa(from)})) {
+				return
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -404,6 +406,7 @@ type diagnosisMessageService struct {
 func (s diagnosisMessageService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
 	return &service.MessageList{Messages: s.messages}, nil
 }
+
 func testSessionDiagnosis(t *testing.T, id string, usage *service.SessionUsageReport, messages []db.Message) *sessionDiagnosis {
 	t.Helper()
 	out := buildSessionDiagnosis(id, usage)
