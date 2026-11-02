@@ -541,6 +541,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentVibe,
 		AgentAider,
 		AgentEvener,
+		AgentMusePersonal,
 		AgentReasonix,
 		AgentRooCode,
 		AgentCline,

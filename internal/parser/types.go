@@ -84,6 +84,7 @@ const (
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
 	AgentEvener         AgentType = "evener"
+	AgentMusePersonal   AgentType = "muse-personal"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
 	AgentCline          AgentType = "cline"
@@ -1065,6 +1066,16 @@ var Registry = []AgentDef{
 		FileBased:         true,
 		ShallowWatch:      true,
 		PeriodicReconcile: true,
+	},
+	{
+		Type:              AgentMusePersonal,
+		DisplayName:       "Muse Personal",
+		EnvVar:            "MUSE_PERSONAL_AGENTS_DIR",
+		DefaultDirs:       []string{"agents"},
+		IDPrefix:          "muse-personal:",
+		FileBased:         true,
+		PeriodicReconcile: true,
+		Usage:             UsageCapabilities{NoPerMessageTokenData: true},
 	},
 	{
 		Type:              AgentEvener,

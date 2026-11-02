@@ -71,6 +71,7 @@ describe("KNOWN_AGENTS", () => {
       "freebuff",
       "crush",
       "muse",
+      "muse-personal",
     ]);
   });
 
@@ -171,4 +172,19 @@ describe("agentLabel", () => {
     expect(agentLabel("claude")).toBe("Claude");
     expect(agentLabel("gemini")).toBe("Gemini");
   });
+});
+
+it("distinguishes Muse Personal in agent filters and session labels", () => {
+  expect(
+    KNOWN_AGENTS.filter((agent) => agent.name.startsWith("muse")).map((agent) => [
+      agent.name,
+      agent.label,
+    ]),
+  ).toEqual([
+    ["muse", "Muse Code"],
+    ["muse-personal", "Muse Personal"],
+  ]);
+  expect(agentLabel("muse-personal")).toBe("Muse Personal");
+  expect(agentLabel("muse")).toBe("Muse Code");
+  expect(agentForeground("muse-personal")).toBe("var(--accent-teal-foreground)");
 });

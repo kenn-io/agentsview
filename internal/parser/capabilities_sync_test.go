@@ -135,6 +135,7 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashRequiredForFreshness: true,
 			UnchangedResults:                    UnchangedResultMTimeAndHash,
 		},
+		AgentMusePersonal: {FingerprintHashRequiredForFreshness: true},
 		AgentEvener: {
 			FingerprintHashRequiredForFreshness: true,
 		},

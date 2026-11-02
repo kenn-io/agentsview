@@ -615,6 +615,7 @@ keeps its default directories.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                          | Legacy `messages.jsonl` plus `meta.json`, or a `unified/<session-id>/` store                                                                                  |
 | Muse Code             | `~/.local/share/muse/sessions/`                                                                                                                                  | `YYYY/MM/DD/<session>/session.jsonl` event logs, subagents under `subagent/`                                                                                  |
+| Muse Personal | `~/agents/` | `agent-<uuid>/sessions/<session-uuid>.jsonl` with optional sibling `sessions.json`; override with `MUSE_PERSONAL_AGENTS_DIR` |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                         | Pi-family JSONL per session                                                                                                                                   |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
@@ -1171,6 +1172,7 @@ export KIRO_IDE_DIR=~/custom/kiro-ide
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
 export MIMOCODE_DIR=~/custom/mimocode
 export MUSE_SESSIONS_DIR=~/custom/muse/sessions
+export MUSE_PERSONAL_AGENTS_DIR=~/custom/agents
 export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
@@ -1205,6 +1207,41 @@ export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder
 ```
+
+### Muse Personal
+
+Muse Personal is Meta's personal assistant, separate from Muse Code. AgentsView
+reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`. A file must have a
+version-1 `session_header` with a session ID matching its filename. The optional
+sibling `sessions.json` index can extend the session's end time; missing, stale
+or unknown-version indexes do not prevent collection.
+
+Set `MUSE_PERSONAL_AGENTS_DIR` or configure the root explicitly:
+
+```toml
+[agents.muse-personal]
+dirs = ["/example/agents"]
+```
+
+Use an explicit root when the collecting process's `HOME` differs from the
+transcript owner's. `agentsview doctor sync` shows the resolved root.
+
+Local sync and native raw capture include background and scheduled runs by
+default. Hosted parsing requires a server built with the Muse Personal provider.
+Raw capture retains the transcript and any regular index as original bytes.
+
+Items appear in stable `seq` order, with same-sequence occurrences keeping their
+file order. Tool outputs pair only with a unique preceding unmatched call;
+ambiguous or unmatched outputs remain separate tool rows. Compaction summaries
+appear as boundaries without deleting earlier history. File references are inert
+text: AgentsView never opens their recorded paths. A final line still being
+written delays publication until it is complete.
+
+Titles, parent links, public model names, token usage and costs are not inferred
+from these files. Context-window snapshots and opaque metadata remain in raw
+custody. The maintainer
+[format evidence](https://github.com/kenn-io/agentsview/blob/main/docs/internal/session-format-sources.md#muse-personal-muse-personal)
+records the projection's limits.
 
 ### CodeBuddy
 

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-02
 ---
 
 # agentsview
@@ -18,7 +18,8 @@ Version 0.46.0 adds
 [Claude.ai Sync through Chrome](https://agentsview.io/docs/chat-import/#sync-claudeai-chats),
 opt-in
 [Codex cloud chats](https://agentsview.io/docs/configuration/#codex-cloud), and
-Muse Code and fx sessions. Preserve a retired machine's history with
+Muse Code and fx sessions. The `main` branch also supports Muse Personal
+sessions. Preserve a retired machine's history with
 [local archives](https://agentsview.io/docs/commands/#agentsview-archive), or
 sync a remote machine over
 [SSH](https://agentsview.io/docs/remote-access/#ssh-remote-sync) without
@@ -430,6 +431,7 @@ local Amp thread JSON files.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                                                                                                              |
 | Muse Code             | `~/.local/share/muse/sessions/` (`$XDG_DATA_HOME/muse/sessions/` when `XDG_DATA_HOME` is set)                                                                                                                                                        |
+| Muse Personal | `~/agents/agent-<uuid>/sessions/` |
 | OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                                                                                                |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                                                                                                           |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                                                                                                        |
