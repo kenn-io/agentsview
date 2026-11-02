@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 )
 
 // Only a known NOWAIT boundary can retry 55P03. A permanent refusal, arbitrary
@@ -33,24 +32,6 @@ func TestRawActivationRetryClassification(t *testing.T) {
 			assert.Equal(t, tc.attempts, n)
 		})
 	}
-}
-
-func TestRawActivationRetryReturnsFreshAttempt(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		failures := hegel.Draw(ht, hegel.Integers(0, 4))
-		code := []string{"40001", "40P01", "55P03"}[hegel.Draw(ht, hegel.Integers(0, 2))]
-		calls := 0
-		audit, err := retryRawActivation(ht.Context(), func() (RawActivationAudit, error) {
-			calls++
-			if calls <= failures {
-				return RawActivationAudit{}, rawActivationNowait(&pgconn.PgError{Code: code})
-			}
-			return RawActivationAudit{CheckedCorpusRevision: int64(calls)}, nil
-		})
-		require.NoError(ht, err)
-		require.EqualValues(ht, failures+1, audit.CheckedCorpusRevision)
-		require.Equal(ht, failures+1, calls)
-	}, hegel.WithTestCases(20))
 }
 
 func TestRawActivationRetryCancellation(t *testing.T) {

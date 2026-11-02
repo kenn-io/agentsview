@@ -13,6 +13,7 @@ import (
 // A waiver must never mask unfinished work or uncertain identity. The oracle
 // enumerates independent blockers rather than calling Report.Passes.
 func TestRawActivationGateModel(t *testing.T) {
+	requireHegel(t)
 	hegel.Test(t, func(ht *hegel.T) {
 		names := []string{"differs", "ambiguous", "unmatchable", "equal", "raw_only", "legacy_only"}
 		counts := rawparity.Counts{}
