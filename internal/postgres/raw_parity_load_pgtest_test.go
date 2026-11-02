@@ -6,8 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"math"
-	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -177,9 +175,7 @@ func TestLoadRawParitySnapshotsUncappedChildren(t *testing.T) {
 // Hegel varies content and accounting independently of generated physical IDs.
 // PostgreSQL text cannot store NUL; retain every other generated character.
 func TestLoadRawParitySnapshotsContentProperty(t *testing.T) {
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "amd64" && os.Getenv("HEGEL_LIBHEGEL_PATH") == "" {
-		t.Skip("Hegel requires HEGEL_LIBHEGEL_PATH on darwin/amd64")
-	}
+	requireHegel(t)
 	f := newHostedFixture(t, "tenant-parity")
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('property','sample','device','codex');
 	 INSERT INTO messages(session_id,ordinal,role,content) VALUES('property',0,'user','')`)

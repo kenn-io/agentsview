@@ -163,6 +163,13 @@ func loadRawParityTools(ctx context.Context, tx *sql.Tx, id string, messages []d
 }
 
 func loadRawParityFindingsAndUsage(ctx context.Context, tx *sql.Tx, id string, s *rawparity.Snapshot) error {
+	if err := rawParityRows(ctx, tx, id, `SELECT `+db.SessionPlanUsageColumns+` FROM session_plan_usage WHERE session_id=$1`, func(rows *sql.Rows) error {
+		p, err := db.ScanSessionPlanUsage(rows.Scan)
+		s.PlanUsage = p
+		return err
+	}); err != nil {
+		return err
+	}
 	loads := []struct {
 		query string
 		scan  func(*sql.Rows) error
