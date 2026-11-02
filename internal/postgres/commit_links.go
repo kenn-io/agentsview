@@ -45,7 +45,7 @@ func (s *Sync) pushCommitLinks(ctx context.Context, tx *sql.Tx, id string) error
 }
 
 func (s *Sync) replaceRetainedCommitLinks(ctx context.Context) error {
-	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.pg, db.PostgresQueryDialect(), s.projects, s.excludeProjects, nil)
+	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.pg, db.PostgresQueryDialect(), s.projects, s.excludeProjects)
 	if err != nil {
 		return err
 	}

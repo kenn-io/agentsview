@@ -3,6 +3,7 @@ package readbase
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -53,9 +54,6 @@ func CommitSessionLinks(ctx context.Context, q CommitLinkQuerier, dialect db.Que
 		return nil, err
 	}
 	out := &db.CommitSessionList{Commits: make([]db.CommitSessionMatch, 0, len(queries))}
-	if len(queries) == 0 {
-		return out, nil
-	}
 	b := db.NewQueryBuilder(dialect, 0)
 	var predicates []string
 	for _, sha := range queries {
@@ -80,28 +78,27 @@ func CommitSessionLinks(ctx context.Context, q CommitLinkQuerier, dialect db.Que
 
 // RetainedCommitLinks refreshes only this archive's absent sessions. Stored
 // projects survive session deletion, so filtered pushes can retain their links.
-func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier, dialect db.QueryDialect, projects, exclude []string, previous map[string]string) ([]string, []db.CommitLinkRow, error) {
+func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier, dialect db.QueryDialect, projects, exclude []string) ([]string, []db.CommitLinkRow, error) {
 	retained, err := local.RetainedCommitLinkRows(ctx)
 	if err != nil || len(retained) == 0 {
 		return nil, nil, err
 	}
+	var ids []string
+	for _, r := range retained {
+		if len(ids) == 0 || ids[len(ids)-1] != r.SessionID {
+			ids = append(ids, r.SessionID)
+		}
+	}
 	stored := make(map[string]string)
 	live := make(map[string]bool)
-	candidates := make([]string, 0, len(retained))
-	for _, r := range retained {
-		candidates = append(candidates, r.SessionID)
-	}
-	err = db.QueryChunkedSize(candidates, 200, func(batch []string) error {
+	err = db.QueryChunkedSize(ids, 200, func(batch []string) error {
 		b := db.NewQueryBuilder(dialect, 0)
-		linkPH, sessionPH := []string{}, []string{}
-		for _, id := range batch {
-			linkPH = append(linkPH, b.Add(id))
-		}
-		for _, id := range batch {
-			sessionPH = append(sessionPH, b.Add(id))
+		ph := make([]string, 0, 2*len(batch))
+		for _, id := range slices.Concat(batch, batch) {
+			ph = append(ph, b.Add(id))
 		}
 		// The session half also protects another archive's row without any links.
-		rows, err := q.QueryContext(ctx, `SELECT l.session_id,l.project,COALESCE(s.id,'')<>'' FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id WHERE l.session_id IN (`+strings.Join(linkPH, ",")+`) UNION ALL SELECT id,project,true FROM sessions WHERE id IN (`+strings.Join(sessionPH, ",")+`)`, b.Args()...)
+		rows, err := q.QueryContext(ctx, `SELECT session_id,project,false FROM commit_links WHERE session_id IN (`+strings.Join(ph[:len(batch)], ",")+`) UNION ALL SELECT id,project,true FROM sessions WHERE id IN (`+strings.Join(ph[len(batch):], ",")+`)`, b.Args()...)
 		if err != nil {
 			return err
 		}
@@ -120,22 +117,11 @@ func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier,
 	if err != nil {
 		return nil, nil, err
 	}
-	ids := []string{}
-	seen := make(map[string]bool)
+	ids = slices.DeleteFunc(ids, func(id string) bool { return live[id] })
 	out := []db.CommitLinkRow{}
 	for _, r := range retained {
-		if live[r.SessionID] {
-			continue
-		}
-		if !seen[r.SessionID] {
-			ids = append(ids, r.SessionID)
-			seen[r.SessionID] = true
-		}
 		project, known := stored[r.SessionID]
-		if !known {
-			project, known = previous[r.SessionID]
-		}
-		if len(projects)+len(exclude) > 0 && (!known || !db.ProjectMatchesPushScope(project, projects, exclude)) {
+		if live[r.SessionID] || len(projects)+len(exclude) > 0 && (!known || !db.ProjectMatchesPushScope(project, projects, exclude)) {
 			continue
 		}
 		r.Project = project

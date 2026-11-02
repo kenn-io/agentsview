@@ -33,7 +33,7 @@ func (s *Sync) replaceCommitLinks(ctx context.Context, exec duckMutationExecutor
 }
 
 func (s *Sync) replaceRetainedCommitLinks(ctx context.Context) error {
-	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.duck, db.DuckDBQueryDialect(), s.projects, s.excludeProjects, s.previousCommitProjects)
+	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.duck, db.DuckDBQueryDialect(), s.projects, s.excludeProjects)
 	if err != nil {
 		return err
 	}
@@ -54,40 +54,4 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-func (s *Sync) loadPreviousCommitProjects(ctx context.Context, path string) error {
-	probe, err := ProbeMirror(ctx, path)
-	if err != nil {
-		return err
-	}
-	if !probe.ShapeOK || probe.SchemaVersion < 22 {
-		return nil
-	}
-	archive, err := s.local.GetArchiveID(ctx)
-	if err != nil {
-		return err
-	}
-	if probe.SourceArchiveID != archive {
-		return nil
-	}
-	old, err := OpenReadOnly(ctx, path)
-	if err != nil {
-		return err
-	}
-	defer old.Close()
-	rows, err := old.QueryContext(ctx, "SELECT DISTINCT session_id,project FROM commit_links")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	s.previousCommitProjects = make(map[string]string)
-	for rows.Next() {
-		var id, project string
-		if err := rows.Scan(&id, &project); err != nil {
-			return err
-		}
-		s.previousCommitProjects[id] = project
-	}
-	return rows.Err()
 }

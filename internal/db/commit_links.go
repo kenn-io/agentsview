@@ -446,12 +446,10 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	return tx.Commit()
 }
 
-const commitLinkFields = `l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at`
-
-const commitLinkSelect = `SELECT ` + commitLinkFields + `,
- (s.id IS NULL OR s.deleted_at IS NOT NULL),COALESCE(s.project,''),turn.ordinal,turn.content` + commitLinkFrom
-
-const commitLinkFrom = ` FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
+const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
+ (s.id IS NULL OR s.deleted_at IS NOT NULL),COALESCE(s.project,''),
+ turn.ordinal, turn.content
+ FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
  AND m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''

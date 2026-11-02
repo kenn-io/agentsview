@@ -20,7 +20,7 @@ func commitLinkRow(r db.CommitLinkRow, retained bool, version uint64) []any {
 }
 
 func (s *Sync) replaceRetainedCommitLinks(ctx context.Context, version uint64) error {
-	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.conn, db.ClickHouseQueryDialect(), s.projects, s.excludeProjects, nil)
+	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.conn, db.ClickHouseQueryDialect(), s.projects, s.excludeProjects)
 	if err != nil {
 		return err
 	}
@@ -38,6 +38,5 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context, version uint64) e
 		}
 	}
 	s.deletedCommitSessions = nil
-
 	return nil
 }

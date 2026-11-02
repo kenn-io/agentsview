@@ -22,13 +22,12 @@ const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
 
 // Sync manages push-only mirroring from the SQLite primary archive to DuckDB.
 type Sync struct {
-	previousCommitProjects map[string]string
-	duck                   *sql.DB
-	local                  *db.DB
-	machine                string
-	projects               []string
-	excludeProjects        []string
-	maintenance            duckDBMaintenance
+	duck            *sql.DB
+	local           *db.DB
+	machine         string
+	projects        []string
+	excludeProjects []string
+	maintenance     duckDBMaintenance
 
 	// archiveID caches this local archive's stable identifier (see
 	// ensureArchiveID), stamped onto every pushed session's

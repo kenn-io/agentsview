@@ -482,7 +482,6 @@ var mirrorTables = []tableSpec{
 		},
 		orderBy: []string{"sha", "session_id"},
 	},
-
 	{
 		name: "secret_findings",
 		columns: []columnSpec{

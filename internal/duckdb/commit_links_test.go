@@ -40,7 +40,8 @@ func TestDuckDBCommitLinkParity(t *testing.T) {
 	store = openPushedStore(t, path)
 	dbtest.AssertCommitLinkParity(t, local, store)
 	require.NoError(t, store.Close())
-	// A rebuild and scope narrowing must keep and then remove the retained link.
+	// An unfiltered rebuild keeps the retained link; scope narrowing removes it.
+	opts.Projects = nil
 	_, err = Push(t.Context(), path, local, "m", opts, true, nil)
 	require.NoError(t, err)
 	store = openPushedStore(t, path)

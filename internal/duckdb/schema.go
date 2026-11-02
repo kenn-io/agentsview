@@ -117,7 +117,6 @@ var mirrorTables = []tableSpec{
 		},
 		indexes: []string{"CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha)"},
 	},
-
 	{
 		name: "sync_metadata",
 		create: `CREATE TABLE IF NOT EXISTS sync_metadata (

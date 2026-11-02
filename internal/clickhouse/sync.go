@@ -16,12 +16,11 @@ import (
 // Sync pushes the SQLite archive into one ClickHouse mirror. Push is
 // one-way: it never reads content back into SQLite.
 type Sync struct {
-	deletedCommitSessions []string
-	target                Target
-	local                 *db.DB
-	machine               string
-	projects              []string
-	excludeProjects       []string
+	target          Target
+	local           *db.DB
+	machine         string
+	projects        []string
+	excludeProjects []string
 	// vectorSource, when non-nil, enables the vector push phase.
 	vectorSource storage.VectorPushSource
 	// sessionBatchSize is how many sessions share one set of insert blocks
@@ -49,6 +48,9 @@ type Sync struct {
 	// mirror sessions without an archive id that the archive no longer
 	// holds. Pushes always record their archive, so no new ones appear.
 	unownedPruned bool
+
+	// deletedCommitSessions are ids whose links outlived their mirror session.
+	deletedCommitSessions []string
 
 	// hooks is nil in production; tests inject failures at push boundaries.
 	hooks *pushHooks

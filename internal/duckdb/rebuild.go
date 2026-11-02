@@ -312,10 +312,6 @@ func buildMirror(
 		}
 		return storage.MirrorPushResult{}, storage.PushNotStartedError{Err: err}
 	}
-	if err := s.loadPreviousCommitProjects(ctx, path); err != nil {
-		_ = s.Close()
-		return storage.MirrorPushResult{}, err
-	}
 	result, buildErr := buildMirrorInto(ctx, s, opts, run, onProgress)
 	if closeErr := s.Close(); closeErr != nil && buildErr == nil {
 		buildErr = fmt.Errorf("closing duckdb rebuild file: %w", closeErr)

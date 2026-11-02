@@ -32,8 +32,8 @@ Commit lookups return the copied links and prompts.
 The first push after upgrading rebuilds the mirror to copy existing commit
 links. Serve requires that rebuild before opening an older mirror.
 A deleted session remains visible as a missing record. Project filters use its
-project from the last push. A session deleted before it was ever pushed has no
-project evidence, so a filtered replica omits its retained links.
+project from the last push. A session deleted before the mirror's last rebuild
+has no project evidence, so a filtered replica omits its retained links.
 
 ## Quick Start
 

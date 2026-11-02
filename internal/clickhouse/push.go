@@ -804,8 +804,8 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	}
 	return sessionPayload{
 		session: snapshot.Session, messages: snapshot.Messages, usage: snapshot.Usage,
-		planUsage:   snapshot.PlanUsage,
-		commitLinks: snapshot.CommitLinks, findings: snapshot.Findings, pins: snapshot.Pins, fingerprint: fingerprint,
+		planUsage: snapshot.PlanUsage,
+		findings:  snapshot.Findings, commitLinks: snapshot.CommitLinks, pins: snapshot.Pins, fingerprint: fingerprint,
 	}, nil
 }
 
