@@ -197,7 +197,7 @@ Recall uses the same `[vector]` model and embeddings servers as session semantic
 search, but it has an independent index generation. Build it explicitly with:
 
 ```bash
-agentsview embeddings build --store recall
+agentsview index embeddings build --store recall
 ```
 
 Automatic Recall embedding requires separate consent because accepted entries

@@ -6,7 +6,7 @@ description: Fast token usage and cost reports from your local AgentsView databa
 AgentsView records token usage while ingesting messages and usage events from
 agents that write model and token metadata to their local logs. The database
 already knows the input, output, cache-creation, and cache-read tokens those
-agents have logged, and the `agentsview usage` commands turn that into daily
+agents have logged, and the `agentsview report usage` commands turn that into daily
 cost reports and a one-line today's-spend summary without re-reading source
 files. To see that same cost attributed to specific time ranges and concurrent
 agent activity, see the [Activity](/docs/activity/) dashboard.
@@ -18,7 +18,7 @@ coding yesterday?" — across multiple coding agents from one archive.
 !!! warning "Experimental"
 
     Token usage and cost reporting is a newer area of AgentsView and is still
-    maturing. The Usage dashboard and the `agentsview usage` CLI may have rough
+    maturing. The Usage dashboard and the `agentsview report usage` CLI may have rough
     edges, especially around agents whose parsers were recently taught to emit token
     counts. Bug reports and feature requests are very welcome — please
     [open an issue](https://github.com/kenn-io/agentsview/issues).
@@ -85,7 +85,7 @@ the turns that finished before it, back to the last time OpenAI restarted that
 total. Chats AgentsView never listened in on carry plan usage instead. OpenAI's
 usage report gives each one's share of your ChatGPT plan's weekly and five-hour
 limits, and a credits figure. Those chats are left out of token and cost totals.
-The Usage page and `agentsview usage daily` say how many were left out, and
+The Usage page and `agentsview report usage daily` say how many were left out, and
 per-model rows show "Plan usage" where those chats are the model's only usage. A
 chat that AgentsView has not asked about yet is counted too, and its session
 details say "Plan usage: not checked yet". A chat with recorded token counts and
@@ -117,7 +117,7 @@ Cursor has two usage sources in AgentsView:
 - local Cursor transcripts, when `~/.cursor/projects` contains usable token
   metadata
 - Cursor Admin API usage events, imported on demand with
-  `agentsview usage cursor`
+  `agentsview source cursor sync-usage`
 
 The admin import is useful when you want billable team usage from Cursor itself,
 including headless/background events that may not map cleanly to a local
@@ -132,13 +132,13 @@ cursor_admin_user_id = "152683922"     # optional default filter
 
 ```bash
 # Import the last 30 days
-agentsview usage cursor
+agentsview source cursor sync-usage
 
 # Import a specific inclusive local-date window
-agentsview usage cursor --since 2026-05-01 --until 2026-05-31
+agentsview source cursor sync-usage --since 2026-05-01 --until 2026-05-31
 
 # Import everything Cursor returns for this admin key/filter
-agentsview usage cursor --all
+agentsview source cursor sync-usage --all
 ```
 
 The command calls Cursor's filtered usage-events endpoint, follows pagination,
@@ -146,7 +146,7 @@ stores the returned rows in the local archive, and deduplicates rows by a stable
 event fingerprint. It is safe to rerun the same window after new events arrive.
 
 Imported admin rows are folded into the Usage dashboard,
-`agentsview usage daily`, DuckDB mirrors, and PostgreSQL after the usual
+`agentsview report usage daily`, DuckDB mirrors, and PostgreSQL after the usual
 push/sync path. They appear as `agent = cursor`; because Cursor Admin events are
 account-level billing rows rather than session transcripts, project, machine,
 session-count, and top-session filters do not apply to those rows. Model and
@@ -357,12 +357,12 @@ cache creation without earning the reads back.
 
 The dashboard reads from the same `model_pricing` table that backs the CLI
 commands below, so the numbers line up exactly with what
-`agentsview usage daily` prints.
+`agentsview report usage daily` prints.
 
 ### PostgreSQL-Backed Usage
 
 As of 0.23.0, the Usage page and usage API also work when the UI is served from
-PostgreSQL via [`agentsview pg serve`](/docs/pg-sync/). That means shared or
+PostgreSQL via [`agentsview replica pg serve`](/docs/pg-sync/). That means shared or
 multi-machine deployments can browse the same cost and token dashboards without
 relying on a local SQLite archive.
 
@@ -373,20 +373,20 @@ The live SSE refresh path is still specific to the normal local `serve` runtime.
 
 ```bash
 # Last 30 days of spend as a terminal table
-agentsview usage daily
+agentsview report usage daily
 
 # Full history, with per-model breakdown rows
-agentsview usage daily --all --breakdown
+agentsview report usage daily --all --breakdown
 
 # JSON output for scripting
-agentsview usage daily --json > spend.json
+agentsview report usage daily --json > spend.json
 
 ```
 
 Examples:
 
 ```
-> agentsview usage daily --since 2026-04-01
+> agentsview report usage daily --since 2026-04-01
 DATE        INPUT      OUTPUT    CACHE_CR   CACHE_RD    COST        MODELS
 ----        -----      ------    --------   --------    ----        ------
 2026-04-01  77116868   2220604   39278251   887929665   $867.5794   claude-opus-4-6, gpt-5.4, claude-haiku-4-5-20251001, claude-sonnet-4-6, gemini-3.1-pro-preview
@@ -405,7 +405,7 @@ DATE        INPUT      OUTPUT    CACHE_CR   CACHE_RD    COST        MODELS
 TOTAL       369376132  18650016  288882628  6114711413  $5814.8710
 
 # One-line today's spend (for prompt or tmux status line)
-> agentsview usage statusline
+> agentsview report usage statusline
 $195.64 today
 ```
 
@@ -531,7 +531,7 @@ output_microdollars_per_mtok = 800_000
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
 special characters). Custom rates take precedence over LiteLLM, OpenRouter, and
-the embedded fallback, and apply to the Usage dashboard, the `agentsview usage`
+the embedded fallback, and apply to the Usage dashboard, the `agentsview report usage`
 CLI, and `pg serve` alike. A custom entry replaces the full rate row for that
 model, so omitted fields are treated as zero rather than falling through to
 another catalog. A custom row is flat and suppresses any fetched request bands
@@ -758,7 +758,7 @@ present locally; threads that exist only as stubs have nothing to read.
 
 ## Reporting Model
 
-`agentsview usage` reads token and cost facts from the same SQLite archive as
+`agentsview report usage` reads token and cost facts from the same SQLite archive as
 the UI, then joins them with the applicable pricing data.
 
 Version 0.42.0 also keeps an exact daily rollup cache for repeated reports. The
@@ -776,11 +776,13 @@ workflow also:
   [Analytics](/docs/usage/#dashboard) and session detail views, so there's no
   second index to keep fresh.
 - **Reads committed archive data** — daily reports can run while the daemon
-  imports new source changes. Run `agentsview sync` first when those changes
+  imports new source changes. Run `agentsview source sync` first when those changes
   must be included. Session usage and statusline finish any pending startup
   ingestion before querying, including when they reuse an existing daemon.
 
-## `agentsview usage daily`
+<a id="agentsview-usage-daily"></a>
+
+## `agentsview report usage daily`
 
 Daily cost report. Outputs a tab-aligned table to stdout by default, or JSON
 with `--format json` (or the `--json` alias).
@@ -799,7 +801,7 @@ terminal. Restart older daemons after upgrading to provide the usage progress
 endpoint.
 
 ```bash
-agentsview usage daily [flags]
+agentsview report usage daily [flags]
 ```
 
 | Flag          | Default       | Description                                                              |
@@ -948,7 +950,7 @@ change `schema_version`.
 
 ### JSON Contract
 
-`agentsview usage daily --json` is a versioned JSON surface. The Usage daily
+`agentsview report usage daily --json` is a versioned JSON surface. The Usage daily
 JSON, Activity report JSON, and session summary export JSON/NDJSON are separate
 versioned surfaces, so a future bump in one does not imply a bump in the others.
 Usage and activity already emitted `schema_version: 1` before 0.38, and the
@@ -1104,14 +1106,16 @@ responses may aggregate archives, so their catalog keys are response-scoped and
 must not be persisted as durable selectors. The canonical `identity.key`, not
 the display label or catalog key, represents project continuity.
 
-## `agentsview usage statusline`
+<a id="agentsview-usage-statusline"></a>
+
+## `agentsview report usage statusline`
 
 One-line today's spend, designed for shell prompts, tmux status lines, and
 window titles. Statusline has a 30-second deadline covering startup and the
 report request; it returns an error if that deadline expires.
 
 ```bash
-agentsview usage statusline [flags]
+agentsview report usage statusline [flags]
 ```
 
 | Flag        | Default | Description                                      |
@@ -1149,16 +1153,18 @@ microdollars rather than a formatted string:
 `agent` is included when `--agent` filtered the query.
 
 The command always scopes to the current local-time day. Use
-`agentsview usage daily --since $(date +%Y-%m-%d)` if you want the full row
+`agentsview report usage daily --since $(date +%Y-%m-%d)` if you want the full row
 instead.
 
-## `agentsview usage cursor`
+<a id="agentsview-usage-cursor"></a>
+
+## `agentsview source cursor sync-usage`
 
 Import Cursor Admin API usage events into the local archive so they contribute
 to the Usage dashboard and daily reports.
 
 ```bash
-agentsview usage cursor [flags]
+agentsview source cursor sync-usage [flags]
 ```
 
 | Flag          | Default       | Description                                              |
@@ -1180,7 +1186,7 @@ default member filters can be supplied with `cursor_admin_email` /
 ```toml
 # ~/.config/starship.toml
 [custom.agentsview]
-command = "agentsview usage statusline --offline --no-sync"
+command = "agentsview report usage statusline --offline --no-sync"
 when = "true"
 format = "[$output]($style) "
 style = "bold green"
@@ -1188,13 +1194,13 @@ style = "bold green"
 
 The offline flags read the existing archive without starting a daemon or syncing
 source files. A separate `agentsview serve` process or periodic
-`agentsview sync` keeps the archive fresh. Cache preparation can still take
+`agentsview source sync` keeps the archive fresh. Cache preparation can still take
 time.
 
 ## Source Freshness
 
 `usage daily` reads committed archive data. When it starts a daemon, routine
-source ingestion runs after readiness. Run `agentsview sync` before the report
+source ingestion runs after readiness. Run `agentsview source sync` before the report
 when it must include new source changes. Full parser rebuilds serve the retained
 archive with a stale warning; scoped upgrades and schema repairs finish before
 the daemon serves requests.
@@ -1227,7 +1233,7 @@ Costs are reported as `money` objects, so read `.microdollars` and divide when
 you want dollars:
 
 ```bash
-agentsview usage daily \
+agentsview report usage daily \
   --since "$(date +%Y-%m-01)" \
   --json \
   | jq '.totals.totalCost.microdollars / 1000000'
@@ -1243,7 +1249,7 @@ since=$(date -v-7d +%Y-%m-%d 2>/dev/null \
   || date -d '7 days ago' +%Y-%m-%d)
 
 for a in claude codex copilot gemini; do
-  total=$(agentsview usage daily \
+  total=$(agentsview report usage daily \
     --since "$since" \
     --agent "$a" \
     --json 2>/dev/null \
@@ -1264,7 +1270,7 @@ when the value is missing, so a broken read cannot pass for an under-budget day:
 
 ```bash
 budget_usd=25
-spent=$(agentsview usage statusline --json --offline --no-sync \
+spent=$(agentsview report usage statusline --json --offline --no-sync \
   | jq -e '.cost.microdollars') || exit 1
 if [ "$spent" -gt $((budget_usd * 1000000)) ]; then
   printf 'AgentsView: $%d.%02d today (over $%d)\n' \

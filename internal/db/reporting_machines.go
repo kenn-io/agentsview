@@ -18,7 +18,7 @@ func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s
 		return err
 	}
 	if strings.TrimSpace(s.localMachineID) == "" {
-		return errors.New("machine snapshots require recorded installation identity; run agentsview sync first")
+		return errors.New("machine snapshots require recorded installation identity; run agentsview source sync first")
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT substr(key, length('machine_alias:') + 1), value
 		FROM pg_sync_state WHERE key LIKE 'machine\_alias:%' ESCAPE '\'`)

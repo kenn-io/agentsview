@@ -348,7 +348,7 @@ dirs = ["/path/to/sources/claude/projects"]
 dirs = ["/path/to/sources/codex/sessions"]
 ```
 
-Then run `agentsview sync`. This optional import uses the normal AgentsView
+Then run `agentsview source sync`. This optional import uses the normal AgentsView
 experience; one-shot capture and `capture report` do not require it or start its
 services.
 

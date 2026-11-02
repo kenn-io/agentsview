@@ -55,6 +55,10 @@ Codex CI run. Total Input includes prompt-cache reads and writes; Uncached Input
 keeps those tokens separate. Choose Smooth, Lines, or Bars for the cost chart.
 [Token usage and costs](/docs/token-usage/).
 
+On `main`, these reports use `agentsview report usage`. See the
+[command migration](/docs/commands/#command-migration) for release-compatible
+names.
+
 Select a project, model, or agent in the cost breakdown to narrow the page. Open
 hermes-cron to compare individual jobs. Model aliases combine variants after
 each has been priced.

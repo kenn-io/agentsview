@@ -1316,7 +1316,7 @@ test.describe('Command palette', () => {
       { timeout: 10_000 }
     );
     await expect(setup).toContainText('[vector]');
-    await expect(setup).toContainText('agentsview embeddings build');
+    await expect(setup).toContainText('agentsview index embeddings build');
     await snapEl(palette.locator('.palette'), 'semantic-search-setup');
   });
 

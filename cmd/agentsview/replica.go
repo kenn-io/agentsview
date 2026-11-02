@@ -511,7 +511,7 @@ func runReplicaStatusTarget(
 		if stall := replicaWatchStall(rec, now, cfg.MaxStale); stall != "" {
 			writeReplicaStatus(os.Stdout, storage.ReplicaStatus{Rows: watchRows})
 			return fmt.Errorf(
-				"push watcher stalled for more than --max-stale %s: %s; run `agentsview %s service logs` for details",
+				"push watcher stalled for more than --max-stale %s: %s; run `agentsview replica %s service logs` for details",
 				cfg.MaxStale, stall, backend.Name(),
 			)
 		}
@@ -543,7 +543,7 @@ func runReplicaStatusTarget(
 	writeReplicaStatus(os.Stdout, status)
 	if cfg.MaxStale > 0 && recErr != nil {
 		return fmt.Errorf(
-			"--max-stale needs a record from `agentsview %s push --watch` for this target: %w",
+			"--max-stale needs a record from `agentsview replica %s push --watch` for this target: %w",
 			backend.Name(), recErr,
 		)
 	}

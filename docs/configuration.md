@@ -91,7 +91,7 @@ The daemon reads the policy when it starts, so a change takes effect after
 `agentsview daemon restart`. The policy applies when rows are written, so
 changing it does not rewrite rows already in the archive. To apply a narrower
 policy to an existing archive, set the key, restart the daemon, and run
-`agentsview sync --full`. The rebuild re-parses sessions whose source files
+`agentsview source sync --full`. The rebuild re-parses sessions whose source files
 still exist and copies archived sessions whose sources are gone, projecting both
 onto the policy. Back up the archive first: dropped content cannot be restored
 without the original source files.
@@ -102,7 +102,7 @@ which suits a dedicated reporting archive in its own data directory:
 ```bash
 AGENTSVIEW_DATA_DIR=~/.agentsview-usage \
 AGENTSVIEW_ARCHIVE_CONTENT=usage \
-agentsview sync
+agentsview source sync
 ```
 
 Limits of the narrower policies:
@@ -130,7 +130,7 @@ Limits of the narrower policies:
     pass refreshes it. With `[vector.embed] run_after_sync` enabled (the
     default) that pass starts right after the rebuild; otherwise let the
     scheduled pass run before pushing vectors to PostgreSQL.
-- `"usage"` supports usage reports such as `agentsview usage daily`. Session
+- `"usage"` supports usage reports such as `agentsview report usage daily`. Session
     search, transcript viewing, tool analytics, and content-derived quality
     metrics require a fuller archive. Insights and recall entries are refused,
     since both hold transcript-derived text. Recall extraction stops before
@@ -258,7 +258,7 @@ zoom_level = 120
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `local_machine_name`                | Optional display-name override; takes effect after a daemon restart                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview source cursor sync-usage`                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -271,21 +271,21 @@ zoom_level = 120
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                                              |
+| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                                                    |
+| `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                     |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/docs/duckdb/)                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
-| `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                          |
-| `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log) |
+| `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
+| `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` — see [Kata](/docs/kata/)                                         |
-| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                        |
+| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview source sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                 |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                                                                                                                                                                                                                                                |
@@ -339,19 +339,19 @@ no deployment variables under it. A command that would read one, such as a
 daemon client with `AGENTSVIEW_AUTH_TOKEN_FILE` set, fails with the invalid
 mode instead.
 
-| Variable                             | Behavior                                                                                                                                                                                    |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENTSVIEW_MODE`                    | `serve` or `pg-serve`. When the command line is empty or starts with a flag other than `--help` or `--version`, the image runs `agentsview serve` or `agentsview pg serve` with those flags |
-| `PG_SERVE`                           | `1`, `true`, `yes`, or `on` selects `pg serve` when `AGENTSVIEW_MODE=serve`; kept for older deployments                                                                                     |
-| `AGENTSVIEW_HOST`                    | Listener address. A non-loopback value needs `AGENTSVIEW_REQUIRE_AUTH=true` or `require_auth = true`                                                                                        |
-| `AGENTSVIEW_REQUIRE_AUTH`            | Require bearer authentication for API access                                                                                                                                                |
-| `AGENTSVIEW_NO_BROWSER`              | Do not open a browser on start                                                                                                                                                              |
-| `AGENTSVIEW_AUTH_TOKEN_FILE`         | File holding the bearer token; overrides `auth_token` in `config.toml`. `~/` expands to the home directory. Cannot be combined with `AGENTSVIEW_AUTH_TOKEN`                                 |
-| `AGENTSVIEW_PG_ALLOW_INSECURE`       | Sets `allow_insecure` for the default PostgreSQL target, for a database on a private network without TLS                                                                                    |
-| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`     | OpenAI-compatible embeddings endpoint for recipe adoption in `pg push --embed` and `pg serve`; local `serve` ignores it. See [semantic search on PostgreSQL](/docs/semantic-search/)        |
-| `AGENTSVIEW_EMBEDDINGS_API_KEY`      | Inline API key for that endpoint; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT` and cannot be combined with the file form                                                                        |
-| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                             |
-| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`   | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits.                                 |
+| Variable                             | Behavior                                                                                                                                                                                            |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENTSVIEW_MODE`                    | `serve` or `pg-serve`. When the command line is empty or starts with a flag other than `--help` or `--version`, the image runs `agentsview serve` or `agentsview replica pg serve` with those flags |
+| `PG_SERVE`                           | `1`, `true`, `yes`, or `on` selects `pg serve` when `AGENTSVIEW_MODE=serve`; kept for older deployments                                                                                             |
+| `AGENTSVIEW_HOST`                    | Listener address. A non-loopback value needs `AGENTSVIEW_REQUIRE_AUTH=true` or `require_auth = true`                                                                                                |
+| `AGENTSVIEW_REQUIRE_AUTH`            | Require bearer authentication for API access                                                                                                                                                        |
+| `AGENTSVIEW_NO_BROWSER`              | Do not open a browser on start                                                                                                                                                                      |
+| `AGENTSVIEW_AUTH_TOKEN_FILE`         | File holding the bearer token; overrides `auth_token` in `config.toml`. `~/` expands to the home directory. Cannot be combined with `AGENTSVIEW_AUTH_TOKEN`                                         |
+| `AGENTSVIEW_PG_ALLOW_INSECURE`       | Sets `allow_insecure` for the default PostgreSQL target, for a database on a private network without TLS                                                                                            |
+| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`     | OpenAI-compatible embeddings endpoint for recipe adoption in `pg push --embed` and `pg serve`; local `serve` ignores it. See [semantic search on PostgreSQL](/docs/semantic-search/)                |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY`      | Inline API key for that endpoint; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT` and cannot be combined with the file form                                                                               |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                                     |
+| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`   | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits.                                         |
 
 Anyone who can inspect the container can read `AGENTSVIEW_EMBEDDINGS_API_KEY`,
 and every process AgentsView starts, such as an agent CLI, inherits it. Use
@@ -399,7 +399,7 @@ naming the file.
 
 ## Remote Hosts
 
-Add `[[remote_hosts]]` entries when a bare `agentsview sync` should include raw
+Add `[[remote_hosts]]` entries when a bare `agentsview source sync` should include raw
 session files from other machines. `transport` is `"http"` (the default when
 omitted) or `"ssh"`. An HTTP entry needs an AgentsView daemon on the remote host
 and a private network such as Tailscale to reach it:
@@ -462,7 +462,7 @@ Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for
 the same machine can duplicate sessions, while reusing it for another machine
 can reuse stale state. Select a configured host with
-`agentsview sync --host <name>`, including for direct sync with
+`agentsview source sync --host <name>`, including for direct sync with
 `AGENTSVIEW_NO_DAEMON=1`. Unknown host names are rejected; ad hoc remotes are
 not supported. HTTP failures are summarized with actionable messages for common
 cases such as token rejection, missing remote archive endpoints, connection
@@ -471,7 +471,7 @@ refusal, DNS failures, and timeouts. For how SSH failures are reported, see
 
 Set `interval` to a positive duration such as `"5m"` to have a running collector
 daemon sync that host periodically. Zero or omitted disables the per-host
-schedule; manual `agentsview sync` still includes the host.
+schedule; manual `agentsview source sync` still includes the host.
 
 The remote daemon must also listen on an interface the collector can reach. The
 server binds `127.0.0.1` by default, so set `host` in the remote machine's
@@ -509,9 +509,9 @@ of this setting.
 
 ## Cursor Admin Usage API
 
-`agentsview usage cursor` imports Cursor Admin API usage events into the local
+`agentsview source cursor sync-usage` imports Cursor Admin API usage events into the local
 archive so Cursor's billed usage can appear in the Usage dashboard and
-`agentsview usage daily` reports. Set the API key in
+`agentsview report usage daily` reports. Set the API key in
 `~/.agentsview/config.toml`:
 
 ```toml
@@ -531,7 +531,7 @@ export AGENTSVIEW_CURSOR_ADMIN_USER_ID=152683922
 The legacy unprefixed names `CURSOR_ADMIN_API_KEY`, `CURSOR_ADMIN_EMAIL`, and
 `CURSOR_ADMIN_USER_ID` are also accepted when the matching `AGENTSVIEW_`
 variable is unset. The email and user ID values are default filters; pass
-`--email` or `--user-id` to `agentsview usage cursor` to override them for one
+`--email` or `--user-id` to `agentsview source cursor sync-usage` to override them for one
 import.
 
 ## Session Discovery
@@ -1386,7 +1386,7 @@ A chat that AgentsView never listened in on, or listened in on without receiving
 a token update, has no token counts. For those, AgentsView asks OpenAI's usage
 report for the chat's share of your plan's weekly and five-hour limits, and the
 credits figure the report includes. That plan usage shows in the session
-details. Such sessions are left out of token and cost totals; `agentsview usage`
+details. Such sessions are left out of token and cost totals; `agentsview report usage`
 reports how many were left out. That count includes a chat AgentsView has not
 asked about yet, such as one waiting while plan usage is paused. Its session
 details say "Plan usage: not checked yet" until the first answer arrives.
@@ -1678,7 +1678,7 @@ source local.
 
 Machine attribution is captured when each session is first ingested. Changing an
 entry's `machine` value affects newly discovered sessions but does not relabel
-existing sessions during ordinary syncs or `agentsview sync --full`. To adopt
+existing sessions during ordinary syncs or `agentsview source sync --full`. To adopt
 old keys belonging to this installation, use
 [`agentsview db adopt-machine`](/docs/commands/#agentsview-db-adopt-machine).
 
@@ -1989,14 +1989,14 @@ it is held exclusively for each import pass. Opening it may apply Docbank
 catalog upgrades. AgentsView opens the source `sessions.db` read-only and writes
 parsed results to the receiving installation.
 
-Restart a running daemon after editing the file, then run `agentsview sync`. The
+Restart a running daemon after editing the file, then run `agentsview source sync`. The
 first sync reads the supported sources and reports pending work, captured
 deletion rules, and supplemental files. Sessions retain the original machine's
 identity and label. `name` labels the configuration entry; changing it does not
 change session ownership.
 
-A daemon started with `--no-sync` still handles manual `agentsview sync` and
-`agentsview sync --full`; automatic ingestion stays disabled.
+A daemon started with `--no-sync` still handles manual `agentsview source sync` and
+`agentsview source sync --full`; automatic ingestion stays disabled.
 
 Pushes to PostgreSQL, ClickHouse, and DuckDB also read pending attached history
 after successful local sync, including on a `--no-sync` daemon. A push watch
@@ -2035,14 +2035,14 @@ Disconnecting the archive leaves already indexed history browsable. Sync reports
 the unavailable source and retries on a later pass. When a source fails to copy
 or parse, the next scheduled sync tries it again. If that retry also fails,
 scheduled syncs and pushes wait an hour, doubling to a day, and report the
-recorded error meanwhile. A manual `agentsview sync` retries immediately;
+recorded error meanwhile. A manual `agentsview source sync` retries immediately;
 restarting the daemon clears the wait. To move the archive, change `repository`
 and restart the daemon. A copied repository with the same repository ID and
 pinned snapshot continues the same history. A different repository at that path
 is refused. For a directory source, update `directory`; the archive identity and
 accepted source records remain independent of its path.
 
-Parser upgrades reparse available sources. Use `agentsview sync --full` to
+Parser upgrades reparse available sources. Use `agentsview source sync --full` to
 request a full reparse; individual session refresh directs attached history to
 that command. Local ingestion runs first and gets a turn between archive
 sources. It can still wait for one large source's parse: 16 GiB is a size limit,
@@ -2294,7 +2294,7 @@ Notes:
     are skipped while the filter is set.
 - The filter gates ingestion only. Sessions already in the archive are preserved
     (the SQLite database is a persistent archive); remove unwanted existing
-    sessions explicitly with `agentsview prune`.
+    sessions explicitly with `agentsview session prune`.
 - Remote-host sync is unaffected: the prefixes describe local paths, so they are
     not applied to sessions pulled from `[[remote_hosts]]` entries.
 
@@ -2346,7 +2346,7 @@ The option has no effect on other platforms.
 
 Enabling the option applies to sessions parsed after the change. Sessions
 already in the archive keep their path-only identity until their session files
-change; run `agentsview sync --full` to reparse the archive and pick up Git
+change; run `agentsview source sync --full` to reparse the archive and pick up Git
 detail for existing sessions.
 
 ### Large Watch Trees

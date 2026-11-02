@@ -469,7 +469,7 @@ func loadUsagePriceContexts(
 		// the schema.
 		return nil, fmt.Errorf(
 			"clickhouse mirror predates schema version %d; run "+
-				"`agentsview clickhouse push` to upgrade it: %w", SchemaVersion, err)
+				"`agentsview replica clickhouse push` to upgrade it: %w", SchemaVersion, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse usage price contexts: %w", err)

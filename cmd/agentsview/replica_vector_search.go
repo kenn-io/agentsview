@@ -26,7 +26,7 @@ func replicaVectorUnavailableReason(
 		fps = append(fps, g.Fingerprint)
 	}
 	return fmt.Sprintf(
-		"semantic search: %s (present: %s); run 'agentsview %s push' from a "+
+		"semantic search: %s (present: %s); run 'agentsview replica %s push' from a "+
 			"machine with a matching [vector.embeddings] config",
 		unavailable, strings.Join(fps, ", "), backend.Name())
 }
@@ -83,7 +83,7 @@ func wireReplicaVectorSearch(
 		vectorStore.SetSemanticUnavailableReason(fmt.Sprintf(
 			"semantic search: %s requires [vector] enabled with a matching "+
 				"[vector.embeddings] config and a generation pushed by "+
-				"'agentsview %s push'", backend.DisplayName(), backend.Name()))
+				"'agentsview replica %s push'", backend.DisplayName(), backend.Name()))
 		return nil
 	}
 	gen := vectorGeneration(appCfg.Vector.Embeddings)

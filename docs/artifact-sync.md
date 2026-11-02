@@ -15,10 +15,10 @@ an external drive, or another trusted filesystem location.
     experiments between archives whose folder storage and operators you trust.
 
 ```bash
-agentsview sync --target /path/to/shared-folder
+agentsview source sync --target /path/to/shared-folder
 ```
 
-This feature is explicit and opt-in. Running `agentsview sync` without
+This feature is explicit and opt-in. Running `agentsview source sync` without
 `--target` does not create the local artifact repository, read an exchange
 folder, or change ordinary provider sync behavior.
 
@@ -40,10 +40,10 @@ Run the command once on each participating machine:
 
 ```bash
 # Machine A
-agentsview sync --target /Volumes/team-agentsview
+agentsview source sync --target /Volumes/team-agentsview
 
 # Machine B, after the same folder is available there
-agentsview sync --target /mnt/team-agentsview
+agentsview source sync --target /mnt/team-agentsview
 ```
 
 The path can differ between machines. Each archive pulls verified immutable
@@ -66,7 +66,7 @@ Artifact work remains; run the sync command again.
 `--full` requests the existing full local resync and a full artifact export:
 
 ```bash
-agentsview sync --full --target /path/to/shared-folder
+agentsview source sync --full --target /path/to/shared-folder
 ```
 
 When a writable local daemon owns SQLite, the CLI asks that daemon to perform

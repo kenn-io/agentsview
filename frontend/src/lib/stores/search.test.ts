@@ -326,7 +326,7 @@ describe("SearchStore", () => {
   it.each([
     [
       501,
-      "Semantic search is unavailable: run agentsview embeddings build",
+      "Semantic search is unavailable: run agentsview index embeddings build",
       "semantic-unavailable",
     ],
     [503, "Embedding provider is temporarily unavailable; retry shortly", "generic"],

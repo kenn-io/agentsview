@@ -147,6 +147,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newAgentsCommand())
 	root.AddCommand(newOpenAPICommand())
 	root.AddCommand(newRemoteSyncCommand())
+	groupCommands(root)
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -377,7 +378,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
 			"Incremental local-only sync waits if the default daemon is busy, with\n" +
 			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
-			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
+			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
 			"syncing each over its transport, HTTP or SSH. A failure on one\n" +
@@ -884,6 +885,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	renderRootCommands(w, root)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Run 'agentsview <command> --help' to discover actions in a domain.")
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprint(w, root.Flags().FlagUsagesWrapped(flagHelpWidth(w)))
 	fmt.Fprintln(w, "Environment variables:")
@@ -949,7 +952,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Remote hosts:")
 	fmt.Fprintln(w, "  Add a [[remote_hosts]] array to ~/.agentsview/config.toml so that")
-	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each configured host:")
+	fmt.Fprintln(w, "  \"agentsview source sync\" (no --host) also syncs each configured host:")
 	fmt.Fprintln(w, "  For daemon-backed HTTP sync over a private network such as Tailscale:")
 	fmt.Fprintln(w, "  [[remote_hosts]]")
 	fmt.Fprintln(w, "  host = \"devbox1\"")
@@ -1017,24 +1020,11 @@ func groupedRootCommands(root *cobra.Command, groupID string) []*cobra.Command {
 			continue
 		}
 		grouped = append(grouped, cmd)
-		if !shouldListRootChildren(cmd) {
-			continue
-		}
-		for _, child := range cmd.Commands() {
-			if !child.IsAvailableCommand() || child.Hidden {
-				continue
-			}
-			grouped = append(grouped, child)
-		}
 	}
 	slices.SortStableFunc(grouped, func(a, b *cobra.Command) int {
 		return strings.Compare(commandPath(root, a), commandPath(root, b))
 	})
 	return grouped
-}
-
-func shouldListRootChildren(cmd *cobra.Command) bool {
-	return cmd.Name() != "completion"
 }
 
 func commandPath(root, cmd *cobra.Command) string {

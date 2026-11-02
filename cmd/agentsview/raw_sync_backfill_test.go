@@ -33,12 +33,12 @@ func TestRawSyncBackfillValidatesFlagsBeforeConfigSideEffects(t *testing.T) {
 	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 
 	tests := [][]string{
-		{"raw-sync", "backfill", "--provider", "claude"},
-		{"raw-sync", "backfill", "--run-id", "run-a"},
-		{"raw-sync", "backfill", "--run-id", "bad/value", "--provider", "claude"},
-		{"raw-sync", "backfill", "--run-id", "run-a", "--provider", "claude", "--batch-size", "0"},
-		{"raw-sync", "backfill", "--run-id", "run-a", "--provider", "claude", "--batch-size", "513"},
-		{"raw-sync", "backfill", "--run-id", "run-a", "--provider", "claude", "--format", "yaml"},
+		{"source", "raw", "backfill", "--provider", "claude"},
+		{"source", "raw", "backfill", "--run-id", "run-a"},
+		{"source", "raw", "backfill", "--run-id", "bad/value", "--provider", "claude"},
+		{"source", "raw", "backfill", "--run-id", "run-a", "--provider", "claude", "--batch-size", "0"},
+		{"source", "raw", "backfill", "--run-id", "run-a", "--provider", "claude", "--batch-size", "513"},
+		{"source", "raw", "backfill", "--run-id", "run-a", "--provider", "claude", "--format", "yaml"},
 	}
 	for _, args := range tests {
 		_, err := executeCommand(newRootCommand(), args...)
@@ -88,7 +88,7 @@ func TestRawSyncBackfillRejectsUnreadableCrushRegistry(t *testing.T) {
 			t.Setenv("AGENTSVIEW_RAW_SYNC_URL", "https://sync.example.test")
 			t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", "device-a")
 			t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
-			output, err := executeCommand(newRootCommand(), "raw-sync", "backfill", "--run-id", "bad-registry", "--provider", "crush", "--format", "json")
+			output, err := executeCommand(newRootCommand(), "source", "raw", "backfill", "--run-id", "bad-registry", "--provider", "crush", "--format", "json")
 			require.Error(t, err)
 			assert.Empty(t, output)
 			assert.Contains(t, err.Error(), "project registry")
@@ -319,7 +319,7 @@ func TestRawSyncBackfillIncompleteErrorIsSilentAfterProgress(t *testing.T) {
 }
 
 func TestRawSyncBackfillCommandRegistersPublicContract(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "raw-sync", "backfill", "--help")
+	help, err := executeCommand(newRootCommand(), "source", "raw", "backfill", "--help")
 	require.NoError(t, err)
 	for _, want := range []string{
 		"--run-id", "--provider", "--batch-size", "--format", "--json",
@@ -344,7 +344,7 @@ func TestRawSyncBackfillCommandReturnsIncompleteWithoutWaitingOffline(t *testing
 	t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", "device-a")
 	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 	args := []string{
-		"raw-sync", "backfill", "--run-id", "offline-a", "--provider", "claude",
+		"source", "raw", "backfill", "--run-id", "offline-a", "--provider", "claude",
 		"--batch-size", "1", "--json", "--allow-insecure-http",
 	}
 
@@ -376,7 +376,7 @@ func TestRawSyncBackfillCommandReportsSpoolCapacity(t *testing.T) {
 	configureRawSyncBackfillCommand(t, dataDir, root)
 
 	output, err := executeCommand(
-		newRootCommand(), "raw-sync", "backfill", "--run-id", "capacity-a",
+		newRootCommand(), "source", "raw", "backfill", "--run-id", "capacity-a",
 		"--provider", "claude", "--format", "json", "--allow-insecure-http",
 	)
 
@@ -399,7 +399,7 @@ func TestRawSyncBackfillCommandReportsUnreadableSelectedRoot(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, os.Chmod(root, 0o700)) })
 
 	output, err := executeCommand(
-		newRootCommand(), "raw-sync", "backfill", "--run-id", "unreadable-a",
+		newRootCommand(), "source", "raw", "backfill", "--run-id", "unreadable-a",
 		"--provider", "claude", "--format", "json", "--allow-insecure-http",
 	)
 
@@ -421,7 +421,7 @@ func TestRawSyncBackfillCommandRefusesToStartWithUnavailableRoot(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "unmounted", "claude")
 	configureRawSyncBackfillCommandRoots(t, dataDir, present, missing)
 	args := []string{
-		"raw-sync", "backfill", "--run-id", "missing-root", "--provider", "claude",
+		"source", "raw", "backfill", "--run-id", "missing-root", "--provider", "claude",
 		"--json", "--allow-insecure-http",
 	}
 

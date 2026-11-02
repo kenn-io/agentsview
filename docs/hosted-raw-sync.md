@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-22
+last_edited: 2026-10-31
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -7,7 +7,7 @@ description: Upload original session files to an operator-managed server and res
 Hosted raw sync uploads original agent session files from your machines to a
 server. An operator provides each device's credentials. The client resumes
 interrupted uploads and saves its progress across restarts. Run
-`agentsview raw-sync watch` to keep the hosted copy current.
+`agentsview source raw watch` to keep the hosted copy current.
 
 ```mermaid
 flowchart LR
@@ -79,7 +79,7 @@ and scoped tokens separately protect raw-sync routes.
 Run explicit provisioning with the owner target:
 
 ```bash
-agentsview pg hosted-provision provision
+agentsview replica pg hosted-provision provision
 ```
 
 This command installs or upgrades hosted tables and protections. It does not
@@ -147,10 +147,11 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   TO hosted_runtime;
 ```
 
-For an existing deployment, run `agentsview pg hosted-provision provision`, then
-apply the `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as
-the owner. `ON ALL TABLES` grants cover only tables that existed when they ran.
-The runtime fails startup until provisioning and these grants are complete.
+For an existing deployment, run
+`agentsview replica pg hosted-provision provision`, then apply the
+`raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as the owner.
+`ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
+fails startup until provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
 into materialized message rows.
@@ -179,7 +180,7 @@ missing privileges instead of silently disabling hosted processing.
 Start the effective default target:
 
 ```bash
-agentsview pg serve --no-browser
+agentsview replica pg serve --no-browser
 ```
 
 Named targets retain their ordinary selection rules. A single-target deployment
@@ -206,19 +207,19 @@ read-only jail. Filesystem escape, networking and process creation are denied;
 seccomp applies to every existing thread and allows only constrained runtime
 thread creation. No external sandbox helper is required.
 
-| Limit                                        | Value                                           |
-| -------------------------------------------- | ----------------------------------------------- |
-| Worker concurrency                           | One sequential job per instance                 |
-| Poll interval                                | Default 5 seconds; maximum 60                   |
-| Whole attempt wall time                      | Default 60 seconds; maximum 300                 |
+| Limit                                        | Value                                            |
+| -------------------------------------------- | ------------------------------------------------ |
+| Worker concurrency                           | One sequential job per instance                  |
+| Poll interval                                | Default 5 seconds; maximum 60                    |
+| Whole attempt wall time                      | Default 60 seconds; maximum 300                  |
 | Attempts per selected generation             | Default 5; maximum 10; 6 / 11 after interruption |
-| Retry backoff                                | Exponential from 1 second, capped at 60 seconds |
-| Lease / heartbeat                            | 60 seconds / 10 seconds                         |
-| Materialized source bytes                    | 512 MiB                                         |
-| Parser stdout / stderr                       | 32 MiB / 64 KiB                                 |
-| Child address space / data                   | 2 GiB / 512 MiB                                 |
-| Child CPU / open descriptors                 | 30 seconds / 64                                 |
-| Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                          |
+| Retry backoff                                | Exponential from 1 second, capped at 60 seconds  |
+| Lease / heartbeat                            | 60 seconds / 10 seconds                          |
+| Materialized source bytes                    | 512 MiB                                          |
+| Parser stdout / stderr                       | 32 MiB / 64 KiB                                  |
+| Child address space / data                   | 2 GiB / 512 MiB                                  |
+| Child CPU / open descriptors                 | 30 seconds / 64                                  |
+| Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                           |
 
 Custody may accept files larger than the materialization limit. Such captures
 remain retained but cannot be projected by this worker. Accepted source bytes
@@ -293,7 +294,7 @@ After an executable upgrade changes the parser data version or the Friction Log
 rules, schedule current heads explicitly in bounded batches:
 
 ```bash
-agentsview pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
+agentsview replica pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
 ```
 
 Repeat the same run ID until the command output contains `complete=true`. A call
@@ -311,10 +312,10 @@ agentsview pg raw-reparse hosted --repair --batch-size 64
 Repeat until the command prints `Rescheduled 0 failed jobs`. If the count stops
 reaching zero while health still lists the same failures, those jobs are failing
 again. Fix their cause or raise `--batch-size` (up to 256). Repair uses this
-executable's processing version and is safe to repeat.
-It only reschedules failed jobs still selected for current heads, leaving
-healthy jobs, in-progress jobs, and heads at other versions unchanged. `--repair`
-and `--run-id` are mutually exclusive.
+executable's processing version and is safe to repeat. It only reschedules
+failed jobs still selected for current heads, leaving healthy jobs, in-progress
+jobs, and heads at other versions unchanged. `--repair` and `--run-id` are
+mutually exclusive.
 
 A source whose file has left its device has a tombstone as its current head.
 Reparsing it changes nothing, so its retained sessions keep the output of the
@@ -346,7 +347,7 @@ export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
 export AGENTSVIEW_RAW_SYNC_DEVICE_ID=device-id
 export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
 
-agentsview raw-sync backfill \
+agentsview source raw backfill \
   --run-id laptop-history-1 \
   --provider claude \
   --provider codex \
@@ -404,7 +405,7 @@ or create another generation, even if files were appended or the old root is no
 longer mounted. Start the watcher after that result to capture later changes:
 
 ```bash
-agentsview raw-sync watch
+agentsview source raw watch
 ```
 
 Keep the same device ID, credential, server, and provider configuration for the
@@ -414,7 +415,7 @@ the same time.
 
 ## Laptop raw watch daemon
 
-`agentsview raw-sync watch` watches supported local provider roots, captures
+`agentsview source raw watch` watches supported local provider roots, captures
 their original files, and uploads durable generations. It does not parse
 sessions or write the normal local SQLite archive. S3 roots are excluded.
 
@@ -425,19 +426,19 @@ credential is environment-only so it does not appear in process arguments:
 export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
 export AGENTSVIEW_RAW_SYNC_DEVICE_ID=device-id
 export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
-agentsview raw-sync watch
+agentsview source raw watch
 ```
 
 To read hosted status without starting the watcher, run:
 
 ```bash
-agentsview raw-sync server-status
+agentsview source raw server-status
 ```
 
 `raw-sync watch` performs an initial bounded audit, watches for changes, repeats
 the audit every 15 minutes by default, and retries uploads every minute.
 Captures and upload state are kept under `raw-sync/` in the configured
-AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
+AgentsView data directory. `agentsview source raw status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
 
@@ -452,9 +453,9 @@ doing so intentionally creates two watchers over the same provider roots.
 
 ## Upload maintenance
 
-When raw-sync routes are active, `agentsview pg serve` cleans upload sessions
-and the private `raw-upload-spool` directory during startup and every 15
-minutes. It expires due open sessions, removes due terminal sessions, and
+When raw-sync routes are active, `agentsview replica pg serve` cleans upload
+sessions and the private `raw-upload-spool` directory during startup and every
+15 minutes. It expires due open sessions, removes due terminal sessions, and
 reconciles orphaned `.part` files through the existing PostgreSQL upload store.
 Each pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
 entries per directory scan. The server keeps its spool cursor between passes.
@@ -462,7 +463,7 @@ entries per directory scan. The server keeps its spool cursor between passes.
 Run the same bounded pass on demand with:
 
 ```bash
-agentsview raw-sync clean-uploads
+agentsview source raw clean-uploads
 ```
 
 The command uses the effective PostgreSQL target and data directory paired with
@@ -478,7 +479,7 @@ successfully.
 
 ## HTTP control plane
 
-In legacy mode, `agentsview pg serve` registers raw-sync routes when its
+In legacy mode, `agentsview replica pg serve` registers raw-sync routes when its
 PostgreSQL role has the required custody-table and ingest-job sequence grants. A
 read-only role keeps serving the PostgreSQL UI and API without these routes.
 Explicit hosted mode uses `raw_tenant` and requires the full hosted preflight;
@@ -508,10 +509,10 @@ and its older signal version, so its calls stay not analyzed.
 This release stores Codex Cloud plan usage in a new `session_plan_usage` table.
 A `GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so
 earlier grants do not reach this table. After
-`agentsview pg hosted-provision provision` or `agentsview pg push` creates the
-table, run the grants below as the schema owner. Replace the schema names
-(`hosted_sessions`, `agentsview`) and the role names (`hosted_runtime`,
-`agentsview_reader`) with your own.
+`agentsview replica pg hosted-provision provision` or
+`agentsview replica pg push` creates the table, run the grants below as the
+schema owner. Replace the schema names (`hosted_sessions`, `agentsview`) and the
+role names (`hosted_runtime`, `agentsview_reader`) with your own.
 
 In explicit hosted mode, the runtime role needs `SELECT` and `INSERT`. Until it
 has them, hosted startup fails with
@@ -522,8 +523,8 @@ GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
 ```
 
 Each read-only role that serves the PostgreSQL UI, such as the reader of a
-legacy schema, needs `SELECT`. Until it has it, `agentsview pg serve` with that
-role fails to start with `serve role cannot read the schema` and
+legacy schema, needs `SELECT`. Until it has it, `agentsview replica pg serve`
+with that role fails to start with `serve role cannot read the schema` and
 `permission denied for table session_plan_usage`. The schema owner or a database
 administrator grants it:
 
@@ -598,7 +599,7 @@ returned token as `Authorization: Bearer <token>` to
 Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
 `null` `last_accepted_at` and false parse flags. Status reads use one read-only
 PostgreSQL transaction and do not expire uploads, alter leases, or change any
-raw-sync state. `agentsview raw-sync server-status` adds `pipeline_depth`, the
+raw-sync state. `agentsview source raw server-status` adds `pipeline_depth`, the
 sum of `ready`, `leased`, and `retrying` parse jobs, including jobs from
 historical generations that the server has not yet superseded. It also adds
 `last_parse_latency_seconds`, the time from manifest acceptance to completion
@@ -611,7 +612,7 @@ processing version, the interval still starts at its original acceptance.
 hosted parsing records completions, while `pipeline_depth` remains the numeric
 sum.
 
-`agentsview raw-sync status` reads the laptop checkpoint. `server-status`
+`agentsview source raw status` reads the laptop checkpoint. `server-status`
 reports HTTP 404 as an error and directs the operator to that local command.
 Request failures include their underlying cause; HTTP errors also include the
 server's error code and message when available.

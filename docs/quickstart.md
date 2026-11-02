@@ -3,6 +3,9 @@ title: Quick Start
 description: Get AgentsView running in under a minute
 ---
 
+CLI examples follow `main`. For older releases, use the legacy spellings in
+the [command migration](commands.md#command-migration).
+
 ## Install
 
 ### Desktop App
@@ -268,7 +271,7 @@ archive directly in read-only mode. Commands that need fresh data or need to
 write, including `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`,
 auto-start the detached daemon when needed. The server remains running after
 these commands finish. For scripts or CI jobs that must leave no background
-server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
+server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
 That setting disables auto-start; it does not stop a running daemon or bypass
 its archive lock.
 

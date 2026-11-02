@@ -221,7 +221,7 @@ func runTokenUse(ctx context.Context, args []string) {
 		os.Exit(tokenUseExitErr)
 	}
 	fmt.Fprintln(os.Stderr,
-		"note: 'token-use' is deprecated; use 'session usage <id>' instead")
+		"note: 'token-use' is deprecated; use 'agentsview session usage <id> --json' instead")
 
 	out, code, err := sessionUsageData(ctx, args[0])
 	if err != nil {
