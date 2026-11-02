@@ -46,6 +46,7 @@
   );
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
+  // A browser host signs in to Claude.ai itself; ChatGPT always syncs through Chrome.
   const activeHost = $derived(provider === "claude-ai" ? host : undefined);
   let chromeRefused = $state(false);
   const canSync = $derived(open && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
