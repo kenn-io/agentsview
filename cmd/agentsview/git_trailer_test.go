@@ -111,7 +111,7 @@ func TestGitTrailerCommits(t *testing.T) {
 		{name: "empty", args: []string{"-m", ""}, abort: true},
 		{name: "empty signoff", args: []string{"-s", "-m", ""}, abort: true},
 		{name: "command-line stripped comment", args: []string{"--cleanup=strip", "-m", "# wip"}, abort: true},
-		{name: "unedited template", abort: true},
+		{name: "comment-only message", abort: true},
 		{name: "editor", editor: true, want: "from editor"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,49 +194,57 @@ func TestGitHookRejectsUnknownAction(t *testing.T) {
 }
 
 func TestGitHookInstall(t *testing.T) {
-	for _, hooksDir := range []string{".git/hooks", "custom-hooks", "custom-hooks "} {
-		t.Run(hooksDir, func(t *testing.T) {
+	for _, tt := range []struct{ hooksDir, subdir string }{
+		{".git/hooks", ""}, {"custom-hooks", ""}, {"custom-hooks ", ""}, {"custom-hooks", "nested/dir"},
+	} {
+		t.Run(filepath.Join(tt.subdir, tt.hooksDir), func(t *testing.T) {
 			f := newGitTrailerFixture(t)
-			if hooksDir != ".git/hooks" {
-				f.git(t, "config", "core.hooksPath", hooksDir)
+			repo := f.repo
+			if tt.hooksDir != ".git/hooks" {
+				f.git(t, "config", "core.hooksPath", tt.hooksDir)
 			}
-			path := filepath.Join(f.repo, hooksDir, "commit-msg")
+			f.repo = filepath.Join(f.repo, tt.subdir)
+			require.NoError(t, os.MkdirAll(f.repo, 0o700))
 			f.hook(t, "install")
+			f.repo = repo
 			f.git(t, "commit", "--allow-empty", "-m", "installed hook")
 			assert.Equal(t, "installed hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
-			if hooksDir != ".git/hooks" {
-				return
-			}
-			original, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.NoError(t, os.Chmod(path, 0o644))
-			before, err := os.Stat(path)
-			require.NoError(t, err)
-			f.hook(t, "install")
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			after, err := os.Stat(path)
-			require.NoError(t, err)
-			assert.Equal(t, original, data)
-			assert.Equal(t, before.ModTime(), after.ModTime())
-			assert.Equal(t, os.FileMode(0o755), after.Mode().Perm())
-			f.git(t, "commit", "--allow-empty", "-m", "reinstalled hook")
-			assert.Equal(t, "reinstalled hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
-			require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n# existing hook\n"), 0o755))
-			out, err := f.run(t, f.bin, "git-hook", "install")
-			require.Error(t, err)
-			assert.Contains(t, out, `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`)
-			data, err = os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, "#!/bin/sh\n# existing hook\n", string(data))
-			_, line, ok := strings.Cut(out, "add this line to it:\n")
-			require.True(t, ok)
-			require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+strings.TrimSpace(line)+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
-			require.NoError(t, os.Remove(f.bin))
-			f.setenv("PATH", filepath.Dir(f.bin))
-			out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "rejected by later check")
-			require.Error(t, err, out)
-			assert.Contains(t, out, "later check")
 		})
 	}
+}
+
+func TestGitHookReinstall(t *testing.T) {
+	f := newGitTrailerFixture(t)
+	f.hook(t, "install")
+	path := filepath.Join(f.repo, ".git", "hooks", "commit-msg")
+	original, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(path, 0o644))
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	f.hook(t, "install")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+	assert.Equal(t, before.ModTime(), after.ModTime())
+	assert.Equal(t, os.FileMode(0o755), after.Mode().Perm())
+	f.git(t, "commit", "--allow-empty", "-m", "reinstalled hook")
+	assert.Equal(t, "reinstalled hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n# existing hook\n"), 0o755))
+	out, err := f.run(t, f.bin, "git-hook", "install")
+	require.Error(t, err)
+	assert.Contains(t, out, `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`)
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "#!/bin/sh\n# existing hook\n", string(data))
+	_, line, ok := strings.Cut(out, "add this line to it:\n")
+	require.True(t, ok)
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+strings.TrimSpace(line)+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
+	require.NoError(t, os.Remove(f.bin))
+	f.setenv("PATH", filepath.Dir(f.bin))
+	out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "rejected by later check")
+	require.Error(t, err, out)
+	assert.Contains(t, out, "later check")
 }
