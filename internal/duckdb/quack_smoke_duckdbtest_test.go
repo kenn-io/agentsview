@@ -75,7 +75,7 @@ func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 		assert.NotContains(t, listenURL.String, token)
 	}
 	t.Cleanup(func() {
-		_, stopErr := server.ExecContext(ctx, `CALL quack_stop(?)`, uri)
+		_, stopErr := server.ExecContext(context.WithoutCancel(ctx), `CALL quack_stop(?)`, uri)
 		require.NoError(t, stopErr, "stop quack server")
 	})
 

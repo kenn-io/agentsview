@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -16,10 +17,12 @@ const vectorSchemaTestSchema = "agentsview_vector_schema_test"
 
 func cleanVectorSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, _ = pg.ExecContext(t.Context(),
+	_, _ = pg.ExecContext(ctx,
 		"DROP SCHEMA IF EXISTS "+vectorSchemaTestSchema+" CASCADE",
 	)
 }

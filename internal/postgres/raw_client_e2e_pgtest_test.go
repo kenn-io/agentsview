@@ -10,6 +10,7 @@ package postgres_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -71,10 +72,12 @@ func newPGE2ETestDatabase(t *testing.T) (*sql.DB, string) {
 
 func pgE2ECleanSchema(t *testing.T, pgURL string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, err = pg.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+pgE2ESchema+" CASCADE")
+	_, err = pg.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+pgE2ESchema+" CASCADE")
 	require.NoError(t, err, "dropping test schema")
 }
 

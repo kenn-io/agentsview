@@ -426,10 +426,12 @@ func pushParityPostgres(
 // dropParitySchema removes the PG schema so each run starts clean.
 func dropParitySchema(t *testing.T, pgURL string) {
 	t.Helper()
-	store, err := postgresstore.NewStore(t.Context(), pgURL, paritySchema, true)
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
+	store, err := postgresstore.NewStore(ctx, pgURL, paritySchema, true)
 	require.NoError(t, err, "opening pg for schema drop")
 	defer func() { require.NoError(t, store.Close()) }()
-	_, _ = store.DB().Exec("DROP SCHEMA IF EXISTS " + paritySchema + " CASCADE")
+	_, _ = store.DB().ExecContext(ctx, "DROP SCHEMA IF EXISTS "+paritySchema+" CASCADE")
 }
 
 // pushParityDuckDB pushes the SQLite fixture to a DuckDB mirror via the

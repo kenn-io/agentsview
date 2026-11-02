@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -18,22 +19,26 @@ import (
 
 func cleanPGSchema(t *testing.T, pgURL string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, _ = pg.ExecContext(t.Context(),
+	_, _ = pg.ExecContext(ctx,
 		"DROP SCHEMA IF EXISTS agentsview CASCADE",
 	)
 }
 
 func cleanNamedPGSchema(t testing.TB, pgURL, schema string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 	quoted, err := quoteIdentifier(schema)
 	require.NoError(t, err, "quote schema")
-	_, _ = pg.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+quoted+" CASCADE")
+	_, _ = pg.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+quoted+" CASCADE")
 }
 
 func TestEnsureSchemaIdempotent(t *testing.T) {
