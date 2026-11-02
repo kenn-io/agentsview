@@ -311,7 +311,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		}
 		matches := commitSummaryRE.FindAllStringSubmatch(output, -1)
 		readback := commitReadbackRE.FindStringSubmatch(command)
-		if len(matches) == 0 && commitQuietRE.MatchString(command) && readback != nil {
+		if commitQuietRE.MatchString(command) && readback != nil {
 			var quiet [][]string
 			if commitRevParseRE.MatchString(readback[2]) {
 				quiet = commitFullLineRE.FindAllStringSubmatch(output, -1)
@@ -326,7 +326,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				if subject == "" {
 					subject = commitMessageSubject(readback[1])
 				}
-				matches = [][]string{{"", "", quiet[0][1], subject}}
+				matches = append(matches, []string{"", "", quiet[0][1], subject})
 			}
 		}
 		if running != 0 {

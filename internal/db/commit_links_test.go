@@ -267,6 +267,28 @@ func TestCommitLinksQuietMetadata(t *testing.T) {
 	}
 }
 
+func TestCommitLinksMixedQuietReadback(t *testing.T) {
+	for _, tt := range []struct{ name, readback, output, sha string }{
+		{"HEAD", "git rev-parse HEAD", "def5678000000000000000000000000000000000\n", "def5678000000000000000000000000000000000"},
+		{"log", "git log -1 --oneline", "def5678 second\n", "def5678"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			input, err := json.Marshal(map[string]string{"command": "git commit -m first && git commit -q -m second && " + tt.readback})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), "[main abc1234] first\n"+tt.output)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 2)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "first", got.Commits[0].Subject)
+			assert.Equal(t, tt.sha, got.Commits[1].SHA)
+			assert.Equal(t, "second", got.Commits[1].Subject)
+		})
+	}
+}
+
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"s1", "s2"} {
