@@ -9,6 +9,7 @@ import ParallelGroup from "./ParallelGroup.svelte";
 
 function makeToolCall(id: string): ToolCall {
   return {
+    call_index: 0,
     tool_use_id: id,
     tool_name: "Read",
     category: "Read",

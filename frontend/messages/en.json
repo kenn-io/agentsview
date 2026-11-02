@@ -3152,5 +3152,18 @@
   "friction_session_error": "Friction findings are unavailable.",
   "friction_session_empty": "No friction findings in this session.",
   "friction_session_jump": "Message {ordinal}",
-  "friction_session_jump_title": "Jump to message {ordinal}"
+  "friction_session_jump_title": "Jump to message {ordinal}",
+  "docbank_subagent_open_session": "File matches appear when opened as a session.",
+  "docbank_checking": "Checking Docbank…",
+  "docbank_current": "Current",
+  "docbank_prior": "Prior version",
+  "docbank_trash": "Trash",
+  "docbank_not_found": "Not in Docbank",
+  "docbank_read_unavailable": "Session files unavailable",
+  "docbank_unavailable": "Docbank unavailable",
+  "docbank_limit_exceeded": "Docbank lookup limit reached",
+  "docbank_bytes_not_kept": "Image bytes not kept",
+  "docbank_file": "File {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "File {n} · {mediaType}",
+  "docbank_more": "+{count} more in Docbank"
 }

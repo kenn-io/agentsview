@@ -3117,5 +3117,18 @@
   "friction_session_error": "フリクションの検出結果を利用できません。",
   "friction_session_empty": "このセッションにフリクションの検出結果はありません。",
   "friction_session_jump": "メッセージ {ordinal}",
-  "friction_session_jump_title": "メッセージ {ordinal} へ移動"
+  "friction_session_jump_title": "メッセージ {ordinal} へ移動",
+  "docbank_subagent_open_session": "セッションとして開くと、ファイルの一致が表示されます。",
+  "docbank_checking": "Docbank を確認中…",
+  "docbank_current": "現在のバージョン",
+  "docbank_prior": "以前のバージョン",
+  "docbank_trash": "ゴミ箱",
+  "docbank_not_found": "Docbank にありません",
+  "docbank_read_unavailable": "セッションのファイルを読み込めません",
+  "docbank_unavailable": "Docbank を利用できません",
+  "docbank_limit_exceeded": "Docbank の検索上限に達しました",
+  "docbank_bytes_not_kept": "画像のバイトは保持されていません",
+  "docbank_file": "ファイル {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "ファイル {n} · {mediaType}",
+  "docbank_more": "Docbank にあと {count} 件"
 }

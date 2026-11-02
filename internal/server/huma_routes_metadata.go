@@ -193,6 +193,7 @@ func (s *Server) humaGetVersion(
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
 	version := s.version
+	version.DocbankEnabled = s.cfg.Integrations.Docbank.Enabled()
 	if database, ok := s.db.(*db.DB); ok {
 		var err error
 		version.ArchiveOnly, err = database.IsArchiveOnly(ctx)

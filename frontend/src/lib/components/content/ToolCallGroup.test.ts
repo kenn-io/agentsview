@@ -24,12 +24,7 @@ function makeToolMessage(ordinal: number): Message {
     output_tokens: 0,
     has_context_tokens: false,
     has_output_tokens: false,
-    tool_calls: [
-      {
-        category: "",
-        tool_name: "bash",
-      },
-    ],
+    tool_calls: [{ call_index: 0, category: "", tool_name: "bash" }],
     is_system: false,
   };
 }
@@ -65,6 +60,7 @@ describe("ToolCallGroup", () => {
       const message = makeToolMessage(1);
       message.tool_calls = [
         {
+          call_index: 0,
           tool_use_id: "call-1",
           tool_name: "Bash",
           category: "Bash",

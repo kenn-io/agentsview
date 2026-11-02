@@ -96,6 +96,7 @@ describe("buildSessionIndex", () => {
         has_tool_use: true,
         tool_calls: [
           {
+            call_index: 0,
             tool_name: "Bash",
             category: "Bash",
             input_json: JSON.stringify({ command: "needle needle" }),
@@ -164,6 +165,7 @@ describe("buildSessionIndex", () => {
         has_tool_use: true,
         tool_calls: [
           {
+            call_index: 0,
             tool_name: "Bash",
             category: "Bash",
             input_json: JSON.stringify({ command: "needle" }),
@@ -186,23 +188,11 @@ describe("buildSessionIndex", () => {
 
   it("refreshes replaced same-length output data", () => {
     const initial = message(1, "", {
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Read",
-          result_content: "needle",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read", result_content: "needle" }],
     });
     const replacement = {
       ...initial,
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Read",
-          result_content: "absent",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read", result_content: "absent" }],
     };
     expect(buildSessionIndex([initial], "needle").total).toBe(1);
     expect(buildSessionIndex([replacement], "needle").total).toBe(0);
@@ -212,11 +202,7 @@ describe("buildSessionIndex", () => {
     const source = Array.from({ length: 3000 }, (_, ordinal) =>
       message(ordinal, "", {
         tool_calls: [
-          {
-            category: "",
-            tool_name: "Read",
-            result_content: "needle needle",
-          },
+          { call_index: 0, category: "", tool_name: "Read", result_content: "needle needle" },
         ],
       }),
     );

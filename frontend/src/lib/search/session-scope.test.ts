@@ -68,12 +68,7 @@ describe("session search scope", () => {
     const thinkingPlusTool = message(2, "[Thinking]\nneedle\n[/Thinking]", {
       has_thinking: true,
       has_tool_use: true,
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Bash",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Bash" }],
     });
     const legacyTool = message(3, "[Bash]\necho needle", { has_tool_use: true });
     const result = scope(
