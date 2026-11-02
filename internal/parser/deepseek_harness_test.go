@@ -106,7 +106,7 @@ func TestDeepSeekHarnessLineReaderReturnsBlankLine(t *testing.T) {
 func TestDeepSeekHarnessPlainAndMultiframeZstdNormalizeTheSameSession(t *testing.T) {
 	records := deepSeekHarnessCompleteFixture("session:one", nil)
 
-	for _, compression := range []string{"plain", "zstd"} {
+	for _, compression := range []string{"plain", "zstd", "zstd-unchecked"} {
 		t.Run(compression, func(t *testing.T) {
 			root := t.TempDir()
 			path := writeDeepSeekHarnessFixture(
@@ -1032,32 +1032,21 @@ func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 		assert.Equal(t, 1, result.Session.UserMessageCount)
 	})
 
-	t.Run("zstd torn frame", func(t *testing.T) {
-		records := deepSeekHarnessCompleteFixture("zstd-torn", nil)
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "zstd-torn", deepSeekHarnessFixtureCwd, "zstd", records)
-		content, err := os.ReadFile(path)
-		require.NoError(t, err)
-		require.Greater(t, len(content), 16)
-		for removed := 1; removed <= 12; removed++ {
-			require.NoError(t, os.WriteFile(path, content[:len(content)-removed], 0o600))
-			result, parseErr := parseDeepSeekHarnessSession(t.Context(), path, "")
-			require.NoError(t, parseErr, "removed %d trailing bytes", removed)
-			assert.True(t, result.Session.IsTruncated)
-		}
-	})
-
-	t.Run("zstd frame without checksum", func(t *testing.T) {
-		records := deepSeekHarnessCompleteFixture("zstd-no-crc", nil)
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "zstd-no-crc", deepSeekHarnessFixtureCwd, "zstd", records)
-		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(false))
-		require.NoError(t, err)
-		encoded := encoder.EncodeAll(deepSeekHarnessFixtureBytes(t, records), nil)
-		encoder.Close()
-		require.NoError(t, os.WriteFile(path, encoded, 0o600))
-		_, err = parseDeepSeekHarnessSession(t.Context(), path, "")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "without checksum")
-	})
+	for _, compression := range []string{"zstd", "zstd-unchecked"} {
+		t.Run(compression+" torn frame", func(t *testing.T) {
+			records := deepSeekHarnessCompleteFixture("zstd-torn", nil)
+			path := writeDeepSeekHarnessFixture(t, t.TempDir(), "zstd-torn", deepSeekHarnessFixtureCwd, compression, records)
+			content, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Greater(t, len(content), 16)
+			for removed := 1; removed <= 12; removed++ {
+				require.NoError(t, os.WriteFile(path, content[:len(content)-removed], 0o600))
+				result, parseErr := parseDeepSeekHarnessSession(t.Context(), path, "")
+				require.NoError(t, parseErr, "removed %d trailing bytes", removed)
+				assert.True(t, result.Session.IsTruncated)
+			}
+		})
+	}
 
 	t.Run("zstd header frame has an event", func(t *testing.T) {
 		records := deepSeekHarnessCompleteFixture("zstd-header-frame", nil)
@@ -1441,8 +1430,10 @@ func writeDeepSeekHarnessFixture(
 	encodedID := encodeDeepSeekHarnessSegment(id)
 	dir := filepath.Join(root, "--workspace-example--", encodedID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
+	// "zstd-unchecked" writes frames without content checksums, which
+	// Harness builds may emit.
 	name := "session.jsonl"
-	if compression == "zstd" {
+	if strings.HasPrefix(compression, "zstd") {
 		name += ".zstd"
 	}
 	path := filepath.Join(dir, name)
@@ -1456,7 +1447,7 @@ func writeDeepSeekHarnessFixture(
 		require.NoError(t, os.WriteFile(path, bytes.Join(lines, nil), 0o600))
 		return path
 	}
-	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(compression == "zstd"))
 	require.NoError(t, err)
 	defer encoder.Close()
 	var encoded []byte
