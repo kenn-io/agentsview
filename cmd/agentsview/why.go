@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -57,7 +58,7 @@ func newWhyCommand() *cobra.Command {
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if (len(args) == 1) == cmd.Flags().Changed("commit") {
-				return fmt.Errorf("provide exactly one path or --commit SHA")
+				return errors.New("provide exactly one path or --commit SHA")
 			}
 			result := whyResult{}
 			shas := []string{commit}
@@ -123,7 +124,7 @@ func newWhyCommand() *cobra.Command {
 				for _, link := range c.Links {
 					line := fmt.Sprintf("  %s  %s  %s  %s", link.Source, link.SessionID, link.Repository, link.Subject)
 					if link.Ambiguous {
-						line += fmt.Sprintf("  (ambiguous: prefix matches several commits)  %s", link.SHA)
+						line += "  (ambiguous: prefix matches several commits)  " + link.SHA
 					}
 					if link.Missing {
 						fmt.Fprintln(w, sanitizeTerminal(line+"  (deleted or in trash)"))
