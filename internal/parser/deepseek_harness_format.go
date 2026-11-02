@@ -300,11 +300,6 @@ func inspectDeepSeekHarnessZstdFrames(
 	}
 	layout, err := zstdframe.Inspect(f, info.Size(), 0)
 	if formatErr, ok := errors.AsType[*zstdframe.FormatError](err); ok {
-		if formatErr.Unsupported {
-			return deepSeekHarnessZstdLayout{}, fmt.Errorf(
-				"unsupported DeepSeek Harness zstd %w", formatErr,
-			)
-		}
 		return deepSeekHarnessZstdLayout{}, fmt.Errorf(
 			"corrupt DeepSeek Harness zstd log: %w", formatErr,
 		)
