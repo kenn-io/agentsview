@@ -3,13 +3,32 @@ import { FrictionService, KataService } from "../api/generated/index";
 import type {
   FrictionDigestItem,
   FrictionDigestResponse,
-  FrictionIssueItem,
+  FrictionPatternItem,
 } from "../api/generated/index.js";
 import { isAbortError, isNotFoundError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
 import { perf } from "./perf.svelte.js";
 
 type ReadStatus = "ok" | "error" | "aborted";
+
+/** The fields of a pattern an issue action changes. */
+type IssueChange = Partial<FrictionPatternItem>;
+
+function withIssueChanges(
+  digest: FrictionDigestResponse,
+  changes: { fingerprint: string; change: IssueChange }[],
+): FrictionDigestResponse {
+  if (changes.length === 0 || !digest.patterns) return digest;
+  return {
+    ...digest,
+    patterns: digest.patterns.map((p) =>
+      changes.reduce(
+        (acc, c) => (c.fingerprint === p.fingerprint ? { ...acc, ...c.change } : acc),
+        p,
+      ),
+    ),
+  };
+}
 
 function errorMessage(e: unknown): string {
   return e instanceof Error && e.message ? e.message : m.friction_load_error();
@@ -48,6 +67,10 @@ class FrictionStore {
   #datesRead = new LatestRead();
   #digestRead = new LatestRead();
   #markdownRead = new LatestRead();
+  /** Issue actions that succeeded, numbered, so a digest read that started
+   *  before one can reapply it to its older response. */
+  #issueChanges: { seq: number; fingerprint: string; change: IssueChange }[] = [];
+  #issueSeq = 0;
 
   get latestDate(): string | null {
     return this.dates[0]?.date ?? null;
@@ -115,6 +138,7 @@ class FrictionStore {
 
   async selectDate(date: string): Promise<void> {
     const signal = this.#digestRead.begin();
+    const changesSince = this.#issueSeq;
     this.#markdownRead.cancel();
     this.selectedDate = date;
     this.markdown = null;
@@ -129,7 +153,11 @@ class FrictionStore {
       this.#markdownRead.cancel();
       this.markdown = null;
       this.loading.markdown = false;
-      this.digest = digest;
+      // Actions that finished while this read was in flight are newer than
+      // its response. Later reads start after every recorded action.
+      const missed = this.#issueChanges.filter((c) => c.seq > changesSince);
+      this.#issueChanges = [];
+      this.digest = withIssueChanges(digest, missed);
       this.lastUpdatedAt = Date.now();
     } catch (e) {
       if (isAbortError(e) || !this.#digestRead.isCurrent(signal)) return;
@@ -193,7 +221,7 @@ class FrictionStore {
         { fingerprint },
         {},
       );
-      return res.issue ?? null;
+      return { issue: res.issue ?? undefined };
     });
   }
 
@@ -203,37 +231,28 @@ class FrictionStore {
         { fingerprint },
         { issue },
       );
-      return res.issue;
+      return { issue: res.issue };
     });
   }
 
   unlinkIssue(fingerprint: string): Promise<void> {
     return this.#issueAction(fingerprint, async () => {
       await FrictionService.deleteApiV1FrictionPatternsByFingerprintIssue({ fingerprint });
-      return null;
+      return { issue: undefined };
     });
   }
 
   // The server owns filing; on success the digest on screen shows the new
   // link without reloading, and a failure stays with its pattern.
-  async #issueAction(
-    fingerprint: string,
-    act: () => Promise<FrictionIssueItem | null>,
-  ): Promise<void> {
+  async #issueAction(fingerprint: string, act: () => Promise<IssueChange>): Promise<void> {
     if (this.issueBusy[fingerprint]) return;
     this.issueBusy[fingerprint] = true;
     delete this.issueErrors[fingerprint];
     try {
-      const issue = await act();
-      const digest = this.digest;
-      if (digest?.patterns) {
-        this.digest = {
-          ...digest,
-          patterns: digest.patterns.map((p) =>
-            p.fingerprint === fingerprint ? { ...p, issue: issue ?? undefined } : p,
-          ),
-        };
-      }
+      const change = await act();
+      const recorded = { seq: ++this.#issueSeq, fingerprint, change };
+      if (this.loading.digest) this.#issueChanges.push(recorded);
+      if (this.digest) this.digest = withIssueChanges(this.digest, [recorded]);
     } catch (e) {
       this.issueErrors[fingerprint] = errorMessage(e);
     } finally {
@@ -268,6 +287,7 @@ class FrictionStore {
     this.kataReady = false;
     this.issueBusy = {};
     this.issueErrors = {};
+    this.#issueChanges = [];
   }
 }
 

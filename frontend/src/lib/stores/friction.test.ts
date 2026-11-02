@@ -297,6 +297,34 @@ describe("FrictionStore Kata issues", () => {
     expect(friction.issueBusy[FP]).toBeUndefined();
   });
 
+  it("keeps an action that finishes while an older digest read is in flight", async () => {
+    const stale = {
+      ...makeDigest(LATEST),
+      patterns: [
+        { fingerprint: FP, kind: "error" },
+        { fingerprint: OTHER, kind: "error", issue },
+      ],
+    } as unknown as FrictionDigestResponse;
+    const read = Promise.withResolvers<FrictionDigestResponse>();
+    service.getApiV1FrictionDigestsByDate.mockReturnValueOnce(read.promise);
+    const selecting = friction.selectDate(LATEST);
+    service.postApiV1FrictionPatternsByFingerprintIssue.mockResolvedValue({ issue, created: true });
+    await friction.fileIssue(FP);
+    service.deleteApiV1FrictionPatternsByFingerprintIssue.mockResolvedValue(undefined);
+    await friction.unlinkIssue(OTHER);
+
+    read.resolve(stale);
+    await selecting;
+    expect(issueOf(FP), "the filed issue survives the older response").toEqual(issue);
+    expect(issueOf(OTHER), "the removed link stays removed").toBeUndefined();
+
+    service.getApiV1FrictionDigestsByDate.mockResolvedValueOnce(stale);
+    await friction.selectDate(LATEST);
+    expect(issueOf(OTHER), "a read started after the actions is the server's answer").toEqual(
+      issue,
+    );
+  });
+
   it("links by reference and unlinks", async () => {
     service.putApiV1FrictionPatternsByFingerprintIssue.mockResolvedValue({ issue });
     await friction.linkIssue(FP, "agentsview#f001");
