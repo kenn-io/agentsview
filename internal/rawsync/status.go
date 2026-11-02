@@ -8,11 +8,12 @@ import (
 
 // Status summarizes the raw-sync metadata owned by one tenant.
 type Status struct {
-	SourceHeads       []SourceHeadStatus  `json:"source_heads"`
-	ParseJobs         ParseJobCounts      `json:"parse_jobs"`
-	ActiveDeviceCount int64               `json:"active_device_count"`
-	Devices           []DeviceStatus      `json:"devices"`
-	Uploads           UploadStatusSummary `json:"uploads"`
+	Rollout           []RolloutScopeStatus `json:"rollout"`
+	SourceHeads       []SourceHeadStatus   `json:"source_heads"`
+	ParseJobs         ParseJobCounts       `json:"parse_jobs"`
+	ActiveDeviceCount int64                `json:"active_device_count"`
+	Devices           []DeviceStatus       `json:"devices"`
+	Uploads           UploadStatusSummary  `json:"uploads"`
 }
 
 // SourceHeadStatus describes one source head and its current generation's
@@ -58,4 +59,17 @@ type OpenUploadStatus struct {
 	_         struct{}  `json:"-" nullable:"true"`
 	UploadID  string    `json:"upload_id"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// RolloutScopeStatus reports deduplicated physical counts, including shared
+// groups, from the same read-only snapshot as the raw-sync status response.
+// Diagnostic readiness/counts cannot authorize activation.
+type RolloutScopeStatus struct {
+	DeviceID       string `json:"device_id"`
+	Provider       string `json:"provider"`
+	State          string `json:"state"`
+	Served         int64  `json:"served"`
+	Shadow         int64  `json:"shadow"`
+	Superseded     int64  `json:"superseded"`
+	UnresolvedPins int64  `json:"unresolved_pins"`
 }

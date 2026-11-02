@@ -5,6 +5,7 @@ package postgres
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"slices"
 	"testing"
@@ -28,9 +29,9 @@ type projectionFixture struct {
 	objects rawsync.ObjectStore
 }
 
-func newProjectionFixture(t *testing.T) projectionFixture {
+func newProjectionFixture(t testing.TB, beforeAdoption ...func(*sql.DB)) projectionFixture {
 	t.Helper()
-	f := newHostedFixture(t, "tenant-projection")
+	f := newHostedFixture(t, "tenant-projection", beforeAdoption...)
 	repo, err := artifact.OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repo.Close()) })
@@ -44,7 +45,7 @@ func newProjectionFixture(t *testing.T) projectionFixture {
 	require.NoError(t, err)
 	return projectionFixture{f, sink, custody, jobs, objects}
 }
-func (f projectionFixture) accept(t *testing.T, device, capture, parent string, providers ...parser.AgentType) (rawsync.CanonicalManifest, rawsync.CommitResult) {
+func (f projectionFixture) accept(t testing.TB, device, capture, parent string, providers ...parser.AgentType) (rawsync.CanonicalManifest, rawsync.CommitResult) {
 	t.Helper()
 	provider := parser.AgentCodex
 	if len(providers) > 0 {
@@ -53,7 +54,7 @@ func (f projectionFixture) accept(t *testing.T, device, capture, parent string, 
 	return f.acceptScoped(t, device, capture, parent, provider, "", "")
 }
 
-func (f projectionFixture) acceptScoped(t *testing.T, device, capture, parent string, provider parser.AgentType, root, source string) (rawsync.CanonicalManifest, rawsync.CommitResult) {
+func (f projectionFixture) acceptScoped(t testing.TB, device, capture, parent string, provider parser.AgentType, root, source string) (rawsync.CanonicalManifest, rawsync.CommitResult) {
 	t.Helper()
 	digest := sha256.Sum256([]byte("synthetic-" + device))
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO raw_devices(device_id,display_name,credential_sha256,created_at) VALUES($1,$1,$2,clock_timestamp()) ON CONFLICT(device_id) DO NOTHING`, device, digest[:])
@@ -96,7 +97,7 @@ func (f projectionFixture) tombstone(t *testing.T, previous rawsync.CanonicalMan
 func projectionOutcome(content string) rawderive.ParsedManifest {
 	return rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true, Results: []parser.ParseResultOutcome{{Result: parser.ParseResult{
 		Session:     parser.ParsedSession{ID: "codex:portable", SourceSessionID: "portable", Agent: parser.AgentCodex, Project: "synthetic", Machine: "capture-device", StartedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-		Messages:    []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleUser, Content: content}, {Ordinal: 1, Role: parser.RoleAssistant, Content: "checking", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call-1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}}},
+		Messages:    []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleUser, Content: content, ContentLength: len(content)}, {Ordinal: 1, Role: parser.RoleAssistant, Content: "checking", ContentLength: len("checking"), ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call-1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}}},
 		UsageEvents: []parser.ParsedUsageEvent{{Source: "turn", Model: "synthetic-model", InputTokens: 11, OutputTokens: 7}},
 	}}}}}
 }
@@ -107,7 +108,7 @@ func deferralReply() parser.ParsedMessage {
 	return parser.ParsedMessage{Ordinal: 2, Role: parser.RoleAssistant, Content: "Continue next session."}
 }
 
-func (f projectionFixture) lease(t *testing.T, m rawsync.CanonicalManifest) rawderive.JobLease {
+func (f projectionFixture) lease(t testing.TB, m rawsync.CanonicalManifest) rawderive.JobLease {
 	t.Helper()
 	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
 	require.NoError(t, err)

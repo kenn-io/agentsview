@@ -205,7 +205,7 @@ func TestRawCustodyEndToEnd(t *testing.T) {
 	assert.Equal(t, int64(2), headGeneration)
 }
 
-func rawCustodyObjectRef(t *testing.T, body []byte) rawsync.ObjectRef {
+func rawCustodyObjectRef(t testing.TB, body []byte) rawsync.ObjectRef {
 	t.Helper()
 	digest := sha256.Sum256(body)
 	object, err := rawsync.NewObjectRef(hex.EncodeToString(digest[:]), int64(len(body)))

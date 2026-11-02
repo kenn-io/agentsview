@@ -26,6 +26,7 @@ func TestRawSyncServerStatusJSON(t *testing.T) {
 	acceptedB := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
 	completedB := acceptedB.Add(20 * time.Minute)
 	status := rawsync.Status{
+		Rollout: []rawsync.RolloutScopeStatus{{State: "active", Served: 3, Shadow: 2, Superseded: 1, UnresolvedPins: 4}},
 		SourceHeads: []rawsync.SourceHeadStatus{
 			{
 				DeviceID:             "device-a",
@@ -63,10 +64,14 @@ func TestRawSyncServerStatusJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(output), &got))
 	assert.ElementsMatch(t, []string{
 		"source_heads", "parse_jobs", "active_device_count", "devices", "uploads",
-		"pipeline_depth", "last_parse_latency_seconds",
+		"pipeline_depth", "last_parse_latency_seconds", "rollout",
 	}, mapKeys(got))
 	assert.InDelta(t, 9.0, got["pipeline_depth"], 0)
 	assert.InDelta(t, 2.0, got["last_parse_latency_seconds"], 0)
+	rollout, ok := got["rollout"].([]any)
+	require.True(t, ok)
+	require.Len(t, rollout, 1)
+	assert.Equal(t, map[string]any{"device_id": "", "provider": "", "state": "active", "served": float64(3), "shadow": float64(2), "superseded": float64(1), "unresolved_pins": float64(4)}, rollout[0])
 	heads, ok := got["source_heads"].([]any)
 	require.True(t, ok)
 	for _, head := range heads {

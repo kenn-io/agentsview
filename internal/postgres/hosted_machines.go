@@ -7,7 +7,7 @@ import (
 
 // A raw session can have several contributing devices. Keep that relation at
 // read time instead of assigning the shared transcript to an arbitrary device.
-var hostedMachineCatalogSQL = hostedMachineRowsSQL("(SELECT * FROM sessions WHERE tenant_id=$1)")
+var hostedMachineCatalogSQL = hostedMachineRowsSQL("(SELECT * FROM sessions WHERE tenant_id=$1 AND NOT rollout_hidden)")
 
 func (h *HostedStore) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
 	query := `SELECT DISTINCT m.machine FROM (` + hostedMachineCatalogSQL + `) m
@@ -25,11 +25,15 @@ func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []st
 	// Old hosted URLs used the physical "hosted" key. Keep exact selectors
 	// working without advertising that compatibility key as a source device.
 	return h.machineIDs(ctx, `SELECT DISTINCT machine FROM (
- `+hostedMachineCatalogSQL+` UNION ALL SELECT id,project,machine FROM sessions WHERE provenance_kind='raw' AND tenant_id=$1) m
+ `+hostedMachineCatalogSQL+` UNION ALL SELECT id,project,machine FROM sessions WHERE provenance_kind='raw' AND tenant_id=$1 AND NOT rollout_hidden) m
  WHERE machine=ANY($2) ORDER BY machine`, h.tenant, candidates)
 }
 
 func (h *HostedStore) machineIDs(ctx context.Context, query string, args ...any) ([]string, error) {
+	return hostedRead(ctx, h, func(_ hostedRevision) ([]string, error) { return h.machineIDsOnce(ctx, query, args...) })
+}
+
+func (h *HostedStore) machineIDsOnce(ctx context.Context, query string, args ...any) ([]string, error) {
 	rows, err := h.physical.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading hosted machines: %w", err)
@@ -47,6 +51,10 @@ func (h *HostedStore) machineIDs(ctx context.Context, query string, args ...any)
 }
 
 func (h *HostedStore) GetMachineLabels(ctx context.Context) (map[string]string, error) {
+	return hostedRead(ctx, h, func(_ hostedRevision) (map[string]string, error) { return h.machineLabels(ctx) })
+}
+
+func (h *HostedStore) machineLabels(ctx context.Context) (map[string]string, error) {
 	labels, err := h.physical.GetMachineLabels(ctx)
 	if err != nil {
 		return nil, err

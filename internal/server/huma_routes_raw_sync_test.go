@@ -86,6 +86,7 @@ func TestRawSyncStatusHTTP(t *testing.T) {
 	acceptedAt := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	lastSeenAt := acceptedAt.Add(time.Hour)
 	want := rawsync.Status{
+		Rollout: []rawsync.RolloutScopeStatus{},
 		SourceHeads: []rawsync.SourceHeadStatus{{
 			DeviceID:         "dev-a",
 			ConfiguredRootID: "root-a",

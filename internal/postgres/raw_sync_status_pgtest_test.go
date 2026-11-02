@@ -635,9 +635,10 @@ func assertRawStatusJSONShape(t *testing.T, body []byte) {
 	var object map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(body, &object))
 	assert.ElementsMatch(t,
-		[]string{"source_heads", "parse_jobs", "active_device_count", "devices", "uploads"},
+		[]string{"source_heads", "parse_jobs", "active_device_count", "devices", "uploads", "rollout"},
 		slices.Collect(maps.Keys(object)),
 	)
+	assert.JSONEq(t, `[]`, string(object["rollout"]))
 	var heads []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(object["source_heads"], &heads))
 	for _, head := range heads {
