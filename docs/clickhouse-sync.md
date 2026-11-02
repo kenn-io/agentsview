@@ -31,6 +31,12 @@ without dialogue, and needs a role that can update the ClickHouse schema. Until
 the schema has `messages.dialogue_text`, reads fail with a schema compatibility
 error naming that column.
 
+Commit lookups return the copied links and prompts.
+The first push after upgrading is a full push to copy existing commit links.
+A deleted session remains visible as a missing record. Project filters use its
+project from the last push. A session deleted before it was ever pushed has no
+project evidence, so a filtered replica omits its retained links.
+
 ## Quick Start
 
 ### 1. Configure ClickHouse

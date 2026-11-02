@@ -28,6 +28,13 @@ A mirror written before dialogue storage (schema version 20 or older) rejects
 reads with a schema compatibility error naming `messages.dialogue_text`. Run
 `agentsview replica duckdb push` to rebuild it before serving it with a newer binary.
 
+Commit lookups return the copied links and prompts.
+The first push after upgrading rebuilds the mirror to copy existing commit
+links. Serve requires that rebuild before opening an older mirror.
+A deleted session remains visible as a missing record. Project filters use its
+project from the last push. A session deleted before it was ever pushed has no
+project evidence, so a filtered replica omits its retained links.
+
 ## Quick Start
 
 ```bash

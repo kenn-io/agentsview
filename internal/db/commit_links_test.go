@@ -660,3 +660,29 @@ func TestCommitLinksCodeModeOperations(t *testing.T) {
 		})
 	}
 }
+
+func TestCommitLinkMirrorRows(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "s1"))
+	rows, err := d.SessionCommitLinkRows(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].TurnOrdinal)
+	assert.Equal(t, 0, *rows[0].TurnOrdinal)
+	assert.Equal(t, "Record the parser fix", rows[0].TurnText)
+	retained, err := d.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, retained)
+	snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Equal(t, rows, snapshot.CommitLinks)
+	require.NoError(t, d.DeleteSession(t.Context(), "s1"))
+	retained, err = d.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	require.Len(t, retained, 1)
+	assert.Equal(t, "abc1234", retained[0].SHA)
+	assert.Nil(t, retained[0].TurnOrdinal)
+	assert.Empty(t, retained[0].TurnText)
+}

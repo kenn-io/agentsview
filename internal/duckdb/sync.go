@@ -22,12 +22,13 @@ const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
 
 // Sync manages push-only mirroring from the SQLite primary archive to DuckDB.
 type Sync struct {
-	duck            *sql.DB
-	local           *db.DB
-	machine         string
-	projects        []string
-	excludeProjects []string
-	maintenance     duckDBMaintenance
+	previousCommitProjects map[string]string
+	duck                   *sql.DB
+	local                  *db.DB
+	machine                string
+	projects               []string
+	excludeProjects        []string
+	maintenance            duckDBMaintenance
 
 	// archiveID caches this local archive's stable identifier (see
 	// ensureArchiveID), stamped onto every pushed session's
@@ -426,6 +427,9 @@ func (s *Sync) runIncrementalPush(
 	identityRevision := probe.IdentityRevision
 	mappingRevision := probe.MappingRevision
 	if result.Errors == 0 {
+		if err := s.replaceRetainedCommitLinks(ctx); err != nil {
+			return result, err
+		}
 		refreshed, err := s.refreshCurationIfChanged(ctx)
 		if err != nil {
 			return result, err

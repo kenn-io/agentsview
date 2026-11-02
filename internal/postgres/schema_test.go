@@ -586,6 +586,7 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"commit_links":                                    true,
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
 		"genai_pricing":                                   true,

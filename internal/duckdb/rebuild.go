@@ -312,6 +312,10 @@ func buildMirror(
 		}
 		return storage.MirrorPushResult{}, storage.PushNotStartedError{Err: err}
 	}
+	if err := s.loadPreviousCommitProjects(ctx, path); err != nil {
+		_ = s.Close()
+		return storage.MirrorPushResult{}, err
+	}
 	result, buildErr := buildMirrorInto(ctx, s, opts, run, onProgress)
 	if closeErr := s.Close(); closeErr != nil && buildErr == nil {
 		buildErr = fmt.Errorf("closing duckdb rebuild file: %w", closeErr)
@@ -535,6 +539,9 @@ func buildMirrorInto(
 		return result, fmt.Errorf(
 			"rebuild failed with %d session push errors", result.Errors,
 		)
+	}
+	if err := s.replaceRetainedCommitLinks(ctx); err != nil {
+		return result, err
 	}
 	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true, nil)
 	if err != nil {

@@ -27,7 +27,7 @@ const idBatchSize = 500
 // insert order. Deletes run in the same order.
 var dependentTables = []string{
 	"messages", "tool_calls", "tool_result_events", "usage_events",
-	"session_plan_usage", "secret_findings", "pinned_messages",
+	"session_plan_usage", "secret_findings", "commit_links", "pinned_messages",
 }
 
 // newPushVersion returns the version stamped on every row a push writes.
@@ -83,6 +83,7 @@ func (s *Sync) pushWithOptions(
 		s.archiveKey(mappingRevisionKeyBase),
 		s.archiveKey(usageSnapshotReadyKeyBase),
 		s.archiveKey(messageDialogueReadyKeyBase),
+		s.archiveKey(commitLinksReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
 		s.archiveKey(databaseIDKeyBase),
 		s.archiveKey(fullPushRunKeyBase),
@@ -109,6 +110,9 @@ func (s *Sync) pushWithOptions(
 	}
 	if !full && meta[s.archiveKey(usageSnapshotReadyKeyBase)] == "" {
 		full, reason = true, "preparing complete usage snapshots"
+	}
+	if !full && meta[s.archiveKey(commitLinksReadyKeyBase)] == "" {
+		full, reason = true, "backfilling commit links"
 	}
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
@@ -276,6 +280,9 @@ func (s *Sync) pushWithOptions(
 			return result, err
 		}
 	}
+	if err := s.replaceRetainedCommitLinks(ctx, version); err != nil {
+		return result, err
+	}
 	if err := s.refreshCurationIfChanged(ctx, version); err != nil {
 		return result, err
 	}
@@ -346,6 +353,7 @@ func (s *Sync) pushWithOptions(
 		}
 		if full {
 			pushed[s.archiveKey(messageDialogueReadyKeyBase)] = cutoff
+			pushed[s.archiveKey(commitLinksReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(fullPushRunKeyBase)] = ""
 		}
 		if err := writeMetadata(ctx, conn, pushed); err != nil {
@@ -558,6 +566,10 @@ func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
 		for _, table := range slices.Concat(dependentTables, derivedSessionTables, []string{"starred_sessions"}) {
+			// Retained refresh needs the project even after the session is gone.
+			if table == "commit_links" {
+				continue
+			}
 			if _, err := s.conn.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE session_id IN ("+placeholders+")", args...); err != nil {
 				return fmt.Errorf("deleting clickhouse %s rows: %w", table, err)
@@ -570,6 +582,7 @@ func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 			}
 		}
 	}
+	s.deletedCommitSessions = append(s.deletedCommitSessions, ids...)
 	return nil
 }
 
@@ -768,6 +781,7 @@ type sessionPayload struct {
 	messages    []db.Message
 	usage       []db.UsageEvent
 	planUsage   *db.SessionPlanUsage
+	commitLinks []db.CommitLinkRow
 	findings    []db.SecretFinding
 	pins        []db.PinnedMessage
 	fingerprint string
@@ -790,8 +804,8 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	}
 	return sessionPayload{
 		session: snapshot.Session, messages: snapshot.Messages, usage: snapshot.Usage,
-		planUsage: snapshot.PlanUsage,
-		findings:  snapshot.Findings, pins: snapshot.Pins, fingerprint: fingerprint,
+		planUsage:   snapshot.PlanUsage,
+		commitLinks: snapshot.CommitLinks, findings: snapshot.Findings, pins: snapshot.Pins, fingerprint: fingerprint,
 	}, nil
 }
 
@@ -864,7 +878,7 @@ func (s *Sync) pushSessionBatch(
 }
 
 func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {
-	var messages, toolCalls, toolResults, usage, planUsage, findings, pins [][]any
+	var messages, toolCalls, toolResults, usage, planUsage, findings, pins, links [][]any
 	for _, p := range payloads {
 		if p.planUsage != nil {
 			row, err := planUsageRow(p.session.ID, p.planUsage, version)
@@ -885,6 +899,9 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 		for _, ev := range p.usage {
 			usage = append(usage, usageEventRow(ev, version))
 		}
+		for _, r := range p.commitLinks {
+			links = append(links, commitLinkRow(r, false, version))
+		}
 		for i, f := range p.findings {
 			findings = append(findings, secretFindingRow(f, i, version))
 		}
@@ -902,6 +919,7 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 		{"usage_events", usage},
 		{"session_plan_usage", planUsage},
 		{"secret_findings", findings},
+		{"commit_links", links},
 		{"pinned_messages", pins},
 	} {
 		if err := insertRows(ctx, s.conn, block.table, block.rows); err != nil {

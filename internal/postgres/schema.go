@@ -609,6 +609,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_result_events_dedup
         call_index, event_index
     );
 
+CREATE TABLE IF NOT EXISTS commit_links (
+    session_id TEXT NOT NULL, sha TEXT NOT NULL,
+    branch TEXT NOT NULL, subject TEXT NOT NULL, repository TEXT NOT NULL,
+    message_ordinal INTEGER NOT NULL, call_index INTEGER NOT NULL, tool_use_id TEXT NOT NULL,
+    committed_at TEXT NOT NULL, turn_ordinal INTEGER, turn_text TEXT NOT NULL,
+    project TEXT NOT NULL, retained BOOLEAN NOT NULL, PRIMARY KEY(session_id,sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);
+
 CREATE TABLE IF NOT EXISTS secret_findings (
     id               BIGINT GENERATED ALWAYS AS IDENTITY
                          PRIMARY KEY,
@@ -2477,7 +2486,8 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	if err := checkPushSchemaCompat(ctx, db); err != nil {
 		return false
 	}
-	if !pgHasTable(ctx, db, "model_pricing") ||
+	if !pgHasTable(ctx, db, "commit_links") ||
+		!pgHasTable(ctx, db, "model_pricing") ||
 		!pgHasTable(ctx, db, "model_pricing_bands") ||
 		!pgHasTable(ctx, db, "genai_pricing") ||
 		!pgHasTable(ctx, db, "source_archives") ||
