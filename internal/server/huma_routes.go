@@ -595,6 +595,9 @@ func serverError(err error) error {
 }
 
 func internalError(logPrefix string, err error) error {
+	if errors.Is(err, db.ErrProtectedSessionPurge) {
+		return apiError(http.StatusConflict, db.ErrProtectedSessionPurge.Error())
+	}
 	if handled := machineFilterHTTPError(err); handled != nil {
 		return handled
 	}

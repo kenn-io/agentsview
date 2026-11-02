@@ -144,7 +144,7 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 			changes = append(changes, rawEmbeddingChange{session: c.id, revision: c.revision, action: action})
 		}
 	}
-	return changes, nil
+	return changes, recomputeRawRollout(ctx, tx, group)
 }
 
 func (s *RawProjectionStore) refreshStaleRawFriction(

@@ -28,11 +28,11 @@ func (s catalogSQL) WorktreeCandidateSessions(ctx context.Context, ids []string,
 }
 
 func (s catalogSQL) VisibleArchivesSQL() string {
-	return readbase.VisibleArchivesSQL()
+	return readbase.VisibleArchivesSQL() + " AND NOT rollout_hidden"
 }
 
 func (s catalogSQL) MachinesSQL() string {
-	return readbase.MachinesSQL()
+	return readbase.MachinesSQL(db.PostgresQueryDialect())
 }
 
 func (s catalogSQL) SourceArchivesSQL() string {
