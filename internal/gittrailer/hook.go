@@ -39,11 +39,22 @@ func Install(repoDir string) error {
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
 	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("commit-msg already exists; add this line to it:\n%s", hookLine)
+		return checkExistingHook(path)
 	}
 	if err != nil {
 		return err
 	}
 	_, err = file.WriteString(hookScript)
 	return errors.Join(err, file.Close())
+}
+
+func checkExistingHook(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if string(data) == hookScript {
+		return nil
+	}
+	return fmt.Errorf("commit-msg already exists; add this line to it:\n%s", hookLine)
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 const (
@@ -48,8 +49,7 @@ func newGitTrailerFixture(t *testing.T) *gitTrailerFixture {
 	require.NoError(t, os.Mkdir(filepath.Dir(f.bin), 0o700))
 	exe, err := os.Executable()
 	require.NoError(t, err)
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
-	require.NoError(t, os.WriteFile(f.bin, []byte("#!/bin/sh\nexec "+quote(exe)+" -test.run=^TestGitTrailerCLIProcess$ -- \"$@\"\n"), 0o755))
+	require.NoError(t, os.WriteFile(f.bin, []byte("#!/bin/sh\nexec "+shellquote.POSIX(exe)+" -test.run=^TestGitTrailerCLIProcess$ -- \"$@\"\n"), 0o755))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		if strings.HasPrefix(key, "GIT_") || strings.HasPrefix(key, "AGENTSVIEW_") || key == "CLAUDE_CODE_SESSION_ID" || key == "CODEX_THREAD_ID" || key == "CODEX_SESSION_ID" {
@@ -208,8 +208,8 @@ func TestGitHookInstall(t *testing.T) {
 			f.hook(t, "install")
 			f.git(t, "commit", "--allow-empty", "-m", "installed hook")
 			assert.Equal(t, "installed hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
-			original, err := os.ReadFile(path)
-			require.NoError(t, err)
+			original := []byte("#!/bin/sh\n# existing hook\n")
+			require.NoError(t, os.WriteFile(path, original, 0o755))
 			out, err := f.run(t, f.bin, "git-hook", "install")
 			require.Error(t, err)
 			assert.Contains(t, out, `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`)
@@ -226,6 +226,25 @@ func TestGitHookInstall(t *testing.T) {
 			assert.Contains(t, out, "later check")
 		})
 	}
+}
+
+func TestGitHookInstallAgain(t *testing.T) {
+	f := newGitTrailerFixture(t)
+	f.hook(t, "install")
+	path := filepath.Join(f.repo, ".git", "hooks", "commit-msg")
+	original, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(path, 0o555))
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	f.hook(t, "install")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+	assert.Equal(t, before.ModTime(), after.ModTime())
+	assert.Equal(t, before.Mode(), after.Mode())
 }
 
 func TestGitTrailerRebasePick(t *testing.T) {

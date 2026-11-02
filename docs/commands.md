@@ -56,8 +56,10 @@ The optional `commit-msg` hook adds `Agent-Session: <agent>:<session-id>` to
 commits made without an editor, including `-m`, `-F`, `-C`,
 `--amend --no-edit`, and `merge --no-edit`. A conflicted cherry-pick finished
 with `--no-edit` or `--continue` also carries the current session. Editor
-commits keep their original messages. Rebase picks keep their existing trailers.
-Amending from a different session adds a second `Agent-Session` line.
+commits keep their original messages. Git doesn't run `commit-msg` for
+`git revert --no-edit` or rebase picks, so they get no new trailer. Rebase picks
+keep their existing trailers. Amending from a different session adds a second
+`Agent-Session` line.
 
 The hook skips messages containing only blank lines, Git comments, or signoffs.
 Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
@@ -76,8 +78,9 @@ hyphens, up to 32 characters, starting with a letter or digit. Their IDs accept
 letters, digits, dots, underscores, and hyphens, up to 128 characters, starting
 with a letter or digit.
 
-Installation writes into the hooks directory Git uses and refuses to replace
-an existing hook. A `core.hooksPath` setting, including a global one, makes
+Installation writes into the hooks directory Git uses. Rerunning it succeeds
+without changing a byte-identical hook; a different existing hook needs manual
+integration. A `core.hooksPath` setting, including a global one, makes
 installation apply to every repository sharing that path.
 Add this line to an existing `commit-msg` hook instead:
 
