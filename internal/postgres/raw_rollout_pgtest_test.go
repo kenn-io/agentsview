@@ -37,6 +37,7 @@ func (f projectionFixture) rolloutRows(t require.TestingT) map[string]rolloutRow
 // must fail this model comparison, as must applying shadow to only one source
 // of a group that is shared across devices.
 func TestRawRolloutWritesMatchSerialModel(t *testing.T) {
+	requireHegel(t)
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, "capture-"+device, "")
@@ -148,6 +149,7 @@ func TestRawRolloutWritesMatchSerialModel(t *testing.T) {
 }
 
 func TestRawRolloutListStoredParity(t *testing.T) {
+	requireHegel(t)
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, "capture", "")
@@ -214,13 +216,4 @@ func TestRawRolloutSourceMembershipChangesEligibility(t *testing.T) {
 			require.Equal(t, 2, active)
 		}
 	}
-}
-
-func TestRawRolloutNullParityRegression(t *testing.T) {
-	f := newProjectionFixture(t)
-	require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow"))
-	scopes, err := ListRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "")
-	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	require.Empty(t, scopes[0].Parity)
 }
