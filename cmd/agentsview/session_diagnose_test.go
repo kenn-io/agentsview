@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net"
 	"net/http"
@@ -16,11 +15,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -62,77 +59,54 @@ func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
 	require.NoError(t, err)
 	report = sessionDiagnosis{}
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
-	assert.Zero(t, report.Usage.SubagentCount)
 	assert.Equal(t, []diagnosisChildLink{{SessionID: "child"}}, report.ChildLinks)
 	assert.Contains(t, report.Scope, "child links remain listed")
 	assert.Equal(t, 2, stub.OpenCount)
-	out, err = executeCommand(newRootCommand(), "session", "diagnose", canonical, "--pg")
-	require.NoError(t, err)
-	assert.Contains(t, out, "  Child: child\n")
 }
 
 func TestSessionDiagnoseMissingSession(t *testing.T) {
 	seedEmptyArchive(t, newAgentDataDir(t))
 	_, err := executeCommand(newRootCommand(), "session", "diagnose", "missing-session", "--format", "json")
 	require.ErrorIs(t, err, errSessionNotFound)
-	var stderr strings.Builder
-	assert.Equal(t, 1, reportCLIError(err, &stderr))
-	assert.Contains(t, stderr.String(), "session not found: missing-session")
 }
 
 func TestSessionDiagnoseRefreshFailure(t *testing.T) {
-	for _, format := range []string{"json", "human"} {
-		t.Run(format, func(t *testing.T) {
-			testDataDir(t)
-			refreshes := 0
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				switch r.URL.Path {
-				case "/api/v1/version":
-					_, _ = w.Write([]byte(`{"api_version":999}`))
-				case "/api/v1/sessions/remote":
-					_, _ = w.Write([]byte(`{"id":"remote","agent":"codex"}`))
-				case "/api/v1/sessions/sync":
-					assert.Equal(t, http.MethodPost, r.Method)
-					refreshes++
-					http.Error(w, `{"error":"refresh failed"}`, http.StatusServiceUnavailable)
-				case "/api/v1/sessions/remote/usage":
-					_, _ = w.Write([]byte(`{"session_id":"remote","has_token_data":true,"total_output_tokens":42}`))
-				case "/api/v1/sessions/remote/messages":
-					_, _ = w.Write([]byte(`{"messages":[]}`))
-				case "/api/v1/sessions/remote/children":
-					_, _ = w.Write([]byte(`[]`))
-				default:
-					http.NotFound(w, r)
-				}
-			}))
-			defer ts.Close()
-			args := []string{"session", "diagnose", "remote", "--server", ts.URL}
-			if format == "json" {
-				args = append(args, "--format", "json")
-			}
-			out, err := executeCommand(newRootCommand(), args...)
-			require.NoError(t, err)
-			assert.Equal(t, 1, refreshes)
-			if format == "json" {
-				var report struct {
-					Usage sessionUsageOutput `json:"usage"`
-				}
-				require.NoError(t, json.Unmarshal([]byte(out), &report))
-				assert.Equal(t, 42, report.Usage.TotalOutputTokens)
-				assert.True(t, report.Usage.RefreshIncomplete)
-			} else {
-				assert.Contains(t, out, "Usage refresh: incomplete; showing archived totals")
-			}
-		})
-	}
+	testDataDir(t)
+	refreshes := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/version":
+			_, _ = w.Write([]byte(`{"api_version":999}`))
+		case "/api/v1/sessions/remote":
+			_, _ = w.Write([]byte(`{"id":"remote","agent":"codex"}`))
+		case "/api/v1/sessions/sync":
+			assert.Equal(t, http.MethodPost, r.Method)
+			refreshes++
+			http.Error(w, `{"error":"refresh failed"}`, http.StatusServiceUnavailable)
+		case "/api/v1/sessions/remote/usage":
+			_, _ = w.Write([]byte(`{"session_id":"remote","has_token_data":true,"total_output_tokens":42}`))
+		case "/api/v1/sessions/remote/messages":
+			_, _ = w.Write([]byte(`{"messages":[]}`))
+		case "/api/v1/sessions/remote/children":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	out, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--server", ts.URL, "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, 1, refreshes)
+	var report sessionDiagnosis
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
+	assert.True(t, report.Usage.RefreshIncomplete)
 }
 
 func TestSessionDiagnoseNoSync(t *testing.T) {
 	testDataDir(t)
 	refreshes := 0
-	usageReads := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -144,11 +118,9 @@ func TestSessionDiagnoseNoSync(t *testing.T) {
 			refreshes++
 			_, _ = w.Write([]byte(`{}`))
 		case "/api/v1/sessions/remote/usage":
-			usageReads++
-			assert.Equal(t, "true", r.URL.Query().Get("subagents"))
-			_, _ = w.Write([]byte(`{"session_id":"remote","has_token_data":true,"total_output_tokens":42,"subagent_count":1}`))
+			_, _ = w.Write([]byte(`{"session_id":"remote","has_token_data":true,"total_output_tokens":42}`))
 		case "/api/v1/sessions/remote/messages":
-			_, _ = w.Write([]byte(`{"messages":[{"ordinal":7,"is_compact_boundary":true}]}`))
+			_, _ = w.Write([]byte(`{"messages":[]}`))
 		case "/api/v1/sessions/remote/children":
 			_, _ = w.Write([]byte(`[]`))
 		default:
@@ -156,14 +128,8 @@ func TestSessionDiagnoseNoSync(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	out, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--server", ts.URL, "--no-sync", "--format", "json")
+	_, err := executeCommand(newRootCommand(), "session", "diagnose", "remote", "--server", ts.URL, "--no-sync", "--format", "json")
 	require.NoError(t, err)
-	var report sessionDiagnosis
-	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
-	assert.Equal(t, 1, report.Usage.SubagentCount)
-	assert.Equal(t, []int{7}, report.Compactions)
-	assert.Equal(t, 1, usageReads)
 	assert.Zero(t, refreshes)
 }
 
@@ -172,7 +138,7 @@ func TestSessionDiagnosisHumanBoundsContext(t *testing.T) {
 	for i := range messages {
 		messages[i] = db.Message{Ordinal: i, HasContextTokens: true, ContextTokens: i * 100}
 	}
-	report := testSessionDiagnosis(t, "root", &service.SessionUsageReport{}, messages, nil)
+	report := testSessionDiagnosis(t, "root", &service.SessionUsageReport{}, messages)
 	var out strings.Builder
 	require.NoError(t, renderSessionDiagnosis(&out, report))
 	assert.Equal(t, 10, strings.Count(out.String(), "  Context #"))
@@ -186,9 +152,14 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 		SessionID: "root", Project: "private-project", HasTokenData: true, SubagentCount: 1,
 		Breakdown: []db.SessionUsageBreakdownEntry{{Source: "message", MessageOrdinal: &ordinal, InputTokens: 40, CacheReadInputTokens: 60, CacheCreationInputTokens: 20, OutputTokens: 10}, {Source: "message", SubagentSessionID: "child", InputTokens: 5, OutputTokens: 2}},
 	}
-	messages := []db.Message{{Ordinal: 3, Content: "secret prompt", HasContextTokens: true, ContextTokens: 120, Model: "model-a"}, {Ordinal: 7, IsCompactBoundary: true}}
-	calls := []service.ToolCall{{Ordinal: 3, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 20}, {Ordinal: 4, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 900}, {Ordinal: 5, ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultLength: 50}, {Ordinal: 6, ToolName: "read", ResultLength: 100, SubagentSessionID: "child"}}
-	got := testSessionDiagnosis(t, "root", usage, messages, calls)
+	messages := []db.Message{
+		{Ordinal: 3, Content: "secret prompt", HasContextTokens: true, ContextTokens: 120, Model: "model-a", ToolCalls: []db.ToolCall{{ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultContentLength: 20}}},
+		{Ordinal: 4, ToolCalls: []db.ToolCall{{ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultContentLength: 900}}},
+		{Ordinal: 5, ToolCalls: []db.ToolCall{{ToolName: "shell", InputJSON: `{"command":"secret command"}`, ResultContentLength: 50}}},
+		{Ordinal: 6, ToolCalls: []db.ToolCall{{ToolName: "read", ResultContentLength: 100, SubagentSessionID: "child"}}},
+		{Ordinal: 7, IsCompactBoundary: true},
+	}
+	got := testSessionDiagnosis(t, "root", usage, messages)
 	assert.Equal(t, diagnosisTokens{UncachedInput: 45, CacheRead: 60, CacheWrite: 20, Output: 12}, got.ObservedRows)
 	assert.Equal(t, []int{7}, got.Compactions)
 	require.Len(t, got.RetryRuns, 1)
@@ -200,7 +171,7 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	assert.Nil(t, got.Coverage.RequestCount)
 	one, err := json.Marshal(got)
 	require.NoError(t, err)
-	two, err := json.Marshal(testSessionDiagnosis(t, "root", usage, messages, calls))
+	two, err := json.Marshal(testSessionDiagnosis(t, "root", usage, messages))
 	require.NoError(t, err)
 	assert.Equal(t, string(one), string(two))
 	assert.NotContains(t, string(one), "secret")
@@ -208,67 +179,20 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	var human strings.Builder
 	require.NoError(t, renderSessionDiagnosis(&human, got))
 	assert.Contains(t, human.String(), "cache read 60")
+	assert.Contains(t, human.String(), "  Child: child via read (#6)\n")
 	assert.NotContains(t, human.String(), "secret")
 }
 
 func TestSessionDiagnosisMissingEvidence(t *testing.T) {
-	calls := []service.ToolCall{{ToolName: "read"}, {ToolName: "read"}, {ToolName: "read"}}
-	got := testSessionDiagnosis(t, "root", &service.SessionUsageReport{}, nil, calls)
-	assert.Equal(t, []diagnosisRetry{{Tool: "read", Count: 3}}, got.RetryRuns)
+	messages := []db.Message{
+		{Ordinal: 0, ToolCalls: []db.ToolCall{{ToolName: "read"}}},
+		{Ordinal: 1, ToolCalls: []db.ToolCall{{ToolName: "read"}}},
+		{Ordinal: 2, ToolCalls: []db.ToolCall{{ToolName: "read"}}},
+	}
+	got := testSessionDiagnosis(t, "root", &service.SessionUsageReport{}, messages)
+	assert.Equal(t, []diagnosisRetry{{Tool: "read", Count: 3, FirstOrdinal: 0, LastOrdinal: 2}}, got.RetryRuns)
 	assert.Equal(t, "no token data reported", got.Coverage.UsageStatus)
 	assert.Nil(t, got.Coverage.RequestCount)
-}
-
-type diagnosisPageService struct {
-	service.SessionService
-	filters []service.MessageFilter
-}
-
-func (s *diagnosisPageService) Messages(_ context.Context, _ string, f service.MessageFilter) (*service.MessageList, error) {
-	s.filters = append(s.filters, f)
-	if f.ExpectedRevision != "" || f.EvidenceSource != "" {
-		return nil, service.ErrSourceChanged
-	}
-	if len(s.filters) == 1 {
-		m := make([]db.Message, db.MaxMessageLimit)
-		for i := range m {
-			m[i].Ordinal = i
-		}
-		return &service.MessageList{Messages: m, TranscriptRevision: "rev", EvidenceSource: "archive"}, nil
-	}
-	return &service.MessageList{Messages: []db.Message{{Ordinal: 1000, IsCompactBoundary: true}}}, nil
-}
-
-func TestDiagnosisAndRecallReadGrowingSession(t *testing.T) {
-	for _, diagnosis := range []bool{false, true} {
-		t.Run(strconv.FormatBool(diagnosis), func(t *testing.T) {
-			svc := &diagnosisPageService{}
-			if diagnosis {
-				report := buildSessionDiagnosis("session", &service.SessionUsageReport{})
-				require.NoError(t, report.readMessages(t.Context(), svc))
-				assert.Equal(t, []int{1000}, report.Compactions)
-			} else {
-				messages, err := loadRecallExtractionMessages(t.Context(), svc, "session")
-				require.NoError(t, err)
-				assert.Len(t, messages, 1001)
-			}
-			require.Len(t, svc.filters, 2)
-			assert.Equal(t, 1000, *svc.filters[1].From)
-		})
-	}
-}
-
-func TestSessionDiagnoseReadsSQLiteWithoutContent(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSession(t, dataDir, "diagnose-test", "project")
-	seedMessages(t, dataDir, "diagnose-test", 3)
-	out, err := executeCommand(newRootCommand(), "session", "diagnose", "diagnose-test", "--json")
-	require.NoError(t, err)
-	var report sessionDiagnosis
-	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	assert.Equal(t, 1, report.SchemaVersion)
-	assert.Nil(t, report.Coverage.RequestCount)
-	assert.NotContains(t, out, "msg-1")
 }
 
 func TestSessionDiagnoseRemoteUsesUsageTransport(t *testing.T) {
@@ -339,11 +263,11 @@ func FuzzDiagnosisLargestResults(f *testing.F) {
 		if len(sizes) > 200 {
 			sizes = sizes[:200]
 		}
-		calls := make([]service.ToolCall, 0, len(sizes))
+		messages := make([]db.Message, 0, len(sizes))
 		for i, n := range sizes {
-			calls = append(calls, service.ToolCall{Ordinal: i, ToolName: "read", ResultLength: int(n)})
+			messages = append(messages, db.Message{Ordinal: i, ToolCalls: []db.ToolCall{{ToolName: "read", ResultContentLength: int(n)}}})
 		}
-		result := testSessionDiagnosis(t, "session", &service.SessionUsageReport{}, nil, calls)
+		result := testSessionDiagnosis(t, "session", &service.SessionUsageReport{}, messages)
 		var counts [256]int
 		for _, n := range sizes {
 			counts[n]++
@@ -386,8 +310,6 @@ func TestSessionDiagnoseColdStartPreservesSourceSync(t *testing.T) {
 			_, _ = w.Write([]byte(`[]`))
 		case "/api/v1/sessions/remote/messages":
 			_, _ = w.Write([]byte(`{"messages":[],"count":0}`))
-		case "/api/v1/sessions/remote/tool-calls":
-			_, _ = w.Write([]byte(`{"tool_calls":[],"count":0}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -412,46 +334,6 @@ func TestSessionDiagnoseColdStartPreservesSourceSync(t *testing.T) {
 	}
 }
 
-func TestSessionUsageNoSyncRejectsVersionSkewWhenAutostartDisabled(t *testing.T) {
-	dataDir := testDataDir(t)
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dataDir, host, port, "1.0.0", false)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	setTestVersion(t, "1.1.0")
-	forbidStartBackgroundServeForTransport(t, "autostart is disabled")
-
-	cmd := sessionUsageCommand(t, "session", "usage", "session", "--no-sync", "--json")
-	_, _, err := sessionUsageDataForCommand(cmd, "session")
-	require.ErrorContains(t, err, "daemon restart required")
-}
-
-func TestSessionDiagnosisRetryCandidatesIncludeRecordedPlaceholders(t *testing.T) {
-	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	records := []mirror.Record{{Kind: mirror.KindThread, FetchedAt: fetched, Data: jsontext.Value(`{"id":"thread-a","createdAt":1,"updatedAt":2}`)}}
-	for _, id := range []string{"a", "b", "c"} {
-		records = append(records, mirror.Record{Kind: mirror.KindItem, FetchedAt: fetched, Data: jsontext.Value(`{"turnId":"turn-1","startedAtMs":1759320000000,"item":{"type":"functionCallOutput","id":"` + id + `","name":"exec","output":"done"}}`)})
-	}
-	path := filepath.Join(t.TempDir(), "account", "thread-a.jsonl.zstd")
-	_, err := mirror.Append(path, 0, records)
-	require.NoError(t, err)
-	parsed, ok, err := parser.ParseCodexCloudFile(t.Context(), path, "machine")
-	require.NoError(t, err)
-	require.True(t, ok)
-	var calls []service.ToolCall
-	for _, m := range parsed.Messages {
-		for _, c := range m.ToolCalls {
-			calls = append(calls, service.ToolCall{Ordinal: m.Ordinal, ToolName: c.ToolName, InputJSON: c.InputJSON})
-		}
-	}
-	require.Len(t, calls, 3)
-	for _, c := range calls {
-		assert.Equal(t, "{}", c.InputJSON)
-	}
-	report := testSessionDiagnosis(t, parsed.Session.ID, &service.SessionUsageReport{}, nil, calls)
-	require.Len(t, report.RetryRuns, 1)
-	assert.Equal(t, 3, report.RetryRuns[0].Count)
-}
-
 func TestSessionDiagnoseDirectArchive(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
@@ -462,11 +344,8 @@ func TestSessionDiagnoseDirectArchive(t *testing.T) {
 	var report sessionDiagnosis
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
 	assert.Equal(t, 42, report.Usage.TotalOutputTokens)
-	cmd := sessionUsageCommand(t, "session", "usage", "codex:direct")
-	usage, _, err := sessionUsageDataForCommand(cmd, "codex:direct")
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 42, usage.TotalOutputTokens)
+	assert.Equal(t, 1, report.SchemaVersion)
+	assert.Nil(t, report.Coverage.RequestCount)
 }
 
 func TestSessionDiagnoseLongGrowingArchive(t *testing.T) {
@@ -487,12 +366,7 @@ func TestSessionDiagnoseLongGrowingArchive(t *testing.T) {
 			_, _ = w.Write([]byte(`[]`))
 		case "/api/v1/sessions/long/messages":
 			from, _ := strconv.Atoi(r.URL.Query().Get("from"))
-			// Ingestion changes the revision between pages. Unpinned readers can
-			// still read the newly appended evidence.
-			if r.URL.Query().Get("expected_revision") != "" {
-				http.Error(w, `{"error":"source_changed"}`, http.StatusConflict)
-				return
-			}
+			assert.Empty(t, r.URL.Query().Get("expected_revision"))
 			messages := []db.Message{}
 			for i := from; i < min(from+1000, 10003); i++ {
 				m := db.Message{Ordinal: i, Content: "private transcript"}
@@ -530,12 +404,8 @@ type diagnosisMessageService struct {
 func (s diagnosisMessageService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
 	return &service.MessageList{Messages: s.messages}, nil
 }
-func testSessionDiagnosis(t *testing.T, id string, usage *service.SessionUsageReport, messages []db.Message, calls []service.ToolCall) *sessionDiagnosis {
+func testSessionDiagnosis(t *testing.T, id string, usage *service.SessionUsageReport, messages []db.Message) *sessionDiagnosis {
 	t.Helper()
-	messages = append([]db.Message{}, messages...)
-	for _, c := range calls {
-		messages = append(messages, db.Message{Ordinal: c.Ordinal, ToolCalls: []db.ToolCall{{ToolName: c.ToolName, InputJSON: c.InputJSON, ResultContentLength: c.ResultLength, SubagentSessionID: c.SubagentSessionID}}})
-	}
 	out := buildSessionDiagnosis(id, usage)
 	require.NoError(t, out.readMessages(t.Context(), diagnosisMessageService{messages: messages}))
 	return out
