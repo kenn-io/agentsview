@@ -118,6 +118,8 @@ The latest release is
 - Hosted imports avoid fetching a transcript from PostgreSQL again when the same
   transaction has just saved that captured version.
   Existing content identities are preserved.
+- Hosted updates load prior transcript content only when provider history needs
+  it, retaining metadata without decoding an unused older transcript.
 - Hosted transcript jobs whose workers keep stopping now fail with error class
   `lease` after one run past `raw_max_attempts`, instead of retrying forever.
   Workers from an older processing generation can no longer change a newer lease.
