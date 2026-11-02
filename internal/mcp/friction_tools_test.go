@@ -75,6 +75,13 @@ func TestFrictionTools(t *testing.T) {
 		})
 	}
 
+	link := db.FrictionIssueLink{
+		Fingerprint: "fl1:b", KataInstanceUID: "i", KataProjectUID: "p", IssueUID: "01J0ABCDEF0000000000000001",
+		QualifiedID: "agentsview#f001", WebURL: "https://kata.example.test/issues/f001",
+		Source: db.FrictionIssueSourceManual, LinkedAt: time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, d.SaveFrictionIssueLink(t.Context(), link))
+
 	patternTests := []struct {
 		name string
 		args map[string]any
@@ -98,6 +105,15 @@ func TestFrictionTools(t *testing.T) {
 				got = append(got, p.Fingerprint)
 			}
 			assert.Equal(t, tt.want, got)
+			for _, p := range out.Patterns {
+				if p.Fingerprint != "fl1:b" {
+					assert.Nil(t, p.Issue, p.Fingerprint)
+					continue
+				}
+				require.NotNil(t, p.Issue, "a linked pattern carries its issue")
+				assert.Equal(t, link.QualifiedID, p.Issue.QualifiedID)
+				assert.Equal(t, link.WebURL, p.Issue.WebURL)
+			}
 		})
 	}
 }

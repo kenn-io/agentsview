@@ -481,8 +481,8 @@ func (db *DB) UpdateFrictionDigestRender(
 	return nil
 }
 
-// CopyFrictionStateFrom carries friction review state (digests, membership
-// and recurrence) across a full resync, like CopyInsightsFrom. Tables absent
+// CopyFrictionStateFrom carries friction review state (digests, membership,
+// recurrence and Kata issue links) across a full resync, like CopyInsightsFrom. Tables absent
 // from an older source archive are skipped.
 func (db *DB) CopyFrictionStateFrom(sourcePath string) error {
 	if err := db.requireDerivedTextStorage("friction review state"); err != nil {
@@ -505,6 +505,7 @@ func (db *DB) CopyFrictionStateFrom(sourcePath string) error {
 		{"friction_digests", "date, timezone, rules_version, built_at, revision, sessions_scanned, snapshot_json, summary_json, markdown, markdown_sha256, run_id"},
 		{"friction_digest_sessions", "subject_id, date, subject_kind"},
 		{"friction_patterns", "fingerprint, kind, title, first_seen_date, last_seen_date, occurrence_count, session_count, last_subject_id, last_ordinal"},
+		{"friction_issue_links", "fingerprint, kata_instance_uid, kata_project_uid, issue_uid, qualified_id, web_url, source, linked_at"},
 	}
 	for _, c := range copies {
 		var present int

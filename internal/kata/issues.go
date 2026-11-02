@@ -58,7 +58,7 @@ func intPtr(p *int64) *int {
 
 func (c *Client) routeRef(ref string) (string, error) {
 	if ref == "" || strings.TrimSpace(ref) != ref {
-		return "", errors.New("kata: invalid issue ref")
+		return "", ErrInvalidIssueRef
 	}
 	if shortID, ok := strings.CutPrefix(ref, c.project+"#"); ok && c.project != "" && validShortID(shortID) {
 		// A qualified ref is already scoped to this project. Sending the short ID
@@ -66,7 +66,7 @@ func (c *Client) routeRef(ref string) (string, error) {
 		return shortID, nil
 	}
 	if strings.ContainsAny(ref, "/?#") {
-		return "", errors.New("kata: invalid issue ref")
+		return "", ErrInvalidIssueRef
 	}
 	return ref, nil
 }
@@ -141,7 +141,7 @@ func (c *Client) validateIssueProject(id int64, uid *string) error {
 	projectID, projectUID := c.projectID, c.projectUID
 	c.mu.RUnlock()
 	if projectID == 0 || id != projectID || (uid != nil && *uid != projectUID) {
-		return fmt.Errorf("%w: issue belongs to a different project", ErrInvalidResponse)
+		return fmt.Errorf("%w: %w", ErrInvalidResponse, ErrIssueInOtherProject)
 	}
 	return nil
 }

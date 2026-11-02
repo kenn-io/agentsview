@@ -90,7 +90,7 @@ func seedFrictionPG(t *testing.T, store *Store) {
 	t.Helper()
 	pg := store.DB()
 	ctx := t.Context()
-	for _, table := range []string{"friction_findings", "friction_digest_sessions", "friction_patterns", "friction_digests"} {
+	for _, table := range []string{"friction_findings", "friction_digest_sessions", "friction_patterns", "friction_digests", "friction_issue_links"} {
 		_, err := pg.ExecContext(ctx, "DELETE FROM "+table)
 		require.NoError(t, err, table)
 	}
@@ -178,6 +178,16 @@ func TestFrictionListParity(t *testing.T) {
 		})
 	}
 
+	// Both stores join the same link into pattern reads.
+	link := db.FrictionIssueLink{
+		Fingerprint: "fl1:aaa", KataInstanceUID: "01J00000000000000000000009",
+		KataProjectUID: "01J00000000000000000000001", IssueUID: "01J0ABCDEF0000000000000001",
+		QualifiedID: "agentsview#f001", WebURL: "https://kata.example.test/issues/f001",
+		Source: db.FrictionIssueSourceCreated, LinkedAt: time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, local.SaveFrictionIssueLink(ctx, link))
+	require.NoError(t, store.SaveFrictionIssueLink(ctx, link))
+
 	patternFilters := map[string]db.FrictionPatternFilter{
 		"all":             {},
 		"kind":            {Kind: "pattern"},
@@ -200,5 +210,30 @@ func TestFrictionListParity(t *testing.T) {
 	t.Run("bad_cursor", func(t *testing.T) {
 		_, _, err := store.ListFrictionFindings(ctx, db.FrictionFindingFilter{Cursor: "nope"})
 		require.ErrorIs(t, err, db.ErrInvalidCursor)
+	})
+
+	t.Run("issue_link_replace_and_delete", func(t *testing.T) {
+		manual := link
+		manual.IssueUID, manual.QualifiedID, manual.Source = "01J0ABCDEF0000000000000002", "agentsview#f002", db.FrictionIssueSourceManual
+		for name, s := range map[string]interface {
+			db.FrictionReader
+			db.FrictionIssueLinkWriter
+		}{"sqlite": local, "postgres": store} {
+			require.NoError(t, s.SaveFrictionIssueLink(ctx, manual), name)
+			rows, _, err := s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:aaa"}})
+			require.NoError(t, err, name)
+			require.Len(t, rows, 1, name)
+			assert.Equal(t, &manual, rows[0].Issue, name)
+
+			removed, err := s.DeleteFrictionIssueLink(ctx, "fl1:aaa")
+			require.NoError(t, err, name)
+			assert.True(t, removed, name)
+			removed, err = s.DeleteFrictionIssueLink(ctx, "fl1:aaa")
+			require.NoError(t, err, name)
+			assert.False(t, removed, name)
+			rows, _, err = s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:aaa"}})
+			require.NoError(t, err, name)
+			assert.Nil(t, rows[0].Issue, name)
+		}
 	})
 }
