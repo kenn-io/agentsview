@@ -105,7 +105,7 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 			}
 			h.SetCursorSecret([]byte("synthetic scoped sidebar cursor"))
 			roots := 2
-			if mode == "unique" || mode == "equal_cohort" {
+			if mode == "unique" || mode == "equal_cohort" || mode == "hidden_competitor" {
 				roots = 1
 			} else if mode == "ambiguous" {
 				roots = 3
