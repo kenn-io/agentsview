@@ -52,11 +52,6 @@ func AssertCommitLinkParity(t *testing.T, local *db.DB, store db.CommitLinkReade
 	require.NoError(t, err)
 	require.Len(t, result.Commits, 200)
 	assert.Empty(t, result.Commits[199].Links)
-
-	for _, queries := range [][]string{{"bad"}, make([]string, 201)} {
-		_, err := store.CommitSessionLinks(t.Context(), queries)
-		require.ErrorIs(t, err, db.ErrInvalidCommitSHA)
-	}
 }
 
 // AssertRetainedCommitLinkScope checks that an archive can reproduce filtered

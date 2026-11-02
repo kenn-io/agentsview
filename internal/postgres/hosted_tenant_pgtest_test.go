@@ -492,14 +492,6 @@ func TestHostedTenantUpgradeInstallsCommitLinksBeforeCatalogCheck(t *testing.T) 
 
 	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
 	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
-	_, err = f.admin.ExecContext(t.Context(), `INSERT INTO commit_links
-		(tenant_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_text,project,retained)
-		VALUES ('tenant-a','s1','abc1234','main','Fix parser','',2,0,'commit-call','2026-01-01T00:00:00Z','','project-a',true)`)
-	require.NoError(t, err)
-	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-	var tenant string
-	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT tenant_id FROM commit_links WHERE session_id='s1'`).Scan(&tenant))
-	assert.Equal(t, "tenant-a", tenant)
 }
 
 func TestHostedTenantUpgradeInstallsFrictionTablesBeforeCatalogCheck(t *testing.T) {

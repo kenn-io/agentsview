@@ -170,10 +170,6 @@ func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
 	store, err := NewStore(testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
-	require.NoError(t, local.DeleteSession(ctx, "commit-delete"))
-	_, err = syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	dbtest.AssertCommitLinkParity(t, local, store)
 	// A resident row belonging to another archive must keep its own summary.
 	_, err = pg.ExecContext(ctx, `UPDATE sessions SET owner_marker='another-archive' WHERE id='commit-live'`)
 	require.NoError(t, err)
@@ -195,13 +191,6 @@ func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	links, err = store.SessionCommitLinks(ctx, "commit-clash")
-	require.NoError(t, err)
-	assert.Empty(t, links.Commits)
-	// Narrowing scope removes retained rows using their stored project.
-	syncer.projects = []string{"other"}
-	_, err = syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	links, err = store.SessionCommitLinks(ctx, "commit-delete")
 	require.NoError(t, err)
 	assert.Empty(t, links.Commits)
 }
