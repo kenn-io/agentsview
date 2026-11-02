@@ -287,7 +287,7 @@ func runDuckDBStatus() {
 	}
 	if status.MirrorMissing {
 		fmt.Printf(
-			"DuckDB mirror not found at %s; run 'agentsview duckdb push' to create it\n",
+			"DuckDB mirror not found at %s; run 'agentsview replica duckdb push' to create it\n",
 			duckCfg.Path,
 		)
 		return
@@ -464,7 +464,7 @@ func openDuckDBServeStore(
 	if schemaErr != nil {
 		if duckCfg.URL == "" {
 			fatal("duckdb serve: schema incompatible: %v\n"+
-				"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
+				"Run 'agentsview replica duckdb push --full' to repopulate the mirror.", schemaErr)
 		}
 		fatal("duckdb serve: schema incompatible: %v", schemaErr)
 	}
@@ -505,7 +505,7 @@ func duckDBMirrorServeProbeError(probe duckdbsync.MirrorProbe) error {
 				"that process if it predates the read-only serve change", reason,
 		)
 	}
-	return fmt.Errorf("%s; rebuild with 'agentsview duckdb push --full'", reason)
+	return fmt.Errorf("%s; rebuild with 'agentsview replica duckdb push --full'", reason)
 }
 
 // duckDBMirrorProbeFailureReason reports why probe is not safe to serve

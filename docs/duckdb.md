@@ -26,22 +26,22 @@ before matching and pagination.
 
 A mirror written before dialogue storage (schema version 20 or older) rejects
 reads with a schema compatibility error naming `messages.dialogue_text`. Run
-`agentsview duckdb push` to rebuild it before serving it with a newer binary.
+`agentsview replica duckdb push` to rebuild it before serving it with a newer binary.
 
 ## Quick Start
 
 ```bash
 # Mirror local SQLite into ~/.agentsview/sessions.duckdb
-agentsview duckdb push
+agentsview replica duckdb push
 
 # Check mirror state
-agentsview duckdb status
+agentsview replica duckdb status
 
 # Serve the read-only web UI from the mirror
-agentsview duckdb serve
+agentsview replica duckdb serve
 
 # Keep the mirror current in the foreground
-agentsview duckdb push --watch
+agentsview replica duckdb push --watch
 ```
 
 `duckdb push` accepts the same project-filter and foreground watcher flags as
@@ -65,7 +65,7 @@ watcher cleanly.
 pushes to a remote Quack endpoint. If `[duckdb].url` or
 `AGENTSVIEW_DUCKDB_URL` is configured, push fails immediately with an error
 telling you to unset it for pushes and expose the mirror remotely with
-`agentsview duckdb quack serve` instead. `url` is read-side only, configuring
+`agentsview replica duckdb quack serve` instead. `url` is read-side only, configuring
 `duckdb status` and `duckdb serve`; `token` and `allow_insecure` also
 configure `duckdb quack serve`.
 
@@ -89,14 +89,14 @@ web UI on one machine from a mirror that lives on another:
 
 ```bash
 # Machine A: expose the local mirror over loopback Quack
-agentsview duckdb quack serve \
+agentsview replica duckdb quack serve \
   --bind quack:127.0.0.1:9494 \
   --token "$AGENTSVIEW_DUCKDB_TOKEN"
 
 # Machine B (or another terminal): serve the UI from that endpoint
 AGENTSVIEW_DUCKDB_URL='quack:127.0.0.1:9494' \
 AGENTSVIEW_DUCKDB_TOKEN="$AGENTSVIEW_DUCKDB_TOKEN" \
-agentsview duckdb serve
+agentsview replica duckdb serve
 ```
 
 The client `url` uses the native `quack:HOST:PORT` form. The Quack extension
@@ -195,7 +195,7 @@ Environment variables override the config file:
   rather than the FTS5 index that local SQLite serving uses, so content search
   is slower on large archives.
 - **No Windows ARM64 support** — the upstream `duckdb-go-bindings` ship no
-  prebuilt DuckDB library for `windows/arm64`, so `agentsview duckdb`
+  prebuilt DuckDB library for `windows/arm64`, so `agentsview replica duckdb`
   subcommands report a clear error on that platform. Everything SQLite-backed
   works normally. On all other platforms the DuckDB driver is linked into the
   standard binary (which grows it considerably — this is expected).

@@ -14,6 +14,7 @@ import (
 	activity "go.kenn.io/agentsview/internal/activity"
 	db "go.kenn.io/agentsview/internal/db"
 	export "go.kenn.io/agentsview/internal/export"
+	kata "go.kenn.io/agentsview/internal/kata"
 	money "go.kenn.io/agentsview/internal/money"
 	rawsync "go.kenn.io/agentsview/internal/rawsync"
 	service "go.kenn.io/agentsview/internal/service"
@@ -5453,6 +5454,7 @@ type ClientInterface interface {
 	PostAPIV1FrictionRunWithResponse(ctx context.Context, options *PostAPIV1FrictionRunRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionRunResp, error)
 	PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
 	PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
+	GetAPIV1KataStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1KataStatusResp, error)
 	GetAPIV1MachinesWithResponse(ctx context.Context, options *GetAPIV1MachinesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MachinesResp, error)
 	GetAPIV1MemoryStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MemoryStatusResp, error)
 	GetAPIV1ProjectsWithResponse(ctx context.Context, options *GetAPIV1ProjectsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ProjectsResp, error)
@@ -10008,6 +10010,212 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1KataStatus Get Kata connection status
+func (c *Client) GetAPIV1KataStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1KataStatusResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/kata/status",
+		Method:     "GET",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/kata/status")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1KataStatusResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1KataStatusResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1KataStatusErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1KataStatusErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1KataStatusErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1KataStatusErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1KataStatusErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1KataStatusErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1KataStatusErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1KataStatusErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1KataStatusErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1KataStatusErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1KataStatusErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -22332,6 +22540,28 @@ type PostAPIV1ImportClaudeAiSyncErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1ImportClaudeAiSyncErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1KataStatusResponse = kata.Status
+
+type GetAPIV1KataStatusErrorResponse = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1KataStatusErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1MachinesResponse = MachinesResponse
 
 type GetAPIV1MachinesErrorResponse = APIErrorResponse
@@ -23809,6 +24039,23 @@ type PostAPIV1ImportClaudeAiSyncResp struct {
 	JSON502      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON502
 	JSON503      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON503
 	JSON504      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON504
+}
+
+type GetAPIV1KataStatusResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1KataStatusResponse
+	JSON400      *GetAPIV1KataStatusErrorResponse
+	JSON401      *GetAPIV1KataStatusErrorResponseJSON
+	JSON403      *GetAPIV1KataStatusErrorResponseJSON403
+	JSON404      *GetAPIV1KataStatusErrorResponseJSON404
+	JSON409      *GetAPIV1KataStatusErrorResponseJSON409
+	JSON500      *GetAPIV1KataStatusErrorResponseJSON500
+	JSON501      *GetAPIV1KataStatusErrorResponseJSON501
+	JSON502      *GetAPIV1KataStatusErrorResponseJSON502
+	JSON503      *GetAPIV1KataStatusErrorResponseJSON503
+	JSON504      *GetAPIV1KataStatusErrorResponseJSON504
 }
 
 type GetAPIV1MachinesResp struct {
@@ -26753,6 +27000,8 @@ func (f FrictionSummary) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(f))
 }
 
+type KataStatus = kata.Status
+
 type MachinesResponse struct {
 	MachineAliases map[string]string `json:"machine_aliases"`
 	MachineLabels  map[string]string `json:"machine_labels"`
@@ -28149,6 +28398,7 @@ type VersionInfo struct {
 	FrictionBuildAllowed       bool   `json:"friction_build_allowed"`
 	FrictionReadable           *bool  `json:"friction_readable,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
+	KataAvailable              bool   `json:"kata_available"`
 	ReadOnly                   *bool  `json:"read_only,omitempty"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	Version                    string `json:"version" validate:"required"`

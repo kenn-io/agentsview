@@ -612,7 +612,7 @@ sessions already present there.
   daemon-owned.
 - If the local archive needs a rebuild, `POST /api/v1/sessions/sync` returns
   HTTP 409 with `X-Agentsview-Resync-Required: true`. Wait for the rebuild or
-  run `agentsview sync --full`, then retry the session sync.
+  run `agentsview source sync --full`, then retry the session sync.
 - If a [`pg serve`](/docs/pg-sync/#agentsview-pg-serve) daemon is running
   (read-only), sync refuses with a clear error.
 - If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI runs the sync in-process only
@@ -850,7 +850,7 @@ stored reasoning, and both slow message writes. Building them on an existing
 mirror blocks writes to `messages` until each finishes. The first push after
 upgrading publishes every session in its scope once to fill existing rows. A
 restricted hosted runtime role needs `UPDATE(dialogue_text)` on `messages`. For
-hosted raw uploads, run `agentsview pg raw-reparse hosted --run-id <id>` after
+hosted raw uploads, run `agentsview replica pg raw-reparse hosted --run-id <id>` after
 upgrading the server. Repeat the same run ID until the command reports
 `complete=true`. A change to dialogue derivation alone keeps session IDs,
 content revisions, and embeddings. A parser upgrade that changes other fields,
@@ -1170,7 +1170,7 @@ refreshing or syncing source files.
 
 The response uses the same JSON fields shown above and is available from both
 local SQLite-backed `agentsview serve` and read-only
-[`agentsview pg serve`](/docs/pg-sync/#agentsview-pg-serve). HTTP responses set
+[`agentsview replica pg serve`](/docs/pg-sync/#agentsview-pg-serve). HTTP responses set
 `server_running: true`. As of 0.37.1, pass `?breakdown=true` to include the
 per-step `breakdown` rows; without it `breakdown` is `[]` while
 `breakdown_count` still reports the row count. The CLI requests the breakdown on
@@ -1248,7 +1248,7 @@ usage from the shared PostgreSQL store.
 
 Pricing comes from the same `model_pricing` table and
 [custom pricing overrides](/docs/token-usage/#custom-model-pricing) that back
-`agentsview usage daily`. Replaces the older
+`agentsview report usage daily`. Replaces the older
 [`agentsview token-use`](/docs/commands/#agentsview-token-use), which remains as
 a deprecated alias.
 
@@ -1257,7 +1257,7 @@ ______________________________________________________________________
 ## Activity Report
 
 The Activity report endpoint powers the top-level [Activity](/docs/activity/)
-page and the `agentsview activity report` CLI command. It returns one resolved
+page and the `agentsview report activity` CLI command. It returns one resolved
 range with concurrency buckets, summary totals, breakdowns, and contributing
 sessions.
 
@@ -1275,7 +1275,7 @@ Activity includes one-shot sessions by default. Automated sessions are also
 included by default and can be filtered with the `automation` query parameter.
 
 The JSON response shares the same `schema_version`, `pricing`, and `projects`
-metadata contract as `agentsview activity report --json`.
+metadata contract as `agentsview report activity --json`.
 
 The report route negotiates its response with `Accept`. Ordinary clients receive
 plain JSON. Clients requesting `text/event-stream` receive throttled `progress`

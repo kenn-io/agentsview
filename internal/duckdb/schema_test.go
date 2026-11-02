@@ -133,7 +133,7 @@ func TestCheckSchemaCompatViaQuackRejectsPreReportedCostMirror(t *testing.T) {
 
 	err = CheckSchemaCompatViaQuack(ctx, db)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'")
+	assert.Contains(t, err.Error(), "rebuild with 'agentsview replica duckdb push --full'")
 }
 
 func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
@@ -159,7 +159,7 @@ func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
 		"remote incompat must tell the operator the fix")
 	assert.NotContains(t, err.Error(),
-		"rebuild with 'agentsview duckdb push --full'",
+		"rebuild with 'agentsview replica duckdb push --full'",
 		"push cannot migrate a remote server schema")
 }
 
@@ -181,7 +181,7 @@ func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 	err = CheckSchemaCompat(ctx, db)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sessions.entrypoint")
-	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'",
+	assert.Contains(t, err.Error(), "rebuild with 'agentsview replica duckdb push --full'",
 		"local mirrors are rebuilt, not migrated in place")
 	assert.NotContains(t, err.Error(), "older AgentsView build")
 }
@@ -219,7 +219,7 @@ func TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections(
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "does not match this build's")
 				assert.Contains(t, err.Error(),
-					"rebuild with 'agentsview duckdb push --full'")
+					"rebuild with 'agentsview replica duckdb push --full'")
 			})
 		}
 	}

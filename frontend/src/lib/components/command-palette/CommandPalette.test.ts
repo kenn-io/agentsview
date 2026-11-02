@@ -590,7 +590,7 @@ describe("CommandPalette", () => {
 
   it("renders the localized error heading and exact backend detail before results", async () => {
     mockSearchStore.error = {
-      detail: "Run agentsview embeddings build --full-rebuild",
+      detail: "Run agentsview index embeddings build --full-rebuild",
       kind: "generic",
     };
     mockSearchStore.results = [makeSearchResult()];
@@ -600,7 +600,7 @@ describe("CommandPalette", () => {
     const error = document.querySelector(".palette-error");
     expect(error?.querySelector("strong")?.textContent).toBe("Search unavailable");
     expect(error?.querySelector("span")?.textContent).toBe(
-      "Run agentsview embeddings build --full-rebuild",
+      "Run agentsview index embeddings build --full-rebuild",
     );
     expect(document.querySelector(".palette-item")).toBeNull();
 
@@ -740,7 +740,7 @@ describe("CommandPalette", () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail:
-        "semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'",
+        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
       kind: "semantic-unavailable",
     };
     const component = mount(CommandPalette, { target: document.body });
@@ -790,7 +790,7 @@ describe("CommandPalette", () => {
       mockSearchStore.mode = "semantic";
       mockSearchStore.error = {
         detail:
-          "semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'",
+          "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
         kind: "semantic-unavailable",
       };
       const component = mount(CommandPalette, { target: document.body });
@@ -834,7 +834,7 @@ describe("CommandPalette", () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail:
-        "semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'",
+        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
       kind: "semantic-unavailable",
     };
     mockSessions.activeSessionId = "session-1";

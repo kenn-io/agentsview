@@ -50,7 +50,7 @@ type agentsJSON struct {
 type agentInfo struct {
 	Type        string `json:"type"`
 	DisplayName string `json:"display_name"`
-	// ImportOnly agents are read only through `agentsview import`.
+	// ImportOnly agents are read only through `agentsview source import`.
 	ImportOnly bool `json:"import_only"`
 	FileBased  bool `json:"file_based"`
 	// DefaultDirs are relative to the home directory. DataDirRoot agents
@@ -134,7 +134,7 @@ func printAgents(w io.Writer, agents []agentInfo) {
 		fmt.Fprintf(w, "%s (%s)\n", a.Type, a.DisplayName)
 		switch {
 		case a.ImportOnly:
-			fmt.Fprintln(w, "  sessions: imported with `agentsview import`")
+			fmt.Fprintln(w, "  sessions: imported with `agentsview source import`")
 		case a.DataDirRoot != "":
 			fmt.Fprintf(w, "  sessions: <data dir>/%s\n", a.DataDirRoot)
 		case len(a.DefaultDirs) > 0:

@@ -30,6 +30,13 @@ var _ db.Store = (*HostedStore)(nil)
 
 type hostedRevision struct{ Identity, Selection, Corpus int64 }
 
+type hostedReadScope uint8
+
+const (
+	hostedPublishedRead hostedReadScope = iota
+	hostedAllRevisionsRead
+)
+
 var (
 	ErrHostedIdentityChanged = errors.New("hosted identity changed during read; retry the request")
 	ErrHostedCursor          = fmt.Errorf("invalid or expired hosted cursor: %w", db.ErrInvalidCursor)
@@ -92,9 +99,13 @@ func (h *HostedStore) revision(ctx context.Context) (hostedRevision, error) {
 	return r, err
 }
 
+func hostedRead[T any](ctx context.Context, h *HostedStore, read func(hostedRevision) (T, error)) (T, error) {
+	return hostedReadWithScope(ctx, h, hostedPublishedRead, read)
+}
+
 // Read failures are also revision checked: a disappearing physical row during
 // convergence must retry resolution, not report an accidental not-found result.
-func hostedRead[T any](ctx context.Context, h *HostedStore, read func(hostedRevision) (T, error)) (T, error) {
+func hostedReadWithScope[T any](ctx context.Context, h *HostedStore, scope hostedReadScope, read func(hostedRevision) (T, error)) (T, error) {
 	var zero T
 	for range 3 {
 		before, err := h.revision(ctx)
@@ -106,7 +117,10 @@ func hostedRead[T any](ctx context.Context, h *HostedStore, read func(hostedRevi
 		if err != nil {
 			return zero, err
 		}
-		if before == after {
+		// Pending source-head selection does not change published rows or aliases.
+		// Source probes expose that selection and retain the stricter fence.
+		if before.Identity == after.Identity && before.Corpus == after.Corpus &&
+			(scope == hostedPublishedRead || before.Selection == after.Selection) {
 			return value, readErr
 		}
 	}

@@ -57,7 +57,7 @@ func TestRawSyncCleanUploadsCommand(t *testing.T) {
 	writeRawSyncCleanUploadsFile(t, checkpoint, "checkpoint")
 	writeRawSyncCleanUploadsFile(t, accepted, "accepted")
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.NoError(t, err)
 	assert.Equal(t, rawSyncCleanUploadsCompletion+"\n", output)
@@ -90,7 +90,7 @@ func TestRawSyncCleanUploadsFailures(t *testing.T) {
 		filepath.Join(dataDir, "raw-upload-spool"), []byte("occupied"), 0o600,
 	))
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)
@@ -122,7 +122,7 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previousLog) })
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)
@@ -140,7 +140,7 @@ func TestRawSyncCleanUploadsRequiresProvisionedSchema(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)

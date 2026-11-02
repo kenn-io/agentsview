@@ -1786,7 +1786,7 @@ func staleClientUpgradeHint() string {
 		"install and rerun the command. If this command is a " +
 		"long-running background process started before the upgrade " +
 		"(`pg push --watch`, `duckdb push --watch`, or a service " +
-		"installed with `agentsview pg service`), restart it so it " +
+		"installed with `agentsview replica pg service`), restart it so it " +
 		"picks up the current binary."
 }
 
@@ -1988,7 +1988,7 @@ func noSyncRebuildNotice(noSync, archiveOnly, needsResync bool) string {
 	return "The archive needs a full rebuild for this version, and --no-sync " +
 		"skips it at startup. Until it runs, sessions that need the new " +
 		"parsers stay missing. Click Sync in the web UI or run " +
-		"`agentsview sync` to rebuild it."
+		"`agentsview source sync` to rebuild it."
 }
 
 // runInitialResync runs ResyncAll, falling back to incremental

@@ -1,15 +1,16 @@
 ---
 title: Stats
-description: Experimental workspace analytics via agentsview stats
+description: Experimental workspace analytics via agentsview report stats
 ---
 
-`agentsview stats` is a top-level CLI command added in 0.23.0 for window-scoped
-reporting over your local session archive. It emits a human-readable summary by
-default and can also emit JSON for scripts and downstream tooling.
+`agentsview report stats` reports over a selected window of your local session
+archive. It emits a human-readable summary by default and can also emit JSON for
+scripts and downstream tooling. The reporting feature originally shipped as
+`agentsview stats` in 0.23.0.
 
 !!! warning "Experimental"
 
-    `agentsview stats` is experimental. The human-readable output is not stable, and
+    `agentsview report stats` is experimental. The human-readable output is not stable, and
     the exact JSON output may change in future releases. Treat it as a moving
     surface and parse it defensively.
 
@@ -44,7 +45,7 @@ The command pulls together several categories of information:
 
 ## Automation Scope
 
-As of 0.25.0, `agentsview stats` uses each session's stored `is_automated` value
+Since 0.25.0, stats reporting uses each session's stored `is_automated` value
 as the authority for human versus automation scope. That classification drives
 session totals, archetypes, the `scope_human` distributions, and the
 human-scoped `agent_portfolio` fields (`by_sessions_human`, `by_messages_human`,
@@ -60,13 +61,13 @@ the human bucket set starts at two user messages. They still contribute to
 
 ```bash
 # Human-readable summary for the last 28 days
-agentsview stats
+agentsview report stats
 
 # Fixed date range as JSON
-agentsview stats --format json --since 2026-04-01 --until 2026-04-15
+agentsview report stats --format json --since 2026-04-01 --until 2026-04-15
 
 # Narrow to one agent and one project
-agentsview stats --agent claude --include-project my-app
+agentsview report stats --agent claude --include-project my-app
 ```
 
 ## Flags
@@ -192,7 +193,7 @@ formatting changes over time.
 
 ## Git And PR Aggregation
 
-`agentsview stats` uses session working directories to discover git repositories
+`agentsview report stats` uses session working directories to discover git repositories
 and then aggregates git activity for the configured author in each repo.
 
 That includes:
@@ -220,5 +221,5 @@ total.
 [`Session Intelligence`](/docs/session-intelligence/) is the per-session surface
 for health scores, outcomes, and signal inspection.
 
-`agentsview stats` is the aggregate surface: it summarizes the whole archive
+`agentsview report stats` is the aggregate surface: it summarizes the whole archive
 over a window rather than explaining one session at a time.

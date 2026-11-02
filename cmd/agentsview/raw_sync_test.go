@@ -196,7 +196,7 @@ func TestRawSyncStatusWithoutCheckpointDoesNotCreateState(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "status")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "status")
 
 	require.NoError(t, err)
 	assert.JSONEq(t, `{

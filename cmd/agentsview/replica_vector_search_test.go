@@ -106,13 +106,13 @@ func TestReplicaVectorReasons(t *testing.T) {
 	backend := pgReplica{}
 	assert.Equal(t,
 		"semantic search: PostgreSQL has no embedding generation matching fingerprint "+
-			"abc123 (present: def456, ghi789); run 'agentsview pg push' from a machine "+
+			"abc123 (present: def456, ghi789); run 'agentsview replica pg push' from a machine "+
 			"with a matching [vector.embeddings] config",
 		replicaVectorUnavailableReason(backend,
 			"PostgreSQL has no embedding generation matching fingerprint abc123",
 			[]storage.VectorGenerationInfo{{Fingerprint: "def456"}, {Fingerprint: "ghi789"}}))
 	assert.Equal(t,
-		"semantic search: no match (present: ); run 'agentsview pg push' from a "+
+		"semantic search: no match (present: ); run 'agentsview replica pg push' from a "+
 			"machine with a matching [vector.embeddings] config",
 		replicaVectorUnavailableReason(backend, "no match", nil))
 }
@@ -127,8 +127,8 @@ func TestWireReplicaVectorSearchRecordsVectorDisabledReason(t *testing.T) {
 	})
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "PostgreSQL requires [vector] enabled")
-	assert.Contains(t, err.Error(), "agentsview pg push")
-	assert.NotContains(t, err.Error(), "agentsview embeddings build")
+	assert.Contains(t, err.Error(), "agentsview replica pg push")
+	assert.NotContains(t, err.Error(), "agentsview index embeddings build")
 }
 
 // nonVectorReplica is a replica that does not implement

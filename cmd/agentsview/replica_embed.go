@@ -25,7 +25,7 @@ var errEmbedNeedsLocalArchive = errors.New(
 // so pg push --watch --embed cannot start building yet.
 var errEmbedWriteLockHeld = errors.New(
 	"vectors.write.lock is held by another process, typically a direct " +
-		"'agentsview embeddings build'; embeddings start on the first push " +
+		"'agentsview index embeddings build'; embeddings start on the first push " +
 		"after it exits")
 
 // replicaEmbedder keeps the first resolved recipe for this process.
