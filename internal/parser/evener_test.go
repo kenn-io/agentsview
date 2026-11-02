@@ -57,6 +57,7 @@ func TestEvenerSemanticSession(t *testing.T) {
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "evener:session", sess.ID)
+	assert.Equal(t, "session", sess.SourceSessionID)
 	assert.Equal(t, AgentType("evener"), sess.Agent)
 	assert.Equal(t, "Title", sess.SessionName)
 	assert.True(t, sess.SessionNamePresent)

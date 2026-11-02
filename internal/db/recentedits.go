@@ -183,7 +183,7 @@ WITH ranked AS (
   JOIN sessions s ON s.id = tc.session_id
   WHERE tc.category IN ('Edit','Write')
     AND tc.file_path IS NOT NULL AND tc.file_path <> ''
-    AND s.deleted_at IS NULL
+    AND ` + b.dialect.SessionLivePredicate("s.") + `
     ` + projectClause + `
     ` + searchClause + `
 ),
