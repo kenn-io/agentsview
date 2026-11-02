@@ -1394,6 +1394,24 @@ agentsview replica pg status [target] [flags]
 
 ______________________________________________________________________
 
+### `agentsview replica pg raw-parity` (unreleased)
+
+Compare hosted raw projections with retained pushed sessions in one read-only
+snapshot, including trashed rows. Requires the selected target's restricted
+runtime connection and `raw_tenant`; owner connections are refused.
+
+```bash
+agentsview replica pg raw-parity [target] [--device ID] [--provider P] [--format human|json]
+```
+
+Without JSON output, prints one summary line. With `--format json` or `--json`,
+stdout contains the complete report and stderr contains the summary. Exit
+status is 0 even when `pass` is false. Use `pass` in scripts. See
+[Compare before cutover](/docs/hosted-raw-sync/#compare-before-cutover-unreleased)
+for matching, classes, scope counts and the readiness gate.
+
+______________________________________________________________________
+
 <a id="agentsview-pg-serve"></a>
 
 ### `agentsview replica pg serve`
@@ -1423,6 +1441,22 @@ from pgvector — see
 [Semantic Search — PostgreSQL](/docs/semantic-search/#postgresql).
 
 ______________________________________________________________________
+
+### `agentsview replica pg raw-rollout`
+
+Inspect or record hosted session rollout scopes through an owner target:
+
+```bash
+agentsview replica pg raw-rollout list [target] [--device ID] [--provider P]
+agentsview replica pg raw-rollout shadow [target] [--device ID] [--provider P]
+agentsview replica pg raw-rollout clear [target] [--device ID] [--provider P]
+```
+
+The tenant scope must exist before narrower scopes and can be cleared only
+when no narrower scopes remain. List output includes physical served, shadow
+and superseded counts, plus the last stored parity report. Public-read
+filtering and activation are pending later cutover stages; see
+[rollout scopes](/docs/hosted-raw-sync/#rollout-scopes) for current limits.
 
 <a id="agentsview-pg-service"></a>
 

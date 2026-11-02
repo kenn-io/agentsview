@@ -88,7 +88,7 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoted); err != nil {
 		return err
 	}
-	for _, ddl := range []string{coreDDL, frictionDDL, frictionReviewDDL, rawIngestDDL, rawIngestAppendOnlyDDL, postgresUsageJSONHelperDDL, rawProjectionDDL, rawLinksDDL} {
+	for _, ddl := range []string{coreDDL, frictionDDL, frictionReviewDDL, rawIngestDDL, rawIngestAppendOnlyDDL, postgresUsageJSONHelperDDL, rawProjectionDDL, rawLinksDDL, rawRolloutDDL} {
 		if _, err = tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating hosted application schema: %w", err)
 		}
@@ -311,6 +311,8 @@ func CheckHostedTenant(ctx context.Context, database *sql.DB, schema, tenant str
 	if err = conn.QueryRowContext(ctx, `SELECT r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR current_user<>session_user
   OR EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid)
   OR has_database_privilege(current_database(),'CREATE')
+  OR has_table_privilege(to_regclass(format('%I.raw_rollout_scopes',$1::text)),'INSERT,UPDATE,DELETE')
+  OR has_any_column_privilege(to_regclass(format('%I.raw_rollout_scopes',$1::text)),'INSERT,UPDATE')
   OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.prosecdef AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND has_function_privilege(p.oid,'EXECUTE'))
   OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND (n.nspowner=r.oid OR has_schema_privilege(n.oid,'CREATE') OR (n.nspname<>$1 AND n.nspname<>'public' AND has_schema_privilege(n.oid,'USAGE'))))
   OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p') AND (has_table_privilege(c.oid,'TRUNCATE,TRIGGER,REFERENCES') OR has_any_column_privilege(c.oid,'REFERENCES')))
