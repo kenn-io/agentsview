@@ -146,6 +146,85 @@ func TestRawProjectionPublishesNormalizedGraph(t *testing.T) {
 	assert.ErrorIs(t, f.sink.Project(t.Context(), lease, m, projectionOutcome("must not replace")), rawderive.ErrLeaseLost)
 }
 
+func TestRawProjectionRematerializesRetainedPayloadOnInsertConflict(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
+			f := newProjectionFixture(t)
+			a, _ := f.accept(t, "device-a", "retained-a", "")
+			outcome := projectionOutcome("retained transcript")
+			outcome.Outcome.Results[0].Result.Messages[0].DialogueText = new("")
+			outcome.Outcome.Results[0].Result.Session.PlanUsage = &parser.ParsedPlanUsage{
+				WeeklyPercent: new(0.0), FiveHourPercent: new(0.0), Credits: new(""),
+			}
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, outcome))
+			original, err := f.sink.Resolve(t.Context(), "codex:portable")
+			require.NoError(t, err)
+			store := &Store{pg: f.runtime}
+			originalPlan, err := store.GetSessionPlanUsage(t.Context(), original.SessionID)
+			require.NoError(t, err)
+			// A new source has no history to decode before its insert conflicts.
+			b, _ := f.accept(t, "device-b", "retained-b", "")
+			lease := f.lease(t, b)
+			_, err = f.runtime.ExecContext(t.Context(), rawSourceProofDetachSQL, original.SessionID)
+			require.NoError(t, err)
+			_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, original.SessionID)
+			require.NoError(t, err)
+			if corrupt {
+				_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_content_revisions SET payload='invalid-gob'::bytea WHERE session_id=$1`, original.SessionID)
+				require.NoError(t, err)
+			}
+			var retained []byte
+			var corpus, identity int64
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, original.SessionID).Scan(&retained))
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision,identity_revision FROM raw_corpus_state`).Scan(&corpus, &identity))
+			err = f.sink.Project(t.Context(), lease, b, outcome)
+			if corrupt {
+				require.Error(t, err, "a conflicting insert must read the retained payload")
+				var state string
+				var physical, branches, contributions int
+				var afterCorpus, afterIdentity int64
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, lease.ID).Scan(&state))
+				assert.Equal(t, "leased", state)
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT (SELECT count(*) FROM sessions),(SELECT count(*) FROM raw_session_branches WHERE source_id=$1),(SELECT count(*) FROM raw_source_contributions)`, rawSourceID(b)).Scan(&physical, &branches, &contributions))
+				assert.Zero(t, physical)
+				assert.Zero(t, branches)
+				assert.Equal(t, 1, contributions)
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision,identity_revision FROM raw_corpus_state`).Scan(&afterCorpus, &afterIdentity))
+				assert.Equal(t, corpus, afterCorpus)
+				assert.Equal(t, identity, afterIdentity)
+			} else {
+				require.NoError(t, err)
+				resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+				require.NoError(t, err)
+				assert.Equal(t, original.SessionID, resolved.SessionID)
+				messages, err := store.GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, "retained transcript", messages[0].Content)
+				var dialogue *string
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT dialogue_text FROM messages WHERE session_id=$1 AND ordinal=0`, resolved.SessionID).Scan(&dialogue))
+				assert.Equal(t, new(""), dialogue)
+				require.Len(t, messages[1].ToolCalls, 1)
+				assert.Equal(t, "Bash", messages[1].ToolCalls[0].ToolName)
+				events, err := store.GetSessionUsageRows(t.Context(), []string{resolved.SessionID})
+				require.NoError(t, err)
+				require.NotNil(t, events)
+				require.Len(t, events.Rows, 1)
+				assert.Equal(t, 11, events.Rows[0].InputTokens)
+				plan, err := store.GetSessionPlanUsage(t.Context(), resolved.SessionID)
+				require.NoError(t, err)
+				assert.Equal(t, originalPlan, plan, "fresh and retained materialization preserve the same optional values")
+				var proofs int
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM session_sources WHERE physical_session_id=$1`, resolved.SessionID).Scan(&proofs))
+				assert.Equal(t, 2, proofs)
+			}
+			var afterPayload []byte
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, original.SessionID).Scan(&afterPayload))
+			assert.Equal(t, retained, afterPayload)
+		})
+	}
+}
+
 func TestRawProjectionFrictionUsesFinalSessionIdentity(t *testing.T) {
 	f := newProjectionFixture(t)
 	var firstID, firstFingerprint string

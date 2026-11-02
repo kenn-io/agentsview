@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash"
 	"reflect"
 	"slices"
 
@@ -19,12 +20,20 @@ import (
 )
 
 func rawDigest(parts ...string) string {
+	return hex.EncodeToString(newRawDigest(parts...).Sum(nil))
+}
+
+func newRawDigest(parts ...string) hash.Hash {
 	h := sha256.New()
 	for _, p := range parts {
-		fmt.Fprintf(h, "%d:", len(p))
+		writeRawDigestLength(h, int64(len(p)))
 		h.Write([]byte(p))
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return h
+}
+
+func writeRawDigestLength(h hash.Hash, size int64) {
+	fmt.Fprintf(h, "%d:", size)
 }
 
 func rawSourceID(m rawsync.CanonicalManifest) string {
@@ -110,7 +119,6 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	p.Signals.Outcome, p.Signals.OutcomeConfidence = "", ""
 	p.Validation = db.ValidationStats{}
 	// Copy nested slices before removing transport IDs: callers retain their rows.
-	var err error
 	p.Messages = append([]db.Message(nil), p.Messages...)
 	for i := range p.Messages {
 		m := &p.Messages[i]
@@ -144,12 +152,20 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Keep the normalized-content-v1 representation stable across JSON APIs.
+	return rawJSONContentRevision(structure)
+}
+
+func rawJSONContentRevision(structure any) (string, error) {
+	// Keep normalized-content-v1 bytes unchanged, but hash the encoded bytes
+	// directly instead of copying the complete result through string and []byte.
 	encoded, err := json.Marshal(structure, json.Deterministic(true), jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true))
 	if err != nil {
 		return "", err
 	}
-	return rawDigest("normalized-content-v1", string(encoded)), nil
+	h := newRawDigest("normalized-content-v1")
+	writeRawDigestLength(h, int64(len(encoded)))
+	h.Write(encoded)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 var (

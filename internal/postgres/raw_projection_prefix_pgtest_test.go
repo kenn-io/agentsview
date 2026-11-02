@@ -26,6 +26,14 @@ func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
 			if longerFirst {
 				b, accepted = f.accept(t, "device-b", "long", "")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
+				// Rebuild the selected retained longer copy, not the incoming
+				// shorter payload that this next projection inserts.
+				retained, err := f.sink.Resolve(t.Context(), "codex:portable")
+				require.NoError(t, err)
+				_, err = f.runtime.ExecContext(t.Context(), rawSourceProofDetachSQL, retained.SessionID)
+				require.NoError(t, err)
+				_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, retained.SessionID)
+				require.NoError(t, err)
 			}
 			a, shortAccepted := f.accept(t, "device-a", "short", "")
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, short))

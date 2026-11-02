@@ -26,7 +26,7 @@ import (
 // Friction rules are part of the version so a rules change reaches existing
 // hosted sessions through the same reparse rollout as a parser change.
 func rawProcessingVersion() string {
-	return fmt.Sprintf("parser-data-%d+%s", db.CurrentDataVersion(), friction.RulesVersion)
+	return fmt.Sprintf("parser-data-%d+%s/runtime-%d", db.CurrentDataVersion(), friction.RulesVersion, rawderive.ParserRuntimeVersion)
 }
 
 // pgRawRuntime owns one bounded sequential worker/maintenance loop. Stop joins
@@ -158,7 +158,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		}
 		worker, err := rawderive.NewWorker(rawderive.WorkerConfig{
 			Queue: metadata, Manifests: rawderive.ManifestLoader{Store: custody, Limits: custody.limits},
-			Materializer: rawderive.Materializer{Store: custody, BaseDir: os.TempDir(), MaxTotalBytes: 512 << 20}, Parser: isolated, Projection: sink,
+			Materializer: rawderive.Materializer{Store: custody, BaseDir: os.TempDir(), MaxTotalBytes: rawderive.MaxMaterializedBytes}, Parser: isolated, Projection: sink,
 			Owner: fmt.Sprintf("hosted-%d", os.Getpid()), BatchSize: 1, LeaseDuration: time.Minute, HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Duration(attempt) * time.Second,
 			RetryBase: retry.Base, RetryMax: retry.Maximum, MaxAttempts: retry.MaxAttempts,
 		})
