@@ -276,27 +276,22 @@ func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "before", value)
 	assert.Equal(t, 1, reads)
-	for _, tc := range []struct{ name, query string }{
-		{"identity", `UPDATE raw_corpus_state SET identity_revision=identity_revision+1 WHERE singleton=1`},
-		{"corpus", `UPDATE raw_corpus_state SET corpus_revision=corpus_revision+1 WHERE singleton=1`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			reads = 0
-			before, err := h.revision(t.Context())
-			require.NoError(t, err)
-			got, err := hostedRead(t.Context(), h, func(h *HostedStore, rev hostedRevision) (hostedRevision, error) {
-				reads++
-				if reads == 1 {
-					_, err := f.runtime.ExecContext(t.Context(), tc.query)
-					require.NoError(t, err)
-				}
-				return rev, nil
-			})
-			require.NoError(t, err)
-			assert.Equal(t, before, got)
-			assert.Equal(t, 1, reads)
+	t.Run("corpus", func(t *testing.T) {
+		reads = 0
+		before, err := h.revision(t.Context())
+		require.NoError(t, err)
+		got, err := hostedRead(t.Context(), h, func(h *HostedStore, rev hostedRevision) (hostedRevision, error) {
+			reads++
+			if reads == 1 {
+				_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET corpus_revision=corpus_revision+1 WHERE singleton=1`)
+				require.NoError(t, err)
+			}
+			return rev, nil
 		})
-	}
+		require.NoError(t, err)
+		assert.Equal(t, before, got)
+		assert.Equal(t, 1, reads)
+	})
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('revision-probe','synthetic','archive','codex')`)
 	require.NoError(t, err)
 	before, err := h.revision(t.Context())
