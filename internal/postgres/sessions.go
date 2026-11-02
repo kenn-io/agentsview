@@ -502,14 +502,32 @@ func (s *Store) getSidebarSessionIndexPage(
 	ctx context.Context, f db.SessionFilter,
 ) (db.SidebarSessionIndex, error) {
 	f.Limit = db.NormalizeSessionLimit(f.Limit)
+	dialect := s.sessionDialect()
+	recursivePrefix := "WITH RECURSIVE "
+	countPrefix := ""
+	treeFrom := "FROM sessions s JOIN tree t ON " + dialect.ParentRelation("s", "t")
+	if s.hostedRelations {
+		parentEdges := hostedSidebarParentEdgesSQL()
+		recursivePrefix += parentEdges + ", "
+		countPrefix = "WITH " + parentEdges + " "
+		dialect = dialect.WithParentRelation(func(child, parent string) string {
+			return "EXISTS (SELECT 1 FROM sidebar_parent_edges pe WHERE pe.child_id=" + child + ".id AND pe.parent_id=" + parent + ".id)"
+		})
+		dialect = dialect.WithOrphanPredicate(func(sessionAlias, _ string) string {
+			return "NOT EXISTS (SELECT 1 FROM sidebar_parent_edges pe WHERE pe.child_id=" + sessionAlias + ".id)"
+		})
+		treeFrom = `FROM tree t
+			JOIN sidebar_parent_edges pe ON pe.parent_id=t.id
+			JOIN sessions s ON s.id=pe.child_id`
+	}
 
 	rootFilter := f
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, s.sessionDialect())
-	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
-	treeMemberWhere := db.SessionTreeMemberPredicate(f, s.sessionDialect(), "s")
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(dialect, "sessions", f.IncludeOrphans)
+	treeMemberWhere := db.SessionTreeMemberPredicate(f, dialect, "s")
 
 	var total int
 	var cur db.SessionCursor
@@ -523,8 +541,7 @@ func (s *Store) getSidebarSessionIndexPage(
 	}
 	if total <= 0 {
 		if f.Starred {
-			countQuery := `
-				WITH RECURSIVE root_candidates(id) AS (
+			countQuery := recursivePrefix + `root_candidates(id) AS (
 					SELECT id
 					FROM sessions
 					WHERE ` + rootWhere + `
@@ -534,8 +551,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					SELECT id, id FROM root_candidates
 					UNION
 					SELECT t.root_id, s.id
-					FROM sessions s
-					JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
+					` + treeFrom + `
 					WHERE ` + treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
@@ -551,7 +567,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					fmt.Errorf("counting sidebar roots: %w", err)
 			}
 		} else {
-			countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+			countQuery := countPrefix + "SELECT COUNT(*) FROM sessions WHERE " +
 				rootWhere + " AND " + canonicalRootWhere
 			if err := s.pg.QueryRowContext(
 				ctx, countQuery, rootArgs...,
@@ -571,8 +587,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			pageBuilder.Add(cur.EndedAt) + "::timestamptz, " +
 			pageBuilder.Add(cur.ID) + ")"
 	}
-	rootQuery := `
-		WITH RECURSIVE root_candidates(id) AS (
+	rootQuery := recursivePrefix + `root_candidates(id) AS (
 			SELECT id
 			FROM sessions
 			WHERE ` + rootWhere + `
@@ -582,8 +597,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT id, id FROM root_candidates
 			UNION
 			SELECT t.root_id, s.id
-			FROM sessions s
-			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
+			` + treeFrom + `
 			WHERE ` + treeMemberWhere + `
 		)
 		` + pgSidebarStarredRootCTE(f.Starred) + `,
@@ -661,16 +675,14 @@ func (s *Store) getSidebarSessionIndexPage(
 	}
 	treeArgs = append(treeArgs, page.Args()...)
 
-	treeQuery := `
-		WITH RECURSIVE root_page(id, ord) AS (
+	treeQuery := recursivePrefix + `root_page(id, ord) AS (
 			` + strings.Join(cteParts, "\n") + `
 		),
 		tree(id, ord) AS (
 			SELECT id, ord FROM root_page
 			UNION
 			SELECT s.id, t.ord
-			FROM sessions s
-			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
+			` + treeFrom + `
 			WHERE ` + treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
