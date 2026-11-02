@@ -1748,9 +1748,6 @@ func (b *httpBackend) SessionCommits(ctx context.Context, id string) (*db.Sessio
 		return nil, err
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
-		if errors.Is(err, errHTTPNotImplemented) {
-			return nil, db.ErrCommitLinksUnavailable
-		}
 		return nil, err
 	}
 	return response.JSON200, nil
@@ -1766,9 +1763,6 @@ func (b *httpBackend) CommitSessions(ctx context.Context, shas []string) (*db.Co
 		return nil, err
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
-		if errors.Is(err, errHTTPNotImplemented) {
-			return nil, db.ErrCommitLinksUnavailable
-		}
 		return nil, err
 	}
 	return response.JSON200, nil

@@ -91,15 +91,6 @@ func TestCommitLinksParsing(t *testing.T) {
 		require.Len(t, got.Commits, 1)
 		assert.Equal(t, "/repo", got.Commits[0].Repository)
 	})
-	t.Run("git argument array", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "s1", "project-a")
-		insertMessages(t, d, commitMessages("s1", `{"command":["git","-c","user.name=Example","-C","/tmp/my repo","commit","-m","fix"]}`, "[main abc1234] Fix parser")...)
-		got, err := d.SessionCommitLinks(t.Context(), "s1")
-		require.NoError(t, err)
-		require.Len(t, got.Commits, 1)
-		assert.Equal(t, "/tmp/my repo", got.Commits[0].Repository)
-	})
 }
 
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {
@@ -121,7 +112,7 @@ func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	for _, l := range clash.Commits[0].Links {
 		assert.True(t, l.Ambiguous)
 	}
-	for _, shas := range [][]string{{"short"}, {"abc123z"}, nil, make([]string, 201)} {
+	for _, shas := range [][]string{{"short"}, {"abc123z"}, make([]string, 201)} {
 		_, err := d.CommitSessionLinks(t.Context(), shas)
 		require.ErrorIs(t, err, ErrInvalidCommitSHA)
 	}

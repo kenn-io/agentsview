@@ -24,7 +24,7 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] (.*)\r?$`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] (.*)$`)
 )
 
 // CommitLinkReader is the optional archive capability used by HTTP and CLI reads.
@@ -65,7 +65,7 @@ type CommitSessionList struct {
 	Commits []CommitSessionMatch `json:"commits"`
 }
 
-// commitRepository recognizes git's global options before the commit subcommand.
+// commitRepository finds git's commit subcommand after its global options.
 // Paths retain literal backslashes, including unquoted backslash-escaped spaces.
 func commitRepository(input, cwd string) (string, bool) {
 	var payload struct {
@@ -79,7 +79,7 @@ func commitRepository(input, cwd string) (string, bool) {
 		cwd = payload.CWD
 	}
 	resolve := func(base, dir string) string {
-		if filepath.IsAbs(dir) || (len(dir) > 2 && dir[1] == ':') {
+		if filepath.IsAbs(dir) {
 			return dir
 		}
 		return filepath.Join(base, dir)
@@ -101,21 +101,10 @@ func commitRepository(input, cwd string) (string, bool) {
 			if !strings.HasPrefix(arg, "-") {
 				break
 			}
-			switch arg {
-			case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path":
-				if i+1 >= len(words) {
-					break
-				}
+			if (arg == "-C" || arg == "-c") && i+1 < len(words) {
 				i++
-				if arg == "-C" || arg == "--work-tree" {
+				if arg == "-C" {
 					repo = resolve(repo, words[i])
-				}
-			default:
-				if strings.HasPrefix(arg, "-C") {
-					repo = resolve(repo, arg[2:])
-				}
-				if dir, ok := strings.CutPrefix(arg, "--work-tree="); ok {
-					repo = resolve(repo, dir)
 				}
 			}
 		}
@@ -149,7 +138,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 				continue
 			}
 			seen[match[2]] = true
-			l.SHA, l.Branch, l.Subject, l.Repository = match[2], match[1], strings.TrimSuffix(match[3], "\r"), repo
+			l.SHA, l.Branch, l.Subject, l.Repository = match[2], match[1], match[3], repo
 			links = append(links, l)
 		}
 	}
@@ -201,9 +190,6 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 		return err
 	}
 	for _, id := range ids {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		if err := refreshSessionCommitLinksTx(tx, id); err != nil {
 			return fmt.Errorf("backfilling commit links: %w", err)
 		}
@@ -258,8 +244,8 @@ func (d *DB) SessionCommitLinks(ctx context.Context, id string) (*SessionCommitL
 }
 
 func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSessionList, error) {
-	if len(shas) == 0 || len(shas) > MaxCommitSHAs {
-		return nil, fmt.Errorf("provide 1 to %d commit SHAs: %w", MaxCommitSHAs, ErrInvalidCommitSHA)
+	if len(shas) > MaxCommitSHAs {
+		return nil, fmt.Errorf("provide at most %d commit SHAs: %w", MaxCommitSHAs, ErrInvalidCommitSHA)
 	}
 	queries := make([]string, len(shas))
 	for i, sha := range shas {
