@@ -143,19 +143,33 @@ if grep -q '^export GDK_BACKEND=x11' "$hook_out"; then
   echo "assertion failed: forced GDK_BACKEND=x11 still present" >&2
   exit 1
 fi
-assert_eq "$(env -u GDK_BACKEND bash -c 'export GDK_BACKEND="${GDK_BACKEND:-x11}"; echo $GDK_BACKEND')" "x11" \
+# Execute the line the repair script actually emitted, not a copy of it.
+gdk_line="$(grep '^export GDK_BACKEND=' "$hook_out")"
+assert_eq "$(env -u GDK_BACKEND bash -c "$gdk_line"$'\n'"printf %s \"\$GDK_BACKEND\"")" "x11" \
   "unset GDK_BACKEND defaults to x11"
-assert_eq "$(GDK_BACKEND=wayland bash -c 'export GDK_BACKEND="${GDK_BACKEND:-x11}"; echo $GDK_BACKEND')" "wayland" \
+assert_eq "$(GDK_BACKEND=wayland bash -c "$gdk_line"$'\n'"printf %s \"\$GDK_BACKEND\"")" "wayland" \
   "caller GDK_BACKEND=wayland is preserved"
 
 # A hook without the forced line means Tauri changed; fail instead of no-op.
+# Use the same signing setup as the passing run so the failure can only come
+# from the missing-line check, and assert on its specific error message.
 printf 'runtime hsqs old-rootfs\n' > "$appimage"
-if TEST_HOOK_GDK_LINE='# no forced backend' \
+missing_status=0
+missing_err="$(TEST_HOOK_GDK_LINE='# no forced backend' \
   TEST_HOOK_OUT="$hook_out" \
   TEST_ARCHIVE="$archive" \
+  TAURI_SIGNING_PRIVATE_KEY="test-key" \
   PATH="$fake_bin:$PATH" \
-  bash "$SCRIPT_DIR/repair-appimage-diricon.sh" "$appimage" >/dev/null 2>&1; then
+  bash "$SCRIPT_DIR/repair-appimage-diricon.sh" "$appimage" 2>&1 >/dev/null)" || missing_status=$?
+if [ "$missing_status" -eq 0 ]; then
   echo "assertion failed: missing forced GDK_BACKEND line should fail" >&2
   exit 1
 fi
+case "$missing_err" in
+  *"forced GDK_BACKEND=x11 not found"*) ;;
+  *)
+    echo "assertion failed: wrong failure for missing line: $missing_err" >&2
+    exit 1
+    ;;
+esac
 echo "repair-appimage-diricon updater archive checks passed"
