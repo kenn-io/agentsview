@@ -13,8 +13,12 @@ The latest release is
 
 - Find the session and prompt behind a Git commit through the session API, or
   list a session's commits with `agentsview session commits <id>`. Links come
-  from successful `git commit` output stored in the local archive. Deleted
-  sessions remain visible as missing records.
+  from stored Git summaries, including Codex output received through later
+  polls. Quiet commits link when the same call prints its SHA through
+  `git rev-parse HEAD` or single-entry `git log --oneline` output. Repository
+  paths follow the first directory in each call and only a leading `cd`.
+  Transcript-only and usage-only archives retain no links; mirrors return HTTP
+  501. Deleted sessions remain visible as missing records.
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at

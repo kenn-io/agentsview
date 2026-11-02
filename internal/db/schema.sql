@@ -1703,6 +1703,6 @@ CREATE TABLE IF NOT EXISTS commit_links (
     call_index INTEGER NOT NULL,
     tool_use_id TEXT NOT NULL,
     committed_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, message_ordinal, call_index, sha)
+    PRIMARY KEY (session_id, sha)
 );
 CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);

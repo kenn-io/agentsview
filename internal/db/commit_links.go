@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
@@ -24,7 +24,18 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] (.*)$`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitGitWordRE           = regexp.MustCompile(`(?:\b|\\[nrt])git\b`)
+	commitWordRE              = regexp.MustCompile(`(?:\b|\\[nrt])commit\b`)
+	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
+	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitGitDirRE            = regexp.MustCompile(`\bgit\s+-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitPollRE              = regexp.MustCompile(`\bwrite_stdin\s*\(\s*\{\s*["']?session_id["']?\s*:\s*([0-9]+)`)
+	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
+	commitRevParseRE          = regexp.MustCompile(`\bgit\s+rev-parse\s+HEAD(?:\s|[;&|"']|\\[nrt]|$)`)
+	commitLogRE               = regexp.MustCompile(`\bgit\s+log\s+(?:-1\s+--oneline|--oneline\s+(?:-1|-n\s+1)|-n\s+1\s+--oneline)\b`)
+	commitFullLineRE          = regexp.MustCompile(`(?m)^([0-9a-f]{40}|[0-9a-f]{64})\r?$`)
+	commitLogLineRE           = regexp.MustCompile(`(?m)^([0-9a-f]{7,64}) ([^\r\n]*)\r?$`)
 )
 
 // CommitLinkReader is the optional archive capability used by HTTP and CLI reads.
@@ -65,82 +76,135 @@ type CommitSessionList struct {
 	Commits []CommitSessionMatch `json:"commits"`
 }
 
-// commitRepository finds git's commit subcommand after its global options.
-// Paths retain literal backslashes, including unquoted backslash-escaped spaces.
-func commitRepository(input, cwd string) (string, bool) {
-	var payload struct {
-		Workdir string `json:"workdir"`
-		CWD     string `json:"cwd"`
-	}
-	_ = json.Unmarshal([]byte(input), &payload)
-	if payload.Workdir != "" {
-		cwd = payload.Workdir
-	} else if payload.CWD != "" {
-		cwd = payload.CWD
-	}
+// commitRepository records the first directory described by a call.
+func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
-		if filepath.IsAbs(dir) {
+		dir = strings.Trim(dir, "\"'")
+		if filepath.IsAbs(dir) || strings.HasPrefix(dir, "~") {
 			return dir
 		}
 		return filepath.Join(base, dir)
 	}
-	for _, words := range parser.ShellCommandSegments(signals.CommandText(input)) {
-		if len(words) == 2 && words[0] == "cd" {
-			cwd = resolve(cwd, words[1])
-			continue
+	if match := commitWorkdirRE.FindStringSubmatch(input); match != nil {
+		dir := match[1]
+		if strings.HasPrefix(dir, "\"") {
+			_ = json.Unmarshal([]byte(match[1]), &dir)
 		}
-		if len(words) < 2 || words[0] != "git" {
-			continue
-		}
-		repo := cwd
-		for i := 1; i < len(words); i++ {
-			arg := words[i]
-			if arg == "commit" {
-				return repo, true
-			}
-			if !strings.HasPrefix(arg, "-") {
-				break
-			}
-			if (arg == "-C" || arg == "-c") && i+1 < len(words) {
-				i++
-				if arg == "-C" {
-					repo = resolve(repo, words[i])
-				}
-			}
-		}
+		cwd = resolve(cwd, dir)
 	}
-	return "", false
+	command := signals.CommandText(input)
+	if match := commitCDRE.FindStringSubmatch(command); match != nil {
+		cwd = resolve(cwd, match[1])
+	}
+	if match := commitGitDirRE.FindStringSubmatch(command); match != nil {
+		cwd = resolve(cwd, match[1])
+	}
+	return cwd
 }
 
-func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
-	rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
- COALESCE(m.timestamp,''), t.input_json, COALESCE(t.result_content,''), s.cwd
- FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
- WHERE t.session_id=? AND t.category='Bash' AND t.input_json LIKE '%commit%'`, sessionID)
-	if err != nil {
-		return err
+type commitCall struct {
+	CommitLink
+	input, result string
+}
+
+// callOutput decodes the two stored Codex result shapes, leaving shell text intact.
+func callOutput(result string) (string, int64) {
+	var payload struct {
+		Output    *string `json:"output"`
+		SessionID int64   `json:"session_id"`
 	}
-	defer rows.Close()
-	var links []CommitLink
-	for rows.Next() {
-		var l CommitLink
-		var input, output, cwd string
-		if err := rows.Scan(&l.MessageOrdinal, &l.CallIndex, &l.ToolUseID, &l.CommittedAt, &input, &output, &cwd); err != nil {
-			return err
+	if json.Unmarshal([]byte(result), &payload) == nil && payload.Output != nil {
+		return *payload.Output, payload.SessionID
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal([]byte(result), &blocks) == nil && len(blocks) > 0 && blocks[0].Type == "input_text" {
+		var outputs []string
+		var running int64
+		for _, block := range blocks {
+			output, process := callOutput(block.Text)
+			outputs = append(outputs, output)
+			if process != 0 {
+				running = process
+			}
 		}
-		repo, ok := commitRepository(input, cwd)
-		if !ok {
+		return strings.Join(outputs, "\n"), running
+	}
+	return result, 0
+}
+
+func commitLinks(calls []commitCall, cwd string) []CommitLink {
+	var links []CommitLink
+	pending := map[string]commitCall{}
+	seen := map[string]bool{}
+	for _, call := range calls {
+		output, running := callOutput(call.result)
+		owner := call
+		command := signals.CommandText(call.input)
+		isCommit := commitGitWordRE.MatchString(command) && commitWordRE.MatchString(command)
+		if poll := commitPollRE.FindStringSubmatch(call.input); poll != nil {
+			if original, ok := pending[poll[1]]; ok {
+				owner = original
+				if running == 0 {
+					delete(pending, poll[1])
+				}
+			}
+		} else if !isCommit {
 			continue
 		}
-		seen := map[string]bool{}
-		for _, match := range commitSummaryRE.FindAllStringSubmatch(output, -1) {
+		matches := commitSummaryRE.FindAllStringSubmatch(output, -1)
+		if len(matches) == 0 && commitQuietRE.MatchString(command) {
+			var quiet [][]string
+			if commitRevParseRE.MatchString(command) {
+				quiet = commitFullLineRE.FindAllStringSubmatch(output, -1)
+			} else if commitLogRE.MatchString(command) {
+				quiet = commitLogLineRE.FindAllStringSubmatch(output, -1)
+			}
+			if len(quiet) == 1 {
+				subject := ""
+				if len(quiet[0]) > 2 {
+					subject = quiet[0][2]
+				}
+				matches = [][]string{{"", "", quiet[0][1], subject}}
+			}
+		}
+		if len(matches) == 0 && running != 0 && isCommit {
+			pending[strconv.FormatInt(running, 10)] = owner
+		}
+		for _, match := range matches {
 			if seen[match[2]] {
 				continue
 			}
 			seen[match[2]] = true
-			l.SHA, l.Branch, l.Subject, l.Repository = match[2], match[1], match[3], repo
-			links = append(links, l)
+			link := owner.CommitLink
+			link.SHA, link.Branch, link.Subject = match[2], match[1], match[3]
+			link.Repository = commitRepository(owner.input, cwd)
+			links = append(links, link)
 		}
+	}
+	return links
+}
+
+func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
+	rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
+ COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,'')
+ FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
+ WHERE t.session_id=? AND t.category='Bash' AND ((t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%') OR t.input_json LIKE '%write_stdin%')
+ ORDER BY m.ordinal,t.call_index`, sessionID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var calls []commitCall
+	var cwd string
+	for rows.Next() {
+		var call commitCall
+		if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd); err != nil {
+			return err
+		}
+		calls = append(calls, call)
 	}
 	err = rows.Err()
 	rows.Close()
@@ -150,8 +214,8 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	if _, err := tx.Exec(`DELETE FROM commit_links WHERE session_id=?`, sessionID); err != nil {
 		return err
 	}
-	for _, l := range links {
-		if _, err := tx.Exec(`INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES (?,?,?,?,?,?,?,?,?)`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt); err != nil {
+	for _, l := range commitLinks(calls, cwd) {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES (?,?,?,?,?,?,?,?,?)`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt); err != nil {
 			return err
 		}
 	}
@@ -202,9 +266,12 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 
 const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
  (s.id IS NULL OR s.deleted_at IS NOT NULL),
- (SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal AND m.role='user' AND m.is_system=0 ORDER BY m.ordinal DESC LIMIT 1),
- (SELECT m.content FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal AND m.role='user' AND m.is_system=0 ORDER BY m.ordinal DESC LIMIT 1)
+ turn.ordinal, turn.content
  FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
+ LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
+ SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
+ AND m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''
+ ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
 func readCommitLinks(ctx context.Context, tx *sql.Tx, where string, args ...any) ([]CommitLink, error) {

@@ -18,15 +18,15 @@ func TestCommitLinksRoutes(t *testing.T) {
 	te.seedSession(t, "s1", "project-a", 0)
 	require.NoError(t, te.db.InsertMessages(t.Context(), []db.Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "Fix parser"},
-		{SessionID: "s1", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{SessionID: "s1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser"}}},
+		{SessionID: "s1", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{SessionID: "s1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}}}},
 	}))
-	w := te.post(t, "/api/v1/commits/sessions", `{"shas":["deadbee","abc12340000000000000000000000000000000000","abc1234"]}`)
+	w := te.post(t, "/api/v1/commits/sessions", `{"shas":["deadbee","abc1234000000000000000000000000000000000","abc1234"]}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	got := decode[db.CommitSessionList](t, w)
 	require.Len(t, got.Commits, 3)
 	assert.Equal(t, "deadbee", got.Commits[0].SHA)
 	assert.Empty(t, got.Commits[0].Links)
-	assert.Equal(t, "abc12340000000000000000000000000000000000", got.Commits[1].SHA)
+	assert.Equal(t, "abc1234000000000000000000000000000000000", got.Commits[1].SHA)
 	require.Len(t, got.Commits[1].Links, 1)
 	assert.Equal(t, "s1", got.Commits[1].Links[0].SessionID)
 	require.NotNil(t, got.Commits[1].Links[0].Turn)
@@ -37,6 +37,16 @@ func TestCommitLinksRoutes(t *testing.T) {
 	session := decode[db.SessionCommitList](t, w)
 	require.Len(t, session.Commits, 1)
 	assert.Equal(t, "abc1234", session.Commits[0].SHA)
+	many := make([]string, 200)
+	for i := range many {
+		many[i] = "abc1234"
+	}
+	body, err := json.Marshal(map[string]any{"shas": many})
+	require.NoError(t, err)
+	w = te.post(t, "/api/v1/commits/sessions", string(body))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Len(t, decode[db.CommitSessionList](t, w).Commits, 200)
+
 	w = te.post(t, "/api/v1/commits/sessions", `{"shas":["bad"]}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	for _, shas := range [][]string{{}, strings.Split(strings.TrimSuffix(strings.Repeat("abc1234,", 201), ","), ",")} {

@@ -1517,8 +1517,9 @@ Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 `repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
 and `source: "transcript"`. `committed_at` is the tool call's message time. The
 SHA is exactly as Git printed it, usually a short prefix. Full SHAs match stored
-prefixes. `turn` contains the preceding non-system user message's `ordinal` and
-`text`, limited to 2,000 UTF-8 bytes.
+prefixes. `turn` contains the preceding nonempty, non-system user prompt's
+`ordinal` and `text`, limited to 2,000 UTF-8 bytes. It is omitted when the
+archive has no preceding user prompt.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link
@@ -1526,11 +1527,23 @@ carries `ambiguous: true` when a query matches distinct commits whose SHAs are
 not prefixes of each other. Several sessions recording the same commit do not
 make it ambiguous.
 
-Links require a `git commit` command and a successful commit summary in its
-stored tool output. Cherry-picks and reverts do not create links. Archives using
-`archive_content = "transcripts"` or `"usage"` retain no commit links. Codex
-output received only through a later `write_stdin` call is excluded. Repository
-paths follow `git -C`, a preceding `cd`, the tool's `workdir` or `cwd`, and then
-the session's working directory. The command tokenizer keeps backslashes
-literally for Windows paths; it does not unescape an unquoted backslash-escaped
-space in a `-C` path.
+Links require the words `git` and `commit` in a shell call's input and Git's
+commit summary in its stored output. This includes commits made through shell
+wrappers or Python helpers. Codex output received through a later `write_stdin`
+poll links to the original call when its process ID matches. An unmatched poll
+with a commit summary links to the poll itself. Each session records a SHA once,
+at its first matching call.
+
+Quiet commits link only when the same call prints exactly one SHA through
+`git rev-parse HEAD` or `git log -1 --oneline`, including the equivalent
+`--oneline -1`, `-n 1 --oneline`, and `--oneline -n 1` forms. These links have
+an empty branch. Without that output, quiet commits have no link.
+
+Repository paths use the tool's `workdir` or `cwd`, or the session's working
+directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative
+paths join onto the base; `~` paths stay literal. A later `cd` is ignored. A
+call that commits in two repositories records the first directory for both
+commits.
+
+Archives using `archive_content = "transcripts"` or `"usage"` retain no commit
+links because they omit tool output.

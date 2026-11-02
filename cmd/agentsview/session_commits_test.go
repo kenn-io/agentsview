@@ -16,7 +16,7 @@ func TestSessionCommitsJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix parser"},
-		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser"}}},
+		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}}}},
 	}))
 	require.NoError(t, d.Close())
 	out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit", "--format", "json")

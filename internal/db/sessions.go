@@ -1496,6 +1496,10 @@ func (db *DB) DeleteParserExcludedSessions(ctx context.Context, ids []string) (i
 				id, err,
 			)
 		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=?", id); err != nil {
+			return 0, fmt.Errorf("deleting parser-excluded commit links: %w", err)
+		}
+
 		res, err := tx.ExecContext(ctx,
 			"DELETE FROM sessions WHERE id = ?", id,
 		)

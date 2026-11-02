@@ -15,7 +15,7 @@ func commitMessages(id, input, result string) []Message {
 	return []Message{
 		userMsg(id, 0, "Record the parser fix"),
 		{SessionID: id, Ordinal: 1, Role: "user", IsSystem: true, Content: "system context"},
-		{SessionID: id, Ordinal: 2, Role: "assistant", Timestamp: tsZero, HasToolUse: true, ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: input, ResultContent: result}}},
+		{SessionID: id, Ordinal: 2, Role: "assistant", Timestamp: tsZero, HasToolUse: true, ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: input, ResultContent: result, ResultEvents: []ToolResultEvent{{Source: "tool_result", Content: result}}}}},
 	}
 }
 
@@ -56,6 +56,23 @@ func TestCommitLinksParsing(t *testing.T) {
 		count                             int
 	}{
 		{"commit", "git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
+		{"env", "GIT_X=1 git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
+		{"absolute git", "/usr/bin/git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
+		{"shell wrapper", "bash -lc 'git commit -m fix'", "[main abc1234] Fix parser", "/work", 1},
+		{"python", `python3 -c 'subprocess.run(["git","commit","-m","fix"])'`, "[main abc1234] Fix parser", "/work", 1},
+		{"heredoc apostrophe", "cat <<'EOF'\nIt's fixed\nEOF\ngit commit -m fix", "[main abc1234] Fix parser", "/work", 1},
+		{"tilde", "cd ~/x && git commit -m fix", "[main abc1234] Fix parser", "~/x", 1},
+		{"nonleading cd", "git add . && cd /elsewhere && git commit -m fix", "[main abc1234] Fix parser", "/work", 1},
+		{"quiet", "git commit -q -m fix", "", "", 0},
+		{"quiet HEAD", "git commit -q -m fix && git rev-parse HEAD", "abc1234000000000000000000000000000000000\n", "/work", 1},
+		{"quiet log", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "/work", 1},
+		{"quiet log reordered", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "/work", 1},
+		{"quiet log n", "git commit -q -m fix && git log -n 1 --oneline", "abc1234 Fix parser\n", "/work", 1},
+		{"quiet log oneline n", "git commit -q -m fix && git log --oneline -n 1", "abc1234 Fix parser\n", "/work", 1},
+		{"quiet unrelated SHA", "git commit -q -m fix && cat sha.txt", "abc1234000000000000000000000000000000000\n", "", 0},
+		{"quiet ancestor", "git commit -q -m fix && git rev-parse HEAD~1", "abc1234000000000000000000000000000000000\n", "", 0},
+		{"quiet log many", "git commit -q -m fix && git log -3 --oneline", "abc1234 Fix parser\n", "", 0},
+		{"quiet multiple lines", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\ndef5678 Other commit\n", "", 0},
 		{"failed", "git commit -m fix", "nothing to commit", "", 0},
 		{"printed", "cat out.txt", "[main abc1234] Fix parser", "", 0},
 		{"quoted directory", `git -C "/tmp/my repo" commit -m fix`, "[main abc1234] Fix parser", "/tmp/my repo", 1},
@@ -79,18 +96,29 @@ func TestCommitLinksParsing(t *testing.T) {
 			require.Len(t, got.Commits, tt.count)
 			if tt.count > 0 {
 				assert.Equal(t, tt.repository, got.Commits[0].Repository)
+				if strings.HasPrefix(tt.name, "quiet") {
+					assert.Empty(t, got.Commits[0].Branch)
+				}
 			}
 		})
 	}
-	t.Run("command array workdir", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "s1", "project-a")
-		insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit -m fix"],"workdir":"/repo"}`, "[main abc1234] Fix parser")...)
-		got, err := d.SessionCommitLinks(t.Context(), "s1")
-		require.NoError(t, err)
-		require.Len(t, got.Commits, 1)
-		assert.Equal(t, "/repo", got.Commits[0].Repository)
-	})
+
+	for _, tt := range []struct{ name, input, result, repository string }{
+		{"Codex JavaScript workdir", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, "/repo"},
+		{"JSON workdir", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser", "/repo"},
+		{"JSON cwd", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser", "/work/sub"},
+		{"JavaScript cwd", `text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`, "/repo"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			insertMessages(t, d, commitMessages("s1", tt.input, tt.result)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+		})
+	}
 }
 
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {
@@ -209,6 +237,81 @@ func TestCommitLinksPromptLimitAndPolicy(t *testing.T) {
 			} else {
 				assert.Empty(t, got.Commits)
 			}
+		})
+	}
+}
+
+func TestCommitLinksDedupAndRepeats(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser\r\n[main def5678] Other fix\r\n")
+	// Blank and tool-result user messages must not replace the real prompt.
+	messages = append(messages, Message{SessionID: "s1", Ordinal: 3, Role: "user", Content: " "}, Message{SessionID: "s1", Ordinal: 4, Role: "user", SourceSubtype: "tool_result", Content: "Tool output"})
+	repeat := commitMessages("s1", `{"command":"git commit -m repeat; tail commit.log"}`, "[main abc1234] Fix parser\n[main 123abcd] Third fix")[2]
+	repeat.Ordinal = 5
+	repeat.ToolCalls[0].ToolUseID = "repeat"
+	messages = append(messages, repeat)
+	insertMessages(t, d, messages...)
+	var raw string
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COALESCE(result_content,'') FROM tool_calls WHERE session_id='s1' ORDER BY message_id LIMIT 1`).Scan(&raw))
+	assert.Empty(t, raw)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 3)
+	assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+	assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
+	require.NotNil(t, got.Commits[0].Turn)
+	assert.Equal(t, 0, got.Commits[0].Turn.Ordinal)
+	assert.Equal(t, "Other fix", got.Commits[1].Subject)
+	require.NotNil(t, got.Commits[2].Turn)
+	assert.Equal(t, 0, got.Commits[2].Turn.Ordinal)
+	_, err = d.DeleteParserExcludedSessions(t.Context(), []string{"s1"})
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM commit_links WHERE session_id='s1'`).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestCommitLinksPolled(t *testing.T) {
+	for _, result := range []string{
+		`{"output":"[main abc1234] Fix parser\n"}`,
+		`[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`,
+	} {
+		t.Run(result, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `{"session_id":7,"output":""}`)
+			messages = append(messages, userMsg("s1", 3, "A later prompt"))
+			for i, input := range []string{`text(await tools.write_stdin({session_id:8,chars:""}))`, `text(await tools.write_stdin({session_id:7,chars:""}))`, `text(await tools.write_stdin({session_id:9,chars:""}))`} {
+				poll := commitMessages("s1", input, result)[2]
+				poll.Ordinal = 4 + i
+				poll.Timestamp = "2026-01-02T00:00:00Z"
+				poll.ToolCalls[0].ToolUseID = "poll"
+				messages = append(messages, poll)
+			}
+			// An unmatched poll owns its summary; use a distinct SHA so it
+			// doesn't hide the paired poll through first-occurrence dedup.
+			messages[4].ToolCalls[0].ResultContent = `{"output":""}`
+			messages[4].ToolCalls[0].ResultEvents[0].Content = messages[4].ToolCalls[0].ResultContent
+			messages[6].ToolCalls[0].ResultContent = strings.ReplaceAll(result, "abc1234", "def5678")
+			messages[6].ToolCalls[0].ResultEvents[0].Content = messages[6].ToolCalls[0].ResultContent
+			insertMessages(t, d, messages[:5]...)
+			before, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, before.Commits)
+			insertMessages(t, d, messages[5:]...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 2)
+			link := got.Commits[0]
+			assert.Equal(t, "abc1234", link.SHA)
+			assert.Equal(t, 2, link.MessageOrdinal)
+			assert.Equal(t, "commit-call", link.ToolUseID)
+			assert.Equal(t, tsZero, link.CommittedAt)
+			assert.Equal(t, "/repo", link.Repository)
+			require.NotNil(t, link.Turn)
+			assert.Equal(t, "Record the parser fix", link.Turn.Text)
+			assert.Equal(t, 6, got.Commits[1].MessageOrdinal)
 		})
 	}
 }

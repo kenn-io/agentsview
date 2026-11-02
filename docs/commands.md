@@ -1928,7 +1928,12 @@ call index, and tool-use ID. The table shows the call time, recorded SHA,
 branch, and subject. Trashed or permanently deleted sessions carry
 `missing: true` and omit the turn. See
 [commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
-retention and lookup limits.
+retention and lookup limits. Links use stored Git summaries, including Codex
+poll results paired with the original call. Quiet commits require the same
+call's `git rev-parse HEAD` or single-entry `git log --oneline` output and have
+an empty branch. Calls spanning repositories use the first directory; only a
+leading `cd` adjusts it. Archives retaining only transcripts or usage have no
+links, and mirrors return HTTP 501.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and

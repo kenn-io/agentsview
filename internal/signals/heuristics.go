@@ -775,16 +775,6 @@ func CommandText(inputJSON string) string {
 		if v, ok := payload[key].(string); ok {
 			return v
 		}
-		if v, ok := payload[key].([]any); ok {
-			words := make([]string, len(v))
-			for i, item := range v {
-				words[i], _ = item.(string)
-			}
-			if len(words) == 3 && (words[1] == "-c" || words[1] == "-lc") {
-				return words[2]
-			}
-			return strings.Join(words, " ")
-		}
 	}
 	return inputJSON
 }
