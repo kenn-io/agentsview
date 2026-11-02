@@ -1,7 +1,9 @@
 package signals
 
 import (
+	"iter"
 	"regexp"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -192,24 +194,32 @@ type ToolRun struct {
 // RetryRuns returns every maximal retry run in call order. It is the
 // per-occurrence form of countRetries: countRetries == Σ(Count-1).
 func RetryRuns(calls []ToolCallRow) []ToolRun {
+	return RetryRunsIter(slices.Values(calls))
+}
+
+// RetryRunsIter reduces calls in order, retaining only the current run's
+// arguments so paged readers can release each page before loading the next.
+func RetryRunsIter(calls iter.Seq[ToolCallRow]) []ToolRun {
 	var runs []ToolRun
-	start := 0
-	for i := 1; i <= len(calls); i++ {
-		if i < len(calls) &&
-			calls[i].ToolName == calls[i-1].ToolName &&
-			calls[i].InputJSON == calls[i-1].InputJSON {
-			continue
+	var run ToolRun
+	var input string
+	flush := func() {
+		if run.Count >= retryRunMinLen {
+			runs = append(runs, run)
 		}
-		if n := i - start; n >= retryRunMinLen {
-			runs = append(runs, ToolRun{
-				ToolName: calls[start].ToolName,
-				Count:    n,
-				First:    toolCallPos(calls[start]),
-				Last:     toolCallPos(calls[i-1]),
-			})
-		}
-		start = i
 	}
+	for call := range calls {
+		if run.Count > 0 && (call.ToolName != run.ToolName || call.InputJSON != input) {
+			flush()
+			run = ToolRun{}
+		}
+		if run.Count == 0 {
+			run.ToolName, run.First, input = call.ToolName, toolCallPos(call), call.InputJSON
+		}
+		run.Last = toolCallPos(call)
+		run.Count++
+	}
+	flush()
 	return runs
 }
 

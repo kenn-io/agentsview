@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -12,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -183,44 +181,4 @@ func printMessagesHuman(w io.Writer, list *service.MessageList) error {
 		fmt.Fprintln(w)
 	}
 	return nil
-}
-
-// loadSessionMessages pins subsequent pages to the first page's revision.
-// A zero limit reads every message; false completeness means the cap was hit.
-func loadSessionMessages(ctx context.Context, svc service.SessionService, id string, maxMessages int) ([]db.Message, bool, error) {
-	var all []db.Message
-	from := 0
-	revision, source := "", ""
-	for maxMessages == 0 || len(all) < maxMessages {
-		limit := db.MaxMessageLimit
-		if maxMessages > 0 {
-			limit = min(limit, maxMessages-len(all))
-		}
-		page, err := svc.Messages(ctx, id, service.MessageFilter{
-			From:             &from,
-			Limit:            limit,
-			Direction:        "asc",
-			ExpectedRevision: revision,
-			EvidenceSource:   source,
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		if page == nil || len(page.Messages) == 0 {
-			return all, true, nil
-		}
-		if revision == "" {
-			revision, source = page.TranscriptRevision, page.EvidenceSource
-		}
-		all = append(all, page.Messages...)
-		if len(page.Messages) < limit {
-			return all, true, nil
-		}
-		next := page.Messages[len(page.Messages)-1].Ordinal + 1
-		if next <= from {
-			return nil, false, errors.New("message pagination did not advance")
-		}
-		from = next
-	}
-	return all, false, nil
 }

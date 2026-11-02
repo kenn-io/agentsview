@@ -3,14 +3,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/signals"
@@ -23,8 +24,8 @@ type diagnosisTool struct {
 	SubagentSessionID string `json:"subagent_session_id,omitempty"`
 }
 type diagnosisChildLink struct {
-	Ordinal   int    `json:"ordinal"`
-	Tool      string `json:"tool"`
+	Ordinal   *int   `json:"ordinal,omitempty"`
+	Tool      string `json:"tool,omitempty"`
 	SessionID string `json:"session_id"`
 }
 
@@ -48,24 +49,23 @@ type diagnosisTokens struct {
 }
 
 type sessionDiagnosis struct {
-	SchemaVersion int                  `json:"schema_version"`
-	SessionID     string               `json:"session_id"`
-	Scope         string               `json:"scope"`
-	Coverage      diagnosisCoverage    `json:"coverage"`
-	Usage         *sessionUsageOutput  `json:"usage"`
-	ObservedRows  diagnosisTokens      `json:"observed_usage_rows"`
-	Context       []diagnosisContext   `json:"context_timeline"`
-	Compactions   []int                `json:"compaction_ordinals"`
-	LargeResults  []diagnosisTool      `json:"largest_tool_results"`
-	RetryRuns     []diagnosisRetry     `json:"retry_runs"`
-	ChildLinks    []diagnosisChildLink `json:"child_links"`
+	SchemaVersion int                         `json:"schema_version"`
+	SessionID     string                      `json:"session_id"`
+	Scope         string                      `json:"scope"`
+	Coverage      diagnosisCoverage           `json:"coverage"`
+	Usage         *service.SessionUsageReport `json:"usage"`
+	ObservedRows  diagnosisTokens             `json:"observed_usage_rows"`
+	Context       []diagnosisContext          `json:"context_timeline"`
+	Compactions   []int                       `json:"compaction_ordinals"`
+	LargeResults  []diagnosisTool             `json:"largest_tool_results"`
+	RetryRuns     []diagnosisRetry            `json:"retry_runs"`
+	ChildLinks    []diagnosisChildLink        `json:"child_links"`
 }
 type diagnosisCoverage struct {
 	RequestCount            *int   `json:"request_count"`
 	RequestCountStatus      string `json:"request_count_status"`
 	CacheMissReasons        string `json:"cache_miss_reasons"`
 	ToolEvidenceScope       string `json:"tool_evidence_scope"`
-	MessagesComplete        bool   `json:"messages_complete"`
 	UsageStatus             string `json:"usage_status"`
 	CacheBucketAvailability string `json:"cache_bucket_availability"`
 }
@@ -77,38 +77,44 @@ func newSessionDiagnoseCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, id, cleanup, err := resolveDiagnosisSession(cmd, args[0])
+			backend, err := resolveSessionUsageBackend(cmd, true)
 			if err != nil {
 				return err
 			}
-			defer cleanup()
-			ownOnly, _ := cmd.Flags().GetBool("own-only")
-			usage, err := svc.SessionUsage(cmd.Context(), service.SessionUsageRequest{ID: id, OwnOnly: ownOnly})
+			defer closeArchiveQueryBackend(backend.cleanup)
+			svc := backend.service
+			usage, code, err := backend.read(args[0])
 			if err != nil {
 				return err
+			}
+			if code == tokenUseExitNotFound {
+				return fmt.Errorf("%w: %s", errSessionNotFound, args[0])
 			}
 			if usage == nil {
-				return fmt.Errorf("session usage unavailable for %s", id)
+				return fmt.Errorf("session usage unavailable for %s", args[0])
 			}
-			messages, complete, err := loadSessionMessages(cmd.Context(), svc, id, 10000)
+			id := usage.SessionID
+			out := buildSessionDiagnosis(id, &usage.SessionUsageReport)
+			ownOnly, _ := cmd.Flags().GetBool("own-only")
+			if ownOnly {
+				out.Scope = "usage, tool and context evidence cover the named session only"
+			}
+			if err := out.readMessages(cmd.Context(), svc); err != nil {
+				return err
+			}
+			children, err := svc.ChildSessions(cmd.Context(), id)
 			if err != nil {
 				return err
 			}
-			var calls []service.ToolCall
-			for _, m := range messages {
-				for _, c := range m.ToolCalls {
-					calls = append(calls, service.ToolCall{
-						Ordinal:           m.Ordinal,
-						ToolName:          c.ToolName,
-						InputJSON:         c.InputJSON,
-						ResultLength:      c.ResultContentLength,
-						SubagentSessionID: c.SubagentSessionID,
-					})
-				}
+			linked := make(map[string]bool)
+			for _, link := range out.ChildLinks {
+				linked[link.SessionID] = true
 			}
-			out := buildSessionDiagnosis(id, &sessionUsageOutput{SessionUsageReport: *usage}, messages, calls, complete)
-			if ownOnly {
-				out.Scope = "usage, tool and context evidence cover the named session only"
+			for _, child := range children {
+				if !linked[child.ID] {
+					out.ChildLinks = append(out.ChildLinks, diagnosisChildLink{SessionID: child.ID})
+					linked[child.ID] = true
+				}
 			}
 			if outputFormat(cmd) == "json" {
 				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout(), jsontext.WithIndent("  ")), out)
@@ -120,59 +126,7 @@ func newSessionDiagnoseCommand() *cobra.Command {
 	return cmd
 }
 
-func resolveDiagnosisSession(cmd *cobra.Command, rawID string) (service.SessionService, string, func(), error) {
-	if pgReadRequested(cmd) {
-		remote, _ := cmd.Flags().GetString("server")
-		if remote != "" {
-			return nil, "", nil, fmt.Errorf("--server and --pg are mutually exclusive")
-		}
-		cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
-		if err != nil {
-			return nil, "", nil, err
-		}
-		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
-		if err != nil {
-			return nil, "", nil, err
-		}
-		store, cleanup, err := openPGReadStore(cfg, pgCfg)
-		if err != nil {
-			closeArchiveQueryBackend(cleanup)
-			return nil, "", nil, err
-		}
-		id, err := resolveStoreSessionID(cmd.Context(), store, rawID)
-		if err != nil {
-			closeArchiveQueryBackend(cleanup)
-			return nil, "", nil, err
-		}
-		if priced, ok := store.(customPricingStore); ok {
-			priced.SetCustomPricing(cfg.CustomModelPricing)
-		}
-		return service.NewReadOnlyBackend(store), id, cleanup, nil
-	}
-	ownOnly, _ := cmd.Flags().GetBool("own-only")
-	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" && !ownOnly {
-		token, err := explicitServerToken(cmd)
-		if err != nil {
-			return nil, "", nil, err
-		}
-		if err := requireRemoteSubagentUsageSupport(cmd.Context(), remote, token, false); err != nil {
-			return nil, "", nil, err
-		}
-	}
-	svc, cleanup, err := resolveServiceWithNoSync(cmd, true)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	id, err := resolveServiceSessionID(cmd.Context(), svc, rawID)
-	if err != nil {
-		cleanup()
-		return nil, "", nil, err
-	}
-	return svc, id, cleanup, nil
-}
-
-func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.Message, calls []service.ToolCall, complete bool) *sessionDiagnosis {
+func buildSessionDiagnosis(id string, usage *service.SessionUsageReport) *sessionDiagnosis {
 	// Project is not needed for diagnosis and may contain private information.
 	safeUsage := *usage
 	safeUsage.Project = ""
@@ -185,7 +139,6 @@ func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.M
 			RequestCountStatus:      "unavailable: usage rows do not always represent requests",
 			CacheMissReasons:        "unavailable: provider diagnostics not captured",
 			ToolEvidenceScope:       "named session only; lengths are not billed tokens",
-			MessagesComplete:        complete,
 			UsageStatus:             "archived; completeness unknown",
 			CacheBucketAvailability: "unknown: zero can mean missing or unreported",
 		},
@@ -204,39 +157,72 @@ func buildSessionDiagnosis(id string, usage *sessionUsageOutput, messages []db.M
 		out.ObservedRows.CacheWrite += row.CacheCreationInputTokens
 		out.ObservedRows.Output += row.OutputTokens
 	}
-	for _, m := range messages {
-		if m.HasContextTokens {
-			out.Context = append(out.Context, diagnosisContext{m.Ordinal, m.Timestamp, m.Model, m.ContextTokens})
+	return out
+}
+
+// readMessages reduces each page before fetching the next. Only the current
+// retry run retains recorded arguments, including when it spans pages.
+func (out *sessionDiagnosis) readMessages(ctx context.Context, svc service.SessionService) error {
+	from := 0
+	var readErr error
+	runs := signals.RetryRunsIter(func(yield func(signals.ToolCallRow) bool) {
+		for {
+			page, err := svc.Messages(ctx, out.SessionID, service.MessageFilter{From: &from, Limit: db.MaxMessageLimit, Direction: "asc"})
+			if err != nil {
+				readErr = err
+				return
+			}
+			if page == nil || len(page.Messages) == 0 {
+				break
+			}
+			for _, m := range page.Messages {
+				if m.HasContextTokens {
+					out.Context = append(out.Context, diagnosisContext{m.Ordinal, m.Timestamp, m.Model, m.ContextTokens})
+				}
+				if m.IsCompactBoundary {
+					out.Compactions = append(out.Compactions, m.Ordinal)
+				}
+				for i, c := range m.ToolCalls {
+					if c.SubagentSessionID != "" {
+						out.ChildLinks = append(out.ChildLinks, diagnosisChildLink{new(m.Ordinal), c.ToolName, c.SubagentSessionID})
+					}
+					if c.ResultContentLength > 0 {
+						out.LargeResults = append(out.LargeResults, diagnosisTool{m.Ordinal, c.ToolName, c.ResultContentLength, c.SubagentSessionID})
+						sort.SliceStable(out.LargeResults, func(i, j int) bool { return out.LargeResults[i].ResultLength > out.LargeResults[j].ResultLength })
+						if len(out.LargeResults) > 10 {
+							out.LargeResults = out.LargeResults[:10]
+						}
+					}
+					if !yield(signals.ToolCallRow{ToolName: c.ToolName, InputJSON: c.InputJSON, MessageOrdinal: m.Ordinal, CallIndex: i}) {
+						return
+					}
+				}
+			}
+			if len(page.Messages) < db.MaxMessageLimit {
+				break
+			}
+			next := page.Messages[len(page.Messages)-1].Ordinal + 1
+			if next <= from {
+				readErr = errors.New("message pagination did not advance")
+				return
+			}
+			from = next
 		}
-		if m.IsCompactBoundary {
-			out.Compactions = append(out.Compactions, m.Ordinal)
-		}
+	})
+	if readErr != nil {
+		return readErr
 	}
-	rows := make([]signals.ToolCallRow, 0, len(calls))
-	for i, c := range calls {
-		if c.SubagentSessionID != "" {
-			out.ChildLinks = append(out.ChildLinks, diagnosisChildLink{c.Ordinal, c.ToolName, c.SubagentSessionID})
-		}
-		if c.ResultLength > 0 {
-			out.LargeResults = append(out.LargeResults, diagnosisTool{c.Ordinal, c.ToolName, c.ResultLength, c.SubagentSessionID})
-		}
-		rows = append(rows, signals.ToolCallRow{ToolName: c.ToolName, InputJSON: c.InputJSON, MessageOrdinal: c.Ordinal, CallIndex: i})
-	}
-	sort.SliceStable(out.LargeResults, func(i, j int) bool { return out.LargeResults[i].ResultLength > out.LargeResults[j].ResultLength })
-	if len(out.LargeResults) > 10 {
-		out.LargeResults = out.LargeResults[:10]
-	}
-	for _, run := range signals.RetryRuns(rows) {
+	for _, run := range runs {
 		out.RetryRuns = append(out.RetryRuns, diagnosisRetry{run.ToolName, run.Count, run.First.MessageOrdinal, run.Last.MessageOrdinal})
 	}
-	return out
+	return nil
 }
 
 func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if _, err := fmt.Fprintf(w, "Session: %s\nScope: %s\n", sanitizeTerminal(d.SessionID), d.Scope); err != nil {
 		return err
 	}
-	if err := renderSessionUsageHuman(w, d.Usage); err != nil {
+	if err := renderSessionUsageHuman(w, &sessionUsageOutput{SessionUsageReport: *d.Usage}); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "Observed usage rows: uncached input %d; cache read %d; cache write %d; output %d (coverage may be incomplete)\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {
@@ -264,7 +250,11 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 		}
 	}
 	for _, link := range d.ChildLinks {
-		if _, err := fmt.Fprintf(w, "  Child: %s via %s (#%d)\n", sanitizeTerminal(link.SessionID), sanitizeTerminal(link.Tool), link.Ordinal); err != nil {
+		via := ""
+		if link.Ordinal != nil {
+			via = fmt.Sprintf(" via %s (#%d)", sanitizeTerminal(link.Tool), *link.Ordinal)
+		}
+		if _, err := fmt.Fprintf(w, "  Child: %s%s\n", sanitizeTerminal(link.SessionID), via); err != nil {
 			return err
 		}
 	}
@@ -272,9 +262,6 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 		if _, err := fmt.Fprintf(w, "  Retry candidate: %s x%d (#%d–#%d; identical recorded arguments)\n", sanitizeTerminal(r.Tool), r.Count, r.FirstOrdinal, r.LastOrdinal); err != nil {
 			return err
 		}
-	}
-	if !d.Coverage.MessagesComplete {
-		_, err = fmt.Fprintln(w, "Message evidence truncated at 10000 rows")
 	}
 	return err
 }

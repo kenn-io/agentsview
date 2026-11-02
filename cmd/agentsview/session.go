@@ -66,10 +66,6 @@ func newSessionCommand() *cobra.Command {
 func resolveService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	return resolveServiceWithNoSync(cmd, false)
-}
-
-func resolveServiceWithNoSync(cmd *cobra.Command, noSync bool) (service.SessionService, func(), error) {
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
@@ -101,7 +97,6 @@ func resolveServiceWithNoSync(cmd *cobra.Command, noSync bool) (service.SessionS
 			"loading config: %w", err,
 		)
 	}
-	cfg.NoSync = cfg.NoSync || noSync
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {
 		return nil, nil, err

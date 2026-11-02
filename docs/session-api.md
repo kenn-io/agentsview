@@ -962,6 +962,7 @@ Human output labels each requested ID and its exit code before its usage or
 error. The process exits 0 after completing the results, including per-session
 failures. Backend setup or output failures exit 1. The existing
 `session usage <id>` output and process exit codes remain unchanged.
+
 ### `agentsview session diagnose`
 
 `agentsview session diagnose <id> --json` reports archived usage and evidence
@@ -983,13 +984,11 @@ incomplete: usage rows are not always requests, request counts and provider
 cache-miss reasons are unavailable, and result lengths are not billed tokens.
 Cost is reported or estimated according to the existing usage contract; no
 causal savings or invoice total is inferred. The report omits transcript content
-and tool arguments. Context, compaction, and tool evidence comes from one
-revision-bound message scan, limited to 10,000 rows. `messages_complete`
-describes that scan only. Human output shows the latest ten context
-observations; JSON includes every observation within the scan limit. Usage is a
-separate read and can reflect a different archive revision if ingestion runs
-concurrently. `schema_version` versions the output shape, not the archive
-snapshot.
+and tool arguments. Context, compaction, and tool evidence comes from a paged
+scan of all archived messages. Human output shows the latest ten context
+observations; JSON includes every observation. Usage is a separate read and can
+reflect a different archive revision if ingestion runs concurrently.
+`schema_version` versions the output shape, not the archive snapshot.
 
 ### `agentsview session usage`
 

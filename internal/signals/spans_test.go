@@ -119,6 +119,15 @@ func TestRetryRuns(t *testing.T) {
 		{"empty", nil, nil},
 		{"two identical is not a run", []ToolCallRow{bashLs(1, 0), bashLs(3, 0)}, nil},
 		{
+			"empty arguments retain recorded retry semantics",
+			[]ToolCallRow{
+				{ToolName: "read", MessageOrdinal: 4, CallIndex: 0},
+				{ToolName: "read", MessageOrdinal: 4, CallIndex: 1},
+				{ToolName: "read", MessageOrdinal: 8, CallIndex: 0},
+			},
+			[]ToolRun{{ToolName: "read", Count: 3, First: CallPos{MessageOrdinal: 4, CallIndex: 0}, Last: CallPos{MessageOrdinal: 8, CallIndex: 0}}},
+		},
+		{
 			"three identical across messages",
 			[]ToolCallRow{bashLs(1, 0), bashLs(3, 0), bashLs(5, 1)},
 			[]ToolRun{{
