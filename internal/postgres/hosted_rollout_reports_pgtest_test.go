@@ -14,7 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"hegel.dev/go/hegel"
 )
 
 type rolloutVectorHits []db.VectorHit
@@ -32,8 +31,8 @@ func (*rolloutVectorHits) ResolveMessageUnits(_ context.Context, refs []db.Messa
 // candidates and project metadata: TestHostedRolloutProjectMetadataAndCandidates.
 // GetChildSessions and nested raw links: TestHostedCrossSourceTargetLifecycleAndReadRevision;
 // legacy nested timing/sidebar roots: TestHostedRolloutLegacyTimingHidesNestedDuration.
-// Pin creation/listing/physical references: this inventory plus the complete
-// eligibility model below. UnpinMessage: TestHostedPinInventorySkipsFalseHistoricalPayloads
+// Pin creation/listing/physical references: this inventory and the eligibility checks in
+// hosted_rollout_mapping_pgtest_test.go. UnpinMessage: TestHostedPinInventorySkipsFalseHistoricalPayloads
 // and TestHostedLegacyWriteFencesFirstRawPublication; RemovePinReference: TestHostedPublicConflictCurationAndCursor.
 // Identity/curation/purge: hosted_rollout_protection tests.
 //
@@ -184,25 +183,7 @@ func TestHostedRolloutReadInventory(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { assert.JSONEq(t, empty[i], read(tc)) })
 	}
-	t.Run("eligibility_property", func(t *testing.T) {
-		requireHegel(t)
-		hegel.Test(t, func(ht *hegel.T) {
-			i := hegel.Draw(ht, hegel.Integers(0, len(cases)-1))
-			hidden := hegel.Draw(ht, hegel.Booleans())
-			_, err := f.runtime.Exec(`UPDATE sessions SET rollout_hidden=$1`, hidden)
-			require.NoError(ht, err)
-			got := read(cases[i])
-			want := empty[i]
-			if !hidden {
-				want = visible[i]
-			}
-			if hidden || !cases[i].positive {
-				require.JSONEq(ht, want, got, cases[i].name)
-			} else {
-				require.NotEqual(ht, empty[i], got, cases[i].name)
-			}
-		}, hegel.WithTestCases(1000))
-	})
+
 }
 
 // Findings, signals, trends and activity must retain a visible peer while
