@@ -56,6 +56,10 @@ func TestSidebarTreeSeeksChildrenAfterOptimize(t *testing.T) {
 		{"tree page", func() string {
 			return queryPlanOf(t, d, sidebarTreePageQuery(predicates, []string{"SELECT ? AS id, ? AS ord"}), "root-00", 0)
 		}},
+		{"include children", func() string {
+			where, args := buildSessionFilter(SessionFilter{IncludeChildren: true, ExcludeAutomated: true})
+			return queryPlanOf(t, d, "SELECT id FROM sessions WHERE "+where, args...)
+		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			plan := tt.plan()
