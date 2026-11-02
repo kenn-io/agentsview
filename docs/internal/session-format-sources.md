@@ -176,9 +176,12 @@ evidence; they do not establish whether a tool helped the task.
   that cannot be resolved safely during incremental parsing requires a full
   parse. Synthetic tests cover ordering with queued prompts, assistant snapshot
   merging, counts, usage, and native identity. This parser stage uses existing
-  message fields; archive resume cursors, upgrades, shared-provider and mirror
-  parity, and the dedicated transcript control still need integration before
-  the feature is ready to publish.
+  message fields. Deferred hook identities stay on stored rows but do not
+  advance the ordinary entry-chain resume cursor. Synthetic ingest and sync
+  tests cover full/append equivalence, native and ID-less hooks, linear parent
+  chains, split responses, checkpoint offsets, counts, and retained pins. Archive
+  upgrades, shared-provider and mirror parity, and the dedicated transcript
+  control still need integration before the feature is ready to publish.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies
