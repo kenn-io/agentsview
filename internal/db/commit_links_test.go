@@ -282,7 +282,11 @@ func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	for _, l := range clash.Commits[0].Links {
 		assert.True(t, l.Ambiguous)
 	}
-	for _, shas := range [][]string{{"short"}, {"abc123z"}, make([]string, 201)} {
+	oversized := make([]string, 201)
+	for i := range oversized {
+		oversized[i] = "abc1234"
+	}
+	for _, shas := range [][]string{{"short"}, {"abc123z"}, oversized} {
 		_, err := d.CommitSessionLinks(t.Context(), shas)
 		require.ErrorIs(t, err, ErrInvalidCommitSHA)
 	}
@@ -481,6 +485,84 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 			assert.Equal(t, "/repo", link.Repository)
 			require.NotNil(t, link.Turn)
 			assert.Equal(t, "Record the parser fix", link.Turn.Text)
+		})
+	}
+}
+
+func TestCommitLinksTranscriptNativePoll(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `{"session_id":7,"chars":""}`, `{"output":"[main abc1234] Fix parser\n"}`)
+	messages[2].ToolCalls[0].ToolName = "write_stdin"
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Empty(t, got.Commits)
+	messages[2].Ordinal = 3
+	messages[2].ToolCalls[0].ToolUseID = "later-poll"
+	insertMessages(t, d, messages[2])
+}
+
+func TestCommitLinksWrappedCommands(t *testing.T) {
+	for _, tt := range []struct{ name, input, result, repository, sha, subject string }{
+		{"quiet", `text(await tools.exec_command({cmd:"git commit -q -m \"Fix parser\" && git rev-parse HEAD",workdir:"/repo"}))`, `{"output":"abc1234000000000000000000000000000000000\n"}`, "/repo", "abc1234000000000000000000000000000000000", "Fix parser"},
+		{"leading cd", `text(await tools.exec_command({cmd:'cd sub && git commit -m fix',workdir:"/repo"}))`, `{"output":"[main abc1234] Fix parser\n"}`, "/repo/sub", "abc1234", "Fix parser"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", tt.input, tt.result)
+			messages[2].ToolCalls[0].ToolName = "exec"
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			assert.Equal(t, tt.sha, got.Commits[0].SHA)
+			assert.Equal(t, tt.subject, got.Commits[0].Subject)
+		})
+	}
+}
+
+func TestCommitLinksCodeModeOperations(t *testing.T) {
+	for _, tt := range []struct{ name, input, result string }{
+		{"reordered poll", `text(await tools.write_stdin({chars:"",yield_time_ms:1000,session_id:7}))`, `{"output":"[main abc1234] Old commit\n"}`},
+		{"commit then poll", `text(await tools.exec_command({cmd:"git commit -m new",workdir:"/new"})); text(await tools.write_stdin({session_id:7,chars:""}))`, `[{"type":"input_text","text":"{\"output\":\"[main def5678] New commit\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main abc1234] Old commit\\n\"}"}]`},
+		{"poll then commit", `text(await tools.write_stdin({chars:"",session_id:7})); text(await tools.exec_command({cmd:"git commit -m new",workdir:"/new"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Old commit\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main def5678] New commit\\n\"}"}]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages := commitMessages("s1", `{"cmd":"git commit -m old","workdir":"/old"}`, `{"session_id":7,"output":""}`)
+			messages[2].ToolCalls[0].ToolName = "exec_command"
+			messages = append(messages, userMsg("s1", 3, "New prompt"))
+			mixed := commitMessages("s1", tt.input, tt.result)[2]
+			mixed.Ordinal = 4
+			mixed.ToolCalls[0].ToolName = "exec"
+			mixed.ToolCalls[0].ToolUseID = "mixed-call"
+			messages = append(messages, mixed)
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			want := 2
+			if tt.name == "reordered poll" {
+				want = 1
+			}
+			require.Len(t, got.Commits, want)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
+			assert.Equal(t, "/old", got.Commits[0].Repository)
+			require.NotNil(t, got.Commits[0].Turn)
+			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+			if want == 2 {
+				assert.Equal(t, "def5678", got.Commits[1].SHA)
+				assert.Equal(t, 4, got.Commits[1].MessageOrdinal)
+				assert.Equal(t, "mixed-call", got.Commits[1].ToolUseID)
+				assert.Equal(t, "/new", got.Commits[1].Repository)
+				require.NotNil(t, got.Commits[1].Turn)
+				assert.Equal(t, "New prompt", got.Commits[1].Turn.Text)
+			}
 		})
 	}
 }

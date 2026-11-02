@@ -20,6 +20,7 @@ const (
 	commitLinksBackfillKey = "commit_links_backfill_v1"
 	commitCommandToken     = `(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
 	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
+	commitJSString         = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`
 )
 
 var (
@@ -33,7 +34,8 @@ var (
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGitDirRE            = regexp.MustCompile(`\bgit\s+-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
-	commitPollRE              = regexp.MustCompile(`\bwrite_stdin\s*\(\s*\{\s*["']?session_id["']?\s*:\s*([0-9]+)`)
+	commitOperationRE         = regexp.MustCompile(`\btools\.(exec_command|write_stdin)\s*\(\s*(\{(?:` + commitJSString + `|[^{}"'])*\})\s*\)`)
+	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
 	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\.|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
@@ -139,6 +141,70 @@ type commitCall struct {
 	input, result, toolName string
 }
 
+// commitOperations pairs literal code-mode calls with their ordered result
+// blocks. Leave ambiguous batches unlinked rather than guessing ownership.
+func commitOperations(call commitCall) []commitCall {
+	if call.toolName != "exec" {
+		return []commitCall{call}
+	}
+	operations := commitOperationRE.FindAllStringSubmatch(call.input, -1)
+	if len(operations) == 0 {
+		return []commitCall{call}
+	}
+	results := []string{call.result}
+	if len(operations) > 1 {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(call.result), &blocks) != nil || len(blocks) != len(operations) {
+			return nil
+		}
+		results = nil
+		for _, block := range blocks {
+			if block.Type != "input_text" {
+				return nil
+			}
+			results = append(results, block.Text)
+		}
+	}
+	var calls []commitCall
+	for i, operation := range operations {
+		args := map[string]any{}
+		for _, property := range commitPropertyRE.FindAllStringSubmatch(operation[2], -1) {
+			key, value := strings.Trim(property[1], `"'`), property[2]
+			if value[0] == '"' || value[0] == '\'' {
+				quote := value[0]
+				rest := value[1 : len(value)-1]
+				var decoded strings.Builder
+				for rest != "" {
+					r, _, tail, err := strconv.UnquoteChar(rest, quote)
+					if err != nil {
+						return nil
+					}
+					decoded.WriteRune(r)
+					rest = tail
+				}
+				args[key] = decoded.String()
+			} else {
+				n, err := strconv.ParseInt(value, 10, 64)
+				if err != nil {
+					return nil
+				}
+				args[key] = n
+			}
+		}
+		input, err := json.Marshal(args)
+		if err != nil {
+			return nil
+		}
+		nested := call
+		nested.input, nested.result, nested.toolName = string(input), results[i], operation[1]
+		calls = append(calls, nested)
+	}
+	return calls
+}
+
 // callOutput decodes shell results and their running process IDs.
 func callOutput(result string) (string, int64) {
 	var payload struct {
@@ -195,10 +261,14 @@ func commitMessageSubject(arguments string) string {
 }
 
 func commitLinks(calls []commitCall, cwd string) []CommitLink {
+	var operations []commitCall
+	for _, call := range calls {
+		operations = append(operations, commitOperations(call)...)
+	}
 	var links []CommitLink
 	pending := map[string]commitCall{}
 	seen := map[string]bool{}
-	for _, call := range calls {
+	for _, call := range operations {
 		output, running := callOutput(call.result)
 		owner := call
 		command := signals.CommandText(call.input)
@@ -212,8 +282,6 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 			if json.Unmarshal([]byte(call.input), &args) == nil {
 				pollID = strconv.FormatInt(args.SessionID, 10)
 			}
-		} else if poll := commitPollRE.FindStringSubmatch(call.input); poll != nil {
-			isPoll, pollID = true, poll[1]
 		}
 		if isPoll {
 			original, ok := pending[pollID]
@@ -269,7 +337,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
  COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
  FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
- WHERE t.session_id=? AND t.category='Bash' AND ((t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%') OR t.input_json LIKE '%write_stdin%' OR t.tool_name='write_stdin')
+ WHERE t.session_id=? AND t.category='Bash' AND t.input_json IS NOT NULL AND ((t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%') OR t.input_json LIKE '%write_stdin%' OR t.tool_name='write_stdin')
  ORDER BY m.ordinal,t.call_index`, sessionID)
 	if err != nil {
 		return err
