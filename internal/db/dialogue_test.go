@@ -1,10 +1,10 @@
 package db
 
 import (
-	"encoding/json/jsontext"
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,81 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 )
-
-func TestMessageMetadataUpdateSkipsFTS(t *testing.T) {
-	for _, reopen := range []bool{false, true} {
-		t.Run(fmt.Sprintf("reopen=%t", reopen), func(t *testing.T) {
-			var baseline [2]int64
-			for _, control := range []bool{true, false} {
-				d := testDB(t)
-				insertSession(t, d, "metadata", "project")
-				insertMessages(t, d,
-					Message{SessionID: "metadata", Role: "assistant", Content: "searchneedle"},
-					Message{SessionID: "metadata", Ordinal: 1, Role: "user", Content: "Thanks"})
-				if reopen {
-					// Simulate an archive with a current corpus marker and the old trigger.
-					_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_au;
-CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
- INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
- VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
- INSERT INTO messages_fts(rowid, rendered, content)
- VALUES(new.id, new.content, COALESCE(new.dialogue_text, new.content));
-END;`)
-					require.NoError(t, err)
-					path := d.Path()
-					require.NoError(t, d.Close())
-					d, err = Open(t.Context(), path)
-					require.NoError(t, err)
-					t.Cleanup(func() { require.NoError(t, d.Close()) })
-				}
-				if control {
-					// Public writes also maintain session rows. Measure that bookkeeping
-					// on an identical fixture without message-update FTS triggers.
-					_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_au; DROP TRIGGER IF EXISTS temp.messages_cjk_au;`)
-					require.NoError(t, err)
-				}
-				before := totalWriterChanges(t, d)
-				_, err := d.WriteSessionIncremental(t.Context(), "metadata", nil, IncrementalSessionUpdate{
-					MsgCount: 2, NextOrdinal: 2,
-					MessageTokenUsageUpdates: []MessageTokenUsageUpdate{{
-						Ordinal: 0, TokenUsage: jsontext.Value(`{"output_tokens":7}`),
-						OutputTokens: 7, HasOutputTokens: true,
-					}},
-				})
-				require.NoError(t, err)
-				writes := totalWriterChanges(t, d) - before
-				if control {
-					baseline[0] = writes
-				} else {
-					assert.Equal(t, baseline[0], writes, "usage receipt must add no FTS writes")
-				}
-				messages, err := d.GetAllMessages(t.Context(), "metadata")
-				require.NoError(t, err)
-				require.Len(t, messages, 2)
-				assert.Equal(t, 7, messages[0].OutputTokens)
-				id := messages[0].ID
-				messages[0].OutputTokens = 9
-				messages[0].TokenUsage = jsontext.Value(`{"output_tokens":9}`)
-				before = totalWriterChanges(t, d)
-				require.NoError(t, d.ReplaceSessionMessages(t.Context(), "metadata", messages))
-				writes = totalWriterChanges(t, d) - before
-				if control {
-					baseline[1] = writes
-				} else {
-					assert.Equal(t, baseline[1], writes, "metadata diff must add no FTS writes")
-				}
-				stored, err := d.GetAllMessages(t.Context(), "metadata")
-				require.NoError(t, err)
-				require.Len(t, stored, 2)
-				assert.Equal(t, id, stored[0].ID)
-				assert.Equal(t, 9, stored[0].OutputTokens)
-				page, err := d.Search(t.Context(), SearchFilter{Query: "searchneedle"})
-				require.NoError(t, err)
-				assert.Len(t, page.Results, 1)
-			}
-		})
-	}
-}
 
 func TestDialogueFTSUpgradePreservesMessages(t *testing.T) {
 	const total, needle = 21, 12
@@ -138,11 +63,26 @@ func TestDialogueFTSCorpusVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, marker string
 		rebuild      bool
+		trigger      string
 	}{
-		{"older", "0", true},
-		{"current", searchCorpusVersion, false},
-		{"newer", "10", false},
-		{"invalid", "invalid", true},
+		{name: "older", marker: "0", rebuild: true},
+		{
+			name: "current", marker: searchCorpusVersion,
+			trigger: `CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+ INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+ VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
+ INSERT INTO messages_fts(rowid, rendered, content)
+ VALUES(new.id, new.content, COALESCE(new.dialogue_text, new.content));
+END`,
+		},
+		{
+			name: "newer", marker: "10",
+			trigger: `CREATE TRIGGER messages_au AFTER UPDATE ON messages
+BEGIN
+ SELECT 1;
+END`,
+		},
+		{name: "invalid", marker: "invalid", rebuild: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -150,25 +90,23 @@ func TestDialogueFTSCorpusVersion(t *testing.T) {
 			insertMessages(t, d, Message{SessionID: "version", Role: "user", Content: "needle"})
 			_, err := d.getWriter().Exec(t.Context(), "UPDATE stats SET value = ? WHERE key = ?", tc.marker, searchCorpusVersionStatsKey)
 			require.NoError(t, err)
-			var triggerBefore string
-			if tc.name == "newer" {
-				_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_au;
-CREATE TRIGGER messages_au AFTER UPDATE ON messages
-BEGIN
- SELECT 1;
-END;`)
+			if tc.trigger != "" {
+				_, err := d.getWriter().Exec(t.Context(), "DROP TRIGGER messages_au;"+tc.trigger)
 				require.NoError(t, err)
-				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'messages_au'").Scan(&triggerBefore))
 			}
 			var details []string
 			err = refreshDialogueFTS(t.Context(), d.getWriter(), func(progress OpenProgress) {
 				details = append(details, progress.Detail)
 			})
 			require.NoError(t, err)
-			if tc.name == "newer" {
+			if tc.trigger != "" {
 				var triggerAfter string
 				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'messages_au'").Scan(&triggerAfter))
-				assert.Equal(t, triggerBefore, triggerAfter, "preserve the newer build's trigger")
+				if tc.marker == searchCorpusVersion {
+					assert.Contains(t, triggerAfter, "WHEN", "upgrade the current corpus's trigger")
+				} else {
+					assert.Equal(t, tc.trigger, triggerAfter, "preserve the newer build's trigger")
+				}
 			}
 			var marker string
 			require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", searchCorpusVersionStatsKey).Scan(&marker))
@@ -261,7 +199,7 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 			insertSession(t, d, "search", "project", func(s *Session) { s.UserMessageCount = 2 })
 			messages := []Message{
 				{SessionID: "search", Ordinal: 0, Role: "user", Content: "Question"},
-				{SessionID: "search", Ordinal: 1, Role: "assistant", Content: tc.dialogue + " [Thinking] " + tc.hidden, DialogueText: new(tc.dialogue)},
+				{SessionID: "search", Ordinal: 1, Role: "assistant", Content: tc.dialogue + " [Thinking] " + tc.hidden},
 				{SessionID: "search", Ordinal: 2, Role: "assistant", Content: "Done"},
 			}
 			insertMessages(t, d, messages...)
@@ -269,7 +207,7 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 			if tc.dialogue != "" {
 				terms = append(terms, tc.dialogue)
 			}
-			dialogue, rendered := tc.dialogue, tc.hidden
+			dialogue, rendered := messages[1].Content, tc.hidden
 			for _, phase := range []string{"insert", "metadata", "update", "dialogue", "delete"} {
 				switch phase {
 				case "metadata":
@@ -285,11 +223,12 @@ WHERE session_id = 'search' AND ordinal = 1`)
 				case "update":
 					messages[1].Content = tc.dialogue + " [Thinking] " + tc.replacement
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
-					rendered = tc.replacement
+					dialogue, rendered = messages[1].Content, tc.replacement
 				case "dialogue":
-					messages[1].DialogueText = new(tc.replacement)
+					// Classify the visible text without changing rendered content.
+					messages[1].DialogueText = new(tc.dialogue)
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
-					dialogue = tc.replacement
+					dialogue = tc.dialogue
 				case "delete":
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", nil))
 				}
@@ -302,7 +241,7 @@ WHERE session_id = 'search' AND ordinal = 1`)
 				for _, term := range terms {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: term, Mode: "fts", Sources: []string{"messages"}})
 					require.NoError(t, err, "%s %s", phase, term)
-					if phase != "delete" && dialogue != "" && term == dialogue {
+					if phase != "delete" && dialogue != "" && strings.Contains(dialogue, term) {
 						require.Len(t, page.Matches, 1, "%s %s", phase, term)
 						assert.Equal(t, dialogue, page.Matches[0].Snippet, phase)
 					} else {

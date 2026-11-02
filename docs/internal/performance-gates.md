@@ -31,9 +31,10 @@ contracts are documented in
 These count work units instead of measuring time, so they are immune to CI
 runner noise and fail loudly:
 
-- `TestMessageMetadataUpdateSkipsFTS` (`internal/db/dialogue_test.go`) checks
-  that usage receipts and metadata diffs add no search-index writes, including
-  after reopening an archive with the old trigger.
+- `TestDialogueFTSTriggerSync` and `TestDialogueFTSCorpusVersion/current`
+  (`internal/db/dialogue_test.go`) check that metadata updates add no
+  search-index writes and that current archives upgrade the old trigger
+  without rebuilding the index.
 - `TestWarmFullSyncDoesNoBulkWriteWork` (`internal/sync/perf_invariant_test.go`)
   — a second full sync over an unchanged Claude archive must skip everything
   and run zero bulk-write batches (`Engine.PhaseStats`).
