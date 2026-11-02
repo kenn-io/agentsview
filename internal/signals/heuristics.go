@@ -600,7 +600,7 @@ func IsContextToolCall(c ToolCallRow) bool {
 	case "Read", "Grep", "Glob":
 		return true
 	case "Bash":
-		return isContextCommand(commandText(c.InputJSON))
+		return isContextCommand(CommandText(c.InputJSON))
 	}
 	return false
 }
@@ -754,7 +754,7 @@ func commandClass(c ToolCallRow) string {
 	if c.Category != "Bash" {
 		return c.Category + ":" + c.ToolName
 	}
-	fields := strings.Fields(commandText(c.InputJSON))
+	fields := strings.Fields(CommandText(c.InputJSON))
 	if len(fields) == 0 {
 		return c.Category + ":" + c.ToolName
 	}
@@ -765,7 +765,8 @@ func toolSignature(c ToolCallRow) string {
 	return c.ToolName + "\x00" + c.Category + "\x00" + c.InputJSON
 }
 
-func commandText(inputJSON string) string {
+// CommandText extracts a shell script from stored tool input.
+func CommandText(inputJSON string) string {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(inputJSON), &payload); err != nil {
 		return inputJSON
@@ -773,6 +774,29 @@ func commandText(inputJSON string) string {
 	for _, key := range []string{"command", "cmd"} {
 		if v, ok := payload[key].(string); ok {
 			return v
+		}
+		if v, ok := payload[key].([]any); ok {
+			words := make([]string, 0, len(v))
+			for _, item := range v {
+				word, ok := item.(string)
+				if !ok {
+					return inputJSON
+				}
+				words = append(words, word)
+			}
+			if len(words) > 0 && strings.HasSuffix(words[0], "sh") {
+				for i, word := range words {
+					if (word == "-c" || word == "-lc") && i+1 < len(words) {
+						return words[i+1]
+					}
+				}
+			}
+			for i, word := range words {
+				if strings.ContainsAny(word, " \t\r\n;|&'\"") {
+					words[i] = "'" + strings.ReplaceAll(word, "'", "'\"'\"'") + "'"
+				}
+			}
+			return strings.Join(words, " ")
 		}
 	}
 	return inputJSON

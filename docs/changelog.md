@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- Find the session and prompt behind a Git commit through the session API, or
+  list a session's commits with `agentsview session commits <id>`. Links come
+  from successful `git commit` output stored in the local archive. Deleted
+  sessions remain visible as missing records.
+
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
   this executable's processing version a fresh attempt budget.

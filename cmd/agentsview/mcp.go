@@ -718,3 +718,11 @@ func normalizeMCPHTTPAddr(addr string, allowInsecure bool) (string, error) {
 	}
 	return trimmed, nil
 }
+
+func (s *mcpDaemonService) SessionCommits(ctx context.Context, id string) (*db.SessionCommitList, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.SessionCommitList, error) { return svc.SessionCommits(ctx, id) })
+}
+
+func (s *mcpDaemonService) CommitSessions(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.CommitSessionList, error) { return svc.CommitSessions(ctx, shas) })
+}

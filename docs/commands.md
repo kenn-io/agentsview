@@ -1909,6 +1909,7 @@ agentsview session get <id>              # metadata + signals
 agentsview session list [flags]          # filtered list
 agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
+agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
 agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
@@ -1920,6 +1921,14 @@ agentsview session usage-batch <id>...   # ordered usage results for several ses
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
+
+`agentsview session commits <id>` lists commits recorded by a session. Use
+`--format json` to include the preceding user turn and exact message ordinal,
+call index, and tool-use ID. The table shows the call time, recorded SHA,
+branch, and subject. Trashed or permanently deleted sessions carry
+`missing: true` and omit the turn. See
+[commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
+retention and lookup limits.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and

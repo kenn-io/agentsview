@@ -1503,3 +1503,34 @@ against `pg serve`, with the same masking and `--reveal` constraints.
 ### Ingest-time image offload
 
 The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.
+
+## Commit lookups
+
+`GET /api/v1/sessions/{id}/commits` returns `{"commits": [...]}` for one
+session. `POST /api/v1/commits/sessions` accepts `{"shas": ["abc1234"]}` and
+returns `{"commits": [{"sha": "abc1234", "links": [...]}]}` in request order.
+Send 1 to 200 hexadecimal SHAs or prefixes of 7 to 64 characters. Queries ignore
+case. Unknown SHAs have empty `links`. Invalid SHAs or array lengths return
+HTTP 400. Mirrors return HTTP 501 until they support commit links.
+
+Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
+`repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
+and `source: "transcript"`. `committed_at` is the tool call's message time. The
+SHA is exactly as Git printed it, usually a short prefix. Full SHAs match stored
+prefixes. `turn` contains the preceding non-system user message's `ordinal` and
+`text`, limited to 2,000 UTF-8 bytes.
+
+Links to trashed or permanently deleted sessions carry `missing: true` and omit
+`turn`. Restoring a trashed session restores its turn. Every candidate link
+carries `ambiguous: true` when a query matches distinct commits whose SHAs are
+not prefixes of each other. Several sessions recording the same commit do not
+make it ambiguous.
+
+Links require a `git commit` command and a successful commit summary in its
+stored tool output. Cherry-picks and reverts do not create links. Archives using
+`archive_content = "transcripts"` or `"usage"` retain no commit links. Codex
+output received only through a later `write_stdin` call is excluded. Repository
+paths follow `git -C`, a preceding `cd`, the tool's `workdir` or `cwd`, and then
+the session's working directory. The command tokenizer keeps backslashes
+literally for Windows paths; it does not unescape an unquoted backslash-escaped
+space in a `-C` path.

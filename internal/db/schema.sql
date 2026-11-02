@@ -1691,3 +1691,18 @@ CREATE TABLE IF NOT EXISTS archive_session_provenance (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_session_source
     ON archive_session_provenance(archive_id,device_id,root_id,source_key);
+
+-- Transcript evidence survives permanent session deletion.
+CREATE TABLE IF NOT EXISTS commit_links (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    message_ordinal INTEGER NOT NULL,
+    call_index INTEGER NOT NULL,
+    tool_use_id TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, message_ordinal, call_index, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);

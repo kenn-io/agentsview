@@ -1737,3 +1737,39 @@ func (b *httpBackend) sessionWebURL(id string) string {
 	base.RawFragment = ""
 	return strings.TrimRight(base.String(), "/") + "/sessions/" + path
 }
+
+func (b *httpBackend) SessionCommits(ctx context.Context, id string) (*db.SessionCommitList, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDCommitsWithResponse(ctx, &apiclient.GetAPIV1SessionsIDCommitsRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDCommitsPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, db.ErrCommitLinksUnavailable
+		}
+		return nil, err
+	}
+	return response.JSON200, nil
+}
+
+func (b *httpBackend) CommitSessions(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.PostAPIV1CommitsSessionsWithResponse(ctx, &apiclient.PostAPIV1CommitsSessionsRequestOptions{Body: &apiclient.PostAPIV1CommitsSessionsBody{Shas: shas}})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, db.ErrCommitLinksUnavailable
+		}
+		return nil, err
+	}
+	return response.JSON200, nil
+}

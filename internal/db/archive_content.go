@@ -511,8 +511,14 @@ func applyArchiveContentToCopiedSessionsTx(
 			return nil
 		}
 	case config.ArchiveContentTranscripts:
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
+			return err
+		}
 		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
 	case config.ArchiveContentUsage:
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
+			return err
+		}
 		err = compactCopiedSessionsForUsageTx(ctx, tx, tempIDsTable)
 	}
 	if err != nil {

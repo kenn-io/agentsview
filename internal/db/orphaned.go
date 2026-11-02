@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1220,6 +1221,19 @@ func (d *DB) CopyExcludedSessionsFrom(
 			}
 		}
 	}
+	if d.ArchiveContent() == config.ArchiveContentFull {
+		var hasLinks bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_links')`).Scan(&hasLinks); err != nil {
+			return err
+		}
+		if hasLinks {
+			if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
+    SELECT l.* FROM old_db.commit_links l WHERE NOT EXISTS (SELECT 1 FROM old_db.sessions s WHERE s.id=l.session_id)`); err != nil {
+				return fmt.Errorf("copying excluded commit links: %w", err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -2570,6 +2584,15 @@ func copySessionDataForIDs(
 			return fmt.Errorf(
 				"copying tool_result_events: %w", err,
 			)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "commit_links") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
+   (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at)
+   SELECT `+sessionID+`,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at
+   FROM old_db.commit_links WHERE session_id IN (SELECT source_id FROM `+tempIDsTable+`)`); err != nil {
+			return fmt.Errorf("copying commit links: %w", err)
 		}
 	}
 

@@ -50,6 +50,7 @@ func newSessionCommand() *cobra.Command {
 	cmd.AddCommand(newSessionListCommand())
 	cmd.AddCommand(newSessionMessagesCommand())
 	cmd.AddCommand(newSessionToolCallsCommand())
+	cmd.AddCommand(newSessionCommitsCommand())
 	cmd.AddCommand(newSessionExportCommand())
 	cmd.AddCommand(newSessionSyncCommand())
 	cmd.AddCommand(newSessionWatchCommand())

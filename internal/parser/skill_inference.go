@@ -544,3 +544,33 @@ func skillNameFromParentDir(path string) string {
 	}
 	return dir
 }
+
+// ShellCommandSegments splits unquoted shell operators and newlines, then
+// tokenizes each segment with the same literal-backslash rules as skill inference.
+func ShellCommandSegments(command string) [][]string {
+	var segments [][]string
+	start := 0
+	var quote rune
+	for i, r := range command {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		if strings.ContainsRune(";|&\n", r) {
+			if words := tokenizeCommand(command[start:i]); len(words) > 0 {
+				segments = append(segments, words)
+			}
+			start = i + 1
+		}
+	}
+	if words := tokenizeCommand(command[start:]); len(words) > 0 {
+		segments = append(segments, words)
+	}
+	return segments
+}

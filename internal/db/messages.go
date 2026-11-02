@@ -2339,7 +2339,7 @@ func bumpTranscriptRevision(
 			sessionID, rows,
 		)
 	}
-	return nil
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 func sessionHasFTSTableTx(tx transactionQueries, table string) (bool, error) {
