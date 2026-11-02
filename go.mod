@@ -39,7 +39,7 @@ require (
 	github.com/tidwall/gjson v1.20.0
 	github.com/yuin/goldmark/v2 v2.1.11
 	go.kenn.io/docbank v0.16.0
-	go.kenn.io/kata v0.18.0
+	go.kenn.io/kata v0.20.0
 	go.kenn.io/kit v0.47.5
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
@@ -49,6 +49,7 @@ require (
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
+	hegel.dev/go/hegel v0.9.28
 	modernc.org/libc v1.79.1
 	modernc.org/sqlite v1.61.0
 )
@@ -92,7 +93,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/duckdb/duckdb-go-bindings v0.20000.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
-	github.com/ebitengine/purego v0.11.2 // indirect
+	github.com/ebitengine/purego v0.12.0-alpha.1.0.20261015130536-d456b1bb95e8 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-faster/city v1.0.1 // indirect

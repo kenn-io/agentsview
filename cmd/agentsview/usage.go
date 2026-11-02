@@ -63,16 +63,18 @@ func defaultUsageDateRange(
 }
 
 type UsageDailyConfig struct {
-	ctx       context.Context
-	JSON      bool
-	Since     string
-	Until     string
-	All       bool
-	Agent     string
-	Breakdown bool
-	Offline   bool
-	NoSync    bool
-	Timezone  string
+	ctx          context.Context
+	JSON         bool
+	Since        string
+	Until        string
+	All          bool
+	Agent        string
+	Breakdown    bool
+	Offline      bool
+	NoSync       bool
+	Timezone     string
+	OutputWriter io.Writer
+	ErrorWriter  io.Writer
 }
 
 type usageDailyDocument struct {
@@ -143,14 +145,18 @@ func resolveUsageWindowPoint(
 	return t, t.In(loc).Format("2006-01-02"), nil
 }
 
-func runUsageDaily(cfg UsageDailyConfig) {
-	if err := runUsageDailyResult(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+func runUsageDaily(cfg UsageDailyConfig) error {
+	return runUsageDailyResult(cfg)
 }
 
 func runUsageDailyResult(cfg UsageDailyConfig) error {
+	output, diagnostics := cfg.OutputWriter, cfg.ErrorWriter
+	if output == nil {
+		output = os.Stdout
+	}
+	if diagnostics == nil {
+		diagnostics = os.Stderr
+	}
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
@@ -158,12 +164,14 @@ func runUsageDailyResult(cfg UsageDailyConfig) error {
 
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return fmt.Errorf("invalid --timezone: %w", err)
+		return cliValidationError(fmt.Errorf("invalid --timezone: %w", err),
+			"Use --timezone with an IANA timezone such as UTC or America/New_York.")
 	}
 
 	since, until, err := resolveUsageWindow(cfg.Since, cfg.Until, time.Now(), loc)
 	if err != nil {
-		return err
+		return cliValidationError(err,
+			"Use --since and --until with a duration such as 28d or a date YYYY-MM-DD; --since must not be after --until.")
 	}
 
 	filter := db.UsageFilter{
@@ -193,7 +201,7 @@ func runUsageDailyResult(cfg UsageDailyConfig) error {
 	}
 	defer closeArchiveQueryBackend(cleanup)
 
-	progress, finishProgress := newUsageProgressPrinter(os.Stderr)
+	progress, finishProgress := newUsageProgressPrinter(diagnostics)
 	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
 		Progress:       progress,
 		Filter:         filter,
@@ -220,22 +228,24 @@ func runUsageDailyResult(cfg UsageDailyConfig) error {
 				}
 			}
 			document.MachineLabels = machineLabelsForKeys(machineLabelCatalog(
-				ctx, os.Stderr, backend.MachineLabels,
+				ctx, diagnostics, backend.MachineLabels,
 			), keys)
 		}
-		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		enc := jsontext.NewEncoder(output, jsontext.WithIndent("  "))
 		if err := json.MarshalEncode(enc, document); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	printDailyTable(result.DailyUsageResult, cfg.Breakdown)
+	if err := printDailyTable(output, result.DailyUsageResult, cfg.Breakdown); err != nil {
+		return err
+	}
 	if note := noTokenDataNote(cfg.Agent, result.Totals); note != "" {
-		fmt.Fprintln(os.Stderr, note)
+		fmt.Fprintln(diagnostics, note)
 	}
 	for _, note := range planUsageNotes(result) {
-		fmt.Fprintln(os.Stderr, note)
+		fmt.Fprintln(diagnostics, note)
 	}
 	return nil
 }
@@ -290,11 +300,13 @@ func noTokenDataNote(agent string, totals db.UsageTotals) string {
 }
 
 type UsageStatuslineConfig struct {
-	ctx     context.Context
-	JSON    bool
-	Agent   string
-	Offline bool
-	NoSync  bool
+	ctx          context.Context
+	JSON         bool
+	Agent        string
+	Offline      bool
+	NoSync       bool
+	OutputWriter io.Writer
+	ErrorWriter  io.Writer
 }
 
 // usageStatuslineReport is the machine-readable form of the statusline. It
@@ -316,14 +328,15 @@ func usageDateForTimezone(now time.Time, timezone string) string {
 	return now.In(loc).Format("2006-01-02")
 }
 
-func runUsageStatusline(cfg UsageStatuslineConfig) {
-	if err := runUsageStatuslineResult(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+func runUsageStatusline(cfg UsageStatuslineConfig) error {
+	return runUsageStatuslineResult(cfg)
 }
 
 func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
+	output := cfg.OutputWriter
+	if output == nil {
+		output = os.Stdout
+	}
 	timezone := localTimezone()
 	today := usageDateForTimezone(time.Now(), timezone)
 	filter := db.UsageFilter{
@@ -361,17 +374,22 @@ func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
 	result := report.DailyUsageResult
 
 	if cfg.JSON {
-		return printUsageStatuslineJSON(result, cfg.Agent, today)
+		return writeUsageStatuslineJSON(output, result, cfg.Agent, today)
 	}
 
-	printUsageStatusline(result, cfg.Agent)
-	return nil
+	return printUsageStatusline(output, result, cfg.Agent)
 }
 
 func printUsageStatuslineJSON(
 	result db.DailyUsageResult, agent, date string,
 ) error {
-	enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+	return writeUsageStatuslineJSON(os.Stdout, result, agent, date)
+}
+
+func writeUsageStatuslineJSON(
+	w io.Writer, result db.DailyUsageResult, agent, date string,
+) error {
+	enc := jsontext.NewEncoder(w, jsontext.WithIndent("  "))
 	report := usageStatuslineReport{
 		Date:  date,
 		Cost:  result.Totals.TotalCost,
@@ -383,14 +401,14 @@ func printUsageStatuslineJSON(
 	return nil
 }
 
-func printUsageStatusline(result db.DailyUsageResult, agent string) {
+func printUsageStatusline(w io.Writer, result db.DailyUsageResult, agent string) error {
 	if agent != "" {
-		fmt.Printf("%s today (%s)\n",
+		_, err := fmt.Fprintf(w, "%s today (%s)\n",
 			fmtCost(result.Totals.TotalCost), agent)
-	} else {
-		fmt.Printf("%s today\n",
-			fmtCost(result.Totals.TotalCost))
+		return err
 	}
+	_, err := fmt.Fprintf(w, "%s today\n", fmtCost(result.Totals.TotalCost))
+	return err
 }
 
 func applyCustomPricing(database *db.DB, cfg config.Config) {
@@ -765,10 +783,10 @@ func newUsageProgressPrinter(w io.Writer) (func(string), func()) {
 }
 
 func printDailyTable(
-	result db.DailyUsageResult, breakdown bool,
-) {
+	output io.Writer, result db.DailyUsageResult, breakdown bool,
+) error {
 	w := tabwriter.NewWriter(
-		os.Stdout, 0, 4, 2, ' ', 0,
+		output, 0, 4, 2, ' ', 0,
 	)
 
 	fmt.Fprintln(w,
@@ -813,7 +831,7 @@ func printDailyTable(
 		fmtCost(result.Totals.TotalCost),
 	)
 
-	w.Flush()
+	return w.Flush()
 }
 
 // localTimezone returns the IANA name of the system's local timezone.

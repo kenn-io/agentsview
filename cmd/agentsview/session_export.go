@@ -24,7 +24,7 @@ func newSessionExportCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("server") {
-				return errors.New("session export: local-only command; --server not supported")
+				return cliUsageError(errors.New("session export: local-only command; --server not supported"), "omit --server and run this command on the host that owns the local archive")
 			}
 			if err := rejectFormatFlags(
 				cmd, "session export", "raw bytes",
@@ -32,7 +32,7 @@ func newSessionExportCommand() *cobra.Command {
 				return err
 			}
 			if pgReadRequested(cmd) {
-				return errors.New("session export: local-only command; --pg not supported")
+				return cliUsageError(errors.New("session export: local-only command; --pg not supported"), "omit --pg and run this command on the host that owns the local archive")
 			}
 			cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 			if err != nil {

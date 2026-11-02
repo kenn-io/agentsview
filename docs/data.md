@@ -130,6 +130,42 @@ count (how many sessions the rule currently classifies) and the **original
 label** recorded when the rule was created through the mapping editor. Rule
 targets link back to the corresponding inventory row.
 
+## Repair worktree project names
+
+In source builds after 0.46.1, SQLite imports use the repository URL recorded by
+the agent when a checkout cannot be identified on disk. This keeps temporary
+worktree folders from becoming separate projects. AgentsView reuses an existing
+project with the repository's name, or a single established Git checkout name.
+Otherwise it uses the repository name. Conflicting checkout names are left for
+an explicit rule. The chosen name is saved so later imports keep using it.
+
+Session assignments and enabled folder rules take priority. The original parser
+label and repository evidence remain in the archive. Sessions with a previously
+identified Git checkout, no usable recorded repository URL, or an already
+corrected project are left unchanged.
+
+The first normal writable startup after upgrading repairs existing sessions
+automatically, including sessions whose source files are gone. This runs once
+and updates project metadata without replacing transcripts or message IDs. An
+interrupted repair retries at the next startup. Read-only opens do not repair
+the archive.
+
+To inspect any remaining corrections without reading source files, run:
+
+```bash
+agentsview db repair-projects
+agentsview db repair-projects --project sample_feature --format json
+```
+
+For a manual repair, review the proposed names, stop the daemon or desktop app,
+then run the same command with `--apply`. `--project` limits the repair to that
+label, even before the automatic upgrade has run. Any pending automatic repair
+waits until the next normal writable startup. Restart AgentsView afterward.
+Subsequent imports and full resyncs retain the corrected attribution. Mirror
+pushes carry the updated session projects to PostgreSQL, DuckDB, and ClickHouse.
+
+For sessions without recorded repository evidence, use a [folder rule](#rules).
+
 ## Read-Only Servers
 
 On a read-only server (`pg serve`, `duckdb serve`, or `clickhouse serve`),

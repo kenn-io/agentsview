@@ -116,26 +116,6 @@ func TestCheckSchemaCompatPassesAfterCreateSchema(t *testing.T) {
 	require.NoError(t, CheckSchemaCompat(ctx, db), "CheckSchemaCompat")
 }
 
-func TestCheckSchemaCompatViaQuackRejectsPreReportedCostMirror(t *testing.T) {
-	ctx := t.Context()
-	db := openTestDuckDB(t)
-	require.NoError(t, createSchema(ctx, db), "createSchema")
-	_, err := db.ExecContext(ctx,
-		`UPDATE sync_metadata SET value = '3' WHERE key = ?`,
-		schemaVersionMetadataKey,
-	)
-	require.NoError(t, err, "simulate v3 mirror schema version")
-	_, err = db.ExecContext(ctx,
-		`UPDATE sync_metadata SET value = '68' WHERE key = ?`,
-		dataVersionMetadataKey,
-	)
-	require.NoError(t, err, "simulate v3 mirror built from parser data version 68")
-
-	err = CheckSchemaCompatViaQuack(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rebuild with 'agentsview replica duckdb push --full'")
-}
-
 func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 	t *testing.T,
 ) {

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-29
+last_edited: 2026-11-01
 ---
 
 # Session Format Source Inventory
@@ -635,6 +635,16 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Hosted capacity (reverified 2026-11-01):** The pinned
+  [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
+  stores text strings in response items; the
+  [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
+  persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
+  this existing shape synthetically through native capture, materialization
+  and the isolated parser, with one large string and many smaller messages.
+  It verifies lossless outcomes above the former transport ceiling, not a
+  producer size limit or a new provider format.
+
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -677,6 +687,17 @@ fixtures retain this field; missing identities remain source-local.
   and review that loss when curating a screenshot generation. The corpus
   procedure does not change the parser or claim complete conversation
   retention.
+
+- **Repository attribution (checked 2026-10-28):** The pinned
+  [GitInfo schema](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/protocol.rs)
+  carries optional `repository_url` and `branch` fields in session metadata.
+  A working directory can name a temporary worktree while the recorded URL
+  still identifies its repository. The parser retains both values. SQLite
+  ingestion now uses the recorded URL to resolve an otherwise unidentified
+  checkout's effective project, without probing the source machine's paths.
+  `TestCodexRemoteWorktreeProjectSurvivesAppendAndRebuild` exercises sibling,
+  nested, managed, and scratch worktrees through import, append, and rebuild.
+  This is an archive attribution policy, not a provider format change.
 
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
@@ -1455,12 +1476,31 @@ fixtures retain this field; missing identities remain source-local.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
 
-- **Usage and cost:** Assistant messages can persist model identity and output
-  tokens. Shutdown metrics can persist input, output, cache-read, cache-write,
-  and reasoning totals. When both shutdown and store usage are absent,
-  Agentsview records only known per-message output tokens; it does not infer
-  input, cache, reasoning, or credit totals. Known-model tokens use catalog
-  estimates; the existing shutdown reported-cost treatment is unchanged.
+- **Usage and cost:** Per-call store rows take precedence over
+  `session.usage_record` receipts and replace all shutdown token rollups.
+  Shutdown token rows before the first usable receipt are summed, just as in
+  sessions without receipts. Shutdowns written after that receipt are
+  cumulative snapshots of what receipts already record, so their token rows
+  are dropped. See the published schema evidence below. Receipts preserve each
+  request's timestamp, input, output, cache-read, cache-write, and reasoning
+  tokens. Without per-call usage, shutdown metrics supply totals, then known
+  per-message output is the fallback. Known-model tokens use catalog
+  estimates. A usable receipt after the latest reported-cost shutdown clears
+  that stale cost only when receipts supply the per-call usage.
+
+- **Receipt schema:** Reverified 2026-10-31 against the published
+  [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
+  (SHA1 `43322d0817b8564afcfe00f3929c00b033bca116`). The embedded schema
+  describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated"
+  and `accountingSnapshot` as "captured atomically with receipt watermarks".
+  It defines `session.usage_checkpoint` for "reconstructing aggregate
+  accounting on resume". It defines `session.usage_record` with
+  `data.usage.model` and token fields under `data.usage`: `inputTokens`,
+  `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, and
+  `reasoningTokens`. Fresh input subtracts cache reads and writes. Receipts
+  use request pricing and their event timestamp without a message ordinal.
+  Data version 163 reparses available Copilot CLI sources in place without
+  changing session or source identities.
 
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
