@@ -33,7 +33,7 @@ var (
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
-	commitGitDirRE            = regexp.MustCompile(`\bgit\s+-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitOperationRE         = regexp.MustCompile(`\btools\.(exec_command|write_stdin)\s*\(\s*(\{(?:` + commitJSString + `|[^{}"'])*\})\s*\)`)
 	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
@@ -130,7 +130,7 @@ func commitRepository(input, cwd string) string {
 	if match := commitCDRE.FindStringSubmatch(command); match != nil {
 		cwd = resolve(cwd, match[1])
 	}
-	if match := commitGitDirRE.FindStringSubmatch(command); match != nil {
+	if match := commitGitDirRE.FindStringSubmatch(commitInvocationRE.FindString(command)); match != nil {
 		cwd = resolve(cwd, match[1])
 	}
 	return cwd

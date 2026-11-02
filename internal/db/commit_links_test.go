@@ -110,6 +110,8 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/work"},
 		{"quoted directory", "/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"},
 		{"quoted operators", "/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"},
+		{"directory after global options", "/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"},
+		{"directory text in message", "/work", `git commit -m "Document git -C /other commit"`, "/work"},
 		{"relative directory", "/work", "cd sub && git -C child commit -m fix", "/work/sub/child"},
 		{"global directory option", "/work", `git --git-dir=/repo/.git commit -m fix`, "/work"},
 		{"POSIX relative", "/work", "cd sub && git -C ../child commit -m fix", "/work/child"},
