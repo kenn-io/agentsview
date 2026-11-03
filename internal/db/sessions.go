@@ -2816,25 +2816,17 @@ func (db *DB) FindSessionIDsByPartial(
 func (db *DB) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
-	return findSessionIDsByRawSuffix(ctx, db.getReader(), raw, limit, "")
-}
-
-// An empty agent searches all providers, as the CLI's raw-ID lookup requires.
-func findSessionIDsByRawSuffix(
-	ctx context.Context, q messageRowsQuerier, raw string, limit int, agent string,
-) ([]string, error) {
 	if raw == "" {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := q.QueryContext(ctx,
+	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT id FROM sessions
 		 WHERE (id = ?1
 		        OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
 		   AND deleted_at IS NULL
-		   AND (?3 = '' OR agent = ?3)
 		 ORDER BY (id = ?1) DESC,
 		          COALESCE(
 		              NULLIF(ended_at, ''),
@@ -2842,7 +2834,7 @@ func findSessionIDsByRawSuffix(
 		              created_at
 		          ) DESC
 		 LIMIT ?2`,
-		raw, limit, agent,
+		raw, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
