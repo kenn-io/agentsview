@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -37,7 +38,7 @@ func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
+	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { assert.NoError(t, local.Close()) })
 	started := "2026-10-01T09:00:00Z"
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{

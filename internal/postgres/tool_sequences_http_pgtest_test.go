@@ -25,7 +25,7 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	}
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
-	require.NoError(t, local.SetPricingMeta("_test_seed", "1"))
+	dbtest.SeedPricingMeta(t, local)
 	sessionIDs := dbtest.SeedToolSequencesParity(t, local)
 
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()

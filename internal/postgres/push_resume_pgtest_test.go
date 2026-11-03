@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -43,7 +44,7 @@ func openResumeArchive(t *testing.T) *db.DB {
 	t.Helper()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
+	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { _ = local.Close() })
 	for id, ended := range map[string]string{
 		"old": "2026-01-01T00:00:00Z",
