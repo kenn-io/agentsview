@@ -1461,7 +1461,8 @@ func TestCapturerPreservesAndSanitizesObservationIOErrors(t *testing.T) {
 }
 
 func TestAssessCaptureSanitizesOpenFileErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
+	root := t.TempDir()
+	path := filepath.Join(root, "session.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o600))
 	file, err := os.Open(path)
 	require.NoError(t, err)
@@ -1470,18 +1471,26 @@ func TestAssessCaptureSanitizesOpenFileErrors(t *testing.T) {
 	identity := stableFileIdentity(file, info)
 	require.NotEmpty(t, identity)
 	require.NoError(t, file.Close())
+	rootHandle, err := os.OpenRoot(root)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rootHandle.Close()) })
+	want := syscall.EIO
+	capturer := &Capturer{files: defaultFileOperations()}
+	capturer.files.openRoot = func(*os.Root, string) (*os.File, error) {
+		return nil, &os.PathError{Op: "open", Path: path, Err: want}
+	}
 	observed := []observedCaptureEntry{{
 		planned: parser.RawCaptureEntry{Path: "session.jsonl", Appendable: true},
-		file:    file, info: info, identity: identity,
+		root:    rootHandle, relative: "session.jsonl", info: info, identity: identity,
 	}}
 	base := rawcheckpoint.CaptureBaseState{Entries: []rawcheckpoint.CapturedEntry{{
 		Path: "session.jsonl", Length: info.Size(), FileIdentity: identity,
 		PrefixSHA256: strings.Repeat("a", 64), Appendable: true,
 	}}}
 
-	_, err = (&Capturer{}).assessCapture(t.Context(), observed, info.Size(), base, true)
+	_, err = capturer.assessCapture(t.Context(), observed, info.Size(), base, true)
 
-	require.Error(t, err)
+	require.ErrorIs(t, err, want)
 	assert.NotContains(t, err.Error(), path)
 	assert.Contains(t, err.Error(), `session.jsonl`)
 }

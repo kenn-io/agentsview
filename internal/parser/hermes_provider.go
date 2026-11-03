@@ -1727,6 +1727,7 @@ func hermesWatchRoots(agent AgentType, root string) []WatchRoot {
 		watchRoots = append(watchRoots, WatchRoot{
 			Path:         sessionsDir,
 			Recursive:    true,
+			Optional:     true,
 			IncludeGlobs: []string{"*.jsonl", "session_*.json"},
 			DebounceKey:  string(agent) + ":sessions:" + root,
 		})

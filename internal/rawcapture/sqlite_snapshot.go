@@ -305,14 +305,6 @@ func sqliteBackupSizeError(pages, pageBytes, maxBytes int64) error {
 	return nil
 }
 
-func sqliteSnapshotReservationBytes(snapshotBytes int64) int64 {
-	metadata := rawcheckpoint.CaptureMetadataCharge(1, 1)
-	if snapshotBytes > math.MaxInt64-metadata {
-		return math.MaxInt64
-	}
-	return snapshotBytes + metadata
-}
-
 // SnapshotSQLite makes a standalone online backup without the upload spool.
 // The caller owns a private destination directory. Existing files are refused.
 func SnapshotSQLite(ctx context.Context, sourcePath, destination string, expected os.FileInfo) (retErr error) {

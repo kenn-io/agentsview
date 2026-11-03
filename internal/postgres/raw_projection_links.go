@@ -79,6 +79,7 @@ var hostedLinkFromSQL = ` FROM raw_session_links e
      JOIN sessions materialized ON materialized.id=b.session_id
      WHERE a.alias_id=e.target_alias
        AND (b.source_id=owner.source_id OR (NOT authority.exact
+         AND owner_source.provider <> 'hermes'
          AND target_source.tenant_id=owner_source.tenant_id
          AND target_source.device_id=owner_source.device_id
          AND target_source.provider=owner_source.provider

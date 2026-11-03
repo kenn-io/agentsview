@@ -75,8 +75,11 @@ func TestHermesRawCaptureRootAliasesAndFirstOwner(t *testing.T) {
 		roots []string
 		owner string
 	}{
-		{"home", []string{"."}, "."}, {"sessions", []string{"sessions"}, "sessions"}, {"database", []string{"state.db"}, "."},
-		{"overlap home first", []string{".", "sessions"}, "."}, {"overlap sessions first", []string{"sessions", "."}, "sessions"},
+		{"home", []string{"."}, "."},
+		{"sessions", []string{"sessions"}, "sessions"},
+		{"database", []string{"state.db"}, "."},
+		{"overlap home first", []string{".", "sessions"}, "."},
+		{"overlap sessions first", []string{"sessions", "."}, "sessions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -153,9 +156,18 @@ func TestHermesRawCaptureFlatTranscriptRoot(t *testing.T) {
 
 func TestHermesRawCaptureIncompleteAndInterrupted(t *testing.T) {
 	t.Run("missing configured root", func(t *testing.T) {
-		d, err := DiscoverRawCaptureSources(t.Context(), hermesRawFixtureProvider(t, filepath.Join(t.TempDir(), "missing")))
+		missingRoot := filepath.Join(t.TempDir(), "missing")
+		healthyRoot := t.TempDir()
+		writeHermesRawTranscript(t, healthyRoot, "healthy.jsonl")
+		d, err := DiscoverRawCaptureSources(
+			t.Context(), hermesRawFixtureProvider(t, missingRoot, healthyRoot),
+		)
 		assert.False(t, d.Complete)
-		_ = err
+		var incomplete DiscoveryIncompleteError
+		require.ErrorAs(t, err, &incomplete)
+		require.Len(t, d.Sources, 1,
+			"discovery must continue through a healthy configured root")
+		assert.Equal(t, filepath.Join(canonicalRawCaptureTestPath(t, healthyRoot), "state.db"), d.Sources[0].Key)
 	})
 	t.Run("empty existing root", func(t *testing.T) {
 		d, err := DiscoverRawCaptureSources(t.Context(), hermesRawFixtureProvider(t, t.TempDir()))

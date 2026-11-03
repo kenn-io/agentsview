@@ -109,3 +109,73 @@ INSERT INTO messages(session_id,role,content) VALUES('parent','user','parent con
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 4)
 }
+
+func TestRawProjectionHermesMissingParentDoesNotResolveAcrossProfiles(t *testing.T) {
+	makeHome := func(parent bool) string {
+		t.Helper()
+		home := t.TempDir()
+		writer := hermesfixture.OpenState(t, home)
+		if parent {
+			_, err := writer.ExecContext(t.Context(), `
+INSERT INTO sessions(id,message_count,title) VALUES('parent',1,'Parent');
+INSERT INTO messages(session_id,role,content) VALUES('parent','user','parent content');`)
+			require.NoError(t, err)
+		} else {
+			_, err := writer.ExecContext(t.Context(), `
+INSERT INTO sessions(id,parent_session_id,message_count,title) VALUES('child','parent',1,'Child');
+INSERT INTO messages(session_id,role,content) VALUES('child','user','child content');`)
+			require.NoError(t, err)
+		}
+		require.NoError(t, writer.Close())
+		return home
+	}
+	parse := func(home string) rawderive.ParsedManifest {
+		t.Helper()
+		p, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{Roots: []string{home}, Machine: "capture-device"})
+		require.True(t, ok)
+		sources, err := p.Discover(t.Context())
+		require.NoError(t, err)
+		out := rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true}, ReplaceSessionContent: true}
+		for _, source := range sources {
+			result, err := p.Parse(t.Context(), parser.ParseRequest{Source: source, Machine: "capture-device", ForceParse: true})
+			require.NoError(t, err)
+			require.Empty(t, result.SourceErrors)
+			out.Outcome.Results = append(out.Outcome.Results, result.Results...)
+		}
+		return out
+	}
+	childHome := makeHome(false)
+	parentHome := makeHome(true)
+	childParsed, parentParsed := parse(childHome), parse(parentHome)
+	require.Len(t, childParsed.Outcome.Results, 1)
+	require.Len(t, parentParsed.Outcome.Results, 1)
+
+	f := newProjectionFixture(t)
+	childManifest, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentHermes, "profiles-root", "profiles/first/state.db")
+	parentManifest, _ := f.acceptScoped(t, "device-a", "parent", "", parser.AgentHermes, "profiles-root", "profiles/second/state.db")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, childManifest), childManifest, childParsed))
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parentManifest), parentManifest, parentParsed))
+
+	publicID := func(m rawsync.CanonicalManifest, member string) string {
+		t.Helper()
+		var alias string
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `
+SELECT a.alias_id FROM raw_session_public_aliases a
+JOIN raw_session_branches b ON b.branch_id=a.anchor_branch
+WHERE b.source_id=$1 AND b.member_id=$2`, rawSourceID(m), "hermes:"+member).Scan(&alias))
+		resolved, err := f.sink.Resolve(t.Context(), alias)
+		require.NoError(t, err)
+		require.Equal(t, RawIdentityUnique, resolved.State)
+		return resolved.PublicID
+	}
+	childID := publicID(childManifest, "child")
+	parentID := publicID(parentManifest, "parent")
+	assert.NotEqual(t, childID, parentID)
+	h, err := newHostedAdapter(f.runtime, f.tenant)
+	require.NoError(t, err)
+	child, err := h.GetSessionFull(t.Context(), childID)
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Nil(t, child.ParentSessionID, "a same-named Hermes parent in another profile is unrelated")
+	assert.Empty(t, child.ParentSessionIDs)
+}

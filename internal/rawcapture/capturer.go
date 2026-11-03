@@ -46,7 +46,6 @@ type observedCaptureEntry struct {
 	planned            parser.RawCaptureEntry
 	root               *os.Root
 	relative           string
-	file               *os.File
 	info               os.FileInfo
 	identity           string
 	checkpointIdentity string
@@ -214,7 +213,6 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		if observeErr != nil {
 			return Result{}, observeErr
 		}
-		defer closeObservedEntries(sourceObserved)
 		var databaseEntry observedCaptureEntry
 		for _, entry := range sourceObserved {
 			if entry.planned.Path == snapshotPath {
@@ -311,7 +309,6 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 	if err != nil {
 		return Result{}, err
 	}
-	defer closeObservedEntries(observed)
 	if !observationRecorded {
 		if err := c.store.RecordSourceObservation(ctx, identity); err != nil {
 			return Result{}, err
@@ -591,7 +588,6 @@ func (c *Capturer) observePlan(
 	for _, entry := range scope.entries {
 		pathInfo, err := c.files.stat(entry.planned.LocalPath)
 		if err != nil {
-			closeObservedEntries(observed)
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, 0, ErrSourceChanged
 			}
@@ -601,12 +597,10 @@ func (c *Capturer) observePlan(
 		}
 		rootedInfo, err := entry.root.Lstat(entry.relative)
 		if err != nil || !rootedInfo.Mode().IsRegular() {
-			closeObservedEntries(observed)
 			return nil, 0, ErrSourceChanged
 		}
 		file, err := c.files.openRoot(entry.root, entry.relative)
 		if err != nil {
-			closeObservedEntries(observed)
 			// A path can be replaced between the rooted check and open. Check
 			// its identity again instead of classifying an upstream error by text.
 			currentInfo, statErr := entry.root.Lstat(entry.relative)
@@ -620,7 +614,6 @@ func (c *Capturer) observePlan(
 		info, err := file.Stat()
 		if err != nil {
 			file.Close()
-			closeObservedEntries(observed)
 			return nil, 0, fmt.Errorf(
 				"rawcapture: stat %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
 			)
@@ -632,23 +625,70 @@ func (c *Capturer) observePlan(
 			!pathInfo.Mode().IsRegular() || !os.SameFile(pathInfo, info) ||
 			sourceBytes > int64(^uint64(0)>>1)-info.Size() {
 			file.Close()
-			closeObservedEntries(observed)
 			return nil, 0, ErrSourceChanged
 		}
 		identity := stableFileIdentity(file, info)
 		if identity == "" {
 			file.Close()
-			closeObservedEntries(observed)
 			return nil, 0, ErrSourceChanged
+		}
+		checkpointIdentity := checkpointFileIdentity(file, info)
+		if err := file.Close(); err != nil {
+			return nil, 0, fmt.Errorf(
+				"rawcapture: close %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
+			)
 		}
 		sourceBytes += info.Size()
 		observed = append(observed, observedCaptureEntry{
 			planned: entry.planned, root: entry.root, relative: entry.relative,
-			file: file, info: info, identity: identity,
-			checkpointIdentity: checkpointFileIdentity(file, info),
+			info: info, identity: identity, checkpointIdentity: checkpointIdentity,
 		})
 	}
 	return observed, sourceBytes, nil
+}
+
+func (c *Capturer) openObservedFile(observed observedCaptureEntry) (*os.File, error) {
+	file, err := c.files.openRoot(observed.root, observed.relative)
+	if err != nil {
+		current, statErr := observed.root.Lstat(observed.relative)
+		if errors.Is(err, os.ErrNotExist) || statErr != nil || !os.SameFile(observed.info, current) {
+			return nil, ErrSourceChanged
+		}
+		return nil, fmt.Errorf(
+			"rawcapture: open %q: %w", observed.planned.Path, sanitizeFilesystemError(err),
+		)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf(
+			"rawcapture: stat %q: %w", observed.planned.Path, sanitizeFilesystemError(err),
+		)
+	}
+	current, err := observed.root.Lstat(observed.relative)
+	identity := stableFileIdentity(file, info)
+	if err != nil || !info.Mode().IsRegular() || !stableFileInfo(observed.info, info) ||
+		!os.SameFile(current, info) || identity == "" || identity != observed.identity {
+		_ = file.Close()
+		return nil, ErrSourceChanged
+	}
+	return file, nil
+}
+
+func (c *Capturer) hashObservedFile(
+	ctx context.Context,
+	observed observedCaptureEntry,
+	prefixLength *int64,
+) (string, int64, error) {
+	file, err := c.openObservedFile(observed)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	if prefixLength != nil {
+		return hashOpenFilePrefixContext(ctx, file, *prefixLength)
+	}
+	return hashOpenFileContext(ctx, file)
 }
 
 func (c *Capturer) assessCapture(
@@ -680,9 +720,8 @@ func (c *Capturer) assessCapture(
 			if current.info.Size() < previous.Length {
 				return full, nil
 			}
-			digest, length, err := hashOpenFilePrefixContext(
-				ctx, current.file, previous.Length,
-			)
+			prefixLength := previous.Length
+			digest, length, err := c.hashObservedFile(ctx, current, &prefixLength)
 			if err != nil {
 				return captureAssessment{}, fmt.Errorf(
 					"rawcapture: hash %q: %w", current.planned.Path,
@@ -703,7 +742,7 @@ func (c *Capturer) assessCapture(
 			prospective = append(prospective, entry)
 			continue
 		}
-		digest, length, err := hashOpenFileContext(ctx, current.file)
+		digest, length, err := c.hashObservedFile(ctx, current, nil)
 		if err != nil {
 			return captureAssessment{}, fmt.Errorf(
 				"rawcapture: hash %q: %w", current.planned.Path,
@@ -809,10 +848,4 @@ func sameCapturePlan(a, b parser.RawCapturePlan) bool {
 		}
 	}
 	return true
-}
-
-func closeObservedEntries(entries []observedCaptureEntry) {
-	for i := range entries {
-		_ = entries[i].file.Close()
-	}
 }

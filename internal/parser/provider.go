@@ -791,6 +791,7 @@ func watchRootMetadata(roots []WatchRoot) []WatchRoot {
 		out = append(out, WatchRoot{
 			Path:             root.Path,
 			Recursive:        root.Recursive,
+			Optional:         root.Optional,
 			MaxDepth:         root.MaxDepth,
 			ExtraDirectories: append([]string(nil), root.ExtraDirectories...),
 			DebounceKey:      root.DebounceKey,
@@ -806,6 +807,10 @@ func watchRootMetadata(roots []WatchRoot) []WatchRoot {
 type WatchRoot struct {
 	Path      string
 	Recursive bool
+	// Optional roots remain watched but do not make an audit incomplete while
+	// the path is absent. Providers use this for directories that may be created
+	// after an archive or home becomes available.
+	Optional bool
 	// MaxDepth limits a recursive root to directories at most MaxDepth
 	// levels below Path; zero means no limit. Set it when a provider reads
 	// only a fixed depth under a root whose deeper subtrees it never

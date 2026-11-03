@@ -80,6 +80,16 @@ func (p *hermesProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yiel
 		}
 		profiles := isHermesProfilesContainer(configured)
 		sessions := filepath.Base(configured) == "sessions"
+		if _, err := os.Stat(configured); err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			if rootErr, isIncomplete := rawCaptureIncompleteRootError(AgentHermes, configured, err); isIncomplete {
+				scanErr = errors.Join(scanErr, rootErr)
+				continue
+			}
+			return false, errors.Join(scanErr, err)
+		}
 		root, err := validateRawCaptureRoot("configured", configured)
 		if err == nil {
 			if profiles {

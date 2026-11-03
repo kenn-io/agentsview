@@ -22,7 +22,6 @@ func TestCaptureUsesCheckpointIdentityForReuseAndAppend(t *testing.T) {
 			defer scope.Close()
 			observed, _, err := capturer.observePlan(scope)
 			require.NoError(t, err)
-			defer closeObservedEntries(observed)
 			base, _, err := capturer.captureFile(t.Context(), observed[0])
 			require.NoError(t, err)
 			// A saved volume identity differs from the live device number.
@@ -32,7 +31,6 @@ func TestCaptureUsesCheckpointIdentityForReuseAndAppend(t *testing.T) {
 			}
 			current, _, err := capturer.observePlan(scope)
 			require.NoError(t, err)
-			defer closeObservedEntries(current)
 			current[0].checkpointIdentity = base.FileIdentity
 			if appendContent {
 				entry, _, err := capturer.captureAppendFile(t.Context(), current[0], base)

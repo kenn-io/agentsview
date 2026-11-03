@@ -450,11 +450,13 @@ SQLite coordination files are not uploaded separately. Homes containing only
 legacy transcripts are also supported. Augure Desktop remains separate and does
 not support raw capture.
 
-Every selected configured root must exist. For a database-only home without a
-`sessions/` directory, set `hermes_sessions_dirs` to the existing home itself.
-Remove unavailable alternate-platform roots or profile containers before the
-initial backfill. A configured profiles container stays the owner of its
-individual profile sources, including profiles created later.
+Each selected home or profile container must exist for a complete backfill. A
+database-only home can omit `sessions/`; AgentsView captures `state.db` and
+keeps the sessions path in its watch plan for transcripts added later. Missing
+selected homes or profile containers keep a backfill incomplete, so remove
+unavailable alternate-platform roots before the initial backfill. A configured
+profiles container stays the owner of its individual profile sources,
+including profiles created later.
 
 Hosted Hermes refreshes replace session content but preserve archived sessions
 omitted from later snapshots, including removed database rows or transcripts.

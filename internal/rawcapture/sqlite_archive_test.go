@@ -99,7 +99,7 @@ func TestCapturerSQLiteArchiveReservesCompanionBeforeBackup(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	capturer := New(store)
 	capturer.sqliteBackup = func(context.Context, *sql.Conn, string, int64) error {
-		t.Fatal("backup must not run without companion capacity")
+		require.FailNow(t, "backup must not run without companion capacity")
 		return nil
 	}
 	result, err := capturer.Capture(t.Context(), provider, source)

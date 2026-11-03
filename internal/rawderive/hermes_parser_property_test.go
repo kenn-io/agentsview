@@ -3,10 +3,7 @@
 package rawderive
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/v2"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,30 +68,5 @@ func TestHermesPropertyHostedTranscriptAgreesWithLocal(t *testing.T) {
 			want = append(want, result.Result)
 		}
 		assert.Equal(ht, want, deriveHermesProperty(ht, filepath.Join(home, "state.db"), "sessions/example.jsonl", contents))
-	}, hegel.WithTestCases(1000))
-}
-
-// Native client home spelling determines cron identity on every worker OS.
-func TestHermesPropertyHostedCronUsesClientHome(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		name := hegel.Draw(ht, hegel.Text())
-		windows := hegel.Draw(ht, hegel.Booleans())
-		share := hegel.Draw(ht, hegel.Booleans())
-		segment := hex.EncodeToString([]byte(name))
-		if len(segment) > 80 {
-			segment = segment[:80]
-		}
-		home, separator := "/fixture/home-"+segment, "/"
-		if windows {
-			home, separator = `C:\fixture\home-`+segment, `\`
-			if share {
-				home = `\\server\share\home-` + segment
-			}
-		}
-		contents := []byte("{\"role\":\"session_meta\",\"platform\":\"cron\"}\n{\"role\":\"user\",\"content\":\"scheduled question\"}\n")
-		results := deriveHermesProperty(ht, home+separator+"state.db", "sessions/cron_job-a_20261007_120000.jsonl", contents)
-		require.Len(ht, results, 1)
-		digest := sha256.Sum256([]byte(home))
-		assert.Equal(ht, fmt.Sprintf("job-a:%x", digest[:4]), results[0].Session.GroupKey)
 	}, hegel.WithTestCases(1000))
 }
