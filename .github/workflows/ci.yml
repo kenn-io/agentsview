@@ -511,13 +511,14 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      - name: Print slowest tests
+      - &print-slowest-tests
+        name: Print slowest tests
         if: always()
         shell: bash
         run: |
           for f in gotestsum/*.json; do
             [ -f "$f" ] || continue
-            go tool gotestsum tool slowest --jsonfile "$f" --num 10
+            go tool gotestsum tool slowest --jsonfile "$f" --num 10 || true
           done
 
       - name: Save Go caches
@@ -787,13 +788,15 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Upload gotestsum windows-duckdb results
-        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/windows-duckdb-reruns.txt') != ''
+        if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-windows-duckdb-attempt-${{ github.run_attempt }}
           path: gotestsum/windows-duckdb.json
           retention-days: 14
           if-no-files-found: ignore
+
+      - *print-slowest-tests
 
   test-race:
     env:
@@ -889,14 +892,7 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      - name: Print slowest tests
-        if: always()
-        shell: bash
-        run: |
-          for f in gotestsum/*.json; do
-            [ -f "$f" ] || continue
-            go tool gotestsum tool slowest --jsonfile "$f" --num 10
-          done
+      - *print-slowest-tests
 
       # This job owns the shared cache, including tests run by the other shards.
       - name: Warm moved race test builds for the next run
