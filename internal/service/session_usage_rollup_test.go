@@ -458,21 +458,35 @@ func TestGetSessionUsageRollupReadsIndependentSessionsConcurrently(t *testing.T)
 	})
 }
 
-// blockingWalkStore holds every child read until its context ends.
+// blockingWalkStore holds every child read until its context ends. The root
+// usage read waits until a child read has started, so the rollup must cancel
+// a read that is already in progress.
 type blockingWalkStore struct {
 	*rollupStore
+	childReadStarted chan struct{}
+}
+
+func (s blockingWalkStore) GetSessionUsage(
+	ctx context.Context, id string, breakdown bool,
+) (*db.SessionUsage, error) {
+	<-s.childReadStarted
+	return s.rollupStore.GetSessionUsage(ctx, id, breakdown)
 }
 
 func (s blockingWalkStore) GetChildSessions(
 	ctx context.Context, _ string,
 ) ([]db.Session, error) {
+	close(s.childReadStarted)
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
 func TestGetSessionUsageRollupMissingRootStopsDescendantWalk(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		store := blockingWalkStore{rollupStore: &rollupStore{}}
+		store := blockingWalkStore{
+			rollupStore:      &rollupStore{},
+			childReadStarted: make(chan struct{}),
+		}
 
 		got, err := service.GetSessionUsageRollup(t.Context(), store, "deleted", false)
 
