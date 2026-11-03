@@ -549,9 +549,10 @@ func (s *Store) getSidebarSessionIndexPage(
 		}
 		total = cur.Total
 	}
+	countQuery := ""
 	if total <= 0 {
 		if f.Starred {
-			countQuery := recursivePrefix + `root_candidates(id) AS (
+			countQuery = recursivePrefix + `root_candidates(id) AS (
 					SELECT id
 					FROM sessions
 					WHERE ` + rootWhere + `
@@ -570,21 +571,9 @@ func (s *Store) getSidebarSessionIndexPage(
 					JOIN starred_sessions ss ON ss.session_id = t.id
 				)
 				SELECT COUNT(*) FROM eligible_roots`
-			if err := s.pg.QueryRowContext(
-				ctx, countQuery, rootArgs...,
-			).Scan(&total); err != nil {
-				return db.SidebarSessionIndex{},
-					fmt.Errorf("counting sidebar roots: %w", err)
-			}
 		} else {
-			countQuery := countPrefix + "SELECT COUNT(*) FROM sessions WHERE " +
+			countQuery = countPrefix + "SELECT COUNT(*) FROM sessions WHERE " +
 				rootWhere + " AND " + canonicalRootWhere
-			if err := s.pg.QueryRowContext(
-				ctx, countQuery, rootArgs...,
-			).Scan(&total); err != nil {
-				return db.SidebarSessionIndex{},
-					fmt.Errorf("counting sidebar roots: %w", err)
-			}
 		}
 	}
 
@@ -624,29 +613,50 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootQueryArgs := append([]any{}, rootArgs...)
 	rootQueryArgs = append(rootQueryArgs, pageBuilder.Args()...)
 
-	rows, err := s.pg.QueryContext(ctx, rootQuery, rootQueryArgs...)
-	if err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("querying sidebar root page: %w", err)
-	}
-	defer rows.Close()
-
 	type rootRow struct {
 		id       string
 		activity time.Time
 	}
-	roots := []rootRow{}
-	for rows.Next() {
-		var row rootRow
-		if err := rows.Scan(&row.id, &row.activity); err != nil {
-			return db.SidebarSessionIndex{},
-				fmt.Errorf("scanning sidebar root page: %w", err)
+	readRoots := func() ([]rootRow, error) {
+		rows, err := s.pg.QueryContext(ctx, rootQuery, rootQueryArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("querying sidebar root page: %w", err)
 		}
-		roots = append(roots, row)
+		defer rows.Close()
+		roots := []rootRow{}
+		for rows.Next() {
+			var row rootRow
+			if err := rows.Scan(&row.id, &row.activity); err != nil {
+				return nil, fmt.Errorf("scanning sidebar root page: %w", err)
+			}
+			roots = append(roots, row)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterating sidebar root page: %w", err)
+		}
+		return roots, nil
 	}
-	if err := rows.Err(); err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("iterating sidebar root page: %w", err)
+
+	// The root count and the root page are independent reads.
+	var roots []rootRow
+	var countErr, rootsErr error
+	reads := make([]func(), 0, 2)
+	if countQuery != "" {
+		reads = append(reads, func() {
+			if err := s.pg.QueryRowContext(
+				ctx, countQuery, rootArgs...,
+			).Scan(&total); err != nil {
+				countErr = fmt.Errorf("counting sidebar roots: %w", err)
+			}
+		})
+	}
+	reads = append(reads, func() { roots, rootsErr = readRoots() })
+	s.runIndependentReads(reads...)
+	if countErr != nil {
+		return db.SidebarSessionIndex{}, countErr
+	}
+	if rootsErr != nil {
+		return db.SidebarSessionIndex{}, rootsErr
 	}
 
 	index := db.SidebarSessionIndex{
@@ -726,7 +736,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			` + pgSidebarActivityExprS + ` DESC,
 			s.id DESC`
 
-	rows, err = s.pg.QueryContext(ctx, treeQuery, treeArgs...)
+	rows, err := s.pg.QueryContext(ctx, treeQuery, treeArgs...)
 	if err != nil {
 		return db.SidebarSessionIndex{},
 			fmt.Errorf("querying sidebar tree page: %w", err)

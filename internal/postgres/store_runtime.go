@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -44,4 +45,21 @@ func (s *Store) readView(tx *sql.Tx) *Store {
 		pg: tx, readTx: tx, hostedRelations: s.hostedRelations,
 		runtime: s.runtimeState(), pricingSnapshot: &pricingSnapshot{},
 	}
+}
+
+// runIndependentReads runs reads that do not depend on each other. On the
+// owned pool they run concurrently. A read snapshot shares one transaction,
+// which cannot run statements at once, so there they run in order.
+func (s *Store) runIndependentReads(reads ...func()) {
+	if s.readTx != nil {
+		for _, read := range reads {
+			read()
+		}
+		return
+	}
+	var wg sync.WaitGroup
+	for _, read := range reads {
+		wg.Go(read)
+	}
+	wg.Wait()
 }

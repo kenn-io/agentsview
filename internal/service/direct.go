@@ -167,16 +167,36 @@ func (b *directBackend) MachineLabels(
 func (b *directBackend) Get(
 	ctx context.Context, id string,
 ) (*SessionDetail, error) {
-	s, err := b.db.GetSession(ctx, id)
+	// Plan usage is keyed by the same exact ID, so a networked store loads
+	// it alongside the session. A missing or failed session read still wins
+	// over its result.
+	var planUsage *db.SessionPlanUsage
+	var planErr error
+	loadPlan := func() { planUsage, planErr = b.db.GetSessionPlanUsage(ctx, id) }
+	var s *db.Session
+	var err error
+	if readsOverlap(b.db) {
+		planDone := make(chan struct{})
+		go func() {
+			defer close(planDone)
+			loadPlan()
+		}()
+		s, err = b.db.GetSession(ctx, id)
+		<-planDone
+	} else {
+		s, err = b.db.GetSession(ctx, id)
+		if err == nil && s != nil {
+			loadPlan()
+		}
+	}
 	if err != nil || s == nil {
 		return nil, err
 	}
+	if planErr != nil {
+		return nil, planErr
+	}
 	hideStaleSecretCount(s, secrets.ActiveRulesVersions())
 	detail := buildSessionDetail(s)
-	planUsage, err := b.db.GetSessionPlanUsage(ctx, s.ID)
-	if err != nil {
-		return nil, err
-	}
 	detail.PlanUsage = planUsage.PlanUsageView()
 	detail.CaptureCoverage = planUsage.CaptureCoverageView()
 	return detail, nil
@@ -954,16 +974,25 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	result, err := b.db.GetDailyUsage(ctx, f)
-	if err != nil {
-		return nil, err
-	}
 	planFilter := f
 	if req.GroupModels {
 		planFilter.ModelAliases = b.modelGroups.Aliases()
 	}
-	planUsage, err := b.db.GetPlanUsageSessionCounts(ctx, planFilter)
-	if err != nil {
+	// Both aggregates read the same filter and neither needs the other.
+	var result db.DailyUsageResult
+	var planUsage db.PlanUsageSessionCounts
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var readErr error
+		result, readErr = b.db.GetDailyUsage(groupCtx, f)
+		return readErr
+	})
+	group.Go(func() error {
+		var readErr error
+		planUsage, readErr = b.db.GetPlanUsageSessionCounts(groupCtx, planFilter)
+		return readErr
+	})
+	if err := group.Wait(); err != nil {
 		return nil, err
 	}
 	if req.GroupModels && b.modelGroups.Configured() {
@@ -1239,6 +1268,21 @@ func (b *directBackend) SearchContent(
 	}, nil
 }
 
+// contentContextConcurrency bounds the context-window reads one content
+// search page starts at once on a networked store.
+const contentContextConcurrency = 8
+
+// readsOverlap reports whether independent reads on store should run at
+// the same time. Each read on a networked store such as PostgreSQL waits on
+// a round trip, so overlapping them saves that wait. The local SQLite
+// archive answers in-process, and its small concurrent reads are slower
+// than the same reads in order: on a 12,600-session archive, 50 context
+// windows took 11 ms in order and 19 ms four at a time.
+func readsOverlap(store db.Store) bool {
+	_, local := store.(*db.DB)
+	return !local
+}
+
 // enrichContentContext populates ContextBefore/ContextAfter on each match
 // with a non-negative Ordinal, fetching n messages of context on each side
 // of the match's ordinal and splitting the returned (ascending, anchor
@@ -1270,36 +1314,49 @@ func (b *directBackend) SearchContent(
 func (b *directBackend) enrichContentContext(
 	ctx context.Context, matches []db.ContentMatch, n int, reveal bool,
 ) (bool, error) {
-	bound := true
+	// Each match reads its own window, so on a networked store the reads
+	// run concurrently. Every goroutine writes only its own match and its
+	// own stale flag.
+	stale := make([]bool, len(matches))
+	group, groupCtx := errgroup.WithContext(ctx)
+	if readsOverlap(b.db) {
+		group.SetLimit(contentContextConcurrency)
+	} else {
+		group.SetLimit(1)
+	}
 	for i := range matches {
 		m := &matches[i]
 		if m.Ordinal < 0 {
 			continue
 		}
-		anchor := m.Ordinal
-		revision := ""
-		msgs, err := b.db.GetMessagesWindow(ctx, m.SessionID, db.MessageWindow{
-			Around: &anchor, Before: n, After: n, ObservedRevision: &revision,
+		group.Go(func() error {
+			anchor := m.Ordinal
+			revision := ""
+			msgs, err := b.db.GetMessagesWindow(groupCtx, m.SessionID, db.MessageWindow{
+				Around: &anchor, Before: n, After: n, ObservedRevision: &revision,
+			})
+			if err != nil {
+				return fmt.Errorf("content search context: %w", err)
+			}
+			stale[i] = revision != m.TranscriptRevision
+			for _, msg := range msgs {
+				if !reveal {
+					msg = redactMessageSecrets(msg)
+				}
+				switch {
+				case msg.Ordinal < anchor:
+					m.ContextBefore = append(m.ContextBefore, msg)
+				case msg.Ordinal > anchor:
+					m.ContextAfter = append(m.ContextAfter, msg)
+				}
+			}
+			return nil
 		})
-		if err != nil {
-			return false, fmt.Errorf("content search context: %w", err)
-		}
-		if revision != m.TranscriptRevision {
-			bound = false
-		}
-		for _, msg := range msgs {
-			if !reveal {
-				msg = redactMessageSecrets(msg)
-			}
-			switch {
-			case msg.Ordinal < anchor:
-				m.ContextBefore = append(m.ContextBefore, msg)
-			case msg.Ordinal > anchor:
-				m.ContextAfter = append(m.ContextAfter, msg)
-			}
-		}
 	}
-	return bound, nil
+	if err := group.Wait(); err != nil {
+		return false, err
+	}
+	return !slices.Contains(stale, true), nil
 }
 
 // redactMessageSecrets returns a copy of m with every secret-shaped span

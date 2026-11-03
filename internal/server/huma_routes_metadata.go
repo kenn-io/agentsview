@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/update"
 
 	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 func (s *Server) registerMetadataRoutes() {
@@ -143,16 +144,26 @@ func (s *Server) humaListMachines(
 	ctx context.Context,
 	in *machinesInput,
 ) (*jsonOutput[machinesResponse], error) {
-	labels, err := s.db.GetMachineLabels(ctx)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	aliases, err := s.machineAliases(ctx)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	machines, err := s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
-	if err != nil {
+	// The labels, aliases, and machine list are independent reads.
+	var labels, aliases map[string]string
+	var machines []string
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var err error
+		labels, err = s.db.GetMachineLabels(groupCtx)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		aliases, err = s.machineAliases(groupCtx)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		machines, err = s.db.GetMachines(groupCtx, !in.IncludeOneShot, !in.IncludeAutomated)
+		return err
+	})
+	if err := group.Wait(); err != nil {
 		return nil, serverError(err)
 	}
 	var resolved []string
