@@ -415,6 +415,9 @@ jobs:
             'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
+          # Start the slow server tests early so they overlap the other packages.
+          $serverPackage = 'go.kenn.io/agentsview/internal/server'
+          $packages = @($serverPackage) + @($packages | Where-Object { $_ -ne $serverPackage })
           go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
