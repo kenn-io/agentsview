@@ -2804,8 +2804,11 @@ schemas keep their existing ordering behavior.
   sources below and synthetic capture/upload/hosted replay fixtures for
   direct and recursive sessions, including pi-subagents directory parents,
   case-insensitive path aliases, and parents preceded by oversized lines.
-  Raw plans preserve physical JSONL bytes, including malformed files, and
-  include existing parent transcripts whose headers the parser consults.
+  Capture collapses case variants only when filesystem identity confirms they
+  refer to the same file, retaining the structural path for case-sensitive
+  hosted replay. Missing case-distinct parents remain forks. Raw plans preserve
+  physical JSONL bytes, including malformed files, and include existing parent
+  transcripts whose headers the parser consults.
   Dependencies must remain within the primary configured root. Hosted
   replay uses captured parents and lexical project/skill metadata; it does
   not read client working directories, skill files, or producer blobs.
@@ -2813,6 +2816,10 @@ schemas keep their existing ordering behavior.
   `TestPiRawCaptureDeduplicatesEquivalentParentReads`,
   `TestPiRawCaptureKeepsCaseDistinctHardLinks`,
   `TestProviderParserHostedPiFamilyParents`,
+  `TestProviderParserHostedPiCapturePreservesCaseInsensitiveParentAliases`,
+  `TestProviderParserHostedPiCaseSensitiveReplayUsesCaseDistinctParentPaths`,
+  `TestProviderParserHostedPiCaseDistinctParentDoesNotImplySubagent`,
+  `TestProviderParserHostedOMPCaptureResolvesCaseInsensitiveParentAlias`,
   `TestProviderParserHostedPiCaptureResolvesCaseInsensitiveParentAliases`,
   `TestProviderParserHostedPiCaptureResolvesParentAfterOversizedLeadingLine`,
   and `TestPiRawSyncCaptureUploadDeriveLifecycle`.
@@ -3077,6 +3084,11 @@ schemas keep their existing ordering behavior.
   with a `skill://<name>` path, percent-decodes namespaced skill names, and
   accepts a relative resource path after the name. Agentsview attributes only
   the URI in the Pi-family read path and decodes the name before storing it.
+  For path-valued parents, exact structural references remain authoritative;
+  stale paths try an exact readable sibling before the case-insensitive
+  structural basename fallback. The ordering is covered by
+  `TestPiProviderOMPExactStructuralReferencePrecedesSibling` and
+  `TestPiProviderOMPPrefersReadableSiblingToCaseInsensitiveStructuralFallback`.
 
 ## StepCode (`stepcode`)
 

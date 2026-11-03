@@ -906,6 +906,49 @@ func TestPiProviderOMPStructuralLineageHonorsExplicitParents(t *testing.T) {
 	}
 }
 
+func TestPiProviderOMPPrefersReadableSiblingToCaseInsensitiveStructuralFallback(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	childPath := filepath.Join(projectDir, "parent", "worker.jsonl")
+	writeSourceFile(t, filepath.Join(projectDir, "parent.jsonl"),
+		`{"type":"session","version":3,"id":"structural-id","cwd":"/repos/example"}`+"\n")
+	writeSourceFile(t, filepath.Join(projectDir, "parent", "Parent.jsonl"),
+		`{"type":"session","version":3,"id":"sibling-id","cwd":"/repos/example"}`+"\n")
+	parentReference, err := json.Marshal("/previous/project/Parent.jsonl")
+	require.NoError(t, err)
+	writeSourceFile(t, childPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-id","cwd":"/repos/example","parentSession":` + string(parentReference) + `}`,
+		`{"type":"message","id":"child-message","message":{"role":"user","content":"child prompt"}}`,
+		"",
+	}, "\n"))
+
+	child, messages, err := parsePiLikeSession(t.Context(), childPath, "example", "local", AgentOMP, "omp:")
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, "omp:sibling-id", child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child prompt", messages[0].Content)
+}
+
+func TestPiProviderOMPExactStructuralReferencePrecedesSibling(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	childPath := filepath.Join(projectDir, "parent", "worker.jsonl")
+	writeSourceFile(t, filepath.Join(projectDir, "parent.jsonl"),
+		`{"type":"session","version":3,"id":"structural-id","cwd":"/repos/example"}`+"\n")
+	writeSourceFile(t, filepath.Join(projectDir, "parent", "parent.jsonl"),
+		`{"type":"session","version":3,"id":"sibling-id","cwd":"/repos/example"}`+"\n")
+	parentReference, err := json.Marshal("../parent.jsonl")
+	require.NoError(t, err)
+	writeSourceFile(t, childPath, `{"type":"session","version":3,"id":"child-id","cwd":"/repos/example","parentSession":`+string(parentReference)+"}\n")
+
+	child, _, err := parsePiLikeSession(t.Context(), childPath, "example", "local", AgentOMP, "omp:")
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, "omp:structural-id", child.ParentSessionID)
+}
+
 func TestPiProviderOMPInvalidParentTargetsKeepChildAvailable(t *testing.T) {
 	tests := []struct {
 		name    string

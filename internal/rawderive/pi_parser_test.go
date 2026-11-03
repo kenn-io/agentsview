@@ -200,39 +200,100 @@ func TestProviderParserHostedPiIgnoresSameSuffixCompanion(t *testing.T) {
 	}
 }
 
-func TestProviderParserHostedPiCaptureResolvesCaseInsensitiveParentAliases(t *testing.T) {
-	root := t.TempDir()
-	parent := filepath.Join(root, "project", "Parent.jsonl")
-	structuralParent := filepath.Join(root, "project", "parent.jsonl")
-	writePiDeriveFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
-	parentInfo, err := os.Stat(parent)
+func TestProviderParserHostedPiCapturePreservesCaseInsensitiveParentAliases(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMO} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			parent := filepath.Join(root, "project", "Parent.jsonl")
+			structuralParent := filepath.Join(root, "project", "parent.jsonl")
+			writePiDeriveFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
+			parentInfo, err := os.Stat(parent)
+			require.NoError(t, err)
+			structuralInfo, err := os.Stat(structuralParent)
+			if err != nil || !os.SameFile(parentInfo, structuralInfo) {
+				t.Skip("requires a case-insensitive filesystem")
+			}
+
+			child := filepath.Join(root, "project", "parent", "task", "run-0", "session.jsonl")
+			writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+			provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, sources[0])
+			require.NoError(t, err)
+			require.True(t, supported)
+			var paths []string
+			for _, entry := range plan.Entries {
+				paths = append(paths, entry.Path)
+			}
+			assert.ElementsMatch(t, []string{
+				"project/parent.jsonl",
+				"project/parent/task/run-0/session.jsonl",
+			}, paths, "capture must keep the structural spelling needed for hosted replay")
+
+			manifest, objects := manifestFromCapturePlan(t, agent, provider, sources[0])
+			require.Len(t, manifest.Manifest.Entries, 2)
+			require.NoError(t, os.RemoveAll(root))
+			hosted := derivePiManifest(t, manifest, objects)
+			require.Len(t, hosted.Outcome.Results, 1)
+			got := hosted.Outcome.Results[0].Result.Session
+			assert.Equal(t, provider.Definition().IDPrefix+"parent-header", got.ParentSessionID)
+			assert.Equal(t, parser.RelSubagent, got.RelationshipType)
+		})
+	}
+}
+
+func TestProviderParserHostedPiCaseSensitiveReplayUsesCaseDistinctParentPaths(t *testing.T) {
+	probeDir := t.TempDir()
+	probeUpper := filepath.Join(probeDir, "CaseProbe")
+	probeLower := filepath.Join(probeDir, "caseprobe")
+	require.NoError(t, os.WriteFile(probeUpper, []byte("upper"), 0o600))
+	require.NoError(t, os.WriteFile(probeLower, []byte("lower"), 0o600))
+	upperContents, err := os.ReadFile(probeUpper)
 	require.NoError(t, err)
-	structuralInfo, err := os.Stat(structuralParent)
-	if err != nil || !os.SameFile(parentInfo, structuralInfo) {
-		t.Skip("requires a case-insensitive filesystem")
+	if string(upperContents) != "upper" {
+		t.Skip("requires a case-sensitive filesystem for hosted replay")
 	}
 
-	child := filepath.Join(root, "project", "parent", "task", "run-0", "session.jsonl")
-	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
-	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMO} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			parent := filepath.Join(root, "project", "Parent.jsonl")
+			structuralParent := filepath.Join(root, "project", "parent.jsonl")
+			parentBody := `{"type":"session","id":"parent-header"}` + "\n"
+			writePiDeriveFixture(t, parent, parentBody)
+			if err := os.Link(parent, structuralParent); err != nil {
+				t.Skip("requires hard-link support")
+			}
+			child := filepath.Join(root, "project", "parent", "task", "run-0", "session.jsonl")
+			writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+			provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
 
-	plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, sources[0])
-	require.NoError(t, err)
-	require.True(t, supported)
-	require.Len(t, plan.Entries, 2, "the child and its single physical parent must each be captured once")
+			manifest, objects := manifestFromCapturePlan(t, agent, provider, sources[0])
+			var paths []string
+			for _, entry := range manifest.Manifest.Entries {
+				paths = append(paths, entry.Path)
+			}
+			assert.ElementsMatch(t, []string{
+				"project/parent.jsonl",
+				"project/parent/task/run-0/session.jsonl",
+			}, paths)
 
-	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
-	require.Len(t, manifest.Manifest.Entries, 2)
-	require.NoError(t, os.RemoveAll(root))
-	hosted := derivePiManifest(t, manifest, objects)
-	require.Len(t, hosted.Outcome.Results, 1)
-	got := hosted.Outcome.Results[0].Result.Session
-	assert.Equal(t, "pi:parent-header", got.ParentSessionID)
-	assert.Equal(t, parser.RelSubagent, got.RelationshipType)
+			require.NoError(t, os.RemoveAll(root))
+			hosted := derivePiManifest(t, manifest, objects)
+			require.Len(t, hosted.Outcome.Results, 1)
+			got := hosted.Outcome.Results[0].Result.Session
+			assert.Equal(t, provider.Definition().IDPrefix+"parent-header", got.ParentSessionID)
+			assert.Equal(t, parser.RelSubagent, got.RelationshipType)
+		})
+	}
 }
 
 func TestProviderParserHostedOMPCaptureResolvesCaseInsensitiveParentAlias(t *testing.T) {
