@@ -212,6 +212,37 @@ func (s *recordingArtifactStore) Create(
 	return result, err
 }
 
+type memorySessionArtifactStore struct {
+	ArtifactStore
+	bodies map[Ref][]byte
+}
+
+func (s *memorySessionArtifactStore) Create(
+	ctx context.Context,
+	ref Ref,
+	identity Identity,
+	mediaType string,
+	body io.Reader,
+) (CreateResult, error) {
+	if ref.Kind != KindSegments && ref.Kind != KindManifests {
+		return s.ArtifactStore.Create(ctx, ref, identity, mediaType, body)
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	actual, err := NewIdentity(hashHex(data), int64(len(data)))
+	if err != nil {
+		return CreateResult{}, err
+	}
+	if actual != identity {
+		return CreateResult{}, ErrArtifactCorrupt
+	}
+	_, exists := s.bodies[ref]
+	s.bodies[ref] = data
+	return CreateResult{Entry: Entry{Ref: ref, Identity: identity}, Created: !exists}, nil
+}
+
 type checkpointReadCountingStore struct {
 	ArtifactStore
 	lists int
@@ -1700,9 +1731,10 @@ func TestExportToStoreFullDrainsMoreThanOneClaimPage(t *testing.T) {
 		t, database, total, "session-%04d", "local",
 	)
 	counted := &countingCanonicalExportDB{DB: database}
-	filesystem, err := newProtocolTestStore(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
+	filesystem := &memorySessionArtifactStore{
+		ArtifactStore: newTestArtifactStore(t),
+		bodies:        make(map[Ref][]byte),
+	}
 
 	result, err := ExportToStore(t.Context(), counted, filesystem, ExportOptions{
 		Origin: contractOrigin, Full: true,
@@ -1727,6 +1759,22 @@ func TestExportToStoreFullDrainsMoreThanOneClaimPage(t *testing.T) {
 	var published checkpoint
 	require.NoError(t, json.Unmarshal(body, &published))
 	assert.Len(t, published.Sessions, total)
+	manifestCount := 0
+	for ref := range filesystem.bodies {
+		if ref.Kind == KindManifests {
+			manifestCount++
+		}
+	}
+	assert.Equal(t, total, manifestCount)
+	for gid, hash := range published.Sessions {
+		ref := requireContractRef(t, contractOrigin, KindManifests, hash+".json")
+		data, ok := filesystem.bodies[ref]
+		require.True(t, ok, "checkpoint manifest for %s is stored", gid)
+		assert.Equal(t, hash, hashHex(data))
+		manifest, err := decodeManifestWithLimits(data, productionArtifactLimits())
+		require.NoError(t, err)
+		assert.Equal(t, strings.TrimPrefix(gid, contractOrigin+"~"), manifest.NativeSessionID)
+	}
 }
 
 func TestExportToStoreExplicitSessionIDsClaimBeyondOldestQueuePage(t *testing.T) {
