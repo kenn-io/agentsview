@@ -65,6 +65,9 @@ type QueryDialect struct {
 	// members of the IncludeChildren tree CTE. Empty means "UNION"; ClickHouse
 	// accepts only "UNION ALL" inside a recursive CTE.
 	recursiveUnion string
+	// recursiveChildJoin puts the tree first on SQLite so startup statistics
+	// cannot move a sessions scan outside the per-node child lookup.
+	recursiveChildJoin string
 	// starredPredicate renders the Starred filter for the given session id
 	// expression. Nil renders the correlated EXISTS the row stores use;
 	// ClickHouse needs an uncorrelated IN subquery.
@@ -112,6 +115,13 @@ func (d QueryDialect) recursiveUnionSQL() string {
 		return "UNION"
 	}
 	return d.recursiveUnion
+}
+
+func (d QueryDialect) recursiveChildJoinSQL() string {
+	if d.recursiveChildJoin == "" {
+		return "FROM sessions s JOIN tree t ON "
+	}
+	return d.recursiveChildJoin
 }
 
 func (d QueryDialect) starredPredicateSQL(idExpr string) string {
@@ -171,10 +181,11 @@ func outerSessionID(q func(string) string) string {
 // SQLiteQueryDialect returns the SQLite SQL fragments used by the local store.
 func SQLiteQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:             "sqlite",
-		placeholderStyle: placeholderQuestion,
-		trueLiteral:      "1",
-		falseLiteral:     "0",
+		name:               "sqlite",
+		placeholderStyle:   placeholderQuestion,
+		trueLiteral:        "1",
+		falseLiteral:       "0",
+		recursiveChildJoin: "FROM tree t CROSS JOIN sessions s ON ",
 		dateStartExpr: func(q func(string) string) string {
 			return "julianday(COALESCE(NULLIF(" + q("started_at") +
 				", ''), " + q("created_at") + "))"
@@ -857,8 +868,7 @@ func buildSessionFilterWithBuilder(
 		" AND root_session.deleted_at IS NULL AND " +
 		rootMatch +
 		" " + b.dialect.recursiveUnionSQL() + " " +
-		"SELECT s.id FROM sessions s" +
-		" JOIN tree t ON " + b.dialect.ParentRelation("s", "t") +
+		"SELECT s.id " + b.dialect.recursiveChildJoinSQL() + b.dialect.ParentRelation("s", "t") +
 		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "s") +
 		") SELECT id FROM tree"
 
