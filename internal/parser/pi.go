@@ -799,8 +799,11 @@ func (read piHeaderLookup) ompParentID(childPath, parentReference, childID, stru
 	}
 
 	base := piPersistedPathBase(parentReference)
+	// OMP's readable structural parent is authoritative when a client recorded
+	// the same parent path with different casing. This fallback is limited to
+	// OMP; Pi fork classification requires a readable structural parent below.
 	if structuralParentID != "" && structuralParentID != childID &&
-		base == filepath.Base(structuralParentPath) {
+		strings.EqualFold(base, filepath.Base(structuralParentPath)) {
 		return structuralParentID
 	}
 	localSibling := filepath.Join(filepath.Dir(childPath), base)
@@ -833,26 +836,6 @@ func isPiSubagentPath(childPath string) bool {
 func piSubagentParentPath(childPath string) string {
 	runDir := filepath.Dir(childPath)
 	return filepath.Dir(filepath.Dir(runDir)) + ".jsonl"
-}
-
-func piSubagentParentReferenceMatchesPath(
-	childPath, parentReference string,
-	resolve func(string) (string, bool),
-) bool {
-	if parentReference == "" || !isPiSubagentPath(childPath) {
-		return false
-	}
-	parentPath := parentReference
-	if resolve != nil {
-		if local, ok := resolvePiStoredPath(resolve, parentReference); ok {
-			parentPath = local
-		}
-	}
-	parentPath = filepath.FromSlash(strings.ReplaceAll(parentPath, "\\", "/"))
-	if !filepath.IsAbs(parentPath) {
-		parentPath = filepath.Join(filepath.Dir(childPath), parentPath)
-	}
-	return strings.EqualFold(filepath.Clean(parentPath), filepath.Clean(piSubagentParentPath(childPath)))
 }
 
 // isPiSubagentRunDir reports whether name is a pi-subagents attempt directory
@@ -929,13 +912,11 @@ func resolvePiLineage(path, headerLine string, agent AgentType, idPrefix string,
 	// OMP parentSession may be an opaque raw ID or a transcript path;
 	// other Pi-family providers retain their existing path resolution.
 	var parentSessionID string
-	var explicitParentReference string
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
 		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent ||
 			agent == AgentOMO || agent == AgentStepCode) {
-		explicitParentReference = parentSession
 		// Client aliases must resolve before host-specific absolute-path checks.
 		if resolve != nil {
 			if local, ok := resolvePiStoredPath(resolve, parentSession); ok {
@@ -967,12 +948,6 @@ func resolvePiLineage(path, headerLine string, agent AgentType, idPrefix string,
 			if parentSessionID == "" {
 				parentSessionID = idPrefix + parentID
 			}
-		} else if parentSessionID != "" &&
-			piSubagentParentReferenceMatchesPath(path, explicitParentReference, resolve) {
-			// Case-insensitive source filesystems can materialize one spelling of
-			// the parent path. The explicit reference still identifies the
-			// structural parent even when the second spelling is unavailable.
-			isPiSubagent = true
 		}
 	}
 
