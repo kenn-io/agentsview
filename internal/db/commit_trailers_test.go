@@ -38,7 +38,7 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 		ids                        []string
 	}{
 		{"claude namespace", "claude:session", "claude", "host-a~session", []string{"host-a~session"}},
-		{"literal ID", "codex:session_%", "codex", "host-a~codex:session_%", []string{"host-a~codex:session_%", "host-b~codex:session-ab"}},
+		{"literal ID", "codex:session_a", "codex", "host-a~codex:session_a", []string{"host-a~codex:session_a", "host-b~codex:sessionXa"}},
 		{"exact owner", "codex:session", "codex", "codex:session", []string{"codex:session", "host-a~codex:session"}},
 		{"ambiguous owners", "codex:session", "codex", "", []string{"host-a~codex:session", "host-b~codex:session"}},
 		{"different agent", "claude:session", "codex", "", []string{"host-a~codex:session"}},
@@ -61,6 +61,51 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 				require.Len(t, found.Commits[0].Links, 1)
 				assert.Equal(t, tt.want, found.Commits[0].Links[0].SessionID)
 			}
+		})
+	}
+}
+
+func TestTrailerCommitLinksOwnerAvailableAfterScan(t *testing.T) {
+	for _, state := range []string{"trashed", "not imported", "ambiguous"} {
+		t.Run(state, func(t *testing.T) {
+			d := testDB(t)
+			const owner = "host-a~codex:session"
+			if state != "not imported" {
+				insertSession(t, d, owner, "project-a", func(s *Session) { s.Agent = "codex" })
+			}
+			if state == "trashed" {
+				require.NoError(t, d.SoftDeleteSession(t.Context(), owner))
+			}
+			if state == "ambiguous" {
+				insertSession(t, d, "host-b~codex:session", "project-a", func(s *Session) { s.Agent = "codex" })
+			}
+			sha := strings.Repeat("a", 40)
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
+				SHA: sha, Sessions: []string{"codex:session"}, CommittedAt: tsZero,
+			}}))
+			found, err := d.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, found.Commits, 1)
+			assert.Empty(t, found.Commits[0].Links)
+
+			switch state {
+			case "trashed":
+				_, err = d.RestoreSession(t.Context(), owner)
+				require.NoError(t, err)
+			case "not imported":
+				insertSession(t, d, owner, "project-a", func(s *Session) { s.Agent = "codex" })
+			case "ambiguous":
+				require.NoError(t, d.SoftDeleteSession(t.Context(), "host-b~codex:session"))
+			}
+			// The saved Git evidence must become visible without another scan.
+			found, err = d.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, found.Commits[0].Links, 1)
+			assert.Equal(t, owner, found.Commits[0].Links[0].SessionID)
+			list, err := d.SessionCommitLinks(t.Context(), owner)
+			require.NoError(t, err)
+			require.Len(t, list.Commits, 1)
+			assert.Equal(t, sha, list.Commits[0].SHA)
 		})
 	}
 }

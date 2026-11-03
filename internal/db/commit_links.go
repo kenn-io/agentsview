@@ -453,17 +453,18 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 // docs/internal/pando-adaptation.md for attribution and changes.
 const commitUserPrompt = `m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''`
 
-const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.source,
+const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?))
+ SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.source,
  (s.id IS NULL OR s.deleted_at IS NOT NULL),
  turn.ordinal, turn.content
  FROM (
  SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,'transcript' AS source FROM commit_links
  UNION ALL
- SELECT t.session_id,t.sha,t.branch,t.subject,t.repository,
- COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=t.session_id AND ` + commitUserPrompt + `
+ SELECT o.session_id,t.sha,t.branch,t.subject,t.repository,
+ COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=o.session_id AND ` + commitUserPrompt + `
  AND julianday(m.timestamp)<=julianday(t.committed_at,'+5 minutes') ORDER BY m.ordinal DESC LIMIT 1),-1),
- -1,'',t.committed_at,'trailer' FROM commit_trailers t
- WHERE NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.session_id AND substr(t.sha,1,length(c.sha))=c.sha)
+ -1,'',t.committed_at,'trailer' FROM commit_trailers t JOIN trailer_owners o ON o.trailer_id=t.session_id
+ WHERE NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=o.session_id AND substr(t.sha,1,length(c.sha))=c.sha)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
@@ -472,31 +473,18 @@ const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.reposit
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
 // StoreTrailerCommitLinks retains Git evidence even when transcripts are rewritten.
+// The stored session_id is the trailer's agent:ID, independent of archive owners.
 func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) error {
 	return d.Update(ctx, func(tx *sql.Tx) error {
 		for _, c := range commits {
 			for _, value := range c.Sessions {
-				agent, id, ok := strings.Cut(value, ":")
-				def, known := parser.AgentByType(parser.AgentType(agent))
+				agent, _, ok := strings.Cut(value, ":")
+				_, known := parser.AgentByType(parser.AgentType(agent))
 				if !ok || !known {
 					continue
 				}
-				sessionID := def.IDPrefix + id
-				matches, err := findSessionIDsByRawSuffix(ctx, tx, sessionID, 2, agent)
-				if err != nil {
-					return err
-				}
-				switch {
-				case len(matches) > 0 && matches[0] == sessionID:
-					// An exact archive ID takes precedence over suffix matches.
-				case len(matches) == 1:
-					sessionID = matches[0]
-				case len(matches) > 1:
-					// A trailer cannot distinguish devices sharing a native ID.
-					continue
-				}
 				if _, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
- ON CONFLICT(session_id,sha) DO UPDATE SET branch=excluded.branch,subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at`, sessionID, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt); err != nil {
+ ON CONFLICT(session_id,sha) DO UPDATE SET branch=excluded.branch,subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at`, value, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt); err != nil {
 					return err
 				}
 			}
@@ -524,7 +512,8 @@ func (d *DB) TrailerRepositories(ctx context.Context) ([]TrailerRepository, erro
 	return repos, rows.Err()
 }
 
-func readCommitLinks(ctx context.Context, tx *sql.Tx, where string, args ...any) ([]CommitLink, error) {
+func readCommitLinks(ctx context.Context, tx *sql.Tx, owners, where string, args ...any) ([]CommitLink, error) {
+	args = append([]any{owners}, args...)
 	rows, err := tx.QueryContext(ctx, commitLinkSelect+where+` ORDER BY l.session_id,l.message_ordinal,l.call_index,l.sha`, args...)
 	if err != nil {
 		return nil, err
@@ -546,13 +535,64 @@ func readCommitLinks(ctx context.Context, tx *sql.Tx, where string, args ...any)
 	return links, rows.Err()
 }
 
+// Resolve in the read snapshot so imports and restores apply without a Git scan.
+func resolveTrailerOwners(ctx context.Context, tx *sql.Tx) (string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT session_id FROM commit_trailers`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var identities []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return "", err
+		}
+		identities = append(identities, value)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return "", err
+	}
+	owners := make(map[string]string, len(identities))
+	for _, value := range identities {
+		agent, id, ok := strings.Cut(value, ":")
+		def, known := parser.AgentByType(parser.AgentType(agent))
+		if !ok || !known {
+			continue
+		}
+		sessionID := def.IDPrefix + id
+		matches, err := findSessionIDsByRawSuffix(ctx, tx, sessionID, 2, agent)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case len(matches) > 0 && matches[0] == sessionID:
+			// An exact archive ID takes precedence over suffix matches.
+		case len(matches) == 1:
+			sessionID = matches[0]
+		case len(matches) > 1:
+			// Retain ambiguous evidence until the owner can be resolved.
+			continue
+		}
+		owners[value] = sessionID
+	}
+	encoded, err := json.Marshal(owners)
+	return string(encoded), err
+}
+
 func (d *DB) SessionCommitLinks(ctx context.Context, id string) (*SessionCommitList, error) {
 	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	links, err := readCommitLinks(ctx, tx, "l.session_id=?", id)
+	owners, err := resolveTrailerOwners(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	links, err := readCommitLinks(ctx, tx, owners, "l.session_id=?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -575,6 +615,10 @@ func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSess
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	owners, err := resolveTrailerOwners(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	out := &CommitSessionList{Commits: make([]CommitSessionMatch, 0, len(shas))}
 	for _, q := range queries {
 		args := []any{q, q + "g"}
@@ -583,7 +627,7 @@ func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSess
 			placeholders = append(placeholders, "?")
 			args = append(args, q[:i])
 		}
-		links, err := readCommitLinks(ctx, tx, `(l.sha>=? AND l.sha<? OR l.sha IN (`+strings.Join(placeholders, ",")+`))`, args...)
+		links, err := readCommitLinks(ctx, tx, owners, `(l.sha>=? AND l.sha<? OR l.sha IN (`+strings.Join(placeholders, ",")+`))`, args...)
 		if err != nil {
 			return nil, err
 		}
