@@ -618,7 +618,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
 	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
-	setRawHealthAcceptedAt(t, pg, time.Unix(0, 0).UTC())
+	setRawHealthAcceptedAt(t, pg, time.Now().Add(-time.Hour))
 	for i := range rawJobHealthMaxRows + 1 {
 		rawHealthCommit(
 			t, store, identity, fmt.Sprintf("capture-cap-%03d", i), "",
