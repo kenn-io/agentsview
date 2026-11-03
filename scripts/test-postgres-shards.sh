@@ -12,6 +12,13 @@ cleanup() {
         kill "${pending[@]}" 2>/dev/null || true
         wait "${pending[@]}" 2>/dev/null || true
     fi
+    for ((i=0; i<shards; i++)); do
+        [[ -f "$work/$i.out" && -f "$work/$i.list" ]] || continue
+        cat "$work/$i.out"
+        listed=$(wc -l < "$work/$i.list")
+        ran=$(awk '/^--- / {n++} END {print n+0}' "$work/$i.out")
+        printf 'shard %s: %s listed, %s ran, exit %s\n' "$i" "$listed" "$ran" "${statuses[i]:-interrupted}"
+    done
     for database in "${databases[@]}"; do
         psql -X -v ON_ERROR_STOP=1 "$TEST_PG_URL" -c "DROP DATABASE IF EXISTS \"${database//\"/\"\"}\" WITH (FORCE)" || true
     done
@@ -56,11 +63,5 @@ for ((i=0; i<shards; i++)); do
     statuses[i]=$status
     pending=("${pids[@]:i+1}")
     if ((status != 0)); then result=1; fi
-done
-for ((i=0; i<shards; i++)); do
-    cat "$work/$i.out"
-    listed=$(wc -l < "$work/$i.list")
-    ran=$(awk '/^--- / {n++} END {print n+0}' "$work/$i.out")
-    printf 'shard %s: %s listed, %s ran, exit %s\n' "$i" "$listed" "$ran" "${statuses[i]}"
 done
 exit "$result"
