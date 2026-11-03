@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
@@ -20,14 +20,15 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
-	ctx := context.Background()
-	pg, err := Open(pgURL, schema, true)
+	ctx := t.Context()
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	dbtest.SeedPricingMeta(t, local)
 	defer local.Close()
 
 	parserParent := "parent-a"
@@ -86,13 +87,14 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
 	ctx := t.Context()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	dbtest.SeedPricingMeta(t, local)
 	defer local.Close()
 	parentID := "parent"
 	for _, sess := range []db.Session{

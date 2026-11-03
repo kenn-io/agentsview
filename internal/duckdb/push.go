@@ -1092,7 +1092,6 @@ const (
 )
 
 type duckInsertBatch struct {
-	ctx    context.Context
 	exec   duckMutationExecutor
 	prefix string
 	rowSQL string
@@ -1102,17 +1101,16 @@ type duckInsertBatch struct {
 }
 
 func newDuckInsertBatch(
-	ctx context.Context, exec duckMutationExecutor, prefix string, columns int,
+	exec duckMutationExecutor, prefix string, columns int,
 ) *duckInsertBatch {
 	return &duckInsertBatch{
-		ctx:    ctx,
 		exec:   exec,
 		prefix: prefix,
 		rowSQL: "(" + strings.TrimSuffix(strings.Repeat("?,", columns), ",") + ")",
 	}
 }
 
-func (b *duckInsertBatch) add(values ...any) error {
+func (b *duckInsertBatch) add(ctx context.Context, values ...any) error {
 	payloadBytes := 0
 	for _, value := range values {
 		switch value := value.(type) {
@@ -1127,7 +1125,7 @@ func (b *duckInsertBatch) add(values ...any) error {
 		}
 	}
 	if b.rows > 0 && (b.rows == duckInsertBatchRows || b.bytes+payloadBytes > duckInsertBatchBytes) {
-		if err := b.flush(); err != nil {
+		if err := b.flush(ctx); err != nil {
 			return err
 		}
 	}
@@ -1135,17 +1133,17 @@ func (b *duckInsertBatch) add(values ...any) error {
 	b.rows++
 	b.bytes += payloadBytes
 	if b.bytes >= duckInsertBatchBytes {
-		return b.flush()
+		return b.flush(ctx)
 	}
 	return nil
 }
 
-func (b *duckInsertBatch) flush() error {
+func (b *duckInsertBatch) flush(ctx context.Context) error {
 	if b.rows == 0 {
 		return nil
 	}
 	query := b.prefix + strings.TrimSuffix(strings.Repeat(b.rowSQL+",", b.rows), ",")
-	if _, err := b.exec.ExecContext(b.ctx, query, b.args...); err != nil {
+	if _, err := b.exec.ExecContext(ctx, query, b.args...); err != nil {
 		return err
 	}
 	clear(b.args)
@@ -1321,7 +1319,7 @@ func sessionInsertArgs(
 func insertMessages(
 	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
 ) error {
-	batch := newDuckInsertBatch(ctx, exec, `
+	batch := newDuckInsertBatch(exec, `
 		INSERT INTO messages (
 			id, session_id, ordinal, role, content, thinking_text, dialogue_text,
 			timestamp, has_thinking, has_tool_use, content_length,
@@ -1332,7 +1330,7 @@ func insertMessages(
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		) VALUES `, 29)
 	for _, m := range msgs {
-		if err := batch.add(
+		if err := batch.add(ctx,
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.ThinkingText, m.DialogueText, timeValue(m.Timestamp),
 			m.HasThinking, m.HasToolUse, m.ContentLength,
@@ -1346,7 +1344,7 @@ func insertMessages(
 			return fmt.Errorf("inserting duckdb messages: %w", err)
 		}
 	}
-	if err := batch.flush(); err != nil {
+	if err := batch.flush(ctx); err != nil {
 		return fmt.Errorf("inserting duckdb messages: %w", err)
 	}
 	return nil
@@ -1379,7 +1377,7 @@ func (s *Sync) replaceToolRows(
 func insertToolCalls(
 	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
 ) error {
-	batch := newDuckInsertBatch(ctx, exec, `
+	batch := newDuckInsertBatch(exec, `
 		INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
 			call_index, tool_use_id, input_json, skill_name,
@@ -1388,7 +1386,7 @@ func insertToolCalls(
 		) VALUES `, 15)
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
-			if err := batch.add(
+			if err := batch.add(ctx,
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
@@ -1402,7 +1400,7 @@ func insertToolCalls(
 			}
 		}
 	}
-	if err := batch.flush(); err != nil {
+	if err := batch.flush(ctx); err != nil {
 		return fmt.Errorf("inserting duckdb tool calls: %w", err)
 	}
 	return nil
@@ -1411,7 +1409,7 @@ func insertToolCalls(
 func insertToolResultEvents(
 	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
 ) error {
-	batch := newDuckInsertBatch(ctx, exec, `
+	batch := newDuckInsertBatch(exec, `
 		INSERT INTO tool_result_events (
 			session_id, tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
@@ -1421,7 +1419,7 @@ func insertToolResultEvents(
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
 			for _, ev := range tc.ResultEvents {
-				if err := batch.add(
+				if err := batch.add(ctx,
 					m.SessionID, m.Ordinal, i,
 					nilEmpty(ev.ToolUseID), nilEmpty(ev.AgentID),
 					nilEmpty(ev.SubagentSessionID), ev.Source, ev.Status,
@@ -1433,7 +1431,7 @@ func insertToolResultEvents(
 			}
 		}
 	}
-	if err := batch.flush(); err != nil {
+	if err := batch.flush(ctx); err != nil {
 		return fmt.Errorf("inserting duckdb tool result events: %w", err)
 	}
 	return nil
@@ -1491,7 +1489,7 @@ func (s *Sync) replacePlanUsage(
 func insertUsageEvents(
 	ctx context.Context, exec duckMutationExecutor, events []db.UsageEvent,
 ) error {
-	batch := newDuckInsertBatch(ctx, exec, `
+	batch := newDuckInsertBatch(exec, `
 		INSERT INTO usage_events (
 			id, session_id, message_ordinal, source, model,
 			provider_id, input_tokens, output_tokens,
@@ -1501,7 +1499,7 @@ func insertUsageEvents(
 		) VALUES `, 16)
 	for _, ev := range events {
 		ordinal, cost, occurredAt := usageEventNullableValues(ev)
-		if err := batch.add(
+		if err := batch.add(ctx,
 			ev.ID, ev.SessionID, ordinal, ev.Source, ev.Model,
 			ev.ProviderID, ev.InputTokens, ev.OutputTokens,
 			ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
@@ -1511,7 +1509,7 @@ func insertUsageEvents(
 			return err
 		}
 	}
-	return batch.flush()
+	return batch.flush(ctx)
 }
 
 func (s *Sync) bulkInsertCursorUsageEvents(

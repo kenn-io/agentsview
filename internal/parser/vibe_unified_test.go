@@ -985,7 +985,7 @@ func TestVibeUnifiedVersions(t *testing.T) {
 			if tc.file == "manifest.json" {
 				writeVibeUnifiedPointer(t, dir, "0000000000000001")
 			}
-			_, err = parseVibeUnifiedResultFile(filepath.Join(parseDir, "CURRENT"), FileInfo{})
+			_, err = parseVibeUnifiedResultFile(t.Context(), filepath.Join(parseDir, "CURRENT"), FileInfo{})
 			if tc.valid {
 				require.NoError(t, err)
 			} else {

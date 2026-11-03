@@ -61,6 +61,7 @@ func parseVisualStudioCopilotTestConversation(
 ) (*ParsedSession, []ParsedMessage, error) {
 	t.Helper()
 	return parseVisualStudioCopilotConversation(
+		t.Context(),
 		tracePath, conversationID, project, machine,
 	)
 }
@@ -75,6 +76,7 @@ func parseVisualStudioCopilotTestSession(
 	t.Helper()
 	if tracePath, conversationID, ok := splitVisualStudioCopilotVirtualPath(path); ok {
 		return parseVisualStudioCopilotConversation(
+			t.Context(),
 			tracePath, conversationID, project, machine,
 		)
 	}
@@ -88,7 +90,8 @@ func parseVisualStudioCopilotTestSession(
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	return parseVisualStudioCopilotConversation(path, ids[0], project, machine)
+	return parseVisualStudioCopilotConversation(
+		t.Context(), path, ids[0], project, machine)
 }
 
 // discoverVisualStudioCopilotTestSessions discovers Visual Studio Copilot

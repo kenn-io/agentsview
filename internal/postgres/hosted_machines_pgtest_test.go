@@ -34,7 +34,7 @@ func TestHostedSourceMachinesLabelsWithoutSessions(t *testing.T) {
 	f.accept(t, "device-a", "unprojected", "")
 	_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_devices SET display_name='Workstation A' WHERE device_id='device-a'`)
 	require.NoError(t, err)
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	labels, err := h.GetMachineLabels(t.Context())
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func newHostedBranchExclusionFixture(t *testing.T) *HostedStore {
 	// Exclusion must survive a reparse that matches the visible device's content.
 	b, _ = f.accept(t, "device-b", "matching-b", accepted.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, hostedMachineOutcome("shared needle")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	return h
 }
@@ -106,7 +106,7 @@ func newHostedCoalescedMachinesFixture(t *testing.T) (projectionFixture, *Hosted
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,message_count,user_message_count,started_at) VALUES('legacy-session','legacy','legacy-machine','claude',2,2,'2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 
 	return f, h
@@ -219,7 +219,7 @@ func TestHostedSourceMachinesKeepDivergentVariantsSeparate(t *testing.T) {
 		m, _ := f.accept(t, device, "capture-"+device, "")
 		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, hostedMachineOutcome(device+" needle")))
 	}
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	var variants []string
 	for _, device := range []string{"device-a", "device-b"} {
@@ -247,7 +247,7 @@ func TestHostedSourceMachinesIncludePrefixCopies(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, short))
 	b, accepted := f.accept(t, "device-b", "long-b", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, hostedMachineOutcome("shared prefix")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	inventory, err := h.GetProjectInventory(t.Context(), db.ProjectDateFilter{})
 	require.NoError(t, err)
@@ -279,7 +279,7 @@ func TestHostedSourceMachinesFollowRetainedProof(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, hostedMachineOutcome("retained needle")))
 	b, acceptedB := f.accept(t, "device-b", "capture-b", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, hostedMachineOutcome("retained needle")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	f.tombstone(t, a, "departed-a", acceptedA.Receipt)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_devices SET revoked_at=clock_timestamp() WHERE device_id='device-a'`)
@@ -316,7 +316,7 @@ func TestHostedSourceMachinesOpaqueDeviceSelector(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device,研发", "capture-opaque", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, hostedMachineOutcome("opaque device needle")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	machines, err := h.GetMachines(t.Context(), false, false)
 	require.NoError(t, err)

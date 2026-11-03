@@ -66,7 +66,7 @@ func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + MCP tool call = 2 (mcp_server_response is paired,
@@ -128,7 +128,7 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + MCP response system msg = 2
@@ -189,7 +189,7 @@ func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + MCP tool call = 2; no standalone message for the
@@ -283,7 +283,7 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 				messagesJSON, 0o644,
 			))
 
-			sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+			sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 			require.NoError(t, err)
 
 			// user task + MCP tool call = 2 (response is paired).

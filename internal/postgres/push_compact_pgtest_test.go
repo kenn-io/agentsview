@@ -72,7 +72,7 @@ func TestPushCompactComparisons(t *testing.T) {
 	}
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: len(messages)}))
 	require.NoError(t, local.InsertMessages(ctx, messages))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)
@@ -145,7 +145,7 @@ func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 			}},
 		}},
 	}}))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)
@@ -241,7 +241,7 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	unchanged := edited[0]
 	unchanged.SessionID = "unchanged"
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{unchanged}))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	initial, err := syncer.Push(ctx, true, nil)

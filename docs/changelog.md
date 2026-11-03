@@ -122,6 +122,9 @@ The latest release is
 
 **Bug fixes**
 
+- Hosted PostgreSQL searches and session reads stay available while raw captures
+  arrive and transcripts are published. Each hosted read uses one database
+  snapshot for its content, public identities and related data.
 - DeepSeek Harness sessions that were missing from the archive now import. This
   covers compressed session logs written without zstd content checksums, and
   sessions that ran shell commands, which log `job/registered` and
@@ -134,11 +137,21 @@ The latest release is
 - Hosted transcript jobs whose workers keep stopping now fail with error class
   `lease` after one run past `raw_max_attempts`, instead of retrying forever.
   Workers from an older processing generation can no longer change a newer lease.
-- Hosted PostgreSQL searches and session reads no longer fail solely because
-  newly accepted raw captures are waiting for processing. Changes to published
-  content or public identities still cause reads to retry.
 - Crashed or still-running Copilot CLI sessions now show tokens and estimated
   cost.
+- Hosted raw imports can process larger captured sources and parser results
+  without retaining an extra complete JSON output buffer. Source reconstruction
+  and parser output remain bounded at 1 GiB and 512 MiB. Byte-limit rejections
+  fail immediately with a `size_limit` diagnostic. After upgrading, operators
+  explicitly schedule retained sources with `pg raw-reparse` under a new run ID.
+- Hosted imports and session curation skip transcript reads when no effective
+  pins need them, and validate pinned content only at the referenced ordinals.
+- Large hosted imports use less temporary memory when comparing session content.
+- Hosted imports avoid fetching a transcript from PostgreSQL again when the same
+  transaction has just saved that captured version.
+  Existing content identities are preserved.
+- Hosted updates load prior transcript content only when provider history needs
+  it, retaining metadata without decoding an unused older transcript.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are
@@ -146,6 +159,12 @@ The latest release is
 - Oversized debug logs retain their last 10 MB in `debug.log.1` to help
   investigate a stalled server. Successful rotation clears the active log;
   a busy lock or failed backup leaves it intact.
+- Imported sessions with a recorded repository URL no longer split into separate
+  projects just because their worktree folders are unavailable. The first
+  writable startup after upgrading repairs existing SQLite archives
+  automatically, even when source files are gone. Explicit project rules still
+  take priority. Use `db repair-projects` to preview any remaining corrections.
+
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on

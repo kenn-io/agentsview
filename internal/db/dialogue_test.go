@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,11 +63,26 @@ func TestDialogueFTSCorpusVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, marker string
 		rebuild      bool
+		trigger      string
 	}{
-		{"older", "0", true},
-		{"current", searchCorpusVersion, false},
-		{"newer", "10", false},
-		{"invalid", "invalid", true},
+		{name: "older", marker: "0", rebuild: true},
+		{
+			name: "current", marker: searchCorpusVersion,
+			trigger: `CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+ INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+ VALUES('delete', old.id, old.content, COALESCE(old.dialogue_text, old.content));
+ INSERT INTO messages_fts(rowid, rendered, content)
+ VALUES(new.id, new.content, COALESCE(new.dialogue_text, new.content));
+END`,
+		},
+		{
+			name: "newer", marker: "10",
+			trigger: `CREATE TRIGGER messages_au AFTER UPDATE ON messages
+BEGIN
+ SELECT 1;
+END`,
+		},
+		{name: "invalid", marker: "invalid", rebuild: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -74,11 +90,24 @@ func TestDialogueFTSCorpusVersion(t *testing.T) {
 			insertMessages(t, d, Message{SessionID: "version", Role: "user", Content: "needle"})
 			_, err := d.getWriter().Exec(t.Context(), "UPDATE stats SET value = ? WHERE key = ?", tc.marker, searchCorpusVersionStatsKey)
 			require.NoError(t, err)
+			if tc.trigger != "" {
+				_, err := d.getWriter().Exec(t.Context(), "DROP TRIGGER messages_au;"+tc.trigger)
+				require.NoError(t, err)
+			}
 			var details []string
 			err = refreshDialogueFTS(t.Context(), d.getWriter(), func(progress OpenProgress) {
 				details = append(details, progress.Detail)
 			})
 			require.NoError(t, err)
+			if tc.trigger != "" {
+				var triggerAfter string
+				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'messages_au'").Scan(&triggerAfter))
+				if tc.marker == searchCorpusVersion {
+					assert.Contains(t, triggerAfter, "WHEN", "upgrade the current corpus's trigger")
+				} else {
+					assert.Equal(t, tc.trigger, triggerAfter, "preserve the newer build's trigger")
+				}
+			}
 			var marker string
 			require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", searchCorpusVersionStatsKey).Scan(&marker))
 			if tc.rebuild {
@@ -170,7 +199,7 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 			insertSession(t, d, "search", "project", func(s *Session) { s.UserMessageCount = 2 })
 			messages := []Message{
 				{SessionID: "search", Ordinal: 0, Role: "user", Content: "Question"},
-				{SessionID: "search", Ordinal: 1, Role: "assistant", Content: tc.dialogue + " [Thinking] " + tc.hidden, DialogueText: new(tc.dialogue)},
+				{SessionID: "search", Ordinal: 1, Role: "assistant", Content: tc.dialogue + " [Thinking] " + tc.hidden},
 				{SessionID: "search", Ordinal: 2, Role: "assistant", Content: "Done"},
 			}
 			insertMessages(t, d, messages...)
@@ -178,11 +207,28 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 			if tc.dialogue != "" {
 				terms = append(terms, tc.dialogue)
 			}
-			for _, phase := range []string{"insert", "update", "delete"} {
+			dialogue, rendered := messages[1].Content, tc.hidden
+			for _, phase := range []string{"insert", "metadata", "update", "dialogue", "delete"} {
 				switch phase {
+				case "metadata":
+					messages[1].OutputTokens = 7
+					messages[1].HasOutputTokens = true
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
+					before := totalWriterChanges(t, d)
+					_, err := d.getWriter().Exec(t.Context(), `UPDATE messages
+SET content = content, dialogue_text = dialogue_text, output_tokens = output_tokens
+WHERE session_id = 'search' AND ordinal = 1`)
+					require.NoError(t, err)
+					assert.Equal(t, int64(1), totalWriterChanges(t, d)-before, "unchanged text must skip both FTS indexes")
 				case "update":
 					messages[1].Content = tc.dialogue + " [Thinking] " + tc.replacement
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
+					dialogue, rendered = messages[1].Content, tc.replacement
+				case "dialogue":
+					// Classify the visible text without changing rendered content.
+					messages[1].DialogueText = new(tc.dialogue)
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", messages))
+					dialogue = tc.dialogue
 				case "delete":
 					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "search", nil))
 				}
@@ -195,9 +241,9 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 				for _, term := range terms {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: term, Mode: "fts", Sources: []string{"messages"}})
 					require.NoError(t, err, "%s %s", phase, term)
-					if phase != "delete" && tc.dialogue != "" && term == tc.dialogue {
+					if phase != "delete" && dialogue != "" && strings.Contains(dialogue, term) {
 						require.Len(t, page.Matches, 1, "%s %s", phase, term)
-						assert.Equal(t, tc.dialogue, page.Matches[0].Snippet, phase)
+						assert.Equal(t, dialogue, page.Matches[0].Snippet, phase)
 					} else {
 						assert.Empty(t, page.Matches, "%s %s", phase, term)
 					}
@@ -205,7 +251,7 @@ func TestDialogueFTSTriggerSync(t *testing.T) {
 				for _, term := range []string{"Question", tc.hidden, tc.replacement} {
 					page, err := d.Search(t.Context(), SearchFilter{Query: term})
 					require.NoError(t, err, "%s %s", phase, term)
-					if phase != "delete" && (term == "Question" || phase == "insert" && term == tc.hidden || phase == "update" && term == tc.replacement) {
+					if phase != "delete" && (term == "Question" || term == rendered) {
 						require.Len(t, page.Results, 1, "%s %s", phase, term)
 						assert.Equal(t, "search", page.Results[0].SessionID, "%s %s", phase, term)
 					} else {

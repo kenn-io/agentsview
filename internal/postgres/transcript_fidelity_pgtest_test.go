@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // TestPGTranscriptFidelityRoundTripsAndRepushes verifies that the
@@ -20,17 +20,18 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_transcript_fidelity_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
+	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -56,7 +57,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push (summary)")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

@@ -413,7 +413,7 @@ func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) (result erro
 		// Graceful shutdown with a short bound; in-flight tool calls
 		// usually finish in milliseconds, so 10s is plenty.
 		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(), 10*time.Second)
+			context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
 		return ctx.Err()

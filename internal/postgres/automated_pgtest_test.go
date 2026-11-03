@@ -23,14 +23,14 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"automated-audit-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
@@ -117,7 +117,7 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -215,7 +215,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 	db.SetUserAutomationPrefixes(nil)
 
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"trust-test-machine", true,
 		storage.PusherOptions{},
 	)
@@ -223,7 +223,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 	defer ps.Close()
 
 	ctx, cancel := context.WithTimeout(
-		context.Background(), 30*time.Second,
+		t.Context(), 30*time.Second,
 	)
 	defer cancel()
 
@@ -264,7 +264,7 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 	}), "upsert")
 
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"backfill-test-machine", true,
 		storage.PusherOptions{},
 	)
@@ -272,7 +272,7 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 	defer ps.Close()
 
 	ctx, cancel := context.WithTimeout(
-		context.Background(), 30*time.Second,
+		t.Context(), 30*time.Second,
 	)
 	defer cancel()
 
@@ -329,7 +329,7 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 					{SessionID: tc.id, Ordinal: 1, Role: "assistant", Content: "Finished.", Model: "model-a"},
 				}))
 			}
-			ps, err := New(pgURL, "agentsview", local, "usage-audit-machine", true, storage.PusherOptions{})
+			ps, err := New(t.Context(), pgURL, "agentsview", local, "usage-audit-machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			defer ps.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

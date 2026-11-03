@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -16,8 +15,9 @@ import (
 )
 
 func TestStoreAnalyticsReads(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	filter := db.AnalyticsFilter{
 		From: "2026-01-01",
 		To:   "2026-01-31",
@@ -110,7 +110,8 @@ func TestStoreAnalyticsReads(t *testing.T) {
 }
 
 func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name      string
 		populated bool
@@ -145,6 +146,7 @@ func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
 // their sessions with a SQL subquery rather than an ID list: session shape
 // autonomy buckets and velocity messages and tool counts.
 func TestAnalyticsSessionSetQueriesMatchSQLite(t *testing.T) {
+	t.Parallel()
 	store, _, local := newPushedStore(t)
 	ctx := t.Context()
 	filter := db.AnalyticsFilter{
@@ -175,6 +177,7 @@ func TestAnalyticsSessionSetQueriesMatchSQLite(t *testing.T) {
 // other split behind the stacked activity timeline on assistant-only,
 // system-only, and mixed days.
 func TestAnalyticsActivityRoleSplitMatchesSQLite(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	ctx := t.Context()
 	type row struct {
@@ -245,6 +248,7 @@ func TestAnalyticsActivityRoleSplitMatchesSQLite(t *testing.T) {
 // bounds. Unclamped, From=0001-01-01 pads to 0000-12-31T10:00:00Z, which
 // parseDateTime64BestEffort reads as a recent date and drops older sessions.
 func TestAnalyticsSummaryFromYearOne(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	ctx := t.Context()
 	const id = "ch-year-one"

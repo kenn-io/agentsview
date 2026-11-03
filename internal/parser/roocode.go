@@ -65,6 +65,7 @@ type rooCodeMessage struct {
 // parsed session with messages. The task directory must contain
 // history_item.json and may contain ui_messages.json.
 func parseRooCodeSession(
+	ctx context.Context,
 	taskDir string,
 	projectHint string,
 	machine string,
@@ -96,7 +97,7 @@ func parseRooCodeSession(
 
 	// Read and parse ui_messages.json (may not exist for empty sessions).
 	parsedMessages, peakCtx, maxTS, err := parseRooCodeMessages(
-		messagesPath, model,
+		ctx, messagesPath, model,
 	)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf("parsing ui_messages.json: %w", err)
@@ -164,7 +165,7 @@ func parseRooCodeSession(
 	// Derive project from workspace path using git-root aware extraction.
 	project := projectHint
 	if historyItem.Workspace != "" {
-		if p := ExtractProjectFromCwd(historyItem.Workspace); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, historyItem.Workspace, ""); p != "" {
 			project = p
 		}
 	}
@@ -338,7 +339,7 @@ func parseRooCodeSession(
 //   - "api_req_started" and "checkpoint_saved" are internal metadata and are
 //     skipped.
 func parseRooCodeMessages(
-	path string, model string,
+	ctx context.Context, path string, model string,
 ) ([]ParsedMessage, int, time.Time, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -420,7 +421,7 @@ func parseRooCodeMessages(
 
 		// Determine role and extract tool calls / tool results.
 		role, toolCalls, toolResults := classifyRooCodeMessage(
-			msg, isFirst, ordinal,
+			ctx, msg, isFirst, ordinal,
 		)
 		isFirst = false
 
@@ -813,7 +814,7 @@ func finalizeRooCommandStream(
 // for a single RooCode message. The isFirst flag is true only for the very
 // first message in the transcript, which carries the user's initial task.
 func classifyRooCodeMessage(
-	msg rooCodeMessage, isFirst bool, ordinal int,
+	ctx context.Context, msg rooCodeMessage, isFirst bool, ordinal int,
 ) (RoleType, []ParsedToolCall, []ParsedToolResult) {
 	say := msg.Say
 	ask := msg.Ask
@@ -891,7 +892,7 @@ func classifyRooCodeMessage(
 		// payload with tool name, path, etc. For file tools
 		// (readFile, appliedDiff, etc.), the result content is
 		// embedded in the payload's "content" field.
-		tc := parseRooCodeToolCall(msg.Text, ordinal)
+		tc := parseRooCodeToolCall(ctx, msg.Text, ordinal)
 		if tc == nil {
 			return RoleAssistant, nil, nil
 		}
@@ -938,7 +939,7 @@ func classifyRooCodeMessage(
 	case "use_mcp_server":
 		// Assistant invokes an MCP server tool. The text field
 		// carries JSON with server name and tool details.
-		tc := parseRooCodeMcpCall(msg.Text, ordinal)
+		tc := parseRooCodeMcpCall(ctx, msg.Text, ordinal)
 		if tc == nil {
 			return RoleAssistant, nil, nil
 		}
@@ -1279,7 +1280,7 @@ func rooCommandOutputIsError(output string) bool {
 // use_mcp_tool calls are named after the invoked toolName; resource
 // accesses keep the type as the name. Payloads without "type" fall
 // back to the generic decoder for the simple {"tool":...} shape.
-func parseRooCodeMcpCall(text string, ordinal int) *ParsedToolCall {
+func parseRooCodeMcpCall(ctx context.Context, text string, ordinal int) *ParsedToolCall {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil
@@ -1292,7 +1293,7 @@ func parseRooCodeMcpCall(text string, ordinal int) *ParsedToolCall {
 
 	typeName, _ := toolData["type"].(string)
 	if typeName == "" {
-		return parseRooCodeToolCall(text, ordinal)
+		return parseRooCodeToolCall(ctx, text, ordinal)
 	}
 
 	toolName := typeName
@@ -1318,7 +1319,7 @@ func parseRooCodeMcpCall(text string, ordinal int) *ParsedToolCall {
 // parseRooCodeToolCall extracts a ParsedToolCall from the JSON text of
 // an ask="tool" message. The text field contains a JSON object like:
 // {"tool":"readFile","path":"src/foo.ts","isOutsideWorkspace":false,...}
-func parseRooCodeToolCall(text string, ordinal int) *ParsedToolCall {
+func parseRooCodeToolCall(ctx context.Context, text string, ordinal int) *ParsedToolCall {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
@@ -1367,14 +1368,14 @@ func parseRooCodeToolCall(text string, ordinal int) *ParsedToolCall {
 		// Infer skill name from readFile calls to SKILL.md files,
 		// matching how Cursor, Codex, Grok, Kimi, and ZCode detect
 		// skill usage from file reads.
-		tc.SkillName = inferToolSkillName(context.Background(), toolName, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(ctx, toolName, tc.InputJSON)
 	}
 	return tc
 }
 
 // rooCodeFingerprintSource computes a composite fingerprint from
 // history_item.json and ui_messages.json for freshness detection.
-func rooCodeFingerprintSource(path string) (SourceFingerprint, error) {
+func rooCodeFingerprintSource(ctx context.Context, path string) (SourceFingerprint, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
@@ -1392,7 +1393,7 @@ func rooCodeFingerprintSource(path string) (SourceFingerprint, error) {
 
 	h := sha256.New()
 	if err := addSiblingMetadataFingerprintPart(
-		h, "history_item", path, info,
+		ctx, h, "history_item", path, info,
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -1410,7 +1411,7 @@ func rooCodeFingerprintSource(path string) (SourceFingerprint, error) {
 			fp.MTimeNS = ts
 		}
 		if err := addSiblingMetadataFingerprintPart(
-			h, "ui_messages", msgPath, msgInfo,
+			ctx, h, "ui_messages", msgPath, msgInfo,
 		); err != nil {
 			return SourceFingerprint{}, err
 		}

@@ -35,7 +35,7 @@ func iflowParseFile(
 	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	project := iflowResolveProject(ctx, req.Source, path)
-	results, err := parseIflowSession(path, project, req.Machine)
+	results, err := parseIflowSession(ctx, path, project, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -499,7 +499,7 @@ func TestExportSessionsCursorResetMainStderrIsOnlyStructuredJSON(t *testing.T) {
 	assert.NotEmpty(t, got.DatabaseID)
 }
 
-func TestExportSessionsMainStillPrintsFatalForNonCursorErrors(t *testing.T) {
+func TestExportSessionsMainPrintsValidationHintForInvalidFormat(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedExportSessionsArchiveAt(t, filepath.Join(dataDir, "sessions.db"))
 
@@ -519,9 +519,9 @@ func TestExportSessionsMainStillPrintsFatalForNonCursorErrors(t *testing.T) {
 
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
-	assert.Equal(t, 1, exitErr.ExitCode())
+	assert.Equal(t, 65, exitErr.ExitCode())
 	assert.Contains(t, string(exitErr.Stderr), "fatal:")
-	assert.Contains(t, string(exitErr.Stderr), "invalid argument \"xml\"")
+	assert.Contains(t, string(exitErr.Stderr), "\nhint:")
 }
 
 func TestExportSessionsCursorResetMainHelperProcess(t *testing.T) {

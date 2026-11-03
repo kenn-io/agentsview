@@ -20,6 +20,7 @@ import (
 )
 
 func TestUsageCatalogCustomOverrideUsesOneSnapshot(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 	before, err := chLoadPricingCatalog(t.Context(), store.conn, nil)
 	require.NoError(t, err)
@@ -52,6 +53,7 @@ func TestUsageCatalogCustomOverrideUsesOneSnapshot(t *testing.T) {
 }
 
 func TestDailyUsageAcceptsLargeReportedCost(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	stamp := "2026-01-12T12:00:00Z"
 	cost := money.Money{Microdollars: 9_100_000_000_000_000_000}
@@ -92,6 +94,7 @@ func TestDailyUsageAcceptsLargeReportedCost(t *testing.T) {
 }
 
 func TestDailyUsagePersistedErrorsKeepMoneyIdentity(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "overflow-rate", InputPerMTok: money.MustParseDollars("9000000000000"),
@@ -120,6 +123,7 @@ func TestDailyUsagePersistedErrorsKeepMoneyIdentity(t *testing.T) {
 }
 
 func TestUsagePricingAcrossBatchesAndColdRead(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "batch-price", InputPerMTok: money.MustParseDollars("0.4"),

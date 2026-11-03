@@ -608,8 +608,8 @@ func combineSubagentUsageFromSessions(
 	if err != nil {
 		return nil, err
 	}
-	combined := newSessionUsageAccumulator(ctx, out, len(root.Breakdown))
-	if err := combined.add(root, ""); err != nil {
+	combined := newSessionUsageAccumulator(out, len(root.Breakdown))
+	if err := combined.add(ctx, root, ""); err != nil {
 		return nil, err
 	}
 	allSessionsHaveTokens := root.HasTokenData
@@ -636,7 +636,7 @@ func combineSubagentUsageFromSessions(
 		) && (usage == nil || usage.BreakdownCount == 0) {
 			breakdownComplete = false
 		}
-		if err := combined.add(usage, descendant.ID); err != nil {
+		if err := combined.add(ctx, usage, descendant.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -673,7 +673,6 @@ func sessionHasPositiveTokens(outputTokens, peakContextTokens int) bool {
 }
 
 type sessionUsageAccumulator struct {
-	ctx             context.Context
 	out             *db.SessionUsage
 	models          map[string]struct{}
 	unpriced        map[string]struct{}
@@ -686,32 +685,32 @@ type sessionUsageAccumulator struct {
 }
 
 func newSessionUsageAccumulator(
-	ctx context.Context, out *db.SessionUsage, breakdownSize int,
+	out *db.SessionUsage, breakdownSize int,
 ) *sessionUsageAccumulator {
 	return &sessionUsageAccumulator{
-		ctx: ctx, out: out, models: make(map[string]struct{}),
+		out: out, models: make(map[string]struct{}),
 		unpriced: make(map[string]struct{}), allPriced: true,
 		breakdown: make([]db.SessionUsageBreakdownEntry, 0, breakdownSize),
 	}
 }
 
 func (combined *sessionUsageAccumulator) add(
-	usage *db.SessionUsage, subagentID string,
+	ctx context.Context, usage *db.SessionUsage, subagentID string,
 ) error {
-	if err := combined.ctx.Err(); err != nil || usage == nil {
+	if err := ctx.Err(); err != nil || usage == nil {
 		return err
 	}
 	if usage.HasTokenData && !usage.HasCost {
 		combined.allPriced = false
 	}
 	for _, model := range usage.Models {
-		if err := combined.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		combined.models[model] = struct{}{}
 	}
 	for _, model := range usage.UnpricedModels {
-		if err := combined.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		combined.unpriced[model] = struct{}{}
@@ -732,7 +731,7 @@ func (combined *sessionUsageAccumulator) add(
 	}
 	combined.out.BreakdownCount += usage.BreakdownCount
 	for _, entry := range usage.Breakdown {
-		if err := combined.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		entry.Ordinal = len(combined.breakdown) + 1

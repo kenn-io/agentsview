@@ -508,6 +508,7 @@ func (s *Server) finishLocalSync(
 		}
 		s.mu.Lock()
 		if s.onDemandArchiveSources == nil {
+			// The cached manager outlives this request.
 			ownerCtx := s.baseCtx
 			if ownerCtx == nil {
 				ownerCtx = context.WithoutCancel(ctx)

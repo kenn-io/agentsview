@@ -654,7 +654,7 @@ func (b *directBackend) Sync(
 		path = parser.ResolveSourceFilePath(storedPath)
 	}
 
-	b.engine.SyncPaths([]string{path})
+	_ = b.engine.SyncPathsContext(ctx, []string{path})
 
 	id := in.ID
 	if id == "" {

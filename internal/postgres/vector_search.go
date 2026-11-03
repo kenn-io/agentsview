@@ -381,25 +381,25 @@ SELECT d.doc_key, d.ordinal, d.ordinal_end,
 // SetVectorSearcher wires (or, with nil, clears) the PG semantic search
 // backend. Safe to call concurrently with SearchContent/HasSemantic.
 func (s *Store) SetVectorSearcher(searcher db.VectorSearcher) {
-	s.vectorMu.Lock()
-	defer s.vectorMu.Unlock()
-	s.vectorSearcher = searcher
+	s.runtimeState().vectorMu.Lock()
+	defer s.runtimeState().vectorMu.Unlock()
+	s.runtimeState().vectorSearcher = searcher
 }
 
 // getVectorSearcher returns the currently wired PG vector searcher, or nil.
 func (s *Store) getVectorSearcher() db.VectorSearcher {
-	s.vectorMu.RLock()
-	defer s.vectorMu.RUnlock()
-	return s.vectorSearcher
+	s.runtimeState().vectorMu.RLock()
+	defer s.runtimeState().vectorMu.RUnlock()
+	return s.runtimeState().vectorSearcher
 }
 
 // SetSemanticUnavailableReason records a human explanation for why semantic
 // search could not be wired (extension missing, no matching generation, stale
 // build), surfaced by semanticUnavailableError. Safe to call concurrently.
 func (s *Store) SetSemanticUnavailableReason(reason string) {
-	s.vectorMu.Lock()
-	defer s.vectorMu.Unlock()
-	s.semanticUnavailableReason = reason
+	s.runtimeState().vectorMu.Lock()
+	defer s.runtimeState().vectorMu.Unlock()
+	s.runtimeState().semanticUnavailableReason = reason
 }
 
 // semanticUnavailableError wraps db.ErrSemanticUnavailable with the recorded
@@ -407,9 +407,9 @@ func (s *Store) SetSemanticUnavailableReason(reason string) {
 // can explain why semantic search is off; without a reason it returns the
 // bare sentinel.
 func (s *Store) semanticUnavailableError() error {
-	s.vectorMu.RLock()
-	reason := s.semanticUnavailableReason
-	s.vectorMu.RUnlock()
+	s.runtimeState().vectorMu.RLock()
+	reason := s.runtimeState().semanticUnavailableReason
+	s.runtimeState().vectorMu.RUnlock()
 	if reason == "" {
 		return db.ErrSemanticUnavailable
 	}
@@ -421,10 +421,10 @@ func (s *Store) semanticUnavailableError() error {
 // measuring archive coverage, so coverage counts remain unavailable.
 func (s *Store) SemanticReadiness(ctx context.Context) (db.SemanticReadiness, error) {
 	_ = ctx
-	s.vectorMu.RLock()
-	searcher := s.vectorSearcher
-	reason := s.semanticUnavailableReason
-	s.vectorMu.RUnlock()
+	s.runtimeState().vectorMu.RLock()
+	searcher := s.runtimeState().vectorSearcher
+	reason := s.runtimeState().semanticUnavailableReason
+	s.runtimeState().vectorMu.RUnlock()
 	if searcher != nil {
 		return db.SemanticReadiness{State: "ready", Reason: "counts_unavailable"}, nil
 	}

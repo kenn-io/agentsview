@@ -24,9 +24,19 @@ import (
 type Store struct {
 	readbase.ReadOnlyStubs
 	hostedRelations bool
-	pg              *sql.DB
-	cursorMu        sync.RWMutex
-	cursorSecret    []byte
+	pg              storeExecutor
+	ownedDB         *sql.DB
+	readTx          *sql.Tx
+	pricingSnapshot *pricingSnapshot
+	runtimeOnce     sync.Once
+	runtime         *storeRuntime
+}
+
+// storeRuntime is shared by the owning store and its borrowed read views.
+// Views never copy locks or start detached work with their transaction.
+type storeRuntime struct {
+	cursorMu     sync.RWMutex
+	cursorSecret []byte
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
@@ -264,10 +274,10 @@ func buildPGSessionBaseFilter(
 func (s *Store) EncodeCursor(c db.SessionCursor) string {
 	data, _ := json.Marshal(c)
 
-	s.cursorMu.RLock()
-	secret := make([]byte, len(s.cursorSecret))
-	copy(secret, s.cursorSecret)
-	s.cursorMu.RUnlock()
+	s.runtimeState().cursorMu.RLock()
+	secret := make([]byte, len(s.runtimeState().cursorSecret))
+	copy(secret, s.runtimeState().cursorSecret)
+	s.runtimeState().cursorMu.RUnlock()
 
 	mac := hmac.New(sha256.New, secret)
 	mac.Write(data)
@@ -323,10 +333,10 @@ func (s *Store) DecodeCursor(
 				db.ErrInvalidCursor, err)
 	}
 
-	s.cursorMu.RLock()
-	secret := make([]byte, len(s.cursorSecret))
-	copy(secret, s.cursorSecret)
-	s.cursorMu.RUnlock()
+	s.runtimeState().cursorMu.RLock()
+	secret := make([]byte, len(s.runtimeState().cursorSecret))
+	copy(secret, s.runtimeState().cursorSecret)
+	s.runtimeState().cursorMu.RUnlock()
 
 	mac := hmac.New(sha256.New, secret)
 	mac.Write(data)

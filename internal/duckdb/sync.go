@@ -972,7 +972,7 @@ func (s *Sync) sessionFingerprints(
 	sessions []db.Session,
 ) (map[string]string, error) {
 	ids := sessionIDs(sessions)
-	usage, err := s.local.UsageEventFingerprints(ids)
+	usage, err := s.local.UsageEventFingerprints(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("computing usage fingerprints: %w", err)
 	}

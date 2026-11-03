@@ -38,6 +38,58 @@ func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 	assert.Equal(t, "git_remote", snapshots[0].KeySource)
 }
 
+func TestCodexRemoteWorktreeProjectSurvivesAppendAndRebuild(t *testing.T) {
+	for _, cwd := range []string{
+		"/remote/code/sample-root-package",
+		"/remote/code/sample/.worktrees/feature",
+		"/remote/.config/superpowers/worktrees/sample/feature",
+		"/remote/scratchpad/pr123",
+	} {
+		t.Run(cwd, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			id := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+			source := filepath.Join(root, "rollout-"+id+".jsonl")
+			meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_cli_rs", "2026-10-08T12:00:00Z",
+				map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/sample.git", "branch": "embedding/root-package"}})
+			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+
+				testjsonl.CodexMsgJSON("user", "add rate limiting", "2026-10-08T12:00:01Z")+"\n"))
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				Machine: "remote", DisableFilesystemProjectDiscovery: true,
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "sample", session.Project)
+
+			f, err := os.OpenFile(source, os.O_APPEND|os.O_WRONLY, 0o600)
+			require.NoError(t, err)
+			_, err = f.WriteString(testjsonl.CodexMsgJSON("assistant", "added a limiter", "2026-10-08T12:00:02Z") + "\n")
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			assert.True(t, session.LastWriteIncremental)
+			assert.Equal(t, "sample", session.Project)
+
+			stats := engine.ResyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "sample", session.Project)
+			messages, err := database.GetAllMessages(t.Context(), session.ID)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.Equal(t, "added a limiter", messages[1].Content)
+		})
+	}
+}
+
 func TestRecordedRepositoryIdentityWritePaths(t *testing.T) {
 	for _, mode := range []string{"ordinary", "bulk", "full"} {
 		t.Run(mode, func(t *testing.T) {

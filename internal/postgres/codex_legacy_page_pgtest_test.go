@@ -42,7 +42,7 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	}
 	require.NoError(t, source.InsertMessages(ctx, []db.Message{message}))
 	require.NoError(t, source.SetSessionDataVersion(ctx, rollout, 133))
-	syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, source, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	pushed, err := syncer.Push(ctx, true, nil)
@@ -65,8 +65,8 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	require.NoError(t, raw.Close())
 
 	rebuilt := testDB(t)
-	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-	require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+	require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), sourcePath))
 	sess.ID = page
 	sess.ParentSessionID = new(thread)
 	sess.RelationshipType = "continuation"
@@ -75,7 +75,7 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
 	require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 
-	upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+	upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	for range 2 {
@@ -130,7 +130,7 @@ func TestCodexPurgedRolloutExclusionBlocksCanonicalPage(t *testing.T) {
 		SessionID: page, Role: "assistant", Content: "page answer",
 		Timestamp: "2026-09-25T12:00:00Z",
 	}}))
-	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))

@@ -23,7 +23,7 @@ func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
 	seedUsageSession(t, store, "codex:later", "usage-project", "codex", 17)
 	opens, closes := 0, 0
 	original := openPGReadStore
-	openPGReadStore = func(config.Config, config.PGConfig) (db.Store, func(), error) {
+	openPGReadStore = func(context.Context, config.Config, config.PGConfig) (db.Store, func(), error) {
 		opens++
 		return store, func() { closes++ }, nil
 	}

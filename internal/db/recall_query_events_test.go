@@ -259,7 +259,7 @@ func TestRecallQueryEventSurvivesFullResyncWithoutExposedEntry(t *testing.T) {
 	dst, err := Open(t.Context(), dstPath)
 	require.NoError(t, err)
 	defer dst.Close()
-	require.NoError(t, dst.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dst.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got, err := dst.GetRecallQueryEvent(
 		t.Context(), "query-orphan-exposure",
@@ -287,5 +287,5 @@ func TestRecallQueryEventCopyToleratesArchiveWithoutLedger(t *testing.T) {
 	require.NoError(t, err)
 	defer dst.Close()
 
-	assert.NoError(t, dst.CopyRecallEntriesFrom(srcPath))
+	assert.NoError(t, dst.CopyRecallEntriesFrom(t.Context(), srcPath))
 }

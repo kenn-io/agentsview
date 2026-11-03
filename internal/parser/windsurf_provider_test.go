@@ -454,7 +454,7 @@ func TestWriteWindsurfSessionJSONScopesVirtualSource(t *testing.T) {
 	}`)
 	var buf bytes.Buffer
 
-	require.NoError(t, WriteWindsurfSessionJSON(&buf, dbPath, "export-a"))
+	require.NoError(t, WriteWindsurfSessionJSON(t.Context(), &buf, dbPath, "export-a"))
 
 	assert.Contains(t, buf.String(), "export-a")
 	assert.Contains(t, buf.String(), "A only")

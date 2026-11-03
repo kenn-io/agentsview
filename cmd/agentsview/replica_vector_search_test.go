@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,7 @@ func TestScopedConfigPGVectorConsumersAdoptDeploymentRecipe(t *testing.T) {
 			stubPGReadStore(t, store)
 			orig := wireReplicaReadVectorSearchFn
 			var adopted config.Config
-			wireReplicaReadVectorSearchFn = func(cfg config.Config, backend storage.Replica, got db.Store) {
+			wireReplicaReadVectorSearchFn = func(_ context.Context, cfg config.Config, backend storage.Replica, got db.Store) {
 				assert.Same(t, db.Store(store), got)
 				assert.Equal(t, "pg", backend.Name())
 				require.NotNil(t, cfg.DeploymentEmbeddings, "PG vector reads need the deployment embeddings transport")
@@ -168,7 +169,7 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 	var gotBackend storage.Replica
 	calls := 0
 	orig := wireReplicaReadVectorSearchFn
-	wireReplicaReadVectorSearchFn = func(cfg config.Config, backend storage.Replica, store db.Store) {
+	wireReplicaReadVectorSearchFn = func(_ context.Context, cfg config.Config, backend storage.Replica, store db.Store) {
 		calls++
 		gotCfg = cfg
 		gotBackend = backend
@@ -178,7 +179,7 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 
 	cfg := config.Config{}
 	cfg.Vector.Enabled = true
-	svc, cleanup, err := newPGReadService(cfg, config.PGConfig{
+	svc, cleanup, err := newPGReadService(t.Context(), cfg, config.PGConfig{
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
 	})
@@ -203,6 +204,6 @@ func TestWireReplicaReadVectorSearchIgnoresNonReplicaStore(t *testing.T) {
 	cfg.Vector.Enabled = true
 
 	require.NotPanics(t, func() {
-		wireReplicaReadVectorSearch(cfg, pgReplica{}, fakeStore)
+		wireReplicaReadVectorSearch(t.Context(), cfg, pgReplica{}, fakeStore)
 	})
 }

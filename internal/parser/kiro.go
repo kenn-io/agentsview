@@ -135,7 +135,7 @@ func (p *kiroProvider) parseLegacySessionContext(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	var messages []ParsedMessage
 	var firstMessage string
@@ -371,7 +371,7 @@ func (p *kiroProvider) parseCurrentSessionContext(
 		return nil, nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	var messages []ParsedMessage
 	firstMessage := ""

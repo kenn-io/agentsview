@@ -68,7 +68,7 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 				return fmt.Errorf("%s push: --no-start-daemon requires --watch", name)
 			}
 			if cfg.Watch {
-				if err := runReplicaPushWatch(backend, cfg, targetName); err != nil {
+				if err := runReplicaPushWatch(cmd.Context(), backend, cfg, targetName); err != nil {
 					return fmt.Errorf("%s push --watch: %w", name, err)
 				}
 				return nil
@@ -77,7 +77,7 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 				fmt.Fprintln(os.Stderr,
 					"warning: --debounce and --interval have no effect without --watch")
 			}
-			if err := runReplicaPush(backend, cfg, targetName); err != nil {
+			if err := runReplicaPush(cmd.Context(), backend, cfg, targetName); err != nil {
 				return fmt.Errorf("%s push: %w", name, err)
 			}
 			return nil
@@ -148,7 +148,7 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runReplicaServe(backend, appCfg, basePath, watch)
+			runReplicaServe(cmd.Context(), backend, appCfg, basePath, watch)
 		},
 	}
 	cmd.Flags().String(
