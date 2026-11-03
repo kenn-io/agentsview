@@ -639,8 +639,12 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # Diagnostics only: the test step decides the job result. The runner
+      # turns a timed-out step into a success when continue-on-error is set,
+      # so a stalled summary cannot fail a job whose tests passed.
       - name: Summarize ${{ matrix.name }} test timing
         if: always()
+        continue-on-error: true
         timeout-minutes: 2
         shell: pwsh
         run: |
