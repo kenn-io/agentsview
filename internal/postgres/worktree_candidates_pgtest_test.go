@@ -229,6 +229,7 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	newLocalDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "new-local.db"))
 	require.NoError(t, err)
+	require.NoError(t, newLocalDB.SetPricingMeta("_test_seed", "1"))
 	t.Cleanup(func() { require.NoError(t, newLocalDB.Close()) })
 	require.NoError(t, newLocalDB.SetArchiveIdentityForTest(
 		ctx, archiveID, archiveSalt,

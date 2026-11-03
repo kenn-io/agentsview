@@ -37,6 +37,7 @@ func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	require.NoError(t, local.SetPricingMeta("_test_seed", "1"))
 	t.Cleanup(func() { assert.NoError(t, local.Close()) })
 	started := "2026-10-01T09:00:00Z"
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{

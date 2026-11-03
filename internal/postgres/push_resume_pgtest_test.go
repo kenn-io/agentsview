@@ -43,6 +43,7 @@ func openResumeArchive(t *testing.T) *db.DB {
 	t.Helper()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	require.NoError(t, local.SetPricingMeta("_test_seed", "1"))
 	t.Cleanup(func() { _ = local.Close() })
 	for id, ended := range map[string]string{
 		"old": "2026-01-01T00:00:00Z",

@@ -28,6 +28,7 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	require.NoError(t, localDB.SetPricingMeta("_test_seed", "1"))
 	defer localDB.Close()
 	syncer := &Sync{
 		pg: pg, local: localDB, machine: "test-machine",

@@ -98,6 +98,7 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 
 	local, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	require.NoError(t, local.SetPricingMeta("_test_seed", "1"))
 	t.Cleanup(func() { _ = local.Close() })
 	seed := func(id, ended string, parent *string) {
 		s := db.Session{

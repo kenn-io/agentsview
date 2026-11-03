@@ -35,6 +35,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 	// Local SQLite DB used by the Sync push path.
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
+	require.NoError(t, localDB.SetPricingMeta("_test_seed", "1"))
 	defer localDB.Close()
 
 	agentTitle := "Agent Title"
