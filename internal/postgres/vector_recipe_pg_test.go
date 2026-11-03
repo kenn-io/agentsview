@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -194,6 +195,7 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 
 			localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 			require.NoError(t, err)
+			dbtest.SeedPricingMeta(t, localDB)
 			t.Cleanup(func() { _ = localDB.Close() })
 			seedVectorSession(t, localDB, "A")
 			sync := &Sync{

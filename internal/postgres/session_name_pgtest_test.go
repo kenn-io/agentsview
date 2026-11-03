@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -35,6 +36,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 	// Local SQLite DB used by the Sync push path.
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
+	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	agentTitle := "Agent Title"

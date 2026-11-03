@@ -120,6 +120,7 @@ func newVectorPushTestSync(
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
+	dbtest.SeedPricingMeta(t, localDB)
 	t.Cleanup(func() { _ = localDB.Close() })
 
 	sync := &Sync{
