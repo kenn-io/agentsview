@@ -327,7 +327,7 @@ func newHTTPHandler(opts ServeOptions) http.Handler {
 		func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
 	registerIconRoutes(mux)
-	mux.Handle("/", withBearerAuth(handler, opts.Token))
+	mux.Handle("/", withBearerAuth(handler, opts.Token)) //nolint:kennlint // nohttpmux: the MCP SDK owns this protocol endpoint, not the typed API router.
 	return mux
 }
 

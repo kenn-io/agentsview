@@ -30,6 +30,6 @@ func registerIconRoutes(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		http.ServeContent(w, r, "icon.png", time.Time{}, bytes.NewReader(serverIconPNG))
 	})
-	mux.Handle("/icon.png", handler)
-	mux.Handle("/favicon.ico", handler)
+	mux.Handle("/icon.png", handler)    //nolint:kennlint // nohttpmux: the MCP listener has no typed API router; this is a static asset.
+	mux.Handle("/favicon.ico", handler) //nolint:kennlint // nohttpmux: the MCP listener has no typed API router; this is a static asset.
 }

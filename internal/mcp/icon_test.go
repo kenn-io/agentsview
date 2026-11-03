@@ -72,7 +72,7 @@ func TestServerIconHTTP(t *testing.T) {
 			for _, path := range []string{"/icon.png", "/favicon.ico"} {
 				for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions} {
 					t.Run(method+path, func(t *testing.T) {
-						req := httptest.NewRequest(method, path, nil)
+						req := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 						req.Header.Set("Origin", "https://client.example")
 						got := httptest.NewRecorder()
 						handler.ServeHTTP(got, req)
@@ -101,7 +101,7 @@ func TestServerIconHTTP(t *testing.T) {
 			// Public aliases must not expose MCP or neighboring paths without auth.
 			for _, path := range []string{"/", "/mcp", "/icon.png/extra", "/favicon.ico/extra"} {
 				for _, auth := range []string{"", "Bearer wrong"} {
-					req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(iconInitialize))
+					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(iconInitialize))
 					req.Header.Set("Authorization", auth)
 					got := httptest.NewRecorder()
 					handler.ServeHTTP(got, req)
@@ -110,7 +110,7 @@ func TestServerIconHTTP(t *testing.T) {
 				}
 			}
 			for _, path := range []string{"/", "/mcp"} {
-				req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, strings.NewReader(iconInitialize))
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1"+path, strings.NewReader(iconInitialize))
 				req.Header.Set("Authorization", "Bearer "+token)
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Accept", "application/json, text/event-stream")
