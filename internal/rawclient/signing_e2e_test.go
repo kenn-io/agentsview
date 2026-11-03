@@ -1,4 +1,4 @@
-package rawclient
+package rawclient_test
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/testutil"
@@ -72,7 +73,7 @@ func TestSignedRawSyncTLSRewritingPrefix(t *testing.T) {
 	capture := &locationCaptureTransport{next: ts.Client().Transport}
 	httpClient, err := signer.Client(&http.Client{Transport: capture})
 	require.NoError(t, err)
-	client, err := NewClient(Config{BaseURL: ts.URL + "/native", DeviceID: enrolled.Identity.DeviceID, Credential: enrolled.Credential, HTTPClient: httpClient, ChunkBytes: 8})
+	client, err := rawclient.NewClient(rawclient.Config{BaseURL: ts.URL + "/native", DeviceID: enrolled.Identity.DeviceID, Credential: enrolled.Credential, HTTPClient: httpClient, ChunkBytes: 8})
 	require.NoError(t, err)
 	body := []byte("signed raw object with multiple resumable chunks")
 	object := e2EObjectFor(t, body)
@@ -82,7 +83,7 @@ func TestSignedRawSyncTLSRewritingPrefix(t *testing.T) {
 	require.NoError(t, client.UploadObject(t.Context(), parser.AgentClaude, object, bytes.NewReader(body)))
 	assert.Regexp(t, `^/native/api/v1/raw-sync/uploads/upl_`, capture.location)
 	// Reconnect with fresh client/token; a completed object is reused idempotently.
-	resumed, err := NewClient(Config{BaseURL: ts.URL + "/native", DeviceID: enrolled.Identity.DeviceID, Credential: enrolled.Credential, HTTPClient: httpClient, ChunkBytes: 8})
+	resumed, err := rawclient.NewClient(rawclient.Config{BaseURL: ts.URL + "/native", DeviceID: enrolled.Identity.DeviceID, Credential: enrolled.Credential, HTTPClient: httpClient, ChunkBytes: 8})
 	require.NoError(t, err)
 	require.NoError(t, resumed.UploadObject(t.Context(), parser.AgentClaude, object, bytes.NewReader(body)))
 	manifest := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: parser.AgentClaude, ConfiguredRootID: "fixture-root", SourceKey: "session.jsonl", CaptureID: "signed-capture", CapturedAt: time.Now().UTC(), Kind: rawsync.ManifestSnapshot, Entries: []rawsync.Entry{{Path: "session.jsonl", Type: "file", Length: object.Length, Objects: []rawsync.ObjectRef{object}}}}
@@ -109,8 +110,8 @@ func TestSignedRawSyncTLSRewritingPrefix(t *testing.T) {
 	writePolicy()
 	_, err = resumed.MissingObjects(t.Context(), parser.AgentClaude, []rawsync.ObjectRef{object})
 	require.Error(t, err)
-	var denied APIError
-	require.True(t, AsAPIError(err, &denied))
+	var denied rawclient.APIError
+	require.True(t, rawclient.AsAPIError(err, &denied))
 	assert.Equal(t, 403, denied.Status)
 	policy.Keys[0].DeviceID = enrolled.Identity.DeviceID
 	writePolicy()

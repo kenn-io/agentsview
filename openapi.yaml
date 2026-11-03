@@ -16969,7 +16969,6 @@ paths:
               contentMediaType: application/octet-stream
               format: binary
               type: string
-        required: true
       responses:
         "200":
           content:
