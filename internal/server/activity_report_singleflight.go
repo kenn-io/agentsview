@@ -8,7 +8,6 @@ import (
 )
 
 type activityReportFlight struct {
-	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
 	waiters   int
@@ -33,13 +32,16 @@ func (group *activityReportBuildGroup) do(
 	group.mu.Lock()
 	flight := group.flights[key]
 	if flight == nil {
+		// The shared build belongs to no single waiter, so it carries none
+		// of their request values. Release cancels it when the last waiter
+		// leaves.
 		buildCtx, cancel := context.WithCancel(context.Background())
 		flight = &activityReportFlight{
-			ctx: buildCtx, cancel: cancel, done: make(chan struct{}), waiters: 1,
+			cancel: cancel, done: make(chan struct{}), waiters: 1,
 		}
 		group.flights[key] = flight
 		go func(active *activityReportFlight) {
-			active.artifacts, active.err = build(active.ctx)
+			active.artifacts, active.err = build(buildCtx)
 			group.mu.Lock()
 			if group.flights[key] == active {
 				delete(group.flights, key)

@@ -29,12 +29,12 @@ func newHostedFixture(t *testing.T, tenant string) hostedFixture {
 	t.Helper()
 	schema := fmt.Sprintf("hosted_test_%x", rand.Uint64())
 	role := schema + "_runtime"
-	admin, err := Open(testPGURL(t), schema, false)
+	admin, err := Open(t.Context(), testPGURL(t), schema, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`)
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`)
 		assert.NoError(t, err)
-		_, err = admin.ExecContext(context.Background(), `DROP ROLE IF EXISTS "`+role+`"`)
+		_, err = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS "`+role+`"`)
 		assert.NoError(t, err)
 		assert.NoError(t, admin.Close())
 	})
@@ -48,7 +48,7 @@ func newHostedFixture(t *testing.T, tenant string) hostedFixture {
 	password := setHostedFixturePassword(t, admin, role)
 	dsn, err := appendConnParams(testPGURL(t), map[string]string{"password": password, "user": role, "search_path": "public", "agentsview.tenant_id": "wrong"})
 	require.NoError(t, err)
-	runtime, err := OpenHosted(dsn, schema, tenant, false)
+	runtime, err := OpenHosted(t.Context(), dsn, schema, tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, runtime.Close()) })
 	return hostedFixture{admin, runtime, schema, role, tenant, dsn}
@@ -147,9 +147,9 @@ func TestHostedDowngradeRefusesDialogueRelation(t *testing.T) {
 		return table.Name == "raw_message_dialogue"
 	})
 	assert.ErrorContains(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant), "uninventoried relation raw_message_dialogue")
-	_, err := NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	_, err := NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	assert.ErrorContains(t, err, "uninventoried relation raw_message_dialogue")
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	if store != nil {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	}
@@ -168,7 +168,7 @@ func TestHostedDowngradeRefusesDialogueRelation(t *testing.T) {
 func TestHostedProvisioningKeepsTrigramInPublic(t *testing.T) {
 	for _, mirror := range []bool{false, true} {
 		t.Run(fmt.Sprintf("mirror installed first %t", mirror), func(t *testing.T) {
-			owner, err := Open(isolatedPGDatabase(t), "public", false)
+			owner, err := Open(t.Context(), isolatedPGDatabase(t), "public", false)
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, owner.Close()) })
 			if mirror {
@@ -199,7 +199,7 @@ func TestHostedProvisioningKeepsTrigramInPublic(t *testing.T) {
 // unindexed rather than tying tenant indexes to a droppable schema.
 func TestHostedProvisioningSkipsTrigramIndexesItCannotRelocate(t *testing.T) {
 	dsn := isolatedPGDatabase(t)
-	admin, err := Open(dsn, "public", false)
+	admin, err := Open(t.Context(), dsn, "public", false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
 	role := fmt.Sprintf("hosted_trgm_owner_%x", rand.Uint64())
@@ -207,12 +207,12 @@ func TestHostedProvisioningSkipsTrigramIndexesItCannotRelocate(t *testing.T) {
  CREATE ROLE "`+role+`" LOGIN NOSUPERUSER; GRANT USAGE ON SCHEMA mirror TO "`+role+`"; GRANT CREATE ON DATABASE "`+strings.TrimPrefix(mustParseURL(t, dsn).Path, "/")+`" TO "`+role+`"`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.Background(), `DROP OWNED BY "`+role+`" CASCADE; DROP ROLE IF EXISTS "`+role+`"`)
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY "`+role+`" CASCADE; DROP ROLE IF EXISTS "`+role+`"`)
 		assert.NoError(t, err)
 	})
 	ownerDSN, err := appendConnParams(dsn, map[string]string{"user": role, "password": setHostedFixturePassword(t, admin, role)})
 	require.NoError(t, err)
-	owner, err := Open(ownerDSN, "tenant_a", false)
+	owner, err := Open(t.Context(), ownerDSN, "tenant_a", false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
 
@@ -227,7 +227,7 @@ func TestHostedProvisioningSkipsTrigramIndexesItCannotRelocate(t *testing.T) {
 // test controls whether and where database-wide extensions are installed.
 func isolatedPGDatabase(t *testing.T) string {
 	t.Helper()
-	admin, err := Open(testPGURL(t), "public", false)
+	admin, err := Open(t.Context(), testPGURL(t), "public", false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
 	database := fmt.Sprintf("hosted_trgm_%x", rand.Uint64())
@@ -235,7 +235,7 @@ func isolatedPGDatabase(t *testing.T) string {
 		t.Skipf("cannot create an isolated database: %v", err)
 	}
 	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.Background(), `DROP DATABASE IF EXISTS `+database+` WITH (FORCE)`)
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP DATABASE IF EXISTS `+database+` WITH (FORCE)`)
 		assert.NoError(t, err)
 	})
 	dsn := mustParseURL(t, testPGURL(t))
@@ -418,10 +418,10 @@ func TestHostedTenantAdoptsLegacyAndEnforcesRelationships(t *testing.T) {
 func newHostedLegacyFixture(t *testing.T) *sql.DB {
 	t.Helper()
 	schema := fmt.Sprintf("hosted_legacy_%x", rand.Uint64())
-	pg, err := Open(testPGURL(t), schema, false)
+	pg, err := Open(t.Context(), testPGURL(t), schema, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := pg.ExecContext(context.Background(), `DROP SCHEMA "`+schema+`" CASCADE`)
+		_, err := pg.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA "`+schema+`" CASCADE`)
 		assert.NoError(t, err)
 		assert.NoError(t, pg.Close())
 	})
@@ -457,14 +457,14 @@ func TestHostedTenantReadStore(t *testing.T) {
 	f := newHostedFixture(t, "tenant-a")
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('read-id','kept','device','claude')`)
 	require.NoError(t, err)
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	defer store.Close()
 	session, err := store.GetSession(t.Context(), "read-id")
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "kept", session.Project)
-	_, err = NewHostedStore(f.dsn, f.schema, "tenant-b", false)
+	_, err = NewHostedStore(t.Context(), f.dsn, f.schema, "tenant-b", false)
 	assert.Error(t, err)
 }
 
@@ -549,7 +549,7 @@ func TestHostedTenantRejectsColumnOnlyPrivileges(t *testing.T) {
 	_, err := f.admin.ExecContext(t.Context(), `CREATE TABLE public."`+table+`"(value text); INSERT INTO public."`+table+`" VALUES ('sibling-row')`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := f.admin.ExecContext(context.Background(), `DROP TABLE public."`+table+`"`)
+		_, err := f.admin.ExecContext(context.WithoutCancel(t.Context()), `DROP TABLE public."`+table+`"`)
 		assert.NoError(t, err)
 	})
 	for _, privilege := range []string{"SELECT", "INSERT", "UPDATE", "REFERENCES"} {

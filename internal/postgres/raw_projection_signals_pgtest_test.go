@@ -18,7 +18,7 @@ import (
 func TestRawProjectionTranscriptsOnlyToolCoverage(t *testing.T) {
 	f := newHostedFixture(t, "tenant-tool-coverage")
 	options := RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}}
-	sink, err := NewRawProjectionStore(f.runtime, options)
+	sink, err := NewRawProjectionStore(t.Context(), f.runtime, options)
 	require.NoError(t, err)
 	outcome := projectionOutcome("Check the fixture")
 	outcome.Outcome.Results[0].Result.Messages = append(outcome.Outcome.Results[0].Result.Messages, parser.ParsedMessage{

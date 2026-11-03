@@ -164,7 +164,7 @@ func (s devinSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		if dbPath == "" {
 			continue
 		}
-		metas, err := ListDevinSessionMeta(dbPath)
+		metas, err := ListDevinSessionMeta(ctx, dbPath)
 		if err != nil {
 			return nil, err
 		}
@@ -231,7 +231,7 @@ func (s devinSourceSet) SourcesForChangedPath(
 			return []SourceRef{ref}, nil
 		}
 		if dbPath, ok := s.dbPathForEvent(root, req.Path); ok {
-			metas, err := ListDevinSessionMeta(dbPath)
+			metas, err := ListDevinSessionMeta(ctx, dbPath)
 			if err != nil {
 				return nil, err
 			}

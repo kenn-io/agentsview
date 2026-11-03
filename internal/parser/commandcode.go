@@ -37,7 +37,7 @@ func (p *commandCodeProvider) parseSessionContext(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	meta := loadCommandCodeMeta(path)
 	var (

@@ -74,7 +74,7 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 	// This is only an orphan guard if the parent dies; normal completion is
 	// driven by the parent observing the warning on stdout.
 	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
-	runDuckDBServe(config.Config{
+	runDuckDBServe(t.Context(), config.Config{
 		Host:    "127.0.0.1",
 		Port:    0,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),

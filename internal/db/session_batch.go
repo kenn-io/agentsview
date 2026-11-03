@@ -267,13 +267,17 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	var writtenUsageIDs []string
 
 	for i, write := range writes {
-		write = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
-		messagesWritten, err := db.writeOneSessionBatchTx(
-			context.Background(), tx, tx,
-			write,
-			&pendingRecallRevocations,
-			db.usageOnlyStorage(), nil,
-		)
+		sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
+		var messagesWritten int
+		if err == nil {
+			write = db.storageSessionBatchWrite(sanitized)
+			messagesWritten, err = db.writeOneSessionBatchTx(
+				ctx, tx, tx,
+				write,
+				&pendingRecallRevocations,
+				db.usageOnlyStorage(), nil,
+			)
+		}
 		if err != nil {
 			result.WrittenSessions = 0
 			result.WrittenMessages = 0
@@ -318,11 +322,6 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	db.notifyUsageSessions(writtenUsageIDs)
 	pendingRecallRevocations.flush()
 	return result, nil
-}
-
-func sanitizeSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
-	sanitized, _ := sanitizeSessionBatchWriteContext(context.Background(), write)
-	return sanitized
 }
 
 func sanitizeSessionBatchWriteContext(

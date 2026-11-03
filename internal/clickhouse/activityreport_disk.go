@@ -239,7 +239,9 @@ func (s *Store) StartBackground(ctx context.Context) {
 	if s.reportDisk.dir == "" {
 		return
 	}
-	sweepCtx, cancel := context.WithCancel(context.Background())
+	// The sweep belongs to the store and runs until Close, so it outlives a
+	// startup-scoped ctx.
+	sweepCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.background = storeBackground{cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(s.background.done)

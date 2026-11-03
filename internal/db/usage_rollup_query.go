@@ -75,7 +75,8 @@ func (cache *usageCache) usageRollupQuery(
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even after cancellation so the pooled connection is clean.
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
@@ -366,7 +367,8 @@ func (cache *usageCache) usageRollupActivityQuery(
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even after cancellation so the pooled connection is clean.
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)

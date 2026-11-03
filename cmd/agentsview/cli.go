@@ -293,7 +293,7 @@ func newServeStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServeStatus(mustLoadConfig(cmd))
+			runServeStatus(cmd.Context(), mustLoadConfig(cmd))
 		},
 	}
 }
@@ -325,7 +325,7 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDaemonRestart(cmd.OutOrStdout(), deps)
+			return runDaemonRestart(cmd.Context(), cmd.OutOrStdout(), deps)
 		},
 	}
 }
@@ -369,7 +369,7 @@ func newSyncCommand() *cobra.Command {
 	return newSyncCommandWithRunner(runSync)
 }
 
-func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
+func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Command {
 	var cfg SyncConfig
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -399,7 +399,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			run(cfg)
+			run(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -539,7 +539,7 @@ func newImportCommand() *cobra.Command {
 			if syncBrowser {
 				return syncClaudeAIChrome(cmd.Context())
 			}
-			return importSessions(ImportConfig{Type: importType, Path: args[0], Replace: replace})
+			return importSessions(cmd.Context(), ImportConfig{Type: importType, Path: args[0], Replace: replace})
 		},
 	}
 	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync Claude.ai through Chrome")
@@ -614,10 +614,9 @@ func newUsageDailyCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
 			cfg.OutputWriter = cmd.OutOrStdout()
 			cfg.ErrorWriter = cmd.ErrOrStderr()
-			return runUsageDaily(cfg)
+			return runUsageDaily(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -641,10 +640,9 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
 			cfg.OutputWriter = cmd.OutOrStdout()
 			cfg.ErrorWriter = cmd.ErrOrStderr()
-			return runUsageStatusline(cfg)
+			return runUsageStatusline(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -678,10 +676,9 @@ func newActivityReportCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
 			cfg.OutputWriter = cmd.OutOrStdout()
 			cfg.ErrorWriter = cmd.ErrOrStderr()
-			return runActivityReport(cfg)
+			return runActivityReport(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Preset, "preset", "", "Range preset: day, week, month, custom")
@@ -751,7 +748,7 @@ func newDuckDBPushCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBPush(cfg)
+			runDuckDBPush(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and DuckDB push")
@@ -771,7 +768,7 @@ func newDuckDBStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBStatus()
+			runDuckDBStatus(cmd.Context())
 		},
 	}
 }
@@ -787,7 +784,7 @@ func newDuckDBServeCommand() *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runDuckDBServe(appCfg, basePath)
+			runDuckDBServe(cmd.Context(), appCfg, basePath)
 			return nil
 		},
 	}
@@ -817,7 +814,7 @@ func newDuckDBQuackCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBQuackServe(serveCfg)
+			runDuckDBQuackServe(cmd.Context(), serveCfg)
 		},
 	}
 	serveCmd.Flags().StringVar(

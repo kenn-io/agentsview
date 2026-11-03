@@ -331,7 +331,7 @@ func TestRepositoryProjectRepairPreservesContentAndRebuild(t *testing.T) {
 
 	rebuilt := testDB(t)
 	require.NoError(t, rebuilt.UpsertSessionWithProjectIdentity(ctx, s, obs, s.Project))
-	require.NoError(t, rebuilt.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), sourcePath))
 	_, err = rebuilt.RestoreSessionProjectsFromIdentitySnapshots(ctx)
 	require.NoError(t, err)
 	got, err = rebuilt.GetSessionFull(ctx, s.ID)
@@ -396,7 +396,7 @@ func TestRepositoryProjectPreviewAndRebuildOfOlderArchive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "sample_dev", provisional.Project)
 	require.NoError(t, rebuilt.UpsertSessionWithProjectIdentity(ctx, main, mainObs, main.Project))
-	require.NoError(t, rebuilt.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), sourcePath))
 	_, err = rebuilt.RestoreSessionProjectsFromIdentitySnapshots(ctx)
 	require.NoError(t, err)
 	got, err := rebuilt.GetSessionFull(ctx, s.ID)

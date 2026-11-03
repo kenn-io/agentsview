@@ -228,10 +228,10 @@ func TestClaudeSubagentUnderTwoParentsJoinsOneSession(t *testing.T) {
 
 	// No id is renamed: each transcript still parses to the sub-agent's own id,
 	// which is what the parents' links to it spell.
-	first, _, err := claudeParseWithExclusions(firstPath, "example-project", "local")
+	first, _, err := claudeParseWithExclusions(t.Context(), firstPath, "example-project", "local")
 	require.NoError(t, err)
 	require.Len(t, first, 1)
-	second, _, err := claudeParseWithExclusions(secondPath, "example-project", "local")
+	second, _, err := claudeParseWithExclusions(t.Context(), secondPath, "example-project", "local")
 	require.NoError(t, err)
 	require.Len(t, second, 1)
 	assert.Equal(t, subagentAgentID, first[0].Session.ID,

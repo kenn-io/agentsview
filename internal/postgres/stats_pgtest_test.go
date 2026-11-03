@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +13,7 @@ import (
 
 func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 	_, d := prepareUsageSchema(t, "agentsview_stats_filters_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	stats, err := d.GetStats(ctx, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, db.Stats{}, stats)

@@ -540,13 +540,13 @@ func TestRawJobHealthReadOnly(t *testing.T) {
 	pgURL := testPGURL(t)
 	const role = "agentsview_health_reader"
 	const password = "agentsview_health_reader_pw"
-	_, _ = pg.Exec("DROP OWNED BY " + role)
-	_, _ = pg.Exec("DROP ROLE IF EXISTS " + role)
-	_, err = pg.Exec("CREATE ROLE " + role + " LOGIN PASSWORD '" + password + "'")
+	_, _ = pg.ExecContext(t.Context(), "DROP OWNED BY "+role)
+	_, _ = pg.ExecContext(t.Context(), "DROP ROLE IF EXISTS "+role)
+	_, err = pg.ExecContext(t.Context(), "CREATE ROLE "+role+" LOGIN PASSWORD '"+password+"'")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = pg.Exec("DROP OWNED BY " + role)
-		_, _ = pg.Exec("DROP ROLE IF EXISTS " + role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), "DROP OWNED BY "+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), "DROP ROLE IF EXISTS "+role)
 	})
 	for _, grant := range []string{
 		"GRANT USAGE ON SCHEMA " + schemaTestSchema + " TO " + role,
@@ -554,13 +554,13 @@ func TestRawJobHealthReadOnly(t *testing.T) {
 		"GRANT SELECT ON " + schemaTestSchema + ".raw_source_heads TO " + role,
 		"GRANT SELECT ON " + schemaTestSchema + ".raw_ingest_jobs TO " + role,
 	} {
-		_, err = pg.Exec(grant)
+		_, err = pg.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 	readerURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	readerURL.User = url.UserPassword(role, password)
-	readerDB, err := Open(readerURL.String(), schemaTestSchema, true)
+	readerDB, err := Open(t.Context(), readerURL.String(), schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, readerDB.Close()) })
 	reader, err := NewRawIngestStore(readerDB)

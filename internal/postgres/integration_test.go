@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -27,13 +26,13 @@ func TestPGPushSecrets(t *testing.T) {
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local, "machine-secrets", true,
+		t.Context(), pgURL, "agentsview", local, "machine-secrets", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	// Seed a session with a message.
@@ -81,7 +80,7 @@ func TestPGPushSecrets(t *testing.T) {
 	require.Equal(t, 1, pushResult.SessionsPushed)
 
 	// Open a read Store and verify via ListSessions + ListSecretFindings.
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "opening store")
 	defer store.Close()
 
@@ -129,13 +128,13 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local, "machine-findings-change", true,
+		t.Context(), pgURL, "agentsview", local, "machine-findings-change", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	// Seed a session (no findings yet) and push it so the PG row exists
@@ -234,7 +233,7 @@ func TestPGPassfileConnects(t *testing.T) {
 		q.Set("passfile", passfile)
 		withParam := *u
 		withParam.RawQuery = q.Encode()
-		pg, err := Open(withParam.String(), "agentsview", true)
+		pg, err := Open(t.Context(), withParam.String(), "agentsview", true)
 		require.NoError(t, err)
 		assert.NoError(t, pg.Close())
 	})
@@ -248,13 +247,13 @@ func TestPGPushCycle(t *testing.T) {
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local, "machine-a", true,
+		t.Context(), pgURL, "agentsview", local, "machine-a", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	started := time.Now().UTC().Format(time.RFC3339)

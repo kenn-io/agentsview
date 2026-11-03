@@ -96,8 +96,8 @@ func claudeAIExportFile(t *testing.T, n int) string {
 
 func TestImportSessionsReplace(t *testing.T) {
 	testDataDir(t)
-	require.NoError(t, importSessions(ImportConfig{Type: "claude-ai", Path: claudeAIExportFile(t, 2)}))
-	require.NoError(t, importSessions(ImportConfig{
+	require.NoError(t, importSessions(t.Context(), ImportConfig{Type: "claude-ai", Path: claudeAIExportFile(t, 2)}))
+	require.NoError(t, importSessions(t.Context(), ImportConfig{
 		Type: "claude-ai", Path: claudeAIExportFile(t, 1), Replace: []string{"claude-ai:replace-001"},
 	}))
 
@@ -117,7 +117,7 @@ func TestImportSessionsReplace(t *testing.T) {
 
 func TestImportSessionsRejectsReplaceForGeminiApps(t *testing.T) {
 	dataDir := testDataDir(t)
-	err := importSessions(ImportConfig{
+	err := importSessions(t.Context(), ImportConfig{
 		Type: "gemini-apps", Path: filepath.Join(t.TempDir(), "missing.html"),
 		Replace: []string{"x"},
 	})

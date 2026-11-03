@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -27,16 +26,16 @@ func prepareUsageSchema(
 	t.Helper()
 
 	pgURL := testPGURL(t)
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	t.Cleanup(func() { _ = store.Close() })
 	return pgURL, store
@@ -45,7 +44,7 @@ func prepareUsageSchema(
 func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_fallback_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -142,7 +141,7 @@ func TestStoreGetDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
 func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_breakdown_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -212,7 +211,7 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 
 func TestStoreGetDailyUsageAppliesPricingBandsOnlyToRequests(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_pricing_band_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
@@ -274,7 +273,7 @@ func TestStoreGetDailyUsageAppliesPricingBandsOnlyToRequests(t *testing.T) {
 
 func TestStoreGetDailyUsagePricesGooseRequestAsRequestScoped(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_goose_request_test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
@@ -337,7 +336,7 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_usage_source_uuid_daily_test")
 
-			ctx := context.Background()
+			ctx := t.Context()
 			_, err := store.DB().ExecContext(ctx, `
 				INSERT INTO model_pricing (
 					model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -399,7 +398,7 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_daily_usage_streamed_snapshot_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -493,7 +492,7 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_daily_usage_numeric_string_snapshot_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -568,7 +567,7 @@ func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 			rowsSQL := pgUsageRowsSQLWithWhere(pgUsageMessageEligibility, pgUsageEventEligibility)
 			ranked := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, db.UsageFilter{}, db.PostgresQueryDialect())
 			var sessionID, attributionSessionID, tokenJSON string
-			err = store.DB().QueryRow(`
+			err = store.DB().QueryRowContext(t.Context(), `
 				SELECT session_id, snapshot_attribution_session_id, token_usage
 				FROM (`+ranked+`)`, pb.args...).Scan(&sessionID, &attributionSessionID, &tokenJSON)
 			require.NoError(t, err)
@@ -582,7 +581,7 @@ func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_priced_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -650,7 +649,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 
 func TestStoreSessionUsageRollupParity(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_rollup_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -685,7 +684,7 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 
 func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_rollup_copilot_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -736,7 +735,7 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_rollup_untimed_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -785,7 +784,7 @@ func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 			if tc.requestID == "" {
 				sourceUUID = "source-1"
 			}
-			ctx := context.Background()
+			ctx := t.Context()
 			_, err := store.DB().ExecContext(ctx, `
 				INSERT INTO model_pricing (
 					model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -837,7 +836,7 @@ func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_empty_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -866,7 +865,7 @@ func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 func TestStoreGetSessionUsageNotFound(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_missing_test")
 
-	got, err := store.GetSessionUsage(context.Background(), "missing", true)
+	got, err := store.GetSessionUsage(t.Context(), "missing", true)
 	require.NoError(t, err, "GetSessionUsage")
 	assert.Nil(t, got, "GetSessionUsage")
 }
@@ -875,7 +874,7 @@ func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_top_sessions_selected_tokens_test",
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -918,7 +917,7 @@ func TestStoreGetUsageSessionCountsFiltersAfterCrossSessionSnapshotSelection(
 ) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_usage_counts_filtered_snapshot_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -965,7 +964,7 @@ func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
 ) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -1007,7 +1006,7 @@ func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestamp
 ) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_late_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -1053,7 +1052,7 @@ func TestStoreGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 ) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_model_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -1098,7 +1097,7 @@ func TestStoreGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 ) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_no_model_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -1140,7 +1139,7 @@ func TestStoreGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 ) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_unbounded_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -1198,7 +1197,7 @@ func TestStoreGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 func TestPostgresUsageQueriesUnionUsageEvents(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_events_union_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -1269,7 +1268,7 @@ func TestPostgresUsageQueriesUnionUsageEvents(t *testing.T) {
 func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_summary_event_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	rawInput := db.MaxPlausibleTokens + 250_000
 	rawOutput := db.MaxPlausibleTokens + 500_000
 	_, err := store.DB().ExecContext(ctx, `
@@ -1337,7 +1336,7 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_message_reasoning_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -1386,7 +1385,7 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 func TestStoreGetDailyUsageSkipsCursorUsageForTerminationFilter(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_cursor_termination_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -1455,18 +1454,18 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 		}},
 	}}), "UpsertModelPricing")
 
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 
-	_, err = ps.Push(context.Background(), false, nil)
+	_, err = ps.Push(t.Context(), false, nil)
 	require.NoError(t, err, "Push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	rows, err := store.DB().QueryContext(context.Background(), `
+	rows, err := store.DB().QueryContext(t.Context(), `
 		SELECT model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok
 		FROM model_pricing
@@ -1494,7 +1493,7 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 		bandInput, bandOutput, bandCacheCreation, bandCacheRead int64
 		firstUpdatedAt                                          string
 	)
-	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT b.above_input_tokens,
 			b.input_microdollars_per_mtok,
 			b.output_microdollars_per_mtok,
@@ -1512,7 +1511,7 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	assert.Equal(t, int64(5_000_000), bandOutput)
 	assert.Equal(t, int64(7_000_000), bandCacheCreation)
 	assert.Equal(t, int64(1_000_000), bandCacheRead)
-	_, err = store.DB().ExecContext(context.Background(), `
+	_, err = store.DB().ExecContext(t.Context(), `
 		UPDATE model_pricing SET updated_at = ''
 		WHERE model_pattern = 'test-model-sync'`)
 	require.NoError(t, err, "set legacy empty pricing revision")
@@ -1524,16 +1523,16 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 		CacheCreationPerMTok: money.MustParseDollars("3.5"),
 		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}), "remove local pricing bands")
-	_, err = ps.Push(context.Background(), false, nil)
+	_, err = ps.Push(t.Context(), false, nil)
 	require.NoError(t, err, "push band removal")
 
 	var bandCount int
-	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM model_pricing_bands
 		WHERE model_pattern = 'test-model-sync'`).Scan(&bandCount))
 	assert.Zero(t, bandCount)
 	var secondUpdatedAt string
-	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT updated_at FROM model_pricing
 		WHERE model_pattern = 'test-model-sync'`).Scan(&secondUpdatedAt))
 	firstRevision, err := time.Parse(time.RFC3339Nano, firstUpdatedAt)
@@ -1565,10 +1564,10 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 			Value: `["minimax/minimax-m3"]`,
 		},
 	))
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
-	_, err = ps.Push(context.Background(), false, nil)
+	_, err = ps.Push(t.Context(), false, nil)
 	require.NoError(t, err, "first push")
 
 	// LiteLLM now covers the model: the local refresh retires the
@@ -1581,14 +1580,14 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 		[]string{"minimax/minimax-m3"},
 		db.PricingMeta{Key: pricing.OpenRouterModelsMetaKey, Value: `[]`},
 	))
-	_, err = ps.Push(context.Background(), false, nil)
+	_, err = ps.Push(t.Context(), false, nil)
 	require.NoError(t, err, "second push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 	var patterns []string
-	rows, err := store.DB().QueryContext(context.Background(), `
+	rows, err := store.DB().QueryContext(t.Context(), `
 		SELECT model_pattern FROM model_pricing
 		WHERE model_pattern IN ('minimax/minimax-m3', 'minimax/MiniMax-M3')
 		ORDER BY model_pattern`)
@@ -1604,13 +1603,13 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 		"retired row deleted, replacement pushed")
 
 	var bandCount int
-	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM model_pricing_bands
 		WHERE model_pattern = 'minimax/minimax-m3'`).Scan(&bandCount))
 	assert.Zero(t, bandCount, "retired row's bands deleted")
 
 	var meta string
-	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT updated_at FROM model_pricing WHERE model_pattern = $1`,
 		pricing.OpenRouterModelsMetaKey).Scan(&meta))
 	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
@@ -1623,18 +1622,18 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 
 	// An empty pricing table is the condition under test.
 	local := dbtest.OpenTestDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 
-	_, err = ps.Push(context.Background(), false, nil)
+	_, err = ps.Push(t.Context(), false, nil)
 	require.NoError(t, err, "Push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	rows, err := store.DB().QueryContext(context.Background(), `
+	rows, err := store.DB().QueryContext(t.Context(), `
 		SELECT model_pattern
 		FROM model_pricing
 		ORDER BY model_pattern`)
@@ -1656,7 +1655,7 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_copilot_credits_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -1686,7 +1685,7 @@ func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_copilot_reported_cost_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -1743,7 +1742,7 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_copilot_cost_only_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -1780,7 +1779,7 @@ func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
 func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_copilot_unpriced_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -1813,7 +1812,7 @@ func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 // breakdown rows tagged with the subagent they came from.
 func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_subagents_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -1923,7 +1922,7 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 func TestStoreGetSessionUsage_CodebuffCostOnlyReported(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_codebuff_cost_only_test")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,

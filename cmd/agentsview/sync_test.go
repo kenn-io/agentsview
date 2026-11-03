@@ -747,7 +747,7 @@ token = "remote-token"
 	}
 	t.Cleanup(func() { prepareHTTPRebuildCLI = originalPrepare })
 
-	hadRemoteFailures := doSync(SyncConfig{Full: true})
+	hadRemoteFailures := doSync(t.Context(), SyncConfig{Full: true})
 
 	assert.True(t, hadRemoteFailures)
 }
@@ -784,7 +784,7 @@ token = "remote-token"
 	httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
 	t.Cleanup(func() { httpRemoteCleanupRegistry = originalRegistry })
 
-	hadRemoteFailures := doSync(SyncConfig{Full: true})
+	hadRemoteFailures := doSync(t.Context(), SyncConfig{Full: true})
 
 	assert.True(t, hadRemoteFailures)
 	assert.Equal(t, 1, prepared.closed)
@@ -835,7 +835,7 @@ token = "remote-token"
 	) (bool, []remoteHostFailure, error) {
 		return true, nil, errUnifiedRebuildAborted
 	}
-	doSync(SyncConfig{Full: true})
+	doSync(t.Context(), SyncConfig{Full: true})
 	os.Exit(0)
 }
 
@@ -848,7 +848,7 @@ func TestDoSyncUnknownHostFailsBeforeDaemonStartup(t *testing.T) {
 		) (*DaemonRuntime, error) {
 			return nil, errors.New("unexpected daemon startup")
 		})
-		doSync(SyncConfig{Host: "missing"})
+		doSync(t.Context(), SyncConfig{Host: "missing"})
 		return
 	}
 	cmd := exec.CommandContext(t.Context(), os.Args[0],
@@ -896,7 +896,7 @@ token = "remote-token"
 	}
 	t.Cleanup(func() { runRemoteHostSync = originalHTTP })
 
-	hadRemoteFailures := doSync(SyncConfig{Host: "one-box", Full: true})
+	hadRemoteFailures := doSync(t.Context(), SyncConfig{Host: "one-box", Full: true})
 
 	assert.False(t, hadRemoteFailures)
 	assert.Equal(t, 0, prepareCalls)
@@ -922,7 +922,7 @@ token = "remote-token"
 
 	var failed bool
 	stderr := captureStderr(t, func() {
-		failed = doSync(SyncConfig{Host: "devbox"})
+		failed = doSync(t.Context(), SyncConfig{Host: "devbox"})
 	})
 
 	assert.True(t, failed)
@@ -1017,7 +1017,7 @@ func TestRunRemoteSyncOnceDispatchesHTTP(t *testing.T) {
 	})
 	defer restore()
 
-	err := runRemoteSyncOnce(config.Config{}, nil, config.RemoteHost{
+	err := runRemoteSyncOnce(t.Context(), config.Config{}, nil, config.RemoteHost{
 		Host: "devbox", Transport: config.RemoteTransportHTTP,
 		URL: "http://devbox:8080", Token: "remote-token",
 	}, true)
@@ -1043,7 +1043,7 @@ destination = "user@ssh-box.example.test"
 	})
 	defer restore()
 
-	hadRemoteFailures := doSync(SyncConfig{Host: "ssh-box"})
+	hadRemoteFailures := doSync(t.Context(), SyncConfig{Host: "ssh-box"})
 
 	assert.False(t, hadRemoteFailures)
 	assert.Equal(t, []config.RemoteHost{{
@@ -1884,7 +1884,7 @@ func TestDoSyncUsesDaemonRouteWhenWritableDaemonRunning(t *testing.T) {
 
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
 
-	hadFailures := doSync(SyncConfig{})
+	hadFailures := doSync(t.Context(), SyncConfig{})
 	require.False(t, hadFailures)
 	assert.True(t, syncCalled)
 	env.assertNoLocalDB(t)
@@ -1917,7 +1917,7 @@ func TestDoSyncFullUsesDaemonResyncRoute(t *testing.T) {
 
 	var hadFailures bool
 	out := captureStdout(t, func() {
-		hadFailures = doSync(SyncConfig{Full: true})
+		hadFailures = doSync(t.Context(), SyncConfig{Full: true})
 	})
 	require.False(t, hadFailures)
 	assert.True(t, resyncCalled)
@@ -1963,7 +1963,7 @@ func TestDoSyncPrintsStatusBeforeWaitingForDaemonStartup(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- doSync(SyncConfig{Full: true})
+		done <- doSync(t.Context(), SyncConfig{Full: true})
 	}()
 	<-startupEntered
 	require.NoError(t, outFile.Sync())
@@ -1995,7 +1995,7 @@ func TestDoSyncFullSkipsRedundantDaemonInitialSync(t *testing.T) {
 		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
 	})
 
-	hadFailures := doSync(SyncConfig{Full: true})
+	hadFailures := doSync(t.Context(), SyncConfig{Full: true})
 
 	assert.False(t, hadFailures)
 	assert.True(t, skipInitialSync)
@@ -2019,7 +2019,7 @@ func TestDoSyncSkipsRedundantDaemonInitialSync(t *testing.T) {
 		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
 	})
 
-	hadFailures := doSync(SyncConfig{})
+	hadFailures := doSync(t.Context(), SyncConfig{})
 
 	assert.False(t, hadFailures)
 	assert.True(t, skipInitialSync)
@@ -2048,7 +2048,7 @@ token = "remote-token"
 		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
 	})
 
-	hadFailures := doSync(SyncConfig{Host: "host-a.example"})
+	hadFailures := doSync(t.Context(), SyncConfig{Host: "host-a.example"})
 
 	assert.False(t, hadFailures)
 	assert.False(t, skipInitialSync,
@@ -2202,7 +2202,7 @@ token = "remote-token"
 	ts := remoteSyncRouteTestServer(t, handler)
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
 
-	hadFailures := doSync(SyncConfig{
+	hadFailures := doSync(t.Context(), SyncConfig{
 		Host: "devbox",
 		Full: true,
 	})
@@ -2252,7 +2252,7 @@ token = "remote-token"
 
 	var hadFailures bool
 	out := captureStdout(t, func() {
-		hadFailures = doSync(SyncConfig{Host: "devbox"})
+		hadFailures = doSync(t.Context(), SyncConfig{Host: "devbox"})
 	})
 
 	require.False(t, hadFailures)
@@ -2290,7 +2290,7 @@ token = "remote-token"
 			var stdout string
 			stderr := captureStderr(t, func() {
 				stdout = captureStdout(t, func() {
-					hadFailures = doSync(SyncConfig{Host: "devbox"})
+					hadFailures = doSync(t.Context(), SyncConfig{Host: "devbox"})
 				})
 			})
 
@@ -2514,7 +2514,7 @@ token = "remote-token"
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
-	doSync(SyncConfig{Full: true})
+	doSync(t.Context(), SyncConfig{Full: true})
 	os.Exit(0)
 }
 
@@ -2536,7 +2536,7 @@ token = "remote-token"
 	ts := remoteSyncRouteTestServer(t, handler)
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
 
-	hadFailures := doSync(SyncConfig{})
+	hadFailures := doSync(t.Context(), SyncConfig{})
 
 	require.False(t, hadFailures)
 	assert.True(t, got.IncludeLocal)

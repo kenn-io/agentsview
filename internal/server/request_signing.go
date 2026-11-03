@@ -42,7 +42,7 @@ func (s *Server) validateRestrictedPolicyAuth(policy requestsign.Policy) error {
 // RestrictedHandler mounts only signed machine operations. Its fixed external
 // URI configuration is trusted operator input, never taken from proxy headers.
 // Main Handler and browser authentication retain their existing behavior.
-func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() error, error) {
+func (s *Server) RestrictedHandler(ctx context.Context, policyFile string) (http.Handler, func() error, error) {
 	policy, _, err := requestsign.ReadPolicy(policyFile)
 	if err != nil {
 		return nil, nil, err
@@ -50,7 +50,7 @@ func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() erro
 	if err := s.validateRestrictedPolicyAuth(policy); err != nil {
 		return nil, nil, err
 	}
-	replay, err := requestsign.OpenReplay(policy.ReplayDB)
+	replay, err := requestsign.OpenReplay(ctx, policy.ReplayDB)
 	if err != nil {
 		return nil, nil, err
 	}

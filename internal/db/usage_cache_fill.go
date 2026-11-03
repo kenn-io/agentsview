@@ -892,7 +892,8 @@ func (c *usageFillCoordinator) installSpoolBatch(
 		return nil, nil, fmt.Errorf("attaching usage fact spool: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(context.Background(),
+		// Detach even after cancellation so the pooled connection is clean.
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx),
 			`DETACH DATABASE usage_fill_spool`)
 	}()
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
@@ -901,7 +902,8 @@ func (c *usageFillCoordinator) installSpoolBatch(
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even after cancellation so the pooled connection is clean.
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
 
@@ -1035,7 +1037,8 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 		return nil, err
 	}
 	defer func() {
-		_, _ = conn.ExecContext(context.Background(),
+		// Restore the pragma even after cancellation; the connection returns to the pool.
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx),
 			`PRAGMA busy_timeout=`+strconv.Itoa(priorBusyTimeout))
 	}()
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -1722,7 +1725,8 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even after cancellation so the pooled connection is clean.
+			_, _ = conn.ExecContext(context.WithoutCancel(c.ctx), `ROLLBACK`)
 		}
 	}()
 	removed, err := usageFactIdentitiesForSessions(c.ctx, conn, ids)

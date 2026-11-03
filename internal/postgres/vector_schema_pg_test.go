@@ -17,11 +17,13 @@ const vectorSchemaTestSchema = "agentsview_vector_schema_test"
 
 func cleanVectorSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, _ = pg.Exec(
-		"DROP SCHEMA IF EXISTS " + vectorSchemaTestSchema + " CASCADE",
+	_, _ = pg.ExecContext(ctx,
+		"DROP SCHEMA IF EXISTS "+vectorSchemaTestSchema+" CASCADE",
 	)
 }
 
@@ -35,11 +37,11 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// EnsureSchema creates the schema itself (Open only sets search_path;
 	// it does not create the target schema), and also exercises the
@@ -86,11 +88,11 @@ func TestVectorChunkTableExists(t *testing.T) {
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
@@ -121,11 +123,11 @@ func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Create the schema but deliberately do not install the vector tables,
 	// so vector_generations does not exist (SQLSTATE 42P01 on query).
 	_, err = pg.ExecContext(ctx,
@@ -151,11 +153,11 @@ func TestListVectorGenerationInfo(t *testing.T) {
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
@@ -181,7 +183,7 @@ func TestListVectorGenerationInfo(t *testing.T) {
 func tableExistsPG(t *testing.T, pg *sql.DB, table string) bool {
 	t.Helper()
 	var one int
-	err := pg.QueryRow(
+	err := pg.QueryRowContext(t.Context(),
 		`SELECT 1 FROM information_schema.tables
 		 WHERE table_schema = current_schema() AND table_name = $1`, table,
 	).Scan(&one)
@@ -202,11 +204,11 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
 	if available, err := VectorExtensionAvailable(ctx, pg); err != nil {
@@ -252,11 +254,11 @@ func TestVectorHalfvecGate(t *testing.T) {
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)

@@ -24,7 +24,7 @@ func runProjects(ctx context.Context, jsonOutput bool) {
 		fatal("loading config: %v", err)
 	}
 
-	tr, err := ensureTransport(&appCfg, transportIntentRead, 0)
+	tr, err := ensureTransportContext(ctx, &appCfg, transportIntentRead, 0)
 	if err != nil {
 		fatal("resolving transport: %v", err)
 	}

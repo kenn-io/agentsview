@@ -130,14 +130,14 @@ var wireReplicaReadVectorSearchFn = wireReplicaReadVectorSearch
 // db.ErrSemanticUnavailable. Stores that are not replica stores (test fakes
 // injected through the store opener) are left untouched.
 func wireReplicaReadVectorSearch(
-	cfg config.Config, backend storage.Replica, store db.Store,
+	ctx context.Context, cfg config.Config, backend storage.Replica, store db.Store,
 ) {
 	replicaStore, ok := store.(storage.ReplicaStore)
 	if !ok {
 		return
 	}
 	if err := wireReplicaVectorSearch(
-		context.Background(), cfg, backend, replicaStore, backend.Name()+" read",
+		ctx, cfg, backend, replicaStore, backend.Name()+" read",
 	); err != nil {
 		log.Printf(
 			"warning: wiring %s semantic search: %v; continuing without semantic search",

@@ -1450,8 +1450,8 @@ func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	replacement, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "replacement.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
-	require.NoError(t, replacement.CopySyncStateFrom(database.Path()))
-	require.NoError(t, replacement.CopySessionMetadataFrom(database.Path()))
+	require.NoError(t, replacement.CopySyncStateFrom(t.Context(), database.Path()))
+	require.NoError(t, replacement.CopySessionMetadataFrom(t.Context(), database.Path()))
 	hs.DB = replacement
 
 	second, err := hs.Run(t.Context())

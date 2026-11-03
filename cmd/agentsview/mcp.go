@@ -248,7 +248,7 @@ func resolveMCPService(
 		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
 			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newPGReadService(cmd.Context(), cfg, pgCfg)
 	}
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return nil, nil, fmt.Errorf("loading daemon auth: %w", err)

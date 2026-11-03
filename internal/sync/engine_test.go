@@ -11852,7 +11852,7 @@ func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testi
 	f := seedCodexRenameCase(t, database)
 
 	// Control: nothing changed -> no rename reported, so the caller may skip.
-	assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+	assert.False(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 		"unchanged title must not report a change")
 
 	// Title-only rename whose index mtime lands at or below the stored
@@ -11867,7 +11867,7 @@ func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testi
 		parser.LookupCodexThreadName(f.path, f.uuid),
 		"live index must report the renamed title")
 
-	assert.True(t, f.e.codexIndexSessionNameChanged(f.path),
+	assert.True(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 		"title-only rename at or below stored watermark must report a change")
 }
 
@@ -11885,7 +11885,7 @@ func TestCodexIndexSessionNameChangedIgnoresAbsentIndexEntry(t *testing.T) {
 		idxPath := filepath.Join(f.root, parser.CodexSessionIndexFilename)
 		require.NoError(t, os.Remove(idxPath))
 
-		assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+		assert.False(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 			"a missing index must not report a stored title as renamed")
 	})
 
@@ -11896,7 +11896,7 @@ func TestCodexIndexSessionNameChangedIgnoresAbsentIndexEntry(t *testing.T) {
 			"99999999-8888-7777-6666-555555555555", "Other Session",
 			time.Unix(0, f.effectiveMtime))
 
-		assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+		assert.False(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 			"an index without this session's entry must not report a rename")
 	})
 }
@@ -11944,7 +11944,7 @@ func TestCodexStoredNameDiffersPreservesMissingSemantics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, e.codexStoredNameDiffersBySessionID(
-				tt.sessionID, tt.indexTitle, tt.missingDiffers,
+				t.Context(), tt.sessionID, tt.indexTitle, tt.missingDiffers,
 			))
 		})
 	}

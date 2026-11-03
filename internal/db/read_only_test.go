@@ -459,27 +459,27 @@ func TestOpenReadOnlyCopyHelpersReturnErrReadOnly(t *testing.T) {
 	readonly := openReadOnlyTestDB(t, dstPath)
 
 	requireReadOnlyOp(t, "CopyInsightsFrom", func() error {
-		return readonly.CopyInsightsFrom(srcPath)
+		return readonly.CopyInsightsFrom(t.Context(), srcPath)
 	})
 	requireReadOnlyOp(t, "CopyOrphanedDataFrom", func() error {
-		_, err := readonly.CopyOrphanedDataFrom(srcPath)
+		_, err := readonly.CopyOrphanedDataFrom(t.Context(), srcPath)
 		return err
 	})
 	requireReadOnlyOp(t, "CopyTrashedDataFrom", func() error {
-		_, err := readonly.CopyTrashedDataFrom(srcPath)
+		_, err := readonly.CopyTrashedDataFrom(t.Context(), srcPath)
 		return err
 	})
 	requireReadOnlyOp(t, "CopySyncStateFrom", func() error {
-		return readonly.CopySyncStateFrom(srcPath)
+		return readonly.CopySyncStateFrom(t.Context(), srcPath)
 	})
 	requireReadOnlyOp(t, "CopyExcludedSessionsFrom", func() error {
-		return readonly.CopyExcludedSessionsFrom(srcPath)
+		return readonly.CopyExcludedSessionsFrom(t.Context(), srcPath)
 	})
 	requireReadOnlyOp(t, "CopySessionMetadataFrom", func() error {
-		return readonly.CopySessionMetadataFrom(srcPath)
+		return readonly.CopySessionMetadataFrom(t.Context(), srcPath)
 	})
 	requireReadOnlyOp(t, "CopyWorktreeProjectMappingsFrom", func() error {
-		return readonly.CopyWorktreeProjectMappingsFrom(srcPath)
+		return readonly.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath)
 	})
 	requireReadOnlyOp(t, "AssignSessionProject", func() error {
 		_, err := readonly.AssignSessionProject(

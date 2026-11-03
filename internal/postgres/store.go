@@ -22,13 +22,13 @@ var _ db.Store = (*Store)(nil)
 // When allowInsecure is true, non-loopback connections without
 // TLS produce a warning instead of failing.
 func NewStore(
-	pgURL, schema string, allowInsecure bool,
+	ctx context.Context, pgURL, schema string, allowInsecure bool,
 ) (*Store, error) {
-	pg, err := Open(pgURL, schema, allowInsecure)
+	pg, err := Open(ctx, pgURL, schema, allowInsecure)
 	if err != nil {
 		return nil, err
 	}
-	if err = RejectHostedPush(context.Background(), pg); err != nil {
+	if err = RejectHostedPush(ctx, pg); err != nil {
 		pg.Close()
 		if errors.Is(err, ErrHostedProjectionOwned) {
 			return nil, errors.New("hosted schema requires raw_tenant and the hosted read adapter")
@@ -40,12 +40,12 @@ func NewStore(
 
 // NewHostedStore opens the read adapter with the same fixed tenant boundary as
 // custody. It fails before serving queries if the runtime role or schema is unsafe.
-func NewHostedStore(pgURL, schema, tenant string, allowInsecure bool) (*HostedStore, error) {
-	pg, err := OpenHosted(pgURL, schema, tenant, allowInsecure)
+func NewHostedStore(ctx context.Context, pgURL, schema, tenant string, allowInsecure bool) (*HostedStore, error) {
+	pg, err := OpenHosted(ctx, pgURL, schema, tenant, allowInsecure)
 	if err != nil {
 		return nil, err
 	}
-	h, err := newHostedAdapter(pg, tenant)
+	h, err := newHostedAdapter(ctx, pg, tenant)
 	if err != nil {
 		pg.Close()
 		return nil, err

@@ -106,9 +106,9 @@ func resolveService(
 				return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 			}
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newPGReadService(cmd.Context(), cfg, pgCfg)
 	}
-	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
+	tr, err := ensureTransportContext(cmd.Context(), &cfg, transportIntentRead, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,7 +180,7 @@ func resolveWritableServiceWithIntent(
 	}
 	var tr transport
 	if fresh {
-		tr, err = ensureTransport(&cfg, transportIntentArchiveWrite, 0)
+		tr, err = ensureTransportContext(cmd.Context(), &cfg, transportIntentArchiveWrite, 0)
 	} else {
 		tr, err = detectClientTransportContext(cmd.Context(), &cfg, 0)
 	}

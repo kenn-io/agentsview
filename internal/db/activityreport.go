@@ -899,9 +899,12 @@ func (db *DB) activityReportUsageFrom(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)
 		baseRows[i] = row
 	}
-	mask, attribution, webSearchRequests := activity.UsageSurvivorSelectionForSessions(
-		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
+		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
+	if err != nil {
+		return nil, nil, err
+	}
 	return materializeActivityReportUsageCandidates(
 		candidates, mask, attribution, webSearchRequests, rateResolver,
 	)

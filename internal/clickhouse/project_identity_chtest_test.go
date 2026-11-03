@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -18,7 +17,7 @@ import (
 func TestProjectInventoryRulesAndCandidates(t *testing.T) {
 	t.Parallel()
 	store, syncer, _ := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true, nil)
 	require.NoError(t, err)
 	_, err = syncer.syncWorktreeMappings(ctx, 0, true)

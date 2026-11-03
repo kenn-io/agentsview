@@ -27,7 +27,7 @@ func TestFrictionRoutesOnPostgres(t *testing.T) {
 		t.Skip("TEST_PG_URL must point to a dedicated test database")
 	}
 	pg, dataDir := newPGE2ETestDatabase(t)
-	store, err := postgres.NewStore(pgURL, pgE2ESchema, true)
+	store, err := postgres.NewStore(t.Context(), pgURL, pgE2ESchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	ctx := t.Context()
@@ -53,7 +53,7 @@ func TestFrictionRoutesOnPostgres(t *testing.T) {
 
 	handler := server.New(config.Config{Host: "127.0.0.1", DataDir: dataDir}, store, nil).Handler()
 	get := func(path string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0"+path, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)

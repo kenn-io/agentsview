@@ -29,7 +29,7 @@ import (
 
 func TestNewSyncCommandHandsTargetToRunner(t *testing.T) {
 	var got SyncConfig
-	cmd := newSyncCommandWithRunner(func(cfg SyncConfig) {
+	cmd := newSyncCommandWithRunner(func(_ context.Context, cfg SyncConfig) {
 		got = cfg
 	})
 	cmd.SetArgs([]string{"--target", "shared-artifacts", "--full"})
@@ -41,7 +41,7 @@ func TestNewSyncCommandHandsTargetToRunner(t *testing.T) {
 
 func TestNewSyncCommandRejectsTargetWithAdHocHost(t *testing.T) {
 	called := false
-	cmd := newSyncCommandWithRunner(func(SyncConfig) {
+	cmd := newSyncCommandWithRunner(func(context.Context, SyncConfig) {
 		called = true
 	})
 	cmd.SetArgs([]string{
@@ -159,7 +159,7 @@ func TestDoSyncWithoutTargetDoesNotCreateArtifactRepository(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	isolateDirectCLISources(t)
 
-	hadFailures := doSync(SyncConfig{})
+	hadFailures := doSync(t.Context(), SyncConfig{})
 
 	assert.False(t, hadFailures)
 	assert.NoDirExists(t, filepath.Join(env.DataDir, "artifacts"))
@@ -199,7 +199,7 @@ func TestDoSyncRunsArtifactExchangeAfterLocalSync(t *testing.T) {
 
 	var hadFailures bool
 	output := captureStdout(t, func() {
-		hadFailures = doSync(SyncConfig{Target: target})
+		hadFailures = doSync(t.Context(), SyncConfig{Target: target})
 	})
 
 	assert.False(t, hadFailures)
@@ -242,7 +242,7 @@ func TestDoSyncRunsArtifactExchangeAfterConfiguredRemoteFanout(t *testing.T) {
 	}
 	t.Cleanup(func() { runArtifactSyncCLI = originalArtifact })
 
-	hadFailures := doSync(SyncConfig{
+	hadFailures := doSync(t.Context(), SyncConfig{
 		Target: filepath.Join(t.TempDir(), "target"),
 	})
 
@@ -632,7 +632,7 @@ func TestDoSyncDelegatesArtifactExchangeAfterDaemonSync(t *testing.T) {
 
 	var hadFailures bool
 	output := captureStdout(t, func() {
-		hadFailures = doSync(SyncConfig{Target: target})
+		hadFailures = doSync(t.Context(), SyncConfig{Target: target})
 	})
 
 	assert.False(t, hadFailures)

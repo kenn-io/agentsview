@@ -1925,7 +1925,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	signalsMaintained := false
 	if !db.ArchiveContent().OmitsToolContent() && update.SignalMaintainer != nil {
 		delta, err := update.SignalMaintainer.MaintainTx(
-			context.Background(), signalTxQuery{
+			ctx, signalTxQuery{
 				tx:                          tx,
 				sessionID:                   sessionID,
 				insertedResultEvents:        insertedResultEvents,
@@ -2083,7 +2083,9 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 ) error {
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	msgs = append([]Message(nil), msgs...)
-	_ = ValidateAndSanitize(nil, msgs, nil)
+	if _, err := ValidateAndSanitizeContext(ctx, nil, msgs, nil); err != nil {
+		return err
+	}
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 
@@ -2109,7 +2111,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	// entries; fall back to the full delete+reinsert for
 	// truncations, reorders, and wholesale rewrites.
 	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
-		sessionID, msgs,
+		ctx, sessionID, msgs,
 	)
 	transcriptChanged := !storedLoaded ||
 		!transcriptMessagesEqual(stored, msgs)
@@ -2153,7 +2155,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, sessionID, &pendingRecallRevocations,
+			ctx, tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
 			return err
 		}
@@ -2527,7 +2529,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	if len(msgs) > 0 {
 		msgs = append([]Message(nil), msgs...)
-		_ = ValidateAndSanitize(nil, msgs, nil)
+		if _, err := ValidateAndSanitizeContext(ctx, nil, msgs, nil); err != nil {
+			return err
+		}
 	}
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
@@ -2546,7 +2550,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	// Same diff-vs-full decision as ReplaceSessionMessages: this is
 	// the hot path for streaming chunk-merge full-parse fallbacks.
 	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
-		sessionID, msgs,
+		ctx, sessionID, msgs,
 	)
 	transcriptChanged := !storedLoaded ||
 		!transcriptMessagesEqual(stored, msgs)
@@ -2594,7 +2598,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, sessionID, &pendingRecallRevocations,
+			ctx, tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
 			return err
 		}

@@ -22,7 +22,7 @@ type ImportConfig struct {
 	Replace []string
 }
 
-func importSessions(cfg ImportConfig) error {
+func importSessions(ctx context.Context, cfg ImportConfig) error {
 	if cfg.Type == "gemini-apps" && len(cfg.Replace) > 0 {
 		return errors.New("--replace is not supported for gemini-apps imports")
 	}
@@ -37,13 +37,12 @@ func importSessions(cfg ImportConfig) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	database, writeLock, err := openWriteDB(context.Background(), appCfg)
+	database, writeLock, err := openWriteDB(ctx, appCfg)
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
 	defer closeWriteDB(database, writeLock)
 
-	ctx := context.Background()
 	if err := database.RequireSourceSync(ctx); err != nil {
 		return err
 	}

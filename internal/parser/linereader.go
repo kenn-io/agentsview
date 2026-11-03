@@ -221,7 +221,7 @@ func (lr *lineReader) readLineBytes() ([]byte, error) {
 // can use offset+consumed as a safe resume point even if the
 // file had a partially written line at EOF.
 func readJSONLFrom(
-	path string, offset int64, fn func(line string),
+	ctx context.Context, path string, offset int64, fn func(line string),
 ) (consumed int64, err error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -235,7 +235,7 @@ func readJSONLFrom(
 		)
 	}
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()

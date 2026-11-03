@@ -2051,11 +2051,11 @@ type openCodeRouteCounters struct {
 
 func stubOpenCodeSpecRoutes(spec *openCodeProviderSpec) *openCodeRouteCounters {
 	c := &openCodeRouteCounters{}
-	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
+	spec.listSQLite = func(_ context.Context, path string) ([]OpenCodeSessionMeta, error) {
 		c.fullList++
 		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
 	}
-	spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
+	spec.listSQLiteWatermark = func(_ context.Context, path string) ([]OpenCodeSessionMeta, error) {
 		c.watermarkList++
 		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
 	}

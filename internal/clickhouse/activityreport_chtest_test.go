@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -66,7 +65,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 func TestStoreActivityReportAndRecentEdits(t *testing.T) {
 	t.Parallel()
 	store, _, _ := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	fixedNow := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	q, err := activity.ResolveQuery(activity.QueryInput{
 		Preset: "day", Date: "2026-01-10", Timezone: "UTC",
@@ -94,7 +93,7 @@ func TestStoreActivityReportAndRecentEdits(t *testing.T) {
 func TestActivityReportIncludesSessionWithOnlyToolEventInWindow(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const sessionID = "ch-tool-window"
 	started := "2026-01-09T10:00:00.000Z"
 	called := "2026-01-09T10:01:00.000Z"

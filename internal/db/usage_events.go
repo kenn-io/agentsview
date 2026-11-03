@@ -176,10 +176,10 @@ func replaceSessionUsageEventsTx(
 // UsageEventFingerprints returns exact ordered fingerprints of
 // stored usage events keyed by session ID.
 func (db *DB) UsageEventFingerprints(
-	sessionIDs []string,
+	ctx context.Context, sessionIDs []string,
 ) (map[string]string, error) {
 	return usageEventFingerprintsWithQuerier(
-		context.Background(), db.getReader(), sessionIDs, nil, false,
+		ctx, db.getReader(), sessionIDs, nil, false,
 	)
 }
 

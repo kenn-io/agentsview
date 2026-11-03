@@ -35,7 +35,7 @@ func tracedHostedReader(t *testing.T, f projectionFixture, argument string) (*Ho
 	pool := stdlib.OpenDB(*cfg)
 	pool.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, pool.Close()) })
-	h, err := newHostedAdapter(pool, f.tenant)
+	h, err := newHostedAdapter(t.Context(), pool, f.tenant)
 	require.NoError(t, err)
 	return h, tracer
 }

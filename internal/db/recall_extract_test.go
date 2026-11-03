@@ -331,7 +331,7 @@ func TestCopyRecallEntriesFromCarriesExtractState(t *testing.T) {
 	dst := testDB(t)
 	seedExtractSession(t, dst, "sess-1") // sess-gone not re-synced
 
-	require.NoError(t, dst.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dst.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	generations, err := dst.ExtractGenerations(ctx)
 	require.NoError(t, err)
@@ -365,7 +365,7 @@ func TestCopyRecallEntriesFromToleratesSourceWithoutExtractTables(t *testing.T) 
 	conn.Close()
 
 	dst := testDB(t)
-	require.NoError(t, dst.CopyRecallEntriesFrom(srcPath),
+	require.NoError(t, dst.CopyRecallEntriesFrom(t.Context(), srcPath),
 		"archives from releases without extraction tables must still resync")
 }
 
@@ -2390,7 +2390,7 @@ func TestCopyRecallExtractStatePreservesContentStamp(t *testing.T) {
 	defer destDB.Close()
 	seedExtractSession(t, destDB, "s1")
 
-	require.NoError(t, destDB.CopyRecallEntriesFrom(filepath.Join(dir, "old.db")))
+	require.NoError(t, destDB.CopyRecallEntriesFrom(t.Context(), filepath.Join(dir, "old.db")))
 
 	// An empty stamp reads as "changed since coverage" for every completed
 	// session, so losing it across a resync would reload the whole
@@ -2430,7 +2430,7 @@ func TestCopyRecallExtractStateToleratesPreStampArchives(t *testing.T) {
 	defer destDB.Close()
 	seedExtractSession(t, destDB, "s1")
 
-	require.NoError(t, destDB.CopyRecallEntriesFrom(filepath.Join(dir, "old.db")))
+	require.NoError(t, destDB.CopyRecallEntriesFrom(t.Context(), filepath.Join(dir, "old.db")))
 	var state string
 	require.NoError(t, destDB.getReader().QueryRow(ctx,
 		"SELECT state FROM recall_extract_progress "+
