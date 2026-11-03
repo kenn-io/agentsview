@@ -494,7 +494,7 @@ jobs:
         run: make test-evalingest
 
       - name: Upload gotestsum results
-        if: matrix.suite != '' && (failure() || github.run_attempt > 1 || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        if: always() && matrix.suite != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -503,13 +503,22 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum macos-race results
-        if: runner.os == 'macOS' && (failure() || github.run_attempt > 1 || hashFiles('gotestsum/macos-race-reruns.txt') != '')
+        if: always() && runner.os == 'macOS'
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-macos-race-attempt-${{ github.run_attempt }}
           path: gotestsum/macos-race.json
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Print slowest tests
+        if: always()
+        shell: bash
+        run: |
+          for f in gotestsum/*.json; do
+            [ -f "$f" ] || continue
+            go tool gotestsum tool slowest --jsonfile "$f" --num 10
+          done
 
       - name: Save Go caches
         if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
@@ -621,7 +630,7 @@ jobs:
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
 
       - name: Upload gotestsum results
-        if: matrix.suite != '' && (failure() || github.run_attempt > 1 || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        if: always() && matrix.suite != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -872,13 +881,22 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Upload gotestsum results
-        if: matrix.suite != '' && (failure() || github.run_attempt > 1 || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        if: always() && matrix.suite != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: gotestsum/${{ matrix.suite }}.json
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Print slowest tests
+        if: always()
+        shell: bash
+        run: |
+          for f in gotestsum/*.json; do
+            [ -f "$f" ] || continue
+            go tool gotestsum tool slowest --jsonfile "$f" --num 10
+          done
 
       # This job owns the shared cache, including tests run by the other shards.
       - name: Warm moved race test builds for the next run
