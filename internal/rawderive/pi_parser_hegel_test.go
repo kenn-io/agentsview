@@ -50,9 +50,7 @@ func TestPiRawCaptureHostedRoundTripProperty(t *testing.T) {
 				payload = stringutil.SafeTruncate(payload, 8192)
 				parentID = stringutil.SafeTruncate(parentID, 1024)
 				childID := "child-" + strconv.FormatUint(childNumber, 16)
-				root, err := os.MkdirTemp(base, "case-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
+				root := t.TempDir()
 				dir := root
 				if agent != parser.AgentPrimeAgent {
 					dir = filepath.Join(root, "project")

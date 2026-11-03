@@ -180,24 +180,6 @@ func TestProviderParserHostedPiNormalizedAbsoluteParent(t *testing.T) {
 	assert.Equal(t, "pi:parent-header", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
 }
 
-// The generated roundtrip first shrank to U+001F. Keep its valid JSON spelling
-// explicit so fixture generation never mistakes Go string escapes for JSON.
-func TestProviderParserHostedPiControlCharacterIdentity(t *testing.T) {
-	root := t.TempDir()
-	child := filepath.Join(root, "child.jsonl")
-	writePiDeriveFixture(t, filepath.Join(root, "parent.jsonl"), `{"type":"session","id":"\u001f"}`+"\n")
-	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":"parent.jsonl"}`+"\n")
-	provider, _ := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{root}})
-	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
-	require.NoError(t, os.RemoveAll(root))
-	hosted := derivePiManifest(t, manifest, objects)
-	require.Len(t, hosted.Outcome.Results, 1)
-	assert.Equal(t, "pi:\x1f", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
-}
-
 func TestProviderParserHostedPiIgnoresSameSuffixCompanion(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {

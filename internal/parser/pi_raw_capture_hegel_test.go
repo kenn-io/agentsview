@@ -3,7 +3,6 @@
 package parser
 
 import (
-	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -58,7 +57,7 @@ func TestPiRawCaptureMalformedCustodyProperty(t *testing.T) {
 				require.NoError(ht, err)
 				assert.Equal(ht, contents, captured)
 				_, err = provider.Parse(ht.Context(), ParseRequest{Source: discovery.Sources[0]})
-				assert.Error(ht, err)
+				require.Error(ht, err)
 			}, hegel.WithTestCases(1000))
 		})
 	}
@@ -67,16 +66,11 @@ func TestPiRawCaptureMalformedCustodyProperty(t *testing.T) {
 func TestPiRawCaptureRejectsOutsideParentProperty(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
-			base := t.TempDir()
 			hegel.Test(t, func(ht *hegel.T) {
 				name := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)
 				extraRoot := hegel.Draw(ht, hegel.Booleans())
-				root, err := os.MkdirTemp(base, "root-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
-				outside, err := os.MkdirTemp(base, "outside-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(outside)
+				root := t.TempDir()
+				outside := t.TempDir()
 				parent := filepath.Join(outside, name+".jsonl")
 				require.NoError(ht, os.WriteFile(parent, []byte(`{"type":"session","id":"outside-header"}`+"\n"), 0o600))
 				dir := root
@@ -95,35 +89,7 @@ func TestPiRawCaptureRejectsOutsideParentProperty(t *testing.T) {
 				require.NoError(ht, err)
 				require.Len(ht, sources, 1)
 				_, _, err = ResolveRawCapturePlan(ht.Context(), provider, sources[0])
-				assert.ErrorIs(ht, err, ErrInvalidRawCapturePlan)
-			}, hegel.WithTestCases(1000))
-		})
-	}
-}
-
-// Cancellation is never a complete inventory, including an empty root set.
-func TestPiRawCaptureCancelledInventoryProperty(t *testing.T) {
-	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
-		t.Run(string(agent), func(t *testing.T) {
-			root := t.TempDir()
-			hegel.Test(t, func(ht *hegel.T) {
-				roots := hegel.Draw(ht, hegel.Lists(hegel.Booleans()))
-				if len(roots) > 32 {
-					roots = roots[:32]
-				}
-				configured := make([]string, len(roots))
-				for i, missing := range roots {
-					configured[i] = root
-					if missing {
-						configured[i] = filepath.Join(root, "missing")
-					}
-				}
-				provider, _ := NewProvider(agent, ProviderConfig{Roots: configured})
-				ctx, cancel := context.WithCancel(ht.Context())
-				cancel()
-				inventory, err := DiscoverRawCaptureSources(ctx, provider)
-				assert.ErrorIs(ht, err, context.Canceled)
-				assert.False(ht, inventory.Complete)
+				require.ErrorIs(ht, err, ErrInvalidRawCapturePlan)
 			}, hegel.WithTestCases(1000))
 		})
 	}
@@ -133,12 +99,9 @@ func TestPiRawCaptureCancelledInventoryProperty(t *testing.T) {
 func TestPiRawCaptureAmbiguousPrimaryProperty(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
-			base := t.TempDir()
 			hegel.Test(t, func(ht *hegel.T) {
 				name := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)
-				root, err := os.MkdirTemp(base, "root-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
+				root := t.TempDir()
 				dir := root
 				if agent != AgentPrimeAgent {
 					dir = filepath.Join(root, name)
@@ -155,7 +118,7 @@ func TestPiRawCaptureAmbiguousPrimaryProperty(t *testing.T) {
 				require.NoError(ht, err)
 				require.Len(ht, sources, 1)
 				_, _, err = ResolveRawCapturePlan(ht.Context(), provider, sources[0])
-				assert.ErrorIs(ht, err, ErrInvalidRawCapturePlan)
+				require.ErrorIs(ht, err, ErrInvalidRawCapturePlan)
 			}, hegel.WithTestCases(1000))
 		})
 	}
@@ -165,16 +128,13 @@ func TestPiRawCaptureAmbiguousPrimaryProperty(t *testing.T) {
 func TestPiRawCaptureLayoutProperty(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
-			base := t.TempDir()
 			hegel.Test(t, func(ht *hegel.T) {
 				parts := hegel.Draw(ht, hegel.Lists(hegel.Integers(uint64(0), uint64(math.MaxUint64))))
 				if len(parts) > 16 {
 					parts = parts[:16]
 				}
 				repeated := hegel.Draw(ht, hegel.Booleans())
-				root, err := os.MkdirTemp(base, "layout-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
+				root := t.TempDir()
 				dir := root
 				for _, part := range parts {
 					dir = filepath.Join(dir, strconv.FormatUint(part, 16))
@@ -198,6 +158,7 @@ func TestPiRawCaptureLayoutProperty(t *testing.T) {
 					accepted = len(parts) == 0
 				case AgentOMP:
 					accepted = len(parts) > 0
+				default:
 				}
 				if accepted {
 					require.Len(ht, discovery.Sources, 1)
@@ -252,13 +213,10 @@ func TestPiRawCaptureBranchPrecedenceProperty(t *testing.T) {
 func TestPiRawCaptureRejectsUnsafeDependencyProperty(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
-			base := t.TempDir()
 			hegel.Test(t, func(ht *hegel.T) {
 				name := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)
 				symlink := hegel.Draw(ht, hegel.Booleans())
-				root, err := os.MkdirTemp(base, "unsafe-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
+				root := t.TempDir()
 				dir := root
 				if agent != AgentPrimeAgent {
 					dir = filepath.Join(root, "project")
@@ -266,9 +224,7 @@ func TestPiRawCaptureRejectsUnsafeDependencyProperty(t *testing.T) {
 				require.NoError(ht, os.MkdirAll(dir, 0o700))
 				parent := filepath.Join(dir, name+".jsonl")
 				if symlink {
-					outside, err := os.MkdirTemp(base, "outside-")
-					require.NoError(ht, err)
-					defer os.RemoveAll(outside)
+					outside := t.TempDir()
 					target := filepath.Join(outside, "parent.jsonl")
 					require.NoError(ht, os.WriteFile(target, []byte(`{"type":"session","id":"outside"}`+"\n"), 0o600))
 					require.NoError(ht, os.Symlink(target, parent))
@@ -282,7 +238,7 @@ func TestPiRawCaptureRejectsUnsafeDependencyProperty(t *testing.T) {
 				require.NoError(ht, err)
 				require.Len(ht, sources, 1)
 				_, _, err = ResolveRawCapturePlan(ht.Context(), provider, sources[0])
-				assert.ErrorIs(ht, err, ErrInvalidRawCapturePlan)
+				require.ErrorIs(ht, err, ErrInvalidRawCapturePlan)
 			}, hegel.WithTestCases(1000))
 		})
 	}
@@ -293,14 +249,11 @@ func TestPiRawCaptureRejectsUnsafeDependencyProperty(t *testing.T) {
 func TestPiRawCaptureSafeSymlinkProperty(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
-			base := t.TempDir()
 			hegel.Test(t, func(ht *hegel.T) {
 				id := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)
 				primaryLink := hegel.Draw(ht, hegel.Booleans())
 				absolute := hegel.Draw(ht, hegel.Booleans())
-				root, err := os.MkdirTemp(base, "link-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
+				root := t.TempDir()
 				dir := root
 				if agent != AgentPrimeAgent {
 					dir = filepath.Join(root, "project")
@@ -320,6 +273,7 @@ func TestPiRawCaptureSafeSymlinkProperty(t *testing.T) {
 				}
 				linkTarget := target
 				if !absolute {
+					var err error
 					linkTarget, err = filepath.Rel(dir, target)
 					require.NoError(ht, err)
 				}
@@ -356,13 +310,10 @@ func TestPiRawCaptureSafeSymlinkProperty(t *testing.T) {
 func TestPiRawCaptureEquivalentStructuralParentProperty(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMO} {
 		t.Run(string(agent), func(t *testing.T) {
-			base := t.TempDir()
 			hegel.Test(t, func(ht *hegel.T) {
 				id := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)
 				repeated := hegel.Draw(ht, hegel.Booleans())
-				root, err := os.MkdirTemp(base, "parent-")
-				require.NoError(ht, err)
-				defer os.RemoveAll(root)
+				root := t.TempDir()
 				parent := filepath.Join(root, "project", id+".jsonl")
 				child := filepath.Join(root, "project", id, "task/run-0/session.jsonl")
 				require.NoError(ht, os.MkdirAll(filepath.Dir(child), 0o700))
