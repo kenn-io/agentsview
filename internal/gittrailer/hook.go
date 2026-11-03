@@ -12,11 +12,13 @@ import (
 )
 
 const (
-	hookLine   = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
-	hookScript = "#!/bin/sh\n" + hookLine + "\n"
+	prepareHookLine   = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi`
+	prepareHookScript = "#!/bin/sh\n" + prepareHookLine + "\n"
+	hookLine          = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
+	hookScript        = "#!/bin/sh\n" + hookLine + "\n"
 )
 
-func hookPath(repoDir string) (string, error) {
+func hookPath(repoDir, name string) (string, error) {
 	out, err := (gitcmd.Runner{}).Output(context.Background(), repoDir, "rev-parse", "--git-path", "hooks")
 	if err != nil {
 		return "", err
@@ -25,36 +27,69 @@ func hookPath(repoDir string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(repoDir, dir)
 	}
-	return filepath.Join(dir, "commit-msg"), nil
+	return filepath.Join(dir, name), nil
 }
 
-// Install adds session trailers in Git's hooks directory without replacing a hook.
+// Install adds template tracking and session trailers without replacing hooks.
 func Install(repoDir string) error {
-	path, err := hookPath(repoDir)
-	if err != nil {
-		return err
+	type hookSpec struct {
+		name, line, script, path string
 	}
+	hooks := []hookSpec{
+		{name: "prepare-commit-msg", line: prepareHookLine, script: prepareHookScript},
+		{name: "commit-msg", line: hookLine, script: hookScript},
+	}
+	for i := range hooks {
+		path, err := hookPath(repoDir, hooks[i].name)
+		if err != nil {
+			return err
+		}
+		hooks[i].path = path
+		if _, err := existingHook(path, hooks[i].name, hooks[i].script, hooks[i].line); err != nil {
+			return err
+		}
+	}
+	for _, hook := range hooks {
+		if err := installHook(hook.path, hook.name, hook.script, hook.line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installHook(path, name, script, line string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
 	if errors.Is(err, os.ErrExist) {
-		return checkExistingHook(path)
+		return checkExistingHook(path, name, script, line)
 	}
 	if err != nil {
 		return err
 	}
-	_, err = file.WriteString(hookScript)
-	return errors.Join(err, file.Close())
+	_, writeErr := file.WriteString(script)
+	return errors.Join(writeErr, file.Close())
 }
 
-func checkExistingHook(path string) error {
+func existingHook(path, name, script, line string) (bool, error) {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
+		return false, err
+	}
+	if string(data) == script {
+		return true, nil
+	}
+	return false, fmt.Errorf("%s already exists; add this line to it:\n%s", name, line)
+}
+
+func checkExistingHook(path, name, script, line string) error {
+	exists, err := existingHook(path, name, script, line)
+	if err != nil || !exists {
 		return err
 	}
-	if string(data) == hookScript {
-		return os.Chmod(path, 0o755)
-	}
-	return fmt.Errorf("commit-msg already exists; add this line to it:\n%s", hookLine)
+	return os.Chmod(path, 0o755)
 }

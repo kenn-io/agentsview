@@ -80,6 +80,14 @@ func main() {
 		_ = cmd.Execute()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "git-trailer-prepare" {
+		cmd := newGitTrailerPrepareCommand()
+		cmd.SetArgs(os.Args[2:])
+		if err := cmd.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, code := rawderive.RunParserChild(os.Args[1:]); handled {
 		os.Exit(code)
 	}

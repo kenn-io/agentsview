@@ -52,11 +52,13 @@ Add the current agent session to commits in a repository:
 agentsview git-hook install
 ```
 
-The optional `commit-msg` hook adds `Agent-Session: <agent>:<session-id>` to
-commits made without an editor, including `-m`, `-F`, `-C`,
-`--amend --no-edit`, and `merge --no-edit`. A conflicted cherry-pick finished
-with `--no-edit` or `--continue` also carries the current session. Editor
-commits keep their original messages. Git doesn't run `commit-msg` for
+The `prepare-commit-msg` and `commit-msg` hooks work together. The first records
+the message Git prepared; the second adds `Agent-Session:
+<agent>:<session-id>` to commits made without an editor, including `-m`, `-F`,
+`-C`, `--amend --no-edit`, and `merge --no-edit`. An unchanged commit template
+stays untouched so Git can reject it. A conflicted cherry-pick finished with
+`--no-edit` or `--continue` also carries the current session. Editor commits
+keep their original messages. Git doesn't run `commit-msg` for
 `git revert --no-edit` or rebase picks, so they get no new trailer. Rebase picks
 keep their existing trailers. Amending from a different session adds a second
 `Agent-Session` line.
@@ -78,18 +80,19 @@ hyphens, up to 32 characters, starting with a letter or digit. Their IDs accept
 letters, digits, dots, underscores, and hyphens, up to 128 characters, starting
 with a letter or digit.
 
-Installation writes into the hooks directory Git uses. Rerunning it succeeds
-without changing a byte-identical hook; a different existing hook needs manual
-integration. A `core.hooksPath` setting, including a global one, makes
-installation apply to every repository sharing that path.
-Add this line to an existing `commit-msg` hook instead:
+Installation writes both hooks into the directory Git uses. Rerunning it
+succeeds without changing byte-identical hooks; a different existing hook needs
+manual integration. A `core.hooksPath` setting, including a global one, makes
+installation apply to every repository sharing that path. Add these lines to
+existing hooks instead:
 
 ```sh
+if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi
 if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi
 ```
 
-To remove the hook, delete the installed `commit-msg` file. For a shared hook,
-remove the added line.
+To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`
+files. For shared hooks, remove the added lines.
 
 ### `agentsview archive`
 

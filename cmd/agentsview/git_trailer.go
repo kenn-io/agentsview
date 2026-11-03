@@ -30,6 +30,22 @@ func newGitTrailerCommand() *cobra.Command {
 	}
 }
 
+func newGitTrailerPrepareCommand() *cobra.Command {
+	return &cobra.Command{
+		Use: "git-trailer-prepare <file> [source] [commit]", Hidden: true, DisableFlagParsing: true,
+		RunE: func(_ *cobra.Command, args []string) error {
+			if len(args) < 1 || len(args) > 3 {
+				return errors.New("usage: agentsview git-trailer-prepare <file> [source] [commit]")
+			}
+			source := ""
+			if len(args) >= 2 {
+				source = args[1]
+			}
+			return gittrailer.PrepareTemplate(args[0], source)
+		},
+	}
+}
+
 func newGitHookCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "git-hook", Short: "Manage the optional agent session trailer hook", GroupID: groupMeta,

@@ -100,11 +100,14 @@ func (f *gitTrailerFixture) hook(t *testing.T, action string) {
 
 func TestGitTrailerCommits(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		args   []string
-		editor bool
-		abort  bool
-		want   string
+		name          string
+		args          []string
+		editor        bool
+		template      bool
+		templateFlag  bool
+		abort         bool
+		abortContains string
+		want          string
 	}{
 		{name: "hash-leading subject is stripped as a comment", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser"},
 		{name: "file", args: []string{"-F", "message"}, want: "from file\n\n" + trailerLine},
@@ -112,6 +115,8 @@ func TestGitTrailerCommits(t *testing.T) {
 		{name: "empty signoff", args: []string{"-s", "-m", ""}, abort: true},
 		{name: "command-line stripped comment", args: []string{"--cleanup=strip", "-m", "# wip"}, abort: true},
 		{name: "comment-only message", abort: true},
+		{name: "unchanged configured template", template: true, abort: true, abortContains: "you did not edit the message"},
+		{name: "unchanged command-line template", template: true, templateFlag: true, abort: true, abortContains: "you did not edit the message"},
 		{name: "editor", editor: true, want: "from editor"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,6 +127,15 @@ func TestGitTrailerCommits(t *testing.T) {
 				f.setenv("TMPDIR", filepath.Join(f.repo, "missing-temp"))
 			}
 			require.NoError(t, os.WriteFile(filepath.Join(f.repo, "message"), []byte("from file\n"), 0o600))
+			if tt.template {
+				template := filepath.Join(f.repo, "template")
+				require.NoError(t, os.WriteFile(template, []byte("Template subject\n\nTemplate body\n"), 0o600))
+				if tt.templateFlag {
+					tt.args = append(tt.args, "-t", "template")
+				} else {
+					f.git(t, "config", "commit.template", template)
+				}
+			}
 			if tt.editor {
 				editor := filepath.Join(filepath.Dir(f.bin), "editor")
 				require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'from editor\\n' > \"$1\"\n"), 0o755))
@@ -130,7 +144,11 @@ func TestGitTrailerCommits(t *testing.T) {
 			out, err := f.run(t, "git", append([]string{"commit", "--allow-empty"}, tt.args...)...)
 			if tt.abort {
 				require.Error(t, err, out)
-				assert.Contains(t, out, "empty commit message")
+				if tt.abortContains == "" {
+					assert.Contains(t, out, "empty commit message")
+				} else {
+					assert.Contains(t, out, tt.abortContains)
+				}
 				message, readErr := os.ReadFile(filepath.Join(f.repo, ".git", "COMMIT_EDITMSG"))
 				require.NoError(t, readErr)
 				assert.NotContains(t, string(message), "Agent-Session:")
@@ -217,6 +235,10 @@ func TestGitHookReinstall(t *testing.T) {
 	f := newGitTrailerFixture(t)
 	f.hook(t, "install")
 	path := filepath.Join(f.repo, ".git", "hooks", "commit-msg")
+	preparePath := filepath.Join(f.repo, ".git", "hooks", "prepare-commit-msg")
+	require.NoError(t, os.Remove(preparePath))
+	f.hook(t, "install")
+	assert.FileExists(t, preparePath)
 	original, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.NoError(t, os.Chmod(path, 0o644))
@@ -247,4 +269,20 @@ func TestGitHookReinstall(t *testing.T) {
 	out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "rejected by later check")
 	require.Error(t, err, out)
 	assert.Contains(t, out, "later check")
+}
+
+func TestGitHookInstallPreservesExistingPrepareHook(t *testing.T) {
+	f := newGitTrailerFixture(t)
+	path := filepath.Join(f.repo, ".git", "hooks", "prepare-commit-msg")
+	const existing = "#!/bin/sh\n# existing hook\n"
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o755))
+	out, err := f.run(t, f.bin, "git-hook", "install")
+	require.Error(t, err)
+	assert.Contains(t, out, "prepare-commit-msg already exists; add this line to it:")
+	assert.Contains(t, out, "agentsview git-trailer-prepare")
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, existing, string(data))
+	_, statErr := os.Stat(filepath.Join(f.repo, ".git", "hooks", "commit-msg"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
