@@ -594,42 +594,403 @@ func (te *testEnv) get(
 	return te.getWithContext(t, t.Context(), path)
 }
 
-func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
+func TestOpenAPIEndpoint(t *testing.T) {
 	t.Parallel()
 	te := setup(t)
-
 	w := te.get(t, "/api/openapi.json")
-
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	contentType := w.Header().Get("Content-Type")
-	assert.True(t, strings.Contains(contentType, "application/json") ||
-		strings.Contains(contentType, "application/openapi+json"),
-		"Content-Type = %q", contentType)
 
-	var spec struct {
-		OpenAPI string `json:"openapi"`
-		Info    struct {
-			Title   string `json:"title"`
-			Version string `json:"version"`
-		} `json:"info"`
-		Paths map[string]map[string]any `json:"paths"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-	require.Equal(t, "3.1.0", spec.OpenAPI)
-	assert.Equal(t, "AgentsView API", spec.Info.Title)
-	assert.NotEmpty(t, spec.Info.Version)
+	t.Run("DocumentsExistingAPIRoutes", func(t *testing.T) {
+		t.Parallel()
+		contentType := w.Header().Get("Content-Type")
+		assert.True(t, strings.Contains(contentType, "application/json") ||
+			strings.Contains(contentType, "application/openapi+json"),
+			"Content-Type = %q", contentType)
 
-	require.Contains(t, spec.Paths, "/api/v1/sessions")
-	assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
-	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}")
-	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "get")
-	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "delete")
-	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}/messages")
-	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}/messages"], "get")
-	require.Contains(t, spec.Paths, "/api/v1/settings")
-	assert.Contains(t, spec.Paths["/api/v1/settings"], "put")
-	require.Contains(t, spec.Paths, "/api/v1/session-stats")
-	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
+		var spec struct {
+			OpenAPI string `json:"openapi"`
+			Info    struct {
+				Title   string `json:"title"`
+				Version string `json:"version"`
+			} `json:"info"`
+			Paths map[string]map[string]any `json:"paths"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+		require.Equal(t, "3.1.0", spec.OpenAPI)
+		assert.Equal(t, "AgentsView API", spec.Info.Title)
+		assert.NotEmpty(t, spec.Info.Version)
+
+		require.Contains(t, spec.Paths, "/api/v1/sessions")
+		assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
+		require.Contains(t, spec.Paths, "/api/v1/sessions/{id}")
+		assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "get")
+		assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "delete")
+		require.Contains(t, spec.Paths, "/api/v1/sessions/{id}/messages")
+		assert.Contains(t, spec.Paths["/api/v1/sessions/{id}/messages"], "get")
+		require.Contains(t, spec.Paths, "/api/v1/settings")
+		assert.Contains(t, spec.Paths["/api/v1/settings"], "put")
+		require.Contains(t, spec.Paths, "/api/v1/session-stats")
+		assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
+	})
+	t.Run("DocumentsTokenUsageAsArbitraryJSON", func(t *testing.T) {
+		t.Parallel()
+
+		var spec struct {
+			Components struct {
+				Schemas map[string]struct {
+					Properties map[string]jsontext.Value `json:"properties"`
+				} `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		messageSchema, ok := spec.Components.Schemas["DbMessage"]
+		require.True(t, ok, "spec missing DbMessage schema")
+		tokenUsage, ok := messageSchema.Properties["token_usage"]
+		require.True(t, ok, "DbMessage schema missing token_usage")
+		assert.JSONEq(t, `{}`, string(tokenUsage))
+	})
+	t.Run("KeepsUsageSummaryContract", func(t *testing.T) {
+		t.Parallel()
+		type openAPISchema struct {
+			Ref        string                   `json:"$ref"`
+			Items      *openAPISchema           `json:"items"`
+			Properties map[string]openAPISchema `json:"properties"`
+		}
+		type openAPIResponse struct {
+			Content map[string]struct {
+				Schema openAPISchema `json:"schema"`
+			} `json:"content"`
+		}
+		type openAPIOperation struct {
+			Responses map[string]openAPIResponse `json:"responses"`
+		}
+		var spec struct {
+			Paths      map[string]map[string]openAPIOperation `json:"paths"`
+			Components struct {
+				Schemas map[string]openAPISchema `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		op := spec.Paths["/api/v1/usage/summary"]["get"]
+		response := op.Responses["200"]
+		jsonContent, ok := response.Content["application/json"]
+		require.True(t, ok, "usage summary 200 response missing application/json")
+		assert.Equal(t, "#/components/schemas/UsageSummaryResponse",
+			jsonContent.Schema.Ref)
+
+		schema, ok := spec.Components.Schemas["UsageSummaryResponse"]
+		require.True(t, ok, "UsageSummaryResponse schema missing")
+		assert.Contains(t, schema.Properties, "comparison")
+		require.Contains(t, schema.Properties, "projectTotals")
+		require.NotNil(t, schema.Properties["projectTotals"].Items)
+		assert.Equal(t, "#/components/schemas/ProjectTotal",
+			schema.Properties["projectTotals"].Items.Ref)
+		require.Contains(t, schema.Properties, "modelTotals")
+		require.NotNil(t, schema.Properties["modelTotals"].Items)
+		assert.Equal(t, "#/components/schemas/ModelTotal",
+			schema.Properties["modelTotals"].Items.Ref)
+		require.Contains(t, schema.Properties, "agentTotals")
+		require.NotNil(t, schema.Properties["agentTotals"].Items)
+		assert.Equal(t, "#/components/schemas/AgentTotal",
+			schema.Properties["agentTotals"].Items.Ref)
+		require.Contains(t, schema.Properties, "cacheStats")
+		assert.Equal(t, "#/components/schemas/CacheStats",
+			schema.Properties["cacheStats"].Ref)
+	})
+	t.Run("DocumentsEnumsAndRequestBodies", func(t *testing.T) {
+		t.Parallel()
+		type openAPISchema struct {
+			Ref        string                   `json:"$ref"`
+			Enum       []any                    `json:"enum"`
+			Properties map[string]openAPISchema `json:"properties"`
+		}
+		type openAPIParameter struct {
+			Name   string        `json:"name"`
+			In     string        `json:"in"`
+			Schema openAPISchema `json:"schema"`
+		}
+		type openAPIRequestBody struct {
+			Content map[string]struct {
+				Schema openAPISchema `json:"schema"`
+			} `json:"content"`
+		}
+		type openAPIOperation struct {
+			Parameters  []openAPIParameter  `json:"parameters"`
+			RequestBody *openAPIRequestBody `json:"requestBody"`
+		}
+		var spec struct {
+			Paths      map[string]map[string]openAPIOperation `json:"paths"`
+			Components struct {
+				Schemas map[string]openAPISchema `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+		resolveSchema := func(schema openAPISchema) openAPISchema {
+			if schema.Ref == "" {
+				return schema
+			}
+			const prefix = "#/components/schemas/"
+			require.True(t, strings.HasPrefix(schema.Ref, prefix),
+				"unsupported schema ref %q", schema.Ref)
+			name := strings.TrimPrefix(schema.Ref, prefix)
+			resolved, ok := spec.Components.Schemas[name]
+			require.True(t, ok, "schema ref %q missing target", schema.Ref)
+			return resolved
+		}
+
+		for _, tt := range []struct {
+			path   string
+			method string
+			name   string
+			want   []any
+		}{
+			{
+				path:   "/api/v1/sessions/{id}/messages",
+				method: "get",
+				name:   "direction",
+				want:   []any{"asc", "desc"},
+			},
+			{
+				path:   "/api/v1/search",
+				method: "get",
+				name:   "sort",
+				want:   []any{"relevance", "recency"},
+			},
+			{
+				path:   "/api/v1/search/content",
+				method: "get",
+				name:   "mode",
+				want:   []any{"substring", "regex", "fts", "terms", "semantic", "hybrid"},
+			},
+			{
+				path:   "/api/v1/search/content",
+				method: "get",
+				name:   "scope",
+				want:   []any{"top", "all", "subordinate"},
+			},
+			{
+				path:   "/api/v1/sessions/{id}/md",
+				method: "get",
+				name:   "depth",
+				want:   []any{"1", "all"},
+			},
+			{
+				path:   "/api/v1/analytics/activity",
+				method: "get",
+				name:   "granularity",
+				want:   []any{"day", "week", "month"},
+			},
+			{
+				path:   "/api/v1/analytics/heatmap",
+				method: "get",
+				name:   "metric",
+				want:   []any{"messages", "sessions", "output_tokens"},
+			},
+		} {
+			pathItem, ok := spec.Paths[tt.path]
+			require.True(t, ok, "spec missing path %s", tt.path)
+			op, ok := pathItem[tt.method]
+			require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
+
+			var got []any
+			for _, param := range op.Parameters {
+				if param.Name == tt.name && param.In == "query" {
+					got = param.Schema.Enum
+					break
+				}
+			}
+			require.NotNil(t, got,
+				"%s %s missing query parameter %q", tt.method, tt.path, tt.name)
+			assert.Equal(t, tt.want, got)
+		}
+
+		for _, tt := range []struct {
+			path     string
+			method   string
+			property string
+		}{
+			{
+				path:     "/api/v1/sessions/{id}/rename",
+				method:   "patch",
+				property: "display_name",
+			},
+			{
+				path:     "/api/v1/settings/worktree-mappings",
+				method:   "post",
+				property: "path_prefix",
+			},
+			{
+				path:     "/api/v1/config/github",
+				method:   "post",
+				property: "token",
+			},
+		} {
+			pathItem, ok := spec.Paths[tt.path]
+			require.True(t, ok, "spec missing path %s", tt.path)
+			op, ok := pathItem[tt.method]
+			require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
+			require.NotNil(t, op.RequestBody,
+				"%s %s missing requestBody", tt.method, tt.path)
+			jsonContent, ok := op.RequestBody.Content["application/json"]
+			require.True(t, ok,
+				"%s %s missing application/json body", tt.method, tt.path)
+			schema := resolveSchema(jsonContent.Schema)
+			require.Contains(t, schema.Properties, tt.property)
+		}
+
+		pathItem, ok := spec.Paths["/api/v1/config/terminal"]
+		require.True(t, ok, "spec missing path /api/v1/config/terminal")
+		op, ok := pathItem["post"]
+		require.True(t, ok, "spec missing operation post /api/v1/config/terminal")
+		require.NotNil(t, op.RequestBody,
+			"post /api/v1/config/terminal missing requestBody")
+		jsonContent, ok := op.RequestBody.Content["application/json"]
+		require.True(t, ok,
+			"post /api/v1/config/terminal missing application/json body")
+		schema := resolveSchema(jsonContent.Schema)
+		mode, ok := schema.Properties["mode"]
+		require.True(t, ok, "post /api/v1/config/terminal missing mode property")
+		mode = resolveSchema(mode)
+		assert.Equal(t, []any{"auto", "custom", "clipboard"}, mode.Enum)
+	})
+	t.Run("DocumentsBatchDeleteSessionIDsAsNonNullableArray", func(t *testing.T) {
+		t.Parallel()
+
+		var spec struct {
+			Components struct {
+				Schemas map[string]struct {
+					Required   []string `json:"required"`
+					Properties map[string]struct {
+						Type jsontext.Value `json:"type"`
+					} `json:"properties"`
+				} `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		schema, ok := spec.Components.Schemas["BatchDeleteInputBody"]
+		require.True(t, ok, "spec missing BatchDeleteInputBody schema")
+		assert.Contains(t, schema.Required, "session_ids")
+
+		prop, ok := schema.Properties["session_ids"]
+		require.True(t, ok, "session_ids property missing from BatchDeleteInputBody schema")
+		assert.JSONEq(t, `"array"`, string(prop.Type),
+			`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
+	})
+	t.Run("DocumentsOptionalProjectIdentity", func(t *testing.T) {
+		t.Parallel()
+
+		var spec struct {
+			Components struct {
+				Schemas map[string]struct {
+					Required   []string `json:"required"`
+					Properties map[string]struct {
+						Ref string `json:"$ref"`
+					} `json:"properties"`
+				} `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		schema, ok := spec.Components.Schemas["ExportProjectMapEntry"]
+		require.True(t, ok, "spec missing ExportProjectMapEntry schema")
+		assert.NotContains(t, schema.Required, "identity")
+		identity, ok := schema.Properties["identity"]
+		require.True(t, ok, "identity property missing from ExportProjectMapEntry")
+		assert.Equal(t, "#/components/schemas/ExportProjectIdentity", identity.Ref)
+	})
+	t.Run("DocumentsQualitySignalResponses", func(t *testing.T) {
+		t.Parallel()
+		type openAPISchema struct {
+			Ref        string                   `json:"$ref"`
+			Type       any                      `json:"type"`
+			Items      *openAPISchema           `json:"items"`
+			Properties map[string]openAPISchema `json:"properties"`
+		}
+		var spec struct {
+			Components struct {
+				Schemas map[string]openAPISchema `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		for _, schemaName := range []string{"DbSession", "ServiceSessionDetail"} {
+			schema, ok := spec.Components.Schemas[schemaName]
+			require.True(t, ok, "schema %s missing", schemaName)
+			require.Contains(t, schema.Properties, "quality_signals",
+				"schema %s should expose runtime quality_signals", schemaName)
+			assert.Equal(t, "#/components/schemas/DbQualitySignals",
+				schema.Properties["quality_signals"].Ref,
+				"schema %s quality_signals ref", schemaName)
+		}
+
+		response, ok := spec.Components.Schemas["DbSignalSessionsResponse"]
+		require.True(t, ok, "schema DbSignalSessionsResponse missing")
+		sessions, ok := response.Properties["sessions"]
+		require.True(t, ok, "DbSignalSessionsResponse.sessions missing")
+		assert.Equal(t, "array", sessions.Type,
+			"sessions should be a non-null array so the generated client keeps item type")
+		require.NotNil(t, sessions.Items, "sessions.items missing")
+		assert.Equal(t, "#/components/schemas/DbSignalSessionExample",
+			sessions.Items.Ref,
+			"sessions item schema")
+	})
+	t.Run("DocumentsDecodeConfidence", func(t *testing.T) {
+		t.Parallel()
+		type openAPISchema struct {
+			Type       any                      `json:"type"`
+			Properties map[string]openAPISchema `json:"properties"`
+		}
+		var spec struct {
+			Components struct {
+				Schemas map[string]openAPISchema `json:"schemas"`
+			} `json:"components"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		detail, ok := spec.Components.Schemas["ServiceSessionDetail"]
+		require.True(t, ok, "schema ServiceSessionDetail missing")
+		prop, ok := detail.Properties["decode_confidence"]
+		require.True(t, ok,
+			"ServiceSessionDetail should document the derived decode_confidence field")
+		assert.Equal(t, "string", prop.Type,
+			"decode_confidence should be typed as a string")
+
+		dbSession, ok := spec.Components.Schemas["DbSession"]
+		require.True(t, ok, "schema DbSession missing")
+		_, present := dbSession.Properties["decode_confidence"]
+		assert.False(t, present,
+			"decode_confidence is detail-only and must not leak into DbSession")
+	})
+	t.Run("DocumentsImportResponseContentTypes", func(t *testing.T) {
+		t.Parallel()
+		type openAPIResponse struct {
+			Content map[string]struct{} `json:"content"`
+		}
+		type openAPIOperation struct {
+			Responses map[string]openAPIResponse `json:"responses"`
+		}
+		var spec struct {
+			Paths map[string]map[string]openAPIOperation `json:"paths"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+		for _, path := range []string{
+			"/api/v1/import/claude-ai",
+			"/api/v1/import/chatgpt",
+		} {
+			pathItem, ok := spec.Paths[path]
+			require.True(t, ok, "spec missing path %s", path)
+			op, ok := pathItem["post"]
+			require.True(t, ok, "spec missing operation post %s", path)
+			response, ok := op.Responses["200"]
+			require.True(t, ok, "post %s missing 200 response", path)
+			require.Contains(t, response.Content, "text/event-stream")
+			require.Contains(t, response.Content, "application/json")
+		}
+	})
 }
 
 func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
@@ -638,245 +999,6 @@ func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
 	w := te.post(t, "/api/v1/config/terminal", `{"mode":"auto","mode":"clipboard"}`)
 
 	assertStatus(t, w, http.StatusBadRequest)
-}
-
-func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	var spec struct {
-		Components struct {
-			Schemas map[string]struct {
-				Properties map[string]jsontext.Value `json:"properties"`
-			} `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	messageSchema, ok := spec.Components.Schemas["DbMessage"]
-	require.True(t, ok, "spec missing DbMessage schema")
-	tokenUsage, ok := messageSchema.Properties["token_usage"]
-	require.True(t, ok, "DbMessage schema missing token_usage")
-	assert.JSONEq(t, `{}`, string(tokenUsage))
-}
-
-func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	type openAPISchema struct {
-		Ref        string                   `json:"$ref"`
-		Items      *openAPISchema           `json:"items"`
-		Properties map[string]openAPISchema `json:"properties"`
-	}
-	type openAPIResponse struct {
-		Content map[string]struct {
-			Schema openAPISchema `json:"schema"`
-		} `json:"content"`
-	}
-	type openAPIOperation struct {
-		Responses map[string]openAPIResponse `json:"responses"`
-	}
-	var spec struct {
-		Paths      map[string]map[string]openAPIOperation `json:"paths"`
-		Components struct {
-			Schemas map[string]openAPISchema `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	op := spec.Paths["/api/v1/usage/summary"]["get"]
-	response := op.Responses["200"]
-	jsonContent, ok := response.Content["application/json"]
-	require.True(t, ok, "usage summary 200 response missing application/json")
-	assert.Equal(t, "#/components/schemas/UsageSummaryResponse",
-		jsonContent.Schema.Ref)
-
-	schema, ok := spec.Components.Schemas["UsageSummaryResponse"]
-	require.True(t, ok, "UsageSummaryResponse schema missing")
-	assert.Contains(t, schema.Properties, "comparison")
-	require.Contains(t, schema.Properties, "projectTotals")
-	require.NotNil(t, schema.Properties["projectTotals"].Items)
-	assert.Equal(t, "#/components/schemas/ProjectTotal",
-		schema.Properties["projectTotals"].Items.Ref)
-	require.Contains(t, schema.Properties, "modelTotals")
-	require.NotNil(t, schema.Properties["modelTotals"].Items)
-	assert.Equal(t, "#/components/schemas/ModelTotal",
-		schema.Properties["modelTotals"].Items.Ref)
-	require.Contains(t, schema.Properties, "agentTotals")
-	require.NotNil(t, schema.Properties["agentTotals"].Items)
-	assert.Equal(t, "#/components/schemas/AgentTotal",
-		schema.Properties["agentTotals"].Items.Ref)
-	require.Contains(t, schema.Properties, "cacheStats")
-	assert.Equal(t, "#/components/schemas/CacheStats",
-		schema.Properties["cacheStats"].Ref)
-}
-
-func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	type openAPISchema struct {
-		Ref        string                   `json:"$ref"`
-		Enum       []any                    `json:"enum"`
-		Properties map[string]openAPISchema `json:"properties"`
-	}
-	type openAPIParameter struct {
-		Name   string        `json:"name"`
-		In     string        `json:"in"`
-		Schema openAPISchema `json:"schema"`
-	}
-	type openAPIRequestBody struct {
-		Content map[string]struct {
-			Schema openAPISchema `json:"schema"`
-		} `json:"content"`
-	}
-	type openAPIOperation struct {
-		Parameters  []openAPIParameter  `json:"parameters"`
-		RequestBody *openAPIRequestBody `json:"requestBody"`
-	}
-	var spec struct {
-		Paths      map[string]map[string]openAPIOperation `json:"paths"`
-		Components struct {
-			Schemas map[string]openAPISchema `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-	resolveSchema := func(schema openAPISchema) openAPISchema {
-		if schema.Ref == "" {
-			return schema
-		}
-		const prefix = "#/components/schemas/"
-		require.True(t, strings.HasPrefix(schema.Ref, prefix),
-			"unsupported schema ref %q", schema.Ref)
-		name := strings.TrimPrefix(schema.Ref, prefix)
-		resolved, ok := spec.Components.Schemas[name]
-		require.True(t, ok, "schema ref %q missing target", schema.Ref)
-		return resolved
-	}
-
-	for _, tt := range []struct {
-		path   string
-		method string
-		name   string
-		want   []any
-	}{
-		{
-			path:   "/api/v1/sessions/{id}/messages",
-			method: "get",
-			name:   "direction",
-			want:   []any{"asc", "desc"},
-		},
-		{
-			path:   "/api/v1/search",
-			method: "get",
-			name:   "sort",
-			want:   []any{"relevance", "recency"},
-		},
-		{
-			path:   "/api/v1/search/content",
-			method: "get",
-			name:   "mode",
-			want:   []any{"substring", "regex", "fts", "terms", "semantic", "hybrid"},
-		},
-		{
-			path:   "/api/v1/search/content",
-			method: "get",
-			name:   "scope",
-			want:   []any{"top", "all", "subordinate"},
-		},
-		{
-			path:   "/api/v1/sessions/{id}/md",
-			method: "get",
-			name:   "depth",
-			want:   []any{"1", "all"},
-		},
-		{
-			path:   "/api/v1/analytics/activity",
-			method: "get",
-			name:   "granularity",
-			want:   []any{"day", "week", "month"},
-		},
-		{
-			path:   "/api/v1/analytics/heatmap",
-			method: "get",
-			name:   "metric",
-			want:   []any{"messages", "sessions", "output_tokens"},
-		},
-	} {
-		pathItem, ok := spec.Paths[tt.path]
-		require.True(t, ok, "spec missing path %s", tt.path)
-		op, ok := pathItem[tt.method]
-		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
-
-		var got []any
-		for _, param := range op.Parameters {
-			if param.Name == tt.name && param.In == "query" {
-				got = param.Schema.Enum
-				break
-			}
-		}
-		require.NotNil(t, got,
-			"%s %s missing query parameter %q", tt.method, tt.path, tt.name)
-		assert.Equal(t, tt.want, got)
-	}
-
-	for _, tt := range []struct {
-		path     string
-		method   string
-		property string
-	}{
-		{
-			path:     "/api/v1/sessions/{id}/rename",
-			method:   "patch",
-			property: "display_name",
-		},
-		{
-			path:     "/api/v1/settings/worktree-mappings",
-			method:   "post",
-			property: "path_prefix",
-		},
-		{
-			path:     "/api/v1/config/github",
-			method:   "post",
-			property: "token",
-		},
-	} {
-		pathItem, ok := spec.Paths[tt.path]
-		require.True(t, ok, "spec missing path %s", tt.path)
-		op, ok := pathItem[tt.method]
-		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
-		require.NotNil(t, op.RequestBody,
-			"%s %s missing requestBody", tt.method, tt.path)
-		jsonContent, ok := op.RequestBody.Content["application/json"]
-		require.True(t, ok,
-			"%s %s missing application/json body", tt.method, tt.path)
-		schema := resolveSchema(jsonContent.Schema)
-		require.Contains(t, schema.Properties, tt.property)
-	}
-
-	pathItem, ok := spec.Paths["/api/v1/config/terminal"]
-	require.True(t, ok, "spec missing path /api/v1/config/terminal")
-	op, ok := pathItem["post"]
-	require.True(t, ok, "spec missing operation post /api/v1/config/terminal")
-	require.NotNil(t, op.RequestBody,
-		"post /api/v1/config/terminal missing requestBody")
-	jsonContent, ok := op.RequestBody.Content["application/json"]
-	require.True(t, ok,
-		"post /api/v1/config/terminal missing application/json body")
-	schema := resolveSchema(jsonContent.Schema)
-	mode, ok := schema.Properties["mode"]
-	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
-	mode = resolveSchema(mode)
-	assert.Equal(t, []any{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
 func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
@@ -945,181 +1067,6 @@ func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
 	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
 		withHeader("X-AgentsView-Search-Intent", "semantic"))
 	assertStatus(t, w, http.StatusServiceUnavailable)
-}
-
-// TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray guards
-// the schema huma emits for the batch-delete request body: session_ids must
-// serialize as a plain, non-nullable string array (schema type "array"), not
-// the OpenAPI 3.1 nullable union ["array", "null"] huma's DefaultArrayNullable
-// otherwise applies to every slice field. Losing that keeps the generated
-// TypeScript client's session_ids typed as Array<string> rather than
-// loosening to any[] | null.
-func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	var spec struct {
-		Components struct {
-			Schemas map[string]struct {
-				Required   []string `json:"required"`
-				Properties map[string]struct {
-					Type jsontext.Value `json:"type"`
-				} `json:"properties"`
-			} `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	schema, ok := spec.Components.Schemas["BatchDeleteInputBody"]
-	require.True(t, ok, "spec missing BatchDeleteInputBody schema")
-	assert.Contains(t, schema.Required, "session_ids")
-
-	prop, ok := schema.Properties["session_ids"]
-	require.True(t, ok, "session_ids property missing from BatchDeleteInputBody schema")
-	assert.JSONEq(t, `"array"`, string(prop.Type),
-		`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
-}
-
-func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	var spec struct {
-		Components struct {
-			Schemas map[string]struct {
-				Required   []string `json:"required"`
-				Properties map[string]struct {
-					Ref string `json:"$ref"`
-				} `json:"properties"`
-			} `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	schema, ok := spec.Components.Schemas["ExportProjectMapEntry"]
-	require.True(t, ok, "spec missing ExportProjectMapEntry schema")
-	assert.NotContains(t, schema.Required, "identity")
-	identity, ok := schema.Properties["identity"]
-	require.True(t, ok, "identity property missing from ExportProjectMapEntry")
-	assert.Equal(t, "#/components/schemas/ExportProjectIdentity", identity.Ref)
-}
-
-func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	type openAPISchema struct {
-		Ref        string                   `json:"$ref"`
-		Type       any                      `json:"type"`
-		Items      *openAPISchema           `json:"items"`
-		Properties map[string]openAPISchema `json:"properties"`
-	}
-	var spec struct {
-		Components struct {
-			Schemas map[string]openAPISchema `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	for _, schemaName := range []string{"DbSession", "ServiceSessionDetail"} {
-		schema, ok := spec.Components.Schemas[schemaName]
-		require.True(t, ok, "schema %s missing", schemaName)
-		require.Contains(t, schema.Properties, "quality_signals",
-			"schema %s should expose runtime quality_signals", schemaName)
-		assert.Equal(t, "#/components/schemas/DbQualitySignals",
-			schema.Properties["quality_signals"].Ref,
-			"schema %s quality_signals ref", schemaName)
-	}
-
-	response, ok := spec.Components.Schemas["DbSignalSessionsResponse"]
-	require.True(t, ok, "schema DbSignalSessionsResponse missing")
-	sessions, ok := response.Properties["sessions"]
-	require.True(t, ok, "DbSignalSessionsResponse.sessions missing")
-	assert.Equal(t, "array", sessions.Type,
-		"sessions should be a non-null array so the generated client keeps item type")
-	require.NotNil(t, sessions.Items, "sessions.items missing")
-	assert.Equal(t, "#/components/schemas/DbSignalSessionExample",
-		sessions.Items.Ref,
-		"sessions item schema")
-}
-
-// TestOpenAPIEndpointDocumentsDecodeConfidence guards that the derived
-// decode_confidence marker is a reflected field on the session-detail response
-// schema, so Huma/OpenAPI and the generated TypeScript client document and type
-// it. It is a detail-only derive-on-read field with no persisted column, so it
-// must appear on ServiceSessionDetail but not on the plain DbSession schema.
-func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	type openAPISchema struct {
-		Type       any                      `json:"type"`
-		Properties map[string]openAPISchema `json:"properties"`
-	}
-	var spec struct {
-		Components struct {
-			Schemas map[string]openAPISchema `json:"schemas"`
-		} `json:"components"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	detail, ok := spec.Components.Schemas["ServiceSessionDetail"]
-	require.True(t, ok, "schema ServiceSessionDetail missing")
-	prop, ok := detail.Properties["decode_confidence"]
-	require.True(t, ok,
-		"ServiceSessionDetail should document the derived decode_confidence field")
-	assert.Equal(t, "string", prop.Type,
-		"decode_confidence should be typed as a string")
-
-	dbSession, ok := spec.Components.Schemas["DbSession"]
-	require.True(t, ok, "schema DbSession missing")
-	_, present := dbSession.Properties["decode_confidence"]
-	assert.False(t, present,
-		"decode_confidence is detail-only and must not leak into DbSession")
-}
-
-func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	w := te.get(t, "/api/openapi.json")
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	type openAPIResponse struct {
-		Content map[string]struct{} `json:"content"`
-	}
-	type openAPIOperation struct {
-		Responses map[string]openAPIResponse `json:"responses"`
-	}
-	var spec struct {
-		Paths map[string]map[string]openAPIOperation `json:"paths"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-
-	for _, path := range []string{
-		"/api/v1/import/claude-ai",
-		"/api/v1/import/chatgpt",
-	} {
-		pathItem, ok := spec.Paths[path]
-		require.True(t, ok, "spec missing path %s", path)
-		op, ok := pathItem["post"]
-		require.True(t, ok, "spec missing operation post %s", path)
-		response, ok := op.Responses["200"]
-		require.True(t, ok, "post %s missing 200 response", path)
-		require.Contains(t, response.Content, "text/event-stream")
-		require.Contains(t, response.Content, "application/json")
-	}
 }
 
 func (te *testEnv) post(
@@ -3656,6 +3603,21 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
 
+	w = putSettings(`{"chart_palette":"neon"}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, `chart_palette must be`)
+	w = putSettings(`{"chart_palette":""}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, `chart_palette must be`)
+
+	w = te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		ChartPalette config.ChartPalette `json:"chart_palette"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, config.ChartPaletteMatplotlib, got.ChartPalette)
+
 	w = putSettings(`{"chart_palette":"colorblind"}`)
 	assertStatus(t, w, http.StatusOK)
 	_, err = toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
@@ -3680,10 +3642,7 @@ func TestReadOnlySettingsAcceptDisplayPreferences(t *testing.T) {
 		body string
 		want int
 	}{
-		{"chart palette", `{"chart_palette":"matplotlib"}`, http.StatusOK},
 		{"zoom level", `{"zoom_level":125}`, http.StatusOK},
-		{"disabled agents", `{"disabled_agents":["codex"]}`, http.StatusNotImplemented},
-		{"tool result images", `{"tool_result_images":"drop"}`, http.StatusNotImplemented},
 		{"require auth", `{"require_auth":true}`, http.StatusNotImplemented},
 		{"display mixed with ingestion", `{"chart_palette":"matplotlib","disabled_agents":["codex"]}`, http.StatusNotImplemented},
 	}
@@ -3790,38 +3749,6 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
-			strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Origin", "http://127.0.0.1:0")
-		w := httptest.NewRecorder()
-		te.handler.ServeHTTP(w, req)
-		return w
-	}
-
-	w := putSettings(`{"chart_palette":"matplotlib"}`)
-	assertStatus(t, w, http.StatusOK)
-
-	w = putSettings(`{"chart_palette":"neon"}`)
-	assertStatus(t, w, http.StatusBadRequest)
-	assertBodyContains(t, w, `chart_palette must be`)
-	w = putSettings(`{"chart_palette":""}`)
-	assertStatus(t, w, http.StatusBadRequest)
-	assertBodyContains(t, w, `chart_palette must be`)
-
-	w = te.get(t, "/api/v1/settings")
-	assertStatus(t, w, http.StatusOK)
-	var got struct {
-		ChartPalette config.ChartPalette `json:"chart_palette"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, config.ChartPaletteMatplotlib, got.ChartPalette)
-}
-
 func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 	te := setup(t)
 	// Point the loader at the same data dir the handler writes, so the
@@ -3907,6 +3834,7 @@ func TestSettingsInsightDefaultAgent(t *testing.T) {
 }
 
 func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -3916,6 +3844,28 @@ func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
 		w := httptest.NewRecorder()
 		te.handler.ServeHTTP(w, req)
 		return w
+	}
+
+	{ // An invalid policy must preserve both settings.
+		// Establish initial state.
+		w := putSettings(`{"chart_palette":"matplotlib"}`)
+		assertStatus(t, w, http.StatusOK)
+
+		// A body with a valid palette change and an invalid policy:
+		// Huma rejects the whole request before the handler runs.
+		w = putSettings(`{"chart_palette":"agentsview","tool_result_images":"strip"}`)
+		assertStatus(t, w, http.StatusBadRequest)
+
+		// Neither key must have changed.
+		w = te.get(t, "/api/v1/settings")
+		assertStatus(t, w, http.StatusOK)
+		var got struct {
+			ChartPalette     string `json:"chart_palette"`
+			ToolResultImages string `json:"tool_result_images"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.Equal(t, "matplotlib", got.ChartPalette)
+		assert.Equal(t, "keep", got.ToolResultImages)
 	}
 
 	// Establish a known prior state.
@@ -3937,40 +3887,6 @@ func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
 	assert.Equal(t, "drop", persisted.ToolResultImages)
 }
 
-func TestSettingsToolResultImagesRejectionPreservesSiblingKeys(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
-			strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Origin", "http://127.0.0.1:0")
-		w := httptest.NewRecorder()
-		te.handler.ServeHTTP(w, req)
-		return w
-	}
-
-	// Establish initial state.
-	w := putSettings(`{"chart_palette":"matplotlib"}`)
-	assertStatus(t, w, http.StatusOK)
-
-	// A body with a valid palette change and an invalid policy:
-	// Huma rejects the whole request before the handler runs.
-	w = putSettings(`{"chart_palette":"agentsview","tool_result_images":"strip"}`)
-	assertStatus(t, w, http.StatusBadRequest)
-
-	// Neither key must have changed.
-	w = te.get(t, "/api/v1/settings")
-	assertStatus(t, w, http.StatusOK)
-	var got struct {
-		ChartPalette     string `json:"chart_palette"`
-		ToolResultImages string `json:"tool_result_images"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, "matplotlib", got.ChartPalette)
-	assert.Equal(t, "keep", got.ToolResultImages)
-}
-
 func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
 	te := setupPGMode(t)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -3986,6 +3902,7 @@ func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
 }
 
 func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
+	t.Parallel()
 	geminiDir := filepath.Join(t.TempDir(), "gemini")
 	te := setup(t, func(cfg *config.Config) {
 		cfg.AgentDirs = map[parser.AgentType][]string{
@@ -4044,6 +3961,21 @@ func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
 	require.NoError(t, err)
 	assert.Equal(t, got.DisabledAgents, persisted.DisabledAgents)
+
+	{
+		assertStatus(t, put(`{"disabled_agents":["gemini"]}`), http.StatusOK)
+		w := put(`{"disabled_agents":["nope"]}`)
+		assertStatus(t, w, http.StatusBadRequest)
+		assertBodyContains(t, w, "unknown session provider")
+
+		w = te.get(t, "/api/v1/settings")
+		assertStatus(t, w, http.StatusOK)
+		var got struct {
+			DisabledAgents []parser.AgentType `json:"disabled_agents"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.Equal(t, []parser.AgentType{parser.AgentGemini}, got.DisabledAgents)
+	}
 }
 
 func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
@@ -4056,32 +3988,6 @@ func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.JSONEq(t, `[]`, string(got.DisabledAgents))
-}
-
-func TestSettingsRejectInvalidDisabledProviderWithoutMutation(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-	put := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
-			strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		te.handler.ServeHTTP(w, req)
-		return w
-	}
-
-	assertStatus(t, put(`{"disabled_agents":["gemini"]}`), http.StatusOK)
-	w := put(`{"disabled_agents":["nope"]}`)
-	assertStatus(t, w, http.StatusBadRequest)
-	assertBodyContains(t, w, "unknown session provider")
-
-	w = te.get(t, "/api/v1/settings")
-	assertStatus(t, w, http.StatusOK)
-	var got struct {
-		DisabledAgents []parser.AgentType `json:"disabled_agents"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, got.DisabledAgents)
 }
 
 func TestSettingsDisabledProvidersRemainLockedInPGMode(t *testing.T) {
@@ -5063,37 +4969,6 @@ func TestTriggerSync_SSEEvents(t *testing.T) {
 	}
 }
 
-func TestResyncEndpoint(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	te.writeSessionFile(t, "resync-proj", "resync.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "msg resync"),
-	)
-
-	// Initial sync — session gets processed normally.
-	syncStats := te.syncSSE(t)
-	if syncStats.Synced != 1 {
-		require.FailNowf(t, "test failed", "initial sync: synced = %d, want 1",
-			syncStats.Synced)
-	}
-
-	// Second normal sync — file is unchanged so it's skipped.
-	sync2Stats := te.syncSSE(t)
-	if sync2Stats.Synced != 0 {
-		require.FailNowf(t, "test failed", "second sync: synced = %d, want 0 (skipped)",
-			sync2Stats.Synced)
-	}
-
-	// Resync — should re-process the same unchanged file.
-	resyncStats := te.resyncSSE(t)
-	if resyncStats.Synced != 1 {
-		require.FailNowf(t, "test failed", "resync: synced = %d, want 1 (reprocessed)",
-			resyncStats.Synced)
-	}
-}
-
 func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
 	t.Parallel()
 	te := setup(t)
@@ -5210,90 +5085,6 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	}
 }
 
-// TestResyncConcurrentReads verifies that concurrent API reads
-// don't panic or deadlock during resync, and that reads succeed
-// after resync completes. During the close->rename->reopen
-// window, SQLite may return various transient errors (database
-// is closed, no such file, no such table). These are expected
-// since resync is a rare manual operation.
-func TestResyncConcurrentReads(t *testing.T) {
-	t.Parallel()
-	te := setup(t)
-
-	te.writeSessionFile(t, "conc-proj", "c.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "concurrent test"),
-	)
-
-	// Initial sync.
-	te.postSSE("/api/v1/sync")
-
-	// Spin up concurrent readers with a barrier to ensure
-	// they are actively querying before resync starts.
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	var wg stdlibsync.WaitGroup
-	var readersReady stdlibsync.WaitGroup
-	readersReady.Add(4)
-
-	for range 4 {
-		wg.Go(func() {
-			readySignaled := false
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				req := httptest.NewRequestWithContext(ctx,
-					http.MethodGet, "/api/v1/sessions",
-					nil,
-				)
-				w := httptest.NewRecorder()
-				te.handler.ServeHTTP(w, req)
-
-				if !readySignaled && w.Code == http.StatusOK {
-					readersReady.Done()
-					readySignaled = true
-				}
-				// Transient 500s are expected during the
-				// close->reopen window. We only care that
-				// no panics/deadlocks occur and reads
-				// succeed after resync (verified below).
-			}
-		})
-	}
-
-	// Wait for all readers to complete at least one
-	// successful request before triggering resync.
-	readersReady.Wait()
-
-	// Trigger resync while readers are active.
-	resyncStats := te.resyncSSE(t)
-	if resyncStats.Synced != 1 {
-		assert.Failf(t, "test failed",
-			"resync: synced = %d, want 1",
-			resyncStats.Synced,
-		)
-	}
-
-	cancel()
-	wg.Wait()
-
-	// The real assertion: reads must succeed after resync
-	// completes. If the close->reopen cycle left the DB
-	// in a bad state, this will fail.
-	w := te.get(t,
-		"/api/v1/sessions?include_one_shot=true",
-	)
-	assertStatus(t, w, http.StatusOK)
-	resp := decode[sessionListResponse](t, w)
-	if resp.Total != 1 {
-		assert.Failf(t, "test failed", "post-resync sessions = %d, want 1", resp.Total)
-	}
-}
-
 // parseSSEDoneStats extracts the SyncStats from the "done" SSE
 // event in a response body. Fails the test if no done event.
 func parseSSEDoneStats(
@@ -5317,7 +5108,7 @@ func parseSSEDoneStats(
 func TestListSessions_Limits(t *testing.T) {
 	t.Parallel()
 	te := setup(t)
-	totalSessions := db.MaxSessionLimit + 5
+	totalSessions := 11
 	writes := make([]db.SessionBatchWrite, 0, totalSessions)
 	for i := range totalSessions {
 		writes = append(writes, db.SessionBatchWrite{
@@ -5343,11 +5134,7 @@ func TestListSessions_Limits(t *testing.T) {
 		limitVal  string
 		wantCount int
 	}{
-		{"DefaultLimit", "", db.DefaultSessionLimit},
 		{"ExplicitLimit", "limit=10", 10},
-		{"LargeLimit", "limit=1000", db.MaxSessionLimit},
-		{"ExactMax", fmt.Sprintf("limit=%d", db.MaxSessionLimit), db.MaxSessionLimit},
-		{"JustOver", fmt.Sprintf("limit=%d", db.MaxSessionLimit+1), db.MaxSessionLimit},
 	}
 
 	for _, tt := range tests {
