@@ -167,17 +167,28 @@ func (b *directBackend) MachineLabels(
 func (b *directBackend) Get(
 	ctx context.Context, id string,
 ) (*SessionDetail, error) {
-	// Plan usage is keyed by the same exact ID, so it loads alongside the
-	// session. A missing or failed session read still wins over its result.
+	// Plan usage is keyed by the same exact ID, so a networked store loads
+	// it alongside the session. A missing or failed session read still wins
+	// over its result.
 	var planUsage *db.SessionPlanUsage
 	var planErr error
-	planDone := make(chan struct{})
-	go func() {
-		defer close(planDone)
-		planUsage, planErr = b.db.GetSessionPlanUsage(ctx, id)
-	}()
-	s, err := b.db.GetSession(ctx, id)
-	<-planDone
+	loadPlan := func() { planUsage, planErr = b.db.GetSessionPlanUsage(ctx, id) }
+	var s *db.Session
+	var err error
+	if readsOverlap(b.db) {
+		planDone := make(chan struct{})
+		go func() {
+			defer close(planDone)
+			loadPlan()
+		}()
+		s, err = b.db.GetSession(ctx, id)
+		<-planDone
+	} else {
+		s, err = b.db.GetSession(ctx, id)
+		if err == nil && s != nil {
+			loadPlan()
+		}
+	}
 	if err != nil || s == nil {
 		return nil, err
 	}
@@ -1258,11 +1269,19 @@ func (b *directBackend) SearchContent(
 }
 
 // contentContextConcurrency bounds the context-window reads one content
-// search page starts at once on a networked store, where each read waits
-// on a round trip. The local SQLite archive reads them one at a time:
-// measured on a 12,600-session archive, 50 windows took 11 ms in order and
-// 19 ms four at a time.
+// search page starts at once on a networked store.
 const contentContextConcurrency = 8
+
+// readsOverlap reports whether independent reads on store should run at
+// the same time. Each read on a networked store such as PostgreSQL waits on
+// a round trip, so overlapping them saves that wait. The local SQLite
+// archive answers in-process, and its small concurrent reads are slower
+// than the same reads in order: on a 12,600-session archive, 50 context
+// windows took 11 ms in order and 19 ms four at a time.
+func readsOverlap(store db.Store) bool {
+	_, local := store.(*db.DB)
+	return !local
+}
 
 // enrichContentContext populates ContextBefore/ContextAfter on each match
 // with a non-negative Ordinal, fetching n messages of context on each side
@@ -1300,10 +1319,10 @@ func (b *directBackend) enrichContentContext(
 	// own stale flag.
 	stale := make([]bool, len(matches))
 	group, groupCtx := errgroup.WithContext(ctx)
-	if b.local != nil {
-		group.SetLimit(1)
-	} else {
+	if readsOverlap(b.db) {
 		group.SetLimit(contentContextConcurrency)
+	} else {
+		group.SetLimit(1)
 	}
 	for i := range matches {
 		m := &matches[i]
