@@ -76,7 +76,7 @@ func TestAgentHelpCommandChecker(t *testing.T) {
 		"agentsview openapi > openapi.json",
 		"agentsview session search 'a > b' --json",
 	} {
-		assert.NoError(t, validateAdvertisedCommand(line), line)
+		require.NoError(t, validateAdvertisedCommand(line), line)
 	}
 	for _, line := range []string{
 		"agentsview session made-up --help",
@@ -85,9 +85,9 @@ func TestAgentHelpCommandChecker(t *testing.T) {
 		"agentsview session search 'unterminated",
 		"agentsview openapi >>>out",
 	} {
-		assert.Error(t, validateAdvertisedCommand(line), line)
+		require.Error(t, validateAdvertisedCommand(line), line)
 	}
-	assert.Error(t, validateCommandExamples("agentsview source list", "agentsview report stats --json"))
+	require.Error(t, validateCommandExamples("agentsview source list", "agentsview report stats --json"))
 }
 
 func walkHelpCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
