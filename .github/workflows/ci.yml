@@ -434,7 +434,7 @@ jobs:
       - name: Restore Windows linter cache
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         uses: $/.github/actions/go-cache-restore
-        with:
+        with: &linter-cache
           group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
@@ -526,10 +526,7 @@ jobs:
       - name: Restore macOS linter cache
         if: runner.os == 'macOS'
         uses: $/.github/actions/go-cache-restore
-        with:
-          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
-          include-go-cache: "false"
-          extra-path: ${{ runner.temp }}/golangci-lint
+        with: *linter-cache
 
       - name: Prepare Go linters (macOS)
         id: prepare_macos_linter
