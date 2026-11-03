@@ -626,7 +626,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 			rawIngestCapturedAt(), object,
 		)
 	}
-	setRawHealthAcceptedAt(t, pg, time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC))
+	setRawHealthAcceptedAt(t, pg, time.Now())
 	capManifest := rawHealthCommit(
 		t, store, identity, "capture-job-cap", "", "sessions/job-cap",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
@@ -658,7 +658,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	query := rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 1}
+	query := rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 1800}
 	first := rawHealthReport(t, store, identity, query.MaxAttempts, query.StaleAfterSeconds)
 	second := rawHealthReport(t, store, identity, query.MaxAttempts, query.StaleAfterSeconds)
 	assert.Equal(t, int64(51), first.OrphanedManifestCount)
