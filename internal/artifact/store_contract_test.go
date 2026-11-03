@@ -221,6 +221,7 @@ func TestArtifactStoreIteratorContractDocbank(t *testing.T) {
 // runArtifactStoreContract exercises only the logical API. Backends register
 // this helper from their own top-level tests and may not expose physical paths
 // or implementation handles to it.
+// Every case runs in parallel, so each factory call must return an isolated store.
 func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	t.Helper()
 

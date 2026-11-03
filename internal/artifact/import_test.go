@@ -1155,8 +1155,8 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 	}})
 	sessionMap := make(map[string]string, unchangedSessions+1)
 	destination := testDB(t)
-	// No checkpoint stage exists yet, so satisfyAllArtifactCheckpointStagesTx
-	// would match nothing. imported_at uses its column default.
+	// No checkpoint stages exist yet, so there is nothing to mark satisfied.
+	// imported_at uses its column default.
 	require.NoError(t, destination.Update(t.Context(), func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO artifact_imported_sessions
 			(origin, gid, manifest_hash, imported_session_id) VALUES (?, ?, ?, ?)`)
