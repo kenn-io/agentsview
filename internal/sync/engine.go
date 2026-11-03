@@ -811,6 +811,13 @@ type Engine struct {
 	verifiedSourcePass       uint64
 	verifiedSourceActivePass uint64
 
+	// contentChecks and contentCheckBytes count sources a freshness gate
+	// re-read in full because their stats alone could not prove them
+	// unchanged. Changed-path passes log the per-pass delta, so a user can
+	// see when watcher events force those re-reads.
+	contentChecks     atomic.Int64
+	contentCheckBytes atomic.Int64
+
 	reconciliationMu           gosync.RWMutex
 	lastReconciliation         ReconciliationResult
 	reconciliationSpoolFactory func(context.Context, string) (reconciliationSpoolStore, error)
@@ -1848,9 +1855,11 @@ func (e *Engine) syncChangedPathsLocked(
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
 	e.invalidateNativeTitleCache(paths)
-	stats, tombstoned, err = e.applyChangedPathSyncLocked(
-		ctx, e.prepareChangedPathSync(ctx, paths),
-	)
+	summary := e.beginChangedPathPass(paths)
+	prepared := e.prepareChangedPathSync(ctx, paths)
+	summary.sources = len(prepared.files)
+	defer func() { log.Print(summary.finish(e, stats)) }()
+	stats, tombstoned, err = e.applyChangedPathSyncLocked(ctx, prepared)
 	// Title store events carry no session files, so this also handles them.
 	if err == nil && !stats.Aborted {
 		var titleStats SyncStats
@@ -14125,7 +14134,7 @@ func (e *Engine) claudeSourceFreshWithoutPrimary(
 	currentHash := sourceFingerprint
 	if currentHash == "" {
 		var err error
-		currentHash, err = computeFileHashPrefix(physicalPath, info.Size())
+		currentHash, err = e.contentCheckHash(physicalPath, info.Size())
 		if err != nil {
 			return false, false
 		}
@@ -15838,7 +15847,7 @@ func (e *Engine) providerIncrementalContentChanged(ctx context.Context,
 	if !ok || storedHash == "" {
 		return false, false
 	}
-	curHash, err := computeFileHashPrefix(hashPath, info.Size())
+	curHash, err := e.contentCheckHash(hashPath, info.Size())
 	if err != nil {
 		return false, false
 	}
