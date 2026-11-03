@@ -12,6 +12,27 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+func TestClickHouseCommitLinksBeforeUpgradePush(t *testing.T) {
+	local, target := seedFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	// Older mirrors have session tables but no commit_links table.
+	_, err = store.DB().ExecContext(t.Context(), `RENAME TABLE commit_links TO future_commit_links`)
+	require.NoError(t, err)
+	t.Run("session", func(t *testing.T) {
+		_, err := store.SessionCommitLinks(t.Context(), fixtureAlphaID)
+		require.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
+	})
+	t.Run("commit", func(t *testing.T) {
+		_, err := store.CommitSessionLinks(t.Context(), []string{"abc1234"})
+		require.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
+	})
+}
+
 func TestClickHouseCommitLinkParity(t *testing.T) {
 	local, target := seedFixture(t)
 	dbtest.SeedCommitLinks(t, local)

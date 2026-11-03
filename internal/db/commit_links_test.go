@@ -417,6 +417,47 @@ func TestCommitLinksProjectColumnMigration(t *testing.T) {
 	}
 }
 
+func TestCommitLinksCopyBeforeProjectColumn(t *testing.T) {
+	for _, kind := range []string{"orphan", "trash", "deleted"} {
+		t.Run(kind, func(t *testing.T) {
+			old := testDB(t)
+			insertSession(t, old, kind, "project-a")
+			insertMessages(t, old, commitMessages(kind, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			switch kind {
+			case "trash":
+				require.NoError(t, old.SoftDeleteSession(t.Context(), kind))
+			case "deleted":
+				require.NoError(t, old.DeleteSession(t.Context(), kind))
+			}
+			// Reproduce the archive schema before links recorded their project.
+			_, err := old.getWriter().Exec(t.Context(), `DROP TRIGGER trg_commit_links_deletion_project; ALTER TABLE commit_links DROP COLUMN project`)
+			require.NoError(t, err)
+			fresh := testDB(t)
+			switch kind {
+			case "orphan":
+				_, err = fresh.CopyOrphanedDataFrom(old.Path())
+			case "trash":
+				_, err = fresh.CopyTrashedDataFrom(old.Path())
+			case "deleted":
+				err = fresh.CopyExcludedSessionsFrom(old.Path())
+			}
+			require.NoError(t, err)
+			got, err := fresh.SessionCommitLinks(t.Context(), kind)
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+			var project string
+			require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), `SELECT project FROM commit_links WHERE session_id=?`, kind).Scan(&project))
+			if kind == "deleted" {
+				assert.Empty(t, project)
+			} else {
+				assert.Equal(t, "project-a", project)
+			}
+		})
+	}
+}
+
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
 	for _, id := range []string{"orphan", "trash", "deleted"} {

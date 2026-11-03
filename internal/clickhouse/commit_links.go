@@ -8,11 +8,19 @@ import (
 )
 
 func (s *Store) SessionCommitLinks(ctx context.Context, id string) (*db.SessionCommitList, error) {
-	return readbase.SessionCommitLinks(ctx, sessionsSQL{Store: s}, db.ClickHouseQueryDialect(), id)
+	out, err := readbase.SessionCommitLinks(ctx, sessionsSQL{Store: s}, db.ClickHouseQueryDialect(), id)
+	if isMissingTableError(err) {
+		return nil, db.ErrCommitLinksUnavailable
+	}
+	return out, err
 }
 
 func (s *Store) CommitSessionLinks(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
-	return readbase.CommitSessionLinks(ctx, sessionsSQL{Store: s}, db.ClickHouseQueryDialect(), shas)
+	out, err := readbase.CommitSessionLinks(ctx, sessionsSQL{Store: s}, db.ClickHouseQueryDialect(), shas)
+	if isMissingTableError(err) {
+		return nil, db.ErrCommitLinksUnavailable
+	}
+	return out, err
 }
 
 func commitLinkRow(r db.CommitLinkRow, retained bool, version uint64) []any {
