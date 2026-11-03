@@ -33,7 +33,6 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	seedTestPricing(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{

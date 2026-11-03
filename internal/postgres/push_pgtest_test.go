@@ -175,7 +175,6 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
 	defer local.Close()
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "snapshot-session", Project: "app", Machine: "laptop", Agent: "codex",
@@ -271,7 +270,6 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 	ctx := context.Background()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, fixture := range []struct {
 		sessionID string
@@ -346,7 +344,6 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 	ctx := context.Background()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, fixture := range []struct {
 		project string
@@ -441,7 +438,6 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	ctx := context.Background()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, project := range []string{"alpha", "beta"} {
 		sessionID := "identity-" + project
@@ -513,7 +509,6 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	ctx := context.Background()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 
 	for _, project := range []string{"alpha", "beta"} {
@@ -737,7 +732,6 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	ctx := context.Background()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	seedTestPricing(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	observedAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	for _, project := range []string{"alpha", "beta"} {
@@ -995,7 +989,6 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	seedTestPricing(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1069,7 +1062,6 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	seedTestPricing(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1546,7 +1538,6 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	seedTestPricing(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
