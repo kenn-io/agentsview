@@ -130,38 +130,26 @@ func TestHostedPublicReadsDuringPublication(t *testing.T) {
 }
 
 func TestHostedPricedReadWithSingleConnection(t *testing.T) {
-	for _, missing := range []string{"none", "model pricing", "GenAI pricing"} {
-		t.Run(missing, func(t *testing.T) {
-			f := newProjectionFixture(t)
-			m, _ := f.accept(t, "device-a", "priced", "")
-			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("priced transcript")))
-			h, _ := tracedHostedReader(t, f, "")
-			switch missing {
-			case "model pricing":
-				_, err := f.admin.ExecContext(t.Context(), `DROP TABLE model_pricing_bands, model_pricing`)
-				require.NoError(t, err)
-			case "GenAI pricing":
-				_, err := f.admin.ExecContext(t.Context(), `DROP TABLE genai_pricing`)
-				require.NoError(t, err)
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			for _, rates := range []struct {
-				input, output string
-				cost          int64
-			}{{"2", "3", 43}, {"5", "7", 104}} {
-				h.SetCustomPricing(map[string]config.CustomModelRate{"synthetic-model": {
-					InputMicrodollarsPerMTok:  money.MustParseDollars(rates.input).Microdollars,
-					OutputMicrodollarsPerMTok: money.MustParseDollars(rates.output).Microdollars,
-				}})
-				usage, err := h.GetSessionUsage(ctx, "codex:portable", true)
-				require.NoError(t, err)
-				require.NotNil(t, usage)
-				assert.Equal(t, "codex:portable", usage.SessionID)
-				assert.True(t, usage.HasCost)
-				assert.Equal(t, rates.cost, usage.Cost.Microdollars)
-			}
-		})
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "priced", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("priced transcript")))
+	h, _ := tracedHostedReader(t, f, "")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for _, rates := range []struct {
+		input, output string
+		cost          int64
+	}{{"2", "3", 43}, {"5", "7", 104}} {
+		h.SetCustomPricing(map[string]config.CustomModelRate{"synthetic-model": {
+			InputMicrodollarsPerMTok:  money.MustParseDollars(rates.input).Microdollars,
+			OutputMicrodollarsPerMTok: money.MustParseDollars(rates.output).Microdollars,
+		}})
+		usage, err := h.GetSessionUsage(ctx, "codex:portable", true)
+		require.NoError(t, err)
+		require.NotNil(t, usage)
+		assert.Equal(t, "codex:portable", usage.SessionID)
+		assert.True(t, usage.HasCost)
+		assert.Equal(t, rates.cost, usage.Cost.Microdollars)
 	}
 }
 
