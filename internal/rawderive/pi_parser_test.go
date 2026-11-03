@@ -92,7 +92,7 @@ func TestProviderParserHostedPiWindowsParent(t *testing.T) {
 				primary = "child.jsonl"
 				parent = "parent-file.jsonl"
 			}
-			storedParent := `C:\captures\` + strings.ReplaceAll(parent, "/", `\`)
+			storedParent := strings.ToUpper(`C:\captures\` + strings.ReplaceAll(parent, "/", `\`))
 			bodies := map[string][]byte{
 				primary: []byte(`{"type":"session","id":"child","parentSession":` + strconv.Quote(storedParent) + "}\n"),
 				parent:  []byte(`{"type":"session","id":"stored-parent-header"}` + "\n"),

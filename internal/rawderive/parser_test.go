@@ -339,6 +339,10 @@ func TestStablePathMapResolvesOriginalClientPathAliases(t *testing.T) {
 			resolved, ok = paths.resolve(tc.sourceKey)
 			require.True(t, ok)
 			assert.Equal(t, transcript, resolved)
+			if tc.name == "posix client path" {
+				_, ok = paths.resolve(strings.Replace(tc.embeddedPath, "/agent/", "/Agent/", 1))
+				assert.False(t, ok, "POSIX client path aliases retain case sensitivity")
+			}
 
 			// Aliases are lookup keys only: they must never become rewrite
 			// targets for worker-local paths.
