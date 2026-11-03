@@ -231,11 +231,7 @@ func (s *memorySessionArtifactStore) Create(
 	if err != nil {
 		return CreateResult{}, err
 	}
-	actual, err := NewIdentity(hashHex(data), int64(len(data)))
-	if err != nil {
-		return CreateResult{}, err
-	}
-	if actual != identity {
+	if hashHex(data) != identity.SHA256 || int64(len(data)) != identity.Size {
 		return CreateResult{}, ErrArtifactCorrupt
 	}
 	_, exists := s.bodies[ref]
