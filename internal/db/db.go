@@ -2360,6 +2360,12 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
+			"commit_links", "project",
+			"ALTER TABLE commit_links ADD COLUMN project TEXT NOT NULL DEFAULT '';" +
+				" UPDATE commit_links SET project = COALESCE(" +
+				"(SELECT project FROM sessions WHERE id = commit_links.session_id), '')",
+		},
+		{
 			"sessions", "pr_links",
 			"ALTER TABLE sessions ADD COLUMN pr_links TEXT NOT NULL DEFAULT ''",
 		},

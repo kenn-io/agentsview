@@ -375,6 +375,90 @@ func TestCommitLinksBackfill(t *testing.T) {
 	assert.Equal(t, "abc1234", got.Commits[0].SHA)
 }
 
+func TestCommitLinksProjectColumnMigration(t *testing.T) {
+	for _, backfillDone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "backfill-pending", true: "backfill-done"}[backfillDone], func(t *testing.T) {
+			d := testDB(t)
+			path := d.Path()
+			for _, id := range []string{"live", "deleted"} {
+				insertSession(t, d, id, "project-a")
+				insertMessages(t, d, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			}
+			require.NoError(t, d.DeleteSession(t.Context(), "deleted"))
+			if !backfillDone {
+				_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='live'; DELETE FROM stats WHERE key='commit_links_backfill_v1'`)
+				require.NoError(t, err)
+			}
+			// Reproduce the base schema, which retained links without a project.
+			_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER trg_commit_links_deletion_project; ALTER TABLE commit_links DROP COLUMN project`)
+			require.NoError(t, err)
+			require.NoError(t, d.Close())
+
+			d, err = Open(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			var sha, project string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT sha,project FROM commit_links WHERE session_id='live'`).Scan(&sha, &project))
+			assert.Equal(t, "project-a", project)
+			assert.Equal(t, "abc1234", sha)
+
+			require.NoError(t, d.DeleteSession(t.Context(), "live"))
+			fresh := testDB(t)
+			require.NoError(t, fresh.CopyExcludedSessionsFrom(path))
+			retained, err := fresh.RetainedCommitLinkRows(t.Context())
+			require.NoError(t, err)
+			require.Len(t, retained, 2)
+			projects := make(map[string]string)
+			for _, link := range retained {
+				assert.Equal(t, "abc1234", link.SHA)
+				projects[link.SessionID] = link.Project
+			}
+			assert.Subset(t, projects, map[string]string{"deleted": ""})
+		})
+	}
+}
+
+func TestCommitLinksCopyBeforeProjectColumn(t *testing.T) {
+	for _, kind := range []string{"orphan", "trash", "deleted"} {
+		t.Run(kind, func(t *testing.T) {
+			old := testDB(t)
+			insertSession(t, old, kind, "project-a")
+			insertMessages(t, old, commitMessages(kind, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			switch kind {
+			case "trash":
+				require.NoError(t, old.SoftDeleteSession(t.Context(), kind))
+			case "deleted":
+				require.NoError(t, old.DeleteSession(t.Context(), kind))
+			}
+			// Reproduce the archive schema before links recorded their project.
+			_, err := old.getWriter().Exec(t.Context(), `DROP TRIGGER trg_commit_links_deletion_project; ALTER TABLE commit_links DROP COLUMN project`)
+			require.NoError(t, err)
+			fresh := testDB(t)
+			switch kind {
+			case "orphan":
+				_, err = fresh.CopyOrphanedDataFrom(old.Path())
+			case "trash":
+				_, err = fresh.CopyTrashedDataFrom(old.Path())
+			case "deleted":
+				err = fresh.CopyExcludedSessionsFrom(old.Path())
+			}
+			require.NoError(t, err)
+			got, err := fresh.SessionCommitLinks(t.Context(), kind)
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+			var project string
+			require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), `SELECT project FROM commit_links WHERE session_id=?`, kind).Scan(&project))
+			if kind == "deleted" {
+				assert.Empty(t, project)
+			} else {
+				assert.Equal(t, "project-a", project)
+			}
+		})
+	}
+}
+
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
 	for _, id := range []string{"orphan", "trash", "deleted"} {
@@ -672,4 +756,50 @@ func TestCommitLinksCodeModeOperations(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommitLinkMirrorRows(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "s1"))
+	rows, err := d.SessionCommitLinkRows(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].TurnOrdinal)
+	assert.Equal(t, 0, *rows[0].TurnOrdinal)
+	assert.Equal(t, "Record the parser fix", rows[0].TurnText)
+	assert.Equal(t, "project-a", rows[0].Project)
+	retained, err := d.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, retained)
+	snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Equal(t, rows, snapshot.CommitLinks)
+	require.NoError(t, d.DeleteSession(t.Context(), "s1"))
+	retained, err = d.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	require.Len(t, retained, 1)
+	assert.Equal(t, "abc1234", retained[0].SHA)
+	assert.Nil(t, retained[0].TurnOrdinal)
+	assert.Empty(t, retained[0].TurnText)
+}
+
+func TestCommitLinkProjectSurvivesMoveDeletionAndResync(t *testing.T) {
+	old := testDB(t)
+	insertSession(t, old, "s1", "project-a")
+	insertMessages(t, old, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	session, err := old.GetSession(t.Context(), "s1")
+	require.NoError(t, err)
+	session.Project = "project-b"
+	require.NoError(t, old.UpsertSession(t.Context(), *session))
+	require.NoError(t, old.DeleteSession(t.Context(), "s1"))
+
+	fresh := testDB(t)
+	require.NoError(t, fresh.CopyExcludedSessionsFrom(old.Path()))
+	retained, err := fresh.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	require.Len(t, retained, 1)
+	assert.Equal(t, "project-b", retained[0].Project)
+	assert.Equal(t, "abc1234", retained[0].SHA)
 }

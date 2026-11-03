@@ -15,6 +15,11 @@ The latest release is
   Session commit lookups show the source and mark suggested prompts as
   heuristic. Trailer links survive transcript rewrites and checkout removal.
 
+- Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
+  replicas after pushing the archive. Deleted sessions remain visible as missing
+  records when the replica has project evidence for them. Hosted PostgreSQL
+  keeps returning HTTP 501.
+
 - Find the session and prompt behind a Git commit through the session API, or
   list a session's commits with `agentsview session commits <id>`. Links come
   from stored Git summaries, including Codex output received through later
@@ -22,9 +27,9 @@ The latest release is
   `git rev-parse HEAD` or single-entry `git log --oneline` output, chained after
   the commit with `&&`. Repository paths follow the first directory in each call
   and only a leading `cd`.
-  Transcript-only and usage-only archives retain no links; mirrors return HTTP
-  501. Deleted sessions remain visible as missing records. Sessions permanently
-  deleted before this release have no links.
+  Transcript-only and usage-only archives retain no links. Deleted sessions
+  remain visible as missing records. Sessions permanently deleted before this
+  release have no links.
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at

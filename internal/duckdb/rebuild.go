@@ -536,6 +536,9 @@ func buildMirrorInto(
 			"rebuild failed with %d session push errors", result.Errors,
 		)
 	}
+	if err := s.replaceRetainedCommitLinks(ctx); err != nil {
+		return result, err
+	}
 	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true, nil)
 	if err != nil {
 		return result, err
