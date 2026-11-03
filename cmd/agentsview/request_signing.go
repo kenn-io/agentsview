@@ -8,7 +8,6 @@ import (
 func newSigningCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "signing", Short: "Prepare private native HTTP signing keys and replay state"}
 	cmd.Long = "Prepare private signing-key files and durable replay state for native HTTP request signing. " +
-		"Commands create files explicitly and do not print the signing secret. " +
 		"Keep key and replay-state paths private when configuring the corresponding service."
 	cmd.Example = "  agentsview signing keygen --help\n" +
 		"  agentsview signing init-replay --help"

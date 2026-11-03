@@ -59,7 +59,7 @@ func newMemoryCommand() *cobra.Command {
 		Use:   "memory",
 		Short: "Manage conversation-memory integration",
 		Long: "Integrate recalled conversation knowledge into an agent's session-start lifecycle. " +
-			"The session-start action selects local, hosted-contributor, or hosted-reader mode and uses bounded lifecycle work; it is intended for the configured hook or plugin integration.",
+			"The session-start action selects local, hosted-contributor, or hosted-reader mode; it is intended for the configured hook or plugin integration.",
 		Example:      "  agentsview memory session-start --help",
 		GroupID:      groupMeta,
 		SilenceUsage: true,

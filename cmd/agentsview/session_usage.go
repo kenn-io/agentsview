@@ -45,7 +45,6 @@ func newSessionUsageCommand() *cobra.Command {
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
 			"Exit 0 means token data, cost, or plan figures are present. " +
-			"Missing sessions use exit 2. " +
 			"A report without any of those figures is printed before a silent exit 3.",
 		Example: "  agentsview session usage <id> --json\n" +
 			"  agentsview session usage <id> --own-only --no-sync --json",

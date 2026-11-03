@@ -28,8 +28,7 @@ func newFrictionCommand() *cobra.Command {
 		Use:   "friction",
 		Short: "Build and read the Friction Log (heuristic session review)",
 		Long: "Build and read heuristic session-review digests, findings, and recurring patterns. " +
-			"Stored digests summarize observed friction rather than proving an outcome; use the linked sessions to inspect evidence. " +
-			"Generation and stored-result queries are separate subcommands.",
+			"Stored digests summarize observed friction rather than proving an outcome; use the linked sessions to inspect evidence.",
 		Example: "  agentsview friction findings --json\n" +
 			"  agentsview friction patterns --json",
 		GroupID:      groupData,

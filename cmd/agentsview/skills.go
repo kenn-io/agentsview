@@ -28,9 +28,7 @@ func newSkillsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skills",
 		Short: "Install and list AgentsView skills for coding-agent harnesses",
-		Long: "Inspect or install AgentsView's skill files for coding-agent harnesses. " +
-			"Listing describes available files and their install state; installation writes the selected harness integration. " +
-			"Explicit server options bake connection details into generated skill examples.",
+		Long:  "Inspect or install AgentsView's skill files for coding-agent harnesses.",
 		Example: "  agentsview skills list\n" +
 			"  agentsview skills install --help",
 		GroupID:      groupMeta,

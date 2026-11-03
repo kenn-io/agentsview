@@ -35,10 +35,9 @@ func kataStatusRequestBudget(perRequest time.Duration) time.Duration {
 
 func newKataCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "kata",
-		Short: "Inspect the optional Kata issue-tracker connection",
-		Long: "Inspect the optional Kata issue-tracker connection. " +
-			"Use status to check whether the configured instance is reachable and ready.",
+		Use:          "kata",
+		Short:        "Inspect the optional Kata issue-tracker connection",
+		Long:         "Inspect the optional Kata issue-tracker connection.",
 		Example:      "  agentsview kata status",
 		GroupID:      groupData,
 		SilenceUsage: true,

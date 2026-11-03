@@ -27,8 +27,7 @@ func newCaptureCommand() *cobra.Command {
 		Use:   "capture",
 		Short: "Capture one non-interactive agent execution",
 		Long: "Capture one non-interactive Claude or Codex execution and produce a recoverable usage result. " +
-			"run launches the exact producer command after --; report recovers or replays its capture. " +
-			"Producer exit codes and capture reporting failures keep their dedicated exit contracts.",
+			"run launches the exact producer command after --; report recovers or replays its capture.",
 		Example: "  agentsview capture run --help\n" +
 			"  agentsview capture report --help",
 		GroupID:      groupUsage,

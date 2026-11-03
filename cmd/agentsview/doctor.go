@@ -65,7 +65,7 @@ func newDoctorCommand() *cobra.Command {
 		Use:   "doctor",
 		Short: "Collect support diagnostics",
 		Long: "Inspect configuration and archive health when sync or memory behavior is unexpected. " +
-			"The sync and memory reports focus on their own subsystem; read the selected report before changing sources or rebuilding data.",
+			"Read the selected report before changing sources or rebuilding data.",
 		Example: "  agentsview doctor sync\n" +
 			"  agentsview doctor memory --help",
 		GroupID:      groupMeta,

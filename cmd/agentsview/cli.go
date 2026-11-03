@@ -343,8 +343,7 @@ func newOpenAPICommand() *cobra.Command {
 		Use:   "openapi",
 		Short: "Print OpenAPI 3.1 schema",
 		Long: "Print the HTTP API's OpenAPI 3.1 schema from this binary without contacting a running server. " +
-			"JSON is the default; --yaml selects YAML. " +
-			"Use this to inspect API operations and response shapes.",
+			"JSON is the default; --yaml selects YAML.",
 		Example: "  agentsview openapi > openapi.json\n" +
 			"  agentsview openapi --yaml > openapi.yaml",
 		GroupID:      groupMeta,
@@ -500,7 +499,6 @@ func newUpdateCommand() *cobra.Command {
 		Use:   "update",
 		Short: "Check for and install updates",
 		Long: "Check for a newer release and, for supported direct installations, install it after confirmation. " +
-			"--check only reports availability. " +
 			"Package-managed installations must be upgraded through their package manager.",
 		Example: "  agentsview update --check\n" +
 			"  agentsview update",
@@ -672,7 +670,7 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Short: "One-line cost summary for today",
 		Long: "Print today's cost in one short line, or a JSON document with the date and exact microdollar amount. " +
 			"Today follows the local system timezone. " +
-			"--agent narrows the total; --no-sync skips refresh and --offline reads the local archive with fallback pricing.",
+			"--no-sync skips refresh and --offline reads the local archive with fallback pricing.",
 		Example: "  agentsview report usage statusline\n" +
 			"  agentsview report usage statusline --agent codex --json",
 		SilenceUsage: true,
@@ -765,8 +763,7 @@ func newPGCommand() *cobra.Command {
 	)
 	cmd.Long = "Mirror archived SQLite data to PostgreSQL and serve the mirror through a read-only API. " +
 		"Configure a PostgreSQL target before pushing or inspecting status. " +
-		"Hosted provisioning, vector maintenance, and the optional push service have separate commands; " +
-		"mirror reads do not ingest local provider sources."
+		"Mirror reads do not ingest local provider sources."
 	return cmd
 }
 

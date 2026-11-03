@@ -19,7 +19,7 @@ import (
 func newPGServiceCommand() *cobra.Command {
 	cmd := newServiceCommands(pgServiceKind)
 	cmd.Long = "Install and manage the optional background service that continuously pushes local archive changes to PostgreSQL. " +
-		"Service installation changes the host's service manager; status and logs inspect the existing service."
+		"Service installation changes the host's service manager."
 	cmd.Example = "  agentsview replica pg service status\n" +
 		"  agentsview replica pg service install --help"
 	return cmd
@@ -28,7 +28,7 @@ func newPGServiceCommand() *cobra.Command {
 func newClickHouseServiceCommand() *cobra.Command {
 	cmd := newServiceCommands(clickHouseServiceKind)
 	cmd.Long = "Install and manage the optional background service that pushes archive changes to ClickHouse. " +
-		"Check status or logs before restarting it; installation and removal change the host's service manager."
+		"Installation and removal change the host's service manager."
 	cmd.Example = "  agentsview replica clickhouse service status\n" +
 		"  agentsview replica clickhouse service install --help"
 	return cmd

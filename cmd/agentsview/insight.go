@@ -42,7 +42,7 @@ func newInsightCommand() *cobra.Command {
 		Use:   "insight",
 		Short: "Generate and inspect stored Activity Insights",
 		Long: "Read stored Activity Insights or ask a configured analysis agent to generate a new one through the daemon. " +
-			"Listing and retrieving inspect stored results; generation can invoke an external agent and needs the corresponding setup.",
+			"Generation can invoke an external agent and needs the corresponding setup.",
 		Example: "  agentsview insight list --json\n" +
 			"  agentsview insight get <id> --json",
 		GroupID:      groupData,

@@ -11,7 +11,7 @@ const rootAgentGuide = `Agent quick start:
   4. Inspect metadata, then a bounded transcript window:
      agentsview session get <id> --json
      agentsview session messages <id> --around 40 --before 5 --after 5 --json
-  5. Search across sessions and inspect usage or workspace totals:
+  Search and reports:
      agentsview session search 'connection reset' --since 14d --json
      agentsview session usage <id> --json
      agentsview report stats --since 28d --json
@@ -31,8 +31,7 @@ Where data comes from:
   SQLite under the data directory is the persistent local archive. Normal local
   reads use a discovered daemon, starting one in the background when permitted.
   Discovery prefers a writable daemon; if only a compatible read-only mirror
-  server is available, supported reads can use that server. Writes and
-  refreshes follow each command's documented sync policy.
+  server is available, supported reads can use that server.
   On the session group, --server URL selects a remote daemon and --pg selects
   configured PostgreSQL; these options are mutually exclusive. Remote auth uses
   --server-token-file or AGENTSVIEW_SERVER_TOKEN. These are command/group flags,
@@ -43,10 +42,7 @@ Where data comes from:
      agentsview daemon status
      agentsview daemon start
   source list reports built-in defaults and environment override names, not
-  configured paths. Set custom paths with [agents.<provider>].dirs in
-  config.toml. Source-directory precedence is environment, then config arrays,
-  then built-in defaults. AGENTSVIEW_DATA_DIR selects a separate archive/config
-  root.
+  configured paths.
 
 Output:
   Human output is the default. Where offered, --json aliases --format json.
@@ -58,8 +54,7 @@ Output:
   JSON selection follows each command's flags; there is no root --json flag.
   session watch emits NDJSON events; session export emits provider-specific
   source content (Markdown, JSON, JSONL, or file bytes).
-  Their --format/--json flags are rejected. Export and capture commands retain
-  their documented output protocols, including already-rendered silent errors.
+  Their --format/--json flags are rejected.
 
 Exit codes:
    0  Success. usage-batch keeps each ID's status in its result document.
