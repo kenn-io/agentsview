@@ -17,7 +17,7 @@ import (
 )
 
 func newSessionExportCommand() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:          "export <id>",
 		Short:        "Export provider-specific source content for a local session",
 		Args:         cobra.ExactArgs(1),
@@ -203,8 +203,6 @@ func newSessionExportCommand() *cobra.Command {
 			return err
 		},
 	}
-	markOmittedCommonFlagsForHelp(cmd, "format", "json", "pg", "server", "server-token-file")
-	return cmd
 }
 
 func rawAiderSessionID(sessionID string) (string, bool) {

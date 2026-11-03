@@ -192,9 +192,6 @@ func markLegacyCommand(cmd *cobra.Command, legacy, replacement string) {
 }
 
 func guardLocalPruneFlags(cmd *cobra.Command) {
-	markOmittedCommonFlagsForHelp(
-		cmd, "server", "server-token-file", "pg", "json", "format",
-	)
 	cmd.Long = "Prune sessions from the local archive using the selected filters.\n" +
 		"Use --dry-run to inspect the selection. Remote and output-format flags\n" +
 		"inherited from session are not supported by this local maintenance action."

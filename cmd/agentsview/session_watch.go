@@ -13,7 +13,7 @@ import (
 var sessionWatchStarted func()
 
 func newSessionWatchCommand() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:          "watch <id>",
 		Short:        "Stream NDJSON events as the session updates",
 		Args:         cobra.ExactArgs(1),
@@ -50,6 +50,4 @@ func newSessionWatchCommand() *cobra.Command {
 			return nil
 		},
 	}
-	markOmittedCommonFlagsForHelp(cmd, "format", "json")
-	return cmd
 }

@@ -1,30 +1,11 @@
 package main
 
-import (
-	"fmt"
-	"slices"
-	"strings"
-
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-)
+import "github.com/spf13/cobra"
 
 type commandHelpText struct {
 	long     string
 	examples string
 	extra    string
-}
-
-const omittedCommonFlagsAnnotation = "agentsview.omitted_common_flags"
-
-func markOmittedCommonFlagsForHelp(cmd *cobra.Command, names ...string) {
-	if len(names) == 0 {
-		return
-	}
-	if cmd.Annotations == nil {
-		cmd.Annotations = make(map[string]string)
-	}
-	cmd.Annotations[omittedCommonFlagsAnnotation] = strings.Join(names, " ")
 }
 
 // Existing command descriptions own their detailed limits. This table fills
@@ -302,69 +283,9 @@ func applyCLIHelp(root *cobra.Command) {
 				cmd.Example = help.examples
 			}
 		}
-		if cmd.Annotations == nil {
-			cmd.Annotations = make(map[string]string)
-		}
-		cmd.Annotations["agentsview.common_flags"] = commonCLIFlagsHelp(cmd)
 		for _, child := range cmd.Commands() {
 			visit(child)
 		}
 	}
 	visit(root)
-	root.SetUsageTemplate(compactCLIUsageTemplate())
-}
-
-// Store rendered, command-local help metadata instead of a global template
-// callback or mutable invocation context. The command tree is complete here.
-func commonCLIFlagsHelp(cmd *cobra.Command) string {
-	var names []string
-	var owners []string
-	omitted := make(map[string]struct{})
-	for name := range strings.FieldsSeq(cmd.Annotations[omittedCommonFlagsAnnotation]) {
-		omitted[name] = struct{}{}
-	}
-	cmd.InheritedFlags().VisitAll(func(flag *pflag.Flag) {
-		if flag.Hidden {
-			return
-		}
-		if _, omit := omitted[flag.Name]; omit {
-			return
-		}
-		names = append(names, "--"+flag.Name)
-		for parent := cmd.Parent(); parent != nil; parent = parent.Parent() {
-			if parent.PersistentFlags().Lookup(flag.Name) == nil {
-				continue
-			}
-			if !slices.Contains(owners, parent.CommandPath()) {
-				owners = append(owners, parent.CommandPath())
-			}
-			break
-		}
-	})
-	if len(names) == 0 {
-		return ""
-	}
-	var out strings.Builder
-	fmt.Fprintf(&out, "  %s\n", strings.Join(names, ", "))
-	for _, owner := range owners {
-		fmt.Fprintf(&out, "  See %s --help for defaults and descriptions.\n", owner)
-	}
-	return strings.TrimSuffix(out.String(), "\n")
-}
-
-// Replace only Cobra's inherited-flags section so other help stays upstream-owned.
-func compactCLIUsageTemplate() string {
-	const inherited = `{{if .HasAvailableInheritedFlags}}
-
-Global Flags:
-{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}`
-	const compact = `{{if .HasAvailableInheritedFlags}}{{with (index .Annotations "agentsview.common_flags")}}
-
-Common flags:
-{{.}}{{end}}{{end}}`
-	template := (&cobra.Command{}).UsageTemplate()
-	if strings.Count(template, inherited) != 1 {
-		panic("Cobra inherited-flags usage template changed")
-	}
-	return strings.Replace(template, inherited, compact, 1)
 }

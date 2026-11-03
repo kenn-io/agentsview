@@ -13,8 +13,7 @@ environment variables. Run `agentsview source list --json` for the provider
 catalog, built-in source locations, and environment override names. It does not
 resolve configured directory arrays. Run `agentsview openapi` for the API schema.
 
-Use `agentsview session --help` for common backend and output flags; leaf help
-lists inherited flag names and points to the parent that explains them. Core
+Use `agentsview session --help` for common backend and output flags. Core
 commands include examples and describe their limits.
 
 ## Recover from CLI errors

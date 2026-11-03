@@ -30,11 +30,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	require.NoError(t, err)
 	sources := map[string]string{"root help": help}
 	var sessionGetHelp string
-	unsupportedCommonFlags := map[string][]string{
-		"agentsview session watch":  {"--format", "--json"},
-		"agentsview session export": {"--format", "--json", "--pg", "--server", "--server-token-file"},
-		"agentsview session prune":  {"--format", "--json", "--pg", "--server", "--server-token-file"},
-	}
 	walkHelpCommands(root, func(cmd *cobra.Command) {
 		sources[cmd.CommandPath()] = cmd.Long
 		if cmd.Parent() == nil {
@@ -62,18 +57,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 				}
 			}
 		}
-		if rejected, ok := unsupportedCommonFlags[cmd.CommandPath()]; ok {
-			commonFlags := commonCLIFlagsSection(rendered)
-			for _, name := range rejected {
-				assert.NotContains(t, commonFlags, name, "%s common flags should omit %s", cmd.CommandPath(), name)
-			}
-			if cmd.CommandPath() != "agentsview session watch" {
-				assert.Empty(t, commonFlags, "%s has no supported inherited flags", cmd.CommandPath())
-			}
-		}
-		if cmd.CommandPath() == "agentsview session watch" {
-			assert.Contains(t, commonCLIFlagsSection(rendered), "--server")
-		}
 		if slices.Contains(agentHelpCoreCommands, path) {
 			assert.NotContains(t, rendered, "Deprecated:", "%s is a canonical command", cmd.CommandPath())
 		}
@@ -87,10 +70,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 		}
 	})
 	require.NotEmpty(t, sessionGetHelp, "session get help must be rendered")
-	assert.Contains(t, sessionGetHelp, "Common flags:")
-	assert.Contains(t, sessionGetHelp, "--server")
-	assert.Contains(t, sessionGetHelp, "agentsview session --help")
-	assert.NotContains(t, sessionGetHelp, "\nGlobal Flags:\n")
 	for path := range agentCommandHelp {
 		commandPath := "agentsview " + path
 		assert.Contains(t, sources, commandPath)
@@ -109,15 +88,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 			require.NoError(t, validateAdvertisedCommand(line), "%s: %s", name, line)
 		}
 	}
-}
-
-func commonCLIFlagsSection(rendered string) string {
-	_, section, found := strings.Cut(rendered, "\nCommon flags:\n")
-	if !found {
-		return ""
-	}
-	section, _, _ = strings.Cut(section, "\n\n")
-	return section
 }
 
 func TestAgentCommandCheckerAcceptsAndRejectsExamples(t *testing.T) {
