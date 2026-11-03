@@ -100,9 +100,15 @@ func newServer(opts ServeOptions) *mcp.Server {
 		version = "dev"
 	}
 	s := mcp.NewServer(&mcp.Implementation{
-		Name:    "agentsview",
-		Title:   "agentsview session history",
-		Version: version,
+		Name:       "agentsview",
+		Title:      "agentsview session history",
+		Version:    version,
+		WebsiteURL: "https://agentsview.io",
+		Icons: []mcp.Icon{{
+			Source:   serverIconSource,
+			MIMEType: "image/png",
+			Sizes:    []string{"256x256"},
+		}},
 	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {

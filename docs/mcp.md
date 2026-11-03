@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-03
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -486,6 +486,12 @@ When the HTTP listener is reachable beyond loopback, AgentsView requires a
 configured bearer token and enforces `Authorization: Bearer <token>` on every
 request. If `require_auth` is enabled, loopback HTTP binds also require bearer
 auth so forwarded ports are not accidentally unauthenticated.
+
+## Server Identity (unreleased)
+
+On `main`, the MCP server declares the AgentsView website and icon. The icon is
+included as a PNG data URI, so stdio and HTTP clients can load it without an
+external request. Whether it appears depends on the client.
 
 ## Security Notes
 
