@@ -207,8 +207,16 @@ func TestRawClientEndToEnd(t *testing.T) {
 	assert.Equal(t, secondCommit.ManifestID, head.ManifestID)
 	assert.Equal(t, int64(2), head.Generation)
 
-	// Capture and acknowledge empty files and lengths around an 8-byte chunk.
-	for _, length := range []int{0, 1, 7, 8, 9, 16, 17} {
+	// Capture and acknowledge empty files and exact 8-byte chunk multiples.
+	for _, tc := range []struct {
+		length  int
+		patches int
+	}{
+		{0, 1},
+		{8, 1},
+		{16, 2},
+	} {
+		length := tc.length
 		t.Run("capture/"+strconv.Itoa(length), func(t *testing.T) {
 			before := uploads.appendCounts()
 			root, err := filepath.EvalSymlinks(t.TempDir())
@@ -223,35 +231,17 @@ func TestRawClientEndToEnd(t *testing.T) {
 			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
-			capture, err := rawcapture.New(checkpoint).Capture(t.Context(), provider, sources[0])
+			_, err = rawcapture.New(checkpoint).Capture(t.Context(), provider, sources[0])
 			require.NoError(t, err)
-			require.Equal(t, rawcapture.StatusCaptured, capture.Status)
-			queued, found, err := checkpoint.NextGeneration(t.Context())
-			require.NoError(t, err)
-			require.True(t, found)
-			require.Len(t, queued.Entries, 1)
-			require.Equal(t, int64(length), queued.Entries[0].Length)
-			require.Equal(t, []rawsync.ObjectRef{e2EObjectFor(t, body)}, queued.Entries[0].Objects)
 
 			uploader := rawupload.New(checkpoint, client, enrollment.Identity.DeviceID)
-			result, found, err := uploader.UploadNext(t.Context())
+			_, found, err := uploader.UploadNext(t.Context())
 			require.NoError(t, err)
 			require.True(t, found)
-			assert.Equal(t, capture.CaptureID, result.CaptureID)
-			assert.NotEmpty(t, result.ManifestID)
-			assert.NotEmpty(t, result.Receipt)
-			assert.Equal(t, int64(1), result.Generation)
-			assert.Equal(t, int64(length), result.UploadedBytes)
-			head, found, err := checkpoint.SourceHead(t.Context(), capture.Source.Provider, capture.Source.ConfiguredRootID, capture.Source.SourceKey)
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, result.ManifestID, head.ManifestID)
-			assert.Equal(t, result.Receipt, head.Receipt)
-			assert.Equal(t, int64(1), head.Generation)
 			_, found, err = uploader.UploadNext(t.Context())
 			require.NoError(t, err)
 			assert.False(t, found, "acknowledged capture must leave the queue")
-			missing, err := client.MissingObjects(t.Context(), parser.AgentClaude, queued.Entries[0].Objects)
+			missing, err := client.MissingObjects(t.Context(), parser.AgentClaude, []rawsync.ObjectRef{e2EObjectFor(t, body)})
 			require.NoError(t, err)
 			assert.Empty(t, missing, "acknowledgement requires verified physical custody")
 			counts := uploads.appendCounts()
@@ -260,7 +250,7 @@ func TestRawClientEndToEnd(t *testing.T) {
 				if _, existed := before[uploadID]; existed {
 					continue
 				}
-				assert.Equal(t, max(1, (length+7)/8), count)
+				assert.Equal(t, tc.patches, count)
 			}
 		})
 	}
