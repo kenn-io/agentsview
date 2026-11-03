@@ -509,10 +509,8 @@ func newUpdateCommand() *cobra.Command {
 func newTokenUseCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "token-use <session-id>",
-		Short:        "Show session token usage as JSON (deprecated; use session usage)",
-		Long:         "Deprecated: use 'agentsview session usage ID --json'.\nThis spelling retains its JSON-only output and existing exit codes.",
-		Example:      "  agentsview token-use <id>",
-		GroupID:      groupUsage,
+		Short:        "Show token usage for a session (JSON)",
+		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

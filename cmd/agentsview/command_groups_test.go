@@ -68,14 +68,13 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	} {
 		assert.Contains(t, help, want, "help missing %q", want)
 	}
-	assert.Contains(t, help, "deprecated; use session usage")
 	for _, tc := range []struct {
 		heading  string
 		commands []string
 	}{
 		{"Sessions, projects, and sources:", []string{"session", "project", "source"}},
 		{"Servers, mirrors, and indexes:", []string{"serve", "daemon", "replica", "index"}},
-		{"Reports, usage, and archive:", []string{"report", "archive", "db", "export", "token-use"}},
+		{"Reports, usage, and archive:", []string{"report", "archive", "db", "export"}},
 		{"Tools and integrations:", []string{"openapi", "mcp", "version"}},
 	} {
 		_, section, found := strings.Cut(help, tc.heading+"\n")
@@ -86,7 +85,7 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 		}
 	}
 	assert.Less(t, len(help), 16*1024, "root help must stay under the 16 KiB design budget")
-	for _, name := range []string{"agents", "sync", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff"} {
+	for _, name := range []string{"agents", "sync", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff", "token-use"} {
 		assert.NotContains(t, help, "\n  "+name+" ")
 	}
 	assert.NotContains(t, help, "\n  session list ", "subcommands belong in domain help")
@@ -116,7 +115,7 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "source\t")
 	assert.NotContains(t, out, "raw-sync\t")
-	assert.Contains(t, out, "token-use\t")
+	assert.NotContains(t, out, "token-use\t")
 	t.Run("no arguments", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand())
 		require.NoError(t, err, "Execute")

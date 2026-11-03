@@ -20,7 +20,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	require.NoError(t, err)
 	sources := map[string]string{"root help": help}
 	var sessionGetHelp string
-	var tokenUseHelp string
 	unsupportedCommonFlags := map[string][]string{
 		"agentsview session watch":  {"--format", "--json"},
 		"agentsview session export": {"--format", "--json", "--pg", "--server", "--server-token-file"},
@@ -43,9 +42,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 		require.NoError(t, err, "%s help", cmd.CommandPath())
 		if cmd.CommandPath() == "agentsview session get" {
 			sessionGetHelp = rendered
-		}
-		if cmd.CommandPath() == "agentsview token-use" {
-			tokenUseHelp = rendered
 		}
 		assert.Contains(t, rendered, cmd.CommandPath())
 		if help, ok := agentCommandHelp[path]; ok {
@@ -81,8 +77,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 		}
 	})
 	require.NotEmpty(t, sessionGetHelp, "session get help must be rendered")
-	require.NotEmpty(t, tokenUseHelp, "token-use help must be rendered")
-	assert.Contains(t, tokenUseHelp, "Deprecated: use 'agentsview session usage ID --json'.")
 	assert.Contains(t, sessionGetHelp, "Common flags:")
 	assert.Contains(t, sessionGetHelp, "--server")
 	assert.Contains(t, sessionGetHelp, "agentsview session --help")

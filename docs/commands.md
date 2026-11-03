@@ -83,11 +83,9 @@ below.
 ### Command migration
 
 Related actions now share a noun. Existing command names continue to work for
-at least one release. Legacy names are hidden from root help and completion
-except for the visible, deprecated `token-use`, which points to
-`session usage ID --json`. An invoked legacy action prints its replacement
-on stderr. Flags, arguments, stdout documents, exit codes, HTTP routes, and
-MCP tools keep their behavior.
+at least one release. They are hidden from root help and completion, and an
+invoked legacy action prints its replacement on stderr. Flags, arguments,
+stdout documents, exit codes, HTTP routes, and MCP tools keep their behavior.
 Daemon, SSH sync, browser host, and parser child protocols keep their existing
 launch paths.
 
