@@ -48,10 +48,16 @@ var computeFileHashPrefix = ComputeFileHashPrefix
 func (e *Engine) contentCheckHash(path string, size int64) (string, error) {
 	hash, err := computeFileHashPrefix(path, size)
 	if err == nil {
-		e.contentChecks.Add(1)
-		e.contentCheckBytes.Add(size)
+		e.countContentCheck(size)
 	}
 	return hash, err
+}
+
+// countContentCheck records one source whose content a sync hashed or
+// fingerprinted, sized by the source's byte length.
+func (e *Engine) countContentCheck(size int64) {
+	e.contentChecks.Add(1)
+	e.contentCheckBytes.Add(size)
 }
 
 // ComputeFileHashPrefix returns the SHA-256 hex digest of the first size bytes

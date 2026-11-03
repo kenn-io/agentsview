@@ -114,9 +114,9 @@ The latest release is
   why the daemon keeps reading the disk without root tools. Each
   `watcher: N file(s) changed` line is now followed by a `sync: changed paths:`
   line. It reports how many of those paths were session files, how many
-  sessions were updated or unchanged, how many sessions were re-read in full
+  sessions were updated or unchanged, how many sessions had their content read
   because their file details alone could not show whether they changed, how
-  many bytes that read, and how long the sync took.
+  many bytes those sessions hold, and how long the sync took.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).

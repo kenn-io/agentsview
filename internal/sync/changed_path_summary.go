@@ -7,7 +7,7 @@ import (
 
 // changedPathPassSummary describes the work one changed-path pass did, so a
 // debug log shows whether watcher events name session sources at all and how
-// much source content the pass re-read because stats could not prove a source
+// much source content the pass read because stats could not prove a source
 // unchanged.
 type changedPathPassSummary struct {
 	paths             int
@@ -35,7 +35,7 @@ func (s changedPathPassSummary) finish(e *Engine, stats SyncStats) string {
 	return fmt.Sprintf(
 		"sync: changed paths: %d path(s) matched %d source(s): "+
 			"%d updated, %d unchanged, %d with errors; "+
-			"%d source(s) re-read to check their content (%s); took %s",
+			"%d source(s) read to check their content (%s); took %s",
 		s.paths, s.sources, stats.Synced, stats.Skipped, stats.Failed,
 		checks, formatByteCount(checkBytes),
 		time.Since(s.started).Round(time.Millisecond),
