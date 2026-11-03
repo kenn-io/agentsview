@@ -1242,6 +1242,13 @@ func TestMirrorPushReportsArchiveRebuild(t *testing.T) {
 				body := recorder.Body.String()
 				finished := strings.Index(body, "event: done\n")
 				require.NotEqual(t, -1, finished, "push did not finish: %s", body)
+				reported := strings.Index(body, `"Phase":"rebuilt"`)
+				if rebuild {
+					require.NotEqual(t, -1, reported, "missing rebuilt progress: %s", body)
+					assert.Less(t, reported, finished, "rebuilt progress must precede done")
+				} else {
+					assert.Equal(t, -1, reported, "unexpected rebuilt progress: %s", body)
+				}
 				var result storage.MirrorPushResult
 				require.NoError(t, json.Unmarshal(
 					[]byte(strings.TrimSpace(strings.TrimPrefix(body[finished:], "event: done\ndata: "))),

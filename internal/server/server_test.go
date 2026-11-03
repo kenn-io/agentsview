@@ -5085,6 +5085,115 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	}
 }
 
+func TestResyncEndpoint(t *testing.T) {
+	t.Parallel()
+	te := setup(t)
+
+	te.writeSessionFile(t, "resync-proj", "resync.jsonl",
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsZero, "msg resync"),
+	)
+
+	// Initial sync — session gets processed normally.
+	syncStats := te.syncSSE(t)
+	if syncStats.Synced != 1 {
+		require.FailNowf(t, "test failed", "initial sync: synced = %d, want 1",
+			syncStats.Synced)
+	}
+
+	// Second normal sync — file is unchanged so it's skipped.
+	sync2Stats := te.syncSSE(t)
+	if sync2Stats.Synced != 0 {
+		require.FailNowf(t, "test failed", "second sync: synced = %d, want 0 (skipped)",
+			sync2Stats.Synced)
+	}
+
+	// Resync — should re-process the same unchanged file.
+	resyncStats := te.resyncSSE(t)
+	if resyncStats.Synced != 1 {
+		require.FailNowf(t, "test failed", "resync: synced = %d, want 1 (reprocessed)",
+			resyncStats.Synced)
+	}
+}
+
+func TestResyncConcurrentReads(t *testing.T) {
+	t.Parallel()
+	te := setup(t)
+
+	te.writeSessionFile(t, "conc-proj", "c.jsonl",
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsZero, "concurrent test"),
+	)
+
+	// Initial sync.
+	te.postSSE("/api/v1/sync")
+
+	// Spin up concurrent readers with a barrier to ensure
+	// they are actively querying before resync starts.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var wg stdlibsync.WaitGroup
+	var readersReady stdlibsync.WaitGroup
+	readersReady.Add(4)
+
+	for range 4 {
+		wg.Go(func() {
+			readySignaled := false
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				req := httptest.NewRequestWithContext(ctx,
+					http.MethodGet, "/api/v1/sessions",
+					nil,
+				)
+				w := httptest.NewRecorder()
+				te.handler.ServeHTTP(w, req)
+
+				if !readySignaled && w.Code == http.StatusOK {
+					readersReady.Done()
+					readySignaled = true
+				}
+				// Transient 500s are expected during the
+				// close->reopen window. We only care that
+				// no panics/deadlocks occur and reads
+				// succeed after resync (verified below).
+			}
+		})
+	}
+
+	// Wait for all readers to complete at least one
+	// successful request before triggering resync.
+	readersReady.Wait()
+
+	// Trigger resync while readers are active.
+	resyncStats := te.resyncSSE(t)
+	if resyncStats.Synced != 1 {
+		assert.Failf(t, "test failed",
+			"resync: synced = %d, want 1",
+			resyncStats.Synced,
+		)
+	}
+
+	cancel()
+	wg.Wait()
+
+	// The real assertion: reads must succeed after resync
+	// completes. If the close->reopen cycle left the DB
+	// in a bad state, this will fail.
+	w := te.get(t,
+		"/api/v1/sessions?include_one_shot=true",
+	)
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[sessionListResponse](t, w)
+	if resp.Total != 1 {
+		assert.Failf(t, "test failed", "post-resync sessions = %d, want 1", resp.Total)
+	}
+}
+
 // parseSSEDoneStats extracts the SyncStats from the "done" SSE
 // event in a response body. Fails the test if no done event.
 func parseSSEDoneStats(
