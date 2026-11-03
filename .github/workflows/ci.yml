@@ -419,9 +419,9 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Resolve Windows linter version
-        id: windows_linter_version
-        if: runner.os == 'Windows' && matrix.testSet == 'lint'
+      - name: Resolve linter version
+        id: linter_version
+        if: runner.os == 'macOS' || (runner.os == 'Windows' && matrix.testSet == 'lint')
         shell: bash
         run: |
           version="$(sed -nE "s/^[[:space:]]*GOLANGCI_LINT_VERSION[[:space:]]*[?:]?[[:space:]]*=[[:space:]]*//; T; s/#.*//; s/^[[:space:]\"']+//; s/[[:space:]\"']+$//; p; q" Makefile)"
@@ -435,7 +435,7 @@ jobs:
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         uses: $/.github/actions/go-cache-restore
         with:
-          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.windows_linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
           extra-path: ${{ runner.temp }}/golangci-lint
 
@@ -480,12 +480,9 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Run file identity and signing race tests and linters (macOS)
+      - name: Run file identity and signing race tests (macOS)
         if: runner.os == 'macOS'
-        run: |
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-race.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-race-reruns.txt --packages "./internal/volumeid ./internal/rawcapture ./internal/requestsign" -- -race -tags fts5 -count=1 -timeout=10m
-          kit-retry 3 5 make lint-tools nilaway-golangci-build
-          ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-race.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-race-reruns.txt --packages "./internal/volumeid ./internal/rawcapture ./internal/requestsign" -- -race -tags fts5 -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
@@ -523,6 +520,35 @@ jobs:
 
       - name: Save Go caches
         if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
+        uses: $/.github/actions/go-cache-save
+
+      # Save the test group before the linter restore replaces GO_CACHE_*.
+      - name: Restore macOS linter cache
+        if: runner.os == 'macOS'
+        uses: $/.github/actions/go-cache-restore
+        with:
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
+          include-go-cache: "false"
+          extra-path: ${{ runner.temp }}/golangci-lint
+
+      - name: Run Go linters (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          export PATH="$GOBIN:$PATH"
+          # The cache key validates the binary without checkout timestamps.
+          if [ ! -x "$GOBIN/custom-gcl" ]; then
+            mkdir -p "$GOBIN"
+            kit-retry 3 5 make lint-tools nilaway-golangci-build
+            mv custom-gcl "$GOBIN/custom-gcl"
+          fi
+          "$GOBIN/custom-gcl" run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
+        env:
+          CGO_ENABLED: "1"
+          GOBIN: ${{ runner.temp }}/golangci-lint/bin
+
+      - name: Save macOS linter cache
+        if: runner.os == 'macOS'
+        continue-on-error: true
         uses: $/.github/actions/go-cache-save
 
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
