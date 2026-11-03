@@ -18,6 +18,7 @@ import (
 )
 
 func TestServeSessionsMessagesAndSearch(t *testing.T) {
+	t.Parallel()
 	store, _, _ := clickhouse.TestingNewPushedStore(t)
 	cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}
 	handler := server.New(cfg, store, nil, server.WithVersion(server.VersionInfo{ReadOnly: true})).Handler()

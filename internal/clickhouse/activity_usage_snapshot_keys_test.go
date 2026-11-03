@@ -19,6 +19,7 @@ import (
 // connection turns exact skip-index mode off so the usage query's own setting
 // is what keeps the superseded row out.
 func TestActivityUsageIgnoresObsoleteSnapshotKeys(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	opt, err := chdriver.ParseDSN(dsn)

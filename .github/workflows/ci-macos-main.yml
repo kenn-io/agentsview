@@ -84,7 +84,7 @@ jobs:
 
       # The push and pull request steps are exclusive, so they share one suite.
       - name: Upload gotestsum macos-fsevents results
-        if: failure() || hashFiles('gotestsum/macos-fsevents-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/macos-fsevents-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-macos-fsevents-attempt-${{ github.run_attempt }}

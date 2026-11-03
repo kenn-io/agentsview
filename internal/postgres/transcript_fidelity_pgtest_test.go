@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // TestPGTranscriptFidelityRoundTripsAndRepushes verifies that the
@@ -31,6 +32,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
+	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{

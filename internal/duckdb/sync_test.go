@@ -2238,10 +2238,7 @@ type syncFixture struct {
 func newLocalDB(t *testing.T) *db.DB {
 	t.Helper()
 	local := dbtest.OpenTestDB(t)
-	// Avoid copying the full fallback pricing table on every push.
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "duckdb-test-seed",
-	}}))
+	dbtest.SeedMirrorPricing(t, local)
 	return local
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
@@ -28,6 +29,7 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	dbtest.SeedPricingMeta(t, local)
 	defer local.Close()
 
 	parserParent := "parent-a"
@@ -93,6 +95,7 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	dbtest.SeedPricingMeta(t, local)
 	defer local.Close()
 	parentID := "parent"
 	for _, sess := range []db.Session{

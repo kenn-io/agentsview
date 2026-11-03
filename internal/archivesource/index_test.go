@@ -2,8 +2,11 @@ package archivesource
 
 import (
 	"database/sql"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,16 +16,75 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/rawarchive"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/kit/safefileio"
 )
 
 const sourceDevice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+type archiveFixtureTemplate struct {
+	dir      string
+	snapshot string
+}
+
+var (
+	archiveFixtureRoot      string
+	archiveFixtureTemplates = make(map[string]archiveFixtureTemplate)
+)
+
+func TestMain(m *testing.M) {
+	var err error
+	archiveFixtureRoot, err = os.MkdirTemp("", "agentsview-archive-fixtures-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(archiveFixtureRoot)
+	os.Exit(code)
+}
+
 func archiveFixture(t *testing.T, excluded ...string) (config.ArchiveSource, string) {
+	t.Helper()
+	key := strings.Join(excluded, "\x00")
+	template, ok := archiveFixtureTemplates[key]
+	if !ok {
+		staging, err := os.MkdirTemp(archiveFixtureRoot, "staging-*") //nolint:usetesting // Templates must outlive the test that builds them.
+		require.NoError(t, err)
+		template = archiveFixtureTemplate{dir: staging + "-ready", snapshot: buildArchiveFixture(t, staging, excluded)}
+		// Move the originals out of the paths recorded by the capture.
+		require.NoError(t, os.Rename(staging, template.dir))
+		archiveFixtureTemplates[key] = template
+	}
+	root := t.TempDir()
+	require.NoError(t, copyArchiveFixture(template.dir, root))
+	return config.ArchiveSource{Name: "history", Repository: filepath.Join(root, "repository"), Snapshot: template.snapshot}, filepath.Join(root, "inputs")
+}
+
+func copyArchiveFixture(src, dst string) error {
+	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
+		return err
+	}
+	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && safefileio.ValidatePrivateDir(path) == nil {
+			rel, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			return safefileio.EnsurePrivateDir(filepath.Join(dst, rel))
+		}
+		return nil
+	})
+}
+
+func buildArchiveFixture(t *testing.T, dir string, excluded []string) string {
 	t.Helper()
 	ctx := t.Context()
 	const device = sourceDevice
 	const session = "019eb791-cf7d-75c1-8439-9ed74c122e02"
-	inputs := t.TempDir()
+	inputs := filepath.Join(dir, "inputs")
 	data := filepath.Join(inputs, "application")
 	require.NoError(t, os.MkdirAll(data, 0o700))
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(data, "sessions.db"))
@@ -78,13 +140,13 @@ func archiveFixture(t *testing.T, excluded ...string) (config.ArchiveSource, str
 	changed, err := archive.Import(ctx, spec)
 	require.NoError(t, err)
 	require.Len(t, changed.Gaps, 1)
-	repository := filepath.Join(t.TempDir(), "repository")
+	repository := filepath.Join(dir, "repository")
 	report, err := archive.Backup(ctx, repository, settings, "test")
 	require.NoError(t, err)
 	require.Equal(t, 2, report.Sources)
 	require.NoError(t, archive.Close())
 	require.NoError(t, database.Close())
-	return config.ArchiveSource{Name: "history", Repository: repository, Snapshot: report.SnapshotID}, inputs
+	return report.SnapshotID
 }
 
 func TestArchiveSourceBootstrapFromRepository(t *testing.T) {

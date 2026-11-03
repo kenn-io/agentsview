@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -674,7 +675,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			missing = append(missing, t.name)
 			continue
 		}
-		for _, c := range append(t.columns, col(pushVersionCol, tVersion)) {
+		for _, c := range append(slices.Clip(t.columns), col(pushVersionCol, tVersion)) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, t.name+"."+c.name)
 			}

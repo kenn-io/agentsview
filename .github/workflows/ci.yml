@@ -494,7 +494,7 @@ jobs:
         run: make test-evalingest
 
       - name: Upload gotestsum results
-        if: matrix.suite != '' && (failure() || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        if: matrix.suite != '' && (failure() || github.run_attempt > 1 || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -503,7 +503,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum macos-race results
-        if: runner.os == 'macOS' && (failure() || hashFiles('gotestsum/macos-race-reruns.txt') != '')
+        if: runner.os == 'macOS' && (failure() || github.run_attempt > 1 || hashFiles('gotestsum/macos-race-reruns.txt') != '')
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-macos-race-attempt-${{ github.run_attempt }}
@@ -621,7 +621,7 @@ jobs:
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
 
       - name: Upload gotestsum results
-        if: matrix.suite != '' && (failure() || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        if: matrix.suite != '' && (failure() || github.run_attempt > 1 || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -778,7 +778,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Upload gotestsum windows-duckdb results
-        if: failure() || hashFiles('gotestsum/windows-duckdb-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/windows-duckdb-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-windows-duckdb-attempt-${{ github.run_attempt }}
@@ -872,7 +872,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Upload gotestsum results
-        if: matrix.suite != '' && (failure() || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        if: matrix.suite != '' && (failure() || github.run_attempt > 1 || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -1016,7 +1016,7 @@ jobs:
       # Suite names are fixed by the Makefile CI targets. Each leg uploads
       # only the suites it ran.
       - name: Upload gotestsum postgres-core-fast results
-        if: failure() || hashFiles('gotestsum/postgres-core-fast-reruns.txt', 'gotestsum/postgres-core-fast-activity-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-fast-reruns.txt', 'gotestsum/postgres-core-fast-activity-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-postgres-core-fast-attempt-${{ github.run_attempt }}
@@ -1027,7 +1027,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum postgres-core-fast-service results
-        if: failure() || hashFiles('gotestsum/postgres-core-fast-service-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-fast-service-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-postgres-core-fast-service-attempt-${{ github.run_attempt }}
@@ -1036,7 +1036,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum postgres-raw-sync results
-        if: failure() || hashFiles('gotestsum/postgres-raw-sync-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-raw-sync-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-postgres-raw-sync-attempt-${{ github.run_attempt }}
@@ -1045,7 +1045,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum postgres-core-heavy results
-        if: failure() || hashFiles('gotestsum/postgres-core-heavy-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-heavy-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-postgres-core-heavy-attempt-${{ github.run_attempt }}
@@ -1054,7 +1054,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum clickhouse results
-        if: failure() || hashFiles('gotestsum/clickhouse-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/clickhouse-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-clickhouse-attempt-${{ github.run_attempt }}
@@ -1063,7 +1063,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum clickhouse-service results
-        if: failure() || hashFiles('gotestsum/clickhouse-service-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/clickhouse-service-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-clickhouse-service-attempt-${{ github.run_attempt }}

@@ -24,6 +24,7 @@ import (
 )
 
 func TestToolSequencesHTTPParity(t *testing.T) {
+	t.Parallel()
 	local := dbtest.OpenTestDB(t)
 	sessionIDs := dbtest.SeedToolSequencesParity(t, local)
 	const boundaryID = "tool-sequences-parity-boundary"
@@ -140,6 +141,7 @@ func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID stri
 // A push that fails after deleting a shortened transcript's messages can leave
 // their tool calls behind. Evidence links only to messages that still exist.
 func TestToolEvidenceIgnoresOrdinalOfMissingMessage(t *testing.T) {
+	t.Parallel()
 	local := dbtest.OpenTestDB(t)
 	const sessionID = "tool-evidence-missing-message"
 	dbtest.SeedToolSequencesExample(t, local, sessionID)
