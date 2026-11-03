@@ -22,7 +22,6 @@ import (
 func newSessionGetCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "get <id>",
-		Aliases:      []string{"show", "info"},
 		Short:        "Get session metadata and signals",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,

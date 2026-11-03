@@ -14,30 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAgentSessionAliases(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		path string
-	}{
-		{[]string{"sessions", "list"}, "agentsview session list"},
-		{[]string{"session", "ls"}, "agentsview session list"},
-		{[]string{"session", "show", "codex:fixture"}, "agentsview session get"},
-		{[]string{"session", "info", "codex:fixture"}, "agentsview session get"},
-		{[]string{"session", "find", "timeout"}, "agentsview session search"},
-		{[]string{"session", "msgs", "codex:fixture"}, "agentsview session messages"},
-		{[]string{"session", "tools", "codex:fixture"}, "agentsview session tool-calls"},
-	} {
-		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
-			root := newRootCommand()
-			cmd, rest, err := root.Find(tc.args)
-			require.NoError(t, err)
-			assert.Equal(t, tc.path, cmd.CommandPath())
-			require.NoError(t, cmd.ParseFlags(rest))
-			assert.NoError(t, cmd.ValidateArgs(cmd.Flags().Args()))
-		})
-	}
-}
-
 func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	root := newRootCommand()
 	help, err := executeCommand(root, "--help")

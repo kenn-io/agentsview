@@ -22,7 +22,6 @@ import (
 func newSessionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "session",
-		Aliases:      []string{"sessions"},
 		Short:        "Programmatic access to session data",
 		GroupID:      groupCore,
 		SilenceUsage: true,

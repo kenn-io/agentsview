@@ -17,10 +17,6 @@ Use `agentsview session --help` for common backend and output flags; leaf help
 lists inherited flag names and points to the parent that explains them. Core
 commands include examples and describe their limits.
 
-The session group also accepts `sessions`. Its aliases are `ls` for `list`,
-`show` and `info` for `get`, `find` for `search`, `msgs` for `messages`, and
-`tools` for `tool-calls`.
-
 ## Recover from CLI errors
 
 On `main` (unreleased), failed commands print `fatal: <message>` followed by

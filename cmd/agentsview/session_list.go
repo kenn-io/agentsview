@@ -48,7 +48,6 @@ func newSessionListCommand() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:          "list",
-		Aliases:      []string{"ls"},
 		Short:        "List sessions with filters",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
