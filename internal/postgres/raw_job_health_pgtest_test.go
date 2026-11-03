@@ -618,7 +618,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
 	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
-	setRawHealthAcceptedAt(t, pg, time.Now().Add(-time.Hour))
+	setRawHealthAcceptedAt(t, pg, time.Unix(0, 0).UTC())
 	for i := range rawJobHealthMaxRows + 1 {
 		rawHealthCommit(
 			t, store, identity, fmt.Sprintf("capture-cap-%03d", i), "",
@@ -626,12 +626,13 @@ func TestRawJobHealthCaps(t *testing.T) {
 			rawIngestCapturedAt(), object,
 		)
 	}
-	setRawHealthAcceptedAt(t, pg, time.Now())
+	_, err := pg.ExecContext(t.Context(), `ALTER TABLE raw_manifests ALTER COLUMN accepted_at SET DEFAULT 'infinity'::timestamptz`)
+	require.NoError(t, err)
 	capManifest := rawHealthCommit(
 		t, store, identity, "capture-job-cap", "", "sessions/job-cap",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
 	)
-	_, err := pg.ExecContext(t.Context(), `
+	_, err = pg.ExecContext(t.Context(), `
 		DELETE FROM raw_ingest_jobs
 		WHERE tenant_id = $1 AND manifest_id <> $2`,
 		identity.TenantID, capManifest.ManifestID,
