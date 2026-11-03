@@ -1155,11 +1155,6 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 	}})
 	sessionMap := make(map[string]string, unchangedSessions+1)
 	destination := testDB(t)
-	for i := range unchangedSessions {
-		gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
-		hash := fmt.Sprintf("%064x", i+1)
-		sessionMap[gid] = hash
-	}
 	// No checkpoint stage exists yet, so satisfyAllArtifactCheckpointStagesTx
 	// would match nothing. imported_at uses its column default.
 	require.NoError(t, destination.Update(t.Context(), func(tx *sql.Tx) error {
@@ -1171,8 +1166,10 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 		defer func() { _ = stmt.Close() }()
 		for i := range unchangedSessions {
 			gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
+			hash := fmt.Sprintf("%064x", i+1)
+			sessionMap[gid] = hash
 			if _, err := stmt.ExecContext(
-				t.Context(), contractOrigin, gid, fmt.Sprintf("%064x", i+1), gid,
+				t.Context(), contractOrigin, gid, hash, gid,
 			); err != nil {
 				return err
 			}
