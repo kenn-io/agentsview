@@ -194,8 +194,17 @@ jobs:
         working-directory: frontend
 
       - name: Run frontend tests
-        run: npm test -- --reporter=verbose
+        run: npm test -- --retry=2 --reporter=default --reporter=github-actions --reporter=json --outputFile.json=test-results/vitest/frontend.json
         working-directory: frontend
+
+      - name: Upload Vitest frontend report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vitest-frontend-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/vitest/frontend.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   frontend-node-26:
     needs: changes
@@ -220,8 +229,17 @@ jobs:
         working-directory: frontend
 
       - name: Run frontend tests
-        run: npm test -- --reporter=verbose
+        run: npm test -- --retry=2 --reporter=default --reporter=github-actions --reporter=json --outputFile.json=test-results/vitest/frontend-node-26.json
         working-directory: frontend
+
+      - name: Upload Vitest frontend-node-26 report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vitest-frontend-node-26-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/vitest/frontend-node-26.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   docs:
     name: Docs and scripts
@@ -1147,13 +1165,25 @@ jobs:
           done
         working-directory: frontend
 
+      # Upload each JSON report before the next Playwright run clears
+      # test-results/.
       - name: Run E2E tests
-        run: npx playwright test --reporter=list --project=${{ matrix.browser }}
+        run: npx playwright test --reporter=list,json --project=${{ matrix.browser }}
         working-directory: frontend
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
           E2E_PREBUILT_SERVER: /tmp/agentsview
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/playwright/e2e-${{ matrix.browser }}.json
           PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
+
+      - name: Upload Playwright E2E report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: playwright-e2e-${{ matrix.browser }}-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/playwright/e2e-${{ matrix.browser }}.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Run DuckDB E2E tests
         if: matrix.browser == 'chromium'
@@ -1161,7 +1191,17 @@ jobs:
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
           E2E_PREBUILT_SERVER: /tmp/agentsview
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/playwright/e2e-duckdb.json
           PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
+
+      - name: Upload Playwright DuckDB E2E report
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: playwright-e2e-duckdb-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/playwright/e2e-duckdb.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Print Playwright browser server logs on failure
         if: failure() && steps.browser_server.outcome == 'success'

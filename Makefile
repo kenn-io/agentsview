@@ -521,7 +521,7 @@ e2e:
 e2e-duckdb:
 	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb \
 		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
-		npx playwright test --reporter=list \
+		npx playwright test \
 		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
 		e2e/session-list.spec.ts --project=chromium
 
