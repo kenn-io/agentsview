@@ -16,7 +16,7 @@ import (
 func lockRawActivationRelations(ctx context.Context, tx *sql.Tx) error {
 	for _, entry := range []struct{ tables, mode string }{
 		{`pinned_messages,raw_corpus_state,raw_curation,raw_legacy_supersessions,raw_pins,raw_rollout_scopes,raw_session_groups,sessions,starred_sessions`, "ROW EXCLUSIVE"},
-		{`friction_findings,messages,raw_content_revisions,raw_ingest_jobs,raw_message_dialogue,raw_session_branches,raw_session_links,raw_session_public_aliases,raw_source_heads,raw_source_projections,secret_findings,tool_calls,tool_result_events,usage_events`, "ACCESS SHARE"},
+		{`friction_findings,messages,raw_content_revisions,raw_ingest_jobs,raw_message_dialogue,raw_session_branches,raw_session_links,raw_session_public_aliases,raw_source_heads,raw_source_projections,session_plan_usage,secret_findings,tool_calls,tool_result_events,usage_events`, "ACCESS SHARE"},
 	} {
 		if _, err := tx.ExecContext(ctx, `LOCK TABLE `+entry.tables+` IN `+entry.mode+` MODE`); err != nil {
 			return err

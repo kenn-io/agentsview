@@ -23,11 +23,18 @@ func TestRawActivationPrelocksBeforeCorpus(t *testing.T) {
 		`SELECT id FROM pinned_messages WHERE session_id='codex:portable' FOR UPDATE`,
 		`SELECT session_id FROM starred_sessions WHERE session_id='codex:portable' FOR UPDATE`,
 		`LOCK TABLE raw_pins IN ACCESS EXCLUSIVE MODE`,
+		`LOCK TABLE session_plan_usage IN ACCESS EXCLUSIVE MODE`,
 		`ALTER SEQUENCE pinned_messages_id_seq CACHE 1`,
 	} {
 		t.Run(lock, func(t *testing.T) {
 			f, _ := supersessionFixture(t)
 			require.NoError(t, ChangeRawRollout(t.Context(), f.admin, f.schema, f.tenant, "", "", "shadow"))
+			if lock == `LOCK TABLE session_plan_usage IN ACCESS EXCLUSIVE MODE` {
+				// Establish the map first. Reactivation skips carry preparation, so
+				// parity must wait on this table before acquiring the corpus fence.
+				_, err := ActivateRawRollout(t.Context(), f.admin, f.schema, f.tenant, "device-a", "", activationOptions())
+				require.NoError(t, err)
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			blocker, err := f.admin.BeginTx(ctx, nil)
