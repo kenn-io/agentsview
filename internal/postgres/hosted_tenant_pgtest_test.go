@@ -485,6 +485,15 @@ func TestHostedTenantProvisioningUsesOneConnection(t *testing.T) {
 	require.NoError(t, EnsureHostedTenant(ctx, pg, schema, "tenant-a"))
 }
 
+func TestHostedTenantUpgradeInstallsCommitLinksBeforeCatalogCheck(t *testing.T) {
+	f := newHostedFixture(t, "tenant-a")
+	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE commit_links`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+}
+
 func TestHostedTenantUpgradeInstallsFrictionTablesBeforeCatalogCheck(t *testing.T) {
 	f := newHostedFixture(t, "tenant-a")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE friction_findings`)

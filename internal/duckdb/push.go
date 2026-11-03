@@ -1028,6 +1028,9 @@ func (s *Sync) pushSession(
 	if err := s.replaceToolRows(ctx, exec, sess.ID, msgs); err != nil {
 		return 0, err
 	}
+	if err := s.replaceCommitLinks(ctx, exec, sess.ID); err != nil {
+		return 0, err
+	}
 	if err := s.replaceSecretFindings(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
@@ -1043,6 +1046,7 @@ func (s *Sync) replaceSessionDependents(
 	// usage_events is deliberately absent here: replaceUsageEvents owns that
 	// delete+reinsert so the row is cleared exactly once per push.
 	for _, stmt := range []string{
+		`DELETE FROM commit_links WHERE session_id = ?`,
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM secret_findings WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
@@ -1054,6 +1058,7 @@ func (s *Sync) replaceSessionDependents(
 	return nil
 }
 
+// Keep commit_links project evidence until replaceRetainedCommitLinks refreshes it.
 func (s *Sync) deleteMirrorSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {

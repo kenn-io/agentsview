@@ -397,7 +397,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		return err
 	}
 	for _, l := range commitLinks(calls, cwd) {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES (?,?,?,?,?,?,?,?,?)`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project) SELECT ?,?,?,?,?,?,?,?,?,project FROM sessions WHERE id=?`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt, sessionID); err != nil {
 			return err
 		}
 	}
@@ -447,7 +447,7 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 }
 
 const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
- (s.id IS NULL OR s.deleted_at IS NOT NULL),
+ (s.id IS NULL OR s.deleted_at IS NOT NULL),COALESCE(s.project,l.project),
  turn.ordinal, turn.content
  FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
@@ -457,26 +457,19 @@ const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.reposit
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
 func readCommitLinks(ctx context.Context, tx *sql.Tx, where string, args ...any) ([]CommitLink, error) {
-	rows, err := tx.QueryContext(ctx, commitLinkSelect+where+` ORDER BY l.session_id,l.message_ordinal,l.call_index,l.sha`, args...)
+	rows, err := sessionCommitLinkRows(ctx, tx, where, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	links := []CommitLink{}
-	for rows.Next() {
-		var l CommitLink
-		var ordinal sql.NullInt64
-		var text sql.NullString
-		if err := rows.Scan(&l.SessionID, &l.SHA, &l.Branch, &l.Subject, &l.Repository, &l.MessageOrdinal, &l.CallIndex, &l.ToolUseID, &l.CommittedAt, &l.Missing, &ordinal, &text); err != nil {
-			return nil, err
-		}
-		l.Source = "transcript"
-		if !l.Missing && ordinal.Valid {
-			l.Turn = &CommitTurn{Ordinal: int(ordinal.Int64), Text: stringutil.SafeTruncate(text.String, 2000)}
+	links := make([]CommitLink, 0, len(rows))
+	for _, r := range rows {
+		l := r.CommitLink
+		if !l.Missing && r.TurnOrdinal != nil {
+			l.Turn = &CommitTurn{Ordinal: *r.TurnOrdinal, Text: r.TurnText}
 		}
 		links = append(links, l)
 	}
-	return links, rows.Err()
+	return links, nil
 }
 
 func (d *DB) SessionCommitLinks(ctx context.Context, id string) (*SessionCommitList, error) {
@@ -493,15 +486,9 @@ func (d *DB) SessionCommitLinks(ctx context.Context, id string) (*SessionCommitL
 }
 
 func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSessionList, error) {
-	if len(shas) > MaxCommitSHAs {
-		return nil, fmt.Errorf("provide at most %d commit SHAs: %w", MaxCommitSHAs, ErrInvalidCommitSHA)
-	}
-	queries := make([]string, len(shas))
-	for i, sha := range shas {
-		queries[i] = strings.ToLower(sha)
-		if !commitSHARE.MatchString(queries[i]) {
-			return nil, ErrInvalidCommitSHA
-		}
+	queries, err := NormalizeCommitSHAs(shas)
+	if err != nil {
+		return nil, err
 	}
 	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -520,22 +507,83 @@ func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSess
 		if err != nil {
 			return nil, err
 		}
-		longest := ""
-		for _, link := range links {
-			if len(link.SHA) > len(longest) {
-				longest = link.SHA
-			}
-		}
-		ambiguous := false
-		for _, link := range links {
-			if !strings.HasPrefix(longest, link.SHA) {
-				ambiguous = true
-			}
-		}
-		for i := range links {
-			links[i].Ambiguous = ambiguous
-		}
+		MarkCommitAmbiguity(links)
 		out.Commits = append(out.Commits, CommitSessionMatch{SHA: q, Links: links})
 	}
 	return out, tx.Commit()
+}
+
+// NormalizeCommitSHAs validates and lowercases lookup queries.
+func NormalizeCommitSHAs(shas []string) ([]string, error) {
+	if len(shas) > MaxCommitSHAs {
+		return nil, fmt.Errorf("provide at most %d commit SHAs: %w", MaxCommitSHAs, ErrInvalidCommitSHA)
+	}
+	queries := make([]string, len(shas))
+	for i, sha := range shas {
+		queries[i] = strings.ToLower(sha)
+		if !commitSHARE.MatchString(queries[i]) {
+			return nil, ErrInvalidCommitSHA
+		}
+	}
+	return queries, nil
+}
+
+// MarkCommitAmbiguity marks matches that cannot describe a single commit.
+func MarkCommitAmbiguity(links []CommitLink) {
+	longest := ""
+	for _, link := range links {
+		if len(link.SHA) > len(longest) {
+			longest = link.SHA
+		}
+	}
+	ambiguous := false
+	for _, link := range links {
+		if !strings.HasPrefix(longest, link.SHA) {
+			ambiguous = true
+		}
+	}
+	for i := range links {
+		links[i].Ambiguous = ambiguous
+	}
+}
+
+// CommitLinkRow carries a prompt copied with its commit link for replica reads.
+type CommitLinkRow struct {
+	CommitLink
+	TurnOrdinal *int
+	TurnText    string
+	Project     string
+}
+
+func (d *DB) SessionCommitLinkRows(ctx context.Context, id string) ([]CommitLinkRow, error) {
+	return sessionCommitLinkRows(ctx, d.getReader(), "l.session_id=?", id)
+}
+
+// RetainedCommitLinkRows returns links whose sessions were permanently deleted.
+func (d *DB) RetainedCommitLinkRows(ctx context.Context) ([]CommitLinkRow, error) {
+	return sessionCommitLinkRows(ctx, d.getReader(), "s.id IS NULL")
+}
+
+func sessionCommitLinkRows(ctx context.Context, q messageRowsQuerier, where string, args ...any) ([]CommitLinkRow, error) {
+	rows, err := q.QueryContext(ctx, commitLinkSelect+where+" ORDER BY l.session_id,l.message_ordinal,l.call_index,l.sha", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CommitLinkRow
+	for rows.Next() {
+		var r CommitLinkRow
+		var ordinal sql.NullInt64
+		var text sql.NullString
+		if err := rows.Scan(&r.SessionID, &r.SHA, &r.Branch, &r.Subject, &r.Repository, &r.MessageOrdinal, &r.CallIndex, &r.ToolUseID, &r.CommittedAt, &r.Missing, &r.Project, &ordinal, &text); err != nil {
+			return nil, err
+		}
+		r.Source = "transcript"
+		if ordinal.Valid {
+			r.TurnOrdinal = new(int(ordinal.Int64))
+			r.TurnText = stringutil.SafeTruncate(text.String, 2000)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

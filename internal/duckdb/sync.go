@@ -426,6 +426,9 @@ func (s *Sync) runIncrementalPush(
 	identityRevision := probe.IdentityRevision
 	mappingRevision := probe.MappingRevision
 	if result.Errors == 0 {
+		if err := s.replaceRetainedCommitLinks(ctx); err != nil {
+			return result, err
+		}
 		refreshed, err := s.refreshCurationIfChanged(ctx)
 		if err != nil {
 			return result, err
