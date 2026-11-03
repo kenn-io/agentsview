@@ -159,6 +159,8 @@ func TestRawUploadEmptyPatchReachesService(t *testing.T) {
 		{name: "invalid request mapping", appendErr: rawsync.ErrInvalid, wantStatus: http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
 			const uploadID = "upl_AQEBAQEBAQEBAQEBAQEBAQ"
 			object := rawHTTPUploadObject(t, nil)

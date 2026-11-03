@@ -161,6 +161,8 @@ func TestUploadServiceChecksumMismatchResetsSession(t *testing.T) {
 		{name: "wrong empty digest", length: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 			store := newMemoryUploadSessionStore()
 			custody := newMemoryUploadCustody()

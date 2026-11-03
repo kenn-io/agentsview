@@ -218,6 +218,26 @@ func TestRawClientEndToEnd(t *testing.T) {
 	} {
 		length := tc.length
 		t.Run("capture/"+strconv.Itoa(length), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			uploads := newE2EUploadSessionStore()
+			httpServer, auth := newE2ERawSyncServer(t, uploads)
+			enrollment, err := auth.EnrollDevice(ctx, "tenant-e2e", "laptop-e2e")
+			require.NoError(t, err)
+			checkpoint, err := rawcheckpoint.Open(ctx, filepath.Join(t.TempDir(), "rawcheckpoint.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
+			require.NoError(t, checkpoint.SetDevice(ctx, enrollment.Identity.DeviceID))
+			client, err := rawclient.NewClient(rawclient.Config{
+				BaseURL:     httpServer.URL,
+				DeviceID:    enrollment.Identity.DeviceID,
+				Credential:  enrollment.Credential,
+				HTTPClient:  httpServer.Client(),
+				ChunkBytes:  8,
+				TokenMargin: time.Minute,
+			})
+			require.NoError(t, err)
+
 			before := uploads.appendCounts()
 			root, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
