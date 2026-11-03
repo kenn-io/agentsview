@@ -79,6 +79,8 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 /// noticed soon after it ends, and well above the request cost of one
 /// loopback GET.
 const BACKEND_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+const BACKEND_READY_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+const BACKEND_LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
 const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
@@ -4082,6 +4084,12 @@ struct BackendProbeState {
     last: Option<(u16, bool)>,
 }
 
+#[derive(serde::Deserialize)]
+struct BackendPingResponse {
+    ok: bool,
+    service: String,
+}
+
 impl BackendProbeState {
     /// Records one probe result and reports whether the current page needs
     /// to be reloaded.
@@ -4089,11 +4097,10 @@ impl BackendProbeState {
     /// The window is reloaded when a reachable backend is not the one the
     /// window was last known to be on: it answers on a different port, or it
     /// answers again after having been unreachable. A backend that comes back
-    /// on the same port may be a different process, and the version endpoint
-    /// carries no per-process identity to tell them apart, so the
-    /// down-then-up transition is the signal. Recovery fires once per
-    /// transition, never on every probe, and never while the backend is down,
-    /// because there would be nothing to reload.
+    /// on the same port may be a different process, so the down-then-up
+    /// transition is the signal. Recovery fires once per transition, never on
+    /// every probe, and never while the backend is down, because there would
+    /// be nothing to reload.
     ///
     /// The first observation never reloads: start-up has already pointed the
     /// window at the backend.
@@ -4121,7 +4128,7 @@ fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
     thread::spawn(move || {
         loop {
             if let Some(port) = current_backend_port(&handle) {
-                let reachable = backend_endpoint_ready(port);
+                let reachable = backend_liveness_ready(port);
                 let deep_link_state = handle.state::<DeepLinkState>();
                 if let Ok(mut dispatch) = deep_link_state.dispatch.lock() {
                     // Recheck after HTTP: startup may have published a new port.
@@ -4167,24 +4174,37 @@ fn wait_for_server_stopped(port: u16, timeout: Duration) -> bool {
 fn backend_endpoint_ready(port: u16) -> bool {
     let request =
         format!("GET /api/v1/version HTTP/1.1\r\nHost: {HOST}:{port}\r\nConnection: close\r\n\r\n");
-    let response = match read_http_response(port, request.as_str()) {
+    let response = match read_http_response(port, request.as_str(), BACKEND_READY_PROBE_TIMEOUT) {
         Some(resp) => resp,
         None => return false,
     };
-    response.starts_with(b"HTTP/1.1 401 ")
-        || response.starts_with(b"HTTP/1.0 401 ")
+    response_is_auth_challenge(response.as_slice())
         || version_response_looks_valid(response.as_slice())
 }
 
-fn read_http_response(port: u16, request: &str) -> Option<Vec<u8>> {
+fn backend_liveness_ready(port: u16) -> bool {
+    // Runtime recovery only needs process liveness. Unlike the version
+    // endpoint, this probe does not wait for archive-backed state.
+    let request =
+        format!("GET /api/ping HTTP/1.1\r\nHost: {HOST}:{port}\r\nConnection: close\r\n\r\n");
+    let response = match read_http_response(port, request.as_str(), BACKEND_LIVENESS_PROBE_TIMEOUT)
+    {
+        Some(resp) => resp,
+        None => return false,
+    };
+    response_is_auth_challenge(response.as_slice())
+        || ping_response_looks_valid(response.as_slice())
+}
+
+fn read_http_response(port: u16, request: &str, timeout: Duration) -> Option<Vec<u8>> {
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    let mut stream = match TcpStream::connect_timeout(&addr.into(), Duration::from_millis(250)) {
+    let mut stream = match TcpStream::connect_timeout(&addr.into(), timeout) {
         Ok(stream) => stream,
         Err(_) => return None,
     };
 
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
 
     if stream.write_all(request.as_bytes()).is_err() {
         return None;
@@ -4200,15 +4220,25 @@ fn read_http_response(port: u16, request: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-fn version_response_looks_valid(response: &[u8]) -> bool {
+fn response_is_auth_challenge(response: &[u8]) -> bool {
+    response.starts_with(b"HTTP/1.1 401 ") || response.starts_with(b"HTTP/1.0 401 ")
+}
+
+fn success_response_body(response: &[u8]) -> Option<&[u8]> {
     if !(response.starts_with(b"HTTP/1.1 200") || response.starts_with(b"HTTP/1.0 200")) {
-        return false;
+        return None;
     }
-    let body = if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
-        &response[(idx + 4)..]
-    } else if let Some(idx) = response.windows(2).position(|w| w == b"\n\n") {
-        &response[(idx + 2)..]
-    } else {
+    if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+        return Some(&response[(idx + 4)..]);
+    }
+    response
+        .windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|idx| &response[(idx + 2)..])
+}
+
+fn version_response_looks_valid(response: &[u8]) -> bool {
+    let Some(body) = success_response_body(response) else {
         return false;
     };
     let body = String::from_utf8_lossy(body);
@@ -4217,6 +4247,14 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
         && body.contains("\"build_date\"")
         && body.contains("\"api_version\"")
         && body.contains("\"data_version\"")
+}
+
+fn ping_response_looks_valid(response: &[u8]) -> bool {
+    let Some(body) = success_response_body(response) else {
+        return false;
+    };
+    serde_json::from_slice::<BackendPingResponse>(body)
+        .is_ok_and(|ping| ping.ok && ping.service == "agentsview")
 }
 
 #[tauri::command]
@@ -6061,6 +6099,76 @@ agentsview running at http://127.0.0.1:18082
 
         let (port, request) = spawn_response_server(b"");
         let ready = backend_endpoint_ready(port);
+        request.join().expect("response server should finish");
+        assert!(!ready, "empty response");
+    }
+
+    #[test]
+    fn backend_liveness_probe_uses_ping_endpoint() {
+        let response = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"healthy\":true,\"service\":\"agentsview\",\"pid\":42}";
+        let (port, request) = spawn_response_server(response);
+        let ready = backend_liveness_ready(port);
+        let request = request.join().expect("response server should finish");
+
+        assert!(request.starts_with("GET /api/ping HTTP/1.1\r\n"));
+        assert!(request.contains(&format!("Host: {HOST}:{port}\r\n")));
+        assert!(!request.contains("/api/v1/version"));
+        assert!(!request.contains("Authorization:"));
+        assert!(ready);
+    }
+
+    #[test]
+    fn backend_liveness_probe_preserves_status_boundaries() {
+        let cases: &[(&str, &[u8], bool)] = &[
+            (
+                "HTTP/1.0 401",
+                b"HTTP/1.0 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "HTTP/1.1 401",
+                b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "healthy agentsview",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"healthy\":true,\"service\":\"agentsview\",\"pid\":42}",
+                true,
+            ),
+            (
+                "stalled agentsview",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"healthy\":false,\"service\":\"agentsview\",\"pid\":42}",
+                true,
+            ),
+            (
+                "not ok",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":false,\"service\":\"agentsview\"}",
+                false,
+            ),
+            (
+                "wrong service",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"service\":\"other\"}",
+                false,
+            ),
+            (
+                "unrelated HTML 200",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n<html></html>",
+                false,
+            ),
+            ("403", b"HTTP/1.1 403 Forbidden\r\n\r\n", false),
+            ("503", b"HTTP/1.1 503 Service Unavailable\r\n\r\n", false),
+            ("HTTP/1.1 4010", b"HTTP/1.1 4010 Invalid\r\n\r\n", false),
+        ];
+
+        for &(name, response, expected) in cases {
+            let (port, request) = spawn_response_server(response);
+            let ready = backend_liveness_ready(port);
+            request.join().expect("response server should finish");
+            assert_eq!(ready, expected, "{name}");
+        }
+
+        let (port, request) = spawn_response_server(b"");
+        let ready = backend_liveness_ready(port);
         request.join().expect("response server should finish");
         assert!(!ready, "empty response");
     }
