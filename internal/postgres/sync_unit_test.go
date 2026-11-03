@@ -18,9 +18,15 @@ func testDB(t *testing.T) *db.DB {
 	t.Helper()
 	d, err := db.Open(t.Context(), t.TempDir()+"/test.db")
 	require.NoError(t, err, "opening test db")
-	require.NoError(t, d.SetPricingMeta("_test_seed", "1"))
+	seedTestPricing(t, d)
 	t.Cleanup(func() { d.Close() })
 	return d
+}
+
+// A metadata row skips the fallback pricing copy without giving PostgreSQL a usable price.
+func seedTestPricing(t *testing.T, d *db.DB) {
+	t.Helper()
+	require.NoError(t, d.SetPricingMeta("_test_seed", "1"))
 }
 
 func TestIsUndefinedTable(t *testing.T) {

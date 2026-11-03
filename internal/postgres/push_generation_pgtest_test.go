@@ -86,7 +86,7 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 
 			rebuilt, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
-			require.NoError(t, rebuilt.SetPricingMeta("_test_seed", "1"))
+			seedTestPricing(t, rebuilt)
 			t.Cleanup(func() { require.NoError(t, rebuilt.Close()) })
 			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(f.local.Path()))
 			require.NoError(t, rebuilt.CopySyncStateFrom(f.local.Path()))

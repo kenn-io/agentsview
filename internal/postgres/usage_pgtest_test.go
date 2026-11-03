@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
@@ -1621,9 +1622,7 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	// An empty pricing table is the condition under test.
-	local, err := db.Open(t.Context(), t.TempDir()+"/test.db")
-	require.NoError(t, err, "opening test db")
-	t.Cleanup(func() { local.Close() })
+	local := dbtest.OpenTestDB(t)
 	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()

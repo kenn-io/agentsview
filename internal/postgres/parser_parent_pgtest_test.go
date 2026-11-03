@@ -28,7 +28,7 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	require.NoError(t, local.SetPricingMeta("_test_seed", "1"))
+	seedTestPricing(t, local)
 	defer local.Close()
 
 	parserParent := "parent-a"
@@ -94,7 +94,7 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	require.NoError(t, local.SetPricingMeta("_test_seed", "1"))
+	seedTestPricing(t, local)
 	defer local.Close()
 	parentID := "parent"
 	for _, sess := range []db.Session{
