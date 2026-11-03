@@ -15,6 +15,7 @@ import (
 // Reusing a probe must avoid data scans without hiding replacements or making
 // an unchanged report token stale after a background merge.
 func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
+	t.Parallel()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
 	ctx := t.Context()

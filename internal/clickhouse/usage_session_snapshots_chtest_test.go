@@ -19,6 +19,7 @@ import (
 // A failed publication must retain the previous complete metadata and usage;
 // a later replacement or hard deletion must not leave its old facts visible.
 func TestUsageSessionSnapshotPublication(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
@@ -85,6 +86,7 @@ func TestUsageSessionSnapshotPublication(t *testing.T) {
 }
 
 func TestUsageSessionSnapshotReadParity(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
@@ -136,6 +138,7 @@ func TestUsageSessionSnapshotReadParity(t *testing.T) {
 }
 
 func TestUsageSnapshotWithoutSessionFingerprintIsRemoved(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"full", "out-of-scope"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()

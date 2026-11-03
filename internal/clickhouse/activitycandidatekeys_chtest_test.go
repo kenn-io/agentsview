@@ -13,6 +13,7 @@ import (
 
 // An older event can admit a key, but only its latest version may admit a session.
 func TestActivityCandidateKeysKeepLatestEventVersion(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	for _, statement := range []string{
