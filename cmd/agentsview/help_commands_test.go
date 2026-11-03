@@ -29,6 +29,7 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	help, err := executeCommand(root, "--help")
 	require.NoError(t, err)
 	sources := map[string]string{"root help": help}
+	var tokenUseHelp string
 	walkHelpCommands(root, func(cmd *cobra.Command) {
 		sources[cmd.CommandPath()] = cmd.Long
 		if cmd.Parent() == nil {
@@ -44,6 +45,9 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 		args := append(strings.Fields(path), "--help")
 		rendered, err := executeCommand(newRootCommand(), args...)
 		require.NoError(t, err, "%s help", cmd.CommandPath())
+		if cmd.CommandPath() == "agentsview token-use" {
+			tokenUseHelp = rendered
+		}
 		assert.Contains(t, rendered, cmd.CommandPath())
 		if slices.Contains(agentHelpCoreCommands, path) {
 			assert.NotContains(t, rendered, "Deprecated:", "%s is a canonical command", cmd.CommandPath())
@@ -58,6 +62,8 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 		}
 	})
 	assert.Contains(t, help, "Agent quick start:")
+	require.NotEmpty(t, tokenUseHelp, "token-use help must be rendered")
+	assert.Contains(t, tokenUseHelp, "Deprecated: use 'agentsview session usage ID --json'.")
 	for name, source := range sources {
 		commands := advertisedHelpCommands(source)
 		if name == "root help" {
