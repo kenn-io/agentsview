@@ -63,7 +63,7 @@ Add to your MCP client config (e.g. Claude Desktop):
       }
     }
   }`,
-		GroupID:      groupMeta,
+		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

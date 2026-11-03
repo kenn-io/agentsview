@@ -15,7 +15,7 @@ import (
 )
 
 func newArchiveCommand() *cobra.Command {
-	command := &cobra.Command{Use: "archive", Short: "Retain original session files, reparse them, and move a complete archive", GroupID: groupUsage}
+	command := &cobra.Command{Use: "archive", Short: "Retain original session files, reparse them, and move a complete archive", GroupID: groupData}
 	var captureRoots []string
 	var identityFrom string
 	var writersStopped bool

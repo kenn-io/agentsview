@@ -438,7 +438,7 @@ func newExportReportingTestRootWithDeps(
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddGroup(&cobra.Group{ID: groupUsage, Title: "Test reports:"})
+	root.AddGroup(&cobra.Group{ID: groupData, Title: "Data Commands:"})
 	root.AddCommand(newExportCommandWithDeps(deps))
 	return root
 }

@@ -23,7 +23,7 @@ func newSessionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "session",
 		Short:        "Programmatic access to session data",
-		GroupID:      groupCore,
+		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

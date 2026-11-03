@@ -27,7 +27,7 @@ func newFrictionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "friction",
 		Short:        "Build and read the Friction Log (heuristic session review)",
-		GroupID:      groupCore,
+		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

@@ -98,7 +98,7 @@ func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "export",
 		Short:        "Export local archive data",
-		GroupID:      groupUsage,
+		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

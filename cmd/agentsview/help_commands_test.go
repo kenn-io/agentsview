@@ -14,6 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Core commands must carry an example, and leaf commands an explanation.
+var agentHelpCoreCommands = []string{
+	"serve", "serve status", "serve stop", "daemon", "daemon start", "daemon stop", "daemon status", "daemon restart", "openapi", "update", "mcp",
+	"source", "source list", "source sync", "source import", "source chrome", "source raw", "source cursor", "source cursor sync-usage",
+	"project", "project list", "report", "report stats", "report activity", "report usage", "report usage daily", "report usage statusline",
+	"replica", "replica pg", "replica duckdb", "replica clickhouse", "index", "index embeddings", "index classifier", "archive diff",
+	"session", "session list", "session get", "session messages", "session tool-calls", "session search", "session usage", "session usage-batch", "session watch", "session export", "session sync", "session label", "session parent", "session health", "session prune",
+	"recall", "insight", "friction", "memory", "skills", "secrets", "export", "doctor",
+}
+
 func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	root := newRootCommand()
 	help, err := executeCommand(root, "--help")

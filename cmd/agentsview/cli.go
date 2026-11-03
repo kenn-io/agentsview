@@ -91,10 +91,10 @@ func newRootCommand() *cobra.Command {
 		},
 	}
 	root.AddGroup(
-		&cobra.Group{ID: groupCore, Title: "Sessions, projects, and sources:"},
-		&cobra.Group{ID: groupData, Title: "Servers, mirrors, and indexes:"},
-		&cobra.Group{ID: groupUsage, Title: "Reports, usage, and archive:"},
-		&cobra.Group{ID: groupMeta, Title: "Tools and integrations:"},
+		&cobra.Group{ID: groupCore, Title: "Core Commands:"},
+		&cobra.Group{ID: groupData, Title: "Data Commands:"},
+		&cobra.Group{ID: groupUsage, Title: "Usage Commands:"},
+		&cobra.Group{ID: groupMeta, Title: "Other Commands:"},
 	)
 	root.SetCompletionCommandGroupID(groupMeta)
 	root.SetHelpCommandGroupID(groupMeta)
@@ -185,7 +185,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 			"If a compatible server is already running, serve reports its URL and exits\n" +
 			"with status 1 so a service manager retries; --background exits with status 0.\n" +
 			"Stopping the server also stops its background sync and file watchers.",
-		GroupID:      groupData,
+		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

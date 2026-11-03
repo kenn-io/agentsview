@@ -155,7 +155,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			"Stopping it also stops the web UI and sync. These commands also manage\n" +
 			"a writable server started by `serve` or automatically by a CLI command.\n\n" +
 			"Read-only `replica pg serve` and `replica duckdb serve` processes are managed separately.",
-		GroupID:      groupData,
+		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 	}
