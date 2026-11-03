@@ -197,6 +197,23 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 	defer directory.Close()
 	plan := RawCapturePlan{ConfiguredRoot: src.Root, CaptureRoot: src.Root, SourceKey: source.Key}
 	seen := map[string]bool{}
+	structuralParentPath := ""
+	switch p.Def.Type {
+	case AgentOMP:
+		structuralParentPath = filepath.Dir(src.Path) + ".jsonl"
+	case AgentPi, AgentOMO:
+		if isPiSubagentPath(src.Path) {
+			structuralParentPath = piSubagentParentPath(src.Path)
+		}
+	default:
+		// Other Pi-family providers do not use a structural parent path.
+	}
+	structuralParentLogical := ""
+	if pathUnderRoot(src.Root, structuralParentPath) {
+		if rel, err := filepath.Rel(src.Root, structuralParentPath); err == nil {
+			structuralParentLogical = filepath.ToSlash(rel)
+		}
+	}
 	type capturedFile struct {
 		path string
 		info os.FileInfo
@@ -254,10 +271,14 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 				}
 			}
 			if duplicate >= 0 {
-				// The first spelling is the explicit parent when present, or
-				// the structural parent otherwise. Hosted replay follows the
-				// same lookup order and can resolve that captured spelling.
+				// Keep one manifest entry for the physical file. Prefer the
+				// structural spelling so hosted replay can resolve it without
+				// folding case-sensitive client paths.
 				seen[logical] = true
+				if logical == structuralParentLogical && plan.Entries[duplicate].Path != structuralParentLogical {
+					plan.Entries[duplicate].Path = structuralParentLogical
+					capturedFiles[duplicate].path = structuralParentLogical
+				}
 			} else {
 				seen[logical] = true
 				plan.Entries = append(plan.Entries, RawCaptureEntry{Path: logical, LocalPath: path, Appendable: true})
