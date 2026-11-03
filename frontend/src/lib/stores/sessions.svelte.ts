@@ -1551,14 +1551,11 @@ class SessionsStore {
     const ids = [...deleted.ids];
     if (ids.length === 0) return;
     clearTimeout(deleted.timer);
-    const failed: string[] = [];
-    for (const id of ids) {
-      try {
-        await SessionsService.postApiV1SessionsByIdRestore({ id });
-      } catch {
-        failed.push(id);
-      }
-    }
+    // Each restore is independent, so they run concurrently.
+    const results = await Promise.allSettled(
+      ids.map((id) => SessionsService.postApiV1SessionsByIdRestore({ id })),
+    );
+    const failed = ids.filter((_, i) => results[i]!.status === "rejected");
     this.updateRecentlyDeletedBatch(deleted, failed);
     this.invalidateFilterCaches();
     await this.load({ force: true });

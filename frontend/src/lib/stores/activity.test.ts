@@ -622,6 +622,26 @@ describe("loadFilterOptions", () => {
     expect(activity.machines).toEqual(["laptop", "desktop"]);
   });
 
+  it("requests every list before any of them answers", async () => {
+    let releaseProjects!: (value: { projects: [] }) => void;
+    api.getProjects.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseProjects = resolve;
+      }),
+    );
+    api.getAgents.mockResolvedValueOnce({ agents: [{ name: "claude", count: 2 }] });
+    api.getMachines.mockResolvedValueOnce({ machines: ["laptop"] });
+
+    const loading = activity.loadFilterOptions();
+
+    expect(api.getAgents).toHaveBeenCalledTimes(1);
+    expect(api.getMachines).toHaveBeenCalledTimes(1);
+    releaseProjects({ projects: [] });
+    await expect(loading).resolves.toBe(true);
+    expect(activity.agents).toEqual([{ name: "claude", count: 2 }]);
+    expect(activity.machines).toEqual(["laptop"]);
+  });
+
   it("fetches once across repeated calls", async () => {
     api.getProjects.mockResolvedValue({ projects: [] });
     api.getAgents.mockResolvedValue({ agents: [] });

@@ -8,6 +8,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"golang.org/x/sync/errgroup"
 )
 
 type sessionUsageRowsProvider interface {
@@ -32,14 +33,22 @@ type SessionUsageRollup struct {
 func GetSessionUsageRollup(
 	ctx context.Context, store db.Store, rootID string, includeBreakdown bool,
 ) (*SessionUsageRollup, error) {
+	// The descendant walk needs only rootID, so it runs while the root's
+	// usage loads. A missing or failed root still wins over its result.
+	var descendants []db.Session
+	var walkErr error
+	walkDone := make(chan struct{})
+	go func() {
+		defer close(walkDone)
+		descendants, walkErr = delegatedDescendants(ctx, store, rootID)
+	}()
 	root, err := store.GetSessionUsage(ctx, rootID, includeBreakdown)
+	<-walkDone
 	if err != nil || root == nil {
 		return nil, err
 	}
-
-	descendants, err := delegatedDescendants(ctx, store, rootID)
-	if err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 	out := &SessionUsageRollup{
 		Usage:         root,
@@ -113,6 +122,10 @@ func delegatedDescendants(
 	return delegatedDescendantsFrom(ctx, store, rootID, false)
 }
 
+// descendantWalkConcurrency bounds the child-session reads one level of the
+// descendant walk starts at once.
+const descendantWalkConcurrency = 8
+
 func delegatedDescendantsFrom(
 	ctx context.Context, store db.Store, rootID string, rootDelegated bool,
 ) ([]db.Session, error) {
@@ -124,42 +137,56 @@ func delegatedDescendantsFrom(
 		{id: rootID, delegated: rootDelegated}: {},
 	}
 	included := make(map[string]struct{})
-	queue := []walkState{{id: rootID, delegated: rootDelegated}}
+	level := []walkState{{id: rootID, delegated: rootDelegated}}
 	var out []db.Session
-	for len(queue) > 0 {
+	for len(level) > 0 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		parent := queue[0]
-		queue = queue[1:]
-		children, err := store.GetChildSessions(ctx, parent.id)
-		if err != nil {
+		// Sessions on one level do not depend on each other, so their
+		// children load concurrently. Results are applied in level order,
+		// which keeps the breadth-first discovery order.
+		children := make([][]db.Session, len(level))
+		group, groupCtx := errgroup.WithContext(ctx)
+		group.SetLimit(descendantWalkConcurrency)
+		for i, parent := range level {
+			group.Go(func() error {
+				var err error
+				children[i], err = store.GetChildSessions(groupCtx, parent.id)
+				return err
+			})
+		}
+		if err := group.Wait(); err != nil {
 			return nil, err
 		}
-		for _, child := range children {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			if child.ID == rootID {
-				continue
-			}
-			childDelegated := parent.delegated ||
-				child.RelationshipType == "subagent"
-			include := child.RelationshipType == "subagent" ||
-				(parent.delegated && child.RelationshipType == "fork")
-			if include {
-				if _, ok := included[child.ID]; !ok {
-					included[child.ID] = struct{}{}
-					out = append(out, child)
+		var next []walkState
+		for i, parent := range level {
+			for _, child := range children[i] {
+				if err := ctx.Err(); err != nil {
+					return nil, err
 				}
+				if child.ID == rootID {
+					continue
+				}
+				childDelegated := parent.delegated ||
+					child.RelationshipType == "subagent"
+				include := child.RelationshipType == "subagent" ||
+					(parent.delegated && child.RelationshipType == "fork")
+				if include {
+					if _, ok := included[child.ID]; !ok {
+						included[child.ID] = struct{}{}
+						out = append(out, child)
+					}
+				}
+				state := walkState{id: child.ID, delegated: childDelegated}
+				if _, ok := visited[state]; ok {
+					continue
+				}
+				visited[state] = struct{}{}
+				next = append(next, state)
 			}
-			next := walkState{id: child.ID, delegated: childDelegated}
-			if _, ok := visited[next]; ok {
-				continue
-			}
-			visited[next] = struct{}{}
-			queue = append(queue, next)
 		}
+		level = next
 	}
 	return out, nil
 }
