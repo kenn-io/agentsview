@@ -540,7 +540,6 @@ func newImportCommand() *cobra.Command {
 		Use:   "import --type <type> <path> | import --type claude-ai --sync",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
-			"Supported formats are claude-ai, chatgpt, and gemini-apps. " +
 			"Claude.ai can instead use --type claude-ai --sync with the configured Chrome integration. " +
 			"--replace grants replacement permission only for the named archived sessions.",
 		GroupID:      groupData,
@@ -594,7 +593,7 @@ func newHealthCommand() *cobra.Command {
 			"sessions with grade and outcome columns. " +
 			"With a session ID, prints detailed signal " +
 			"counts for that session.\n\n" +
-			"The list is bounded by --limit and includes one-shot and automated sessions. " +
+			"The list includes one-shot and automated sessions. " +
 			"Use a full ID from session list when a displayed short ID is ambiguous.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
@@ -634,10 +633,8 @@ func newUsageDailyCommand() *cobra.Command {
 		Use:   "daily",
 		Short: "Daily cost summary",
 		Long: "Summarize daily token usage and cost, optionally broken down by model. " +
-			"The default window is the last 30 days; --all removes that default. " +
 			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339; a relative --since is measured back from --until when supplied. " +
-			"Use an IANA --timezone for date boundaries. " +
-			"--no-sync skips on-demand source refresh; --offline reads the local archive with fallback pricing. " +
+			"--offline reads the local archive with fallback pricing. " +
 			"Plan-only sessions and partly captured sessions may be reported separately from priced token totals.",
 		Example: "  agentsview report usage daily --since 28d --breakdown --json\n" +
 			"  agentsview report usage daily --since 2026-10-01 --until 2026-10-07 --timezone UTC --offline --json",
@@ -670,7 +667,7 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Short: "One-line cost summary for today",
 		Long: "Print today's cost in one short line, or a JSON document with the date and exact microdollar amount. " +
 			"Today follows the local system timezone. " +
-			"--no-sync skips refresh and --offline reads the local archive with fallback pricing.",
+			"--offline reads the local archive with fallback pricing.",
 		Example: "  agentsview report usage statusline\n" +
 			"  agentsview report usage statusline --agent codex --json",
 		SilenceUsage: true,
@@ -712,7 +709,6 @@ func newActivityReportCommand() *cobra.Command {
 		Short: "Activity report over a date range",
 		Long: "Report activity totals, peak concurrency, breakdowns, and a page of sessions. " +
 			"Use --preset day, week, or month with an optional --date YYYY-MM-DD; custom ranges require --preset custom and RFC3339 --from/--to bounds. " +
-			"Use an IANA --timezone and --bucket 5m, 15m, 1h, 1d, or 1w. " +
 			"JSON includes the detailed bucket timeline and session continuation values. " +
 			"For daemon paging, keep the returned report ID and cursor together so subsequent pages use the same report generation. " +
 			"--offline reads local archived data with fallback pricing.",
@@ -981,8 +977,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CODEBUDDY_DIR           CodeBuddy data directory")
 	fmt.Fprintln(w, "  PIEBALD_DIR             Piebald data directory")
 	fmt.Fprintln(w, "  AGENTSVIEW_DATA_DIR     Data directory (database, config)")
-	fmt.Fprintln(w, "  AGENTSVIEW_NO_DAEMON    Disable automatic daemon startup/replacement")
-	fmt.Fprintln(w, "  AGENTSVIEW_SERVER_TOKEN Bearer token for explicit --server requests")
 	fmt.Fprintln(w, "  AGENTSVIEW_AUTH_TOKEN   Bearer token for the local daemon and its clients")
 	fmt.Fprintln(w, "  AGENTSVIEW_MODE         Deployment default: serve or pg-serve")
 	fmt.Fprintln(w, "  AGENTSVIEW_AUTH_TOKEN_FILE")

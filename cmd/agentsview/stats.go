@@ -33,10 +33,7 @@ func newStatsCommand() *cobra.Command {
 		Use:   "stats",
 		Short: "Window-scoped workspace analytics (v1 schema)",
 		Long: "Summarize sessions, activity, and outcomes within a bounded time window. " +
-			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339; --since defaults to 28d. " +
-			"Use an IANA --timezone for calendar grouping. " +
-			"One-shot and automated sessions are excluded unless included explicitly. " +
-			"--include-project and --exclude-project are repeatable. " +
+			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339. " +
 			"GitHub outcome enrichment is opt-in and may contact GitHub.",
 		GroupID:      groupData,
 		Args:         cobra.NoArgs,

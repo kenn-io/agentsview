@@ -70,7 +70,6 @@ func newConversationMessageCommand() *cobra.Command {
 		Use: "message SESSION_ID MESSAGE_ID", Short: "Read a bounded chunk of one message revision",
 		Long: "Read one bounded chunk of the exact message revision named by a changes result. " +
 			"Supply its session ID, message ID, --revision, and --database-id, using the same --text-mode. " +
-			"Continue with the returned UTF-8 byte offset rather than calculating character offsets. " +
 			"A changed revision or archive generation requires handling the export error before retrying.",
 		Example: "  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536",
 		Args:    cobra.ExactArgs(2), SilenceUsage: true,

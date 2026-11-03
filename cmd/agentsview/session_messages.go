@@ -19,9 +19,7 @@ func newSessionMessagesCommand() *cobra.Command {
 		Use:   "messages <id>",
 		Short: "Show a window of messages from a session",
 		Long: "Read a bounded transcript page by zero-based message ordinal. " +
-			"Use --from and --limit with --direction asc or desc, or center a window with --around and optional --before/--after. " +
-			"--before/--after require --around; an around window cannot also use --from or an explicit --direction. " +
-			"For descending pages, omitting --from selects the newest page; an explicit --from 0 means ordinal zero.",
+			"--before/--after require --around; an around window cannot also use --from or an explicit --direction.",
 		Example: "  agentsview session messages <id> --from 0 --limit 20 --json\n" +
 			"  agentsview session messages <id> --around 40 --before 5 --after 5 --json\n" +
 			"  agentsview session messages <id> --direction desc --limit 20 --json",

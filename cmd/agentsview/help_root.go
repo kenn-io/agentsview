@@ -18,7 +18,7 @@ const rootAgentGuide = `Agent quick start:
      agentsview report usage daily --since 28d --json
 
 Session IDs:
-  Treat IDs as opaque strings. Copy the full ID from session list or search.
+  Treat IDs as opaque strings.
   Claude IDs are commonly bare UUIDs; other agents use forms such as codex:<id>.
   Remote-synced IDs may be host~codex:<id>. Several read commands retry bare
   provider IDs with known agent prefixes; a full ID avoids choosing a different
@@ -68,7 +68,7 @@ Exit codes:
   65  Invalid values, including malformed time windows and sort selections.
   69  A required service or capability is unavailable.
   70  Capture report failure. capture run preserves the producer's exit code.
-  Codes 2 and 3 for usage are intentional outcomes; no-data 3 is silent after
-  its report. Explicit command and child-process codes take precedence.
+  No-data 3 is silent after its report. Explicit command and child-process
+  codes take precedence.
 
 Choose a command below, then use agentsview <command> --help for flags, limits, and examples.`
