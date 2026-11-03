@@ -536,8 +536,8 @@ func readCommitLinks(ctx context.Context, tx *sql.Tx, owners, where string, args
 }
 
 // Resolve in the read snapshot so imports and restores apply without a Git scan.
-func resolveTrailerOwners(ctx context.Context, tx *sql.Tx) (string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT session_id FROM commit_trailers`)
+func resolveTrailerOwners(ctx context.Context, tx *sql.Tx, where string, args ...any) (string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT session_id FROM commit_trailers WHERE `+where, args...)
 	if err != nil {
 		return "", err
 	}
@@ -563,7 +563,7 @@ func resolveTrailerOwners(ctx context.Context, tx *sql.Tx) (string, error) {
 			continue
 		}
 		sessionID := def.IDPrefix + id
-		matches, err := findSessionIDsByRawSuffix(ctx, tx, sessionID, 2, agent)
+		matches, err := findTrailerOwnerIDs(ctx, tx, sessionID, agent)
 		if err != nil {
 			return "", err
 		}
@@ -582,13 +582,57 @@ func resolveTrailerOwners(ctx context.Context, tx *sql.Tx) (string, error) {
 	return string(encoded), err
 }
 
+// Trailer evidence survives trash and permanent deletion. The CLI's suffix
+// resolver intentionally searches only active sessions.
+func findTrailerOwnerIDs(ctx context.Context, tx *sql.Tx, raw, agent string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM (
+ SELECT id FROM sessions WHERE agent=?2
+ UNION SELECT id FROM excluded_sessions
+ ) WHERE id=?1 OR SUBSTR(id,-(LENGTH(?1)+1)) IN (':' || ?1,'~' || ?1)
+ ORDER BY (id=?1) DESC,id LIMIT 2`, raw, agent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// Enumerate the trailer identities that could resolve to this archive ID.
+// Keep every colon suffix because native IDs can themselves contain colons.
+func sessionTrailerIdentities(id string) []string {
+	var identities []string
+	for i := range id {
+		if i != 0 && id[i-1] != ':' && id[i-1] != '~' {
+			continue
+		}
+		for _, def := range parser.Registry {
+			if raw, ok := strings.CutPrefix(id[i:], def.IDPrefix); ok {
+				identities = append(identities, string(def.Type)+":"+raw)
+			}
+		}
+	}
+	return identities
+}
+
 func (d *DB) SessionCommitLinks(ctx context.Context, id string) (*SessionCommitList, error) {
 	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	owners, err := resolveTrailerOwners(ctx, tx)
+	identities, err := json.Marshal(sessionTrailerIdentities(id))
+	if err != nil {
+		return nil, err
+	}
+	owners, err := resolveTrailerOwners(ctx, tx, `session_id IN (SELECT value FROM json_each(?))`, string(identities))
 	if err != nil {
 		return nil, err
 	}
@@ -615,10 +659,6 @@ func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSess
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	owners, err := resolveTrailerOwners(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
 	out := &CommitSessionList{Commits: make([]CommitSessionMatch, 0, len(shas))}
 	for _, q := range queries {
 		args := []any{q, q + "g"}
@@ -627,7 +667,12 @@ func (d *DB) CommitSessionLinks(ctx context.Context, shas []string) (*CommitSess
 			placeholders = append(placeholders, "?")
 			args = append(args, q[:i])
 		}
-		links, err := readCommitLinks(ctx, tx, owners, `(l.sha>=? AND l.sha<? OR l.sha IN (`+strings.Join(placeholders, ",")+`))`, args...)
+		shaFilter := `(sha>=? AND sha<? OR sha IN (` + strings.Join(placeholders, ",") + `))`
+		owners, err := resolveTrailerOwners(ctx, tx, shaFilter, args...)
+		if err != nil {
+			return nil, err
+		}
+		links, err := readCommitLinks(ctx, tx, owners, strings.ReplaceAll(shaFilter, "sha", "l.sha"), args...)
 		if err != nil {
 			return nil, err
 		}
