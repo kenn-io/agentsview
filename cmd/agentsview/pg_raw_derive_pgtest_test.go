@@ -213,7 +213,7 @@ func TestHostedRuntimeDerivesAcceptedSource(t *testing.T) {
 	assert.Zero(t, attempts)
 	assert.Equal(t, 1, generation)
 	var processingVersion string
-	require.NoError(t, database.QueryRow(`SELECT processing_version FROM raw_ingest_jobs`).Scan(&processingVersion))
+	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT processing_version FROM raw_ingest_jobs`).Scan(&processingVersion))
 	assert.Equal(t, rawProcessingVersion(), processingVersion)
 	ctx, cancel := context.WithCancel(startup.ctx)
 	startup.ctx = ctx

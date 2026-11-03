@@ -168,7 +168,7 @@ func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&state))
 	assert.Equal(t, "complete", state)
 	var attempts int
-	require.NoError(t, f.runtime.QueryRow(`SELECT attempt_count FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&attempts))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT attempt_count FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&attempts))
 	assert.Equal(t, 1, attempts, "same-version replay does not reset a completed job")
 }
 
