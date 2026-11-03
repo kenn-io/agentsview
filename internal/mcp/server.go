@@ -85,7 +85,7 @@ type ServeOptions struct {
 	// Profile controls which shared tools the server advertises. The zero
 	// value preserves the full profile.
 	Profile Profile
-	// Token, when non-empty, requires every StreamableHTTP request to
+	// Token, when non-empty, requires every MCP StreamableHTTP request to
 	// carry "Authorization: Bearer <Token>". It has no effect on stdio.
 	// The command layer sets it for non-loopback HTTP binds so the
 	// network-reachable surface is never unauthenticated.
@@ -100,9 +100,15 @@ func newServer(opts ServeOptions) *mcp.Server {
 		version = "dev"
 	}
 	s := mcp.NewServer(&mcp.Implementation{
-		Name:    "agentsview",
-		Title:   "agentsview session history",
-		Version: version,
+		Name:       "agentsview",
+		Title:      "agentsview session history",
+		Version:    version,
+		WebsiteURL: "https://agentsview.io",
+		Icons: []mcp.Icon{{
+			Source:   serverIconSource,
+			MIMEType: "image/png",
+			Sizes:    []string{"256x256"},
+		}},
 	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
@@ -319,7 +325,10 @@ func newHTTPHandler(opts ServeOptions) http.Handler {
 	srv := newServer(opts)
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return srv }, nil)
-	return withBearerAuth(handler, opts.Token)
+	mux := http.NewServeMux()
+	registerIconRoutes(mux)
+	mux.Handle("/", withBearerAuth(handler, opts.Token))
+	return mux
 }
 
 // withBearerAuth wraps next so every request must present
