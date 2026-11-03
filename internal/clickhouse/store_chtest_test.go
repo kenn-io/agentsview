@@ -16,6 +16,7 @@ import (
 )
 
 func TestReadStatusHonorsProjectFilters(t *testing.T) {
+	t.Parallel()
 	_, syncer, local := newPushedStore(t)
 	ctx := context.Background()
 	archiveID, err := local.GetArchiveID(ctx)
@@ -38,6 +39,7 @@ func TestReadStatusHonorsProjectFilters(t *testing.T) {
 }
 
 func TestStoreSessionsMessagesAndSearch(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := context.Background()
 
@@ -262,6 +264,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 }
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	for _, mode := range []string{"substring", "regex", "fts"} {
 		t.Run(mode, func(t *testing.T) {
@@ -294,6 +297,7 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 }
 
 func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := context.Background()
 	appendMessage(t, local, fixtureAlphaID, "hello_world unique token", "2026-01-10T00:04:00.000Z")
@@ -309,6 +313,7 @@ func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
 }
 
 func TestGetSessionFullReturnsFilePath(t *testing.T) {
+	t.Parallel()
 	store, _, local := newPushedStore(t)
 	ctx := context.Background()
 	want, err := local.GetSessionFull(ctx, fixtureAlphaID)
@@ -331,6 +336,7 @@ func TestGetSessionFullReturnsFilePath(t *testing.T) {
 }
 
 func TestStoreGetSessionHidesTrash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, syncer, local := newPushedStore(t)
 	require.NoError(t, local.SoftDeleteSession(t.Context(), fixtureBetaID))
@@ -354,6 +360,7 @@ func TestStoreGetSessionHidesTrash(t *testing.T) {
 }
 
 func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, syncer, local := newPushedStore(t)
 	count, version, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
@@ -371,6 +378,7 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 }
 
 func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := context.Background()
 
@@ -422,6 +430,7 @@ func (s *activityVectorSearcher) ResolveMessageUnits(_ context.Context, refs []d
 }
 
 func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	for _, tt := range []struct {
@@ -453,6 +462,7 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 }
 
 func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)

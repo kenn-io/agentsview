@@ -15,6 +15,7 @@ import (
 )
 
 func TestClickHouseUsageCostFromFixture(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})

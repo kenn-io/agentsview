@@ -13,6 +13,7 @@ import (
 )
 
 func TestNewStoreRequiresActivityPartsRead(t *testing.T) {
+	t.Parallel()
 	dsn, database := chtest.FreshDatabase(t)
 	admin := chtest.Open(t, dsn, database)
 	ctx := t.Context()

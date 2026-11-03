@@ -20,6 +20,7 @@ import (
 )
 
 func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
+	t.Parallel()
 	failBeforeSessionRows := &pushHooks{beforeSessionRows: func([]db.Session) error {
 		return errors.New("simulated crash before session rows")
 	}}
@@ -103,6 +104,7 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 }
 
 func TestToolSequencesServeAfterPublicationRecovers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
@@ -126,6 +128,7 @@ func TestToolSequencesServeAfterPublicationRecovers(t *testing.T) {
 }
 
 func TestToolSequencesServeSessionsWithoutStoredMessages(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	const id = "ch-metadata-only"
@@ -151,6 +154,7 @@ func TestToolSequencesServeSessionsWithoutStoredMessages(t *testing.T) {
 }
 
 func TestToolSequencesRefuseEmptiedUntimedTranscript(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	const id = "ch-untimed"
@@ -192,6 +196,7 @@ func TestToolSequencesRefuseEmptiedUntimedTranscript(t *testing.T) {
 }
 
 func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	_, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)

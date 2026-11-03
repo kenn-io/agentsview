@@ -19,6 +19,7 @@ import (
 // with activity or usage that day, and rebuilt after one that does; either
 // way it matches a report built by a store that kept nothing.
 func TestEndedActivityReportSurvivesUnrelatedPushes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	push := func() {

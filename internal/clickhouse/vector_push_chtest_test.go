@@ -125,6 +125,7 @@ func newFixtureVectorSource() *fakeVectorSource {
 }
 
 func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -207,6 +208,7 @@ func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 // several sessions removes each session's stale rows without touching what
 // the other sessions still hold, whether the sessions share a flush or not.
 func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		batchSessions int
@@ -269,6 +271,7 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 // after its rows land records no push state for any of its sessions, so the
 // next push repeats them instead of trusting the half-finished write.
 func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -306,6 +309,7 @@ func TestVectorPushFailedFlushKeepsSessionsStale(t *testing.T) {
 }
 
 func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 
@@ -331,6 +335,7 @@ func TestVectorPushSkipsWithoutSourceOrGeneration(t *testing.T) {
 // project scope) gets no vectors, and a mirrored session that later leaves
 // the scope has its vectors evicted with it.
 func TestVectorPushFollowsMirrorResidency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -364,6 +369,7 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 // the marker (an interrupted pass) promotes a scoped push again even though
 // the generation row itself is registered.
 func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -404,6 +410,7 @@ func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 // promotion to generation-wide finds the local index not ready reports the
 // phase skipped instead of failing or panicking on the unopened export.
 func TestVectorPushPromotedExportNotReady(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -433,6 +440,7 @@ func TestVectorPushPromotedExportNotReady(t *testing.T) {
 // under the other archive with its chunks in place and no state row yet (a
 // push mirrors sessions before chunks, and chunks before its state row).
 func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		claim func(t *testing.T, conn *sql.DB, version uint64)
@@ -500,6 +508,7 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 // archive recorded, whether or not a vector source is still attached, and
 // leaves another archive's rows for the same session alone.
 func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -562,6 +571,7 @@ func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 }
 
 func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -699,6 +709,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 }
 
 func TestVectorPushRepairsNamedSessions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()

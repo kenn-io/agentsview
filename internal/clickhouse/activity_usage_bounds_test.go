@@ -14,6 +14,7 @@ import (
 
 // Out-of-range duplicates must not suppress in-range usage at timezone or DST boundaries.
 func TestClickHouseActivityUsageBounds(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	for _, zone := range []string{"UTC", "America/New_York", "Pacific/Kiritimati", "Pacific/Pago_Pago"} {
@@ -66,6 +67,7 @@ func TestClickHouseActivityUsageBounds(t *testing.T) {
 }
 
 func TestClickHouseActivityUsageFractionalBound(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	q, err := activity.ResolveQuery(activity.QueryInput{

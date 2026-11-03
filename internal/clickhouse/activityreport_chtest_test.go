@@ -17,6 +17,7 @@ import (
 )
 
 func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	for _, tc := range []struct {
 		id        string
@@ -63,6 +64,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 }
 
 func TestStoreActivityReportAndRecentEdits(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := context.Background()
 	fixedNow := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -90,6 +92,7 @@ func TestStoreActivityReportAndRecentEdits(t *testing.T) {
 }
 
 func TestActivityReportIncludesSessionWithOnlyToolEventInWindow(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := context.Background()
 	const sessionID = "ch-tool-window"
@@ -149,6 +152,7 @@ func TestActivityReportIncludesSessionWithOnlyToolEventInWindow(t *testing.T) {
 // those pairs, so the report must both survive the key volume and still pick
 // the peer token rows while attributing them to the earliest session.
 func TestActivityReportUsageHandlesOversizedClaudeSnapshotKeys(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
 
