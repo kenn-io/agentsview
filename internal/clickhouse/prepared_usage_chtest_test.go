@@ -374,6 +374,7 @@ func TestEnsureSchemaDuringPreparedUsageRefresh(t *testing.T) {
 // A projection step that fails after it stopped the refresh must start the
 // refresh again. Otherwise prepared usage stays stale, and a later start that
 // finds the projections present never restarts it.
+// No t.Parallel: changes chPreparedUsageProjections, which every EnsureSchema reads.
 func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T) {
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
@@ -876,6 +877,7 @@ func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
 // server restart can change the answer, so later schema steps and pushes on
 // the same server reuse it. An answer recorded before the server started, or
 // by another server and copied in by a restore, is probed again.
+// No t.Parallel: reads the server-wide UNSUPPORTED_METHOD count that other tests raise.
 func TestTableExchangeProbedOncePerServerStart(t *testing.T) {
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
