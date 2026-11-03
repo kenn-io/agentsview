@@ -77,4 +77,4 @@ jobs:
         env:
           AGENTSVIEW_SIMPLE_DIR: ${{ github.workspace }}/dist/agentsview-simple
           CGO_ENABLED: "1"
-        run: go test -tags "fts5" ./internal/db ./internal/service ./internal/mcp -count=1 -timeout=20m
+        run: go test -tags "fts5" ./internal/db ./internal/service ./internal/mcp -v -count=1 -timeout=20m

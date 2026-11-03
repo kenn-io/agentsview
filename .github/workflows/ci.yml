@@ -194,7 +194,7 @@ jobs:
         working-directory: frontend
 
       - name: Run frontend tests
-        run: npm test
+        run: npm test -- --reporter=verbose
         working-directory: frontend
 
   frontend-node-26:
@@ -220,7 +220,7 @@ jobs:
         working-directory: frontend
 
       - name: Run frontend tests
-        run: npm test
+        run: npm test -- --reporter=verbose
         working-directory: frontend
 
   docs:
@@ -388,7 +388,7 @@ jobs:
             'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
-          go test -tags "fts5" $packages -count=1 -timeout=20m
+          go test -tags "fts5" $packages -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -449,14 +449,14 @@ jobs:
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go test -tags "fts5" ./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid -count=1 -timeout=10m
+        run: go test -tags "fts5" ./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid -v -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
       - name: Run file identity and signing race tests and linters (macOS)
         if: runner.os == 'macOS'
         run: |
-          go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -count=1 -timeout=10m
+          go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -v -count=1 -timeout=10m
           kit-retry 3 5 make lint-tools nilaway-golangci-build
           ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
         env:
@@ -724,7 +724,7 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run DuckDB tests
-        run: go test -tags "fts5" ./internal/duckdb -count=1 -timeout=20m
+        run: go test -tags "fts5" ./internal/duckdb -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -794,13 +794,13 @@ jobs:
       # because highly parallel race runs can exhaust deadlines.
       - name: Run Go tests (race detector)
         if: matrix.testSet == 'other'
-        run: go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        run: go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$' | xargs go test -p 4 -tags "fts5" -race -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run ${{ matrix.name }} tests (race detector)
         if: matrix.package != ''
-        run: go test -tags "fts5" -race ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        run: go test -tags "fts5" -race ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
