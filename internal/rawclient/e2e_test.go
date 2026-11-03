@@ -238,7 +238,6 @@ func TestRawClientEndToEnd(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			before := uploads.appendCounts()
 			root, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
 			body := bytes.Repeat([]byte("x"), length)
@@ -265,11 +264,8 @@ func TestRawClientEndToEnd(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, missing, "acknowledgement requires verified physical custody")
 			counts := uploads.appendCounts()
-			require.Len(t, counts, len(before)+1)
-			for uploadID, count := range counts {
-				if _, existed := before[uploadID]; existed {
-					continue
-				}
+			require.Len(t, counts, 1)
+			for _, count := range counts {
 				assert.Equal(t, tc.patches, count)
 			}
 		})

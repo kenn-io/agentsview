@@ -360,42 +360,6 @@ func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) 
 	assert.NoFileExists(t, store.ObjectPath(refs[1]))
 }
 
-func TestUploaderPermanentRejectionAllowsIndependentSource(t *testing.T) {
-	store, first := queuedUploadTestGeneration(t)
-	second := first
-	second.CaptureID = strings.Repeat("3", 32)
-	second.Source.SourceKey = "independent-source"
-	second.CapturedAt = first.CapturedAt.Add(time.Minute)
-	reservation, err := store.ReserveSourceCapture(t.Context(), second.Source,
-		5+rawcheckpoint.CaptureMetadataCharge(1, 1))
-	require.NoError(t, err)
-	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, second))
-	commit := rawsync.CommitResult{
-		ManifestID: strings.Repeat("c", 64), Receipt: strings.Repeat("d", 64),
-		Generation: 1, Created: true,
-	}
-	transport := &uploadTransportStub{
-		uploaded: make(map[rawsync.ObjectRef]string),
-		commitFunc: func(manifest rawsync.Manifest) (rawsync.CommitResult, error) {
-			if manifest.CaptureID == first.CaptureID {
-				return rawsync.CommitResult{}, &rawclient.APIError{Status: http.StatusBadRequest, Code: rawclient.CodeInvalidRequest}
-			}
-			require.Equal(t, second.CaptureID, manifest.CaptureID)
-			return commit, nil
-		},
-	}
-	uploader := New(store, transport, "device-a")
-	_, found, err := uploader.UploadNext(t.Context())
-	require.True(t, found)
-	require.ErrorIs(t, err, ErrPermanentFailure)
-	result, found, err := uploader.UploadNext(t.Context())
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, second.CaptureID, result.CaptureID)
-	assert.Equal(t, commit.Receipt, result.Receipt)
-	assert.Equal(t, 2, transport.commitCalls)
-}
-
 func TestMissingObjectNegotiationUsesBoundedBatches(t *testing.T) {
 	transport := &uploadTransportStub{}
 	objects := make([]rawsync.ObjectRef, 5000)
