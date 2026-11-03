@@ -85,7 +85,7 @@ type ServeOptions struct {
 	// Profile controls which shared tools the server advertises. The zero
 	// value preserves the full profile.
 	Profile Profile
-	// Token, when non-empty, requires every MCP StreamableHTTP request to
+	// Token, when non-empty, requires every StreamableHTTP request to
 	// carry "Authorization: Bearer <Token>". It has no effect on stdio.
 	// The command layer sets it for non-loopback HTTP binds so the
 	// network-reachable surface is never unauthenticated.
@@ -325,10 +325,7 @@ func newHTTPHandler(opts ServeOptions) http.Handler {
 	srv := newServer(opts)
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return srv }, nil)
-	mux := http.NewServeMux()
-	registerIconRoutes(mux)
-	mux.Handle("/", withBearerAuth(handler, opts.Token)) //nolint:kennlint // nohttpmux: the MCP SDK owns this protocol endpoint, not the typed API router.
-	return mux
+	return withBearerAuth(handler, opts.Token)
 }
 
 // withBearerAuth wraps next so every request must present

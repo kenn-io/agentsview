@@ -484,7 +484,7 @@ agentsview mcp --http 0.0.0.0:8085 --http-allow-insecure
 
 When the HTTP listener is reachable beyond loopback, AgentsView requires a
 configured bearer token and enforces `Authorization: Bearer <token>` on every
-MCP request. If `require_auth` is enabled, loopback HTTP binds also require bearer
+request. If `require_auth` is enabled, loopback HTTP binds also require bearer
 auth so forwarded ports are not accidentally unauthenticated.
 
 ## Server Identity (unreleased)
@@ -492,10 +492,6 @@ auth so forwarded ports are not accidentally unauthenticated.
 On `main`, the MCP server declares the AgentsView website and icon. The icon is
 included as a PNG data URI, so stdio and HTTP clients can load it without an
 external request. Whether it appears depends on the client.
-
-The MCP HTTP listener also serves the same PNG at `/icon.png` and `/favicon.ico`.
-These public image routes accept GET and HEAD without a bearer token. MCP
-requests keep their configured authentication.
 
 ## Security Notes
 
