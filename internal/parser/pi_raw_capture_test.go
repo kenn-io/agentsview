@@ -118,6 +118,33 @@ func TestPiRawCaptureContinuesAfterUnavailableRoot(t *testing.T) {
 	assert.Equal(t, transcript, discovery.Sources[0].DisplayPath)
 }
 
+func TestPiRawCaptureUsesNestedRootWhenEarlierRootCannotBeListed(t *testing.T) {
+	parent := t.TempDir()
+	nested := filepath.Join(parent, "nested")
+	transcript := filepath.Join(nested, "session.jsonl")
+	writePiRawFixture(t, transcript, `{"type":"session","id":"nested"}`+"\n")
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{parent, nested}})
+	require.True(t, ok)
+
+	readErr := errors.New("injected directory read failure")
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		if filepath.Clean(dir) == filepath.Clean(parent) {
+			return readErr
+		}
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+	discovery, err := DiscoverRawCaptureSources(ctx, provider)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	require.ErrorIs(t, err, readErr)
+	assert.False(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+	assert.Equal(t, transcript, discovery.Sources[0].Key)
+	source, ok := discovery.Sources[0].Opaque.(JSONLSource)
+	require.True(t, ok)
+	assert.Equal(t, nested, source.Root)
+}
+
 func TestPiRawCaptureParentBoundary(t *testing.T) {
 	for _, symlink := range []bool{false, true} {
 		t.Run(map[bool]string{false: "absolute", true: "symlink"}[symlink], func(t *testing.T) {

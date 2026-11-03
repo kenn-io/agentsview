@@ -43,7 +43,8 @@ func (p *piProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield fu
 	ctx = withRawCaptureStreamingTraversal(ctx)
 	// Unlike ordinary discovery, a missing configured root cannot prove deletions.
 	var incomplete error
-	for index, root := range p.sources.roots {
+	var completedRoots []string
+	for _, root := range p.sources.roots {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -92,14 +93,19 @@ func (p *piProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield fu
 			if !ok {
 				return invalidRawCapturePlan("pi raw source has no physical path")
 			}
-			// Compare configured roots rather than retaining every discovered source.
-			for _, earlier := range p.sources.roots[:index] {
+			// Only a completed traversal proves that an earlier overlapping root
+			// already covered this source. An incomplete parent scan may leave a
+			// nested configured root as the only route to its transcripts.
+			for _, earlier := range completedRoots {
 				if p.sources.pathAllowedByRoot(earlier, src.Path) && p.sources.pathIncluded(earlier, src.Path) && p.sources.sourcePathAllowedByDescendPath(earlier, src.Path) {
 					return nil
 				}
 			}
 			return yield(source)
 		})
+		if err == nil {
+			completedRoots = append(completedRoots, root)
+		}
 		if err != nil {
 			if cause, ok := discoveryYieldCause(err); ok {
 				return false, errors.Join(incomplete, cause)
