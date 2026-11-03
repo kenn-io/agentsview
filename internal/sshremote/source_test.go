@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,6 +91,23 @@ func (e sourceEnv) onlySession(t *testing.T) db.Session {
 	return *session
 }
 
+// sessionAt returns the archived session read from the remote file path.
+func (e sourceEnv) sessionAt(t *testing.T, path string) db.Session {
+	t.Helper()
+	page, err := e.database.ListSessions(t.Context(), db.SessionFilter{})
+	require.NoError(t, err)
+	for _, listed := range page.Sessions {
+		session, err := e.database.GetSessionFull(t.Context(), listed.ID)
+		require.NoError(t, err)
+		if session != nil && session.FilePath != nil &&
+			*session.FilePath == sourceTestHost+":"+path {
+			return *session
+		}
+	}
+	require.FailNow(t, "no archived session for "+path)
+	return db.Session{}
+}
+
 // writeSession writes a one-message Claude session on the remote.
 func writeSession(t *testing.T, path, message string) {
 	t.Helper()
@@ -96,6 +115,24 @@ func writeSession(t *testing.T, path, message string) {
 	require.NoError(t, os.WriteFile(path, []byte(
 		testjsonl.NewSessionBuilder().AddClaudeUser("2024-01-01T00:00:00Z", message).String(),
 	), 0o644))
+}
+
+// mirroredSessionFiles lists the mirror copies of the remote session file.
+func (e sourceEnv) mirroredSessionFiles(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	root := remotesync.MirrorDir(e.dataDir, sourceTestHost)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() && entry.Name() == filepath.Base(e.sessionPath) {
+			found = append(found, path)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return found
 }
 
 // installTestBinary places the shell wrapper in the fake remote's cache as
@@ -127,6 +164,22 @@ func uniqueLines(t *testing.T, path string) []string {
 		}
 	}
 	return lines
+}
+
+// recordingSource records every archive request a sync makes.
+type recordingSource struct {
+	remotesync.Source
+	mu       sync.Mutex
+	archives []remotesync.ArchiveRequest
+}
+
+func (s *recordingSource) Archive(
+	ctx context.Context, request remotesync.ArchiveRequest,
+) (*remotesync.ArchiveStream, error) {
+	s.mu.Lock()
+	s.archives = append(s.archives, request)
+	s.mu.Unlock()
+	return s.Source.Archive(ctx, request)
 }
 
 func TestSSHSourceSyncsRemoteHome(t *testing.T) {
@@ -161,6 +214,54 @@ func TestSSHSourceSyncsRemoteWithInvalidUnusedConfig(t *testing.T) {
 	assert.Equal(t, 1, stats.SessionsSynced)
 }
 
+func TestSSHSourceSyncsAppendedSessionAsDelta(t *testing.T) {
+	env := newSourceEnv(t)
+	installTestBinary(t, env.ssh.Home, env.build)
+	// Sync fetches a full archive when at least half the files changed, so
+	// two unchanged sessions keep the change below that share.
+	projects := filepath.Dir(filepath.Dir(env.sessionPath))
+	writeSession(t, filepath.Join(projects, "project-b", "other-1.jsonl"), "unchanged one")
+	writeSession(t, filepath.Join(projects, "project-c", "other-2.jsonl"), "unchanged two")
+	_, err := env.run(t, env.source())
+	require.NoError(t, err)
+	before := env.sessionAt(t, env.sessionPath)
+	appended := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:01:00Z", "second message over ssh").String()
+	f, err := os.OpenFile(env.sessionPath, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	recorder := &recordingSource{Source: env.source()}
+	_, err = env.run(t, recorder)
+
+	require.NoError(t, err)
+	require.Len(t, recorder.archives, 1)
+	assert.NotNil(t, recorder.archives[0].DeltaFiles, "second sync must request a delta")
+	after := env.sessionAt(t, env.sessionPath)
+	assert.Equal(t, before.ID, after.ID)
+	assert.Greater(t, after.MessageCount, before.MessageCount)
+}
+
+func TestSSHSourceRemovesDeletedFileFromMirrorAndKeepsSession(t *testing.T) {
+	env := newSourceEnv(t)
+	installTestBinary(t, env.ssh.Home, env.build)
+	_, err := env.run(t, env.source())
+	require.NoError(t, err)
+	session := env.onlySession(t)
+	require.Len(t, env.mirroredSessionFiles(t), 1)
+	require.NoError(t, os.Remove(env.sessionPath))
+
+	_, err = env.run(t, env.source())
+
+	require.NoError(t, err)
+	assert.Empty(t, env.mirroredSessionFiles(t))
+	kept, err := env.database.GetSession(t.Context(), session.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, kept, "archived session must survive deletion on the remote")
+}
+
 func TestSSHSourceReportsNoisyShellStartUp(t *testing.T) {
 	env := newSourceEnv(t)
 	installTestBinary(t, env.ssh.Home, env.build)
@@ -174,6 +275,19 @@ func TestSSHSourceReportsNoisyShellStartUp(t *testing.T) {
 	assert.Contains(t, err.Error(), "shell start-up")
 	assert.Contains(t, remotesync.FailureSummary(err), "shell start-up")
 	assert.False(t, remotesync.IsHostUnavailable(err))
+}
+
+func TestSSHSourceUploadsItselfWhenRemoteHasNoAgentsview(t *testing.T) {
+	env := newSourceEnv(t)
+
+	stats, err := env.run(t, env.source())
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	id, err := env.build.ContentID()
+	require.NoError(t, err)
+	assert.FileExists(t,
+		filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id, "agentsview"))
 }
 
 func TestSSHSourceProvisionsAgainWhenItsBinaryVanishes(t *testing.T) {
@@ -267,10 +381,6 @@ func TestSSHSourceReportsItsUploadThroughTheSyncProgress(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, details, "Installing agentsview on "+sourceTestHost)
-	id, err := env.build.ContentID()
-	require.NoError(t, err)
-	assert.FileExists(t,
-		filepath.Join(env.ssh.Home, ".cache", "agentsview", "bin", id, "agentsview"))
 }
 
 func TestSSHSourceFullSyncLeavesRemoteHomeUnchanged(t *testing.T) {
