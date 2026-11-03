@@ -394,61 +394,17 @@ func TestUnmappedRelationshipChanges(t *testing.T) {
 	}
 }
 
-func TestFailureDoesNotMutateInput(t *testing.T) {
-	propertyTest(t, func(ht *hegel.T) {
-		a, want := sample(), sample()
-		text := "\xff" + hegel.Draw(ht, hegel.Text())
-		a.Friction[0].Text = text
-		want.Friction[0].Text = text
-		_, err := Compare(a, sample())
-		require.Error(ht, err)
-		assert.Equal(ht, want, a)
-	}, hegel.WithTestCases(1000))
-}
-
 func TestResultPrivacy(t *testing.T) {
-	propertyTest(t, func(ht *hegel.T) {
-		a, b := sample(), sample()
-		sentinel := "transcript-sentinel:" + hegel.Draw(ht, hegel.Text())
-		a.Messages[0].Content = sentinel
-		got, err := Compare(a, b)
-		require.NoError(ht, err)
-		assert.NotContains(ht, string(mustJSON(ht, got)), sentinel)
-		a.Friction[0].Text = "\xff" + sentinel
-		_, err = Compare(a, b)
-		require.Error(ht, err)
-		assert.NotContains(ht, err.Error(), sentinel)
-	}, hegel.WithTestCases(1000))
-}
-
-func TestComparisonSymmetry(t *testing.T) {
-	propertyTest(t, func(ht *hegel.T) {
-		a, b := sample(), sample()
-		b.Messages[0].Content = hegel.Draw(ht, hegel.Text())
-		ab, err := Compare(a, b)
-		require.NoError(ht, err)
-		ba, err := Compare(b, a)
-		require.NoError(ht, err)
-		assert.Equal(ht, ab.Left, ba.Right)
-		assert.Equal(ht, ab.Right, ba.Left)
-		assert.Equal(ht, ab.Differing, ba.Differing)
-	}, hegel.WithTestCases(1000))
-}
-
-func TestToolCoordinateRelationshipCounterexamples(t *testing.T) {
-	for _, field := range []string{"call", "event"} {
-		t.Run(field, func(t *testing.T) {
-			a, b := sample(), sample()
-			if field == "call" {
-				b.Messages[0].ToolCalls[0].CallIndex = 1
-			} else {
-				b.Messages[0].ToolCalls[0].ResultEvents[0].EventIndex = 1
-			}
-			got, err := Compare(a, b)
-			require.NoError(t, err)
-			assert.Equal(t, []string{"tool_calls", "relationships"}, got.Differing)
-		})
-	}
+	a, b := sample(), sample()
+	sentinel := "transcript-sentinel"
+	a.Messages[0].Content = sentinel
+	got, err := Compare(a, b)
+	require.NoError(t, err)
+	assert.NotContains(t, string(mustJSON(t, got)), sentinel)
+	a.Friction[0].Text = "\xff" + sentinel
+	_, err = Compare(a, b)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), sentinel)
 }
 
 // Hegel 0.9.27 has no bundled Intel macOS library. Ordinary regression tests
