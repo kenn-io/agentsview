@@ -38,6 +38,10 @@ export default defineConfig({
   // failures still fail after every attempt; retried passes are reported
   // as "flaky" so they stay visible.
   retries: isCI ? 2 : 0,
+  // CI keeps Playwright's default dot output and also writes a JSON report
+  // for the CI flake monitor. Each CI step names its own report file with
+  // PLAYWRIGHT_JSON_OUTPUT_FILE, which takes precedence over outputFile.
+  reporter: isCI ? [["dot"], ["json", { outputFile: "test-results/playwright/e2e.json" }]] : "list",
   use: {
     baseURL: `http://127.0.0.1:${e2ePort}`,
     headless: true,
