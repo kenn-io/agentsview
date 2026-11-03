@@ -468,7 +468,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			}
 		})
 		validRemotes := true
-		if err := cfg.ValidateRemoteHosts(); err != nil {
+		if err := cfg.ValidateAutomaticRemoteHosts(); err != nil {
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}

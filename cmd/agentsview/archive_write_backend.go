@@ -1017,7 +1017,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 ) error {
 	var autoHosts []config.RemoteHost
 	if backend.Name() == "pg" {
-		if err := b.appCfg.ValidateRemoteHosts(); err != nil {
+		if err := b.appCfg.ValidateAutomaticRemoteHosts(); err != nil {
 			return err
 		}
 		for _, host := range b.appCfg.RemoteHosts {

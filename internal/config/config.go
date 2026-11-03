@@ -1154,6 +1154,17 @@ func (c *Config) IsUserConfigured(
 // passed to remote sync. Returns an aggregated error naming every
 // offending entry, or nil when all entries are valid.
 func (c Config) ValidateRemoteHosts() error {
+	return c.validateRemoteHosts(false)
+}
+
+// ValidateAutomaticRemoteHosts validates the hosts selected for periodic
+// collection, while still checking host identity and shared settings for every
+// configured entry.
+func (c Config) ValidateAutomaticRemoteHosts() error {
+	return c.validateRemoteHosts(true)
+}
+
+func (c Config) validateRemoteHosts(automaticOnly bool) error {
 	var problems []string
 	seen := make(map[string]int, len(c.RemoteHosts))
 	for i, h := range c.RemoteHosts {
@@ -1174,7 +1185,9 @@ func (c Config) ValidateRemoteHosts() error {
 				problems = append(problems, fmt.Sprintf("entry %d (%q): invalid %s %s", i+1, h.Host, bound.key, bound.timeout))
 			}
 		}
-		problems = append(problems, validateRemoteTransport(i+1, h)...)
+		if !automaticOnly || h.Interval > 0 {
+			problems = append(problems, validateRemoteTransport(i+1, h)...)
+		}
 		// Remote sync namespaces sessions and cached state by host.
 		if h.Host != "" {
 			if first, ok := seen[h.Host]; ok {

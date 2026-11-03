@@ -2766,6 +2766,49 @@ func TestValidateRemoteHosts(t *testing.T) {
 	}
 }
 
+func TestValidateAutomaticRemoteHosts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		hosts   []RemoteHost
+		wantErr []string
+	}{
+		{
+			name:  "incomplete manual-only HTTP host",
+			hosts: []RemoteHost{{Host: "manual", Transport: RemoteTransportHTTP}},
+		},
+		{
+			name:    "automatic HTTP host requires collection settings",
+			hosts:   []RemoteHost{{Host: "automatic", Transport: RemoteTransportHTTP, Interval: time.Hour}},
+			wantErr: []string{"url is required", "token is required"},
+		},
+		{
+			name: "manual and automatic host identities remain unique",
+			hosts: []RemoteHost{
+				{Host: "shared", Transport: RemoteTransportHTTP},
+				{Host: "shared", Transport: RemoteTransportSSH, Interval: time.Hour},
+			},
+			wantErr: []string{"duplicate host"},
+		},
+		{
+			name:    "manual-only timeout remains validated",
+			hosts:   []RemoteHost{{Host: "manual", Transport: RemoteTransportHTTP, SyncTimeout: -time.Second}},
+			wantErr: []string{"invalid sync_timeout"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := Config{RemoteHosts: tt.hosts}.ValidateAutomaticRemoteHosts()
+			if len(tt.wantErr) == 0 {
+				require.NoError(t, err)
+				return
+			}
+			requireErrorContains(t, err, tt.wantErr...)
+		})
+	}
+}
+
 func TestLoadFile_SyncIncludeCwdPrefixes(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `sync_include_cwd_prefixes = ["/home/me/work", "/home/me/oss"]

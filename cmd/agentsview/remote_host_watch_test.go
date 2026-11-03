@@ -212,36 +212,46 @@ func (remoteWatchPusher) Close() error { return nil }
 
 func TestReplicaWatchSelectsAutomaticHosts(t *testing.T) {
 	for _, tc := range []struct {
-		name                             string
-		destination                      storage.Replica
-		full, manualOnly                 bool
-		want                             []string
-		invalidTimeout, invalidTransport bool
-		wantErr                          string
+		name                                                              string
+		destination                                                       storage.Replica
+		full, manualOnly                                                  bool
+		want                                                              []string
+		invalidTimeout, invalidManualTransport, invalidScheduledTransport bool
+		incompleteManualHTTP                                              bool
+		wantErr                                                           string
 	}{
 		{name: "PostgreSQL incremental", destination: pgReplica{}, want: []string{"scheduled"}},
 		{name: "PostgreSQL full", destination: pgReplica{}, full: true, want: []string{"scheduled"}},
 		{name: "PostgreSQL manual only", destination: pgReplica{}, manualOnly: true},
+		{name: "PostgreSQL incomplete manual HTTP", destination: pgReplica{}, manualOnly: true, incompleteManualHTTP: true},
 		{name: "ClickHouse", destination: clickhouse.Backend{}},
-		{name: "ClickHouse invalid remote config", destination: clickhouse.Backend{}, invalidTimeout: true, invalidTransport: true},
+		{name: "ClickHouse invalid remote config", destination: clickhouse.Backend{}, invalidTimeout: true, invalidManualTransport: true},
 		{name: "PostgreSQL manual-only negative timeout", destination: pgReplica{}, manualOnly: true, invalidTimeout: true, wantErr: "invalid sync_timeout"},
-		{name: "PostgreSQL manual-only malformed transport", destination: pgReplica{}, manualOnly: true, invalidTransport: true, wantErr: "transport"},
+		{name: "PostgreSQL manual-only malformed transport", destination: pgReplica{}, manualOnly: true, invalidManualTransport: true},
 		{name: "PostgreSQL negative timeout", destination: pgReplica{}, invalidTimeout: true, wantErr: "invalid sync_timeout"},
-		{name: "PostgreSQL malformed transport", destination: pgReplica{}, invalidTransport: true, wantErr: "transport"},
+		{name: "PostgreSQL malformed manual transport", destination: pgReplica{}, invalidManualTransport: true, want: []string{"scheduled"}},
+		{name: "PostgreSQL malformed automatic transport", destination: pgReplica{}, invalidScheduledTransport: true, wantErr: "transport"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			cfg := config.Config{DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{}, RemoteHosts: []config.RemoteHost{
 				{Host: "manual", Transport: config.RemoteTransportSSH},
 			}}
+			if tc.incompleteManualHTTP {
+				cfg.RemoteHosts[0].Transport = config.RemoteTransportHTTP
+			}
 			if tc.invalidTimeout {
 				cfg.RemoteHosts[0].SyncTimeout = -time.Second
 			}
-			if tc.invalidTransport {
+			if tc.invalidManualTransport {
 				cfg.RemoteHosts[0].Transport = "invalid"
 			}
 			if !tc.manualOnly {
-				cfg.RemoteHosts = append(cfg.RemoteHosts, config.RemoteHost{Host: "scheduled", Transport: config.RemoteTransportSSH, Interval: time.Hour})
+				scheduled := config.RemoteHost{Host: "scheduled", Transport: config.RemoteTransportSSH, Interval: time.Hour}
+				if tc.invalidScheduledTransport {
+					scheduled.Transport = "invalid"
+				}
+				cfg.RemoteHosts = append(cfg.RemoteHosts, scheduled)
 			}
 			originalID, err := database.GetDatabaseID(t.Context())
 			require.NoError(t, err)
