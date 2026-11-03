@@ -22,6 +22,7 @@ contracts are documented in
 | Event storms                   | One SSE emit per watcher flush drove ~1/s dashboard refetch; SQLite WAL sidecar events fanned out to every session in a shared DB.                                                                                                               | #367, #956                                     |
 | Per-row query shape            | `GetDailyUsage` ran 1.2M `json_extract` calls per scan and had no date pushdown.                                                                                                                                                                 | #309                                           |
 | Usage archive scaling          | Normalized facts removed JSON parsing but warm requests still ranked and priced hundreds of thousands of rows instead of reading daily aggregates.                                                                                               | Usage aggregate cache                          |
+| Metadata update reindexing     | Token receipts and coverage repairs re-tokenized unchanged message text, holding the writer longer as message bodies grew.                                                                                                                       | Guarded message update triggers                |
 
 ## Automated invariants and local benchmarks
 
@@ -30,6 +31,10 @@ contracts are documented in
 These count work units instead of measuring time, so they are immune to CI
 runner noise and fail loudly:
 
+- `TestDialogueFTSTriggerSync` and `TestDialogueFTSCorpusVersion/current`
+  (`internal/db/dialogue_test.go`) check that metadata updates add no
+  search-index writes and that current archives upgrade the old trigger
+  without rebuilding the index.
 - `TestWarmFullSyncDoesNoBulkWriteWork` (`internal/sync/perf_invariant_test.go`)
   — a second full sync over an unchanged Claude archive must skip everything
   and run zero bulk-write batches (`Engine.PhaseStats`).
@@ -154,6 +159,7 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkReplaceSessionMessagesStreamingMerge` — the streaming chunk-merge
   diff path (one UPDATE, not a full delete+reinsert).
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
+- `BenchmarkMessageTokenUsageUpdate` — token receipts over varied message sizes.
 - `BenchmarkCopySparseOrphan` — retain one missing session from archives of
   different sizes without scanning every old message to map its session ID.
 - `BenchmarkCopyMixedLegacyPageOrphans` — upgrade archived Codex pages alongside

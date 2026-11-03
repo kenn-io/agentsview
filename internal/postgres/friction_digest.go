@@ -20,7 +20,7 @@ import (
 
 // FrictionAvailable reports whether startup proved this role can write the
 // friction review tables. pg serve runs the friction-review job only then.
-func (s *Store) FrictionAvailable() bool { return s.frictionAvailable.Load() }
+func (s *Store) FrictionAvailable() bool { return s.runtimeState().frictionAvailable.Load() }
 
 // frictionSessionVersionColumn selects the engine's committed row version.
 // Both values change with session updates without relying on writer versions.
@@ -42,7 +42,7 @@ func (s *Store) frictionSessionVersionColumn(ctx context.Context) (string, error
 func (s *Store) DetectFrictionAvailability(ctx context.Context) {
 	for _, table := range []string{"friction_digests", "friction_digest_sessions", "friction_patterns"} {
 		if !pgHasTable(ctx, s.pg, table) {
-			s.frictionAvailable.Store(false)
+			s.runtimeState().frictionAvailable.Store(false)
 			return
 		}
 	}
@@ -52,13 +52,13 @@ func (s *Store) DetectFrictionAvailability(ctx context.Context) {
 	}
 	if err != nil {
 		log.Printf("friction: session version probe: %v", err)
-		s.frictionAvailable.Store(false)
+		s.runtimeState().frictionAvailable.Store(false)
 		return
 	}
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		log.Printf("friction: capability probe: %v", err)
-		s.frictionAvailable.Store(false)
+		s.runtimeState().frictionAvailable.Store(false)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -97,10 +97,10 @@ func (s *Store) DetectFrictionAvailability(ctx context.Context) {
 		if !IsReadOnlyError(err) {
 			log.Printf("friction: capability probe: %v", err)
 		}
-		s.frictionAvailable.Store(false)
+		s.runtimeState().frictionAvailable.Store(false)
 		return
 	}
-	s.frictionAvailable.Store(true)
+	s.runtimeState().frictionAvailable.Store(true)
 }
 
 func (s *Store) FrictionPendingDates(ctx context.Context, first, last string, loc *time.Location) ([]string, error) {
@@ -276,7 +276,7 @@ func (s *Store) SaveFrictionDigest(
 	if err != nil {
 		return err
 	}
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning friction digest tx: %w", err)
 	}

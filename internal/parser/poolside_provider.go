@@ -29,14 +29,14 @@ func newPoolsideProviderFactory(def AgentDef) ProviderFactory {
 						return poolsideClassifyPath(root, path, allowMissing)
 					},
 				),
-				WithFileLookup(func(root, rawID string) (singleFileMatch, bool) {
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
 					return poolsideFindFile(root, rawID)
 				}),
-				WithFileFingerprint(func(src singleFileSource) (SourceFingerprint, error) {
+				WithFileFingerprint(func(_ context.Context, src singleFileSource) (SourceFingerprint, error) {
 					return poolsideFingerprintSource(src.Path)
 				}),
-				WithFileParse(func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
-					return poolsideParseFile(src, req)
+				WithFileParse(func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
+					return poolsideParseFile(ctx, src, req)
 				}),
 			)
 		},
@@ -155,10 +155,10 @@ func poolsideFingerprintSource(sourcePath string) (SourceFingerprint, error) {
 
 // poolsideParseFile parses a single Poolside trajectory file.
 func poolsideParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	sess, msgs, usageEvents, err := parsePoolsideSession(
-		src.Path, req.Source.ProjectHint, req.Machine,
+		ctx, src.Path, req.Source.ProjectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err

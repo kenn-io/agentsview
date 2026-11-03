@@ -76,7 +76,7 @@ ensure-embed-dir:
 # Chained from pricing-snapshot so every Go-compiling target stages it
 # without lengthening each prerequisite list.
 sqlite-vec-header:
-	@go mod download github.com/mattn/go-sqlite3
+	@$(DOWNLOAD_RETRY) go mod download github.com/mattn/go-sqlite3
 	@mkdir -p $(SQLITE_INCLUDE_DIR)
 	@install -m 0644 \
 		"$$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)/sqlite3-binding.h" \
@@ -85,7 +85,7 @@ sqlite-vec-header:
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.
 pricing-snapshot: sqlite-vec-header
-	go run ./internal/pricing/cmd/litellm-snapshot -restore
+	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
@@ -164,7 +164,7 @@ install-cjk-fts: install simple-fts
 
 # Build frontend SPA and copy into embed directory
 frontend:
-	cd frontend && npm ci && npm run build
+	cd frontend && $(DOWNLOAD_RETRY) npm ci && npm run build
 	rm -rf internal/web/dist
 	cp -r frontend/dist internal/web/dist
 	printf '%s\n' \
@@ -361,12 +361,20 @@ perf-sim: pricing-snapshot ensure-embed-dir
 test-short: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -short
 
+# CI test runner. Prints a compact log, writes go test JSON events to
+# gotestsum/<suite>.json for the CI flake monitor, and reruns failed tests up
+# to twice, recording the reruns in gotestsum/<suite>-reruns.txt.
+# Usage: $(call gotestsum,<suite>,<packages>) <go test flags>
+gotestsum = go tool gotestsum --format pkgname-and-test-fails --format-icons text \
+	--jsonfile gotestsum/$(1).json --rerun-fails=2 \
+	--rerun-fails-report gotestsum/$(1)-reruns.txt --packages "$(2)" --
+
 # Run the quarantined eval-ingest endpoint tests under their build tag.
 # Only internal/server contains evalingest-gated code; every other package is
 # identical under the tag and already covered by the untagged run.
 test-evalingest: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,evalingest" \
-		./internal/server -v -count=1
+	CGO_ENABLED=1 $(call gotestsum,evalingest,./internal/server) \
+		-tags "fts5,evalingest" -count=1
 
 # Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.
@@ -443,7 +451,7 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	@sleep 2
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
-		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
+		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
@@ -455,21 +463,22 @@ test-postgres-ci:
 	$(MAKE) -j1 test-postgres-raw-sync-ci test-postgres-core-ci
 
 test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
-		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
+	CGO_ENABLED=1 $(call gotestsum,postgres-raw-sync,./cmd/agentsview) -tags "fts5,pgtest" \
+		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 
 test-postgres-core-ci:
 	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci
 
-# These packages drop schemas that can own database-wide extensions, so their
-# cleanup must finish before another package starts using the same database.
+# Each process gets its own database because tests drop schemas that own
+# database-wide extensions. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -skip '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-service,./internal/service) -tags "fts5,pgtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
 test-postgres-core-heavy-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -list '^$(POSTGRES_CORE_HEAVY_TEST)$$' | grep -Fx '$(POSTGRES_CORE_HEAVY_TEST)'
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -run '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-heavy,./internal/postgres/...) -tags "fts5,pgtest" -run '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
 
 # Start test ClickHouse container (native 19000, HTTP 18123)
 clickhouse-up:
@@ -490,8 +499,8 @@ test-clickhouse: pricing-snapshot ensure-embed-dir clickhouse-up
 
 # ClickHouse integration tests for CI (clickhouse already running as service)
 test-clickhouse-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
-	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "fts5,chtest" -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,clickhouse-service,./internal/service) -tags "fts5,chtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker
@@ -683,7 +692,7 @@ docs-assets-branch:
 	bash docs/assets/update-static-assets-branch.sh
 
 docs-generated-assets-branch:
-	bash docs/screenshots/update-generated-assets-branch.sh
+	bash docs/screenshots/update-generated-assets-branch.sh --source "$(CAPTURE_ASSETS)"
 
 docs-deploy-staging:
 	vercel deploy docs
@@ -805,3 +814,7 @@ actions-lock-check-local: gh-actions-lock-install
 # Network check that the lockfile is complete and every locked commit is still valid
 actions-lock-check: gh-actions-lock-install
 	gh actions-lock --verify
+
+.PHONY: lint-workflow-retries
+lint-workflow-retries:
+	GOOS= GOARCH= go run go.kenn.io/kit/cmd/kennlint@v0.47.3 workflow-retries

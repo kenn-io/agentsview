@@ -27,8 +27,6 @@ const (
 	groupMeta  = "meta"
 )
 
-const dataVersionTooNewExitCode = 3
-
 type cliExitError struct {
 	code   int
 	err    error
@@ -60,6 +58,9 @@ func withSilentExitCode(err error, code int) error {
 func exitCodeFromError(err error) int {
 	if exitErr, ok := errors.AsType[*cliExitError](err); ok {
 		return exitErr.code
+	}
+	if diagnostic, ok := errors.AsType[*cliDiagnosticError](err); ok && diagnostic.code != 0 {
+		return diagnostic.code
 	}
 	return 1
 }
@@ -133,6 +134,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newMCPCommand())
 	root.AddCommand(newRecallCommand())
 	root.AddCommand(newInsightCommand())
+	root.AddCommand(newKataCommand())
 	root.AddCommand(newFrictionCommand())
 	root.AddCommand(newStatsCommand())
 	root.AddCommand(newParseDiffCommand())
@@ -146,6 +148,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newAgentsCommand())
 	root.AddCommand(newOpenAPICommand())
 	root.AddCommand(newRemoteSyncCommand())
+	groupCommands(root)
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -290,7 +293,7 @@ func newServeStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServeStatus(mustLoadConfig(cmd))
+			runServeStatus(cmd.Context(), mustLoadConfig(cmd))
 		},
 	}
 }
@@ -322,7 +325,7 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDaemonRestart(cmd.OutOrStdout(), deps)
+			return runDaemonRestart(cmd.Context(), cmd.OutOrStdout(), deps)
 		},
 	}
 }
@@ -366,7 +369,7 @@ func newSyncCommand() *cobra.Command {
 	return newSyncCommandWithRunner(runSync)
 }
 
-func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
+func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Command {
 	var cfg SyncConfig
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -376,7 +379,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
 			"Incremental local-only sync waits if the default daemon is busy, with\n" +
 			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
-			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
+			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
 			"syncing each over its transport, HTTP or SSH. A failure on one\n" +
@@ -396,7 +399,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			run(cfg)
+			run(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -508,8 +511,8 @@ func newTokenUseCommand() *cobra.Command {
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runTokenUse(cmd.Context(), args)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTokenUse(cmd, args)
 		},
 	}
 }
@@ -536,7 +539,7 @@ func newImportCommand() *cobra.Command {
 			if syncBrowser {
 				return syncClaudeAIChrome(cmd.Context())
 			}
-			return importSessions(ImportConfig{Type: importType, Path: args[0], Replace: replace})
+			return importSessions(cmd.Context(), ImportConfig{Type: importType, Path: args[0], Replace: replace})
 		},
 	}
 	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync Claude.ai through Chrome")
@@ -573,9 +576,9 @@ func newHealthCommand() *cobra.Command {
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			runHealth(cmd, args, cfg)
+			return runHealth(cmd, args, cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -609,10 +612,11 @@ func newUsageDailyCommand() *cobra.Command {
 		Short:        "Daily cost summary",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runUsageDaily(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageDaily(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -634,10 +638,11 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Short:        "One-line cost summary for today",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runUsageStatusline(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageStatusline(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -669,10 +674,11 @@ func newActivityReportCommand() *cobra.Command {
 		Short:        "Activity report over a date range",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runActivityReport(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runActivityReport(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Preset, "preset", "", "Range preset: day, week, month, custom")
@@ -742,7 +748,7 @@ func newDuckDBPushCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBPush(cfg)
+			runDuckDBPush(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and DuckDB push")
@@ -762,7 +768,7 @@ func newDuckDBStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBStatus()
+			runDuckDBStatus(cmd.Context())
 		},
 	}
 }
@@ -778,7 +784,7 @@ func newDuckDBServeCommand() *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runDuckDBServe(appCfg, basePath)
+			runDuckDBServe(cmd.Context(), appCfg, basePath)
 			return nil
 		},
 	}
@@ -808,7 +814,7 @@ func newDuckDBQuackCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBQuackServe(serveCfg)
+			runDuckDBQuackServe(cmd.Context(), serveCfg)
 		},
 	}
 	serveCmd.Flags().StringVar(
@@ -883,6 +889,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	renderRootCommands(w, root)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Run 'agentsview <command> --help' to discover actions in a domain.")
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprint(w, root.Flags().FlagUsagesWrapped(flagHelpWidth(w)))
 	fmt.Fprintln(w, "Environment variables:")
@@ -948,7 +956,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Remote hosts:")
 	fmt.Fprintln(w, "  Add a [[remote_hosts]] array to ~/.agentsview/config.toml so that")
-	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each configured host:")
+	fmt.Fprintln(w, "  \"agentsview source sync\" (no --host) also syncs each configured host:")
 	fmt.Fprintln(w, "  For daemon-backed HTTP sync over a private network such as Tailscale:")
 	fmt.Fprintln(w, "  [[remote_hosts]]")
 	fmt.Fprintln(w, "  host = \"devbox1\"")
@@ -1016,24 +1024,11 @@ func groupedRootCommands(root *cobra.Command, groupID string) []*cobra.Command {
 			continue
 		}
 		grouped = append(grouped, cmd)
-		if !shouldListRootChildren(cmd) {
-			continue
-		}
-		for _, child := range cmd.Commands() {
-			if !child.IsAvailableCommand() || child.Hidden {
-				continue
-			}
-			grouped = append(grouped, child)
-		}
 	}
 	slices.SortStableFunc(grouped, func(a, b *cobra.Command) int {
 		return strings.Compare(commandPath(root, a), commandPath(root, b))
 	})
 	return grouped
-}
-
-func shouldListRootChildren(cmd *cobra.Command) bool {
-	return cmd.Name() != "completion"
 }
 
 func commandPath(root, cmd *cobra.Command) string {

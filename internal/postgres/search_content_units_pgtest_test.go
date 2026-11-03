@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -22,7 +21,7 @@ func insertCSUnitMessage(
 ) {
 	t.Helper()
 	ts := fmt.Sprintf("2026-05-01T10:00:%02dZ", ordinal)
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
 			 content_length, is_system, is_sidechain)
@@ -70,7 +69,7 @@ func TestPGSearchContentSubstringDerivedRunRange(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-run", 5, "user",
 		"next question", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "RUNHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
@@ -123,7 +122,7 @@ func TestPGSearchContentSidechainRunSubordinate(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-side", 3, "assistant",
 		"main MAINHIT answer", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SIDEHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
@@ -164,7 +163,7 @@ func TestPGSearchContentSubagentLineage(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-child", 1, "assistant",
 		"SUBHIT answer", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SUBHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeChildren: true, Limit: 50,
@@ -198,7 +197,7 @@ func TestPGSearchContentToolDerivedRunRange(t *testing.T) {
 	insertCSToolCall(t, store, "cs-unit-tool", 1, 0,
 		"Bash", "tu1", `{"command":"TOOLHIT"}`, "output RESHIT data")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	in, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "TOOLHIT", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
@@ -248,7 +247,7 @@ func TestPGSearchContentToolResultEventsDerived(t *testing.T) {
 	insertCSToolResultEvent(t, store, "cs-ev-run", 1, 0, 0,
 		"tu1", "EVHIT streamed output")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	orph, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "ORPHHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, IncludeChildren: true, Limit: 50,
@@ -289,7 +288,7 @@ func TestPGSearchContentRegexDerivedRange(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-rx", 2, "assistant",
 		"RXHIT beta", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: `RXHIT [a-z]+`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
@@ -314,7 +313,7 @@ func TestPGSearchContentFTSDerivedRange(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-fts", 2, "assistant",
 		"ftshit beta step", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "ftshit", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
@@ -370,7 +369,7 @@ func TestPGSearchContentDenseFlowDerivedRanges(t *testing.T) {
 	require.GreaterOrEqual(t, anchorCount, db.UnitBoundsFlowFactor,
 		"single-session page must clear the dense-flow gate")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "DFHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: anchorCount + 10,
@@ -421,7 +420,7 @@ func TestPGSearchContentMultiRunReducerParity(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-multi", 8, "user",
 		"PARHIT q2", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "PARHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,

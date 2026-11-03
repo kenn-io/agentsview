@@ -149,7 +149,7 @@ url = "postgres://archive"
 
 	var err error
 	out := captureStdout(t, func() {
-		err = runReplicaPush(pgReplica{}, ReplicaPushConfig{}, "archive")
+		err = runReplicaPush(t.Context(), pgReplica{}, ReplicaPushConfig{}, "archive")
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
@@ -229,7 +229,7 @@ machine_name = "workbox"
 url = "postgres://archive"
 `)
 
-	err := runReplicaPush(pgReplica{}, ReplicaPushConfig{AllTargets: true}, "")
+	err := runReplicaPush(t.Context(), pgReplica{}, ReplicaPushConfig{AllTargets: true}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "2 pg target(s) failed")
 	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
@@ -364,7 +364,7 @@ func TestRunPGServeHelperProcess(t *testing.T) {
 	require.NoError(t, cmd.Flags().Parse(args[sep+1:]))
 	cfg, basePath, err := loadReplicaServeConfig(cmd)
 	require.NoError(t, err)
-	runReplicaServe(pgReplica{}, cfg, basePath, nil)
+	runReplicaServe(t.Context(), pgReplica{}, cfg, basePath, nil)
 }
 
 func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {

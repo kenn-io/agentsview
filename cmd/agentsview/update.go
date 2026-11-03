@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -35,14 +34,14 @@ type updateDaemonStopResult struct {
 func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 	dataDir, err := config.ResolveDataDir()
 	if err != nil {
-		log.Fatalf("resolving data dir: %v", err)
+		fatal("resolving data dir: %v", err)
 	}
 
 	info, err := update.CheckForUpdate(ctx,
 		version, cfg.Force, dataDir,
 	)
 	if err != nil {
-		log.Fatalf("checking for updates: %v", err)
+		fatal("checking for updates: %v", err)
 	}
 
 	if info == nil {
@@ -68,7 +67,7 @@ func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 				version, true, dataDir,
 			)
 			if err != nil {
-				log.Fatalf("checking for updates: %v", err)
+				fatal("checking for updates: %v", err)
 			}
 			if info == nil {
 				fmt.Fprintln(out, "Up to date.")
@@ -124,7 +123,7 @@ func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 		restartDaemonAfterUpdate,
 	); err != nil {
 		fmt.Fprintln(out)
-		log.Fatal(err)
+		fatal("%v", err)
 	}
 }
 

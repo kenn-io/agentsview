@@ -205,7 +205,7 @@ func (p *gptmeProvider) Parse(
 		return ParseOutcome{}, errors.New("gptme source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, events, err := p.parseSession(path, machine)
+	sess, msgs, events, err := p.parseSession(ctx, path, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}

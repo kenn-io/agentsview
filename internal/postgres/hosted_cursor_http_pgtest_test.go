@@ -31,7 +31,7 @@ func TestHostedCursorHTTPBadRequest(t *testing.T) {
 	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
 		for name, token := range map[string]string{"malformed": "invalid", "stale": cursor} {
 			t.Run(path+"/"+name, func(t *testing.T) {
-				request := httptest.NewRequest(http.MethodGet, path+"?cursor="+url.QueryEscape(token), nil)
+				request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?cursor="+url.QueryEscape(token), nil)
 				request.Host = "localhost:8080"
 				response := httptest.NewRecorder()
 				app.Handler().ServeHTTP(response, request)

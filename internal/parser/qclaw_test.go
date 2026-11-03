@@ -43,7 +43,7 @@ func parseQClawSessionForTest(
 	require.True(t, ok)
 	claw, ok := provider.(*qClawProvider)
 	require.True(t, ok)
-	return claw.parseSession(path, project, machine)
+	return claw.parseSession(t.Context(), path, project, machine)
 }
 
 func discoverQClawSessionsForTest(t *testing.T, root string) []SourceRef {

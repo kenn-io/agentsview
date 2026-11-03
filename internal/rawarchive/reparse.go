@@ -121,7 +121,7 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 			return report, err
 		}
 	}
-	if err := scratch.CopySessionMetadataFrom(a.database.Path()); err != nil {
+	if err := scratch.CopySessionMetadataFrom(ctx, a.database.Path()); err != nil {
 		return report, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -136,7 +136,7 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 	engine := syncer.NewEngine(ctx, a.database, syncer.EngineConfig{Ephemeral: true})
 	defer engine.Close()
 	a.report("Installing reparsed archive")
-	installed, err := engine.SwapResyncDatabase(scratchPath)
+	installed, err := engine.SwapResyncDatabase(ctx, scratchPath)
 	if installed {
 		report.Parsed = len(selected)
 		report.Suppressed = len(suppressed)

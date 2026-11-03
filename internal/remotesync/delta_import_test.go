@@ -362,7 +362,7 @@ func TestPreparePendingPreservesCacheBoundariesAcrossParserUpgrades(t *testing.T
 			host string, deletes []string, upserts map[string]int64,
 		) error {
 			mutations = append(mutations, mutationCount{len(deletes), len(upserts)})
-			return database.ApplyRemoteSkippedFileChanges(t.Context(), host, deletes, upserts)
+			return database.ApplyRemoteSkippedFileChanges(ctx, host, deletes, upserts)
 		},
 	}
 	pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{

@@ -57,6 +57,7 @@ export interface SessionGroupInput {
   project: string;
   project_assigned?: boolean;
   machine: string;
+  source_machines?: string[];
   agent: string;
   agent_label?: string | null;
   entrypoint?: string | null;
@@ -1818,6 +1819,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     project: row.project,
     project_assigned: row.project_assigned ?? false,
     machine: row.machine,
+    source_machines: row.source_machines,
     agent: row.agent,
     agent_label: row.agent_label ?? undefined,
     entrypoint: row.entrypoint ?? undefined,
@@ -1848,6 +1850,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     project: skinny.project,
     project_assigned: skinny.project_assigned,
     machine: skinny.machine,
+    source_machines: skinny.source_machines,
     agent: skinny.agent,
     agent_label: skinny.agent_label,
     entrypoint: skinny.entrypoint,

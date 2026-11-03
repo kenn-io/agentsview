@@ -94,7 +94,7 @@ func (s *Store) searchContentTermsPG(
 	if len(terms) == 0 {
 		return db.ContentSearchPage{}, nil
 	}
-	query, args, err := db.BuildTermsSearchSQL(f, terms, db.PostgresQueryDialect())
+	query, args, err := db.BuildTermsSearchSQL(f, terms, s.sessionDialect())
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
@@ -133,7 +133,7 @@ func appendExcludeSessionIDsPG(
 func (s *Store) searchContentSubstringPG(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
-	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.PostgresQueryDialect())
+	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	escapedPat := escapeLike(f.Pattern)
@@ -440,7 +440,7 @@ func (s *Store) searchContentRegexPG(
 func (s *Store) pgRegexCandidateRows(
 	ctx context.Context, f db.ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
-	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.PostgresQueryDialect())
+	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 

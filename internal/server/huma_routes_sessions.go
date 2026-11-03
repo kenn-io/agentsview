@@ -1420,7 +1420,7 @@ func (s *Server) humaUploadSession(
 			"claude provider does not support uploads")
 	}
 	results, err := uploader.ParseUploadedTranscript(
-		upload.tempPath, project, machine,
+		ctx, upload.tempPath, project, machine,
 	)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest,

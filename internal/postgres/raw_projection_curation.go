@@ -8,6 +8,14 @@ import (
 	"errors"
 )
 
+// rawBranchExclusionSQL reads the branch override before the group-wide value.
+// Callers supply any additional curation scope and decide how to test the value.
+func rawBranchExclusionSQL(branch, curationScope string) string {
+	return `(SELECT c.value::boolean FROM raw_curation c WHERE ` + curationScope +
+		`c.group_id=` + branch + `.group_id AND c.field='excluded' AND c.branch_id IN ('',` + branch + `.branch_id)
+ ORDER BY c.branch_id DESC LIMIT 1)`
+}
+
 // RawIdentityError lets the hosted boundary distinguish conflict from gone
 // without accepting a private row ID or selecting an arbitrary cohort.
 type RawIdentityError struct{ Identity RawIdentity }
@@ -103,7 +111,7 @@ func (s *RawProjectionStore) SetCuration(ctx context.Context, alias, field strin
 }
 
 func (s *RawProjectionStore) publishRawCuration(ctx context.Context, tx *sql.Tx, group string) error {
-	changes, err := s.materializeGroup(ctx, tx, group)
+	changes, err := s.materializeGroup(ctx, tx, group, nil)
 	if err != nil {
 		return err
 	}

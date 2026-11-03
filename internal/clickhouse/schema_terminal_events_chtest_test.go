@@ -11,6 +11,7 @@ import (
 )
 
 func TestClickHouseTerminalSnapshotUpdates(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	for _, phase := range []struct {
@@ -63,6 +64,7 @@ func TestClickHouseTerminalSnapshotUpdates(t *testing.T) {
 }
 
 func TestClickHouseTerminalSnapshotBackfill(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	for _, query := range []string{

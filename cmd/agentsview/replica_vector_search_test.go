@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,7 @@ func TestScopedConfigPGVectorConsumersAdoptDeploymentRecipe(t *testing.T) {
 			stubPGReadStore(t, store)
 			orig := wireReplicaReadVectorSearchFn
 			var adopted config.Config
-			wireReplicaReadVectorSearchFn = func(cfg config.Config, backend storage.Replica, got db.Store) {
+			wireReplicaReadVectorSearchFn = func(_ context.Context, cfg config.Config, backend storage.Replica, got db.Store) {
 				assert.Same(t, db.Store(store), got)
 				assert.Equal(t, "pg", backend.Name())
 				require.NotNil(t, cfg.DeploymentEmbeddings, "PG vector reads need the deployment embeddings transport")
@@ -106,13 +107,13 @@ func TestReplicaVectorReasons(t *testing.T) {
 	backend := pgReplica{}
 	assert.Equal(t,
 		"semantic search: PostgreSQL has no embedding generation matching fingerprint "+
-			"abc123 (present: def456, ghi789); run 'agentsview pg push' from a machine "+
+			"abc123 (present: def456, ghi789); run 'agentsview replica pg push' from a machine "+
 			"with a matching [vector.embeddings] config",
 		replicaVectorUnavailableReason(backend,
 			"PostgreSQL has no embedding generation matching fingerprint abc123",
 			[]storage.VectorGenerationInfo{{Fingerprint: "def456"}, {Fingerprint: "ghi789"}}))
 	assert.Equal(t,
-		"semantic search: no match (present: ); run 'agentsview pg push' from a "+
+		"semantic search: no match (present: ); run 'agentsview replica pg push' from a "+
 			"machine with a matching [vector.embeddings] config",
 		replicaVectorUnavailableReason(backend, "no match", nil))
 }
@@ -127,8 +128,8 @@ func TestWireReplicaVectorSearchRecordsVectorDisabledReason(t *testing.T) {
 	})
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "PostgreSQL requires [vector] enabled")
-	assert.Contains(t, err.Error(), "agentsview pg push")
-	assert.NotContains(t, err.Error(), "agentsview embeddings build")
+	assert.Contains(t, err.Error(), "agentsview replica pg push")
+	assert.NotContains(t, err.Error(), "agentsview index embeddings build")
 }
 
 // nonVectorReplica is a replica that does not implement
@@ -168,7 +169,7 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 	var gotBackend storage.Replica
 	calls := 0
 	orig := wireReplicaReadVectorSearchFn
-	wireReplicaReadVectorSearchFn = func(cfg config.Config, backend storage.Replica, store db.Store) {
+	wireReplicaReadVectorSearchFn = func(_ context.Context, cfg config.Config, backend storage.Replica, store db.Store) {
 		calls++
 		gotCfg = cfg
 		gotBackend = backend
@@ -178,7 +179,7 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 
 	cfg := config.Config{}
 	cfg.Vector.Enabled = true
-	svc, cleanup, err := newPGReadService(cfg, config.PGConfig{
+	svc, cleanup, err := newPGReadService(t.Context(), cfg, config.PGConfig{
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
 	})
@@ -203,6 +204,6 @@ func TestWireReplicaReadVectorSearchIgnoresNonReplicaStore(t *testing.T) {
 	cfg.Vector.Enabled = true
 
 	require.NotPanics(t, func() {
-		wireReplicaReadVectorSearch(cfg, pgReplica{}, fakeStore)
+		wireReplicaReadVectorSearch(t.Context(), cfg, pgReplica{}, fakeStore)
 	})
 }

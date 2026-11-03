@@ -21,7 +21,12 @@ Key assumptions reviewers MUST account for:
    raw-sync routes use device credentials and scoped tokens separately
    from the viewer bearer token. DO flag any path that lets the backend bind
    non-loopback in proxy mode, or missing subnet checks for
-   non-loopback Caddy binds.
+   non-loopback Caddy binds. A non-loopback host from config.toml or
+   AGENTSVIEW_HOST requires require_auth; validateServeConfig refuses
+   to start otherwise. An explicit --host flag may still bind
+   non-loopback without auth as a deliberate one-off; that exemption
+   is intended. DO flag any config-driven or persistent path that
+   exposes the API beyond loopback without auth.
 
 2. MANAGED CADDY INVARIANTS: Backend loopback-only (enforced).
    Non-loopback Caddy binds require allowed_subnets. auto_https off;
@@ -97,7 +102,10 @@ Key assumptions reviewers MUST account for:
 
 16. INSIGHT AGENT SANDBOXING: Not all agent CLIs offer equal
    sandboxing. Claude (--tools "") and Codex (--sandbox read-only)
-   have verified no-tools/read-only modes. Gemini currently does not.
+   have verified no-tools/read-only modes. Gemini currently does not,
+    so Gemini insights refuse to run unless [agent.gemini].sandbox
+    names a Gemini sandbox provider or [agent.gemini].allow_unsafe is
+    true.
     Copilot only supports --disable-builtin-mcps (blocks MCP tools
     but not all tool use). Kiro CLI uses --trust-tools= and
     --no-interactive (disables tool trust prompts but does not
@@ -108,11 +116,13 @@ Key assumptions reviewers MUST account for:
     model as running agents on codebases. Do not flag Copilot's or
     Kiro's sandboxing as insufficient.
 
-17. POSTGRES PARITY: agentsview supports both SQLite (default) and
-    PostgreSQL (via `pg push` / `pg serve`) as the session store.
-    Any schema or read/write change to the SQLite session model
-    must be mirrored on the PG side. Reviewers should check that
-    new sessions columns are added to:
+17. BACKEND PARITY: SQLite is the only writable archive. agentsview
+    pushes it to PostgreSQL/CockroachDB (`pg push` / `pg serve`),
+    ClickHouse (`clickhouse push` / `clickhouse serve`) and a
+    disposable local DuckDB mirror (`duckdb push`). Any schema or
+    read/write change to the SQLite session model must be mirrored
+    on every backend. Reviewers should check that new sessions
+    columns are added to:
       - internal/postgres/schema.go (CREATE TABLE + idempotent
         ALTER TABLE migration in EnsureSchema)
       - internal/postgres/sessions.go (pgSessionCols, scanPGSession)
@@ -122,12 +132,20 @@ Key assumptions reviewers MUST account for:
         from the fingerprint will silently skip pushes when only that
         column changed)
       - CheckSchemaCompat probe (any column required for reads)
-    Filter logic that runs against both backends (e.g. activity-
+      - internal/duckdb (mirrored session columns and
+        duckSessionFingerprintFields; a schema change bumps
+        SchemaVersion and rebuilds a fresh file, never an ALTER
+        migration)
+      - internal/clickhouse (sessions table spec and
+        sessionFingerprintFields)
+    Filter logic that runs against several backends (e.g. activity-
     window predicates) must use the same constants/semantics in
-    both internal/db/ and internal/postgres/. DO flag SQLite-only
-    changes to the session model that don't have a matching PG
-    update, and DO flag new session columns missing from
-    sessionPushFingerprint.
+    internal/db/ and each backend package. docs/agents/storage.md
+    ("Backend Parity") holds the full rule. DO flag SQLite-only
+    changes to the session model that don't have a matching update
+    in each backend, and DO flag new session columns missing from
+    sessionPushFingerprint or the DuckDB and ClickHouse fingerprint
+    field lists.
 
 18. GO VERSION: This project pins Go 1.27+ in go.mod. Go 1.26
     added value-form `new(v)` which returns `*T` pointing to v —

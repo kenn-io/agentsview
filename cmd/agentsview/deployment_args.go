@@ -7,7 +7,7 @@ import (
 )
 
 // deploymentArgs selects the image's command under AGENTSVIEW_MODE. It
-// prefixes serve or pg serve only when argv is empty or starts with a flag,
+// prefixes serve or replica pg serve only when argv is empty or starts with a flag,
 // so explicit subcommands and root help/version requests stay unchanged.
 func deploymentArgs(args []string) ([]string, error) {
 	if len(args) > 0 {
@@ -25,7 +25,7 @@ func deploymentArgs(args []string) ([]string, error) {
 		return args, err
 	}
 	if mode == config.DeploymentModePGServe {
-		return append([]string{"pg", "serve"}, args...), nil
+		return append([]string{"replica", "pg", "serve"}, args...), nil
 	}
 	return append([]string{"serve"}, args...), nil
 }

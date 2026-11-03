@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -28,7 +29,7 @@ type planUsagePushFixture struct {
 func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 	t.Helper()
 	pgURL := testPGURL(t)
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, pg.Close()) })
 	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
@@ -37,6 +38,7 @@ func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
+	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { assert.NoError(t, local.Close()) })
 	started := "2026-10-01T09:00:00Z"
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
@@ -44,7 +46,7 @@ func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 		Agent: "codex-cloud", StartedAt: &started, CreatedAt: started,
 	}))
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	return planUsagePushFixture{
@@ -149,7 +151,7 @@ func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
 		}
 		session.CaptureCoverage = &parser.ParsedCaptureCoverage{UncapturedTurns: 2}
 		require.NoError(t, pf.sink.Project(t.Context(), pf.lease(t, m), m, p))
-		h, err := newHostedAdapter(pf.runtime, pf.tenant)
+		h, err := newHostedAdapter(t.Context(), pf.runtime, pf.tenant)
 		require.NoError(t, err)
 		want := &db.SessionPlanUsage{
 			HasPlanUsage: true, DataAsOf: "2026-10-01T10:00:00Z", DataStatus: "partial",
@@ -192,7 +194,7 @@ func TestHostedProjectionWritesPlanUsage(t *testing.T) {
 
 	// No session codex:root exists, so hosted reads cannot name a public
 	// root and must not leak the source ID.
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	hosted, err := h.GetSessionPlanUsage(t.Context(), "codex:portable")
 	require.NoError(t, err)
@@ -218,7 +220,7 @@ func TestHostedGrandchildUsageRootMapped(t *testing.T) {
 	root.Outcome.Results = append(root.Outcome.Results, child.Outcome.Results[0], grandchild.Outcome.Results[0])
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, root))
 
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	got, err := h.GetSessionPlanUsage(t.Context(), "codex:grandchild")
 	require.NoError(t, err)

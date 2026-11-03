@@ -6,25 +6,20 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
 
-// Exit codes for the token-use subcommand.
-const (
-	tokenUseExitOK            = 0
-	tokenUseExitErr           = 1
-	tokenUseExitNotFound      = 2
-	tokenUseExitNoTokenData   = 3
-	tokenUseResolveMatchLimit = 2
-)
+const tokenUseResolveMatchLimit = 2
 
 // resolveRawSessionID translates a user-supplied session ID into
 // the canonical form stored in sessions.id. Callers may pass
@@ -105,7 +100,7 @@ func resolveRawSessionID(
 		}
 		bareID := strings.TrimPrefix(input, def.IDPrefix)
 		for _, dir := range agentDirs[def.Type] {
-			if findAgentSourceFile(def, dir, bareID) != "" {
+			if findAgentSourceFile(ctx, def, dir, bareID) != "" {
 				return input, true
 			}
 		}
@@ -121,7 +116,7 @@ func resolveRawSessionID(
 			continue
 		}
 		for _, dir := range agentDirs[def.Type] {
-			if findAgentSourceFile(def, dir, input) != "" {
+			if findAgentSourceFile(ctx, def, dir, input) != "" {
 				return def.IDPrefix + input, true
 			}
 		}
@@ -148,14 +143,14 @@ func agentHasDiskSourceLookup(def parser.AgentDef) bool {
 // findAgentSourceFile resolves a raw agent session ID to an on-disk source path
 // under dir via the provider's FindSource (RawSessionID lookup). Returns ""
 // when no source resolves or the agent has no on-disk lookup.
-func findAgentSourceFile(def parser.AgentDef, dir, rawID string) string {
+func findAgentSourceFile(ctx context.Context, def parser.AgentDef, dir, rawID string) string {
 	factory, ok := parser.ProviderFactoryByType(def.Type)
 	if !ok {
 		return ""
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{dir}})
 	source, found, err := provider.FindSource(
-		context.Background(),
+		ctx,
 		parser.FindSourceRequest{RawSessionID: rawID},
 	)
 	if err != nil || !found {
@@ -214,28 +209,26 @@ type sessionUsageOutput struct {
 // on-demand sync or direct DB access.
 const startupWaitTimeout = 30 * time.Second
 
-func runTokenUse(ctx context.Context, args []string) {
+func runTokenUse(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr,
-			"usage: agentsview token-use <session-id>")
-		os.Exit(tokenUseExitErr)
+		return withCLIHint(withExitCode(
+			errors.New("usage: agentsview token-use <session-id>"), tokenUseExitErr,
+		), "Run `agentsview token-use --help` for usage.")
 	}
-	fmt.Fprintln(os.Stderr,
-		"note: 'token-use' is deprecated; use 'session usage <id>' instead")
+	fmt.Fprintln(cmd.ErrOrStderr(),
+		"note: 'token-use' is deprecated; use 'agentsview session usage <id> --json' instead")
 
-	out, code, err := sessionUsageData(ctx, args[0])
+	out, code, err := sessionUsageData(cmd.Context(), args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(tokenUseExitErr)
+		return withExitCode(err, tokenUseExitErr)
 	}
 	if out != nil {
-		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		enc := jsontext.NewEncoder(cmd.OutOrStdout(), jsontext.WithIndent("  "))
 		if encErr := json.MarshalEncode(enc, out); encErr != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", encErr)
-			os.Exit(tokenUseExitErr)
+			return withExitCode(encErr, tokenUseExitErr)
 		}
 	}
-	os.Exit(code)
+	return sessionUsageExitError(args[0], code)
 }
 
 func sessionUsageData(ctx context.Context, sessionID string) (*sessionUsageOutput, int, error) {
@@ -263,9 +256,5 @@ func sessionUsageData(ctx context.Context, sessionID string) (*sessionUsageOutpu
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	out, code, err := backend.SessionUsage(ctx, sessionUsageQuery{SessionID: sessionID})
-	if err == nil && code == tokenUseExitNotFound {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-	}
-	return out, code, err
+	return backend.SessionUsage(ctx, sessionUsageQuery{SessionID: sessionID})
 }

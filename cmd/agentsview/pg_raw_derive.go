@@ -26,7 +26,7 @@ import (
 // Friction rules are part of the version so a rules change reaches existing
 // hosted sessions through the same reparse rollout as a parser change.
 func rawProcessingVersion() string {
-	return fmt.Sprintf("parser-data-%d+%s", db.CurrentDataVersion(), friction.RulesVersion)
+	return fmt.Sprintf("parser-data-%d+%s/runtime-%d", db.CurrentDataVersion(), friction.RulesVersion, rawderive.ParserRuntimeVersion)
 }
 
 // pgRawRuntime owns one bounded sequential worker/maintenance loop. Stop joins
@@ -82,7 +82,7 @@ func (r *pgRawRuntime) Stop() {
 	}
 }
 
-func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string) (replicaServeStartup, error) {
+func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGConfig, basePath string) (replicaServeStartup, error) {
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return replicaServeStartup{}, err
 	}
@@ -90,11 +90,11 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		return replicaServeStartup{}, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
 	applyClassifierConfig(app)
-	store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+	store, err := postgres.NewHostedStore(ctx, pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {
 		return replicaServeStartup{}, err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
 	var closeUploads func() error
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
@@ -152,13 +152,13 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 			return fail(err)
 		}
 		retry := rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: maxAttempts}
-		sink, err := postgres.NewRawProjectionStore(store.DB(), hostedRawProjectionOptions(app, pg.RawTenant, retry))
+		sink, err := postgres.NewRawProjectionStore(ctx, store.DB(), hostedRawProjectionOptions(app, pg.RawTenant, retry))
 		if err != nil {
 			return fail(err)
 		}
 		worker, err := rawderive.NewWorker(rawderive.WorkerConfig{
 			Queue: metadata, Manifests: rawderive.ManifestLoader{Store: custody, Limits: custody.limits},
-			Materializer: rawderive.Materializer{Store: custody, BaseDir: os.TempDir(), MaxTotalBytes: 512 << 20}, Parser: isolated, Projection: sink,
+			Materializer: rawderive.Materializer{Store: custody, BaseDir: os.TempDir(), MaxTotalBytes: rawderive.MaxMaterializedBytes}, Parser: isolated, Projection: sink,
 			Owner: fmt.Sprintf("hosted-%d", os.Getpid()), BatchSize: 1, LeaseDuration: time.Minute, HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Duration(attempt) * time.Second,
 			RetryBase: retry.Base, RetryMax: retry.Maximum, MaxAttempts: retry.MaxAttempts,
 		})
@@ -185,12 +185,12 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err != nil {
 		return fail(err)
 	}
-	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(app.DataDir, store.DB(), custody)
+	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(ctx, app.DataDir, store.DB(), custody)
 	if err != nil {
 		return fail(err)
 	}
 	closeUploads = closeUploadStore
-	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption}
+	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption, pgKataConn(app)}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))
 	}
@@ -219,7 +219,7 @@ func newPGHostedProvisionCommand() *cobra.Command {
 			return errors.New("hosted-provision requires raw_tenant in the selected PG target")
 		}
 		applyClassifierConfig(cfg)
-		database, err := postgres.Open(pg.URL, pg.Schema, pg.AllowInsecure)
+		database, err := postgres.Open(cmd.Context(), pg.URL, pg.Schema, pg.AllowInsecure)
 		if err != nil {
 			return errors.New("opening hosted owner connection failed")
 		}
@@ -235,9 +235,10 @@ func newPGHostedProvisionCommand() *cobra.Command {
 func newPGRawReparseCommand() *cobra.Command {
 	var runID string
 	var batch int
-	cmd := &cobra.Command{Use: "raw-reparse [target]", Short: "Schedule one bounded, resumable batch of current raw heads for this parser version", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if runID == "" {
-			return errors.New("raw-reparse requires --run-id for its durable checkpoint")
+	var repair bool
+	cmd := &cobra.Command{Use: "raw-reparse [target]", Short: "Schedule current raw heads or repair failed jobs in one bounded batch for this parser version", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if !repair && strings.TrimSpace(runID) == "" {
+			return errors.New("raw-reparse requires --run-id")
 		}
 		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
@@ -257,14 +258,26 @@ func newPGRawReparseCommand() *cobra.Command {
 		if pg.RawTenant == "" {
 			return errors.New("raw-reparse requires raw_tenant")
 		}
-		store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+		store, err := postgres.NewHostedStore(cmd.Context(), pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
-		sink, err := postgres.NewRawProjectionStore(store.DB(), postgres.RawProjectionOptions{Tenant: pg.RawTenant})
+		sink, err := postgres.NewRawProjectionStore(cmd.Context(), store.DB(), postgres.RawProjectionOptions{Tenant: pg.RawTenant})
 		if err != nil {
 			return err
+		}
+		if repair {
+			count, err := sink.RepairFailedJobs(cmd.Context(), rawProcessingVersion(), batch)
+			if err != nil {
+				return err
+			}
+			jobs := "jobs"
+			if count == 1 {
+				jobs = "job"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Rescheduled %d failed %s\n", count, jobs)
+			return nil
 		}
 		result, err := sink.ScheduleCurrentHeads(cmd.Context(), runID, rawProcessingVersion(), batch)
 		if err != nil {
@@ -274,7 +287,10 @@ func newPGRawReparseCommand() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&runID, "run-id", "", "Durable rollout checkpoint ID; reuse to resume")
-	cmd.Flags().IntVar(&batch, "batch-size", 64, "Maximum current heads in this invocation (1-256)")
+	cmd.Flags().IntVar(&batch, "batch-size", 64, "Maximum current heads to schedule or failed jobs to repair in this invocation (1-256)")
+	cmd.Flags().BoolVar(&repair, "repair", false, "Reschedule failed jobs for this parser version")
+	cmd.MarkFlagsMutuallyExclusive("repair", "run-id")
+	cmd.MarkFlagsOneRequired("repair", "run-id")
 	return cmd
 }
 

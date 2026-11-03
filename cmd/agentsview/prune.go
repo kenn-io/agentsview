@@ -92,8 +92,11 @@ func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 }
 
 func confirm(r io.Reader, w io.Writer, msg string) bool {
+	return confirmScanned(bufio.NewScanner(r), w, msg)
+}
+
+func confirmScanned(scanner *bufio.Scanner, w io.Writer, msg string) bool {
 	fmt.Fprintf(w, "%s [y/N] ", msg)
-	scanner := bufio.NewScanner(r)
 	scanner.Scan()
 	ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	return ans == "y" || ans == "yes"
@@ -224,12 +227,12 @@ func runPrune(ctx context.Context, cfg PruneConfig) {
 
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", err)
 	}
 
 	database, writeLock, err := openWriteDB(ctx, appCfg)
 	if err != nil {
-		log.Fatalf("opening database: %v", err)
+		fatal("opening database: %v", err)
 	}
 
 	pruner := &Pruner{
@@ -240,6 +243,6 @@ func runPrune(ctx context.Context, cfg PruneConfig) {
 	err = pruner.Prune(ctx, cfg)
 	closeWriteDB(database, writeLock)
 	if err != nil {
-		log.Fatalf("prune: %v", err)
+		fatal("prune: %v", err)
 	}
 }

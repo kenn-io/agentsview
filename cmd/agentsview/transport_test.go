@@ -123,7 +123,7 @@ func TestEnsureTransport_SameVersionFallbackDoesNotAutostart(t *testing.T) {
 		"same-version fallback daemon must not trigger autostart")
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(&cfg, transportIntentRead, time.Second)
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
@@ -273,7 +273,7 @@ func stubWaitForDaemonStartupForTransport(
 func TestDetectTransport_NoDaemon_ReturnsDirect(t *testing.T) {
 	t.Parallel()
 	dir := daemonRuntimeDir(t)
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
 	assert.False(t, tr.ReadOnly)
@@ -286,7 +286,7 @@ func TestDetectTransport_LocalServe_ReturnsHTTPWriteCapable(t *testing.T) {
 	host, port := testPingServer(t)
 	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
 
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.False(t, tr.ReadOnly)
@@ -299,7 +299,7 @@ func TestDetectTransport_PGServe_ReturnsReadOnlyHTTP(t *testing.T) {
 	host, port := testPingServer(t)
 	writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
 
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.True(t, tr.ReadOnly)
@@ -312,7 +312,7 @@ func TestDetectTransport_AuthenticatedDaemonUsesBearerToken(t *testing.T) {
 	host, port := testAuthenticatedPingServer(t, "secret")
 	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
 
-	tr, err := detectTransport(dir, "secret", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "secret", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.False(t, tr.ReadOnly)
@@ -327,7 +327,7 @@ func TestDetectTransport_PGServeUnreachable_AllowsDirectWrite(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	writeUnreachableDaemonRuntime(t, dir, true) // readOnly = pg serve
 
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
 }
@@ -337,7 +337,7 @@ func TestDetectTransport_IncompatibleDaemonSetsDirectReason(t *testing.T) {
 	host, port := testPingServer(t)
 	writeIncompatibleDaemonRuntime(t, dir, host, port, "old", false)
 
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
 	assert.True(t, tr.DirectReadOnly)
@@ -350,7 +350,7 @@ func TestDetectTransport_LocalDaemonUnreachableDoesNotSetDirectIncompatible(t *t
 	dir := daemonRuntimeDir(t)
 	writeUnreachableDaemonRuntime(t, dir, false)
 
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
 	assert.True(t, tr.DirectReadOnly)
@@ -376,7 +376,7 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 		return false
 	})
 
-	tr, err := detectTransport(dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.True(t, waited)
 	// Still no runtime record after wait, so IsDaemonActive sees
@@ -401,7 +401,7 @@ func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {
 		}, nil
 	})
 
-	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, 0)
 	require.NoError(t, err)
 	assert.True(t, started)
 	assert.Equal(t, transportHTTP, tr.Mode)
@@ -415,7 +415,7 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 	forbidStartBackgroundServeForTransport(t,
 		"AGENTSVIEW_NO_DAEMON must suppress daemon start")
 
-	_, err := ensureTransport(&cfg, transportIntentRead, time.Second)
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "direct SQLite reads are not supported")
 	assert.Contains(t, err.Error(), "agentsview daemon start")
@@ -428,7 +428,7 @@ func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing
 	forbidStartBackgroundServeForTransport(t,
 		"unreachable live daemon must not trigger a second start")
 
-	_, err := ensureTransport(&cfg, transportIntentRead, time.Second)
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
 	require.ErrorIs(t, err, errLocalDaemonUnreachable)
 }
 
@@ -448,7 +448,7 @@ func TestEnsureTransport_ArchiveWriteStartsDaemon(t *testing.T) {
 		}, nil
 	})
 
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.NoError(t, err)
@@ -493,7 +493,7 @@ func TestEnsureTransport_ReplacesDifferentDaemonVersion(t *testing.T) {
 					return &DaemonRuntime{Host: "127.0.0.1", Port: 23456}, nil
 				})
 				cfg := config.Config{DataDir: dir}
-				tr, err := ensureTransport(&cfg, intent, time.Second)
+				tr, err := ensureTransportContext(t.Context(), &cfg, intent, time.Second)
 				require.NoError(t, err)
 				assert.Equal(t, tt.replace, started)
 				assert.Equal(t, transportHTTP, tr.Mode)
@@ -520,7 +520,7 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesOlderDaemon(
 		"AGENTSVIEW_NO_DAEMON must suppress daemon replacement")
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentRead, time.Second,
 	)
 
@@ -556,7 +556,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDae
 	})
 
 	cfg := config.Config{DataDir: dir, NoSync: true}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentRead, time.Second,
 	)
 	require.NoError(t, err)
@@ -577,7 +577,7 @@ func TestEnsureTransport_ArchiveWriteNoDaemonEnvKeepsOlderDaemon(t *testing.T) {
 		"AGENTSVIEW_NO_DAEMON must not start a replacement daemon")
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.NoError(t, err)
@@ -610,7 +610,7 @@ func TestEnsureTransport_ArchiveWriteStopsOlderDaemonUnderLaunchLock(
 	})
 
 	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransport(
+	_, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	assert.ErrorIs(t, err, stopErr)
@@ -634,7 +634,7 @@ func TestEnsureTransport_ArchiveWriteRestartsDifferentDaemonAPI(t *testing.T) {
 				return &DaemonRuntime{Host: "127.0.0.1", Port: 23456}, nil
 			})
 			cfg := config.Config{DataDir: dir}
-			tr, err := ensureTransport(&cfg, transportIntentArchiveWrite, time.Second)
+			tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
 			require.NoError(t, err)
 			assert.True(t, started)
 			assert.Equal(t, transportHTTP, tr.Mode)
@@ -665,7 +665,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingIncompat
 	})
 
 	cfg := config.Config{DataDir: dir, NoSync: true}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentRead, time.Second,
 	)
 	require.NoError(t, err)
@@ -693,7 +693,7 @@ func TestEnsureTransport_ReadIntentRestartsIncompatibleOlderDaemon(t *testing.T)
 	})
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentRead, time.Second,
 	)
 	require.NoError(t, err)
@@ -734,7 +734,7 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStar
 	})
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 
@@ -759,7 +759,7 @@ func TestEnsureTransport_ArchiveWriteRejectsUnsafeOlderDaemonRestart(t *testing.
 		"unsafe restart must be rejected before daemon start")
 
 	cfg := config.Config{DataDir: dir, Host: "0.0.0.0"}
-	_, err := ensureTransport(
+	_, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.Error(t, err)
@@ -788,7 +788,7 @@ func TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart(t *testi
 			"daemon already on a newer one")
 
 	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransport(
+	_, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.Error(t, err)
@@ -814,7 +814,7 @@ func TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade(t *testing
 		"a read client must not replace a daemon on a newer data version")
 
 	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransport(&cfg, transportIntentRead, time.Second)
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "data version")
 	assert.Contains(t, err.Error(), "newer than this agentsview binary")
@@ -859,7 +859,7 @@ func TestEnsureTransport_ArchiveWriteRefusesUnauthenticatedNonLoopbackAutoStart(
 	forbidStartBackgroundServeForTransport(t,
 		"unsafe auto-start must be rejected before launch")
 
-	_, err := ensureTransport(
+	_, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.Error(t, err)
@@ -886,7 +886,7 @@ func TestEnsureTransport_ArchiveWriteAllowsAuthenticatedNonLoopbackAutoStart(
 		return &DaemonRuntime{Host: "0.0.0.0", Port: 12345}, nil
 	})
 
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.NoError(t, err)
@@ -917,7 +917,7 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 	})
 
 	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransport(&cfg, transportIntentArchiveWrite, 0)
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, 0)
 	require.NoError(t, err)
 	assert.Equal(t, backgroundAutoStartReadyTimeout, gotWait)
 }
@@ -977,7 +977,7 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 	})
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 
@@ -1062,7 +1062,7 @@ auth_token = "generated-token"
 	})
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 
@@ -1101,7 +1101,7 @@ auth_token = "generated-token"
 	})
 
 	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransport(
+	tr, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentRead, time.Second,
 	)
 
@@ -1177,7 +1177,7 @@ func TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon(t *testi
 		"AGENTSVIEW_NO_DAEMON must not start a replacement daemon")
 
 	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransport(
+	_, err := ensureTransportContext(t.Context(),
 		&cfg, transportIntentArchiveWrite, time.Second,
 	)
 	require.Error(t, err)
@@ -1193,7 +1193,7 @@ func TestEnsureTransport_ArchiveWriteNoDaemonEnvUsesDirect(t *testing.T) {
 	forbidStartBackgroundServeForTransport(t,
 		"AGENTSVIEW_NO_DAEMON must suppress daemon start")
 
-	tr, err := ensureTransport(&cfg, transportIntentArchiveWrite, time.Second)
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
 }
@@ -1206,7 +1206,7 @@ func TestEnsureTransport_ArchiveWriteUnreachableDaemonRefuses(t *testing.T) {
 		"unreachable live daemon must not trigger a second start")
 
 	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransport(&cfg, transportIntentArchiveWrite, time.Second)
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errLocalDaemonUnreachable)
 }
@@ -1224,7 +1224,7 @@ func TestEnsureTransport_ArchiveWritePropagatesGeneratedAuthToken(t *testing.T) 
 		}, nil
 	})
 
-	_, err := ensureTransport(&cfg, transportIntentArchiveWrite, time.Second)
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, "generated", cfg.AuthToken)
 }

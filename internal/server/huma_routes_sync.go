@@ -508,6 +508,7 @@ func (s *Server) finishLocalSync(
 		}
 		s.mu.Lock()
 		if s.onDemandArchiveSources == nil {
+			// The cached manager outlives this request.
 			ownerCtx := s.baseCtx
 			if ownerCtx == nil {
 				ownerCtx = context.WithoutCancel(ctx)
@@ -1185,13 +1186,13 @@ func (s *Server) humaSyncSession(
 	if local, ok := s.db.(*db.DB); ok && local.NeedsResync() {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusConflict,
-				"archive is stale; wait for the rebuild or run 'agentsview sync --full' before syncing this session"),
+				"archive is stale; wait for the rebuild or run 'agentsview source sync --full' before syncing this session"),
 			http.Header{ResyncRequiredHeader: []string{"true"}},
 		)
 	}
 	if in.Body.UsageRefresh && s.engine != nil && !s.engine.StartupReconciled() {
 		return nil, apiError(http.StatusConflict,
-			"startup ingestion is incomplete; wait for scheduled ingestion or run 'agentsview sync'")
+			"startup ingestion is incomplete; wait for scheduled ingestion or run 'agentsview source sync'")
 	}
 	detail, err := s.sessionSyncService(ctx).Sync(ctx, in.Body)
 	if err != nil {

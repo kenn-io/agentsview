@@ -475,8 +475,8 @@ func TestCopyFrictionStateFrom(t *testing.T) {
 
 	dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
 	defer dst.Close()
-	require.NoError(t, dst.CopyFrictionStateFrom(srcPath))
-	require.NoError(t, dst.CopyFrictionStateFrom(srcPath), "copy is idempotent")
+	require.NoError(t, dst.CopyFrictionStateFrom(t.Context(), srcPath))
+	require.NoError(t, dst.CopyFrictionStateFrom(t.Context(), srcPath), "copy is idempotent")
 
 	got, err := dst.GetFrictionDigest(t.Context(), "2026-09-15")
 	require.NoError(t, err)
@@ -498,7 +498,7 @@ func TestCopyFrictionStateFromOldArchive(t *testing.T) {
 	src.Close()
 	dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
 	defer dst.Close()
-	require.NoError(t, dst.CopyFrictionStateFrom(srcPath))
+	require.NoError(t, dst.CopyFrictionStateFrom(t.Context(), srcPath))
 	assert.Equal(t, 0, countRows(t, dst, "friction_digests"))
 }
 
@@ -512,7 +512,7 @@ func TestCopyFrictionStateFromRejectsUsageOnly(t *testing.T) {
 	dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
 	t.Cleanup(func() { require.NoError(t, dst.Close()) })
 	dst.SetArchiveContent(config.ArchiveContentUsage)
-	require.ErrorIs(t, dst.CopyFrictionStateFrom(srcPath), ErrArchiveContentExcluded)
+	require.ErrorIs(t, dst.CopyFrictionStateFrom(t.Context(), srcPath), ErrArchiveContentExcluded)
 	assert.Equal(t, 0, countRows(t, dst, "friction_digests"))
 }
 

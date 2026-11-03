@@ -396,7 +396,7 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 		From:             "2024-06-01",
 		To:               "2024-06-30",
 		ExcludeAutomated: true,
-	})
+	}, db.PostgresQueryDialect())
 
 	normalized := strings.ToLower(query)
 	assert.NotContains(t, normalized, "and u.ts >=")
@@ -437,7 +437,7 @@ func TestPGDailyUsageDetailedQuerySelectsMachine(t *testing.T) {
 		db.UsageFilter{
 			From: "2026-07-15", To: "2026-07-15", Breakdowns: true,
 		},
-		false,
+		false, db.PostgresQueryDialect(),
 	))
 	assert.Contains(t, detailed, "u.machine")
 
@@ -445,7 +445,7 @@ func TestPGDailyUsageDetailedQuerySelectsMachine(t *testing.T) {
 	fast := strings.ToLower(pgDailyUsageRowQuery(
 		fastParams,
 		db.UsageFilter{From: "2026-07-15", To: "2026-07-15"},
-		false,
+		false, db.PostgresQueryDialect(),
 	))
 	assert.NotContains(t, fast, "u.machine")
 }
@@ -456,7 +456,7 @@ func TestPGBoundedDailyUsageRowsCTEProjectsReasoningTokens(t *testing.T) {
 		From: "2024-06-01",
 		To:   "2024-06-30",
 	}
-	query := pgDailyUsageRowsSQLForBounds(pb, f, pgUsageBoundsForFilter(pb, f))
+	query := pgDailyUsageRowsSQLForBounds(pb, f, pgUsageBoundsForFilter(pb, f), db.PostgresQueryDialect())
 
 	normalized := strings.ToLower(query)
 	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
@@ -520,7 +520,7 @@ func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
 		Model: "gpt-5.3-codex",
 	}
 	bounds := pgUsageBoundsForFilter(pb, f)
-	query := pgMatchingUsageRowsSQLForBounds(pb, f, bounds)
+	query := pgMatchingUsageRowsSQLForBounds(pb, f, bounds, db.PostgresQueryDialect())
 
 	normalized := strings.ToLower(query)
 	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
@@ -543,7 +543,7 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 		From:     "2024-06-01",
 		To:       "2024-06-30",
 		Timezone: "America/New_York",
-	}, true)
+	}, true, db.PostgresQueryDialect())
 
 	normalized := strings.ToLower(query)
 	assert.Contains(t, normalized, "coalesce(attributed.group_key, '') as group_key")

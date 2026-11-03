@@ -1760,9 +1760,7 @@ fn forward_sidecar_logs(
                             );
                         }
                         if let Some(status) = stdout_update.status {
-                            let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
-                            let _ =
-                                window.eval(format!("window.__setStatus('{escaped}');").as_str());
+                            let _ = window.eval(status_update_script(status.as_str()).as_str());
                         }
                         if let Some(port) = stdout_update.port {
                             save_sidecar_port(window.app_handle(), port);
@@ -2055,6 +2053,10 @@ fn js_string_literal(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+fn status_update_script(status: &str) -> String {
+    format!("window.__setStatus({});", js_string_literal(status))
+}
+
 fn startup_failure_footer(handle: &AppHandle) -> String {
     match desktop_log_file_path(handle) {
         Ok(path) => format!(
@@ -2331,8 +2333,7 @@ fn poll_background_status_after_launcher_exit(
                     failed_status_probes = 0;
                     unhealthy_since = None;
                     if !long_startup_notice_shown && !status.trim().is_empty() {
-                        let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
-                        let _ = window.eval(format!("window.__setStatus('{escaped}');").as_str());
+                        let _ = window.eval(status_update_script(status.as_str()).as_str());
                     }
                 }
                 BackendStatusProbe::Unhealthy(status) => {
@@ -4634,6 +4635,16 @@ mod tests {
         assert!(script.contains("fatal: opening database"));
         assert!(script.contains("role', 'alert'"));
         assert!(script.contains("Attach logs"));
+    }
+
+    #[test]
+    fn status_update_script_serializes_multiline_startup_status() {
+        let status = "agentsview is starting up.\n  phase: opening user's \"main\" database\n  log: C:\\AgentsView\\serve.log";
+
+        assert_eq!(
+            status_update_script(status),
+            r#"window.__setStatus("agentsview is starting up.\n  phase: opening user's \"main\" database\n  log: C:\\AgentsView\\serve.log");"#
+        );
     }
 
     #[test]

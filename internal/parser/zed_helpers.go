@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"sort"
 	"strings"
@@ -167,9 +168,9 @@ func zedMarshalRaw(v any) string {
 	return string(b)
 }
 
-func zedProjectFromFolderPaths(paths string) string {
+func zedProjectFromFolderPaths(ctx context.Context, paths string) string {
 	if cwd := zedFirstFolderPath(paths); cwd != "" {
-		if project := ExtractProjectFromCwd(cwd); project != "" {
+		if project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, ""); project != "" {
 			return project
 		}
 	}

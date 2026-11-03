@@ -18,6 +18,7 @@ import (
 // still in the read-time delta or already refreshed, and still matches the
 // local archive, including the Claude peers of a filtered report.
 func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
 	const peerID = "range-peer"
@@ -122,6 +123,7 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 // reads of the whole mirror give, for the Activity report, a range still
 // in progress, and daily usage.
 func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	// The revision is left to its default, so the copy is a new snapshot.

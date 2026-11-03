@@ -466,13 +466,13 @@ func (s JSONLSourceSet) Fingerprint(
 		Device:  device,
 	}
 	if s.options.Hash {
-		hash, err := hashJSONLSourceFile(path)
+		hash, err := hashJSONLSourceFileContext(ctx, path)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
 		fingerprint.Hash = hash
 	}
-	if err := s.foldCompanionFingerprint(path, &fingerprint); err != nil {
+	if err := s.foldCompanionFingerprint(ctx, path, &fingerprint); err != nil {
 		return SourceFingerprint{}, err
 	}
 	return fingerprint, nil
@@ -484,6 +484,7 @@ func (s JSONLSourceSet) Fingerprint(
 // companion change is reflected in the source's freshness identity. Missing
 // companions are ignored, matching sibling-metadata behavior.
 func (s JSONLSourceSet) foldCompanionFingerprint(
+	ctx context.Context,
 	transcriptPath string,
 	fingerprint *SourceFingerprint,
 ) error {
@@ -547,7 +548,7 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 			if optional && info.IsDir() && slices.Contains(s.options.OptionalCompanionDirectories, filepath.Base(companion)) {
 				err = addSiblingMetadataDirectoryFingerprintPart(hasher, "companion", companion)
 			} else {
-				err = addSiblingMetadataFingerprintPart(hasher, "companion", companion, info)
+				err = addSiblingMetadataFingerprintPart(ctx, hasher, "companion", companion, info)
 			}
 			if err != nil {
 				if !optional {
@@ -1099,10 +1100,6 @@ func firstNonEmptyJSONLString(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func hashJSONLSourceFile(path string) (string, error) {
-	return hashJSONLSourceFileContext(context.Background(), path)
 }
 
 func hashJSONLSourceFileContext(

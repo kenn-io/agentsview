@@ -154,7 +154,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			"`daemon start` runs it in the background without opening a browser.\n" +
 			"Stopping it also stops the web UI and sync. These commands also manage\n" +
 			"a writable server started by `serve` or automatically by a CLI command.\n\n" +
-			"Read-only `pg serve` and `duckdb serve` processes are managed separately.",
+			"Read-only `replica pg serve` and `replica duckdb serve` processes are managed separately.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -255,7 +255,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		cfg, []string{"serve"}, serveReplacementOptions{},
 		backgroundLaunchPolicy{
 			ConfigOnly: true, Operation: "daemon start",
-			Context: ctx, Attached: true,
+			Attached: true,
 			OnLaunch: progress.launch, OnProgress: progress.progress,
 		},
 	)
@@ -711,8 +711,8 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	})
 }
 
-func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
-	return runDaemonRestartWithPolicy(context.Background(), w, deps, false)
+func runDaemonRestart(ctx context.Context, w io.Writer, deps daemonCommandDeps) error {
+	return runDaemonRestartWithPolicy(ctx, w, deps, false)
 }
 
 func runDaemonRestartAttached(
@@ -790,7 +790,6 @@ func runDaemonRestartWithPolicy(
 	}
 	if attached {
 		progress := &daemonLaunchProgressWriter{w: w}
-		policy.Context = ctx
 		policy.Attached = true
 		policy.OnLaunch = progress.launch
 		policy.OnProgress = progress.progress

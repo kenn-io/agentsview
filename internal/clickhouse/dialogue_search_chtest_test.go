@@ -15,6 +15,7 @@ import (
 )
 
 func TestClickHouseDialogueSearchParity(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	dbtest.SeedDialogueSearch(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -27,6 +28,7 @@ func TestClickHouseDialogueSearchParity(t *testing.T) {
 }
 
 func TestDialogueClickHouseBackfillsExistingPushCursor(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
@@ -60,6 +62,7 @@ func TestDialogueClickHouseBackfillsExistingPushCursor(t *testing.T) {
 }
 
 func TestDialogueClickHouseHybridKeywordSnippets(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
@@ -111,6 +114,7 @@ func TestDialogueClickHouseHybridKeywordSnippets(t *testing.T) {
 }
 
 func TestDialogueReparseClickHouseRepushesSession(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	require.NoError(t, local.SetSessionDataVersion(ctx, fixtureAlphaID, 139))

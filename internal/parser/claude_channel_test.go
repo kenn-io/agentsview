@@ -20,7 +20,7 @@ func TestClaudeChannelMessages(t *testing.T) {
 				offset := strings.Index(content, `{"parentUuid":"aaaaaaaa-0000-4000-8000-000000000011"`)
 				require.Positive(t, offset)
 				var err error
-				messages, _, _, _, err = claudeParseSessionFrom(path, int64(offset), claudeIncrementalScan{startOrdinal: 2, lastEntryUUID: "aaaaaaaa-0000-4000-8000-000000000011", stored: claudeStoredIdentity{entrypoint: "cli"}})
+				messages, _, _, _, err = claudeParseSessionFrom(t.Context(), path, int64(offset), claudeIncrementalScan{startOrdinal: 2, lastEntryUUID: "aaaaaaaa-0000-4000-8000-000000000011", stored: claudeStoredIdentity{entrypoint: "cli"}})
 				require.NoError(t, err)
 				require.Len(t, messages, 2)
 			} else {

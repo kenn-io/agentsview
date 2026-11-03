@@ -278,6 +278,7 @@ type VectorEmbeddingsConfig struct {
 	DefaultServer string `toml:"default_server" json:"default_server,omitempty"`
 	// Servers is the set of named OpenAI-compatible endpoints that serve
 	// Model, keyed by the name `embeddings build --using <name>` selects.
+	// Nil means the table was omitted; an empty map means it was explicit.
 	Servers map[string]VectorEmbeddingsServerConfig `toml:"servers" json:"servers"`
 }
 
@@ -286,6 +287,7 @@ type VectorEmbeddingsConfig struct {
 // VectorEmbeddingsConfig.
 type VectorEmbeddingsServerConfig struct {
 	Endpoint string `toml:"endpoint" json:"endpoint"`
+	Local    bool   `toml:"local" json:"local,omitempty"`
 	// OllamaCPUFallback retries invalid Metal vectors once through Ollama's
 	// native CPU embedding path. It is transport-only and defaults to false.
 	OllamaCPUFallback bool `toml:"ollama_cpu_fallback" json:"ollama_cpu_fallback,omitempty"`
@@ -319,6 +321,21 @@ type VectorEmbeddingsServerConfig struct {
 	apiKey string
 }
 
+const defaultNomicModel = "nomic-embed-text"
+
+func isNomicModel(model string) bool {
+	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
+}
+
+// ServerNames returns the available server names, including automatic
+// discovery when an untagged Nomic recipe has no configured server table.
+func (c VectorEmbeddingsConfig) ServerNames() []string {
+	if c.Servers == nil && c.Model == defaultNomicModel {
+		return []string{"automatic"}
+	}
+	return sortedServerNames(c.Servers)
+}
+
 // ResolvedDefaultServer returns the server name used when no explicit
 // choice is made: default_server when set, otherwise the only defined
 // server, otherwise "".
@@ -326,10 +343,8 @@ func (c VectorEmbeddingsConfig) ResolvedDefaultServer() string {
 	if c.DefaultServer != "" {
 		return c.DefaultServer
 	}
-	if len(c.Servers) == 1 {
-		for name := range c.Servers {
-			return name
-		}
+	if names := c.ServerNames(); len(names) == 1 {
+		return names[0]
 	}
 	return ""
 }
@@ -342,10 +357,13 @@ func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsSer
 		name = c.ResolvedDefaultServer()
 	}
 	s, ok := c.Servers[name]
+	if !ok && name == "automatic" && c.Servers == nil && c.Model == defaultNomicModel {
+		return name, normalizedEmbeddingsServers(map[string]VectorEmbeddingsServerConfig{"automatic": {}}, toml.MetaData{})[name], nil
+	}
 	if !ok {
 		return "", VectorEmbeddingsServerConfig{}, fmt.Errorf(
 			"[vector.embeddings] no server named %q; define it under [vector.embeddings.servers.%s] (have: %s)",
-			name, name, strings.Join(sortedServerNames(c.Servers), ", "))
+			name, name, strings.Join(c.ServerNames(), ", "))
 	}
 	return name, s, nil
 }
@@ -546,28 +564,42 @@ func (c VectorEmbeddingsServerConfig) APIKey() string {
 	return os.Getenv(c.APIKeyEnv)
 }
 
-// validateServers checks the named-servers section: at least one server, an
-// unambiguous default, and per-server transport settings that parse.
+// validateServers checks available servers, their default and transport
+// settings, and the dimensions supported by local Nomic.
 func (c VectorEmbeddingsConfig) validateServers() error {
-	if len(c.Servers) == 0 {
+	names := c.ServerNames()
+	if len(names) == 0 {
 		return errors.New("[vector.embeddings] at least one server is required when [vector] is enabled; " +
 			"define one under [vector.embeddings.servers.<name>]")
 	}
-	if c.DefaultServer == "" && len(c.Servers) > 1 {
+	if c.DefaultServer == "" && len(names) > 1 {
 		return fmt.Errorf(
 			"[vector.embeddings] default_server is required when more than one server is defined (have: %s)",
-			strings.Join(sortedServerNames(c.Servers), ", "))
+			strings.Join(names, ", "))
 	}
 	if c.DefaultServer != "" {
-		if _, ok := c.Servers[c.DefaultServer]; !ok {
+		if !slices.Contains(names, c.DefaultServer) {
 			return fmt.Errorf(
 				"[vector.embeddings] default_server %q is not a defined server (have: %s)",
-				c.DefaultServer, strings.Join(sortedServerNames(c.Servers), ", "))
+				c.DefaultServer, strings.Join(names, ", "))
 		}
 	}
+	local := c.Servers == nil
 	for _, name := range sortedServerNames(c.Servers) {
+		if c.Servers[name].Local && !isNomicModel(c.Model) {
+			return fmt.Errorf("[vector.embeddings.servers.%s] local requires nomic-embed-text; changing models requires rebuilding the index", name)
+		}
+		local = local || c.Servers[name].Local
 		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {
 			return err
+		}
+	}
+	if local {
+		if c.Dimension > 768 {
+			return fmt.Errorf("[vector.embeddings] dimension must be at most 768 for local %q, got %d", c.Model, c.Dimension)
+		}
+		if c.Dimension < 768 && !c.RequestDimensions {
+			return errors.New("[vector.embeddings] request_dimensions must be true for local Nomic dimensions below 768")
 		}
 	}
 	return nil
@@ -576,7 +608,10 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 // validate checks one named server's transport settings.
 func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens int) error {
 	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
-	if c.Endpoint == "" {
+	if c.Local && c.Endpoint != "" {
+		return fmt.Errorf("%s local cannot be combined with endpoint", section)
+	}
+	if c.Endpoint == "" && !c.Local {
 		return fmt.Errorf("%s endpoint is required", section)
 	}
 	if c.OllamaCPUFallback {
@@ -983,6 +1018,7 @@ type Config struct {
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
+	Kata                 KataConfig                  `json:"-" toml:"kata"`
 	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
@@ -1385,6 +1421,7 @@ func Default() (Config, error) {
 			},
 		},
 		Friction: FrictionConfig{BackfillDays: DefaultFrictionBackfillDays},
+		Kata:     defaultKataConfig(),
 	}, nil
 }
 
@@ -1814,6 +1851,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
+		Kata                           KataConfig             `toml:"kata"`
 		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
@@ -2102,8 +2140,26 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.Vector.Embeddings.DefaultServer != "" {
 		c.Vector.Embeddings.DefaultServer = file.Vector.Embeddings.DefaultServer
 	}
-	if len(file.Vector.Embeddings.Servers) > 0 {
+	if meta.IsDefined("vector", "embeddings", "servers") {
 		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
+	}
+	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && !meta.IsDefined("vector", "embeddings", "servers") {
+		c.Vector.Embeddings.Model = defaultNomicModel
+		if !meta.IsDefined("vector", "embeddings", "dimension") {
+			c.Vector.Embeddings.Dimension = 768
+		}
+		if !meta.IsDefined("vector", "embeddings", "max_input_chars") {
+			c.Vector.Embeddings.MaxInputChars = 4000
+		}
+		if !meta.IsDefined("vector", "embeddings", "model_context_tokens") {
+			c.Vector.Embeddings.ModelContextTokens = 2048
+		}
+		if !meta.IsDefined("vector", "embeddings", "query_prefix") {
+			c.Vector.Embeddings.QueryPrefix = "search_query: "
+		}
+		if !meta.IsDefined("vector", "embeddings", "document_prefix") {
+			c.Vector.Embeddings.DocumentPrefix = "search_document: "
+		}
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
 		c.Vector.Embed.RunAfterSync = file.Vector.Embed.RunAfterSync
@@ -2123,6 +2179,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.DefaultAgent = strings.ToLower(
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
+	}
+	if meta.IsDefined("kata") {
+		mergeKataTOML(&c.Kata, file.Kata, meta)
 	}
 	if meta.IsDefined("friction", "enabled") {
 		c.Friction.Enabled = file.Friction.Enabled

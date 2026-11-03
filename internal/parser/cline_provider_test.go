@@ -172,13 +172,13 @@ func TestClineFingerprintSource(t *testing.T) {
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{"session_id":"test"}`), 0o644))
 	require.NoError(t, os.WriteFile(msgPath, []byte(`{"messages":[]}`), 0o644))
 
-	fp1, err := clineFingerprintSource(metaPath)
+	fp1, err := clineFingerprintSource(t.Context(), metaPath)
 	require.NoError(t, err)
 	assert.NotEmpty(t, fp1.Hash)
 
 	// Modifying messages file must change composite fingerprint
 	require.NoError(t, os.WriteFile(msgPath, []byte(`{"messages":[{"id":"1"}]}`), 0o644))
-	fp2, err := clineFingerprintSource(metaPath)
+	fp2, err := clineFingerprintSource(t.Context(), metaPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp1.Hash, fp2.Hash)
 	assert.NotEqual(t, fp1.Size, fp2.Size)
@@ -205,7 +205,7 @@ func TestClinePrimarySymlinksAreRejected(t *testing.T) {
 		paths, err := clineDiscoverPaths(t, provider)
 		require.NoError(t, err)
 		assert.NotContains(t, paths, metaPath)
-		_, err = clineFingerprintSource(metaPath)
+		_, err = clineFingerprintSource(t.Context(), metaPath)
 		require.Error(t, err)
 		require.NoError(t, os.Remove(msgPath))
 	})
@@ -229,7 +229,7 @@ func TestClinePrimarySymlinksAreRejected(t *testing.T) {
 	symlinkOrSkip(t, msgTarget, msgPath)
 	_, ok := clineClassifyPath(root, msgPath, false)
 	assert.False(t, ok)
-	_, err := clineFingerprintSource(metaPath)
+	_, err := clineFingerprintSource(t.Context(), metaPath)
 	require.Error(t, err)
 	require.NoError(t, os.Remove(msgPath))
 	// Changing the former symlink target must not make the source fingerprint
@@ -274,7 +274,7 @@ func TestClineSessionDirectorySymlinkEscapingRootIsRejected(t *testing.T) {
 	)
 	assert.Empty(t, scopes, "an escaping session directory must have no ownership scope")
 
-	_, _, err = clineParseFile(singleFileSource{Root: root, Path: metaPath}, ParseRequest{})
+	_, _, err = clineParseFile(t.Context(), singleFileSource{Root: root, Path: metaPath}, ParseRequest{})
 	assert.Error(t, err, "parsing must reject the path before reading the external metadata")
 }
 
@@ -306,21 +306,21 @@ func TestClineFingerprint_Teammates(t *testing.T) {
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{"session_id":"sess-fp-test"}`), 0o644))
 	require.NoError(t, os.WriteFile(msgPath, []byte(`{"messages":[]}`), 0o644))
 
-	fp1, err := clineFingerprintSource(metaPath)
+	fp1, err := clineFingerprintSource(t.Context(), metaPath)
 	require.NoError(t, err)
 
 	// Adding a teammate file must invalidate fingerprint
 	teammatePath := filepath.Join(sessDir, "git-scout__t1.messages.json")
 	require.NoError(t, os.WriteFile(teammatePath, []byte(`{"messages":[{"id":"m1"}]}`), 0o644))
 
-	fp2, err := clineFingerprintSource(metaPath)
+	fp2, err := clineFingerprintSource(t.Context(), metaPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp1.Hash, fp2.Hash)
 	assert.Greater(t, fp2.Size, fp1.Size)
 
 	// Modifying teammate file must invalidate fingerprint again
 	require.NoError(t, os.WriteFile(teammatePath, []byte(`{"messages":[{"id":"m1"},{"id":"m2"}]}`), 0o644))
-	fp3, err := clineFingerprintSource(metaPath)
+	fp3, err := clineFingerprintSource(t.Context(), metaPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp2.Hash, fp3.Hash)
 }

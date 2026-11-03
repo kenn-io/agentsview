@@ -12,6 +12,7 @@ import (
 )
 
 func TestFleetBatchAndSourceMetadata(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
 	const rawID = "codex:shared_%"

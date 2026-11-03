@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
@@ -112,10 +113,10 @@ func isKiroIDESystemMessage(content string) bool {
 // Returns (nil, nil, nil) if the file doesn't exist or
 // contains no meaningful messages.
 func parseKiroIDESession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if strings.HasSuffix(path, ".json") {
-		return parseKiroIDENewFormat(path, machine)
+		return parseKiroIDENewFormat(ctx, path, machine)
 	}
 	return parseKiroIDEChatFormat(path, machine)
 }
@@ -123,7 +124,7 @@ func parseKiroIDESession(
 // parseKiroIDENewFormat parses the new workspace-sessions
 // JSON format with history array and structured content.
 func parseKiroIDENewFormat(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -239,8 +240,8 @@ func parseKiroIDENewFormat(
 
 	project := "unknown"
 	if sess.WorkspaceDirectory != "" {
-		if p := ExtractProjectFromCwd(
-			sess.WorkspaceDirectory,
+		if p := ExtractProjectFromCwdWithBranchContext(
+			ctx, sess.WorkspaceDirectory, "",
 		); p != "" {
 			project = p
 		}

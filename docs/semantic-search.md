@@ -5,9 +5,8 @@ description: Vector (semantic) search over session messages, plus hybrid search 
 
 AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
-substring/regex/FTS5 content search. This is an opt-in feature backed by an
-OpenAI-compatible embeddings endpoint — a local [Ollama](https://ollama.com)
-model or a hosted API.
+substring/regex/FTS5 content search. This is an opt-in feature backed by Ollama,
+Kit's shared local server, or a configured OpenAI-compatible API.
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
@@ -24,6 +23,27 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Add a `[vector]` section to
 `~/.agentsview/config.toml`:
+
+```toml
+[vector]
+enabled = true
+```
+
+Restart the daemon, then run `agentsview index embeddings build`. AgentsView
+uses a running Ollama server with Nomic or Kit's shared local server. If the
+local server needs files, the CLI asks before downloading them. Search and
+automatic builds reuse installed files; they direct you to the CLI when a
+download needs approval. Declining stops the download and build.
+
+The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
+characters, 2,048 context tokens, `search_query: ` for queries, and
+`search_document: ` for documents. Explicit model recipes keep their existing
+settings, including empty prefixes. Only untagged `nomic-embed-text` uses
+automatic discovery without a server table. Tagged recipes such as
+`nomic-embed-text:latest` and `nomic-embed-text:v1.5` need a named server with
+`endpoint` or `local = true`.
+
+For an explicit model or endpoint, configure the recipe and named servers:
 
 ```toml
 [vector]
@@ -69,10 +89,9 @@ input beyond the window. Changing this cap on an existing index
 [creates a new generation and re-embeds the archive](#building-the-index) on the
 next build.
 
-`model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
-entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
-fast with an actionable message if any is missing or a duration field doesn't
-parse. Restart the daemon (or run a CLI command) after editing the file.
+With explicit servers, `model` and `dimension` are required. Each server needs
+an `endpoint` or `local = true`. Invalid settings fail at config load. Restart
+the daemon (or run a CLI command) after editing the file.
 
 Automatic Recall embedding has a separate, default-off consent gate. Setting
 `[vector.embed] recall = true` permits daemon startup, corpus mutations, and
@@ -80,22 +99,60 @@ periodic backstops to send accepted Recall entry titles, bodies, and triggers to
 the configured embeddings endpoint. `run_after_sync` controls only session
 archive sync notifications; it does not suppress Recall startup or Recall
 corpus-mutation refreshes after that consent is enabled. A manual
-`agentsview embeddings build --store recall` remains available without this
-setting because invoking that command is an explicit one-time request. Recall
-vector and hybrid queries fail closed as unavailable once the served Recall
-corpus is more than `recall_max_revision_lag` revisions newer than the last
-completed build; lexical queries remain available while an automatic or manual
-refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
+`agentsview index embeddings build --store recall` remains available without
+this setting because invoking that command is an explicit one-time request.
+Recall vector and hybrid queries fail closed as unavailable once the served
+Recall corpus is more than `recall_max_revision_lag` revisions newer than the
+last completed build; lexical queries remain available while an automatic or
+manual refresh catches up. See
+[Recall](/docs/recall/#vector-and-hybrid-retrieval).
 
 ### Named embeddings servers
+
+To select Kit's local server while Ollama keeps running, keep your existing
+explicit Nomic recipe and add a named server:
+
+```toml
+[vector.embeddings.servers.shared]
+local = true
+```
+
+If you started with only `[vector] enabled = true`, write out its default recipe
+when adding the server table:
+
+```toml
+[vector]
+enabled = true
+
+[vector.embeddings]
+model = "nomic-embed-text"
+dimension = 768
+max_input_chars = 4000
+model_context_tokens = 2048
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+default_server = "shared"
+
+[vector.embeddings.servers.shared]
+local = true
+```
+
+Set `default_server = "shared"` under `[vector.embeddings]` for searches and
+scheduled builds, or run `agentsview index embeddings build --using shared` for
+one build. Keep your existing model, dimensions, prefixes, suffix, and input cap
+to reuse the active generation. Only new or changed content needs embedding.
+`local = true` supports `nomic-embed-text`, `nomic-embed-text:latest`, and
+`nomic-embed-text:v1.5` and cannot have an `endpoint`. Keep the configured model
+spelling when switching servers; changing model identity requires rebuilding the
+index.
 
 Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`,
 `query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
-What varies per server is transport and capacity: `endpoint`, `api_key_env`,
-`timeout`, `max_retries`, `batch_size`, `max_batch_tokens`, `concurrency`, and
-`ollama_cpu_fallback`.
+What varies per server is transport and capacity: `endpoint`, `local`,
+`api_key_env`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
+`concurrency`, and `ollama_cpu_fallback`.
 
 When `model_context_tokens` and a server's `max_batch_tokens` are both set,
 builds cap that server's effective batch size at
@@ -142,7 +199,7 @@ concurrency = 6
 `default_server` names the server used for search-time query encoding and for
 any build that doesn't select one; with a single server defined it is implicit,
 with more than one it is required.
-`agentsview embeddings build --using build-box` runs one build against a
+`agentsview index embeddings build --using build-box` runs one build against a
 different server without touching the default. Because the model identity is
 global, the server choice is not part of the generation fingerprint — a build
 started on one server can be topped up incrementally from another.
@@ -309,11 +366,11 @@ makes the existing index stale and re-embeds the archive on the next build.
 The first scheduled build that `run_after_sync` triggers after enabling
 `[vector]` embeds the entire existing archive, not just deltas, since the mirror
 starts out empty and every document counts as pending. For a hosted embeddings
-API that is a real cost event, so run `agentsview embeddings build` directly at
-a time of your choosing if you want to control when that initial cost lands,
-rather than letting the debounced after-sync scheduler trigger it on its own.
-The same cost event can recur on upgrade: when a new agentsview version changes
-the index's internal mirror schema or document-identity scheme, the next
+API that is a real cost event, so run `agentsview index embeddings build`
+directly at a time of your choosing if you want to control when that initial
+cost lands, rather than letting the debounced after-sync scheduler trigger it on
+its own. The same cost event can recur on upgrade: when a new agentsview version
+changes the index's internal mirror schema or document-identity scheme, the next
 writable open resets the mirror, and with `run_after_sync = true` the next sync
 automatically re-embeds the entire archive against the configured endpoint.
 
@@ -463,13 +520,13 @@ ranked below top-level human-driven work. The
 ## Building the index
 
 ```bash
-agentsview embeddings build            # incremental: refresh + fill whatever's missing
-agentsview embeddings build --yes      # skip confirmation prompts
-agentsview embeddings build --full-rebuild --yes  # re-embeds every document
-agentsview embeddings build --backstop # force a full mirror reconciliation scan
-agentsview embeddings build --repair-invalid # regenerate only documents with invalid stored vectors
-agentsview embeddings build --include-automated  # embed automated sessions for this build only
-agentsview embeddings build --using build-box    # encode against a named server instead of the default
+agentsview index embeddings build            # incremental: refresh + fill whatever's missing
+agentsview index embeddings build --yes      # skip the full-rebuild prompt; local downloads still ask
+agentsview index embeddings build --full-rebuild --yes  # re-embeds every document
+agentsview index embeddings build --backstop # force a full mirror reconciliation scan
+agentsview index embeddings build --repair-invalid # regenerate only documents with invalid stored vectors
+agentsview index embeddings build --include-automated  # embed automated sessions for this build only
+agentsview index embeddings build --using build-box    # encode against a named server instead of the default
 ```
 
 `--using <name>` selects which `[vector.embeddings.servers.<name>]` entry the
@@ -582,7 +639,7 @@ the daemon also embeds sync deltas automatically on a debounce, so a manual
 `build` is mainly for the initial index or a `--full-rebuild`.
 
 ```bash
-agentsview embeddings list
+agentsview index embeddings list
 ```
 
 ```text
@@ -594,8 +651,8 @@ Generations move through **building → active → retired**. A first build
 activates automatically once it reaches full coverage.
 
 ```bash
-agentsview embeddings activate <id> [--force]
-agentsview embeddings retire <id> [--force]
+agentsview index embeddings activate <id> [--force]
+agentsview index embeddings retire <id> [--force]
 ```
 
 `activate` on a generation with incomplete coverage, or `retire` on the
@@ -843,20 +900,21 @@ of `ordinal_range` to read the whole stretch.
 
 ## Error taxonomy
 
-| Situation                                                                                                                       | Message                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview embeddings ...`)                                                |
-| No `VectorSearcher` wired (index never built, DuckDB backend, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'`                                                        |
-| Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                        |
-| Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview embeddings build --full-rebuild'`                                           |
-| Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview embeddings build` ``                                              |
-| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI/HTTP: `scope is only supported for semantic and hybrid search modes`; MCP also supports scope with `terms`                                               |
-| Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                          |
-| Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                  |
-| Embeddings endpoint returned a non-finite or zero-norm vector                                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview embeddings build --repair-invalid` |
-| Embeddings endpoint returned a JSON `null` component                                                                            | `[vector.embeddings] decode response: embedding component <n> is null`; correct the endpoint/cache configuration, then run the targeted repair               |
-| `--in` names a source other than `messages` with `--semantic`/`--hybrid`                                                        | CLI: `--semantic searches messages only; drop --in` (or `--hybrid ...`); HTTP/MCP: `search: semantic search only supports the messages source (got "...")`   |
-| `--cursor` with `--semantic`/`--hybrid`                                                                                         | `semantic search returns a single ranked page; cursor pagination is not supported`                                                                           |
+| Situation                                                                                                                       | Message                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview index embeddings ...`)                                                   |
+| No `VectorSearcher` wired (index never built, DuckDB backend, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'`                                                           |
+| Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
+| Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
+| Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
+| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI/HTTP: `scope is only supported for semantic and hybrid search modes`; MCP also supports scope with `terms`                                                        |
+| An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
+| Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
+| Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
+| Embeddings endpoint returned a non-finite or zero-norm vector                                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview index embeddings build --repair-invalid`    |
+| Embeddings endpoint returned a JSON `null` component                                                                            | `[vector.embeddings] decode response: embedding component <n> is null`; correct the endpoint/cache configuration, then run the targeted repair                        |
+| `--in` names a source other than `messages` with `--semantic`/`--hybrid`                                                        | CLI: `--semantic searches messages only; drop --in` (or `--hybrid ...`); HTTP/MCP: `search: semantic search only supports the messages source (got "...")`            |
+| `--cursor` with `--semantic`/`--hybrid`                                                                                         | `semantic search returns a single ranked page; cursor pagination is not supported`                                                                                    |
 
 Over HTTP (`GET /api/v1/search/content`) and MCP (`search_content`), the "not
 available" family of errors maps to HTTP `501 Not Implemented` and the matching
@@ -864,18 +922,18 @@ MCP tool error, carrying the same remediation text.
 
 ## PostgreSQL
 
-The `--pg` read path and `agentsview pg serve` support semantic and hybrid
-search backed by [pgvector](https://github.com/pgvector/pgvector), so a shared
-PostgreSQL deployment answers `--semantic`/`--hybrid` the same way a local
-SQLite index does. [ClickHouse](#clickhouse) does the same with its own tables.
-Only the DuckDB mirror lacks a vector backend and still returns the "not
+The `--pg` read path and `agentsview replica pg serve` support semantic and
+hybrid search backed by [pgvector](https://github.com/pgvector/pgvector), so a
+shared PostgreSQL deployment answers `--semantic`/`--hybrid` the same way a
+local SQLite index does. [ClickHouse](#clickhouse) does the same with its own
+tables. Only the DuckDB mirror lacks a vector backend and still returns the "not
 available" error (HTTP 501).
 
 ### Pushing embeddings
 
-`agentsview pg push` runs a vector phase after the session and message phases:
-it copies the machine's active generation from the local `vectors.db` mirror
-into PostgreSQL as per-generation `halfvec` chunk tables. Only the active
+`agentsview replica pg push` runs a vector phase after the session and message
+phases: it copies the machine's active generation from the local `vectors.db`
+mirror into PostgreSQL as per-generation `halfvec` chunk tables. Only the active
 generation is pushed, and only sessions whose document set changed since the
 last push are re-sent, mirroring the incremental session push (`pg push --full`
 bypasses the change detection and re-sends every session's vectors). The
@@ -925,11 +983,11 @@ fingerprint. A `[vector]` section in `config.toml` can't be combined with the
 `AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If PostgreSQL holds several
 published recipes, adoption refuses to guess and semantic search reports the
 count; stop the hub's `pg push --watch --embed`, remove obsolete generations
-with `agentsview pg vectors drop <id>`, then start the watcher and restart
-`pg serve`. Generations pushed before recipe publication have no recipe until a
-configured machine pushes them again. If `pg serve` starts before a workstation
-pushes its first generation, restart `pg serve` after that push to enable
-semantic search.
+with `agentsview replica pg vectors drop <id>`, then start the watcher and
+restart `pg serve`. Generations pushed before recipe publication have no recipe
+until a configured machine pushes them again. If `pg serve` starts before a
+workstation pushes its first generation, restart `pg serve` after that push to
+enable semantic search.
 
 If no generation matches, `pg serve` starts normally but semantic and hybrid
 search return the 501 "not available" error carrying the mismatch reason, which
@@ -979,11 +1037,11 @@ search keeps working.
 
 ### Maintenance
 
-`agentsview pg vectors list` prints every generation with its model, dimension,
-document and chunk counts, contributing machines, and creation time.
-`agentsview pg vectors drop <id>` removes a generation and all of its embeddings
-(prompted unless `--yes`); use it to reclaim space after retiring an embedding
-model. Both accept `--target` to select a non-default PG target.
+`agentsview replica pg vectors list` prints every generation with its model,
+dimension, document and chunk counts, contributing machines, and creation time.
+`agentsview replica pg vectors drop <id>` removes a generation and all of its
+embeddings (prompted unless `--yes`); use it to reclaim space after retiring an
+embedding model. Both accept `--target` to select a non-default PG target.
 
 ### Hybrid keyword leg
 
@@ -997,9 +1055,9 @@ differ between the backends.
 
 ## ClickHouse
 
-`agentsview clickhouse serve` supports semantic and hybrid search the same way
-`pg serve` does. For the step-by-step setup with the output that confirms each
-step, see
+`agentsview replica clickhouse serve` supports semantic and hybrid search the
+same way `pg serve` does. For the step-by-step setup with the output that
+confirms each step, see
 [ClickHouse sync: Enabling Semantic Search](/docs/clickhouse-sync/#enabling-semantic-search).
 `clickhouse push` runs a vector phase after the session phase when `[vector]` is
 enabled locally and the target has not set `push_vectors = false`;

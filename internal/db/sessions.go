@@ -334,10 +334,12 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Session struct {
 	// WebURL is a client-derived browser link, never persisted.
-	WebURL                string   `json:"web_url,omitempty"`
-	ID                    string   `json:"id"`
-	Project               string   `json:"project"`
-	Machine               string   `json:"machine"`
+	WebURL  string `json:"web_url,omitempty"`
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	Machine string `json:"machine"`
+	// SourceMachines lists contributing hosted device identities, derived on read.
+	SourceMachines        []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
 	Agent                 string   `json:"agent"`
 	AgentLabel            string   `json:"agent_label,omitempty"`
 	Entrypoint            string   `json:"entrypoint,omitempty"`
@@ -712,6 +714,7 @@ type SidebarSessionIndexRow struct {
 	Project            string   `json:"project"`
 	ProjectAssigned    bool     `json:"project_assigned,omitempty"`
 	Machine            string   `json:"machine"`
+	SourceMachines     []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
 	Agent              string   `json:"agent"`
 	AgentLabel         string   `json:"agent_label,omitempty"`
 	Entrypoint         string   `json:"entrypoint,omitempty"`
@@ -975,8 +978,8 @@ func sidebarRootPageQuery(f SessionFilter, cur SessionCursor, predicates sidebar
 			SELECT id, id FROM root_candidates
 			UNION
 			SELECT t.root_id, s.id
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
+			FROM tree t
+			CROSS JOIN sessions s ON s.parent_session_id = t.id
 			WHERE ` + predicates.treeMemberWhere + `
 		)
 		` + sidebarStarredRootCTE(f.Starred) + `,
@@ -995,6 +998,80 @@ func sidebarRootPageQuery(f SessionFilter, cur SessionCursor, predicates sidebar
 	args := append([]any{}, predicates.rootArgs...)
 	args = append(args, pageBuilder.Args()...)
 	return query, args
+}
+
+func sidebarStarredRootCountQuery(predicates sidebarPredicates) string {
+	return `
+		WITH RECURSIVE root_candidates(id) AS (
+			SELECT id
+			FROM sessions
+			WHERE ` + predicates.rootWhere + `
+			  AND ` + predicates.canonicalRootWhere + `
+		),
+		tree(root_id, id) AS (
+			SELECT id, id FROM root_candidates
+			UNION
+			SELECT t.root_id, s.id
+			FROM tree t
+			CROSS JOIN sessions s ON s.parent_session_id = t.id
+			WHERE ` + predicates.treeMemberWhere + `
+		),
+		eligible_roots(id) AS (
+			SELECT DISTINCT t.root_id
+			FROM tree t
+			JOIN starred_sessions ss ON ss.session_id = t.id
+		)
+		SELECT COUNT(*) FROM eligible_roots`
+}
+
+func sidebarTreePageQuery(predicates sidebarPredicates, cteParts []string) string {
+	return `
+		WITH RECURSIVE root_page(id, ord) AS (
+			` + strings.Join(cteParts, "\n") + `
+		),
+		tree(id, ord) AS (
+			SELECT id, ord FROM root_page
+			UNION
+			SELECT s.id, t.ord
+			FROM tree t
+			CROSS JOIN sessions s ON s.parent_session_id = t.id
+			WHERE ` + predicates.treeMemberWhere + `
+		),
+		ranked_tree(id, ord) AS (
+			SELECT id, MIN(ord) AS ord
+			FROM tree
+			GROUP BY id
+		)
+		SELECT
+			s.id,
+			s.parent_session_id,
+			s.relationship_type,
+			s.project,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = s.id
+			) AS project_assigned,
+			s.machine,
+			s.agent,
+			s.agent_label,
+			s.entrypoint,
+			s.session_kind,
+			COALESCE(s.display_name, s.session_name) AS display_name,
+			s.started_at,
+			s.ended_at,
+			s.created_at,
+			s.termination_status,
+			s.message_count,
+			s.user_message_count,
+			s.transcript_revision,
+			s.is_automated,
+			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
+		FROM sessions s
+		JOIN ranked_tree t ON s.id = t.id
+		ORDER BY
+			t.ord ASC,
+			` + sidebarActivityExprSQLiteS + ` DESC,
+			s.id DESC`
 }
 
 func (db *DB) getSidebarSessionIndexPage(
@@ -1016,27 +1093,7 @@ func (db *DB) getSidebarSessionIndexPage(
 	}
 	if total <= 0 {
 		if f.Starred {
-			countQuery := `
-				WITH RECURSIVE root_candidates(id) AS (
-					SELECT id
-					FROM sessions
-					WHERE ` + predicates.rootWhere + `
-					  AND ` + predicates.canonicalRootWhere + `
-				),
-				tree(root_id, id) AS (
-					SELECT id, id FROM root_candidates
-					UNION
-					SELECT t.root_id, s.id
-					FROM sessions s
-					JOIN tree t ON s.parent_session_id = t.id
-					WHERE ` + predicates.treeMemberWhere + `
-				),
-				eligible_roots(id) AS (
-					SELECT DISTINCT t.root_id
-					FROM tree t
-					JOIN starred_sessions ss ON ss.session_id = t.id
-				)
-				SELECT COUNT(*) FROM eligible_roots`
+			countQuery := sidebarStarredRootCountQuery(predicates)
 			if err := db.getReader().QueryRowContext(
 				ctx, countQuery, predicates.rootArgs...,
 			).Scan(&total); err != nil {
@@ -1109,53 +1166,7 @@ func (db *DB) getSidebarSessionIndexPage(
 		treeArgs = append(treeArgs, root.id, i)
 	}
 
-	treeQuery := `
-		WITH RECURSIVE root_page(id, ord) AS (
-			` + strings.Join(cteParts, "\n") + `
-		),
-		tree(id, ord) AS (
-			SELECT id, ord FROM root_page
-			UNION
-			SELECT s.id, t.ord
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
-			WHERE ` + predicates.treeMemberWhere + `
-		),
-		ranked_tree(id, ord) AS (
-			SELECT id, MIN(ord) AS ord
-			FROM tree
-			GROUP BY id
-		)
-		SELECT
-			s.id,
-			s.parent_session_id,
-			s.relationship_type,
-			s.project,
-			EXISTS (
-				SELECT 1 FROM session_project_assignments spa
-				WHERE spa.session_id = s.id
-			) AS project_assigned,
-			s.machine,
-			s.agent,
-			s.agent_label,
-			s.entrypoint,
-			s.session_kind,
-			COALESCE(s.display_name, s.session_name) AS display_name,
-			s.started_at,
-			s.ended_at,
-			s.created_at,
-			s.termination_status,
-			s.message_count,
-			s.user_message_count,
-			s.transcript_revision,
-			s.is_automated,
-			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
-		FROM sessions s
-		JOIN ranked_tree t ON s.id = t.id
-		ORDER BY
-			t.ord ASC,
-			` + sidebarActivityExprSQLiteS + ` DESC,
-			s.id DESC`
+	treeQuery := sidebarTreePageQuery(predicates, cteParts)
 
 	rows, err = db.getReader().QueryContext(ctx, treeQuery, treeArgs...)
 	if err != nil {
@@ -1733,7 +1744,9 @@ func upsertSessionExec(
 	s Session,
 	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
-	_ = ValidateAndSanitize(&s, nil, nil)
+	if _, err := ValidateAndSanitizeContext(ctx, &s, nil, nil); err != nil {
+		return sessionUpsertResult{}, err
+	}
 
 	// Check exclusion/trash state under the write lock to avoid a race with
 	// concurrent DeleteSession/EmptyTrash/RestoreSession.
@@ -2935,10 +2948,10 @@ func (db *DB) SetSessionDataVersionsContext(
 
 // SetExistingSessionDataVersions atomically stamps every listed session that
 // already exists, ignoring IDs that have not been inserted yet.
-func (db *DB) SetExistingSessionDataVersions(ids []string, version int) error {
-	return db.setSessionDataVersions(
-		context.Background(), ids, version, false,
-	)
+func (db *DB) SetExistingSessionDataVersions(
+	ctx context.Context, ids []string, version int,
+) error {
+	return db.setSessionDataVersions(ctx, ids, version, false)
 }
 
 func (db *DB) setSessionDataVersions(

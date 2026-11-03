@@ -820,6 +820,9 @@
   .analytics-content {
     flex: 1;
     overflow-y: auto;
+    /* Reserve the scrollbar's width up front so right-aligned controls do not
+       shift when loaded results first make a tall pane scroll. */
+    scrollbar-gutter: stable;
     padding: 16px;
     display: flex;
     flex-direction: column;

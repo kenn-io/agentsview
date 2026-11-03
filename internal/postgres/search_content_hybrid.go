@@ -145,7 +145,7 @@ func (s *Store) hybridKeywordLegPG(
 func (s *Store) fetchHybridKeywordBatchPG(
 	ctx context.Context, f db.ContentSearchFilter, k, offset int,
 ) ([]pgHybridDisplay, error) {
-	scopeWhere, scopeArgs := buildPGSessionBaseFilter(db.SemanticContentSessionFilter(f))
+	scopeWhere, scopeArgs := buildPGSessionBaseFilter(db.SemanticContentSessionFilter(f), s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}

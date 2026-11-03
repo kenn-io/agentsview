@@ -525,6 +525,17 @@ default as the `[pg]` config key, and an explicit `false` opts out.
 
 ## Backend Parity
 
+Automatic repository project naming belongs to the writable SQLite archive.
+`repository_project_names` retains choices derived from producer-recorded
+remotes and source snapshots; explicit folder rules and session assignments win.
+Identity writes apply names in the same transaction and retain source snapshot
+labels. Metadata copies preserve the registry, and rebuilds reapply it after
+restoring snapshots. The metadata-only `db repair-projects` command uses the
+same resolver. Updates advance session publication timestamps and reconcile
+identity observations, so replica reads consume the corrected project without
+their own naming inference. Hosted raw derivation does not consume this local
+archive registry.
+
 Reporting project-label keys are not repository identities. The reporting
 catalog must resolve every contributing session from the same read transaction;
 aggregate catalogs that ignore unknown observations cannot supply that evidence.
@@ -549,6 +560,12 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/readbase.Sessions`, with required backend SQL and typed scanners.
   `readbase.ReadOnlyStubs` owns unsupported archive writes; `MirrorStubs` adds
   mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
+- Published `hostedRead` operations keep physical queries, alias/link/pin
+  hydration and cursors in one read-only repeatable-read transaction. Borrowed
+  views share runtime locks and configuration, never pool ownership. Their
+  pricing loads run synchronously on that transaction and stay view-local;
+  detached pricing singleflight belongs only to owning stores. Source probes
+  retain their separate live revision fence.
 - All four backends share activity report assembly and session usage selection
   in `internal/activity`. Explicit inputs supply usage, candidate streams,
   message counts and project maps; SQL, pricing, caches and read lifetimes
@@ -646,6 +663,14 @@ of a few seconds is expected and intended. Do not reintroduce a whole-snapshot
 recheck against the archive: validating a snapshot against a source that changes
 one session at a time livelocks the request.
 
+Refills still extract complete session histories, but compare facts in bounded
+batches against one read-only cache snapshot and spool only changed or new
+rows. Comparison requires the expected install revision; installation checks
+that revision again. Complete per-session fact counts remove obsolete tails,
+and identity invalidation compares the complete cache before and after install.
+An append can still shift later activity or event indexes and spool those rows.
+This reduces temporary writes; it does not make source extraction incremental.
+
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but
 keeps immutable coordinator pointers and the cache database alive until active
@@ -719,11 +744,19 @@ after column migrations, and startup `PRAGMA optimize` gathers its statistics.
 Bulk imports retain the index, and widening it needs no parser resync. Read-only
 opens use whichever form the archive has until a writable open widens it.
 
+SQLite's recursive session-tree steps, including unpaged sidebar and session
+list queries with children, put the tree first with `CROSS JOIN` so each queued
+row seeks its children. When few sessions have parents, startup statistics
+otherwise move a sessions scan outside that per-node lookup.
+
 PostgreSQL keeps `idx_sessions_parent` on `parent_session_id` alone. The wider
-SQLite index exists because, without it, SQLite builds a temporary
-`is_automated` index on every recursive step of the child lookup. PostgreSQL
-never builds temporary indexes, so it filters `is_automated` while it uses the
-parent-only index.
+SQLite index lets each recursive child lookup seek both `parent_session_id` and
+`is_automated` instead of filtering rows found by parent alone. PostgreSQL
+filters `is_automated` while it uses the parent-only index.
+
+Hosted PostgreSQL sidebar pages resolve contextual raw parent links and legacy
+parent edges once per statement. Root orphan checks and recursive child joins
+use that query-local edge set without changing parent identity or visibility.
 
 ### Dashboard metadata index
 

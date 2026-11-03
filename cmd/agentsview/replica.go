@@ -95,7 +95,7 @@ func replicaVectorPushSource(
 }
 
 func runReplicaPush(
-	backend storage.Replica, cfg ReplicaPushConfig, targetName string,
+	ctx context.Context, backend storage.Replica, cfg ReplicaPushConfig, targetName string,
 ) error {
 	appCfg, err := config.LoadMinimalFor(replicaConfigScope(backend, &cfg))
 	if err != nil {
@@ -126,7 +126,7 @@ func runReplicaPush(
 
 	applyClassifierConfig(appCfg)
 	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt,
+		ctx, os.Interrupt,
 	)
 	defer stop()
 
@@ -439,7 +439,7 @@ func runReplicaStatus(
 			fmt.Printf("Target: %s\n", target.Label())
 		}
 		if err := runReplicaStatusTarget(
-			backend, database, appCfg, target, cfg,
+			ctx, backend, database, appCfg, target, cfg,
 		); err != nil {
 			if len(targets) == 1 {
 				return err
@@ -470,6 +470,7 @@ func runReplicaStatus(
 var replicaStatusQueryTimeout = time.Minute
 
 func runReplicaStatusTarget(
+	ctx context.Context,
 	backend storage.Replica,
 	database *db.DB,
 	appCfg config.Config,
@@ -511,14 +512,14 @@ func runReplicaStatusTarget(
 		if stall := replicaWatchStall(rec, now, cfg.MaxStale); stall != "" {
 			writeReplicaStatus(os.Stdout, storage.ReplicaStatus{Rows: watchRows})
 			return fmt.Errorf(
-				"push watcher stalled for more than --max-stale %s: %s; run `agentsview %s service logs` for details",
+				"push watcher stalled for more than --max-stale %s: %s; run `agentsview replica %s service logs` for details",
 				cfg.MaxStale, stall, backend.Name(),
 			)
 		}
 	}
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt,
+		ctx, os.Interrupt,
 	)
 	defer stop()
 	if cfg.MaxStale > 0 {
@@ -543,7 +544,7 @@ func runReplicaStatusTarget(
 	writeReplicaStatus(os.Stdout, status)
 	if cfg.MaxStale > 0 && recErr != nil {
 		return fmt.Errorf(
-			"--max-stale needs a record from `agentsview %s push --watch` for this target: %w",
+			"--max-stale needs a record from `agentsview replica %s push --watch` for this target: %w",
 			backend.Name(), recErr,
 		)
 	}
@@ -590,7 +591,7 @@ type replicaServeStartup struct {
 var prepareReplicaServe = prepareReplicaServeImpl
 
 func prepareReplicaServeImpl(
-	backend storage.Replica, appCfg config.Config, basePath string,
+	ctx context.Context, backend storage.Replica, appCfg config.Config, basePath string,
 	watch *ReplicaPushConfig,
 ) (replicaServeStartup, error) {
 	name := backend.Name()
@@ -614,13 +615,13 @@ func prepareReplicaServeImpl(
 			return replicaServeStartup{}, err
 		}
 		if pg.RawTenant != "" {
-			return prepareHostedPGServe(appCfg, pg, basePath)
+			return prepareHostedPGServe(ctx, appCfg, pg, basePath)
 		}
 	}
 
 	applyClassifierConfig(appCfg)
 	ctx, stop := signal.NotifyContext(
-		context.Background(),
+		ctx,
 		os.Interrupt, syscall.SIGTERM,
 	)
 	store, err := backend.OpenServeStore(ctx, target.Target)
@@ -712,7 +713,7 @@ func supportsInsightGeneration(store storage.ReplicaStore) bool {
 	return ok && capable.InsightGenerationAvailable()
 }
 
-func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath string, watch *ReplicaPushConfig) {
+func runReplicaServe(ctx context.Context, backend storage.Replica, appCfg config.Config, basePath string, watch *ReplicaPushConfig) {
 	name := backend.Name()
 	setupLogFile(appCfg.DataDir)
 	if appCfg.RequireAuth {
@@ -721,7 +722,7 @@ func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath str
 		}
 	}
 
-	startup, err := prepareReplicaServe(backend, appCfg, basePath, watch)
+	startup, err := prepareReplicaServe(ctx, backend, appCfg, basePath, watch)
 	if err != nil {
 		fatal("%v", err)
 	}

@@ -947,3 +947,119 @@ func TestCopilotResumedOutputAfterShutdown(t *testing.T) {
 	assert.Empty(t, msgs[0].TokenUsage)
 	assert.JSONEq(t, `{"output_tokens":7}`, string(msgs[1].TokenUsage))
 }
+
+func TestParseCopilotSession_UsageRecords(t *testing.T) {
+	lines := []string{
+		`{"type":"session.start","timestamp":"2026-05-01T23:58:00Z","data":{"sessionId":"receipts"}}`,
+		`{"type":"user.message","data":{"content":"Hello"}}`,
+		`{"type":"session.usage_record","timestamp":"2026-05-01T23:59:00Z","data":{"usage":{"model":"claude-sonnet-4.6","inputTokens":100,"outputTokens":30,"cacheReadTokens":40,"cacheWriteTokens":10,"reasoningTokens":5}}}`,
+		`{"type":"session.usage_record","timestamp":"2026-05-02T00:01:00Z","data":{"usage":{"model":"claude-sonnet-4.6","inputTokens":200,"outputTokens":70,"cacheReadTokens":80,"cacheWriteTokens":20}}}`,
+		`{"type":"session.usage_record","timestamp":"2026-05-02T00:02:00Z","data":{"usage":{"model":"claude-sonnet-4.6"}}}`,
+	}
+	sess, _, events, err := parseCopilotTestSession(t, writeCopilotJSONL(t, lines...), "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, events, 2)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 100, sess.TotalOutputTokens)
+	assert.Equal(t, 200, sess.PeakContextTokens)
+	assert.Equal(t, "2026-05-01T23:59:00Z", events[0].OccurredAt)
+	assert.Equal(t, "2026-05-02T00:01:00Z", events[1].OccurredAt)
+	assert.Equal(t, 50, events[0].InputTokens)
+	assert.Equal(t, 40, events[0].CacheReadInputTokens)
+	assert.Equal(t, 10, events[0].CacheCreationInputTokens)
+	assert.Equal(t, 5, events[0].ReasoningTokens)
+	assert.Equal(t, 100, events[1].InputTokens)
+	for _, event := range events {
+		assert.Equal(t, "usage-record", event.Source)
+		assert.Equal(t, "claude-sonnet-4-6", event.Model)
+	}
+}
+
+func TestParseCopilotSession_UsageRecordsKeepUncoveredShutdown(t *testing.T) {
+	const coveredShutdown = `{"type":"session.shutdown","timestamp":"2026-09-01T12:03:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`
+	const laterShutdown = `{"type":"session.shutdown","timestamp":"2026-09-01T12:04:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`
+	for _, tc := range []struct {
+		name       string
+		extra      []string
+		wantOutput int
+		wantRows   int
+		withOutput bool
+	}{
+		{"crashed after receipt", nil, 507, 2, false},
+		{"next shutdown has no receipts", []string{coveredShutdown, laterShutdown}, 507, 2, false},
+		{"shutdown covers message output", nil, 507, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := []string{
+				`{"type":"session.start","timestamp":"2026-09-01T12:00:00Z"}`,
+				`{"type":"user.message","data":{"content":"Hello"}}`,
+			}
+			if tc.withOutput {
+				lines = append(lines, `{"type":"assistant.message","timestamp":"2026-09-01T12:00:30Z","data":{"content":"First","model":"gpt-5.4","outputTokens":500}}`)
+			}
+			lines = append(lines,
+				`{"type":"session.shutdown","timestamp":"2026-09-01T12:01:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":1000,"outputTokens":500}}}}}`,
+				`{"type":"session.usage_record","timestamp":"2026-09-01T12:02:00Z","data":{"usage":{"model":"gpt-5.4","inputTokens":100,"outputTokens":7}}}`,
+			)
+			lines = append(lines, tc.extra...)
+			sess, _, events, err := parseCopilotTestSession(t, writeCopilotJSONL(t, lines...), "local")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.True(t, sess.HasTotalOutputTokens)
+			assert.Equal(t, tc.wantOutput, sess.TotalOutputTokens)
+			assert.True(t, sess.HasPeakContextTokens)
+			assert.Equal(t, 100, sess.PeakContextTokens)
+			require.Len(t, events, tc.wantRows)
+			assert.Equal(t, "usage-record", events[0].Source)
+			assert.Equal(t, 7, events[0].OutputTokens)
+			assert.Equal(t, "shutdown", events[1].Source)
+			assert.Equal(t, 1000, events[1].InputTokens)
+			assert.Equal(t, 500, events[1].OutputTokens)
+		})
+	}
+}
+
+func TestParseCopilotSession_UsageRecordReportedCost(t *testing.T) {
+	const receipt = `{"type":"session.usage_record","timestamp":"2026-09-01T12:01:00Z","data":{"usage":{"model":"gpt-5.4","inputTokens":100,"outputTokens":7}}}`
+	const emptyReceipt = `{"type":"session.usage_record","data":{"usage":{}}}`
+	const costOnly = `{"type":"session.shutdown","timestamp":"2026-09-01T12:02:00Z","data":{"totalNanoAiu":100000000}}`
+	const withMetrics = `{"type":"session.shutdown","timestamp":"2026-09-01T12:02:00Z","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":100,"outputTokens":7}}}}}`
+	for _, tc := range []struct {
+		name       string
+		lines      []string
+		wantCost   bool
+		wantOutput int
+		wantRows   int
+	}{
+		{"cost only covers receipt", []string{receipt, costOnly}, true, 7, 2},
+		{"empty receipts preserve reported cost", []string{receipt, costOnly, emptyReceipt, withMetrics, emptyReceipt}, true, 7, 2},
+		{"empty receipts before usable receipt preserve shutdown metrics", []string{emptyReceipt, withMetrics, emptyReceipt, receipt}, false, 14, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := append([]string{
+				`{"type":"session.start","timestamp":"2026-09-01T12:00:00Z"}`,
+				`{"type":"user.message","data":{"content":"Hello"}}`,
+			}, tc.lines...)
+			sess, _, events, err := parseCopilotTestSession(t, writeCopilotJSONL(t, lines...), "local")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, tc.wantOutput, sess.TotalOutputTokens)
+			require.Len(t, events, tc.wantRows)
+			assert.Equal(t, "usage-record", events[0].Source)
+			if tc.wantCost {
+				costEvent := events[len(events)-1]
+				require.NotNil(t, costEvent.Cost)
+				assert.Equal(t, money.MustParseDollars("0.001"), *costEvent.Cost)
+				assert.Equal(t, copilotReportedCostSource, costEvent.CostSource)
+				assert.Zero(t, costEvent.InputTokens)
+				assert.Zero(t, costEvent.OutputTokens)
+			} else {
+				for _, event := range events {
+					assert.Nil(t, event.Cost)
+					assert.Empty(t, event.CostSource)
+				}
+			}
+		})
+	}
+}

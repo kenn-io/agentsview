@@ -14,6 +14,7 @@ import (
 // A scan that fails part way must not memoize the counts it did not read;
 // the next request scans those sessions again and returns full counts.
 func TestFrustrationMarkersAreNotMemoizedAfterFailedScan(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	rows := func() []db.SignalRow {
 		return []db.SignalRow{{ID: fixtureAlphaID}, {ID: fixtureBetaID}}

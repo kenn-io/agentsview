@@ -424,7 +424,7 @@
               <p class="hint">{m.import_claude_update_app()}</p>
             {/if}
             {#if !host && (chromeState === "extension-update" || chromeState === "disconnected")}
-              <CodeBlock code="agentsview chrome setup" title={m.import_claude_terminal()} wrapToggle={false} copyLabel={m.import_claude_copy_command()} />
+              <CodeBlock code="agentsview source chrome setup" title={m.import_claude_terminal()} wrapToggle={false} copyLabel={m.import_claude_copy_command()} />
               <p class="hint">
                 {chromeState === "extension-update" ? m.import_claude_reload_extension({ url: "chrome://extensions" }) : m.import_claude_setup_load({ url: "chrome://extensions" })}
               </p>

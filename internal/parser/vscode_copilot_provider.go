@@ -456,7 +456,7 @@ func (s vscodeCopilotSourceSet) Fingerprint(
 			}
 		}
 	}
-	fingerprint.Hash, err = vscodeCopilotSourceHash(path, workspacePath)
+	fingerprint.Hash, err = vscodeCopilotSourceHash(ctx, path, workspacePath)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -701,15 +701,15 @@ func vscodeCopilotJSONLPreferredOver(path string) bool {
 	return IsRegularFile(base + ".jsonl")
 }
 
-func vscodeCopilotSourceHash(path, workspacePath string) (string, error) {
-	hash, err := hashJSONLSourceFile(path)
+func vscodeCopilotSourceHash(ctx context.Context, path, workspacePath string) (string, error) {
+	hash, err := hashJSONLSourceFileContext(ctx, path)
 	if err != nil {
 		return "", err
 	}
 	if workspacePath == "" {
 		return hash, nil
 	}
-	workspaceHash, err := hashJSONLSourceFile(workspacePath)
+	workspaceHash, err := hashJSONLSourceFileContext(ctx, workspacePath)
 	if err != nil {
 		return "", err
 	}

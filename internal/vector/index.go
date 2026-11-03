@@ -188,7 +188,7 @@ func RecallIndexSpec() IndexSpec {
 // but every subsequent Search call on that Index fails with this sentinel
 // until a build recreates the mirror.
 var ErrMirrorVersionMismatch = errors.New(
-	"vector index was built by an incompatible version: run `agentsview embeddings build`")
+	"vector index was built by an incompatible version: run `agentsview index embeddings build`")
 
 // Index wraps vectors.db: agentsview's mirror of embeddable message content
 // plus kit's sqlitevec store, which owns the generation and vec0 tables

@@ -103,7 +103,7 @@ func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
 	insertCSUnitMessage(t, store, "s1", 1, "assistant", "first step of the answer", false, false)
 	insertCSUnitMessage(t, store, "s1", 2, "assistant", "second step mentions zebra", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -133,7 +133,7 @@ func TestPGHybridVectorOnlyAndKeywordOnlyBothAppear(t *testing.T) {
 	insertCSSession(t, store, "vec-only", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "vec-only", 0, "user", "totally unrelated content", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -163,7 +163,7 @@ func TestPGHybridKeywordHitOutsideUniverseKeepsMessageGranularity(t *testing.T) 
 	insertCSSession(t, store, "covered", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "covered", 0, "user", "unrelated content", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -209,7 +209,7 @@ func TestPGHybridScopeFiltersBothLegs(t *testing.T) {
 	insertCSChildSession(t, store, "subkw", "proj", "claude", "topkw", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "subkw", 0, "assistant", "zebra subordinate", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	top, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Scope: "top", Limit: 50,
 	})
@@ -247,7 +247,7 @@ func TestPGHybridRRFOrderParity(t *testing.T) {
 	insertCSSession(t, store, "kw", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "kw", 0, "user", "needle appears", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -291,7 +291,7 @@ func TestPGHybridKeywordSnippetCentersOnTerm(t *testing.T) {
 	insertCSSession(t, store, "s1", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "s1", 0, "user", content, false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "alpha omega", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")

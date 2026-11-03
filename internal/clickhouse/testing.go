@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -131,7 +130,7 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 	ok, err := local.StarSession(t.Context(), fixtureAlphaID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	msgs, err := local.GetAllMessages(context.Background(), fixtureAlphaID)
+	msgs, err := local.GetAllMessages(t.Context(), fixtureAlphaID)
 	require.NoError(t, err)
 	note := "pin alpha"
 	_, err = local.PinMessage(t.Context(), fixtureAlphaID, msgs[0].ID, &note)
@@ -192,7 +191,7 @@ func fixtureMessage(
 // newTestSync runs EnsureSchema so tests can push immediately.
 func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherOptions) *Sync {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	s, err := New(ctx, target, local, fixtureMachine, opts)
 	require.NoError(t, err)
 	require.NoError(t, s.EnsureSchema(ctx))
@@ -204,7 +203,7 @@ func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherO
 // its message count so the session becomes an incremental candidate.
 func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	sess, err := local.GetSessionFull(ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -225,7 +224,7 @@ func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 
 func newPushedStore(t *testing.T) (*Store, *Sync, *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(ctx, false, nil)

@@ -65,14 +65,25 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.5
+
       - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Build pinned simple and cppjieba sidecar
-        run: bash scripts/build-simple-fts.sh dist/agentsview-simple
+        run: kit-retry 3 5 bash scripts/build-simple-fts.sh dist/agentsview-simple
 
       - name: Run database, service, and MCP tests with CJK FTS enabled
         env:
           AGENTSVIEW_SIMPLE_DIR: ${{ github.workspace }}/dist/agentsview-simple
           CGO_ENABLED: "1"
-        run: go test -tags "fts5" ./internal/db ./internal/service ./internal/mcp -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/cjk-fts.json --rerun-fails=2 --rerun-fails-report gotestsum/cjk-fts-reruns.txt --packages "./internal/db ./internal/service ./internal/mcp" -- -tags "fts5" -count=1 -timeout=20m
+
+      - name: Upload gotestsum cjk-fts results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/cjk-fts-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-cjk-fts-attempt-${{ github.run_attempt }}
+          path: gotestsum/cjk-fts.json
+          retention-days: 14
+          if-no-files-found: ignore

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-30
+last_edited: 2026-11-01
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -16,6 +16,10 @@ The latest release is
   even when they came up in different parts of the conversation. Pass two to
   five `concepts` to `search_content`. Each result shows the passage that
   matched each idea. This needs the semantic search index.
+
+- Hosted operators can retry failed raw parse jobs after fixing their cause with
+  `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
+  this executable's processing version a fresh attempt budget.
 
 - `agentsview agents` lists every supported agent, where AgentsView looks for its
   sessions, and which session details it reads, such as tool calls, thinking,
@@ -83,6 +87,11 @@ The latest release is
   is labeled as model-written, and cannot change findings, digests, or
   recurrence.
 
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
+  not available yet. See [Kata](/docs/kata/).
+
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
   Setting it together with `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup.
@@ -91,6 +100,10 @@ The latest release is
   rename that variable.
 
 **Improvements**
+
+- Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
+  parent links when counting roots and loading child trees, including pages
+  filtered by labels or pull requests.
 
 - The Recall corpus pane uses the shared page header for its title, description,
   entry count, and refresh control. The title stays a second-level heading under
@@ -109,9 +122,49 @@ The latest release is
 
 **Bug fixes**
 
+- Hosted PostgreSQL searches and session reads stay available while raw captures
+  arrive and transcripts are published. Each hosted read uses one database
+  snapshot for its content, public identities and related data.
+- DeepSeek Harness sessions that were missing from the archive now import. This
+  covers compressed session logs written without zstd content checksums, and
+  sessions that ran shell commands, which log `job/registered` and
+  `job/settled` events. The next sync picks up the affected sessions.
+- Codex fork imports notice new or moved parent pages on Linux even when the
+  directory timestamps stay unchanged. Unchanged folders keep their cached
+  filenames. Available Codex, TraeX and Augure Code sources are reprocessed on
+  upgrade to repair previously copied parent messages in place. Imports continue
+  by reading directory listings when Linux cannot allocate notifications.
+- Hosted transcript jobs whose workers keep stopping now fail with error class
+  `lease` after one run past `raw_max_attempts`, instead of retrying forever.
+  Workers from an older processing generation can no longer change a newer lease.
+- Crashed or still-running Copilot CLI sessions now show tokens and estimated
+  cost.
+- Hosted raw imports can process larger captured sources and parser results
+  without retaining an extra complete JSON output buffer. Source reconstruction
+  and parser output remain bounded at 1 GiB and 512 MiB. Byte-limit rejections
+  fail immediately with a `size_limit` diagnostic. After upgrading, operators
+  explicitly schedule retained sources with `pg raw-reparse` under a new run ID.
+- Hosted imports and session curation skip transcript reads when no effective
+  pins need them, and validate pinned content only at the referenced ordinals.
+- Large hosted imports use less temporary memory when comparing session content.
+- Hosted imports avoid fetching a transcript from PostgreSQL again when the same
+  transaction has just saved that captured version.
+  Existing content identities are preserved.
+- Hosted updates load prior transcript content only when provider history needs
+  it, retaining metadata without decoding an unused older transcript.
+- Oh My Pi subagent runs now appear under the correct parent, including runs
+  started by other subagents. Newer OMP transcripts that record parent file paths
+  are supported alongside older transcripts. Available OMP sources are
+  reprocessed on upgrade to repair existing links.
 - Oversized debug logs retain their last 10 MB in `debug.log.1` to help
   investigate a stalled server. Successful rotation clears the active log;
   a busy lock or failed backup leaves it intact.
+- Imported sessions with a recorded repository URL no longer split into separate
+  projects just because their worktree folders are unavailable. The first
+  writable startup after upgrading repairs existing SQLite archives
+  automatically, even when source files are gone. Explicit project rules still
+  take priority. Use `db repair-projects` to preview any remaining corrections.
+
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on

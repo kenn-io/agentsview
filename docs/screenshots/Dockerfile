@@ -1,62 +1,34 @@
-# Stage 1: Build agentsview binary
-FROM golang:1.27.3-bookworm AS builder
+# Environment preparation only. Applications and corpora are mounted per run.
+ARG GO_IMAGE=golang@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
+ARG NODE_IMAGE=node@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
+ARG PYTHON_IMAGE=ghcr.io/astral-sh/uv@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
+FROM ${GO_IMAGE} AS go
+FROM ${NODE_IMAGE} AS node
 
-ENV GOPROXY="https://proxy.golang.org|direct"
-
-ARG AV_VERSION=dev
-ARG AV_COMMIT=unknown
-
-# Download the nodesource setup script to a file before running
-# it. `curl | bash` hides curl failures (bash exits 0 on empty
-# stdin) and the resulting layer gets cached as a "success",
-# leaving apt-get to install Debian's stock nodejs without npm.
-RUN apt-get update && \
-    apt-get install -y curl ca-certificates libsqlite3-dev && \
-    curl -fsSL https://deb.nodesource.com/setup_24.x \
-      -o /tmp/nodesource_setup.sh && \
-    bash /tmp/nodesource_setup.sh && \
-    apt-get install -y nodejs && \
-    rm /tmp/nodesource_setup.sh
-
+FROM ${PYTHON_IMAGE} AS builder
+ARG DEBIAN_SNAPSHOT=20261023T000000Z
+COPY --from=go /usr/local/go /usr/local/go
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+ENV PATH="/usr/local/go/bin:/usr/local/bin:${PATH}" GOTOOLCHAIN=local
+COPY snapshot-apt.sh /snapshot-apt.sh
+RUN bash /snapshot-apt.sh "$DEBIAN_SNAPSHOT" && \
+    apt-get install -y --no-install-recommends gcc g++ make git curl ca-certificates libsqlite3-dev && \
+    ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 WORKDIR /src
-COPY agentsview/ .
 
-# Build frontend and Go binary. Pass version info resolved on
-# the host (the .git dir is excluded from the build context).
-RUN cd frontend && npm ci
-# Include the opt-in mapping workspace shown in its documentation.
-RUN VITE_PROJECT_MAPPING_WORKSPACE=true make build VERSION="$AV_VERSION" COMMIT="$AV_COMMIT"
-RUN cp agentsview /bin/agentsview
-
-# Stage 2: Run Playwright screenshots
-FROM node:24.22.1-bookworm
-
-WORKDIR /work
-
-# Install PostgreSQL, curl (for health checks), and Playwright
-RUN apt-get update && \
-    apt-get install -y postgresql postgresql-client curl && \
-    rm -rf /var/lib/apt/lists/*
-
-# Allow local TCP connections without password (trust auth).
-# The cluster is auto-created by the Debian package. Write
-# a trust-only pg_hba.conf for the auto-created cluster.
-RUN PG_HBA=$(find /etc/postgresql -name pg_hba.conf | head -1) && \
+FROM ${NODE_IMAGE} AS runtime
+ARG DEBIAN_SNAPSHOT=20261023T000000Z
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
+COPY snapshot-apt.sh /snapshot-apt.sh
+RUN bash /snapshot-apt.sh "$DEBIAN_SNAPSHOT" && \
+    apt-get install -y --no-install-recommends postgresql postgresql-client curl python3
+WORKDIR /opt/playwright
+COPY package.json package-lock.json ./
+RUN npm ci && npx playwright install --with-deps chromium && \
+    sha256sum package-lock.json > /opt/playwright/lock.sha256
+RUN PG_HBA=$(find /etc/postgresql -name pg_hba.conf -print -quit) && \
     test -n "$PG_HBA" && \
     printf 'local all all trust\nhost all all 127.0.0.1/32 trust\nhost all all ::1/128 trust\n' > "$PG_HBA"
-
-COPY screenshots/package.json screenshots/package-lock.json ./
-RUN npm ci
-RUN npx playwright install --with-deps chromium
-
-# Copy agentsview binary and test database
-COPY --from=builder /bin/agentsview /usr/local/bin/agentsview
-COPY test-sessions.db /data/sessions.db
-
-# Copy test files
-COPY screenshots/playwright.config.ts .
-COPY screenshots/tests/ ./tests/
-COPY screenshots/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
+WORKDIR /work

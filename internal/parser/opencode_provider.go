@@ -102,11 +102,11 @@ type openCodeProviderSpec struct {
 	agent      AgentType
 	format     openCodeFormat
 	dbName     string
-	listSQLite func(string) ([]OpenCodeSessionMeta, error)
+	listSQLite func(context.Context, string) ([]OpenCodeSessionMeta, error)
 	// listSQLiteWatermark is the bounded changed-path form of listSQLite: it
 	// carries only the session-row watermark and no child digest, so a
 	// watcher event on the shared container never scans the child tables.
-	listSQLiteWatermark func(string) ([]OpenCodeSessionMeta, error)
+	listSQLiteWatermark func(context.Context, string) ([]OpenCodeSessionMeta, error)
 	streamSQLite        func(context.Context, string, func(OpenCodeSessionMeta) error) error
 	// streamSQLiteWatermark is the bounded trusted-container form of
 	// streamSQLite, used by streamed reconciliation discovery for containers
@@ -201,9 +201,9 @@ func streamOpenCodeSessionWatermarkMetaAs(
 
 func listOpenCodeSessionWatermarkMetaAs(
 	virtualPath func(string, string) string,
-) func(string) ([]OpenCodeSessionMeta, error) {
-	return func(dbPath string) ([]OpenCodeSessionMeta, error) {
-		metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+) func(context.Context, string) ([]OpenCodeSessionMeta, error) {
+	return func(ctx context.Context, dbPath string) ([]OpenCodeSessionMeta, error) {
+		metas, err := ListOpenCodeSessionWatermarkMeta(ctx, dbPath)
 		if err != nil {
 			return nil, err
 		}
@@ -1270,7 +1270,7 @@ func (s openCodeFormatSourceSet) sqliteSources(
 	if watermarkOnly && s.spec.listSQLiteWatermark != nil {
 		lister = s.spec.listSQLiteWatermark
 	}
-	metas, err := lister(dbPath)
+	metas, err := lister(ctx, dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1577,7 +1577,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 			if reconciliationScopeSamePath(candidate, dbPath) {
 				break
 			}
-			metas, err := s.spec.listSQLite(candidate)
+			metas, err := s.spec.listSQLite(ctx, candidate)
 			if err != nil {
 				return nil, true, err
 			}

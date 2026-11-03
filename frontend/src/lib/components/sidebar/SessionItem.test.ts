@@ -82,6 +82,14 @@ describe("SessionItem identity", () => {
     expect(agentTag?.title).toBe("Qwen Code");
   });
 
+  it("shows all hosted source devices instead of the projection machine", () => {
+    sessions.machineLabels = { "raw-device:61": "Laptop", "raw-device:62": "Desktop" };
+    mountSession({ machine: "hosted", source_machines: ["raw-device:61", "raw-device:62"] });
+
+    const badge = document.querySelector<HTMLElement>(".machine-tag");
+    expect(badge?.textContent).toBe("Laptop, Desktop");
+  });
+
   it("uses the registry label for a whitespace-only override", () => {
     mountSession({ agent: "qwen", agent_label: "   " });
 

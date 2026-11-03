@@ -72,7 +72,7 @@ func decodeSingleResult(t *testing.T, out *bytes.Buffer) workerResult {
 func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out))
 
 	var results []workerResult
 	sawProgress := false
@@ -103,7 +103,7 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 func TestSyncWorkerAuditModeForwardsReconciliationProgress(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "audit"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "audit"}, &out))
 
 	sawActiveProgress := false
 	sc := bufio.NewScanner(&out)
@@ -130,7 +130,7 @@ func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out))
 	assert.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
 	database, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
@@ -196,7 +196,7 @@ func TestSyncWorkerFailsWhenWriteLockHeld(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	holdWriteOwnerLockForTest(t, cfg.DataDir) // hold db.write.lock like a daemon
 	var out bytes.Buffer
-	err := runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out)
+	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "write lock")
 }
@@ -204,7 +204,7 @@ func TestSyncWorkerFailsWhenWriteLockHeld(t *testing.T) {
 func TestSyncWorkerRejectsUnknownMode(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	err := runSyncWorker(cfg, syncWorkerRequest{Mode: "bogus"}, &out)
+	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "bogus"}, &out)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "unknown sync-worker mode")
 }
@@ -221,7 +221,7 @@ func TestSyncWorkerResyncBuildModeBuildsReplacement(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status)
 	assert.True(t, result.DiscoveryComplete)
@@ -254,7 +254,7 @@ func TestSyncWorkerResyncBuildUsesConfiguredImagePolicy(t *testing.T) {
 
 	cfg.ToolResultImages = config.ToolResultImagesDrop
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
 	require.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
 	replacement, err := db.Open(t.Context(), cfg.DBPath+"-resync")
@@ -306,7 +306,7 @@ func TestSyncWorkerResyncBuildAppliesClassifierConfig(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
 	require.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
 	conn, err := sql.Open("sqlite3", cfg.DBPath+"-resync")
@@ -419,7 +419,7 @@ func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out),
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out),
 		"the incremental fallback must complete the pass")
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status,
@@ -508,7 +508,7 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 func TestSyncWorkerSyncModeSyncsLikeStartup(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "sync"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "sync"}, &out))
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status)
 	assert.True(t, result.DiscoveryComplete)
@@ -544,7 +544,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			var initial bytes.Buffer
-			require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &initial))
+			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &initial))
 			database, lock := openTestWriteDB(t, cfg)
 			for _, id := range []string{"worker-parent", "worker-child"} {
 				require.NoError(t, database.UpsertSession(t.Context(), db.Session{

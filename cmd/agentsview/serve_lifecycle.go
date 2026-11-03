@@ -152,7 +152,7 @@ func pluralSuffix(count int) string {
 
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
-func runServeStatus(cfg config.Config) {
+func runServeStatus(ctx context.Context, cfg config.Config) {
 	var readOnly *DaemonRuntime
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
 		if rt.ReadOnly {
@@ -162,7 +162,7 @@ func runServeStatus(cfg config.Config) {
 				fmt.Println(line)
 			}
 			for _, line := range codexCloudStatusLines(
-				context.Background(), urlFromDaemonRuntime(rt), cfg.AuthToken,
+				ctx, urlFromDaemonRuntime(rt), cfg.AuthToken,
 			) {
 				fmt.Println(line)
 			}

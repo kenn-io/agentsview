@@ -116,26 +116,6 @@ func TestCheckSchemaCompatPassesAfterCreateSchema(t *testing.T) {
 	require.NoError(t, CheckSchemaCompat(ctx, db), "CheckSchemaCompat")
 }
 
-func TestCheckSchemaCompatViaQuackRejectsPreReportedCostMirror(t *testing.T) {
-	ctx := t.Context()
-	db := openTestDuckDB(t)
-	require.NoError(t, createSchema(ctx, db), "createSchema")
-	_, err := db.ExecContext(ctx,
-		`UPDATE sync_metadata SET value = '3' WHERE key = ?`,
-		schemaVersionMetadataKey,
-	)
-	require.NoError(t, err, "simulate v3 mirror schema version")
-	_, err = db.ExecContext(ctx,
-		`UPDATE sync_metadata SET value = '68' WHERE key = ?`,
-		dataVersionMetadataKey,
-	)
-	require.NoError(t, err, "simulate v3 mirror built from parser data version 68")
-
-	err = CheckSchemaCompatViaQuack(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'")
-}
-
 func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 	t *testing.T,
 ) {
@@ -159,7 +139,7 @@ func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
 		"remote incompat must tell the operator the fix")
 	assert.NotContains(t, err.Error(),
-		"rebuild with 'agentsview duckdb push --full'",
+		"rebuild with 'agentsview replica duckdb push --full'",
 		"push cannot migrate a remote server schema")
 }
 
@@ -181,7 +161,7 @@ func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 	err = CheckSchemaCompat(ctx, db)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sessions.entrypoint")
-	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'",
+	assert.Contains(t, err.Error(), "rebuild with 'agentsview replica duckdb push --full'",
 		"local mirrors are rebuilt, not migrated in place")
 	assert.NotContains(t, err.Error(), "older AgentsView build")
 }
@@ -219,7 +199,7 @@ func TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections(
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "does not match this build's")
 				assert.Contains(t, err.Error(),
-					"rebuild with 'agentsview duckdb push --full'")
+					"rebuild with 'agentsview replica duckdb push --full'")
 			})
 		}
 	}

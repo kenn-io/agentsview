@@ -57,7 +57,7 @@ func TestRawSyncCleanUploadsCommand(t *testing.T) {
 	writeRawSyncCleanUploadsFile(t, checkpoint, "checkpoint")
 	writeRawSyncCleanUploadsFile(t, accepted, "accepted")
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.NoError(t, err)
 	assert.Equal(t, rawSyncCleanUploadsCompletion+"\n", output)
@@ -90,7 +90,7 @@ func TestRawSyncCleanUploadsFailures(t *testing.T) {
 		filepath.Join(dataDir, "raw-upload-spool"), []byte("occupied"), 0o600,
 	))
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)
@@ -112,7 +112,7 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 		"GRANT USAGE ON SCHEMA "+rawSyncCleanUploadsSchema+" TO "+role,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = pg.ExecContext(context.Background(), "DROP ROLE IF EXISTS "+role) })
+	t.Cleanup(func() { _, _ = pg.ExecContext(context.WithoutCancel(t.Context()), "DROP ROLE IF EXISTS "+role) })
 	parsedURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	parsedURL.User = url.UserPassword(role, password)
@@ -122,7 +122,7 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previousLog) })
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)
@@ -140,7 +140,7 @@ func TestRawSyncCleanUploadsRequiresProvisionedSchema(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+	output, err := executeCommand(newRootCommand(), "source", "raw", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)
@@ -170,12 +170,12 @@ func newRawSyncCleanUploadsPG(t *testing.T) (*sql.DB, string, string) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = admin.ExecContext(
-			context.Background(),
+			context.WithoutCancel(t.Context()),
 			"DROP SCHEMA IF EXISTS "+rawSyncCleanUploadsSchema+" CASCADE",
 		)
 	})
 
-	pg, err := postgres.Open(pgURL, rawSyncCleanUploadsSchema, true)
+	pg, err := postgres.Open(t.Context(), pgURL, rawSyncCleanUploadsSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, postgres.EnsureSchema(

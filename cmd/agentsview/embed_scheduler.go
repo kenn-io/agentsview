@@ -417,7 +417,7 @@ func (a recallSearcherAdapter) SearchRecall(
 	}
 	if stale {
 		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf(
-			"%w: recall index is stale: run 'agentsview embeddings build --store recall'",
+			"%w: recall index is stale: run 'agentsview index embeddings build --store recall'",
 			db.ErrSemanticUnavailable,
 		)
 	}
@@ -549,7 +549,7 @@ func (a searcherAdapter) PrepareSemanticSearch(
 	if stale {
 		return nil, 0, fmt.Errorf(
 			"%w: index is stale (embedding config changed): run "+
-				"'agentsview embeddings build --full-rebuild'",
+				"'agentsview index embeddings build --full-rebuild'",
 			db.ErrSemanticUnavailable)
 	}
 
@@ -639,12 +639,12 @@ func translateRecallSearchError(err error) error {
 		))
 	case errors.Is(err, vector.ErrMirrorVersionMismatch):
 		return db.NewSemanticUnavailableError(fmt.Sprintf(
-			"%v; rebuild the recall index with 'agentsview embeddings build --store recall'",
+			"%v; rebuild the recall index with 'agentsview index embeddings build --store recall'",
 			err,
 		))
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.NewSemanticUnavailableError(
-			"recall index has not been built; run 'agentsview embeddings build --store recall'",
+			"recall index has not been built; run 'agentsview index embeddings build --store recall'",
 		)
 	default:
 		return translateSearchError(err)
@@ -701,7 +701,7 @@ func setupVectorServing(
 		return vectorServing{ServerOpts: []server.Option{
 			server.WithEmbeddingsUnavailableReason(
 				"vector serving is disabled for this daemon run: another " +
-					"process (typically a direct 'agentsview embeddings build') " +
+					"process (typically a direct 'agentsview index embeddings build') " +
 					"held vectors.write.lock at startup; wait for it to finish, " +
 					"then restart the daemon"),
 		}}, nil
@@ -853,7 +853,7 @@ func recallBackstop(cfg config.Config, configured time.Duration) time.Duration {
 // no-op cases above, and the degraded-on-error case); otherwise the
 // caller must call it when done with d to release the read-only index
 // handle.
-func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
+func installDirectVectorSearcher(ctx context.Context, cfg config.Config, d *db.DB) func() error {
 	if cfg.ArchiveContent.UsageOnly() || d.ArchiveContent().UsageOnly() || !cfg.Vector.Enabled {
 		return nil
 	}
@@ -863,11 +863,11 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	}
 
 	ix, messageErr := vector.OpenSpec(
-		context.Background(), path, vector.MessageIndexSpec(), true,
+		ctx, path, vector.MessageIndexSpec(), true,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
 	recallIX, recallErr := vector.OpenSpec(
-		context.Background(), path, vector.RecallIndexSpec(), true,
+		ctx, path, vector.RecallIndexSpec(), true,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
 	if messageErr != nil && recallErr != nil {

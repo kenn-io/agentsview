@@ -189,7 +189,7 @@ func coworkClassifyPath(
 	return coworkTranscriptMatch(root, transcript)
 }
 
-func coworkFindFile(root, rawID string) (singleFileMatch, bool) {
+func coworkFindFile(_ context.Context, root, rawID string) (singleFileMatch, bool) {
 	path := coworkFindSourceFile(root, rawID)
 	if path == "" {
 		return singleFileMatch{}, false
@@ -241,7 +241,7 @@ func coworkTranscriptMatchStrict(
 }
 
 func coworkFingerprintSource(
-	src singleFileSource,
+	ctx context.Context, src singleFileSource,
 ) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
@@ -252,7 +252,7 @@ func coworkFingerprintSource(
 			"stat %s: source is a directory", src.Path,
 		)
 	}
-	hash, err := hashJSONLSourceFile(src.Path)
+	hash, err := hashJSONLSourceFileContext(ctx, src.Path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -264,9 +264,9 @@ func coworkFingerprintSource(
 }
 
 func coworkParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	results, excluded, err := parseCoworkSession(src.Path, req.Machine)
+	results, excluded, err := parseCoworkSession(ctx, src.Path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

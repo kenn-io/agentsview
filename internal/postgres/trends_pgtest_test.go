@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +13,7 @@ import (
 
 func TestStoreGetTrendsTerms(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_trends_terms_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -60,7 +59,7 @@ func TestStoreGetTrendsTerms(t *testing.T) {
 
 func TestStoreGetTrendsTermsUsesMessageTimestampFilters(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_trends_terms_message_filters_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -101,7 +100,7 @@ func TestStoreGetTrendsTermsModelFilterStaysOnMatchingMessages(
 	t *testing.T,
 ) {
 	_, store := prepareUsageSchema(t, "agentsview_trends_terms_model_messages_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,

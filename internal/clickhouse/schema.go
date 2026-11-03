@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -674,7 +675,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			missing = append(missing, t.name)
 			continue
 		}
-		for _, c := range append(t.columns, col(pushVersionCol, tVersion)) {
+		for _, c := range append(slices.Clip(t.columns), col(pushVersionCol, tVersion)) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, t.name+"."+c.name)
 			}
@@ -701,14 +702,14 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 		}
 		for _, fill := range [][2]string{{"usage_messages_backfill", "usage"}, {"terminal_event_snapshots_backfill", "terminal event"}} {
 			if metadata[fill[0]] != "1" {
-				return fmt.Errorf("clickhouse %s backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it", fill[1])
+				return fmt.Errorf("clickhouse %s backfill is incomplete; run `agentsview replica clickhouse push` with a role that can finish it", fill[1])
 			}
 		}
 		return nil
 	}
 	sort.Strings(missing)
 	return fmt.Errorf(
-		"clickhouse mirror schema is missing %s; run `agentsview clickhouse push` with a role that can create tables",
+		"clickhouse mirror schema is missing %s; run `agentsview replica clickhouse push` with a role that can create tables",
 		strings.Join(missing, ", "),
 	)
 }

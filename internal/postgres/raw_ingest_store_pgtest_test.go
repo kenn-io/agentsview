@@ -279,7 +279,7 @@ func TestRawIngestStoreCommitDoesNotOverwriteTerminalPriorHeadJobAfterWait(
 				"application_name": "raw-commit-supersession",
 			})
 			require.NoError(t, err)
-			committer, err := Open(committerURL, schemaTestSchema, true)
+			committer, err := Open(t.Context(), committerURL, schemaTestSchema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, committer.Close()) })
 			committerStore, err := NewRawIngestStore(committer)
@@ -591,7 +591,7 @@ func newRawIngestTestStore(t *testing.T) (*sql.DB, *RawIngestStore) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))

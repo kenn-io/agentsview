@@ -25,7 +25,7 @@ var errEmbedNeedsLocalArchive = errors.New(
 // so pg push --watch --embed cannot start building yet.
 var errEmbedWriteLockHeld = errors.New(
 	"vectors.write.lock is held by another process, typically a direct " +
-		"'agentsview embeddings build'; embeddings start on the first push " +
+		"'agentsview index embeddings build'; embeddings start on the first push " +
 		"after it exits")
 
 // replicaEmbedder keeps the first resolved recipe for this process.
@@ -188,7 +188,7 @@ func (e *replicaEmbedder) build(ctx context.Context) error {
 
 func (e *replicaEmbedder) resolveRecipe(ctx context.Context) (config.Config, error) {
 	applyClassifierConfig(e.appCfg)
-	store, err := e.backend.OpenStore(e.target)
+	store, err := e.backend.OpenStore(ctx, e.target)
 	if err != nil {
 		return config.Config{}, fmt.Errorf("opening %s: %w", e.backend.DisplayName(), err)
 	}
