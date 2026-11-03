@@ -343,7 +343,7 @@ func newOpenAPICommand() *cobra.Command {
 		Use:   "openapi",
 		Short: "Print OpenAPI 3.1 schema",
 		Long: "Print the HTTP API's OpenAPI 3.1 schema from this binary without contacting a running server. " +
-			"JSON is the default; --yaml selects YAML.",
+			"JSON is the default.",
 		Example: "  agentsview openapi > openapi.json\n" +
 			"  agentsview openapi --yaml > openapi.yaml",
 		GroupID:      groupMeta,
@@ -540,8 +540,7 @@ func newImportCommand() *cobra.Command {
 		Use:   "import --type <type> <path> | import --type claude-ai --sync",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
-			"Claude.ai can instead use --type claude-ai --sync with the configured Chrome integration. " +
-			"--replace grants replacement permission only for the named archived sessions.",
+			"Claude.ai can instead use --type claude-ai --sync with the configured Chrome integration.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {

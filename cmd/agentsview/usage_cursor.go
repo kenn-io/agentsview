@@ -35,7 +35,7 @@ func newUsageCursorCommand() *cobra.Command {
 		Use:   "cursor",
 		Short: "Ingest Cursor admin usage events",
 		Long: "Fetch Cursor organization usage through the configured admin API and store it in the local archive. " +
-			"It requires a Cursor admin API key; --since and --until use YYYY-MM-DD dates. " +
+			"It requires a Cursor admin API key. " +
 			"Explicit --email or --user-id overrides the configured member selection.",
 		Example:      "  agentsview source cursor sync-usage --since 2026-10-01 --until 2026-10-07",
 		SilenceUsage: true,

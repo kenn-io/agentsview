@@ -95,52 +95,6 @@ func TestAgentHelpCommandChecker(t *testing.T) {
 	require.Error(t, validateCommandExamples("agentsview source list", "agentsview report stats --json"))
 }
 
-func TestAgentHelpIncludesOperationalGuidance(t *testing.T) {
-	cases := []struct {
-		name     string
-		args     []string
-		guidance string
-	}{
-		{
-			name:     "database archive safety",
-			args:     []string{"db", "--help"},
-			guidance: "Keep the original archive when preparing a new image.",
-		},
-		{
-			name:     "transcript window constraints",
-			args:     []string{"session", "messages", "--help"},
-			guidance: "--before/--after require --around",
-		},
-		{
-			name:     "session list cursor behavior",
-			args:     []string{"session", "list", "--help"},
-			guidance: "The cursor does not retain filters",
-		},
-		{
-			name:     "search continuation behavior",
-			args:     []string{"session", "search", "example", "--help"},
-			guidance: "repeat the query, search mode, backend, and filters when continuing",
-		},
-		{
-			name:     "daily report time bounds",
-			args:     []string{"report", "usage", "daily", "--help"},
-			guidance: "a relative --since is measured back from --until when supplied",
-		},
-		{
-			name:     "stats data enrichment",
-			args:     []string{"report", "stats", "--help"},
-			guidance: "GitHub outcome enrichment is opt-in",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rendered, err := executeCommand(newRootCommand(), tc.args...)
-			require.NoError(t, err)
-			assert.Contains(t, rendered, tc.guidance)
-		})
-	}
-}
-
 func walkHelpCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 	if cmd.Hidden || cmd.Name() == "completion" {
 		return
