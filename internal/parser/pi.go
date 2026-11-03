@@ -16,14 +16,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func (p *piProvider) parseSession(
-	ctx context.Context, path, project, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	return parsePiLikeSession(
-		ctx, path, project, machine, p.Def.Type, p.Def.IDPrefix,
-	)
-}
-
 func parsePiLikeSession(
 	ctx context.Context,
 	path, project, machine string,
