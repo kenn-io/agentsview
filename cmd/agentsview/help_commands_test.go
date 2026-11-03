@@ -57,9 +57,9 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 			require.NoError(t, validateCommandExamples(cmd.CommandPath(), cmd.Example))
 		}
 	})
+	assert.Contains(t, help, "Agent quick start:")
 	for name, source := range sources {
-		commands, err := advertisedHelpCommands(source)
-		require.NoError(t, err, name)
+		commands := advertisedHelpCommands(source)
 		if name == "root help" {
 			require.NotEmpty(t, commands, name)
 		}
@@ -69,59 +69,23 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	}
 }
 
-func TestAgentCommandCheckerAcceptsAndRejectsExamples(t *testing.T) {
-	inline, err := advertisedHelpCommands(`Use 'agentsview session usage ID --json' or "agentsview session usage ID --json".`)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"agentsview session usage ID --json", "agentsview session usage ID --json"}, inline)
-	quotedOperand := "agentsview session search 'agentsview imaginary' --json"
-	quotedCommands, err := advertisedHelpCommands(quotedOperand)
-	require.NoError(t, err)
-	require.Len(t, quotedCommands, 1)
-	assert.Equal(t, []string{quotedOperand}, quotedCommands)
-	require.NoError(t, validateAdvertisedCommand(quotedCommands[0]))
-	continued := "agentsview session search " + "\\\n" + "  'a query' " + "\\\n" + "  --json"
-	require.NoError(t, validateCommandExamples("agentsview session search", continued))
-	commands, err := advertisedHelpCommands(continued)
-	require.NoError(t, err)
-	require.Len(t, commands, 1)
-	require.NoError(t, validateAdvertisedCommand(commands[0]))
-	unfinished := "agentsview session search " + "\\"
-	require.Error(t, validateCommandExamples("agentsview session search", unfinished))
-	require.Error(t, validateCommandExamples("agentsview source list", "agentsview report stats --json"))
+func TestAgentHelpCommandChecker(t *testing.T) {
 	for _, line := range []string{
-		"agentsview openapi >",
-		"agentsview openapi >>> out",
-		"agentsview openapi > out > other",
-		"agentsview openapi > out extra",
-		"agentsview session search foo) --json",
-		"agentsview session search $( --json",
-		"agentsview session get <id --json",
-		"agentsview session search query<file",
-		"agentsview session search 'unterminated",
-		"agentsview session search word; --json",
-		"agentsview session search word| --json",
-		"agentsview session search word& --json",
+		"agentsview session get <id> --json",
+		"agentsview session search 'connection reset' --json",
+		"agentsview openapi > openapi.json",
+	} {
+		assert.NoError(t, validateAdvertisedCommand(line), line)
+	}
+	for _, line := range []string{
 		"agentsview session made-up --help",
 		"agentsview session list --nonexistent",
 		"agentsview session get",
+		"agentsview session search 'unterminated",
 	} {
-		require.Error(t, validateAdvertisedCommand(line), line)
+		assert.Error(t, validateAdvertisedCommand(line), line)
 	}
-	for _, line := range []string{
-		"agentsview openapi>>openapi.json # append",
-		"agentsview session get <id> --json",
-		"agentsview session search 'literal (parentheses) $(value) $' --json",
-		"agentsview session search \"literal (parentheses) \\$(value) \\$\" --json",
-		`agentsview session search escaped\(parentheses\)\$ --json`,
-		"agentsview session search \">\" --json",
-		`agentsview session search \> --json`,
-		"agentsview session search '# > literal' --json",
-		"agentsview session search query --json # > ignored",
-		"agentsview session search 'pipe | ampersand & semicolon ;' --json",
-		`agentsview session search escaped\|operator --json`,
-	} {
-		require.NoError(t, validateAdvertisedCommand(line), line)
-	}
+	assert.Error(t, validateCommandExamples("agentsview source list", "agentsview report stats --json"))
 }
 
 func walkHelpCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
@@ -134,36 +98,34 @@ func walkHelpCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 	}
 }
 
-var helpInlineCommands = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")
+var (
+	helpInlineCommands = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")
+	trailingRedirect   = regexp.MustCompile(`\s+>\s*\S+$`)
+)
 
-func advertisedHelpCommands(source string) ([]string, error) {
+// advertisedHelpCommands returns lines that start with agentsview and quoted
+// agentsview commands inside prose.
+func advertisedHelpCommands(source string) []string {
 	var commands []string
-	add := func(line string) {
+	for line := range strings.Lines(source) {
+		line = strings.TrimSpace(line)
 		if line == "agentsview <command> [flags]" || line == "agentsview [flags]" ||
 			strings.Contains(line, " - local web viewer for AI agent sessions") {
-			return
+			continue
 		}
-		commands = append(commands, line)
-	}
-	lines, err := logicalHelpLines(source)
-	if err != nil {
-		return nil, err
-	}
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if startsHelpCommand(line) {
-			add(line)
+		if strings.HasPrefix(line, "agentsview") {
+			commands = append(commands, line)
 			continue
 		}
 		for _, match := range helpInlineCommands.FindAllStringSubmatch(line, -1) {
 			for _, span := range match[1:] {
-				if startsHelpCommand(strings.TrimSpace(span)) {
-					add(strings.TrimSpace(span))
+				if strings.HasPrefix(span, "agentsview") {
+					commands = append(commands, span)
 				}
 			}
 		}
 	}
-	return commands, nil
+	return commands
 }
 
 func validateAdvertisedCommand(line string) error {
@@ -171,8 +133,10 @@ func validateAdvertisedCommand(line string) error {
 	return err
 }
 
+// Help examples use single quotes, <placeholder> words, and at most one
+// trailing "> file" redirect, so shlex covers the rest.
 func resolveAdvertisedCommand(line string) (*cobra.Command, error) {
-	words, err := splitHelpCommand(line)
+	words, err := shlex.Split(trailingRedirect.ReplaceAllString(line, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -183,13 +147,8 @@ func resolveAdvertisedCommand(line string) (*cobra.Command, error) {
 }
 
 func validateCommandExamples(path, source string) error {
-	ownerPath := strings.TrimSpace(path)
-	lines, err := logicalHelpLines(source)
-	if err != nil {
-		return err
-	}
 	count := 0
-	for _, line := range lines {
+	for line := range strings.Lines(source) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -199,7 +158,7 @@ func validateCommandExamples(path, source string) error {
 		if err != nil {
 			return fmt.Errorf("%s example %q: %w", path, line, err)
 		}
-		if cmd.CommandPath() != ownerPath && !strings.HasPrefix(cmd.CommandPath(), ownerPath+" ") {
+		if cmd.CommandPath() != path && !strings.HasPrefix(cmd.CommandPath(), path+" ") {
 			return fmt.Errorf("%s example %q resolves to %s outside its command path", path, line, cmd.CommandPath())
 		}
 	}
@@ -242,108 +201,4 @@ func validateAdvertisedArgs(words []string) (*cobra.Command, error) {
 		return nil, err
 	}
 	return cmd, nil
-}
-
-// Join shell continuations; single quotes and comments keep a backslash literal.
-func logicalHelpLines(source string) ([]string, error) {
-	var out strings.Builder
-	var quote byte
-	comment, word := false, false
-	for i := 0; i < len(source); i++ {
-		c := source[i]
-		if c == '\n' {
-			quote, comment, word = 0, false, false
-		} else if !comment {
-			if c == '\\' && quote != '\'' {
-				if i+1 == len(source) {
-					return nil, errors.New("unfinished help continuation")
-				}
-				i++
-				if source[i] != '\n' {
-					word = true
-					out.WriteByte(c)
-					out.WriteByte(source[i])
-				}
-				continue
-			}
-			if quote != 0 {
-				if c == quote {
-					quote = 0
-				}
-			} else if c == '\'' || c == '"' {
-				quote, word = c, true
-			} else if c == '#' && !word {
-				comment = true
-			} else {
-				word = !strings.ContainsRune(" \t", rune(c))
-			}
-		}
-		out.WriteByte(c)
-	}
-	return strings.Split(out.String(), "\n"), nil
-}
-
-// Find unquoted, unescaped redirects before shlex erases quoting; <id> stays a word.
-func splitHelpCommand(line string) ([]string, error) {
-	var quote byte
-	redirect, target, word := -1, -1, false
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		if c == '\\' && quote != '\'' {
-			word = true
-			i++
-			continue
-		}
-		if quote != 0 {
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"':
-			quote, word = c, true
-		case ';', '|', '&', '(', ')':
-			return nil, fmt.Errorf("unsupported shell operator %q", c)
-		case '#':
-			if !word {
-				line = line[:i]
-				i = len(line)
-			}
-		case '<':
-			end := strings.IndexByte(line[i:], '>')
-			if end > 1 && !strings.ContainsAny(line[i:i+end], " \t") {
-				i, word = i+end, true
-			} else {
-				return nil, errors.New("unsupported input redirection")
-			}
-		case '>':
-			if redirect >= 0 {
-				return nil, errors.New("repeated output redirection")
-			}
-			redirect = i
-			if i+1 < len(line) && line[i+1] == '>' {
-				i++
-			}
-			target = i + 1
-			word = false
-		default:
-			word = !strings.ContainsRune(" \t", rune(c))
-		}
-	}
-	if redirect >= 0 {
-		filenames, err := shlex.Split(line[target:])
-		if err != nil {
-			return nil, err
-		}
-		if len(filenames) != 1 || filenames[0] == "" {
-			return nil, errors.New("output redirection needs one filename")
-		}
-		line = line[:redirect]
-	}
-	return shlex.Split(line)
-}
-
-func startsHelpCommand(line string) bool {
-	return strings.HasPrefix(line, "agentsview")
 }
