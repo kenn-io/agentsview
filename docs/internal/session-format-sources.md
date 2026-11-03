@@ -182,9 +182,14 @@ evidence; they do not establish whether a tool helped the task.
   chains, split responses, checkpoint offsets, counts, and retained pins. In
   normal transcript mode, hook rows use a collapsed Hook output card and an
   independent Hooks filter. Focused mode hides these rows without treating them
-  as new prompts. The card preserves escaped body text. Archive upgrades and
-  shared-provider and mirror parity still need integration before the feature
-  is ready to publish.
+  as new prompts. The card preserves escaped body text. Data version 164 reparses
+  readable Claude, Cowork, Qoder, and iCodeMate CLI sources in place. Synthetic
+  upgrade tests preserve session and public message identities, pins, notes,
+  names, stars, and retained rows whose sources are gone; archive-only archives
+  retain their pending state without source sync. DuckDB schema 22 requires a
+  fresh mirror. The messages API and DuckDB round-trip tests cover the existing
+  system/source fields and preserved body. PostgreSQL and ClickHouse runtime
+  checks and a combined native server/browser check remain unverified.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies
