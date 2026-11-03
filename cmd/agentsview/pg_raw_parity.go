@@ -33,7 +33,7 @@ func newPGRawParityCommand() *cobra.Command {
 		}
 		// OpenHosted uses the existing CheckHostedTenant runtime-role gate. No
 		// owner-mode bypass, schema provisioning, worker or local archive open.
-		database, err := postgres.OpenHosted(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+		database, err := postgres.OpenHosted(cmd.Context(), pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 		if err != nil {
 			return err
 		}
