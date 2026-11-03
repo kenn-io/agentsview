@@ -19,7 +19,7 @@ import (
 const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v1"
-	commitCommandToken     = `(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
+	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
 	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
 	commitJSString         = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|` + "`(?:\\\\.|[^`\\\\])*`)"
 )
@@ -39,7 +39,7 @@ var (
 	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)\s*[,}]`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
-	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\.|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
+	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
 	commitArgumentRE          = regexp.MustCompile(commitCommandToken)
 	commitRevParseRE          = regexp.MustCompile(`^git\s+rev-parse\s+HEAD\s*$`)
 	commitLogRE               = regexp.MustCompile(`^git\s+log\s+(?:-1\s+--oneline|--oneline\s+(?:-1|-n\s+1)|-n\s+1\s+--oneline)(?:\s+HEAD)?\s*$`)
@@ -272,10 +272,22 @@ func commitMessageSubject(arguments string) string {
 	for i, token := range tokens {
 		if (token == "-m" || token == "--message") && i+1 < len(tokens) {
 			message := tokens[i+1]
-			if unquoted, err := strconv.Unquote(message); err == nil {
-				message = unquoted
-			} else if len(message) >= 2 && strings.ContainsAny(message[:1], "\"'") {
+			if len(message) >= 2 && strings.ContainsAny(message[:1], "\"'") {
+				quote := message[0]
 				message = message[1 : len(message)-1]
+				if quote == '"' {
+					var decoded strings.Builder
+					for j := 0; j < len(message); j++ {
+						if message[j] == '\\' && j+1 < len(message) && strings.ContainsRune("\"\\$`\n", rune(message[j+1])) {
+							j++
+							if message[j] == '\n' {
+								continue
+							}
+						}
+						decoded.WriteByte(message[j])
+					}
+					message = decoded.String()
+				}
 			}
 			subject, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
 			return strings.TrimSpace(subject)
