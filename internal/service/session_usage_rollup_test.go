@@ -457,3 +457,26 @@ func TestGetSessionUsageRollupReadsIndependentSessionsConcurrently(t *testing.T)
 		assert.Equal(t, 4, got.SubagentCount)
 	})
 }
+
+// blockingWalkStore holds every child read until its context ends.
+type blockingWalkStore struct {
+	*rollupStore
+}
+
+func (s blockingWalkStore) GetChildSessions(
+	ctx context.Context, _ string,
+) ([]db.Session, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestGetSessionUsageRollupMissingRootStopsDescendantWalk(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := blockingWalkStore{rollupStore: &rollupStore{}}
+
+		got, err := service.GetSessionUsageRollup(t.Context(), store, "deleted", false)
+
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+}

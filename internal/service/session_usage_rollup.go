@@ -34,19 +34,24 @@ func GetSessionUsageRollup(
 	ctx context.Context, store db.Store, rootID string, includeBreakdown bool,
 ) (*SessionUsageRollup, error) {
 	// The descendant walk needs only rootID, so it runs while the root's
-	// usage loads. A missing or failed root still wins over its result.
+	// usage loads. A missing or failed root cancels the walk and wins over
+	// its result.
+	walkCtx, cancelWalk := context.WithCancel(ctx)
+	defer cancelWalk()
 	var descendants []db.Session
 	var walkErr error
 	walkDone := make(chan struct{})
 	go func() {
 		defer close(walkDone)
-		descendants, walkErr = delegatedDescendants(ctx, store, rootID)
+		descendants, walkErr = delegatedDescendants(walkCtx, store, rootID)
 	}()
 	root, err := store.GetSessionUsage(ctx, rootID, includeBreakdown)
-	<-walkDone
 	if err != nil || root == nil {
+		cancelWalk()
+		<-walkDone
 		return nil, err
 	}
+	<-walkDone
 	if walkErr != nil {
 		return nil, walkErr
 	}
