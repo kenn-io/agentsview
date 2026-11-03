@@ -28,6 +28,7 @@ func TestAttachedArchiveMirrorKeepsOriginalMachine(t *testing.T) {
 	defer manager.Close()
 	require.NoError(t, drainError(manager, t.Context(), nil))
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	dbtest.SeedMirrorPricing(t, receiver)
 	result, err := duckdb.Push(t.Context(), path, receiver, "receiver", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
