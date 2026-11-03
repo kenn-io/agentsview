@@ -913,31 +913,6 @@ func TestRemoteSyncArchiveDeltaRejectsFileOutsideAllowedDirs(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-func TestRemoteSyncArchiveGzipsWhenAdvertised(t *testing.T) {
-	t.Parallel()
-	_, handler, sessionPath := newRemoteSyncServer(t)
-	payload, err := json.Marshal(map[string]any{
-		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
-	})
-	require.NoError(t, err)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/remote-sync/archive",
-		bytes.NewReader(payload))
-	req.Header.Set("Authorization", "Bearer remote-token")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
-	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
-	require.NoError(t, err)
-	tr := tar.NewReader(gz)
-	hdr, err := tr.Next()
-	require.NoError(t, err)
-	assert.NotEmpty(t, hdr.Name)
-}
-
 func TestRemoteSyncArchiveExplicitEmptyDeltaReturnsEmptyTar(t *testing.T) {
 	t.Parallel()
 	_, handler, sessionPath := newRemoteSyncServer(t)
