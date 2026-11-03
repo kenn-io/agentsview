@@ -279,21 +279,27 @@ jobs:
           - os: ubuntu-latest
             name: ubuntu-latest, Sync
             package: ./internal/sync
+            suite: linux-sync
             timeout: 29
           - os: ubuntu-latest
             name: ubuntu-latest, DuckDB
             package: ./internal/duckdb
+            suite: linux-duckdb
             timeout: 28
           - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
+            suite: linux-other
             timeout: 32
           - os: ubuntu-latest
             name: ubuntu-latest, Eval ingest
             testSet: evalingest
+            # Fixed by the Makefile's test-evalingest target.
+            suite: evalingest
             timeout: 16
           - os: windows-latest
             name: windows-latest
+            suite: windows
             timeout: 34
           - os: windows-latest
             name: windows-latest
@@ -301,6 +307,7 @@ jobs:
             timeout: 21
           - os: macos-latest
             name: macos-latest
+            suite: macos
             timeout: 29
     steps:
       - uses: actions/checkout@v7.0.1
@@ -357,7 +364,7 @@ jobs:
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
-        run: go test -tags "fts5" ${{ matrix.package }} -v -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -365,7 +372,9 @@ jobs:
       - name: Run other Go tests (Linux)
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
-        run: go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -tags "fts5" -v -count=1 -timeout=20m
+        run: |
+          packages="$(go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$')"
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -388,7 +397,7 @@ jobs:
             'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
-          go test -tags "fts5" $packages -v -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -449,14 +458,14 @@ jobs:
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go test -tags "fts5" ./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid -v -count=1 -timeout=10m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5" -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
       - name: Run file identity and signing race tests and linters (macOS)
         if: runner.os == 'macOS'
         run: |
-          go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -v -count=1 -timeout=10m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-race.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-race-reruns.txt --packages "./internal/volumeid ./internal/rawcapture ./internal/requestsign" -- -race -tags fts5 -count=1 -timeout=10m
           kit-retry 3 5 make lint-tools nilaway-golangci-build
           ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
         env:
@@ -465,6 +474,24 @@ jobs:
       - name: Run eval-ingest build-tag tests
         if: matrix.testSet == 'evalingest'
         run: make test-evalingest
+
+      - name: Upload gotestsum results
+        if: matrix.suite != '' && (failure() || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: gotestsum/${{ matrix.suite }}.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum macos-race results
+        if: runner.os == 'macOS' && (failure() || hashFiles('gotestsum/macos-race-reruns.txt') != '')
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-macos-race-attempt-${{ github.run_attempt }}
+          path: gotestsum/macos-race.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Save Go caches
         if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
@@ -482,20 +509,26 @@ jobs:
       matrix:
         include:
           - name: CLI A-P
+            suite: windows-cli-a-p
             package: ./cmd/agentsview
             run: &cli-test-prefix '^Test[A-P]'
           - name: CLI remaining
+            suite: windows-cli-rest
             package: ./cmd/agentsview
             skip: *cli-test-prefix
           - name: Capture
+            suite: windows-capture
             package: ./internal/capture
           - name: Database, Parser
+            suite: windows-db-parser
             package: ./internal/db ./internal/parser
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
+            suite: windows-sync-a-r
             package: ./internal/sync
             run: &sync-test-prefix '^Test[A-R]'
           - name: Sync remaining
+            suite: windows-sync-rest
             package: ./internal/sync
             skip: *sync-test-prefix
     steps:
@@ -560,9 +593,7 @@ jobs:
       - name: Run ${{ matrix.name }} tests
         shell: pwsh
         run: |
-          go test -json -tags "fts5" ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m 2>&1 |
-            Tee-Object -FilePath go-test-events.jsonl
-          exit $LASTEXITCODE
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -571,21 +602,21 @@ jobs:
         shell: pwsh
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
 
-      - name: Upload ${{ matrix.name }} test events
-        if: failure()
+      - name: Upload gotestsum results
+        if: matrix.suite != '' && (failure() || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
-          path: go-test-events.jsonl
-          if-no-files-found: warn
-          retention-days: 7
+          name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: gotestsum/${{ matrix.suite }}.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Summarize ${{ matrix.name }} test timing
         if: always()
         timeout-minutes: 2
         shell: pwsh
         run: |
-          $eventsPath = "go-test-events.jsonl"
+          $eventsPath = "gotestsum/${{ matrix.suite }}.json"
           if (-not (Test-Path $eventsPath)) {
             Write-Warning "Go test event log was not created"
             exit 0
@@ -724,9 +755,18 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run DuckDB tests
-        run: go test -tags "fts5" ./internal/duckdb -v -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/windows-duckdb.json --rerun-fails=2 --rerun-fails-report gotestsum/windows-duckdb-reruns.txt --packages "./internal/duckdb" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
+
+      - name: Upload gotestsum windows-duckdb results
+        if: failure() || hashFiles('gotestsum/windows-duckdb-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-windows-duckdb-attempt-${{ github.run_attempt }}
+          path: gotestsum/windows-duckdb.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   test-race:
     env:
@@ -741,25 +781,31 @@ jobs:
       matrix:
         include:
           - name: Sync A-R
+            suite: race-sync-a-r
             runner: ubuntu-latest
             package: ./internal/sync
             run: *sync-test-prefix
           - name: Sync remaining
+            suite: race-sync-rest
             runner: ubuntu-latest
             package: ./internal/sync
             skip: *sync-test-prefix
           - name: CLI A-P
+            suite: race-cli-a-p
             runner: ubuntu-latest
             package: ./cmd/agentsview
             run: *cli-test-prefix
           - name: CLI remaining
+            suite: race-cli-rest
             runner: ubuntu-latest
             package: ./cmd/agentsview
             skip: *cli-test-prefix
           - name: Database and Server
+            suite: race-db-server
             runner: ubuntu-latest
             package: ./internal/db ./internal/server
           - name: Other packages
+            suite: race-other
             runner: ubuntu-latest
             testSet: other
     steps:
@@ -794,15 +840,27 @@ jobs:
       # because highly parallel race runs can exhaust deadlines.
       - name: Run Go tests (race detector)
         if: matrix.testSet == 'other'
-        run: go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$' | xargs go test -p 4 -tags "fts5" -race -v -count=1 -timeout=20m
+        shell: bash
+        run: |
+          packages="$(go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$')"
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run ${{ matrix.name }} tests (race detector)
         if: matrix.package != ''
-        run: go test -tags "fts5" -race ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -v -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -race -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
+
+      - name: Upload gotestsum results
+        if: matrix.suite != '' && (failure() || hashFiles(format('gotestsum/{0}-reruns.txt', matrix.suite)) != '')
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: gotestsum/${{ matrix.suite }}.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       # This job owns the shared cache, including tests run by the other shards.
       - name: Warm moved race test builds for the next run
@@ -936,6 +994,62 @@ jobs:
         env:
           CGO_ENABLED: "1"
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
+
+      # Suite names are fixed by the Makefile CI targets. Each leg uploads
+      # only the suites it ran.
+      - name: Upload gotestsum postgres-core-fast results
+        if: failure() || hashFiles('gotestsum/postgres-core-fast-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-core-fast-attempt-${{ github.run_attempt }}
+          path: gotestsum/postgres-core-fast.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum postgres-core-fast-service results
+        if: failure() || hashFiles('gotestsum/postgres-core-fast-service-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-core-fast-service-attempt-${{ github.run_attempt }}
+          path: gotestsum/postgres-core-fast-service.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum postgres-raw-sync results
+        if: failure() || hashFiles('gotestsum/postgres-raw-sync-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-raw-sync-attempt-${{ github.run_attempt }}
+          path: gotestsum/postgres-raw-sync.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum postgres-core-heavy results
+        if: failure() || hashFiles('gotestsum/postgres-core-heavy-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-core-heavy-attempt-${{ github.run_attempt }}
+          path: gotestsum/postgres-core-heavy.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum clickhouse results
+        if: failure() || hashFiles('gotestsum/clickhouse-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-clickhouse-attempt-${{ github.run_attempt }}
+          path: gotestsum/clickhouse.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum clickhouse-service results
+        if: failure() || hashFiles('gotestsum/clickhouse-service-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-clickhouse-service-attempt-${{ github.run_attempt }}
+          path: gotestsum/clickhouse-service.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   e2e:
     needs: changes

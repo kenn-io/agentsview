@@ -76,8 +76,18 @@ jobs:
 
       - name: Run focused macOS FSEvents tests
         if: github.event_name == 'push'
-        run: CGO_ENABLED=1 go test -tags "fts5" ./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview -v -count=1 -timeout=20m
+        run: CGO_ENABLED=1 go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview" -- -tags "fts5" -count=1 -timeout=20m
 
       - name: Run focused macOS FSEvents tests for pull requests
         if: github.event_name == 'pull_request'
-        run: CGO_ENABLED=1 go test -tags "fts5" ./internal/fsevents ./internal/sync -v -count=1 -timeout=20m
+        run: CGO_ENABLED=1 go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync" -- -tags "fts5" -count=1 -timeout=20m
+
+      # The push and pull request steps are exclusive, so they share one suite.
+      - name: Upload gotestsum macos-fsevents results
+        if: failure() || hashFiles('gotestsum/macos-fsevents-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-macos-fsevents-attempt-${{ github.run_attempt }}
+          path: gotestsum/macos-fsevents.json
+          retention-days: 14
+          if-no-files-found: ignore
