@@ -19537,6 +19537,19 @@ func (e *Engine) projectIdentityObservationForWrite(
 	return export.WithRecordedGitRemote(obs, pw.sess.GitRemote), true
 }
 
+// mayDiscoverLocalProject reports whether path may be probed on the local
+// filesystem. Only sessions recorded on this machine qualify: another
+// machine's cwd (e.g. /home/... from a synced Linux host) is meaningless
+// here, and on macOS merely stat'ing such paths wakes the /home automounter —
+// with tens of thousands of remote sessions and a one-minute cache TTL that
+// becomes a sustained automountd/opendirectoryd CPU storm.
+// mayProbeLocalPath also guards export.NormalizeRootPath, which resolves
+// symlinks and would reach into a protected location on its own.
+func (e *Engine) mayDiscoverLocalProject(machine, path string) bool {
+	return !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
+		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(path)
+}
+
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
 	e.projectIdentityMu.Lock()
 	defer e.projectIdentityMu.Unlock()
@@ -19550,16 +19563,7 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		return cached
 	}
 	identity := projectIdentityCacheEntry{rootPath: rootPath}
-	// Only probe the local filesystem for sessions recorded on this
-	// machine: another machine's cwd (e.g. /home/... from a synced Linux
-	// host) is meaningless here, and on macOS merely stat'ing such paths
-	// wakes the /home automounter — with tens of thousands of remote
-	// sessions and a one-minute cache TTL that becomes a sustained
-	// automountd/opendirectoryd CPU storm.
-	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
-	// resolves symlinks and would reach into a protected location on its own.
-	if !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
-		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
+	if e.mayDiscoverLocalProject(machine, rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}
@@ -19697,23 +19701,7 @@ func discoverLocalGitIdentity(
 	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(cwd)) {
 		return localGitIdentity{}
 	}
-	// Archived sessions can name temporary subdirectories that were removed.
-	// Resolve from the nearest surviving ancestor, as git.DiscoverRepos does.
-	start := filepath.Clean(cwd)
-	for {
-		if !mayProbe(start) {
-			return localGitIdentity{}
-		}
-		if _, err := os.Stat(start); !os.IsNotExist(err) {
-			break
-		}
-		parent := filepath.Dir(start)
-		if parent == start {
-			return localGitIdentity{}
-		}
-		start = parent
-	}
-	resolved, err := filepath.EvalSymlinks(start)
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
 	if err != nil {
 		return localGitIdentity{}
 	}

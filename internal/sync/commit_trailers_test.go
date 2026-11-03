@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testutil"
 )
@@ -99,17 +100,33 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	testutil.IsolateGit(t)
 	database := openTestDB(t)
-	repo := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o700))
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Scratch\n\nAgent-Session: codex:removed"}} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	}
 	cwd := filepath.Join(repo, "temporary", "nested")
 	require.NoError(t, os.MkdirAll(cwd, 0o700))
 	require.NoError(t, os.RemoveAll(filepath.Join(repo, "temporary")))
+	session := db.Session{ID: "codex:removed", Agent: "codex", Project: "project-a", Machine: "local", Cwd: cwd}
+	require.NoError(t, database.UpsertSession(t.Context(), session))
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
-	identity := engine.cachedProjectIdentity("local", cwd)
-	resolved, err := filepath.EvalSymlinks(repo)
+	engine.ReconcileCommitTrailers(t.Context())
+	list, err := database.SessionCommitLinks(t.Context(), "codex:removed")
 	require.NoError(t, err)
-	assert.Equal(t, resolved, identity.rootPath)
+	require.Len(t, list.Commits, 1)
+	assert.Equal(t, "Scratch", list.Commits[0].Subject)
+	// Only trailer discovery looks past the removed cwd; the session's
+	// recorded project identity does not claim the enclosing checkout.
+	obs, ok := engine.projectIdentityObservation(session)
+	require.True(t, ok)
+	assert.Equal(t, cwd, obs.RootPath)
+	assert.Empty(t, obs.RepositoryPath)
+	assert.Equal(t, export.WorktreeUnknown, obs.WorktreeRelationship)
 }
 
 func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {

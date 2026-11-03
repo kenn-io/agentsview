@@ -5,6 +5,8 @@ import (
 	"encoding/json/v2"
 	"log"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -42,7 +44,7 @@ func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget t
 	}
 	paths := map[string]string{}
 	for _, r := range repositories {
-		identity := e.cachedProjectIdentity(r.Machine, r.Cwd)
+		identity := e.cachedProjectIdentity(r.Machine, e.survivingTrailerCwd(r.Machine, r.Cwd))
 		if identity.gitDir == "" {
 			continue
 		}
@@ -72,6 +74,26 @@ func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget t
 			return
 		}
 	}
+}
+
+// survivingTrailerCwd returns the nearest existing ancestor of a session cwd.
+// Archived sessions can name temporary subdirectories that were removed, and
+// the checkout that contained them still holds the session's commits.
+func (e *Engine) survivingTrailerCwd(machine, cwd string) string {
+	if !safeLocalAbsolutePath(cwd) {
+		return cwd
+	}
+	for dir := filepath.Clean(cwd); e.mayDiscoverLocalProject(machine, dir); {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return cwd
 }
 
 func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path string) error {
