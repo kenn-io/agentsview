@@ -74,6 +74,7 @@ func TestAgentHelpCommandChecker(t *testing.T) {
 		"agentsview session get <id> --json",
 		"agentsview session search 'connection reset' --json",
 		"agentsview openapi > openapi.json",
+		"agentsview session search 'a > b' --json",
 	} {
 		assert.NoError(t, validateAdvertisedCommand(line), line)
 	}
@@ -82,6 +83,7 @@ func TestAgentHelpCommandChecker(t *testing.T) {
 		"agentsview session list --nonexistent",
 		"agentsview session get",
 		"agentsview session search 'unterminated",
+		"agentsview openapi >>>out",
 	} {
 		assert.Error(t, validateAdvertisedCommand(line), line)
 	}
@@ -98,10 +100,7 @@ func walkHelpCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 	}
 }
 
-var (
-	helpInlineCommands = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")
-	trailingRedirect   = regexp.MustCompile(`\s+>\s*\S+$`)
-)
+var helpInlineCommands = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")
 
 // advertisedHelpCommands returns lines that start with agentsview and quoted
 // agentsview commands inside prose.
@@ -134,11 +133,15 @@ func validateAdvertisedCommand(line string) error {
 }
 
 // Help examples use single quotes, <placeholder> words, and at most one
-// trailing "> file" redirect, so shlex covers the rest.
+// trailing "> file" redirect. Split with shlex so quoted text stays one word,
+// then drop an unquoted trailing redirect.
 func resolveAdvertisedCommand(line string) (*cobra.Command, error) {
-	words, err := shlex.Split(trailingRedirect.ReplaceAllString(line, ""))
+	words, err := shlex.Split(line)
 	if err != nil {
 		return nil, err
+	}
+	if n := len(words); n >= 2 && words[n-2] == ">" {
+		words = words[:n-2]
 	}
 	if len(words) == 0 || words[0] != "agentsview" {
 		return nil, errors.New("expected an agentsview command")
