@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1158,16 +1159,26 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 		gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
 		hash := fmt.Sprintf("%064x", i+1)
 		sessionMap[gid] = hash
-		require.NoError(t, destination.RecordArtifactImportedSession(
-			t.Context(),
-			db.ArtifactImportedSession{
-				Origin:            contractOrigin,
-				GID:               gid,
-				ManifestHash:      hash,
-				ImportedSessionID: gid,
-			},
-		))
 	}
+	// No checkpoint stage exists yet, so satisfyAllArtifactCheckpointStagesTx
+	// would match nothing. imported_at uses its column default.
+	require.NoError(t, destination.Update(t.Context(), func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO artifact_imported_sessions
+			(origin, gid, manifest_hash, imported_session_id) VALUES (?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+		for i := range unchangedSessions {
+			gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
+			if _, err := stmt.ExecContext(
+				t.Context(), contractOrigin, gid, fmt.Sprintf("%064x", i+1), gid,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
 	sessionMap[contractOrigin+"~changed"] = changedHash
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, sessionMap,
