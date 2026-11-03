@@ -391,6 +391,49 @@ func TestRawClientPostgresEndToEnd(t *testing.T) {
 	assert.Equal(t, pgE2EIngestCounts{
 		Manifests: 2, Entries: 4, Objects: 4, Heads: 1, Jobs: 2,
 	}, pgE2EReadIngestCounts(t, pg), "the rejected stale commit wrote no metadata")
+
+	t.Run("zero-byte object", func(t *testing.T) {
+		ctx := t.Context()
+		object := pgE2EObjectFor(t, nil)
+		missing, err := client.MissingObjects(ctx, parser.AgentClaude, []rawsync.ObjectRef{object})
+		require.NoError(t, err)
+		require.Equal(t, []rawsync.ObjectRef{object}, missing)
+		require.NoError(t, client.UploadObject(ctx, parser.AgentClaude, object, bytes.NewReader(nil)))
+
+		var uploadID, state string
+		var offset int64
+		require.NoError(t, pg.QueryRowContext(ctx, `
+			SELECT upload_id, state, offset_bytes FROM raw_upload_sessions
+			WHERE sha256 = $1 AND size_bytes = 0`, object.SHA256,
+		).Scan(&uploadID, &state, &offset))
+		assert.Equal(t, "complete", state)
+		assert.Zero(t, offset)
+		patches, sent := wire.snapshot()
+		assert.Equal(t, int64(1), patches[uploadID])
+		assert.Zero(t, sent[uploadID])
+		missing, err = client.MissingObjects(ctx, parser.AgentClaude, []rawsync.ObjectRef{object})
+		require.NoError(t, err)
+		assert.Empty(t, missing, "the empty object is in verified physical custody")
+
+		manifest := manifestFor("capture-pg-e2e-empty", capturedAt.Add(3*time.Minute), secondCommit.Receipt)
+		manifest.Entries = []rawsync.Entry{{
+			Path: "session.jsonl", Type: "file", Length: 0,
+			Objects: []rawsync.ObjectRef{object},
+		}}
+		committed, err := client.CommitManifest(ctx, manifest)
+		require.NoError(t, err)
+		assert.NotEmpty(t, committed.ManifestID)
+		assert.NotEmpty(t, committed.Receipt)
+		assert.Equal(t, int64(3), committed.Generation)
+		assert.True(t, committed.Created)
+		manifestID, receipt, generation := durableHead()
+		assert.Equal(t, committed.ManifestID, manifestID)
+		assert.Equal(t, committed.Receipt, receipt)
+		assert.Equal(t, int64(3), generation)
+		assert.Equal(t, pgE2EIngestCounts{
+			Manifests: 3, Entries: 5, Objects: 5, Heads: 1, Jobs: 3,
+		}, pgE2EReadIngestCounts(t, pg))
+	})
 }
 
 // pgE2EObjectFor builds a validated ObjectRef carrying body's real digest.

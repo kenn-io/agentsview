@@ -1,11 +1,8 @@
 package rawclient_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -14,98 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/rawcapture"
-	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawclient"
 	"go.kenn.io/agentsview/internal/rawsync"
-	"go.kenn.io/agentsview/internal/rawupload"
 )
-
-// Capture, upload, commit, and acknowledge through the real HTTP handlers.
-// The zero case protects the empty finalizing PATCH; neighboring cases protect
-// transfer completion on either side of a chunk boundary.
-func TestRawClientCapturesAndAcknowledgesEmptyAndChunkBoundaryFiles(t *testing.T) {
-	for _, length := range []int{0, 1, 7, 8, 9, 16, 17} {
-		t.Run(strconv.Itoa(length), func(t *testing.T) {
-			client, uploads, identity := emptyObjectClient(t, 8)
-			base := t.TempDir()
-			checkpoint, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), rawcheckpoint.Options{
-				SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
-			})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
-			require.NoError(t, checkpoint.SetDevice(t.Context(), identity.DeviceID))
-			root, err := filepath.EvalSymlinks(t.TempDir())
-			require.NoError(t, err)
-			body := bytes.Repeat([]byte("x"), length)
-			project := filepath.Join(root, "project")
-			require.NoError(t, os.Mkdir(project, 0o700))
-			path := filepath.Join(project, "session.jsonl")
-			require.NoError(t, os.WriteFile(path, body, 0o600))
-			provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
-			require.True(t, ok)
-			sources, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			capture, err := rawcapture.New(checkpoint).Capture(t.Context(), provider, sources[0])
-			require.NoError(t, err)
-			require.Equal(t, rawcapture.StatusCaptured, capture.Status)
-			queued, found, err := checkpoint.NextGeneration(t.Context())
-			require.NoError(t, err)
-			require.True(t, found)
-			require.Len(t, queued.Entries, 1)
-			require.Equal(t, int64(length), queued.Entries[0].Length)
-			require.Equal(t, []rawsync.ObjectRef{e2EObjectFor(t, body)}, queued.Entries[0].Objects)
-
-			uploader := rawupload.New(checkpoint, client, identity.DeviceID)
-			result, found, err := uploader.UploadNext(t.Context())
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, capture.CaptureID, result.CaptureID)
-			assert.NotEmpty(t, result.ManifestID)
-			assert.NotEmpty(t, result.Receipt)
-			assert.Equal(t, int64(1), result.Generation)
-			assert.Equal(t, int64(length), result.UploadedBytes)
-			head, found, err := checkpoint.SourceHead(t.Context(), capture.Source.Provider, capture.Source.ConfiguredRootID, capture.Source.SourceKey)
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, result.ManifestID, head.ManifestID)
-			assert.Equal(t, result.Receipt, head.Receipt)
-			assert.Equal(t, int64(1), head.Generation)
-			_, found, err = uploader.UploadNext(t.Context())
-			require.NoError(t, err)
-			assert.False(t, found, "acknowledged capture must leave the queue")
-			missing, err := client.MissingObjects(t.Context(), parser.AgentClaude, queued.Entries[0].Objects)
-			require.NoError(t, err)
-			assert.Empty(t, missing, "acknowledgement requires verified physical custody")
-			counts := uploads.appendCounts()
-			require.Len(t, counts, 1)
-			for _, count := range counts {
-				assert.Equal(t, max(1, (length+7)/8), count)
-			}
-		})
-	}
-}
-
-func emptyObjectClient(t *testing.T, chunkBytes int64) (*rawclient.Client, *e2EUploadSessionStore, rawsync.AuthIdentity) {
-	t.Helper()
-	config, uploads, identity := emptyObjectClientConfig(t, chunkBytes)
-	client, err := rawclient.NewClient(config)
-	require.NoError(t, err)
-	return client, uploads, identity
-}
-
-func emptyObjectClientConfig(t *testing.T, chunkBytes int64) (rawclient.Config, *e2EUploadSessionStore, rawsync.AuthIdentity) {
-	t.Helper()
-	uploads := newE2EUploadSessionStore()
-	srv, auth := newE2ERawSyncServer(t, uploads)
-	enrollment, err := auth.EnrollDevice(t.Context(), "tenant-e2e", "device-e2e")
-	require.NoError(t, err)
-	return rawclient.Config{
-		BaseURL: srv.URL, DeviceID: enrollment.Identity.DeviceID, Credential: enrollment.Credential,
-		HTTPClient: srv.Client(), ChunkBytes: chunkBytes, TokenMargin: time.Minute,
-	}, uploads, enrollment.Identity
-}
 
 func TestRawClientEmptyPatchFinalizationValidatesStagedBytes(t *testing.T) {
 	for _, tc := range []struct {

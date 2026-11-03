@@ -470,13 +470,14 @@ coverage.
 
 Deterministic rejections permanently block the rejected capture so independent
 sources can continue uploading. These include `invalid_request` and
-`checksum_mismatch` errors, plus HTTP 400 and 413 responses decoded as server
-JSON errors. Credential failures, expired upload sessions, other conflicts,
-request timeouts, rate limits, server failures, missing-object responses, and
-non-JSON proxy replies remain retryable. Source-head conflicts reconcile with
-the server's current head. Each signed retry uses a fresh signature. After
-correcting a permanent rejection, a later capture or audit can replace the
-blocked capture; that capture itself is not retried.
+`checksum_mismatch` errors, plus HTTP 413 responses decoded as server JSON
+errors. Codeless HTTP 400 responses, credential failures, expired upload
+sessions, other conflicts, request timeouts, rate limits, server failures,
+missing-object responses, and non-JSON proxy replies remain retryable.
+Source-head conflicts reconcile with the server's current head. Each signed
+retry uses a fresh signature. After correcting a permanent rejection, a later
+capture or audit can replace the blocked capture; that capture itself is not
+retried.
 
 When a complete audit finds that a previously captured file is gone, the watcher
 uploads a tombstone for it. The server keeps the sessions already derived from

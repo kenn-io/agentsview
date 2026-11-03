@@ -168,7 +168,7 @@ func (u *Uploader) recordFailure(
 			apiError.Code == rawclient.CodeMissingObject:
 		case apiError.Code == rawclient.CodeInvalidRequest,
 			apiError.Code == rawclient.CodeChecksumMismatch,
-			(apiError.Status == http.StatusBadRequest || apiError.Status == http.StatusRequestEntityTooLarge) &&
+			apiError.Status == http.StatusRequestEntityTooLarge &&
 				apiError.Code != rawclient.CodeInternal:
 			class = rawcheckpoint.GenerationFailurePermanent
 			retryAt = time.Time{}

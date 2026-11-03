@@ -26,7 +26,6 @@ import (
 type uploadTransportStub struct {
 	missingBatches [][]rawsync.ObjectRef
 	uploaded       map[rawsync.ObjectRef]string
-	uploadErr      error
 	commit         rawsync.CommitResult
 	commitErr      error
 	commitFunc     func(rawsync.Manifest) (rawsync.CommitResult, error)
@@ -52,9 +51,6 @@ func (s *uploadTransportStub) UploadObject(
 	_, err := content.ReadAt(data, 0)
 	if err != nil && err != io.EOF {
 		return err
-	}
-	if s.uploadErr != nil {
-		return s.uploadErr
 	}
 	s.uploaded[object] = string(data)
 	return nil
@@ -258,8 +254,8 @@ func TestUploaderClassifiesRejections(t *testing.T) {
 		permanent bool
 	}{
 		{"invalid request", 400, rawclient.CodeInvalidRequest, true},
-		{"uncoded server bad request", 400, "", true},
-		{"unknown server rejection", 400, "future_rejection", true},
+		{"uncoded JSON bad request", 400, "", false},
+		{"unknown-code JSON bad request", 400, "future_rejection", false},
 		{"server too large", 413, "", true},
 		{"checksum mismatch", 409, rawclient.CodeChecksumMismatch, true},
 		{"expired credential", 401, rawclient.CodeUnauthorized, false},
