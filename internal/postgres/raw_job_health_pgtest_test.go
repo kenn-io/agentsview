@@ -626,13 +626,12 @@ func TestRawJobHealthCaps(t *testing.T) {
 			rawIngestCapturedAt(), object,
 		)
 	}
-	_, err := pg.ExecContext(t.Context(), `ALTER TABLE raw_manifests ALTER COLUMN accepted_at SET DEFAULT 'infinity'::timestamptz`)
-	require.NoError(t, err)
+	setRawHealthAcceptedAt(t, pg, time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC))
 	capManifest := rawHealthCommit(
 		t, store, identity, "capture-job-cap", "", "sessions/job-cap",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
 	)
-	_, err = pg.ExecContext(t.Context(), `
+	_, err := pg.ExecContext(t.Context(), `
 		DELETE FROM raw_ingest_jobs
 		WHERE tenant_id = $1 AND manifest_id <> $2`,
 		identity.TenantID, capManifest.ManifestID,
