@@ -43,9 +43,8 @@ reports, transcript streams, and API response formats keep their existing
 formats on stdout.
 
 If a session is missing, copy a canonical ID from
-`agentsview session list --json`. For a new session, run
-`agentsview source sync` on the archive host. If autostart is disabled with
-`AGENTSVIEW_NO_DAEMON=1`, run
+`agentsview session list --json`. For a new session, run `agentsview sync` on
+the archive host. If autostart is disabled with `AGENTSVIEW_NO_DAEMON=1`, run
 `agentsview daemon start` before retrying a daemon read. An explicit remote
 `--server` needs that host's URL and token, supplied through
 `--server-token-file` or `AGENTSVIEW_SERVER_TOKEN`.

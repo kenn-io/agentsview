@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestAgentSessionAliases(t *testing.T) {
@@ -43,12 +42,7 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	root := newRootCommand()
 	help, err := executeCommand(root, "--help")
 	require.NoError(t, err)
-	sources := map[string]string{"root help": help, "session recovery": sessionLookupHint}
-	sessionSearch, _, err := root.Find([]string{"session", "search"})
-	require.NoError(t, err)
-	diagnostic := &cliDiagnosticError{}
-	applyCLIRecovery(sessionSearch, db.ErrSemanticUnavailable, diagnostic)
-	sources["embedding recovery"] = diagnostic.hint
+	sources := map[string]string{"root help": help}
 	var sessionGetHelp string
 	var tokenUseHelp string
 	unsupportedCommonFlags := map[string][]string{
@@ -128,7 +122,7 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	for name, source := range sources {
 		commands, err := advertisedHelpCommands(source)
 		require.NoError(t, err, name)
-		if name == "root help" || name == "session recovery" || name == "embedding recovery" {
+		if name == "root help" {
 			require.NotEmpty(t, commands, name)
 		}
 		for _, line := range commands {

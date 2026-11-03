@@ -249,7 +249,7 @@ func writeCLIDiagnostic(stderr io.Writer, err error) {
 }
 
 const (
-	sessionLookupHint  = "run `agentsview session list --json` for canonical IDs; run `agentsview source sync` on the archive host if the session is new"
+	sessionLookupHint  = "run `agentsview session list --json` for canonical IDs; run `agentsview sync` on the archive host if the session is new"
 	configRecoveryHint = "fix TOML syntax or invalid settings in config.toml under AGENTSVIEW_DATA_DIR (default ~/.agentsview); use a separate AGENTSVIEW_DATA_DIR to select another configuration"
 )
 
@@ -258,40 +258,23 @@ func commandRecoveryHint(cmd *cobra.Command) string {
 	if cmd == nil {
 		return hint
 	}
-	switch name := recoveryCommandName(cmd); {
-	case name == "pg" || cmd.Name() == "clean-uploads":
-		return "check AGENTSVIEW_PG_URL or [pg].url in config.toml (named targets use default_pg); " + hint
-	case name == "duckdb":
-		return "check AGENTSVIEW_DUCKDB_PATH / AGENTSVIEW_DUCKDB_URL or [duckdb].path / [duckdb].url in config.toml; " + hint
-	case name == "clickhouse":
-		return "check AGENTSVIEW_CLICKHOUSE_URL or [clickhouse].url in config.toml (named targets use default_clickhouse); " + hint
-	case name == "raw" || name == "raw-sync":
-		return "set --server or AGENTSVIEW_RAW_SYNC_URL, --device-id or AGENTSVIEW_RAW_SYNC_DEVICE_ID, and AGENTSVIEW_RAW_SYNC_CREDENTIAL; " + hint
-	case name == "sync":
-		return "check the named host in [[remote_hosts]] in config.toml, or omit --host to sync all configured sources; " + hint
-	}
-	return hint
-}
-
-// Grouped command trees add a top-level domain noun before their existing
-// recovery-specific command names. Resolve only those known groups so an
-// unrelated nested command named sync does not receive source-sync advice.
-func recoveryCommandName(cmd *cobra.Command) string {
-	if cmd == nil {
-		return ""
-	}
 	top := cmd
 	for top.Parent() != nil && top.Parent().Parent() != nil {
 		top = top.Parent()
 	}
-	if cmd == top || !slices.Contains([]string{"replica", "report", "source"}, top.Name()) {
-		return top.Name()
+	switch top.Name() {
+	case "pg":
+		return "check AGENTSVIEW_PG_URL or [pg].url in config.toml (named targets use default_pg); " + hint
+	case "duckdb":
+		return "check AGENTSVIEW_DUCKDB_PATH / AGENTSVIEW_DUCKDB_URL or [duckdb].path / [duckdb].url in config.toml; " + hint
+	case "clickhouse":
+		return "check AGENTSVIEW_CLICKHOUSE_URL or [clickhouse].url in config.toml (named targets use default_clickhouse); " + hint
+	case "raw-sync":
+		return "set --server or AGENTSVIEW_RAW_SYNC_URL, --device-id or AGENTSVIEW_RAW_SYNC_DEVICE_ID, and AGENTSVIEW_RAW_SYNC_CREDENTIAL; " + hint
+	case "sync":
+		return "check the named host in [[remote_hosts]] in config.toml, or omit --host to sync all configured sources; " + hint
 	}
-	child := cmd
-	for child.Parent() != nil && child.Parent() != top {
-		child = child.Parent()
-	}
-	return child.Name()
+	return hint
 }
 
 func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
@@ -320,7 +303,7 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 	}
 	if errors.Is(err, db.ErrSemanticUnavailable) {
 		d.kind, d.code = "unavailable", cliUnavailableExitCode
-		d.hint = "run `agentsview index embeddings build` on the archive host; " + commandHelpHint(cmd)
+		d.hint = "run `agentsview embeddings build` on the archive host; " + commandHelpHint(cmd)
 		if cmd != nil && cmd.CommandPath() == "agentsview session search" {
 			d.hint += "; use --fts or --regex while semantic search is unavailable"
 		}
@@ -363,13 +346,16 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 	}
 	if _, ok := errors.AsType[*url.Error](err); ok {
 		d.kind, d.code, d.display = "unavailable", cliUnavailableExitCode, "network request failed"
-		recoveryName := recoveryCommandName(cmd)
-		if recoveryName == "raw" || recoveryName == "raw-sync" {
+		top := cmd
+		for top != nil && top.Parent() != nil && top.Parent().Parent() != nil {
+			top = top.Parent()
+		}
+		if top != nil && top.Name() == "raw-sync" {
 			d.display = "cannot reach raw-sync server"
 			d.hint = "check --server or AGENTSVIEW_RAW_SYNC_URL and the raw-sync server's status, then retry; " + commandHelpHint(cmd)
 			return
 		}
-		if recoveryName == "update" {
+		if top != nil && top.Name() == "update" {
 			d.display = "cannot reach update service"
 			d.hint = "check network access to GitHub and retry; " + commandHelpHint(cmd)
 			return
@@ -381,7 +367,7 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 		if remote != "" {
 			d.display = "cannot reach server"
 			d.hint = "check --server URL and the server's status on that host, then retry; " + commandHelpHint(cmd)
-		} else if slices.Contains([]string{"session", "stats", "usage", "activity", "health"}, recoveryName) {
+		} else if top != nil && slices.Contains([]string{"session", "stats", "usage", "activity", "health"}, top.Name()) {
 			d.display = "cannot reach server"
 			d.hint = "run `agentsview daemon status` to check the local server; " + commandHelpHint(cmd)
 		}

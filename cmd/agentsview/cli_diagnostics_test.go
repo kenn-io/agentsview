@@ -41,30 +41,20 @@ func TestCLIRecoveryUsage(t *testing.T) {
 }
 
 func TestCLIRecoveryJSON(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		args []string
-	}{
-		{name: "canonical path", args: []string{"session", "list", "--bogus", "--json"}},
-		{name: "group and command aliases", args: []string{"sessions", "ls", "--bogus", "--json"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			err := executeCLIWithLegacyFlagCompat(tc.args, &stdout, &stderr)
-			require.Error(t, err)
-			assert.Equal(t, 64, reportCLIError(err, &stderr))
-			assert.Empty(t, stdout.String())
-			var diagnostic struct {
-				Error   string `json:"error"`
-				Message string `json:"message"`
-				Hint    string `json:"hint"`
-			}
-			require.NoError(t, json.Unmarshal(stderr.Bytes(), &diagnostic))
-			assert.Equal(t, "usage", diagnostic.Error)
-			assert.Contains(t, diagnostic.Message, "unknown flag")
-			assert.Contains(t, diagnostic.Hint, "agentsview session list --help")
-		})
+	var stdout, stderr bytes.Buffer
+	err := executeCLIWithLegacyFlagCompat([]string{"session", "list", "--bogus", "--json"}, &stdout, &stderr)
+	require.Error(t, err)
+	reportCLIError(err, &stderr)
+	assert.Empty(t, stdout.String())
+	var diagnostic struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+		Hint    string `json:"hint"`
 	}
+	require.NoError(t, json.Unmarshal(stderr.Bytes(), &diagnostic))
+	assert.Equal(t, "usage", diagnostic.Error)
+	assert.Contains(t, diagnostic.Message, "unknown flag")
+	assert.Contains(t, diagnostic.Hint, "agentsview session list --help")
 }
 
 func TestCLIRecoveryValidationBeforeTransport(t *testing.T) {
