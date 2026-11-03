@@ -19,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/shellquote"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -49,7 +50,7 @@ func newSourceEnv(t *testing.T) sourceEnv {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	executable := writeExecutable(t, t.TempDir(), "agentsview",
-		"#!/bin/sh\nexec '"+strings.ReplaceAll(os.Args[0], "'", "'\\''")+"' \"$@\"\n")
+		"#!/bin/sh\nexec "+shellquote.POSIX(os.Args[0])+" \"$@\"\n")
 	return sourceEnv{
 		ssh:         ssh,
 		build:       LocalBuild{Version: "dev", Executable: executable},
