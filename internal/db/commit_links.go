@@ -481,8 +481,22 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 				if !ok || !known {
 					continue
 				}
+				sessionID := def.IDPrefix + id
+				matches, err := findSessionIDsByRawSuffix(ctx, tx, sessionID, 2, agent)
+				if err != nil {
+					return err
+				}
+				switch {
+				case len(matches) > 0 && matches[0] == sessionID:
+					// An exact archive ID takes precedence over suffix matches.
+				case len(matches) == 1:
+					sessionID = matches[0]
+				case len(matches) > 1:
+					// A trailer cannot distinguish devices sharing a native ID.
+					continue
+				}
 				if _, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
- ON CONFLICT(session_id,sha) DO UPDATE SET branch=excluded.branch,subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at`, def.IDPrefix+id, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt); err != nil {
+ ON CONFLICT(session_id,sha) DO UPDATE SET branch=excluded.branch,subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at`, sessionID, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt); err != nil {
 					return err
 				}
 			}
