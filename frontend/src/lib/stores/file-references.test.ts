@@ -104,6 +104,78 @@ describe("file references store", () => {
       vi.useRealTimers();
     }
   });
+  it.each([
+    { name: "first lookup", staleFirst: false },
+    { name: "stale retry", staleFirst: true },
+  ])(
+    "shows a $name answered for a revision between the requested and current ones",
+    async ({ staleFirst }) => {
+      vi.useFakeTimers();
+      try {
+        let resolve!: (value: unknown) => void;
+        lookup.mockReset();
+        if (staleFirst) lookup.mockResolvedValueOnce({ ...result, transcript_revision: "2" });
+        lookup.mockImplementationOnce(
+          () =>
+            new Promise((done) => {
+              resolve = done;
+            }),
+        );
+        const store = new FileReferencesStore();
+        store.enabled = true;
+        const pending = store.track("a", "1");
+        await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(staleFirst ? 2 : 1));
+        void store.track("a", "3");
+
+        // The server read revision 2: neither the one asked about nor the
+        // one on screen now.
+        resolve({ ...result, transcript_revision: "2" });
+        await pending;
+        expect(store.status).toBe("ok");
+        expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
+
+        lookup.mockResolvedValue({ ...result, transcript_revision: "3" });
+        await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS);
+        expect(store.result?.transcript_revision).toBe("3");
+        expect(store.status).toBe("ok");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it("asks once more after the interval when the retry is stale too", async () => {
+    vi.useFakeTimers();
+    try {
+      const changed = new ApiError(409, "source changed", "source_changed");
+      lookup.mockReset().mockRejectedValue(changed);
+      const store = new FileReferencesStore();
+      store.enabled = true;
+      await store.track("a", "1");
+      expect(store.status).toBe("failed");
+      expect(lookup).toHaveBeenCalledTimes(2);
+
+      // The follow-up gets the same treatment and then stops for this
+      // revision, so a server that never settles is not polled forever.
+      await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS);
+      expect(lookup).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS * 2);
+      expect(lookup).toHaveBeenCalledTimes(4);
+      expect(store.status).toBe("failed");
+
+      // A new revision gets its own follow-up, which shows the matches once
+      // the transcript stops changing.
+      lookup.mockReset().mockRejectedValueOnce(changed).mockRejectedValueOnce(changed);
+      lookup.mockResolvedValue({ ...result, transcript_revision: "2" });
+      await store.track("a", "2");
+      expect(store.status).toBe("failed");
+      expect(lookup).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(MIN_REFRESH_INTERVAL_MS);
+      expect(store.status).toBe("ok");
+      expect(store.forMessage("a", 0)).toEqual([imageOccurrence]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("ignores a lookup for a session the user left", async () => {
     let resolve!: (value: unknown) => void;
     lookup.mockReset().mockImplementationOnce(

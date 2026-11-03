@@ -23,6 +23,8 @@ export class FileReferencesStore {
   private timer: ReturnType<typeof setTimeout> | null = null;
   // The revision on screen when the lookup in flight started.
   private requested: string | null = null;
+  // The revision that already had a follow-up after both stale answers.
+  private followedUp: string | null = null;
 
   track(id: string | null, revision: string | null): Promise<void> {
     if (!this.enabled) return Promise.resolve();
@@ -48,6 +50,7 @@ export class FileReferencesStore {
     this.read.cancel();
     this.sessionId = null;
     this.revision = null;
+    this.followedUp = null;
     this.result = undefined;
     this.status = "idle";
     this.pending = Promise.resolve();
@@ -95,21 +98,26 @@ export class FileReferencesStore {
     retryStale: boolean,
   ): void | Promise<void> {
     if (!this.read.isCurrent(signal)) return;
-    // A transcript that grew during the lookup still gets the answer for the
-    // revision that was asked about; the latest revision follows on schedule.
-    const superseded =
-      result.transcript_revision === this.requested && this.requested !== this.revision;
-    if (!this.revision || (result.transcript_revision !== this.revision && !superseded)) {
+    // A transcript that grew during the lookup still gets the answer for
+    // whichever revision the server read; the latest revision follows on
+    // schedule.
+    const movedOn = this.requested !== this.revision;
+    if (!this.revision || (result.transcript_revision !== this.revision && !movedOn)) {
       return this.stale(retryStale);
     }
     this.result = result;
     this.status = "ok";
-    if (superseded) this.schedule();
+    if (result.transcript_revision !== this.revision) this.schedule();
   }
 
   private stale(retryStale: boolean): void | Promise<void> {
     this.status = "failed";
-    return retryStale ? this.refresh(false) : undefined;
+    if (retryStale) return this.refresh(false);
+    // The retry was stale too. Ask once more after the refresh interval so
+    // the lookup does not stay failed once the transcript stops changing.
+    if (this.followedUp === this.revision) return;
+    this.followedUp = this.revision;
+    this.schedule();
   }
 
   private visibleResult(sessionId: string) {
