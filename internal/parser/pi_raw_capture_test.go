@@ -87,18 +87,35 @@ func TestPiRawCapturePhysicalDiscovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	discovery, err = DiscoverRawCaptureSources(ctx, provider)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, discovery.Complete)
 	streaming, ok := provider.(StreamingRawCaptureSourceProvider)
 	require.True(t, ok)
 	sentinel := errors.New("stop yielding")
 	complete, err := streaming.DiscoverRawCaptureSourcesEach(t.Context(), func(SourceRef) error { return sentinel })
-	assert.ErrorIs(t, err, sentinel)
+	require.ErrorIs(t, err, sentinel)
 	assert.False(t, complete)
 	provider, _ = NewProvider(AgentPi, ProviderConfig{Roots: []string{filepath.Join(root, "absent")}})
 	discovery, err = DiscoverRawCaptureSources(t.Context(), provider)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.False(t, discovery.Complete)
+}
+
+func TestPiRawCaptureContinuesAfterUnavailableRoot(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	healthy := filepath.Join(root, "healthy")
+	transcript := filepath.Join(healthy, "session.jsonl")
+	writePiRawFixture(t, transcript, `{"type":"session","id":"healthy"}`+"\n")
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{missing, healthy}})
+	require.True(t, ok)
+
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	assert.False(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+	assert.Equal(t, transcript, discovery.Sources[0].DisplayPath)
 }
 
 func TestPiRawCaptureParentBoundary(t *testing.T) {
@@ -200,7 +217,7 @@ func TestPiRawCaptureConfinesTraversal(t *testing.T) {
 			})
 			discovery, err := DiscoverRawCaptureSources(ctx, provider)
 			require.Error(t, err)
-			assert.NotErrorIs(t, err, sentinel)
+			require.NotErrorIs(t, err, sentinel)
 			assert.False(t, discovery.Complete)
 			assert.Empty(t, discovery.Sources)
 		})
@@ -251,7 +268,7 @@ func TestPiRawCaptureCancelledEmptyRoots(t *testing.T) {
 	cancel()
 	provider, _ := NewProvider(AgentPi, ProviderConfig{})
 	discovery, err := DiscoverRawCaptureSources(ctx, provider)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, discovery.Complete)
 }
 

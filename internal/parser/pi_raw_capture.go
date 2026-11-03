@@ -7,14 +7,17 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
 
-var _ RawCaptureProvider = (*piProvider)(nil)
-var _ StreamingRawCaptureSourceProvider = (*piProvider)(nil)
-var _ RawCaptureSourceProvider = (*piProvider)(nil)
+var (
+	_ RawCaptureProvider                = (*piProvider)(nil)
+	_ StreamingRawCaptureSourceProvider = (*piProvider)(nil)
+	_ RawCaptureSourceProvider          = (*piProvider)(nil)
+)
 
 // Resolve only aliases supplied by the materializer, including equivalent
 // client path spellings. Cleaning is lexical and never probes the worker.
@@ -39,6 +42,7 @@ func (p *piProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield fu
 	}
 	ctx = withRawCaptureStreamingTraversal(ctx)
 	// Unlike ordinary discovery, a missing configured root cannot prove deletions.
+	var incomplete error
 	for index, root := range p.sources.roots {
 		if err := ctx.Err(); err != nil {
 			return false, err
@@ -51,11 +55,20 @@ func (p *piProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield fu
 			err = errors.New("raw capture root is not a directory")
 		}
 		if err != nil {
-			return false, incompleteDiscoveryError(p.Def.Type, "stat raw capture root", err)
+			incomplete = errors.Join(
+				incomplete,
+				incompleteDiscoveryError(p.Def.Type, "stat raw capture root", err),
+			)
+			continue
 		}
 		canonicalRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
-			return false, err
+			rootErr, isIncomplete := rawCaptureIncompleteRootError(p.Def.Type, root, err)
+			if !isIncomplete {
+				return false, errors.Join(incomplete, err)
+			}
+			incomplete = errors.Join(incomplete, rootErr)
+			continue
 		}
 		reader := ctx.Value(streamingDirectoryReaderContextKey{}).(streamingDirectoryReader)
 		active := map[string]bool{}
@@ -89,12 +102,16 @@ func (p *piProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield fu
 		})
 		if err != nil {
 			if cause, ok := discoveryYieldCause(err); ok {
-				return false, cause
+				return false, errors.Join(incomplete, cause)
 			}
-			return false, err
+			rootErr, isIncomplete := rawCaptureIncompleteRootError(p.Def.Type, root, err)
+			if !isIncomplete {
+				return false, errors.Join(incomplete, err)
+			}
+			incomplete = errors.Join(incomplete, rootErr)
 		}
 	}
-	return true, nil
+	return incomplete == nil, incomplete
 }
 
 func (p *piProvider) RawCaptureSourcesForChangedPath(ctx context.Context, req ChangedPathRequest) ([]SourceRef, error) {
@@ -110,13 +127,7 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 	if !ok || src.Root == "" || src.Path == "" {
 		return RawCapturePlan{}, invalidRawCapturePlan("pi source is not a discovered local transcript")
 	}
-	configured := false
-	for _, root := range p.sources.roots {
-		if root == src.Root {
-			configured = true
-			break
-		}
-	}
+	configured := slices.Contains(p.sources.roots, src.Root)
 	if !configured || !p.sources.pathAllowedByRoot(src.Root, src.Path) || !p.sources.pathIncluded(src.Root, src.Path) || !p.sources.sourcePathAllowedByDescendPath(src.Root, src.Path) {
 		return RawCapturePlan{}, invalidRawCapturePlan("pi source is outside its configured layout")
 	}

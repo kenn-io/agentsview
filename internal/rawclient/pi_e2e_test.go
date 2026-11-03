@@ -46,6 +46,7 @@ func TestPiRawSyncCaptureUploadDeriveLifecycle(t *testing.T) {
 			case parser.AgentPrimeAgent:
 				childRel = "child.jsonl"
 				parentRel = "parent-file.jsonl"
+			default:
 			}
 			child := filepath.Join(root, filepath.FromSlash(childRel))
 			parent := filepath.Join(root, filepath.FromSlash(parentRel))
@@ -172,7 +173,7 @@ func TestPiRawSyncCaptureUploadDeriveLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, rawcapture.StatusCaptured, grown.Status)
 			generation++
-			manifest = upload(generation)
+			upload(generation)
 			grownBase, found, err := checkpoint.CaptureBase(ctx, capture.Source)
 			require.NoError(t, err)
 			require.True(t, found)
