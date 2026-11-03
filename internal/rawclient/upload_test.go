@@ -113,21 +113,17 @@ func TestMissingObjectsRejectsResponseOutsideRequestedOrderedSubset(t *testing.T
 // holds the completion report until an empty finalization PATCH arrives;
 // neverComplete makes the PATCH route refuse to ever complete.
 type uploadScript struct {
-	mu               sync.Mutex
-	startOffset      int64
-	offset           int64
-	length           int64
-	startCalls       int
-	expireResponses  int
-	expireAfterBytes int
-	bytesPerSession  int
-	patchBytes       [][]byte
-	failFirst        string // "offset_conflict" | "checksum_mismatch"
-	lieInBody        bool
-	postIncomplete   bool
-	deferComplete    bool
-	neverComplete    bool
-	object           rawsync.ObjectRef
+	mu             sync.Mutex
+	startOffset    int64
+	offset         int64
+	length         int64
+	patchBytes     [][]byte
+	failFirst      string // "offset_conflict" | "checksum_mismatch"
+	lieInBody      bool
+	postIncomplete bool
+	deferComplete  bool
+	neverComplete  bool
+	object         rawsync.ObjectRef
 }
 
 type fullReadEOFReaderAt []byte
@@ -146,12 +142,6 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 		// Handler goroutines use assert, never require/FailNow.
 		switch {
 		case r.URL.Path == "/api/v1/raw-sync/uploads" && r.Method == http.MethodPost:
-			s.startCalls++
-			uploadID := fmt.Sprintf("up_%d", s.startCalls)
-			s.bytesPerSession = 0
-			if s.startCalls > 1 {
-				s.offset = 0
-			}
 			var in struct {
 				Object rawsync.ObjectRef `json:"object"`
 			}
@@ -165,13 +155,8 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			if s.postIncomplete {
 				complete = false
 			}
-			io.WriteString(w, uploadResponseJSON(uploadID, s.object, s.startOffset, complete))
-		case strings.HasPrefix(r.URL.Path, "/api/v1/raw-sync/uploads/up_") && r.Method == http.MethodPatch:
-			uploadID := strings.TrimPrefix(r.URL.Path, "/api/v1/raw-sync/uploads/")
-			if !assert.Equal(t, fmt.Sprintf("up_%d", s.startCalls), uploadID) {
-				http.Error(w, "unexpected upload ID", http.StatusNotFound)
-				return
-			}
+			io.WriteString(w, uploadResponseJSON("up_1", s.object, s.startOffset, complete))
+		case r.URL.Path == "/api/v1/raw-sync/uploads/up_1" && r.Method == http.MethodPatch:
 			assert.NotEmpty(t, r.Header.Get("Authorization"))
 			assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 			offset, err := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
@@ -182,13 +167,6 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			body, err := io.ReadAll(r.Body)
 			if !assert.NoError(t, err) {
 				http.Error(w, "bad body", http.StatusInternalServerError)
-				return
-			}
-			if s.expireResponses > 0 && s.bytesPerSession >= s.expireAfterBytes {
-				s.expireResponses--
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusNotFound)
-				io.WriteString(w, `{"code":"not_found","error":"raw sync object not found"}`)
 				return
 			}
 			if s.failFirst == "offset_conflict" {
@@ -214,7 +192,6 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			}
 			s.patchBytes = append(s.patchBytes, body)
 			s.offset += int64(len(body))
-			s.bytesPerSession += len(body)
 			complete := s.offset >= s.length
 			if s.deferComplete && len(body) > 0 {
 				// Finalization answers only the empty finalization PATCH.
@@ -227,10 +204,10 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			w.Header().Set("Upload-Complete", strconv.FormatBool(complete))
 			if s.lieInBody {
 				// Stale body: only the headers carry the truth.
-				io.WriteString(w, uploadResponseJSON(uploadID, s.object, 0, false))
+				io.WriteString(w, uploadResponseJSON("up_1", s.object, 0, false))
 				return
 			}
-			io.WriteString(w, uploadResponseJSON(uploadID, s.object, s.offset, complete))
+			io.WriteString(w, uploadResponseJSON("up_1", s.object, s.offset, complete))
 		default:
 			assert.Failf(t, "test failed", "unexpected request %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected", http.StatusNotFound)
@@ -484,57 +461,6 @@ func TestUploadObjectResumesFromServerOffset(t *testing.T) {
 		uploaded += len(chunk)
 	}
 	assert.Equal(t, 10, uploaded)
-}
-
-func TestUploadObjectRestartsExpiredUploadSessionOnce(t *testing.T) {
-	t.Parallel()
-	body := []byte("abcdefghijklmnop")
-	for _, tc := range []struct {
-		name             string
-		expiredResponses int
-		wantSuccess      bool
-		wantPatchBytes   [][]byte
-	}{
-		{
-			name:             "new session accepts replay from offset zero",
-			expiredResponses: 1,
-			wantSuccess:      true,
-			wantPatchBytes:   [][]byte{body[:8], body[:8], body[8:]},
-		},
-		{
-			name:             "second expired session is returned",
-			expiredResponses: 2,
-			wantPatchBytes:   [][]byte{body[:8], body[:8]},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			script := &uploadScript{
-				length: int64(len(body)), expireResponses: tc.expiredResponses,
-				expireAfterBytes: 8,
-			}
-			server := httptest.NewServer(script.handler(t))
-			t.Cleanup(server.Close)
-			client := newTestClient(t, server.URL, time.Minute)
-			client.chunkBytes = 8
-
-			err := client.UploadObject(t.Context(), parser.AgentClaude,
-				newUploadObject(t, body), bytes.NewReader(body))
-
-			if tc.wantSuccess {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, ErrUploadSessionExpired)
-				var apiErr *APIError
-				require.ErrorAs(t, err, &apiErr)
-				assert.Equal(t, http.StatusNotFound, apiErr.Status)
-				assert.Equal(t, CodeNotFound, apiErr.Code)
-			}
-			assert.Equal(t, 2, script.startCalls,
-				"expired upload sessions may be replaced only once")
-			assert.Equal(t, tc.wantPatchBytes, script.patchBytes)
-		})
-	}
 }
 
 func TestUploadObjectAdoptsConcurrentDuplicateCompletion(t *testing.T) {

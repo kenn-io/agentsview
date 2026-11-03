@@ -2,7 +2,6 @@ package rawclient_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -39,22 +38,16 @@ func TestRawClientCapturesAndAcknowledgesEmptyAndChunkBoundaryFiles(t *testing.T
 			root, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
 			body := bytes.Repeat([]byte("x"), length)
-			path := filepath.Join(root, "session.jsonl")
+			project := filepath.Join(root, "project")
+			require.NoError(t, os.Mkdir(project, 0o700))
+			path := filepath.Join(project, "session.jsonl")
 			require.NoError(t, os.WriteFile(path, body, 0o600))
-			provider := &emptyObjectCaptureProvider{
-				parser.ProviderBase{
-					Def: parser.AgentDef{Type: parser.AgentClaude},
-					Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
-						Support: parser.CapabilitySupported, Shape: parser.RawCaptureShapeFiles,
-						Append: parser.RawCaptureAppendOne, Snapshot: parser.RawCaptureSnapshotNone,
-					}},
-				},
-				parser.RawCapturePlan{
-					ConfiguredRoot: root, CaptureRoot: root, SourceKey: "session",
-					Entries: []parser.RawCaptureEntry{{Path: "session.jsonl", LocalPath: path, Appendable: true}},
-				},
-			}
-			capture, err := rawcapture.New(checkpoint).Capture(t.Context(), provider, parser.SourceRef{Provider: parser.AgentClaude, Key: "session"})
+			provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			capture, err := rawcapture.New(checkpoint).Capture(t.Context(), provider, sources[0])
 			require.NoError(t, err)
 			require.Equal(t, rawcapture.StatusCaptured, capture.Status)
 			queued, found, err := checkpoint.NextGeneration(t.Context())
@@ -180,17 +173,4 @@ func TestRawClientEmptyPatchFinalizationValidatesStagedBytes(t *testing.T) {
 			}
 		})
 	}
-}
-
-type emptyObjectCaptureProvider struct {
-	parser.ProviderBase
-	plan parser.RawCapturePlan
-}
-
-func (p *emptyObjectCaptureProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
-	panic("raw capture must not parse source bytes")
-}
-
-func (p *emptyObjectCaptureProvider) PlanRawCapture(context.Context, parser.SourceRef) (parser.RawCapturePlan, error) {
-	return p.plan, nil
 }

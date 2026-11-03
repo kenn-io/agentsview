@@ -148,6 +148,50 @@ func TestRawUploadHeadReportsAuthoritativeOffset(t *testing.T) {
 	assert.Equal(t, 1, uploads.statusCalls)
 }
 
+func TestRawUploadEmptyPatchFinalizesOnlyAtFullLength(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		body       []byte
+		offset     int64
+		appendErr  error
+		wantStatus int
+	}{
+		{name: "empty object", wantStatus: http.StatusOK},
+		{name: "full object", body: []byte("abc"), offset: 3, wantStatus: http.StatusOK},
+		{name: "short object", body: []byte("abc"), offset: 2, appendErr: rawsync.ErrInvalid, wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
+			const uploadID = "upl_AQEBAQEBAQEBAQEBAQEBAQ"
+			object := rawHTTPUploadObject(t, tc.body)
+			uploads := &rawSyncUploadsStub{
+				appendChunk: func(_ context.Context, gotIdentity rawsync.AuthIdentity, gotID string, offset int64, chunk []byte) (rawsync.UploadSession, error) {
+					assert.Equal(t, identity, gotIdentity)
+					assert.Equal(t, uploadID, gotID)
+					assert.Equal(t, tc.offset, offset)
+					assert.Empty(t, chunk)
+					return rawsync.UploadSession{
+						ID: uploadID, Identity: identity, Provider: parser.AgentCodex,
+						Object: object, Offset: tc.offset, Complete: tc.appendErr == nil,
+					}, tc.appendErr
+				},
+			}
+			srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
+			response := serveRawUploadChunk(t, srv, http.MethodPatch, "/api/v1/raw-sync/uploads/"+uploadID, "avdt_upload", tc.offset, nil)
+			assert.Equal(t, tc.wantStatus, response.Code, response.Body.String())
+			assert.Equal(t, 1, uploads.appendCalls, "empty requests must reach the upload service")
+			if tc.appendErr != nil {
+				var failure apiResponseError
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &failure))
+				assert.Equal(t, "invalid_request", failure.Code)
+			} else {
+				assert.Equal(t, "true", response.Header().Get(rawSyncUploadCompleteHeader))
+			}
+		})
+	}
+}
+
 func TestRawUploadPatchAppendsOpaqueChunkAndReturnsCompletion(t *testing.T) {
 	t.Parallel()
 
