@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bufio"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -820,14 +819,40 @@ func (read piHeaderLookup) ompParentID(childPath, parentReference, childID, stru
 // <parent>.jsonl. A delegated child's own children resolve to that child,
 // because the extension nests them below its session.jsonl stem.
 func (read piHeaderLookup) subagentParentID(childPath string) string {
-	if filepath.Base(childPath) != "session.jsonl" {
+	if !isPiSubagentPath(childPath) {
 		return ""
 	}
+	return read.transcriptID(piSubagentParentPath(childPath), false)
+}
+
+func isPiSubagentPath(childPath string) bool {
+	return filepath.Base(childPath) == "session.jsonl" &&
+		isPiSubagentRunDir(filepath.Base(filepath.Dir(childPath)))
+}
+
+func piSubagentParentPath(childPath string) string {
 	runDir := filepath.Dir(childPath)
-	if !isPiSubagentRunDir(filepath.Base(runDir)) {
-		return ""
+	return filepath.Dir(filepath.Dir(runDir)) + ".jsonl"
+}
+
+func piSubagentParentReferenceMatchesPath(
+	childPath, parentReference string,
+	resolve func(string) (string, bool),
+) bool {
+	if parentReference == "" || !isPiSubagentPath(childPath) {
+		return false
 	}
-	return read.transcriptID(filepath.Dir(filepath.Dir(runDir))+".jsonl", false)
+	parentPath := parentReference
+	if resolve != nil {
+		if local, ok := resolvePiStoredPath(resolve, parentReference); ok {
+			parentPath = local
+		}
+	}
+	parentPath = filepath.FromSlash(strings.ReplaceAll(parentPath, "\\", "/"))
+	if !filepath.IsAbs(parentPath) {
+		parentPath = filepath.Join(filepath.Dir(childPath), parentPath)
+	}
+	return strings.EqualFold(filepath.Clean(parentPath), filepath.Clean(piSubagentParentPath(childPath)))
 }
 
 // isPiSubagentRunDir reports whether name is a pi-subagents attempt directory
@@ -868,10 +893,14 @@ func readPiSessionHeader(path string) (string, bool, error) {
 }
 
 func scanPiSessionHeader(reader io.Reader) (string, bool, error) {
-	s := bufio.NewScanner(reader)
-	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
-	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
+	lr := newLineReader(reader, maxLineSize)
+	defer releaseLineReader(lr)
+	for {
+		line, ok := lr.next()
+		if !ok {
+			return "", false, lr.Err()
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -883,7 +912,6 @@ func scanPiSessionHeader(reader io.Reader) (string, bool, error) {
 		}
 		return line, true, nil
 	}
-	return "", false, s.Err()
 }
 
 // resolvePiLineage shares the exact parent lookup order between parsing and capture.
@@ -901,11 +929,13 @@ func resolvePiLineage(path, headerLine string, agent AgentType, idPrefix string,
 	// OMP parentSession may be an opaque raw ID or a transcript path;
 	// other Pi-family providers retain their existing path resolution.
 	var parentSessionID string
+	var explicitParentReference string
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
 		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent ||
 			agent == AgentOMO || agent == AgentStepCode) {
+		explicitParentReference = parentSession
 		// Client aliases must resolve before host-specific absolute-path checks.
 		if resolve != nil {
 			if local, ok := resolvePiStoredPath(resolve, parentSession); ok {
@@ -933,9 +963,15 @@ func resolvePiLineage(path, headerLine string, agent AgentType, idPrefix string,
 	var isPiSubagent bool
 	if agent == AgentPi || agent == AgentOMO {
 		if parentID := read.subagentParentID(path); parentID != "" {
+			isPiSubagent = true
 			if parentSessionID == "" {
 				parentSessionID = idPrefix + parentID
 			}
+		} else if parentSessionID != "" &&
+			piSubagentParentReferenceMatchesPath(path, explicitParentReference, resolve) {
+			// Case-insensitive source filesystems can materialize one spelling of
+			// the parent path. The explicit reference still identifies the
+			// structural parent even when the second spelling is unavailable.
 			isPiSubagent = true
 		}
 	}

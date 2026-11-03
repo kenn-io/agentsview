@@ -305,37 +305,3 @@ func TestPiRawCaptureSafeSymlinkProperty(t *testing.T) {
 		})
 	}
 }
-
-// Explicit and structural parent spellings denote one logical capture entry.
-func TestPiRawCaptureEquivalentStructuralParentProperty(t *testing.T) {
-	for _, agent := range []AgentType{AgentPi, AgentOMO} {
-		t.Run(string(agent), func(t *testing.T) {
-			hegel.Test(t, func(ht *hegel.T) {
-				id := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)
-				repeated := hegel.Draw(ht, hegel.Booleans())
-				root := t.TempDir()
-				parent := filepath.Join(root, "project", id+".jsonl")
-				child := filepath.Join(root, "project", id, "task/run-0/session.jsonl")
-				require.NoError(ht, os.MkdirAll(filepath.Dir(child), 0o700))
-				require.NoError(ht, os.WriteFile(parent, []byte(`{"type":"session","id":"parent-header"}`+"\n"), 0o600))
-				reference := root + string(filepath.Separator) + "project" + string(filepath.Separator) + "." + string(filepath.Separator) + id + ".jsonl"
-				if repeated {
-					reference = root + string(filepath.Separator) + "project" + string(filepath.Separator) + string(filepath.Separator) + id + ".jsonl"
-				}
-				require.NoError(ht, os.WriteFile(child, []byte(`{"type":"session","id":"child","parentSession":`+strconv.Quote(reference)+"}\n"), 0o600))
-				provider, _ := NewProvider(agent, ProviderConfig{Roots: []string{root}})
-				sources, err := RawCaptureSourcesForChangedPath(ht.Context(), provider, ChangedPathRequest{Path: child})
-				require.NoError(ht, err)
-				require.Len(ht, sources, 1)
-				plan, supported, err := ResolveRawCapturePlan(ht.Context(), provider, sources[0])
-				require.NoError(ht, err)
-				require.True(ht, supported)
-				var paths []string
-				for _, entry := range plan.Entries {
-					paths = append(paths, entry.Path)
-				}
-				assert.ElementsMatch(ht, []string{"project/" + id + ".jsonl", "project/" + id + "/task/run-0/session.jsonl"}, paths)
-			}, hegel.WithTestCases(1000))
-		})
-	}
-}

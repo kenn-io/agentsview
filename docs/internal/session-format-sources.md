@@ -2800,17 +2800,22 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
-- **Raw capture (2026-11-02):** Reverified against the pinned upstream
+- **Raw capture (2026-11-03):** Reverified against the pinned upstream
   sources below and synthetic capture/upload/hosted replay fixtures for
-  direct and recursive sessions, including pi-subagents directory parents.
+  direct and recursive sessions, including pi-subagents directory parents,
+  case-insensitive path aliases, and parents preceded by oversized lines.
   Raw plans preserve physical JSONL bytes, including malformed files, and
   include existing parent transcripts whose headers the parser consults.
   Dependencies must remain within the primary configured root. Hosted
-  replay uses captured parents and lexical project/skill metadata; it
-  does not read client working directories, skill files, or producer
-  blobs. Coverage: `TestPiRawCaptureFamily`,
-  `TestProviderParserHostedPiFamilyParents`, and
-  `TestPiRawSyncCaptureUploadDeriveLifecycle`.
+  replay uses captured parents and lexical project/skill metadata; it does
+  not read client working directories, skill files, or producer blobs.
+  Coverage: `TestPiRawCaptureFamily`,
+  `TestPiRawCaptureDeduplicatesEquivalentParentReads`,
+  `TestPiRawCaptureKeepsCaseDistinctHardLinks`,
+  `TestProviderParserHostedPiFamilyParents`,
+  `TestProviderParserHostedPiCaptureResolvesCaseInsensitiveParentAliases`,
+  `TestProviderParserHostedPiCaptureResolvesParentAfterOversizedLeadingLine`,
+  and `TestPiRawSyncCaptureUploadDeriveLifecycle`.
 - **Dialogue projection:** Reverified 2026-10-17 against Pi block-order and
   ingest fixtures. Text blocks retain quoted markers, thinking blocks populate
   `thinking_text`, and tool calls retain their separate inputs and results.
