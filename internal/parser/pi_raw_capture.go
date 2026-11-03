@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"os"
@@ -125,6 +124,56 @@ func (p *piProvider) RawCaptureSourcesForChangedPath(ctx context.Context, req Ch
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+// sameCaseInsensitivePathAlias reports whether two differently cased paths
+// resolve through one directory entry at every differing component. Requiring
+// one matching entry keeps distinct POSIX names separate even when they are
+// hard links to the same file.
+func sameCaseInsensitivePathAlias(root, first, second string) bool {
+	firstRel, err := filepath.Rel(root, first)
+	if err != nil {
+		return false
+	}
+	secondRel, err := filepath.Rel(root, second)
+	if err != nil {
+		return false
+	}
+	firstRel = filepath.ToSlash(firstRel)
+	secondRel = filepath.ToSlash(secondRel)
+	if firstRel == secondRel || !strings.EqualFold(firstRel, secondRel) {
+		return false
+	}
+	firstParts := strings.Split(firstRel, "/")
+	secondParts := strings.Split(secondRel, "/")
+	if len(firstParts) != len(secondParts) {
+		return false
+	}
+	current := root
+	for i, firstPart := range firstParts {
+		secondPart := secondParts[i]
+		if firstPart == secondPart {
+			current = filepath.Join(current, firstPart)
+			continue
+		}
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return false
+		}
+		matchedName := ""
+		matches := 0
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Name(), firstPart) && strings.EqualFold(entry.Name(), secondPart) {
+				matchedName = entry.Name()
+				matches++
+			}
+		}
+		if matches != 1 {
+			return false
+		}
+		current = filepath.Join(current, matchedName)
+	}
+	return true
+}
+
 func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawCapturePlan, error) {
 	if err := ctx.Err(); err != nil {
 		return RawCapturePlan{}, err
@@ -148,6 +197,11 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 	defer directory.Close()
 	plan := RawCapturePlan{ConfiguredRoot: src.Root, CaptureRoot: src.Root, SourceKey: source.Key}
 	seen := map[string]bool{}
+	type capturedFile struct {
+		path string
+		info os.FileInfo
+	}
+	var capturedFiles []capturedFile
 	var readErr error
 	read := piHeaderLookup(func(path string) (string, bool) {
 		if readErr != nil {
@@ -190,8 +244,25 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 		}
 		logical := filepath.ToSlash(rel)
 		if !seen[logical] {
-			seen[logical] = true
-			plan.Entries = append(plan.Entries, RawCaptureEntry{Path: logical, LocalPath: path, Appendable: true})
+			duplicate := -1
+			for i, captured := range capturedFiles {
+				capturedPath := filepath.Join(src.Root, filepath.FromSlash(captured.path))
+				if strings.EqualFold(captured.path, logical) && os.SameFile(captured.info, info) &&
+					sameCaseInsensitivePathAlias(src.Root, capturedPath, path) {
+					duplicate = i
+					break
+				}
+			}
+			if duplicate >= 0 {
+				// The first spelling is the explicit parent when present, or
+				// the structural parent otherwise. Hosted replay follows the
+				// same lookup order and can resolve that captured spelling.
+				seen[logical] = true
+			} else {
+				seen[logical] = true
+				plan.Entries = append(plan.Entries, RawCaptureEntry{Path: logical, LocalPath: path, Appendable: true})
+				capturedFiles = append(capturedFiles, capturedFile{path: logical, info: info})
+			}
 		}
 		// os.Root rejects absolute symlink targets. Open the already validated
 		// target beneath the root, retaining the original logical entry name.
@@ -207,7 +278,7 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 		}
 		defer file.Close()
 		header, valid, err := scanPiSessionHeader(file)
-		if err != nil && !errors.Is(err, bufio.ErrTooLong) {
+		if err != nil {
 			readErr = err
 		}
 		return header, valid

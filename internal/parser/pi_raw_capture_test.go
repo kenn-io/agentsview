@@ -372,3 +372,31 @@ func TestPiRawCaptureDeduplicatesEquivalentParentReads(t *testing.T) {
 		})
 	}
 }
+
+func TestPiRawCaptureKeepsCaseDistinctHardLinks(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "project", "Parent.jsonl")
+	structuralParent := filepath.Join(root, "project", "parent.jsonl")
+	writePiRawFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
+	if err := os.Link(parent, structuralParent); err != nil {
+		t.Skip("requires case-sensitive paths and hard-link support")
+	}
+	child := filepath.Join(root, "project", "parent", "task", "run-0", "session.jsonl")
+	writePiRawFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+	provider, _ := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	sources, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: child})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
+	require.NoError(t, err)
+	require.True(t, supported)
+	var paths []string
+	for _, entry := range plan.Entries {
+		paths = append(paths, entry.Path)
+	}
+	assert.ElementsMatch(t, []string{
+		"project/Parent.jsonl",
+		"project/parent.jsonl",
+		"project/parent/task/run-0/session.jsonl",
+	}, paths)
+}

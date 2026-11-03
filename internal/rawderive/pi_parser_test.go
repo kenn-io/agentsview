@@ -22,7 +22,17 @@ func writePiDeriveFixture(t *testing.T, path, body string) {
 
 func derivePiManifest(t *testing.T, manifest rawsync.CanonicalManifest, objects map[rawsync.ObjectRef][]byte) ParsedManifest {
 	t.Helper()
-	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+	return derivePiManifestWithMaxTotalBytes(t, manifest, objects, 1<<20)
+}
+
+func derivePiManifestWithMaxTotalBytes(
+	t *testing.T,
+	manifest rawsync.CanonicalManifest,
+	objects map[rawsync.ObjectRef][]byte,
+	maxTotalBytes int64,
+) ParsedManifest {
+	t.Helper()
+	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: maxTotalBytes}).Materialize(t.Context(), manifest)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
@@ -146,22 +156,6 @@ func TestProviderParserHostedPiMetadataStaysLexical(t *testing.T) {
 	assert.Empty(t, got.Messages[0].ToolCalls[0].SkillName)
 }
 
-func TestProviderParserHostedPiIgnoresCompanionLineage(t *testing.T) {
-	root := t.TempDir()
-	child := filepath.Join(root, "project/child.jsonl")
-	writePiDeriveFixture(t, filepath.Join(root, "parent.jsonl"), `{"type":"session","id":"parent-header","parentSession":"project"}`+"\n")
-	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(filepath.Join(root, "parent.jsonl"))+"}\n")
-	provider, _ := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{root}})
-	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
-	hosted := derivePiManifest(t, manifest, objects)
-	require.Len(t, hosted.Outcome.Results, 1)
-	assert.Equal(t, "pi:child", hosted.Outcome.Results[0].Result.Session.ID)
-	assert.Equal(t, "pi:parent-header", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
-}
-
 func TestProviderParserHostedPiNormalizedAbsoluteParent(t *testing.T) {
 	root := t.TempDir()
 	child := filepath.Join(root, "project/child.jsonl")
@@ -204,4 +198,94 @@ func TestProviderParserHostedPiIgnoresSameSuffixCompanion(t *testing.T) {
 			assert.Equal(t, provider.Definition().IDPrefix+"parent-header", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
 		})
 	}
+}
+
+func TestProviderParserHostedPiCaptureResolvesCaseInsensitiveParentAliases(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "project", "Parent.jsonl")
+	structuralParent := filepath.Join(root, "project", "parent.jsonl")
+	writePiDeriveFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
+	parentInfo, err := os.Stat(parent)
+	require.NoError(t, err)
+	structuralInfo, err := os.Stat(structuralParent)
+	if err != nil || !os.SameFile(parentInfo, structuralInfo) {
+		t.Skip("requires a case-insensitive filesystem")
+	}
+
+	child := filepath.Join(root, "project", "parent", "task", "run-0", "session.jsonl")
+	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, sources[0])
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, plan.Entries, 2, "the child and its single physical parent must each be captured once")
+
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
+	require.Len(t, manifest.Manifest.Entries, 2)
+	require.NoError(t, os.RemoveAll(root))
+	hosted := derivePiManifest(t, manifest, objects)
+	require.Len(t, hosted.Outcome.Results, 1)
+	got := hosted.Outcome.Results[0].Result.Session
+	assert.Equal(t, "pi:parent-header", got.ParentSessionID)
+	assert.Equal(t, parser.RelSubagent, got.RelationshipType)
+}
+
+func TestProviderParserHostedPiKeepsHeaderForkOutsideSubagentRuns(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "encoded-cwd", "parent.jsonl")
+	child := filepath.Join(root, "custom", "run-abc", "run-0", "session.jsonl")
+	writePiDeriveFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
+	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
+	require.NoError(t, os.RemoveAll(root))
+	hosted := derivePiManifest(t, manifest, objects)
+	require.Len(t, hosted.Outcome.Results, 1)
+	got := hosted.Outcome.Results[0].Result.Session
+	assert.Equal(t, "pi:parent-header", got.ParentSessionID)
+	assert.Equal(t, parser.RelFork, got.RelationshipType)
+}
+
+func TestProviderParserHostedPiCaptureResolvesParentAfterOversizedLeadingLine(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "project", "parent.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(parent), 0o700))
+	file, err := os.Create(parent)
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate((64<<20)+1))
+	_, err = file.Seek(0, 2)
+	require.NoError(t, err)
+	_, err = file.WriteString("\n" + `{"type":"session","id":"stored-parent-header"}` + "\n")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	child := filepath.Join(root, "project", "child.jsonl")
+	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: child})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, local.Results, 1)
+	assert.Equal(t, "pi:stored-parent-header", local.Results[0].Result.Session.ParentSessionID)
+
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
+	require.Len(t, manifest.Manifest.Entries, 2, "the referenced parent must remain in the capture manifest")
+	require.NoError(t, os.RemoveAll(root))
+	hosted := derivePiManifestWithMaxTotalBytes(t, manifest, objects, 128<<20)
+	require.Len(t, hosted.Outcome.Results, 1)
+	assert.Equal(t, "pi:stored-parent-header", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
 }
