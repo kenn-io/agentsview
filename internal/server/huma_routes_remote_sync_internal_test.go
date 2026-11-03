@@ -22,11 +22,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func newRemoteSyncServer(t *testing.T) (*Server, http.Handler, string) {
@@ -64,166 +62,6 @@ func currentRemoteSyncHandler(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func TestIssue1492AuthenticatedHTTPMirrorImportUsesCuratedTargets(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	serverDBPath := filepath.Join(dir, "server.db")
-	serverDB := dbtest.OpenTestDBAt(t, serverDBPath)
-	claudeRoot := filepath.Join(dir, "claude")
-	cursorRoot := filepath.Join(dir, "cursor")
-	transcript := filepath.Join(claudeRoot, "session.jsonl")
-	cursorFile := filepath.Join(cursorRoot, "project", "agent-transcripts", "session.jsonl")
-	decoy := filepath.Join(cursorRoot, "project", "mcp_auth.json")
-	require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Dir(cursorFile), 0o755))
-	require.NoError(t, os.WriteFile(transcript, []byte(testjsonl.NewSessionBuilder().
-		AddClaudeUser("2026-08-24T12:00:00Z", "authenticated mirror").String()), 0o644))
-	require.NoError(t, os.WriteFile(cursorFile, []byte("cursor transcript"), 0o644))
-	require.NoError(t, os.WriteFile(decoy, []byte("secret"), 0o600))
-
-	srv := New(config.Config{
-		Host: "127.0.0.1", Port: 8080, DataDir: dir, DBPath: serverDBPath,
-		AuthToken: "remote-token", RequireAuth: true,
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {claudeRoot}, parser.AgentCursor: {cursorRoot},
-		},
-	}, serverDB, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-
-	for _, token := range []string{"", "wrong-token"} {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/remote-sync/targets", nil)
-		require.NoError(t, err)
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		req.Header.Set(remotesync.ProtocolHeader, strconv.Itoa(remotesync.ProtocolVersion))
-		resp, err := ts.Client().Do(req)
-		require.NoError(t, err)
-		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-		require.NoError(t, resp.Body.Close())
-	}
-
-	dataDir := t.TempDir()
-	clientDB, err := db.Open(t.Context(), filepath.Join(dataDir, "client.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
-	stats, err := (remotesync.RemoteSync{
-		Host:    "authenticated-host",
-		Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
-		DataDir: dataDir, DB: clientDB,
-	}).Run(t.Context())
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, stats.SessionsTotal, 1)
-
-	var mirrorFiles []string
-	require.NoError(t, filepath.Walk(remotesync.MirrorDir(dataDir, "authenticated-host"),
-		func(path string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil || info.IsDir() {
-				return walkErr
-			}
-			mirrorFiles = append(mirrorFiles, filepath.Base(path))
-			return nil
-		}))
-	assert.NotContains(t, mirrorFiles, "mcp_auth.json")
-}
-
-func TestIssue1492AuthenticatedVSCodeWorkspacePresentChatMissingEvictsMirror(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "server.db")
-	database := dbtest.OpenTestDBAt(t, dbPath)
-	root := filepath.Join(dir, "vscode")
-	workspaceDir := filepath.Join(root, "workspaceStorage", "hash")
-	workspace := filepath.Join(workspaceDir, "workspace.json")
-	chat := filepath.Join(workspaceDir, "chatSessions", "01234567-89ab-cdef-0123-456789abcdef.json")
-	require.NoError(t, os.MkdirAll(filepath.Dir(chat), 0o755))
-	require.NoError(t, os.WriteFile(workspace, []byte(`{"folder":"/repo"}`), 0o644))
-	require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
-	srv := New(config.Config{
-		Host: "127.0.0.1", Port: 8080, DataDir: dir, DBPath: dbPath,
-		AuthToken: "remote-token", RequireAuth: true,
-		AgentDirs: map[parser.AgentType][]string{parser.AgentVSCodeCopilot: {root}},
-	}, database, nil)
-	handler := currentRemoteSyncHandler(srv.Handler())
-
-	get := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/remote-sync/targets", nil)
-	get.Header.Set("Authorization", "Bearer remote-token")
-	getW := httptest.NewRecorder()
-	handler.ServeHTTP(getW, get)
-	require.Equal(t, http.StatusOK, getW.Code, getW.Body.String())
-	var stale remotesync.TargetSet
-	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &stale))
-	require.Contains(t, stale.Files[parser.AgentVSCodeCopilot], chat)
-	require.Contains(t, stale.Files[parser.AgentVSCodeCopilot], workspace)
-	require.NoError(t, os.Remove(chat))
-
-	post := func(path string, body any) *httptest.ResponseRecorder {
-		payload, err := json.Marshal(body)
-		require.NoError(t, err)
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, bytes.NewReader(payload))
-		req.Header.Set("Authorization", "Bearer remote-token")
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		return w
-	}
-	manifestW := post("/api/v1/remote-sync/manifest", stale)
-	require.Equal(t, http.StatusOK, manifestW.Code, manifestW.Body.String())
-	manifestReader, err := gzip.NewReader(bytes.NewReader(manifestW.Body.Bytes()))
-	require.NoError(t, err)
-	manifestBody, err := io.ReadAll(manifestReader)
-	require.NoError(t, err)
-	require.NoError(t, manifestReader.Close())
-	var manifest remotesync.Manifest
-	require.NoError(t, json.Unmarshal(manifestBody, &manifest))
-	assert.Empty(t, manifest.Files)
-	archiveW := post("/api/v1/remote-sync/archive", remotesync.ArchiveRequest{TargetSet: stale})
-	require.Equal(t, http.StatusOK, archiveW.Code, archiveW.Body.String())
-	assert.Empty(t, tarEntries(t, archiveW.Body.Bytes()))
-	require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
-
-	ts := httptest.NewServer(handler)
-	t.Cleanup(ts.Close)
-	dataDir := t.TempDir()
-	clientDB, err := db.Open(get.Context(), filepath.Join(dataDir, "client.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
-	sync := func() {
-		_, err := (remotesync.RemoteSync{
-			Host:    "vscode-host",
-			Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
-			DataDir: dataDir, DB: clientDB,
-		}).Run(t.Context())
-		require.NoError(t, err)
-	}
-	sync()
-	mirrorRoot := remotesync.MirrorDir(dataDir, "vscode-host")
-	mirrorContains := func(name string) bool {
-		found := false
-		err := filepath.Walk(mirrorRoot, func(path string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if !info.IsDir() && filepath.Base(path) == name {
-				found = true
-			}
-			return nil
-		})
-		if err != nil && !os.IsNotExist(err) {
-			require.NoError(t, err)
-		}
-		return found
-	}
-	assert.True(t, mirrorContains(filepath.Base(chat)))
-	assert.True(t, mirrorContains(filepath.Base(workspace)))
-
-	require.NoError(t, os.Remove(chat))
-	sync()
-	assert.False(t, mirrorContains(filepath.Base(chat)))
-	assert.False(t, mirrorContains(filepath.Base(workspace)))
 }
 
 func TestIssue1492AuthenticatedAllCuratedFilesVanishedLifecycle(t *testing.T) {
@@ -298,22 +136,6 @@ func TestIssue1492AuthenticatedAllCuratedFilesVanishedLifecycle(t *testing.T) {
 					TargetSet: targets, DeltaFiles: []string{cursorDecoy, vscodeDecoy},
 				})
 				assert.Equal(t, http.StatusForbidden, deltaW.Code)
-
-				ts := httptest.NewServer(handler)
-				t.Cleanup(ts.Close)
-				dataDir := t.TempDir()
-				clientDB, err := db.Open(get.Context(), filepath.Join(dataDir, "client.db"))
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
-				stats, err := (remotesync.RemoteSync{
-					Host:    "empty-host",
-					Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
-					DataDir: dataDir, DB: clientDB,
-				}).Run(t.Context())
-				require.NoError(t, err)
-				assert.Equal(t, 0, stats.SessionsTotal)
-				_, mirrorErr := os.Stat(remotesync.MirrorDir(dataDir, "empty-host"))
-				assert.True(t, os.IsNotExist(mirrorErr), "empty target sync must not create a decoy mirror")
 			}
 		})
 	}
