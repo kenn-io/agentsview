@@ -6,9 +6,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
+func TestListenAddrDefaultsUnsetHostToLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		host string
+		want string
+	}{
+		{"", "127.0.0.1:8080"},
+		{"127.0.0.1", "127.0.0.1:8080"},
+		{"0.0.0.0", "0.0.0.0:8080"},
+		{"::", "[::]:8080"},
+		{"::1", "[::1]:8080"},
+	} {
+		require.Equal(t, tc.want, listenAddr(tc.host, 8080),
+			"bind address for host %q", tc.host)
+	}
+}
+
 func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) {
+	testutil.RequireWildcardListen(t)
 	occupiedListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
 	require.NoError(t, err, "bind IPv4 wildcard")
 	defer occupiedListener.Close()

@@ -1422,7 +1422,7 @@ func localInterfaceIPs() map[string]bool {
 
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe() error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+	addr := listenAddr(s.cfg.Host, s.cfg.Port)
 	listenCtx := context.Background()
 	if s.baseCtx != nil {
 		listenCtx = s.baseCtx
@@ -1589,6 +1589,22 @@ type listenProbe struct {
 
 func isWildcardListenHost(host string) bool {
 	return host == "" || host == "0.0.0.0" || host == "::"
+}
+
+// listenAddr returns the bind address for the configured host and port.
+//
+// An unset host means the Config was assembled in code rather than from
+// flags, the environment, or the config file, which all default to
+// 127.0.0.1. Binding every interface is an explicit opt-in
+// (--host 0.0.0.0), so an unset host listens on loopback: exposing the
+// server on the LAN should never be an accident, and a wildcard bind also
+// makes the host firewall prompt for the binary (on Windows, once per
+// program path, so every rebuilt test binary asks again).
+func listenAddr(host string, port int) string {
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // listenProbes returns the bind attempts that must all succeed before a

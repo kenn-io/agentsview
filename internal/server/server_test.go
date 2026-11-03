@@ -41,6 +41,7 @@ import (
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // Timestamp constants for test data.
@@ -5508,6 +5509,7 @@ func TestFindAvailablePortWildcardSkipsIPv4OccupiedPort(t *testing.T) {
 	// A dual-stack wildcard listen can succeed on IPv6 while an unrelated
 	// process still owns the port on IPv4 (observed on macOS), so wildcard
 	// availability must check the IPv4 wildcard address on its own.
+	testutil.RequireWildcardListen(t)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
 	require.NoError(t, err, "bind IPv4 wildcard")
 	defer ln.Close()
@@ -5521,6 +5523,7 @@ func TestFindAvailablePortWildcardSkipsIPv4OccupiedPort(t *testing.T) {
 }
 
 func TestFindAvailablePortWildcardSkipsIPv6OccupiedPort(t *testing.T) {
+	testutil.RequireWildcardListen(t)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::]:0")
 	if err != nil {
 		t.Skipf("IPv6 unavailable: %v", err)
