@@ -469,10 +469,11 @@ test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
 test-postgres-core-ci:
 	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci
 
-# These packages drop schemas that can own database-wide extensions, so their
-# cleanup must finish before another package starts using the same database.
+# Each process gets its own database because tests drop schemas that own
+# database-wide extensions. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast,./internal/postgres/... ./internal/activity/...) -p 1 -tags "fts5,pgtest" -skip '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
+	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-service,./internal/service) -tags "fts5,pgtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
 test-postgres-core-heavy-ci: pricing-snapshot ensure-embed-dir

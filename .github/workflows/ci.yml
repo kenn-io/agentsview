@@ -1016,11 +1016,13 @@ jobs:
       # Suite names are fixed by the Makefile CI targets. Each leg uploads
       # only the suites it ran.
       - name: Upload gotestsum postgres-core-fast results
-        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-fast-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-fast-reruns.txt', 'gotestsum/postgres-core-fast-activity-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-postgres-core-fast-attempt-${{ github.run_attempt }}
-          path: gotestsum/postgres-core-fast.json
+          path: |
+            gotestsum/postgres-core-fast.json
+            gotestsum/postgres-core-fast-activity.json
           retention-days: 14
           if-no-files-found: ignore
 
