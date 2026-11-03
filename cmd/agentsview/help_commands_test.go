@@ -29,7 +29,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	help, err := executeCommand(root, "--help")
 	require.NoError(t, err)
 	sources := map[string]string{"root help": help}
-	var sessionGetHelp string
 	walkHelpCommands(root, func(cmd *cobra.Command) {
 		sources[cmd.CommandPath()] = cmd.Long
 		if cmd.Parent() == nil {
@@ -45,18 +44,7 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 		args := append(strings.Fields(path), "--help")
 		rendered, err := executeCommand(newRootCommand(), args...)
 		require.NoError(t, err, "%s help", cmd.CommandPath())
-		if cmd.CommandPath() == "agentsview session get" {
-			sessionGetHelp = rendered
-		}
 		assert.Contains(t, rendered, cmd.CommandPath())
-		if help, ok := agentCommandHelp[path]; ok {
-			renderedText := strings.Join(strings.Fields(rendered), " ")
-			for _, configured := range []string{help.long, help.extra} {
-				if configured != "" {
-					assert.Contains(t, renderedText, strings.Join(strings.Fields(configured), " "), "%s help must render its configured description", cmd.CommandPath())
-				}
-			}
-		}
 		if slices.Contains(agentHelpCoreCommands, path) {
 			assert.NotContains(t, rendered, "Deprecated:", "%s is a canonical command", cmd.CommandPath())
 		}
@@ -69,15 +57,6 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 			require.NoError(t, validateCommandExamples(cmd.CommandPath(), cmd.Example))
 		}
 	})
-	require.NotEmpty(t, sessionGetHelp, "session get help must be rendered")
-	for path := range agentCommandHelp {
-		commandPath := "agentsview " + path
-		assert.Contains(t, sources, commandPath)
-		cmd, rest, err := root.Find(strings.Fields(path))
-		require.NoError(t, err)
-		require.Empty(t, rest)
-		require.NotEmpty(t, cmd.Example, "%s needs a usable invocation", commandPath)
-	}
 	for name, source := range sources {
 		commands, err := advertisedHelpCommands(source)
 		require.NoError(t, err, name)

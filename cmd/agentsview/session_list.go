@@ -47,8 +47,20 @@ func newSessionListCommand() *cobra.Command {
 		resume, active                          bool
 	)
 	cmd := &cobra.Command{
-		Use:          "list",
-		Short:        "List sessions with filters",
+		Use:   "list",
+		Short: "List sessions with filters",
+		Long: "Find sessions with metadata filters and stable cursor pagination. " +
+			"One-shot, automated, and child sessions are excluded by default; use the corresponding --include-* flags to include them. " +
+			"--since accepts 12h, 14d, 2w, 3m (months), 1y, or YYYY-MM-DD; --active-since accepts RFC3339 instead. " +
+			"Choose comma-separated --sort keys from the flag help, optionally with :asc or :desc. " +
+			"JSON includes full session IDs and a next_cursor. " +
+			"The cursor does not retain filters: repeat the same backend, filters, and sort (including --reverse) on every page. " +
+			"Changing the sort rejects the cursor; changing filters changes the selection. " +
+			"Machine filters accept exact IDs, aliases, or a unique whole display name.",
+		Example: "  agentsview session list --since 2026-10-01 --project example-project --sort recent --limit 20 --json\n" +
+			"  agentsview session list --since 2026-10-01 --project example-project --sort recent --limit 20 --cursor <cursor> --json\n" +
+			"  agentsview session list --agent codex --sort messages:desc --limit 20 --json\n" +
+			"  agentsview session list --agent codex --sort messages:desc --limit 20 --cursor <cursor> --json",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

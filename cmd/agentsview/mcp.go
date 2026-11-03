@@ -63,6 +63,9 @@ Add to your MCP client config (e.g. Claude Desktop):
       }
     }
   }`,
+		Example: "  agentsview mcp\n" +
+			"  agentsview mcp --profile memory\n" +
+			"  agentsview mcp status",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

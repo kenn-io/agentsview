@@ -155,6 +155,8 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			"Stopping it also stops the web UI and sync. These commands also manage\n" +
 			"a writable server started by `serve` or automatically by a CLI command.\n\n" +
 			"Read-only `replica pg serve` and `replica duckdb serve` processes are managed separately.",
+		Example: "  agentsview daemon status\n" +
+			"  agentsview daemon start",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -162,6 +164,10 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "start", Short: "Start the background server",
+			Long: "Start the writable server in the background using saved configuration, without opening a browser. " +
+				"A compatible running daemon is reused. " +
+				"This is also the explicit startup step when automatic startup is disabled.",
+			Example:      "  agentsview daemon start",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				ctx, stop := signal.NotifyContext(
@@ -173,6 +179,10 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 		},
 		&cobra.Command{
 			Use: "status", Short: "Show background server status",
+			Long: "Print the writable daemon's status and URL for this data directory. " +
+				"No running daemon is a successful status query with human output, not a failing health check. " +
+				"This command has no --json flag.",
+			Example:      "  agentsview daemon status",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				return runDaemonStatus(cmd.OutOrStdout(), clientDeps)
@@ -180,6 +190,9 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 		},
 		&cobra.Command{
 			Use: "stop", Short: "Stop the background server",
+			Long: "Stop only the writable daemon, including its web UI, source sync, and file watchers. " +
+				"Read-only PostgreSQL and DuckDB servers are left running.",
+			Example:      "  agentsview daemon stop",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				return runDaemonStop(cmd.OutOrStdout(), clientDeps)
@@ -187,6 +200,9 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 		},
 		&cobra.Command{
 			Use: "restart", Short: "Restart the background server",
+			Long: "Restart the writable background server using the saved configuration. " +
+				"Use this after changing settings or when a running daemon needs replacement; read-only mirror servers are separate.",
+			Example:      "  agentsview daemon restart",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				ctx, stop := signal.NotifyContext(

@@ -55,8 +55,11 @@ var embeddingsDaemonHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 func newEmbeddingsCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "embeddings",
-		Short:        "Manage the semantic search embedding index",
+		Use:   "embeddings",
+		Short: "Manage the semantic search embedding index",
+		Long: "Build and manage the embedding generations used by semantic and hybrid search. " +
+			"Configure an embedding provider and the intended storage backend before building. " +
+			"Listing inspects generations; activation and retirement control which generation serves queries.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

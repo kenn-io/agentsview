@@ -30,8 +30,14 @@ func newStatsCommand() *cobra.Command {
 		includeGitOutcomes, includeGHOutcomes bool
 	)
 	cmd := &cobra.Command{
-		Use:          "stats",
-		Short:        "Window-scoped workspace analytics (v1 schema)",
+		Use:   "stats",
+		Short: "Window-scoped workspace analytics (v1 schema)",
+		Long: "Summarize sessions, activity, and outcomes within a bounded time window. " +
+			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339; --since defaults to 28d. " +
+			"Use an IANA --timezone for calendar grouping. " +
+			"One-shot and automated sessions are excluded unless included explicitly. " +
+			"--include-project and --exclude-project are repeatable. " +
+			"GitHub outcome enrichment is opt-in and may contact GitHub.",
 		GroupID:      groupData,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,

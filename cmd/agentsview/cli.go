@@ -150,8 +150,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newRemoteSyncCommand())
 	groupCommands(root)
 
-	applyCLIHelp(root)
-
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		if cmd == root {
@@ -185,6 +183,8 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 			"If a compatible server is already running, serve reports its URL and exits\n" +
 			"with status 1 so a service manager retries; --background exits with status 0.\n" +
 			"Stopping the server also stops its background sync and file watchers.",
+		Example: "  agentsview serve --no-browser\n" +
+			"  agentsview serve --background",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -290,8 +290,11 @@ func runServeDataVersionCheck(ctx context.Context, cfg config.Config) error {
 
 func newServeStatusCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:          "status",
-		Short:        "Show whether a server is running and where to reach it",
+		Use:   "status",
+		Short: "Show whether a server is running and where to reach it",
+		Long: "Show whether a server for this data directory is running and print its URL. " +
+			"The result is human text, including when no server is running; there is no JSON status flag.",
+		Example:      "  agentsview serve status",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -308,6 +311,7 @@ func newServeStopCommand() *cobra.Command {
 			"by `agentsview daemon start` or automatically by a CLI command.\n\n" +
 			"This also stops read-only PostgreSQL and DuckDB servers for the data\n" +
 			"directory. Use `agentsview daemon stop` to stop only the writable server.",
+		Example:      "  agentsview serve stop",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -324,6 +328,7 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 			"from config.toml.\n\n" +
 			"Unlike `agentsview serve stop`, this command intentionally leaves " +
 			"read-only PostgreSQL and DuckDB servers running.",
+		Example:      "  agentsview serve restart",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -335,8 +340,13 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 func newOpenAPICommand() *cobra.Command {
 	var yamlOutput bool
 	cmd := &cobra.Command{
-		Use:          "openapi",
-		Short:        "Print OpenAPI 3.1 schema",
+		Use:   "openapi",
+		Short: "Print OpenAPI 3.1 schema",
+		Long: "Print the HTTP API's OpenAPI 3.1 schema from this binary without contacting a running server. " +
+			"JSON is the default; --yaml selects YAML. " +
+			"Use this to inspect API operations and response shapes.",
+		Example: "  agentsview openapi > openapi.json\n" +
+			"  agentsview openapi --yaml > openapi.yaml",
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -487,8 +497,13 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 func newUpdateCommand() *cobra.Command {
 	var cfg UpdateConfig
 	cmd := &cobra.Command{
-		Use:          "update",
-		Short:        "Check for and install updates",
+		Use:   "update",
+		Short: "Check for and install updates",
+		Long: "Check for a newer release and, for supported direct installations, install it after confirmation. " +
+			"--check only reports availability. " +
+			"Package-managed installations must be upgraded through their package manager.",
+		Example: "  agentsview update --check\n" +
+			"  agentsview update",
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -524,8 +539,12 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:          "import --type <type> <path> | import --type claude-ai --sync",
-		Short:        "Import conversations",
+		Use:   "import --type <type> <path> | import --type claude-ai --sync",
+		Short: "Import conversations",
+		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
+			"Supported formats are claude-ai, chatgpt, and gemini-apps. " +
+			"Claude.ai can instead use --type claude-ai --sync with the configured Chrome integration. " +
+			"--replace grants replacement permission only for the named archived sessions.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -553,8 +572,10 @@ func newImportCommand() *cobra.Command {
 
 func newProjectsCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "projects",
-		Short:        "List projects with session counts",
+		Use:   "projects",
+		Short: "List projects with session counts",
+		Long: "List archived projects and their session counts. " +
+			"Use a returned project name with session list --project or analytics filters to narrow later queries.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -574,7 +595,9 @@ func newHealthCommand() *cobra.Command {
 		Long: "Without arguments, lists the most recent " +
 			"sessions with grade and outcome columns. " +
 			"With a session ID, prints detailed signal " +
-			"counts for that session.",
+			"counts for that session.\n\n" +
+			"The list is bounded by --limit and includes one-shot and automated sessions. " +
+			"Use a full ID from session list when a displayed short ID is ambiguous.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
@@ -610,8 +633,16 @@ func newUsageCommand() *cobra.Command {
 func newUsageDailyCommand() *cobra.Command {
 	var cfg UsageDailyConfig
 	cmd := &cobra.Command{
-		Use:          "daily",
-		Short:        "Daily cost summary",
+		Use:   "daily",
+		Short: "Daily cost summary",
+		Long: "Summarize daily token usage and cost, optionally broken down by model. " +
+			"The default window is the last 30 days; --all removes that default. " +
+			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339; a relative --since is measured back from --until when supplied. " +
+			"Use an IANA --timezone for date boundaries. " +
+			"--no-sync skips on-demand source refresh; --offline reads the local archive with fallback pricing. " +
+			"Plan-only sessions and partly captured sessions may be reported separately from priced token totals.",
+		Example: "  agentsview report usage daily --since 28d --breakdown --json\n" +
+			"  agentsview report usage daily --since 2026-10-01 --until 2026-10-07 --timezone UTC --offline --json",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -637,8 +668,13 @@ func newUsageDailyCommand() *cobra.Command {
 func newUsageStatuslineCommand() *cobra.Command {
 	var cfg UsageStatuslineConfig
 	cmd := &cobra.Command{
-		Use:          "statusline",
-		Short:        "One-line cost summary for today",
+		Use:   "statusline",
+		Short: "One-line cost summary for today",
+		Long: "Print today's cost in one short line, or a JSON document with the date and exact microdollar amount. " +
+			"Today follows the local system timezone. " +
+			"--agent narrows the total; --no-sync skips refresh and --offline reads the local archive with fallback pricing.",
+		Example: "  agentsview report usage statusline\n" +
+			"  agentsview report usage statusline --agent codex --json",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -674,8 +710,14 @@ func newActivityCommand() *cobra.Command {
 func newActivityReportCommand() *cobra.Command {
 	var cfg ActivityReportConfig
 	cmd := &cobra.Command{
-		Use:          "report",
-		Short:        "Activity report over a date range",
+		Use:   "report",
+		Short: "Activity report over a date range",
+		Long: "Report activity totals, peak concurrency, breakdowns, and a page of sessions. " +
+			"Use --preset day, week, or month with an optional --date YYYY-MM-DD; custom ranges require --preset custom and RFC3339 --from/--to bounds. " +
+			"Use an IANA --timezone and --bucket 5m, 15m, 1h, 1d, or 1w. " +
+			"JSON includes the detailed bucket timeline and session continuation values. " +
+			"For daemon paging, keep the returned report ID and cursor together so subsequent pages use the same report generation. " +
+			"--offline reads local archived data with fallback pricing.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -717,20 +759,32 @@ func newActivityReportCommand() *cobra.Command {
 }
 
 func newPGCommand() *cobra.Command {
-	return newReplicaCommand(
+	cmd := newReplicaCommand(
 		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
 		newPGHostedProvisionCommand(), newPGRawReparseCommand(),
 	)
+	cmd.Long = "Mirror archived SQLite data to PostgreSQL and serve the mirror through a read-only API. " +
+		"Configure a PostgreSQL target before pushing or inspecting status. " +
+		"Hosted provisioning, vector maintenance, and the optional push service have separate commands; " +
+		"mirror reads do not ingest local provider sources."
+	return cmd
 }
 
 func newClickHouseCommand() *cobra.Command {
-	return newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
+	cmd := newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
+	cmd.Long = "Mirror local archived data to ClickHouse and serve read-only queries against that mirror. " +
+		"Configure a ClickHouse target before push, status, or serving. " +
+		"The optional service keeps pushing local changes in the background."
+	return cmd
 }
 
 func newDuckDBCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "duckdb",
-		Short:        "DuckDB sync and serve commands",
+		Use:   "duckdb",
+		Short: "DuckDB sync and serve commands",
+		Long: "Build a disposable DuckDB mirror from the persistent SQLite archive, inspect sync status, or serve read-only queries from that mirror. " +
+			"Quack exposes a DuckDB file over its separate remote protocol. " +
+			"Configure the intended path or connection before using these commands.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -804,8 +858,11 @@ func newDuckDBServeCommand() *cobra.Command {
 
 func newDuckDBQuackCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "quack",
-		Short:        "Quack remote protocol commands",
+		Use:   "quack",
+		Short: "Quack remote protocol commands",
+		Long: "Expose a local DuckDB mirror through the Quack remote protocol. " +
+			"This listener is separate from the AgentsView HTTP API and requires its own configured authentication and bind settings.",
+		Example:      "  agentsview replica duckdb quack serve --help",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

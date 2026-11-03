@@ -21,8 +21,14 @@ import (
 
 func newSessionGetCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "get <id>",
-		Short:        "Get session metadata and signals",
+		Use:   "get <id>",
+		Short: "Get session metadata and signals",
+		Long: "Read one session's metadata, outcome, and health signals. " +
+			"Copy its full ID from list or search. " +
+			"Bare provider IDs are retried with known prefixes, while a canonical agent-prefixed or host-prefixed ID is authoritative. " +
+			"Bare Codebuff/Freebuff timestamps use --machine (default local) to select their source. " +
+			"Explicit --server and --pg reads do not support bare timestamp lookup; use a canonical stored ID there.",
+		Example:      "  agentsview session get <id> --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

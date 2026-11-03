@@ -26,8 +26,13 @@ import (
 
 func newRecallCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "recall",
-		Short:        "Build and inspect recalled knowledge from past sessions",
+		Use:   "recall",
+		Short: "Build and inspect recalled knowledge from past sessions",
+		Long: "Build and inspect accepted knowledge derived from past conversations. " +
+			"Recall entries are curated records, separate from raw transcript search. " +
+			"Query or brief reads accepted entries; import brings reviewed records into the archive, while extract manages a configured extraction recipe.",
+		Example: "  agentsview recall list --json\n" +
+			"  agentsview recall query 'deployment troubleshooting' --json",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

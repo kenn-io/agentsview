@@ -22,8 +22,11 @@ import (
 
 func newPGVectorsCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "vectors",
-		Short:        "Inspect and drop PostgreSQL vector generations",
+		Use:   "vectors",
+		Short: "Inspect and drop PostgreSQL vector generations",
+		Long: "Inspect PostgreSQL embedding generations and explicitly remove a generation's stored vectors. " +
+			"This operates on the configured PostgreSQL mirror; it is separate from building the local embedding index.",
+		Example:      "  agentsview replica pg vectors list",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

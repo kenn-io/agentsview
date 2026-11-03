@@ -56,8 +56,11 @@ type rawSyncLoopWorker interface {
 
 func newRawSyncCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "raw-sync",
-		Short:        "Capture and upload provider-owned raw session sources",
+		Use:   "raw-sync",
+		Short: "Capture and upload provider-owned raw session sources",
+		Long: "Capture and upload provider-owned source artifacts to the configured raw-sync server, keeping durable local progress. " +
+			"Inspect status before starting the continuous watcher or a bounded backfill. " +
+			"This moves original sources, rather than only derived session summaries.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

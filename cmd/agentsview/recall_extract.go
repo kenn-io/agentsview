@@ -256,8 +256,12 @@ func newRecallExtractCommand() *cobra.Command {
 	var dryRun bool
 	var chunkMaxChars int
 	cmd := &cobra.Command{
-		Use:          "extract",
-		Short:        "Extract recall entries from session transcripts",
+		Use:   "extract",
+		Short: "Extract recall entries from session transcripts",
+		Long: "Manage extraction recipes that propose recalled knowledge from session content. " +
+			"Inspect status and preview candidates before choosing an active recipe or running extraction; accepted recall records remain a separate reviewed layer.",
+		Example: "  agentsview recall extract status\n" +
+			"  agentsview recall extract preview --session <id>",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

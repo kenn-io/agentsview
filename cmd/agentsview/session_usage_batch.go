@@ -24,8 +24,13 @@ type sessionUsageBatchOutput struct {
 
 func newSessionUsageBatchCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "usage-batch <id>...",
-		Short:        "Show token usage and cost estimates for several sessions",
+		Use:   "usage-batch <id>...",
+		Short: "Show token usage and cost estimates for several sessions",
+		Long: "Read usage for several IDs through one backend selection, preserving argument order and duplicates. " +
+			"Each result carries its own exit_code: 0 for figures, 2 for missing, 3 for no figures, or 1 for a per-ID failure. " +
+			"Per-ID failures are report data and do not make the overall command fail; backend setup or output failures do.",
+		Example: "  agentsview session usage-batch <id> <other-id> --json\n" +
+			"  agentsview session usage-batch <id> <other-id> --no-sync --own-only --json",
 		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -18,8 +18,15 @@ import (
 
 func newSessionExportCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:          "export <id>",
-		Short:        "Export provider-specific source content for a local session",
+		Use:   "export <id>",
+		Short: "Export provider-specific source content for a local session",
+		Long: "Export provider-specific source content for one locally archived session. " +
+			"Aider emits the selected run as Markdown; Windsurf and Trae reconstruct session JSON; supported shared or database sources emit only the selected session as JSONL. " +
+			"Other file sources are copied as bytes. " +
+			"Local source access is required, and usage-only archives cannot export it. " +
+			"--server, --pg, --json, and --format are rejected. " +
+			"Use the top-level export group for normalized archive reports.",
+		Example:      "  agentsview session export <id> > session-export.out",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
