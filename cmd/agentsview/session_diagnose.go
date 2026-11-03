@@ -99,7 +99,7 @@ func newSessionDiagnoseCommand() *cobra.Command {
 			out.Usage.ServerRunning = usage.ServerRunning
 			ownOnly, _ := cmd.Flags().GetBool("own-only")
 			if ownOnly {
-				out.Scope = "usage, tool and context evidence cover the named session only; child links remain listed"
+				out.Scope = "usage, tool and context evidence cover the named session only"
 			}
 			if err := out.readMessages(cmd.Context(), svc); err != nil {
 				return err
@@ -221,7 +221,7 @@ func (out *sessionDiagnosis) addSequenceSignals(calls []signals.ToolCallRow, con
 }
 
 func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
-	if _, err := fmt.Fprintf(w, "Session: %s\nScope: %s\n", sanitizeTerminal(d.SessionID), d.Scope); err != nil {
+	if _, err := fmt.Fprintf(w, "Scope: %s\n", d.Scope); err != nil {
 		return err
 	}
 	if err := renderSessionUsageHuman(w, d.Usage); err != nil {
@@ -230,7 +230,7 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if _, err := fmt.Fprintf(w, "Observed usage rows: uncached input %d; cache read %d; cache write %d; output %d (coverage may be incomplete)\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(w, "Request count: unavailable (usage rows may not be requests)\nCache miss reasons: unavailable\nContext observations: %d; compactions: %v; inferred compactions: %d; retry runs: %d\n", len(d.Context), d.Compactions, d.InferredCompactions, len(d.RetryRuns))
+	_, err := fmt.Fprintf(w, "Request count: unavailable (usage rows may not be requests)\nCache miss reasons: unavailable\nContext observations: %d; compactions: %v; inferred compactions: %d\n", len(d.Context), d.Compactions, d.InferredCompactions)
 	if err != nil {
 		return err
 	}

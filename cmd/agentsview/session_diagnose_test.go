@@ -60,7 +60,7 @@ func TestSessionDiagnosePGRawRemoteID(t *testing.T) {
 	report = sessionDiagnosis{}
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
 	assert.Equal(t, []diagnosisChildLink{{SessionID: "child"}}, report.ChildLinks)
-	assert.Contains(t, report.Scope, "child links remain listed")
+	assert.Equal(t, "usage, tool and context evidence cover the named session only", report.Scope)
 	assert.Equal(t, 2, stub.OpenCount)
 }
 
@@ -180,6 +180,9 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	require.NoError(t, renderSessionDiagnosis(&human, got))
 	assert.Contains(t, human.String(), "cache read 60")
 	assert.Contains(t, human.String(), "  Child: child via read (#6)\n")
+	assert.Equal(t, 1, strings.Count(human.String(), "Session:"), "usage output already names the session")
+	assert.Contains(t, human.String(), "  Retry candidate: shell x3 (#3–#5; identical recorded arguments)\n")
+	assert.NotContains(t, human.String(), "retry runs:", "retry candidates are listed, so no separate count")
 	assert.NotContains(t, human.String(), "secret")
 }
 
