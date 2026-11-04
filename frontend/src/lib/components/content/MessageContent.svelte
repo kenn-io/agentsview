@@ -340,17 +340,17 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 <style>
   .message {
     border-left: var(--role-assistant-bar-width) var(--role-assistant-bar-style);
-    padding: 14px 20px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: 12px 18px 14px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
   .message.is-user { border-left: var(--role-user-bar-width) var(--role-user-bar-style); }
-  .message-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .message-header { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 6px; }
   .role-icon {
-    width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
-    justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; line-height: 1;
+    width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 10px; font-weight: 700; color: white; flex-shrink: 0; line-height: 1;
   }
-  .role-label { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
-  .timestamp { font-size: 12px; color: var(--text-muted); }
-  .header-meta { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .role-label { font-size: 12px; font-weight: 600; letter-spacing: 0; }
+  .timestamp { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .header-meta { margin-left: auto; display: flex; align-items: center; gap: 12px; min-width: 0; }
   .message-tokens { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
   .message-model {
     font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px;
@@ -358,12 +358,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   .turn-summary {
     font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
-    background: color-mix(in srgb, var(--text-primary) 4%, transparent); padding: 2px 8px;
-    border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
+    padding: 1px 0; border-radius: var(--radius-sm); border: 1px solid transparent;
     white-space: nowrap; flex-shrink: 0;
   }
-  .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
-  .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
+  .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
+  .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
   .message:hover :global(.kit-copy-btn) { opacity: 1; }
   .pin-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;

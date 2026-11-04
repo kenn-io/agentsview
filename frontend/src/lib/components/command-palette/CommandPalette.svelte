@@ -434,17 +434,17 @@
     background: var(--overlay-bg);
     display: flex;
     justify-content: center;
-    padding-top: 20vh;
+    padding-top: 14vh;
     z-index: var(--z-overlay);
   }
 
   .palette {
-    width: 560px;
-    max-height: 400px;
+    width: min(720px, calc(100vw - 32px));
+    max-height: min(560px, 72vh);
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -506,9 +506,9 @@
   .palette-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
-    padding: 6px 14px;
+    padding: 7px 14px;
     text-align: left;
     font-size: 13px;
     color: var(--text-primary);
@@ -556,6 +556,7 @@
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
   }
 
   .palette-empty {
@@ -608,9 +609,10 @@
   }
 
   .sort-btn.active {
-    background: var(--bg-surface-hover);
+    background: var(--bg-inset);
     color: var(--text-primary);
-    border-color: var(--accent-purple);
+    border-color: var(--border-default);
+    font-weight: 500;
   }
 
   .item-id {

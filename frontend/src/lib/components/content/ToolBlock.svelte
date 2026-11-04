@@ -325,7 +325,7 @@
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
   .tool-header {
-    display: flex; align-items: center; gap: 6px; padding: 6px 10px; width: 100%;
+    display: flex; align-items: center; gap: 8px; padding: 5px 10px; width: 100%;
     text-align: left; font-size: 12px; color: var(--text-secondary); min-width: 0;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0; transition: background 0.1s;
     user-select: text; flex: 1 1 auto;
@@ -333,12 +333,11 @@
   .tool-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
-  .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
+  .tool-label { font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
   .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
-    font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); padding: 2px 7px;
-    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
-    border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); padding: 1px 6px;
+    font-variant-numeric: tabular-nums; border: 1px solid transparent;
     border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
@@ -387,8 +386,16 @@
     border-top: 1px solid var(--border-muted); padding: 4px 0; max-height: 400px; overflow-y: auto;
   }
   .diff-line { display: inline-block; min-width: 100%; padding: 0 14px; white-space: pre; }
-  .diff-hunk { color: var(--accent-blue, #58a6ff); background: color-mix(in srgb, var(--accent-blue, #58a6ff) 8%, transparent); padding: 2px 14px; margin: 2px 0; }
-  .diff-add { color: var(--accent-green, #3fb950); background: color-mix(in srgb, var(--accent-green, #3fb950) 10%, transparent); }
-  .diff-del { color: var(--accent-red, #f85149); background: color-mix(in srgb, var(--accent-red, #f85149) 10%, transparent); }
+  .diff-hunk { color: var(--text-muted); background: color-mix(in srgb, var(--accent-blue, #58a6ff) 6%, transparent); padding: 2px 14px; margin: 2px 0; }
+  .diff-add {
+    color: color-mix(in srgb, var(--accent-green, #3fb950) 70%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-green, #3fb950) 9%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-green, #3fb950) 60%, transparent);
+  }
+  .diff-del {
+    color: color-mix(in srgb, var(--accent-red, #f85149) 70%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 60%, transparent);
+  }
   .diff-ctx { color: var(--text-muted); }
 </style>

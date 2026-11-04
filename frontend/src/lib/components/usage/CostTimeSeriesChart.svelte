@@ -775,6 +775,7 @@
                 y1="y1"
                 fill={layer.fill}
                 curve={areaCurve}
+                class="cost-area"
               />
             {/each}
           {/if}
@@ -957,6 +958,14 @@
   .chart-container :global(.cost-seg) {
     opacity: 0.75;
     /* Surface-colored seam so stacked segments read as separate parts. */
+    stroke: var(--bg-surface);
+    stroke-width: 1;
+  }
+
+  /* Same seam and softened fill as the bar segments, so stacked areas
+     read as layers instead of one saturated mass. */
+  .chart-container :global(.cost-area) {
+    fill-opacity: 0.78;
     stroke: var(--bg-surface);
     stroke-width: 1;
   }

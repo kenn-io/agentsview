@@ -348,8 +348,8 @@
   .summary-cards :global(.card) {
     flex: 1;
     min-width: 120px;
-    min-height: 90px;
-    padding: 12px;
+    min-height: 0;
+    padding: 10px 12px;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -359,9 +359,10 @@
     display: contents;
   }
 
+  /* The featured total keeps a quiet accent edge instead of a heavy frame. */
   .summary-cards :global(.card.featured) {
-    border-width: 2px;
-    border-color: var(--accent-blue);
+    border-color: color-mix(in srgb, var(--accent-blue) 45%, var(--border-default));
+    box-shadow: inset 0 2px 0 var(--accent-blue);
   }
 
   .card-value {
@@ -369,6 +370,8 @@
     font-weight: 600;
     color: var(--text-primary);
     line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
 
   .card-value.error {

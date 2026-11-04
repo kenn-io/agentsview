@@ -1516,26 +1516,33 @@
   .breadcrumb-meta {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     margin-left: auto;
     min-width: 0;
     flex-shrink: 1;
   }
 
   .agent-badge {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    line-height: 14px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
     color: white;
     flex-shrink: 0;
     background: var(--text-muted);
   }
 
-  .entrypoint-badge {
-    opacity: 0.8;
+  /* The entrypoint qualifies the agent; keep it neutral so the agent
+     color stays the only identity fill in the strip. */
+  .agent-badge.entrypoint-badge {
+    margin-left: -6px;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border-color: var(--border-default);
   }
 
   .summary-badge {
@@ -1589,7 +1596,7 @@
   }
 
   .session-time {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
