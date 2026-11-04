@@ -1852,11 +1852,12 @@ Entries are trimmed, deduplicated, and capped at 1024 characters. Entries that
 duplicate a built-in pattern in the same category are silently dropped.
 
 **Reclassification on config change.** AgentsView stores a hash of the active
-classifier (built-in patterns + your configured patterns) with the database. On
-startup, it rechecks stored `is_automated` values against the active classifier
-and re-stamps the hash, so edits to `[automated]` patterns apply to history
-immediately — no manual resync required. The same backfill also corrects rows
-pulled in from PostgreSQL sync or copied from other archives.
+classifier (built-in patterns + your configured patterns) with the database.
+For archives that retain transcript text, startup rechecks changed and imported
+sessions. When the classifier changes, it rechecks all sessions, so edits to
+`[automated]` patterns apply to history immediately without a manual resync.
+The same backfill corrects rows pulled in from PostgreSQL sync or copied from
+other archives.
 
 ## Database
 

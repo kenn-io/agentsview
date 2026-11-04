@@ -11,7 +11,6 @@ const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 const (
 	automationAuditFresh = iota
 	automationAuditStale
-	automationAuditClaimed
 )
 
 // ParentlessWorkerSQL is the stored-row equivalent of parser.PromoteParentlessWorker.
@@ -122,7 +121,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 		 WHERE s.automation_audit = ?`,
 		automationAuditPrefixBytes,
 		automationAuditPrefixBytes,
-		automationAuditClaimed,
+		automationAuditStale,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf(

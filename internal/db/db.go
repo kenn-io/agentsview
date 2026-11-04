@@ -2341,10 +2341,6 @@ type schemaColumnMigration struct {
 func legacySchemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
-			"sessions", "automation_audit",
-			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
-		},
-		{
 			"tool_result_events", "raw_content_digest",
 			"ALTER TABLE tool_result_events ADD COLUMN raw_content_digest BLOB",
 		},
@@ -2389,6 +2385,10 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{
+			"sessions", "automation_audit",
+			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
+		},
 		{
 			"sessions", "pr_links",
 			"ALTER TABLE sessions ADD COLUMN pr_links TEXT NOT NULL DEFAULT ''",
@@ -4120,9 +4120,8 @@ func tableHasRowsLocked(ctx context.Context, w *writerHandle, table string) (boo
 }
 
 // backfillIsAutomatedLocked audits stale sessions, or all sessions when the
-// classifier changes. Claimed rows survive an interrupted audit for retry.
-// Writes during the audit mark rows stale again, so release leaves them for
-// the next audit. Corrections also mark rows stale for one additional check.
+// classifier changes. The writer is exclusively owned during the audit, and
+// interrupted audits leave stale rows for retry.
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
 	if err := repairParentlessWorkers(ctx, w); err != nil {
 		return err
@@ -4153,13 +4152,6 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 		)
 	}
 
-	if _, err := w.Exec(ctx,
-		`UPDATE sessions SET automation_audit = ? WHERE automation_audit = ?`,
-		automationAuditClaimed, automationAuditStale,
-	); err != nil {
-		return fmt.Errorf("claiming stale automation audit rows: %w", err)
-	}
-
 	patterns := snapshotAutomationPatterns()
 	var setIDs, clearIDs []string
 	if stored == current {
@@ -4183,9 +4175,9 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	}
 	if _, err := w.Exec(ctx,
 		`UPDATE sessions SET automation_audit = ? WHERE automation_audit = ?`,
-		automationAuditFresh, automationAuditClaimed,
+		automationAuditFresh, automationAuditStale,
 	); err != nil {
-		return fmt.Errorf("releasing automation audit rows: %w", err)
+		return fmt.Errorf("marking automation audit rows fresh: %w", err)
 	}
 
 	if len(setIDs) > 0 || len(clearIDs) > 0 {

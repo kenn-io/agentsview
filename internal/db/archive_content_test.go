@@ -16,6 +16,48 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func TestCopyTrashedTranscriptProjectionRechecksAutomation(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	insertSession(t, source, "shared", "project", func(s *Session) { s.Agent = "codex" })
+	insertMessages(t, source, userMsg("shared", 1, "Another message"))
+	require.NoError(t, source.SoftDeleteSession(ctx, "shared"))
+
+	destination := testDB(t)
+	destination.SetArchiveContent(config.ArchiveContentTranscripts)
+	insertSession(t, destination, "shared", "project", func(s *Session) {
+		s.Agent = "codex"
+		s.UserMessageCount = 1
+	})
+	insertMessages(t, destination, userMsg("shared", 0, "You are a code reviewer. Review the code."))
+	require.NoError(t, destination.SetSessionDataVersion(ctx, "shared", 104))
+	require.NoError(t, destination.backfillIsAutomatedLocked(ctx, destination.getWriter()))
+	before, err := destination.GetSession(ctx, "shared")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.True(t, before.IsAutomated)
+	var revision string
+	require.NoError(t, destination.getWriter().QueryRow(ctx,
+		`SELECT transcript_revision FROM sessions WHERE id = 'shared'`).Scan(&revision))
+
+	_, err = destination.CopyTrashedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	messages, err := destination.GetAllMessages(ctx, "shared")
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Empty(t, messages[0].Content)
+	var afterRevision string
+	require.NoError(t, destination.getWriter().QueryRow(ctx,
+		`SELECT transcript_revision FROM sessions WHERE id = 'shared'`).Scan(&afterRevision))
+	assert.Equal(t, revision, afterRevision)
+
+	require.NoError(t, destination.backfillIsAutomatedLocked(ctx, destination.getWriter()))
+	after, err := destination.GetSession(ctx, "shared")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.False(t, after.IsAutomated)
+}
+
 func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	for name, reopen := range map[string]func(context.Context, string, config.ArchiveContent) (*DB, error){
 		"maintained": OpenWithArchiveContent,

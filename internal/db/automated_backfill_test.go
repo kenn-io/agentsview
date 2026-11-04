@@ -303,8 +303,6 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "changed",
 				[]Message{userMsg("changed", 0, reviewPrompt)}))
-			_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'changed'`)
-			require.NoError(t, err)
 			var state int
 			require.NoError(t, d.getWriter().QueryRow(t.Context(),
 				`SELECT automation_audit FROM sessions WHERE id = 'changed'`).Scan(&state))
@@ -315,7 +313,8 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 			_, err := d.getWriter().Exec(t.Context(),
 				`UPDATE sessions SET first_message = ? WHERE id = 'changed'`, reviewPrompt)
 			require.NoError(t, err)
-			_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET automation_audit = 2 WHERE id = 'changed'`)
+			// The previous audit corrected the flag but stopped before clearing it.
+			_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 1 WHERE id = 'changed'`)
 			require.NoError(t, err)
 		}},
 	} {
@@ -336,8 +335,6 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, session)
 			assert.True(t, session.IsAutomated)
-			// Corrections invalidate their own claim, then settle on the next run.
-			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
 			var state int
 			require.NoError(t, d.getWriter().QueryRow(t.Context(),
 				`SELECT automation_audit FROM sessions WHERE id = ?`, id).Scan(&state))
@@ -368,6 +365,10 @@ func TestMigration_AutomationAudit(t *testing.T) {
 	d, err = Open(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
+	assert.False(t, d.NeedsResync(), "adding the audit column must not force a rebuild")
+	var version int
+	require.NoError(t, d.getWriter().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Equal(t, CurrentDataVersion(), version)
 	session, err := d.GetSession(t.Context(), "legacy")
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -378,11 +379,10 @@ func TestMigration_AutomationAudit(t *testing.T) {
 		WHERE (type = 'index' AND name = 'idx_sessions_automation_audit')
 		   OR (type = 'trigger' AND name = 'trg_sessions_automation_audit')`).Scan(&objects))
 	assert.Equal(t, 2, objects)
-	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
 	var state int
 	require.NoError(t, d.getWriter().QueryRow(t.Context(),
 		`SELECT automation_audit FROM sessions WHERE id = 'legacy'`).Scan(&state))
-	assert.Equal(t, 0, state, "upgraded row becomes fresh after its correction settles")
+	assert.Equal(t, 0, state, "the upgrade audit leaves corrected rows fresh")
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'legacy'`)
 	require.NoError(t, err)
 	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
