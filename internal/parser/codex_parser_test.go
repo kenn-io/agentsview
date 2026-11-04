@@ -769,7 +769,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		}})
 	})
 
-	t.Run("subagent wait timeout adds no result", func(t *testing.T) {
+	t.Run("subagent wait completion adds no result", func(t *testing.T) {
 		const childID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("fc-wait-timeout", "/tmp", "user", tsEarly),
@@ -778,10 +778,10 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 				"message": "run the script",
 			}, tsEarlyS5),
 			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`"}`, tsLate),
-			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
-				"ids": []string{childID},
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait_agent", "call_wait", map[string]any{
+				"timeout_ms": 300000,
 			}, tsLateS5),
-			testjsonl.CodexFunctionCallOutputJSON("call_wait", `{"status":{},"timed_out":true}`, "2024-01-01T10:01:06Z"),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait", `{"message":"Wait completed.","timed_out":false}`, "2024-01-01T10:01:06Z"),
 		)
 		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 

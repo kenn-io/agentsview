@@ -640,7 +640,8 @@ fixtures retain this field; missing identities remain source-local.
   `function_call_output.output` is an array of `input_text` blocks containing
   completion timing and script output. Agentsview stores this as the call's
   normal tool result. Subagent waits with a `status` object, including empty
-  timeout statuses, keep their existing handling. Synthetic coverage in
+  timeout statuses, keep their existing handling. `wait_agent` responses
+  without a `status` object add no result event. Synthetic coverage in
   `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.

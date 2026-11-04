@@ -890,7 +890,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 		}
 	}
 
-	switch b.toolCallNameForOutput(callID) {
+	switch name := b.toolCallNameForOutput(callID); name {
 	case "spawn_agent":
 		agentID := strings.TrimSpace(output.Get("agent_id").Str)
 		if agentID == "" {
@@ -904,7 +904,9 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	case "wait", "wait_agent":
 		status := output.Get("status")
 		if !status.Exists() || !status.IsObject() {
-			b.appendFunctionCallOutput(ctx, callID, payload, raw, ts)
+			if name == "wait" {
+				b.appendFunctionCallOutput(ctx, callID, payload, raw, ts)
+			}
 			return
 		}
 		status.ForEach(func(key, entry gjson.Result) bool {
