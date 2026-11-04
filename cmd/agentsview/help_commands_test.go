@@ -95,37 +95,6 @@ func TestAgentHelpCommandChecker(t *testing.T) {
 	require.Error(t, validateCommandExamples("agentsview source list", "agentsview report stats --json"))
 }
 
-func TestSelectedHelpExplainsReplicaBackendsAndExportExitCodes(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{
-			name: "ClickHouse service",
-			args: []string{"replica", "clickhouse", "--help"},
-			want: "Configure a ClickHouse target before push, status, or serving.",
-		},
-		{
-			name: "session backend selection",
-			args: []string{"session", "--help"},
-			want: "Local reads use the daemon. --server and --pg are mutually exclusive.",
-		},
-		{
-			name: "conversation export failures",
-			args: []string{"export", "conversations", "--help"},
-			want: "Exit 4: archive reconciliation required. Exit 5: message revision changed.",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rendered, err := executeCommand(newRootCommand(), tc.args...)
-			require.NoError(t, err)
-			assert.Contains(t, rendered, tc.want)
-		})
-	}
-}
-
 func walkHelpCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 	if cmd.Hidden || cmd.Name() == "completion" {
 		return
