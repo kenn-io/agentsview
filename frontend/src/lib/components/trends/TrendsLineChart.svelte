@@ -169,7 +169,7 @@
     left: 52px;
     z-index: 1;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     text-anchor: start;
   }

@@ -284,7 +284,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -316,7 +316,7 @@
 
   .metric-btn {
     padding: 3px 10px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     background: var(--bg-inset);
@@ -414,7 +414,7 @@
     flex-shrink: 0;
     width: 56px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -431,7 +431,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;

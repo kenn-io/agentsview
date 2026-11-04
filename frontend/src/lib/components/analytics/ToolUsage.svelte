@@ -411,7 +411,7 @@
   }
 
   .count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -422,7 +422,7 @@
   }
 
   .section-title {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -459,7 +459,7 @@
     border-radius: 50%;
   }
 
-  .tool-kind { display: block; font-size: 10px; color: var(--text-muted); }
+  .tool-kind { display: block; font-size: 11px; color: var(--text-muted); }
 
   .tool-name {
     min-width: 0;
@@ -486,8 +486,8 @@
     color: var(--text-muted);
   }
 
-  .tool-labels { font-size: 10px; color: var(--text-muted); }
-  .tool-rate { text-align: right; font-family: var(--font-mono); font-size: 10px; }
+  .tool-labels { font-size: 11px; color: var(--text-muted); }
+  .tool-rate { text-align: right; font-family: var(--font-mono); font-size: 11px; }
   .rate-note { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
   .tool-evidence { margin-top: 12px; }
   .evidence-list { display: grid; gap: 2px; margin: 6px 0 8px; }
@@ -566,7 +566,7 @@
     flex-shrink: 0;
     width: 48px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -575,7 +575,7 @@
     flex-shrink: 0;
     width: 36px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -611,7 +611,7 @@
   }
 
   .trend-label {
-    font-size: 8px;
+    font-size: 10px;
     color: var(--text-muted);
     margin-top: 2px;
     white-space: nowrap;
@@ -623,7 +623,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
@@ -656,7 +656,7 @@
     .tool-name { grid-column: 1 / 3; }
     .tool-category { text-align: right; }
     .tool-rate { grid-column: auto; display: flex; flex-direction: column; gap: 4px; font-family: inherit; align-items: center; }
-    .tool-rate::before { content: attr(data-label); font-size: 10px; }
+    .tool-rate::before { content: attr(data-label); font-size: 11px; }
     .tool-row > .tool-rate:nth-of-type(7) { grid-column: 1; }
     .tool-rate { min-width: 0; }
   }

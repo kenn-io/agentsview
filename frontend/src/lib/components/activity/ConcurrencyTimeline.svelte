@@ -978,7 +978,7 @@
     height: 22px;
     min-height: 22px;
     padding: 0 8px;
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .chart-meta {
@@ -1001,7 +1001,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -1026,7 +1026,7 @@
   }
 
   .chart-peak {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     font-family: var(--font-mono);
   }
@@ -1036,7 +1036,7 @@
     flex-shrink: 0;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     /* kit-ui Typeahead sizing knobs; custom properties inherit into the
        child .kit-typeahead. */
@@ -1044,7 +1044,7 @@
     --typeahead-max-width: 96px;
     --typeahead-control-height: 22px;
     --typeahead-control-padding: 0 6px;
-    --typeahead-control-font-size: 10px;
+    --typeahead-control-font-size: 11px;
   }
 
   .overlay-toggle :global(.kit-typeahead) {
@@ -1067,13 +1067,13 @@
   }
 
   .timeline :global(.y-label) {
-    font-size: 9px;
+    font-size: 10.5px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
   .timeline :global(.x-label) {
-    font-size: 9px;
+    font-size: 10.5px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
@@ -1138,7 +1138,7 @@
   }
 
   .timeline :global(.overlay-y-label) {
-    font-size: 9px;
+    font-size: 10.5px;
     fill: var(--accent-amber);
     font-family: var(--font-mono);
   }

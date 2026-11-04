@@ -206,7 +206,7 @@
 
   .status-count-pill {
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     border-radius: 999px;
     color: var(--accent-amber);
@@ -242,7 +242,7 @@
 
   .toggle-btn {
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
@@ -285,7 +285,7 @@
     flex-shrink: 0;
     width: 18px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     font-family: var(--font-mono);
@@ -318,7 +318,7 @@
   }
 
   .session-project {
-    font-size: 9px;
+    font-size: 10.5px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;

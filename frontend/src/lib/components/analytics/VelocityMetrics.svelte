@@ -172,7 +172,7 @@
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -203,7 +203,7 @@
   }
 
   .metric-label {
-    font-size: 9px;
+    font-size: 10.5px;
     color: var(--text-muted);
     margin-bottom: 4px;
   }
@@ -231,7 +231,7 @@
 
   .breakdown-header {
     border-bottom: 1px solid var(--border-muted);
-    font-size: 9px;
+    font-size: 10.5px;
     color: var(--text-muted);
     font-weight: 500;
   }

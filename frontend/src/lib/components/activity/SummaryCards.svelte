@@ -163,7 +163,7 @@
   }
 
   .card-sub {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     margin-top: 2px;
   }
