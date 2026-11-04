@@ -6,6 +6,7 @@
   import { m } from "../../i18n/index.js";
   import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { seriesPaint } from "../../utils/seriesPaint.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
   import { treemapLabelSize, type TreemapLabelScale } from "./treemapLabelSize.js";
@@ -59,8 +60,19 @@
   // Tiles use the same series color as the chart and legend. The label ink
   // flips to black or white per tile, and the fill moves 12% away from the
   // ink, so mid-tone hues still keep labels above 4.5:1.
+  // Palette colors can be CSS variables such as var(--chart-series-1).
+  // Resolve them against the root so the contrast math sees the real hex;
+  // reading the theme here re-runs the resolution when the theme changes.
+  function resolveColor(color: string): string {
+    const name = /^var\((--[\w-]+)\)$/.exec(color.trim())?.[1];
+    if (!name || typeof document === "undefined") return color;
+    void ui.theme;
+    void ui.highContrast;
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || color;
+  }
+
   function tilePaint(color: string): { fill: string; ink: string } | null {
-    const hex = parseHexColor(color);
+    const hex = parseHexColor(resolveColor(color));
     if (!hex) return null;
     const ink = readableInk(hex, ["#111318", "#ffffff"]);
     const fill = mixHexColors(hex, ink === "#ffffff" ? "#000000" : "#ffffff", 0.88);

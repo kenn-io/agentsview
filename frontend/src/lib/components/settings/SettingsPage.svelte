@@ -292,8 +292,10 @@
 
   /* Local overrides of kit-ui SettingsLayout: readable nav summaries and
      the app-wide neutral selected state. */
-  .settings-page :global(.kit-settings .kit-settings__sidebar) {
-    width: 236px;
+  @media (min-width: 761px) {
+    .settings-page :global(.kit-settings .kit-settings__sidebar) {
+      width: 236px;
+    }
   }
 
   .settings-page :global(.kit-settings__nav-summary) {

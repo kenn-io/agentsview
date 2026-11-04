@@ -47,6 +47,34 @@ describe("Treemap", () => {
 
     unmount(component);
   });
+  it("gives variable palette colors readable tile ink", async () => {
+    document.documentElement.style.setProperty("--test-series-lime", "#a3e635");
+    document.documentElement.style.setProperty("--test-series-navy", "#1f3a8a");
+    const component = mount(Treemap, {
+      target: document.body,
+      props: {
+        items: [
+          { id: "lime", label: "Lime", value: 60, style: { color: "var(--test-series-lime)", fill: "solid" as const } },
+          { id: "navy", label: "Navy", value: 40, style: { color: "var(--test-series-navy)", fill: "solid" as const } },
+        ],
+      },
+    });
+    await tick();
+
+    const tiles = [...document.querySelectorAll<SVGGElement>(".tile")];
+    const ink = tiles.map((tile) => tile.style.getPropertyValue("--tile-ink"));
+    const fill = tiles.map((tile) => tile.style.getPropertyValue("--tile-fill"));
+    // Bright lime takes dark text; dark navy takes white text.
+    expect(ink).toEqual(["#111318", "#ffffff"]);
+    // Each fill moves away from its ink: lime lightens, navy darkens.
+    expect(fill[0]).not.toBe("#a3e635");
+    expect(fill[1]).not.toBe("#1f3a8a");
+
+    unmount(component);
+    document.documentElement.style.removeProperty("--test-series-lime");
+    document.documentElement.style.removeProperty("--test-series-navy");
+  });
+
   it("selects with Enter and opens on double click", async () => {
     const onSelect = vi.fn();
     const onOpen = vi.fn();

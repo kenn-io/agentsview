@@ -1753,27 +1753,16 @@
     background: var(--border-default);
   }
 
-  /* Usage figures lead the strip; the ID steps back. */
-  .token-badge,
-  .cost-badge,
-  .usage-breakdown-trigger {
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-
-  .session-id {
-    color: color-mix(in srgb, var(--text-muted) 85%, transparent);
-  }
-
   .session-id:hover {
     color: var(--text-secondary);
     background: var(--bg-surface-hover);
   }
 
+  /* Usage figures lead the strip in secondary ink; the ID stays muted. */
   .token-badge {
-    font-size: 11px;
+    font-size: 12px;
     font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--bg-tertiary);
@@ -1787,9 +1776,9 @@
   }
 
   .cost-badge {
-    font-size: 11px;
+    font-size: 12px;
     font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--bg-tertiary);
@@ -1875,9 +1864,9 @@
 
   .usage-breakdown-trigger {
     list-style: none;
-    font-size: 11px;
+    font-size: 12px;
     font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--bg-tertiary);
