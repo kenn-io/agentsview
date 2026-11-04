@@ -563,7 +563,7 @@ func (c *usageFillCoordinator) extractSessions(
 	if err := c.extractUsageAppends(ctx, tx, spoolTx, extracted, expected, messageIndexes); err != nil {
 		return nil, nil, err
 	}
-	if _, err := c.extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes, usageFillMessageFactsSQL, nil); err != nil {
+	if _, err := c.extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes, usageMessageExtraction{query: usageFillMessageFactsSQL}); err != nil {
 		return nil, nil, err
 	}
 	if err := extractUsageActivityFacts(ctx, tx, &spoolWriter, activityIndexes); err != nil {
@@ -616,6 +616,7 @@ func (c *usageFillCoordinator) extractUsageAppends(
 			LEFT JOIN comparison.usage_facts tail ON tail.cached_session_id=cached.id
 			 AND tail.fact_index=(SELECT MAX(fact_index) FROM comparison.usage_facts WHERE cached_session_id=cached.id)
 			WHERE cached.session_id=? AND cached.install_revision=? AND cached.source_usage_generation=?
+			 AND cached.usage_event_fingerprint=''
 			 AND (tail.fact_index IS NULL OR (tail.source='message' AND tail.token_eligible=1))`,
 			id, expected[id].InstallRevision, version.UsageGeneration).Scan(&ordinal, &count, &tail)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -629,7 +630,9 @@ func (c *usageFillCoordinator) extractUsageAppends(
 		}
 		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
 		deltaIndexes := map[string]int{id: count}
-		eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageFillAppendFactsSQL, &tail, id, ordinal)
+		eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageMessageExtraction{
+			query: usageFillAppendFactsSQL, args: []any{id, ordinal}, appendOnly: true, tail: tail,
+		})
 		if err != nil {
 			return err
 		}
@@ -651,11 +654,18 @@ func (c *usageFillCoordinator) extractUsageAppends(
 	return nil
 }
 
+type usageMessageExtraction struct {
+	query      string
+	args       []any
+	appendOnly bool
+	tail       string
+}
+
 func (c *usageFillCoordinator) extractUsageMessageFacts(
 	ctx context.Context, archive *sql.Tx, spool *usageFactSpoolWriter,
-	indexes map[string]int, query string, tail *string, args ...any,
+	indexes map[string]int, extraction usageMessageExtraction,
 ) (bool, error) {
-	rows, err := archive.QueryContext(ctx, query, args...)
+	rows, err := archive.QueryContext(ctx, extraction.query, extraction.args...)
 	if err != nil {
 		return false, fmt.Errorf("extracting token usage messages: %w", err)
 	}
@@ -677,7 +687,7 @@ func (c *usageFillCoordinator) extractUsageMessageFacts(
 		if !ok {
 			continue
 		}
-		if tail != nil && (input.Timestamp == "" || input.Timestamp < *tail || !fact.TokenEligible) {
+		if extraction.appendOnly && (input.Timestamp < extraction.tail || !fact.TokenEligible) {
 			return false, nil
 		}
 		if err := spool.Add(sessionID, indexes[sessionID], fact); err != nil {
@@ -1165,7 +1175,7 @@ func loadUsageSourceVersions(
 		rows, queryErr := tx.QueryContext(ctx, `
 			SELECT id, COALESCE(sync_marker, ''),
 			       COALESCE(transcript_revision, '0'), COALESCE(usage_generation, ''),
-                   (SELECT MAX(ordinal) FROM messages WHERE session_id=sessions.id)
+			       (SELECT MAX(ordinal) FROM messages WHERE session_id=sessions.id)
 			FROM sessions WHERE deleted_at IS NULL AND id IN `+placeholders,
 			args...)
 		if queryErr != nil {

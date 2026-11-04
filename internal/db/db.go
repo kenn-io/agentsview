@@ -2930,13 +2930,8 @@ func schemaColumnMigrations() []schemaColumnMigration {
 // A tail append preserves the generation. Every change to an existing usage
 // input invalidates the prefix retained by incremental usage-cache fills.
 const usageGenerationSchemaSQL = `
-CREATE TRIGGER IF NOT EXISTS sessions_usage_generation_insert AFTER INSERT ON sessions BEGIN
-    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=NEW.id;
-END;
-CREATE TRIGGER IF NOT EXISTS messages_usage_generation_delete AFTER DELETE ON messages
-WHEN (SELECT usage_generation FROM sessions WHERE id=OLD.session_id) IS NOT NULL
-BEGIN
-    UPDATE sessions SET usage_generation=NULL WHERE id=OLD.session_id;
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_delete AFTER DELETE ON messages BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=OLD.session_id;
 END;
 CREATE TRIGGER IF NOT EXISTS messages_usage_generation_update
 AFTER UPDATE OF session_id, ordinal, role, timestamp, model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid ON messages

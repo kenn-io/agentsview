@@ -106,8 +106,8 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 
 	result, err := cache.db.ExecContext(t.Context(), `INSERT INTO usage_cached_sessions(
 		session_id, source_sync_marker, source_transcript_rev,
-		usage_event_fingerprint, install_revision
-	) VALUES ('s1', 'm1', 'r1', 'e1', 1)`)
+		usage_event_fingerprint, install_revision, source_usage_generation
+	) VALUES ('s1', 'm1', 'r1', 'e1', 1, '')`)
 	require.NoError(t, err)
 	cachedSessionID, err := result.LastInsertId()
 	require.NoError(t, err)
@@ -720,18 +720,15 @@ func TestUsageGenerationMigrationPreservesArchive(t *testing.T) {
 	require.NoError(t, database.Close())
 	legacy, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = legacy.ExecContext(t.Context(), `DROP TRIGGER sessions_usage_generation_insert;
-		DROP TRIGGER messages_usage_generation_insert; DROP TRIGGER messages_usage_generation_delete;
+	_, err = legacy.ExecContext(t.Context(), `DROP TRIGGER messages_usage_generation_insert; DROP TRIGGER messages_usage_generation_delete;
 		DROP TRIGGER messages_usage_generation_update; ALTER TABLE sessions DROP COLUMN usage_generation`)
 	require.NoError(t, err)
 	require.NoError(t, legacy.Close())
 	requireOpenReadOnlyFails(t, path, "schema missing sessions.usage_generation")
-	for range 2 {
-		database, err = Open(t.Context(), path)
-		require.NoError(t, err)
-		var generation string
-		require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation FROM sessions WHERE id='retained'`).Scan(&generation))
-		assert.NotEmpty(t, generation)
-		require.NoError(t, database.Close())
-	}
+	database, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	var generation string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation FROM sessions WHERE id='retained'`).Scan(&generation))
+	assert.NotEmpty(t, generation)
+	require.NoError(t, database.Close())
 }

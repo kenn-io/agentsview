@@ -84,7 +84,7 @@ CREATE TABLE usage_cached_sessions (
     source_transcript_rev TEXT NOT NULL,
     usage_event_fingerprint TEXT NOT NULL,
     install_revision INTEGER NOT NULL,
-    source_usage_generation TEXT NOT NULL DEFAULT '',
+    source_usage_generation TEXT NOT NULL,
     source_message_ordinal INTEGER
 );
 CREATE TABLE usage_facts (
