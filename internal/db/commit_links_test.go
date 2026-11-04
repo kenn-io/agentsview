@@ -457,7 +457,20 @@ func TestCommitLinksAmbiguity(t *testing.T) {
 	assert.Equal(t, "abc1234", found.Commits[0].Links[0].SHA)
 	assert.Equal(t, "abc1234ff7", found.Commits[0].Links[1].SHA)
 	for _, link := range found.Commits[0].Links {
-		assert.True(t, link.Ambiguous, "stored SHA %s", link.SHA)
+		assert.False(t, link.Ambiguous, "stored SHA %s", link.SHA)
+	}
+}
+
+func TestMarkCommitAmbiguityMixedSources(t *testing.T) {
+	links := []CommitLink{
+		{SHA: "aaaaaaa", Source: "transcript"},
+		{SHA: "aaaaaaa0123456789012345678901234567890123", Source: "trailer"},
+	}
+
+	MarkCommitAmbiguity(links)
+
+	for _, link := range links {
+		assert.False(t, link.Ambiguous, "source %s", link.Source)
 	}
 }
 
