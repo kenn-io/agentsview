@@ -14,23 +14,26 @@ import (
 
 const worktreeReclassificationSampleLimit = 10
 
-// Unary + keeps SQLite from scanning the machine index when the archive has no statistics.
+// Pinned indexes and CROSS JOIN keep lookups scoped to one transcript even with stale statistics.
 const worktreeMappingSessionScopeQuery = `
-	SELECT id, project, cwd, file_path,
+	SELECT sessions.id, project, cwd, file_path,
 		EXISTS (
 			SELECT 1 FROM session_project_assignments spa
 			WHERE spa.session_id = sessions.id
 		)
-	FROM sessions
-	WHERE +machine = ? AND deleted_at IS NULL
-		AND (id = ? OR (
-			file_path IS NOT NULL AND file_path != ''
+	FROM (
+		SELECT ? AS id
+		UNION
+		SELECT id FROM sessions INDEXED BY idx_sessions_file_path
+		WHERE file_path IS NOT NULL AND file_path != ''
 			AND file_path = (
 				SELECT file_path FROM sessions
 				WHERE machine = ? AND id = ? AND deleted_at IS NULL
 			)
-		))
-	ORDER BY id`
+	) scope
+	CROSS JOIN sessions INDEXED BY sqlite_autoindex_sessions_1 ON sessions.id = scope.id
+	WHERE machine = ? AND deleted_at IS NULL
+	ORDER BY sessions.id`
 
 var ErrWorktreeMappingSetChanged = errors.New(
 	"worktree reclassification preview changed",
@@ -334,7 +337,7 @@ func evaluateWorktreeMappingsTx(
 	args := []any{machine}
 	if sessionID != "" {
 		query = worktreeMappingSessionScopeQuery
-		args = []any{machine, sessionID, machine, sessionID}
+		args = []any{sessionID, machine, sessionID, machine}
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

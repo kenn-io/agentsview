@@ -14,38 +14,62 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-func TestWorktreeMappingSessionScopeQueryIgnoresMissingStats(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	for _, session := range []struct{ id, path string }{
-		{id: "target", path: "shared.jsonl"},
-		{id: "sibling", path: "shared.jsonl"},
-		{id: "other", path: "other.jsonl"},
-	} {
-		insertSession(t, d, session.id, "project", func(s *Session) {
-			s.FilePath = new(session.path)
+func TestWorktreeMappingSessionScopeQueryIgnoresStats(t *testing.T) {
+	for _, stats := range []string{"missing", "stale"} {
+		t.Run(stats, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "target", "project", func(s *Session) {
+				s.FilePath = new("shared.jsonl")
+			})
+			if stats == "stale" {
+				_, err := d.getWriter().Exec(ctx, `ANALYZE sessions`)
+				require.NoError(t, err)
+			}
+			for _, session := range []struct{ id, path string }{
+				{id: "sibling", path: "shared.jsonl"},
+				{id: "other", path: "other.jsonl"},
+			} {
+				insertSession(t, d, session.id, "project", func(s *Session) {
+					s.FilePath = new(session.path)
+				})
+			}
+			_, err := d.getWriter().Exec(ctx, `
+				WITH RECURSIVE n(i) AS (
+					VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < 100000
+				)
+				INSERT INTO sessions (id, project, machine, agent, file_path)
+				SELECT 'unrelated-' || i, 'project', ?, 'claude', 'file-' || i || '.jsonl'
+				FROM n`, defaultMachine)
+			require.NoError(t, err)
+			if stats == "missing" {
+				_, err := d.getWriter().Exec(ctx, `DELETE FROM sqlite_stat1; ANALYZE sqlite_schema`)
+				require.NoError(t, err)
+			}
+
+			args := []any{"target", defaultMachine, "target", defaultMachine}
+			rows, err := d.getWriter().Query(ctx, "EXPLAIN QUERY PLAN "+worktreeMappingSessionScopeQuery, args...)
+			require.NoError(t, err)
+			details := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+			require.NoError(t, rows.Close())
+			assert.NotContains(t, details, "SCAN sessions")
+			assert.NotContains(t, details, "idx_sessions_machine")
+
+			rows, err = d.getWriter().Query(ctx, worktreeMappingSessionScopeQuery, args...)
+			require.NoError(t, err)
+			defer rows.Close()
+			var ids []string
+			for rows.Next() {
+				var id, project string
+				var cwd, filePath sql.NullString
+				var assigned bool
+				require.NoError(t, rows.Scan(&id, &project, &cwd, &filePath, &assigned))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, []string{"sibling", "target"}, ids)
 		})
 	}
-	_, err := d.getWriter().Exec(ctx, `DELETE FROM sqlite_stat1; ANALYZE sqlite_schema`)
-	require.NoError(t, err)
-
-	rows, err := d.getWriter().Query(ctx,
-		"EXPLAIN QUERY PLAN "+worktreeMappingSessionScopeQuery,
-		defaultMachine, "target", defaultMachine, "target",
-	)
-	require.NoError(t, err)
-	defer rows.Close()
-	var plan []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		plan = append(plan, detail)
-	}
-	require.NoError(t, rows.Err())
-	details := strings.Join(plan, "\n")
-	assert.NotContains(t, details, "idx_sessions_machine")
-	assert.Contains(t, details, "sqlite_autoindex_sessions_1 (id=?)")
 }
 
 func TestWorktreeProjectMappingsCRUDNormalizesAndScopesByMachine(t *testing.T) {
