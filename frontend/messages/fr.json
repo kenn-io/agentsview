@@ -57,7 +57,7 @@
   "header_transcript_visibility": "Visibilité des blocs",
   "header_transcript_show_all": "Tout afficher",
   "header_view_trigger": "Vue : {layout}",
-  "header_view_trigger_focused": "Vue : {layout} · Requêtes seules",
+  "header_view_trigger_focused": "Vue : {layout} · Requêtes et réponses",
   "header_view_trigger_label": "Vue de la transcription : {layout}",
   "header_view_trigger_title": "Choisir la mise en page, le contenu et les types de blocs de cette transcription",
   "header_view_menu_label": "Vue de la transcription",
@@ -1259,7 +1259,17 @@
   "recent_edits_title": "Modifications récentes",
   "recent_edits_empty": "Aucune modification de fichier pour l'instant.",
   "recent_edits_loading": "Chargement des modifications récentes...",
-  "recent_edits_count": "{count} modifications",
+  "recent_edits_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} modification",
+        "countPlural=other": "{countNumber} modifications",
+        "countPlural=many": "{countNumber} modifications"
+      }
+    }
+  ],
   "recent_edits_truncated": "affichage des {shown} plus récentes sur {total}",
   "recent_edits_load_more": "Charger plus",
   "recent_edits_refresh": "Actualiser",

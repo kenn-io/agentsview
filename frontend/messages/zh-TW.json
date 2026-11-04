@@ -57,7 +57,7 @@
   "header_transcript_visibility": "Block 可見性",
   "header_transcript_show_all": "全部顯示",
   "header_view_trigger": "檢視：{layout}",
-  "header_view_trigger_focused": "檢視：{layout} · 僅提示",
+  "header_view_trigger_focused": "檢視：{layout} · 提示和回答",
   "header_view_trigger_label": "對話檢視：{layout}",
   "header_view_trigger_title": "選擇此對話的版面、內容和區塊類型",
   "header_view_menu_label": "對話檢視",

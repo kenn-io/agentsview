@@ -339,15 +339,16 @@
   .tool-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
-  .tool-label { font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
+  .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
   .summary-path { color: var(--text-primary); }
   .stat-add { color: color-mix(in srgb, var(--accent-green) 75%, var(--text-primary)); }
   .stat-del { color: color-mix(in srgb, var(--accent-red) 75%, var(--text-primary)); }
   .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
-    font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); padding: 0 6px;
+    /* Plain text by default; only slow and running durations get a fill. */
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 0 6px;
     font-variant-numeric: tabular-nums; border: 1px solid transparent;
-    background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+    background: transparent;
     border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: right;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }

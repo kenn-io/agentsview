@@ -215,17 +215,18 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .pinned-page {
-    max-width: 1100px;
+    max-width: 1088px;
     margin: 0 auto;
-    padding: 40px 24px;
+    padding: 28px 24px;
   }
 
   .pinned-header {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    margin-bottom: 28px;
+    margin-bottom: 16px;
   }
 
   :global(.pin-icon) {
@@ -233,7 +234,7 @@
   }
 
   .pinned-header h2 {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;

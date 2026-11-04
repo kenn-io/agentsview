@@ -57,7 +57,7 @@
   "header_transcript_visibility": "블록 표시 여부",
   "header_transcript_show_all": "모두 표시",
   "header_view_trigger": "보기: {layout}",
-  "header_view_trigger_focused": "보기: {layout} · 프롬프트만",
+  "header_view_trigger_focused": "보기: {layout} · 프롬프트와 답변",
   "header_view_trigger_label": "대화 보기: {layout}",
   "header_view_trigger_title": "이 대화의 레이아웃, 내용, 블록 유형을 선택합니다",
   "header_view_menu_label": "대화 보기",

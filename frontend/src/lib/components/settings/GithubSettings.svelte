@@ -95,7 +95,9 @@
     gap: 8px;
   }
 
-  :global(.setting-input.kit-text-input) {
+  /* Scoped to this row: a global flex: 1 collapsed the stacked inputs
+     in Remote access to 18px. */
+  .token-row :global(.setting-input.kit-text-input) {
     flex: 1;
     font-family: var(--font-mono, monospace);
   }

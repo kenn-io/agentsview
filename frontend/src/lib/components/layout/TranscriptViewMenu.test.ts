@@ -89,10 +89,10 @@ describe("TranscriptViewMenu", () => {
 
   it("names prompts-only mode on the trigger and marks hidden blocks", async () => {
     await tick();
-    expect(trigger().textContent).not.toContain("Prompts only");
+    expect(trigger().textContent).not.toContain("Prompts and answers");
     ui.setTranscriptMode("focused");
     await tick();
-    expect(trigger().textContent).toContain("View: Default · Prompts only");
+    expect(trigger().textContent).toContain("View: Default · Prompts and answers");
     expect(trigger().classList.contains("filtered")).toBe(false);
     ui.toggleBlock("thinking");
     await tick();

@@ -59,7 +59,7 @@
   "header_transcript_visibility": "Visibilidad de bloques",
   "header_transcript_show_all": "Mostrar todo",
   "header_view_trigger": "Vista: {layout}",
-  "header_view_trigger_focused": "Vista: {layout} · Solo solicitudes",
+  "header_view_trigger_focused": "Vista: {layout} · Solicitudes y respuestas",
   "header_view_trigger_label": "Vista de la transcripción: {layout}",
   "header_view_trigger_title": "Elige el diseño, el contenido y los tipos de bloque de esta transcripción",
   "header_view_menu_label": "Vista de la transcripción",
@@ -1261,7 +1261,17 @@
   "recent_edits_title": "Ediciones recientes",
   "recent_edits_empty": "Aún no se encontraron ediciones de archivos.",
   "recent_edits_loading": "Cargando ediciones recientes...",
-  "recent_edits_count": "{count} ediciones",
+  "recent_edits_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} edición",
+        "countPlural=other": "{countNumber} ediciones",
+        "countPlural=many": "{countNumber} ediciones"
+      }
+    }
+  ],
   "recent_edits_truncated": "mostrando las {shown} más recientes de {total}",
   "recent_edits_load_more": "Cargar más",
   "recent_edits_refresh": "Actualizar",

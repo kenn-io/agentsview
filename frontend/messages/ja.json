@@ -57,7 +57,7 @@
   "header_transcript_visibility": "ブロックの可視性",
   "header_transcript_show_all": "すべて表示",
   "header_view_trigger": "表示: {layout}",
-  "header_view_trigger_focused": "表示: {layout} · プロンプトのみ",
+  "header_view_trigger_focused": "表示: {layout} · プロンプトと回答",
   "header_view_trigger_label": "トランスクリプト表示: {layout}",
   "header_view_trigger_title": "このトランスクリプトのレイアウト、内容、ブロックの種類を選択します",
   "header_view_menu_label": "トランスクリプト表示",

@@ -225,22 +225,23 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .recent-edits-page {
-    max-width: 900px;
+    max-width: 1088px;
     margin: 0 auto;
-    padding: 40px 24px;
+    padding: 28px 24px;
   }
 
   .re-header {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    margin-bottom: 24px;
+    margin-bottom: 16px;
     color: var(--text-muted);
   }
 
   .re-header h2 {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
@@ -273,7 +274,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-5);
-    margin-bottom: 20px;
+    margin-bottom: 12px;
   }
 
   .re-toolbar :global(.re-search) {
@@ -295,21 +296,18 @@
     font-size: 14px;
   }
 
+  /* One list with hairline rows, not a stack of cards. */
   .re-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-  }
-
-  .re-file {
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-md);
     overflow: hidden;
-    transition: border-color 0.15s;
+    background: var(--bg-surface);
   }
 
-  .re-file:hover {
-    border-color: var(--border-default);
+  .re-file + .re-file {
+    border-top: 1px solid var(--border-muted);
   }
 
   .re-file-row {
@@ -317,9 +315,9 @@
     align-items: center;
     gap: var(--space-4);
     width: 100%;
-    padding: 10px 14px;
+    padding: 7px 14px;
     text-align: left;
-    background: var(--bg-surface);
+    background: transparent;
     border: none;
     cursor: pointer;
     transition: background 0.12s;
@@ -329,19 +327,22 @@
     background: var(--bg-surface-hover);
   }
 
+  /* Project names sit in a fixed muted column and truncate before the
+     path does. */
   .re-project {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    color: var(--accent-blue);
-    letter-spacing: 0.03em;
+    width: 160px;
+    font-size: 12px;
+    color: var(--text-muted);
     flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .re-path {
     flex: 1;
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 12.5px;
+    font-weight: 400;
     color: var(--text-primary);
     font-family: var(--font-mono);
     white-space: nowrap;
@@ -349,20 +350,15 @@
     text-overflow: ellipsis;
   }
 
-  .re-count {
-    font-size: 11px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-    background: var(--bg-inset);
-    padding: 2px 8px;
-    border-radius: 10px;
-  }
-
+  .re-count,
   .re-time {
-    font-size: 11px;
+    min-width: 64px;
+    font-size: 12px;
     color: var(--text-muted);
     flex-shrink: 0;
     white-space: nowrap;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
   .re-edits {

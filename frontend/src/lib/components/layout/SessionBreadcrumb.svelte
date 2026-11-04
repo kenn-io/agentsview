@@ -2231,6 +2231,30 @@
     }
   }
 
+  /* Below 1100px the title, transcript controls, and actions do not fit on
+     one row. Keep the title and actions on the first row, and start the
+     second row with the transcript controls, ahead of the metadata. */
+  @media (min-width: 641px) and (max-width: 1099px) {
+    .breadcrumb-meta > :global(*) {
+      order: 4;
+    }
+
+    .breadcrumb-meta > .open-group,
+    .breadcrumb-meta > .actions-wrapper {
+      order: 1;
+    }
+
+    .breadcrumb-meta > .open-group {
+      margin-left: auto;
+    }
+
+    .breadcrumb-meta > :global(.transcript-controls) {
+      order: 3;
+      margin-left: 0;
+      margin-right: 8px;
+    }
+  }
+
   @media (max-width: 900px) {
     .breadcrumb-meta {
       gap: 2px;

@@ -308,7 +308,7 @@
     gap: 4px;
   }
 
-  :global(.setting-input.kit-text-input) {
+  .field :global(.setting-input.kit-text-input) {
     font-family: var(--font-mono, monospace);
   }
 
