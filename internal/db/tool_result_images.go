@@ -140,6 +140,7 @@ func stripToolResultImageArrayWithInline(
 }
 
 type offloadedImagePlaceholder struct {
+	Version   *int   `json:"version"`
 	Type      string `json:"type"`
 	ImageRef  string `json:"image_ref"`
 	MediaType string `json:"media_type"`
@@ -255,59 +256,52 @@ func stripToolResultSummaryImagesWithInline(
 // parseInlineImageHeader parses a data URI header and returns the parsed
 // media type and base64 payload. It accepts only base64-encoded image/* URIs.
 func parseInlineImageHeader(uri string) (mediaType, payload string, ok bool) {
+	mediaType, payload, ok = parseInlineDataHeader(uri, true)
+	return mediaType, payload, ok && strings.HasPrefix(strings.ToLower(mediaType), "image/")
+}
+
+func parseInlineDataHeader(uri string, strict bool) (mediaType, payload string, ok bool) {
 	if !strings.HasPrefix(strings.ToLower(uri), "data:") {
 		return "", "", false
 	}
 	header, payload, found := strings.Cut(uri, ",")
-	if !found || payload == "" {
+	if !found || (strict && payload == "") {
 		return "", "", false
 	}
-	parts := strings.Split(header, ";")
-	if len(parts) != 2 || !strings.EqualFold(parts[1], "base64") {
+	marker := strings.LastIndexByte(header, ';')
+	if marker < 0 || !strings.EqualFold(header[marker+1:], "base64") || (strict && strings.IndexByte(header, ';') != marker) {
 		return "", "", false
 	}
-	rawType := parts[0][len("data:"):]
-	parsedType, _, err := mime.ParseMediaType(rawType)
-	if err != nil || !strings.HasPrefix(strings.ToLower(parsedType), "image/") {
+	parsedType, _, err := mime.ParseMediaType(header[len("data:"):marker])
+	if err != nil {
 		return "", "", false
 	}
 	return parsedType, payload, true
 }
 
 func decodeInlineImageURL(raw jsontext.Value) (string, int64, int64, bool) {
-	var uri string
-	if err := json.Unmarshal(raw, &uri); err != nil {
-		return "", 0, 0, false
-	}
-	mediaType, payload, ok := parseInlineImageHeader(uri)
-	if !ok {
-		return "", 0, 0, false
-	}
 	var count countingWriter
-	decoder := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
-	if _, err := io.Copy(&count, decoder); err != nil {
-		return "", 0, 0, false
-	}
-	return mediaType, count.n, int64(len(uri)), true
+	return streamInlineData(raw, &count, true)
 }
 
-// decodeInlineImage returns the parsed media type and decoded bytes of a
-// supported inline data URI. Acceptance matches decodeInlineImageURL.
+// decodeInlineImage shares strict streaming acceptance with hashing and offload.
 func decodeInlineImage(raw jsontext.Value) (mediaType string, decoded []byte, ok bool) {
-	var uri string
-	if err := json.Unmarshal(raw, &uri); err != nil {
-		return "", nil, false
-	}
-	mediaType, payload, ok := parseInlineImageHeader(uri)
-	if !ok {
-		return "", nil, false
-	}
 	var buf bytes.Buffer
-	decoder := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
-	if _, err := io.Copy(&buf, decoder); err != nil {
-		return "", nil, false
+	mediaType, _, _, ok = streamInlineData(raw, &buf, true)
+	return mediaType, buf.Bytes(), ok
+}
+
+func streamInlineData(raw jsontext.Value, dst io.Writer, imageOnly bool) (string, int64, int64, bool) {
+	var uri string
+	if json.Unmarshal(raw, &uri) != nil {
+		return "", 0, 0, false
 	}
-	return mediaType, buf.Bytes(), true
+	mediaType, payload, ok := parseInlineDataHeader(uri, imageOnly)
+	if !ok || (imageOnly && !strings.HasPrefix(strings.ToLower(mediaType), "image/")) {
+		return "", 0, 0, false
+	}
+	size, err := io.Copy(dst, base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload)))
+	return mediaType, size, int64(len(uri)), err == nil
 }
 
 // imagePutFunc writes decoded image bytes and returns their asset reference.
@@ -642,4 +636,63 @@ func (db *DB) ProjectToolResultImagesForComparison(
 		return messages, ToolImageStats{}
 	}
 	return ProjectToolResultImagesWithoutWriting(messages, policy, db.AssetsDir())
+}
+
+// RetainedImage identifies exact bytes still available in the archive or asset store.
+type RetainedImage struct {
+	Index     int    `json:"image_index"`
+	MediaType string `json:"media_type"`
+	Size      *int64 `json:"size"`
+	SHA256    string `json:"sha256"`
+}
+
+// RetainedToolResultImages walks the same sections used by image retention.
+func RetainedToolResultImages(content string) []RetainedImage {
+	var images []RetainedImage
+	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+		var blocks []jsontext.Value
+		if json.Unmarshal(raw, &blocks) != nil {
+			return
+		}
+		for _, raw := range blocks {
+			if image, ok := retainedImageBlock(raw, len(images)); ok {
+				images = append(images, image)
+			}
+		}
+	})
+	return images
+}
+
+// retainedImageBlock reads one tool-result block as retained image evidence. A
+// placeholder left by the drop policy has no image_ref, so it has no digest.
+func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
+	if p, ok := parseOffloadedImagePlaceholder(raw); ok {
+		digest, _, ok := assetImageDigest(p.ImageRef)
+		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest}, ok && (p.Version == nil || *p.Version == 1)
+	}
+	var p offloadedImagePlaceholder
+	if json.Unmarshal(raw, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
+		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize)}, p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
+	}
+	return retainedInlineFile(raw, index)
+}
+
+func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
+	var block struct {
+		Type     string         `json:"type"`
+		ImageURL jsontext.Value `json:"image_url"`
+		URI      jsontext.Value `json:"uri"`
+	}
+	if json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)) != nil {
+		return RetainedImage{}, false
+	}
+	uri := block.ImageURL
+	if block.Type == "file" {
+		uri = block.URI
+	} else if block.Type != "input_image" {
+		return RetainedImage{}, false
+	}
+	hash := sha256.New()
+	mediaType, size, _, ok := streamInlineData(uri, hash, block.Type == "input_image")
+	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
 }

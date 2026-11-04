@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-02
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -468,6 +468,17 @@ AgentsView data directory. `agentsview source raw status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
 
+Deterministic rejections permanently block the rejected capture so independent
+sources can continue uploading. These include `invalid_request` and
+`checksum_mismatch` errors, plus HTTP 413 responses decoded as server JSON
+errors. Codeless HTTP 400 responses, credential failures, expired upload
+sessions, other conflicts, request timeouts, rate limits, server failures,
+missing-object responses, and non-JSON proxy replies remain retryable.
+Source-head conflicts reconcile with the server's current head. Each signed
+retry uses a fresh signature. After correcting a permanent rejection, a later
+capture or audit can replace the blocked capture; that capture itself is not
+retried.
+
 When a complete audit finds that a previously captured file is gone, the watcher
 uploads a tombstone for it. The server keeps the sessions already derived from
 that file; see
@@ -597,6 +608,11 @@ The implemented routes are:
 | `HEAD /api/v1/raw-sync/uploads/{id}`    | Access token with the `upload` scope    | Read the accepted upload offset         |
 | `PATCH /api/v1/raw-sync/uploads/{id}`   | Access token with the `upload` scope    | Append and finalize object bytes        |
 | `POST /api/v1/raw-sync/manifests`       | Access token with the `commit` scope    | Validate and commit one raw generation  |
+
+An empty PATCH finalizes an upload whose accepted offset equals its
+object length, including a zero-byte source file. The server still verifies
+the object's length and SHA-256 digest. An empty PATCH before the full length
+is rejected.
 
 These machine routes use their own device credentials and scoped tokens. They do
 not accept the shared bearer token that can protect the rest of a remote

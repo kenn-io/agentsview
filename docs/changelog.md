@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-01
+last_edited: 2026-11-03
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -16,6 +16,12 @@ The latest release is
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
   a PostgreSQL archive. Transcript text and tool arguments stay out of the
   report.
+
+- Assistants searching your history through MCP can now ask for sessions that
+  covered several ideas at once, such as an auth change and its retry policy,
+  even when they came up in different parts of the conversation. Pass two to
+  five `concepts` to `search_content`. Each result shows the passage that
+  matched each idea. This needs the semantic search index.
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
@@ -113,15 +119,32 @@ The latest release is
   Sessions with rows written before control-character cleanup are rewritten once.
 - `pg push` reduces writes when a session grows by rewriting only the messages
   from the first changed message onward instead of the whole session.
+- `pg push` no longer rewrites every unchanged transcript when it runs a full push
+  on its own, such as after an upgrade adds a backfill or when the archive was
+  rebuilt before the push. It still updates every session and copies changed
+  messages. `--full` still rewrites everything.
 - Homebrew installs built with `make homebrew` no longer replace themselves.
   `agentsview update` stops and tells you to run `brew upgrade agentsview`;
   `agentsview update --check` still reports new releases with the same advice.
+- `debug.log` now shows what each watcher-triggered sync cost, so you can tell
+  why the daemon keeps reading the disk without root tools. Each
+  `watcher: N file(s) changed` line is now followed by a `sync: changed paths:`
+  line. It reports how many of those paths were session files, how many
+  sessions were updated or unchanged, how many sessions had their content read
+  because their file details alone could not show whether they changed, how
+  many bytes were read, and how long the sync took. For a few less common
+  agents, the read figures can be lower than the real reads.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
+- Codex code-mode `wait` calls now show their script output. The next sync
+  restores missing results in previously imported sessions. Subagent waits
+  keep their existing behavior.
+- On Linux, large Claude archives keep Claude and Codex on live file watches
+  instead of two-minute rescans that delay session updates.
 - Hosted PostgreSQL searches and session reads stay available while raw captures
   arrive and transcripts are published. Each hosted read uses one database
   snapshot for its content, public identities and related data.

@@ -69,10 +69,32 @@ func (db *DB) GetTrendsTerms(
 	sessionFilter.Hour = nil
 	sessionFilter.Model = ""
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
+	from, to := f.messageWindowBoundsUTC()
+	if sessionWindow, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
+		messageWindow, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
+		// Filter sessions before walking their messages.
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + ")))"
+		args = append(args, wargs...)
+		args = append(args, messageArgs...)
+	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
+	content := "m.content"
+	var selectArgs []any
+	effectiveTime := "COALESCE(NULLIF(m.timestamp, ''), NULLIF(s.started_at, ''), s.created_at)"
+	if inWindow, wargs := analyticsMessageWindowPred(effectiveTime, from, to); inWindow != "" {
+		rowWindow := inWindow
+		if modelFiltering {
+			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
+			selectArgs = append(selectArgs, wargs...)
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+		}
+		where += " AND " + rowWindow
+		args = append(args, wargs...)
+	}
+	args = append(selectArgs, args...)
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, COALESCE(m.timestamp, ''),
+			COALESCE(m.model, ''), ` + content + `, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id

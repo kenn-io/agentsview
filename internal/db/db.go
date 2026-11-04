@@ -645,7 +645,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // session identities.)
 // (163: count Copilot CLI usage receipts. Re-parse Copilot sources in place;
 // source and session identities are unchanged.)
-const dataVersion = 163
+// (164: restore code-mode wait output in Codex-format sessions. Re-parse
+// sources in place; source and session identities are unchanged.)
+const dataVersion = 164
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2386,6 +2388,10 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
+			"sessions", "automation_audit",
+			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
+		},
+		{
 			"sessions", "pr_links",
 			"ALTER TABLE sessions ADD COLUMN pr_links TEXT NOT NULL DEFAULT ''",
 		},
@@ -3736,6 +3742,21 @@ BEGIN
 END;
 `
 
+const automationAuditSchemaSQL = `
+DROP TRIGGER IF EXISTS trg_sessions_automation_audit;
+CREATE TRIGGER IF NOT EXISTS trg_sessions_automation_audit
+AFTER UPDATE OF session_kind, first_message, user_message_count, is_automated, transcript_revision ON sessions
+WHEN NEW.session_kind IS NOT OLD.session_kind
+  OR NEW.first_message IS NOT OLD.first_message
+  OR NEW.user_message_count IS NOT OLD.user_message_count
+  OR NEW.is_automated IS NOT OLD.is_automated
+  OR NEW.transcript_revision IS NOT OLD.transcript_revision
+BEGIN
+    UPDATE sessions SET automation_audit = 1
+    WHERE id = NEW.id AND automation_audit <> 1;
+END;
+`
+
 // backfillSyncMarkerSQL computes sync_marker for rows written before
 // the column existed. It is the SQL twin of the trigger bodies above:
 // the max of created_at, local_modified_at, ended_at, started_at, and
@@ -3775,6 +3796,10 @@ func installSyncMarkerSchemaLocked(ctx context.Context, w *writerHandle) error {
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, syncMarkerSchemaSQL); err != nil {
 		return fmt.Errorf("creating sync_marker index and triggers: %w", err)
+	}
+	// Install column-dependent triggers after migrations in the same transaction.
+	if _, err := tx.ExecContext(ctx, automationAuditSchemaSQL); err != nil {
+		return fmt.Errorf("creating automation audit trigger: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, backfillSyncMarkerSQL); err != nil {
 		return fmt.Errorf("backfilling sync_marker: %w", err)
@@ -3902,6 +3927,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_rules_version
 		 ON sessions(friction_rules_version)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_automation_audit
+		 ON sessions(automation_audit) WHERE automation_audit = 1`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers
+		 ON sessions(id) WHERE ` + ParentlessWorkerSQL,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
 		 ON sessions(COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, '')))
 		 WHERE deleted_at IS NULL`,
@@ -4094,13 +4123,11 @@ func tableHasRowsLocked(ctx context.Context, w *writerHandle, table string) (boo
 	return populated, nil
 }
 
-// backfillIsAutomatedLocked verifies is_automated for all
-// sessions, correcting both false negatives (new patterns or
-// stale imported rows) and stale false positives (patterns
-// tightened since last run). The stored classifier hash records
-// which classifier wrote the current audit, but it is not a
-// complete integrity marker: rows can be copied from older DBs
-// or stale remote machines after the hash was stamped.
+const clearAutomationAuditSQL = `UPDATE sessions SET automation_audit = 0 WHERE automation_audit = 1`
+
+// backfillIsAutomatedLocked audits stale sessions, or all sessions when the
+// classifier changes. The writer is exclusively owned during the audit, and
+// interrupted audits leave stale rows for retry.
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
 	if err := repairParentlessWorkers(ctx, w); err != nil {
 		return err
@@ -4151,6 +4178,11 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 		w, clearIDs, 0,
 	); err != nil {
 		return err
+	}
+	if _, err := w.Exec(ctx,
+		clearAutomationAuditSQL,
+	); err != nil {
+		return fmt.Errorf("marking automation audit rows fresh: %w", err)
 	}
 
 	if len(setIDs) > 0 || len(clearIDs) > 0 {

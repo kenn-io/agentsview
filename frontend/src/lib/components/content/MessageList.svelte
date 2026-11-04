@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fileReferences } from "../../stores/file-references.svelte.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, tick, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
@@ -40,6 +41,14 @@
     keepsAnswerBeforeTrailingTools,
     projectSessionScope,
   } from "../../search/session-scope.js";
+
+  $effect(() => {
+    const id = messages.sessionId;
+    const revision = messages.loadedRevision;
+    if (fileReferences.enabled) untrack(() => void fileReferences.track(id, revision));
+  });
+
+  onDestroy(() => fileReferences.reset());
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let containerScrollTop = $state(0);

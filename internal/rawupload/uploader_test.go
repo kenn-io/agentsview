@@ -122,60 +122,6 @@ func TestUploaderRetriesPostCommitAcknowledgementWithoutRecommitting(t *testing.
 	assert.Equal(t, commit.Generation, head.Generation)
 }
 
-func TestUploaderClassifiesGatewayTimeoutByHTTPStatus(t *testing.T) {
-	store, generation := queuedUploadTestGeneration(t)
-	transport := &uploadTransportStub{
-		uploaded: make(map[rawsync.ObjectRef]string),
-		commitErr: &rawclient.APIError{
-			Status:  http.StatusGatewayTimeout,
-			Code:    rawclient.CodeInternal,
-			Message: "request timed out",
-		},
-	}
-	uploader := New(store, transport, "device-a")
-
-	result, found, err := uploader.UploadNext(t.Context())
-
-	require.Error(t, err)
-	require.True(t, found)
-	assert.Zero(t, result)
-	_, found, retryErr := uploader.UploadNext(t.Context())
-	require.NoError(t, retryErr)
-	assert.False(t, found, "durable retry time must delay the finalized generation")
-	base, ok, readErr := store.CaptureBase(t.Context(), generation.Source)
-	require.NoError(t, readErr)
-	require.True(t, ok)
-	assert.Equal(t, generation.CaptureID, base.CaptureID)
-}
-
-func TestUploaderRetriesRecoverableClientErrors(t *testing.T) {
-	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
-	store, _ := queuedUploadTestGenerationWithNow(t, func() time.Time { return now })
-	transport := &uploadTransportStub{
-		uploaded: make(map[rawsync.ObjectRef]string),
-		commitErr: &rawclient.APIError{
-			Status:  http.StatusUnauthorized,
-			Code:    rawclient.CodeUnauthorized,
-			Message: "credential expired",
-		},
-	}
-	uploader := New(store, transport, "device-a")
-	uploader.now = func() time.Time { return now }
-
-	_, found, err := uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
-	now = now.Add(2 * transientRetryDelay)
-	transport.commitErr = nil
-	transport.commit = rawsync.CommitResult{
-		ManifestID: strings.Repeat("c", 64), Receipt: strings.Repeat("d", 64),
-		Generation: 1, Created: true,
-	}
-	_, found, err = uploader.UploadNext(t.Context())
-	require.NoError(t, err)
-	assert.True(t, found, "corrected credentials must resume the source chain")
-}
-
 func TestUploaderExponentiallyBacksOffRepeatedTransientFailures(t *testing.T) {
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	store, _ := queuedUploadTestGenerationWithNow(t, func() time.Time { return now })
@@ -274,40 +220,74 @@ func TestUploaderBacksOffMissingLocalSpoolObject(t *testing.T) {
 	assert.False(t, found, "persistent local failures must not hot-loop")
 }
 
-func TestUploaderPersistsPermanentRejectionAndSuppressesRetry(t *testing.T) {
-	baseDir := t.TempDir()
-	store, generation := queuedUploadTestGenerationAt(t, baseDir, nil)
-	transport := &uploadTransportStub{
-		uploaded: make(map[rawsync.ObjectRef]string),
-		commitErr: &rawclient.APIError{
-			Status: http.StatusBadRequest, Code: rawclient.CodeInvalidRequest,
-		},
+func TestUploaderClassifiesRejections(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		code      string
+		permanent bool
+	}{
+		{"invalid request", 400, rawclient.CodeInvalidRequest, true},
+		{"uncoded JSON bad request", 400, "", false},
+		{"unknown-code JSON bad request", 400, "future_rejection", false},
+		{"server too large", 413, "", true},
+		{"checksum mismatch", 409, rawclient.CodeChecksumMismatch, true},
+		{"expired credential", 401, rawclient.CodeUnauthorized, false},
+		{"forbidden", 403, "", false},
+		{"expired upload session", 404, rawclient.CodeNotFound, false},
+		{"request timeout", 408, "", false},
+		{"upload offset conflict", 409, rawclient.CodeUploadOffset, false},
+		{"rate limit", 429, "", false},
+		{"server error", 500, rawclient.CodeInternal, false},
+		{"gateway error", 502, rawclient.CodeInternal, false},
+		{"missing object", 409, rawclient.CodeMissingObject, false},
+		{"non-JSON too large", 413, rawclient.CodeInternal, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+			baseDir := t.TempDir()
+			store, generation := queuedUploadTestGenerationAt(t, baseDir, func() time.Time { return now })
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			transport := &uploadTransportStub{
+				uploaded:  make(map[rawsync.ObjectRef]string),
+				commitErr: &rawclient.APIError{Status: tc.status, Code: tc.code},
+			}
+			uploader := New(store, transport, "device-a")
+			uploader.now = func() time.Time { return now }
+			_, found, err := uploader.UploadNext(t.Context())
+			require.Error(t, err)
+			require.True(t, found)
+			if tc.permanent {
+				require.ErrorIs(t, err, ErrPermanentFailure)
+			} else {
+				require.NotErrorIs(t, err, ErrPermanentFailure)
+			}
+			if tc.name != "invalid request" {
+				return
+			}
+			require.NoError(t, store.Close())
+			store, err = rawcheckpoint.OpenWithOptions(
+				t.Context(), filepath.Join(baseDir, "checkpoint.db"),
+				rawcheckpoint.Options{
+					SpoolDir: filepath.Join(baseDir, "spool"), MaxOutboxBytes: 1 << 20,
+					Now: func() time.Time { return now },
+				},
+			)
+			require.NoError(t, err)
+			base, ok, err := store.CaptureBase(t.Context(), generation.Source)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, generation.CaptureID, base.CaptureID)
+			uploader = New(store, transport, "device-a")
+			uploader.now = func() time.Time { return now }
+			_, found, err = uploader.UploadNext(t.Context())
+			require.NoError(t, err)
+			assert.False(t, found, "blocked or backed-off captures stay out of the ready queue")
+			status, err := store.ClientStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, 1, status.PermanentFailures)
+		})
 	}
-
-	_, found, err := New(store, transport, "device-a").UploadNext(t.Context())
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrPermanentFailure)
-	require.True(t, found)
-	require.NoError(t, store.Close())
-	store, err = rawcheckpoint.OpenWithOptions(
-		t.Context(), filepath.Join(baseDir, "checkpoint.db"),
-		rawcheckpoint.Options{
-			SpoolDir: filepath.Join(baseDir, "spool"), MaxOutboxBytes: 1 << 20,
-		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	base, ok, err := store.CaptureBase(t.Context(), generation.Source)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, generation.CaptureID, base.CaptureID)
-	_, found, err = New(store, transport, "device-a").UploadNext(t.Context())
-	require.NoError(t, err)
-	assert.False(t, found)
-	status, err := store.ClientStatus(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, 1, status.PermanentFailures)
 }
 
 func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) {

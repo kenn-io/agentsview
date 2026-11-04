@@ -339,3 +339,24 @@ func TestUsageModelGroupsQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchContentForwardsConceptsAndSemanticIntent(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		assert.Equal(t, []string{"auth model", "retry policy"}, query["concepts"])
+		assert.False(t, query.Has("pattern"))
+		assert.Equal(t, service.SemanticSearchIntentValue, r.Header.Get(service.SemanticSearchIntentHeader))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[],"candidate_truncated":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res, err := NewHTTPBackend(srv.URL, "", false, "").SearchContent(
+		t.Context(), service.ContentSearchRequest{
+			Concepts: []string{"auth model", "retry policy"},
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, res.CandidateTruncated)
+}

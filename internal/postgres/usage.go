@@ -1349,31 +1349,34 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
-	sess, err := s.GetSession(ctx, sessionID)
-	if err != nil {
-		return nil, err
+	// All four reads need only sessionID. A missing or failed session still
+	// wins over the other results.
+	var (
+		sess                                  *db.Session
+		pricing                               []export.EffectivePricingRow
+		usageRows                             []pgUsageScanRow
+		planUsage                             *db.SessionPlanUsage
+		sessErr, pricingErr, rowsErr, planErr error
+	)
+	s.runIndependentReads(
+		func() { sess, sessErr = s.GetSession(ctx, sessionID) },
+		func() { pricing, pricingErr = s.loadPricingMap(ctx) },
+		func() { usageRows, rowsErr = s.querySessionUsageRows(ctx, sessionID) },
+		func() { planUsage, planErr = s.GetSessionPlanUsage(ctx, sessionID) },
+	)
+	if sessErr != nil {
+		return nil, sessErr
 	}
 	if sess == nil {
 		return nil, nil
 	}
-
-	pricing, err := s.loadPricingMap(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("loading pg pricing: %w", err)
+	if pricingErr != nil {
+		return nil, fmt.Errorf("loading pg pricing: %w", pricingErr)
+	}
+	if rowsErr != nil {
+		return nil, rowsErr
 	}
 	rateResolver := export.NewPricingResolver(pricing)
-
-	pb := &paramBuilder{}
-	query := pgUsageRowSelect() + " AND u.session_id = " +
-		pb.add(sessionID) + ` ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC,
-		u.usage_source ASC,
-		COALESCE(u.usage_dedup_key, '') ASC`
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying pg session usage: %w", err)
-	}
-	defer rows.Close()
 
 	var cost money.Money
 	var authoritativeCost *money.Money
@@ -1385,18 +1388,6 @@ func (s *Store) GetSessionUsage(
 	breakdown := make([]db.SessionUsageBreakdownEntry, 0)
 	breakdownCount := 0
 
-	var usageRows []pgUsageScanRow
-	for rows.Next() {
-		r, scanErr := scanPGUsageRow(rows)
-		if scanErr != nil {
-			return nil,
-				fmt.Errorf("scanning pg session usage row: %w", scanErr)
-		}
-		usageRows = append(usageRows, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating pg session usage rows: %w", err)
-	}
 	snapshotRows := make([]activity.UsageRow, len(usageRows))
 	for i, r := range usageRows {
 		var outputTokens int
@@ -1518,11 +1509,41 @@ func (s *Store) GetSessionUsage(
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = db.SortedKeys(unpricedSet)
 	}
-	out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID)
-	if err != nil {
-		return nil, err
+	if planErr != nil {
+		return nil, planErr
 	}
+	out.PlanUsage = planUsage
 	return out, nil
+}
+
+// querySessionUsageRows reads one session's usage rows in rollup order.
+func (s *Store) querySessionUsageRows(
+	ctx context.Context, sessionID string,
+) ([]pgUsageScanRow, error) {
+	pb := &paramBuilder{}
+	query := pgUsageRowSelect() + " AND u.session_id = " +
+		pb.add(sessionID) + ` ORDER BY u.ts ASC, u.session_id ASC,
+		COALESCE(u.message_ordinal, -1) ASC,
+		u.usage_source ASC,
+		COALESCE(u.usage_dedup_key, '') ASC`
+	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying pg session usage: %w", err)
+	}
+	defer rows.Close()
+	var usageRows []pgUsageScanRow
+	for rows.Next() {
+		r, scanErr := scanPGUsageRow(rows)
+		if scanErr != nil {
+			return nil,
+				fmt.Errorf("scanning pg session usage row: %w", scanErr)
+		}
+		usageRows = append(usageRows, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pg session usage rows: %w", err)
+	}
+	return usageRows, nil
 }
 
 // GetDailyUsage returns token usage and cost aggregated by day.

@@ -409,54 +409,57 @@ class ActivityStore {
     const signal = this.filterOptionsRead.begin();
     const machine = this.machine;
     const opts = { include_one_shot: true, include_automated: true };
+    const isCurrent = () =>
+      ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
+    // A failed list keeps its current values and is retried on the next call.
+    const failure = (e: unknown): "failed" | "aborted" =>
+      isAbortError(e) || !this.filterOptionsRead.isCurrent(signal) ? "aborted" : "failed";
+    type Outcome = "ok" | "failed" | "aborted";
     let request!: Promise<boolean>;
     request = (async () => {
-      let ok = true;
-      try {
-        const res = await MetadataService.getApiV1Projects(opts, { signal });
-        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
-          this.projects = res.projects;
-      } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
-        ok = false; // keep the current list; retry on the next call
-      }
-      try {
-        const res = await MetadataService.getApiV1Agents(opts, { signal });
-        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
-          this.agents = res.agents;
-      } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
-        ok = false;
-      }
-      try {
-        const res = await MetadataService.getApiV1Machines(
+      // The three lists are independent, so they load concurrently.
+      const outcomes = await Promise.all([
+        MetadataService.getApiV1Projects(opts, { signal }).then((res): Outcome => {
+          if (isCurrent()) this.projects = res.projects;
+          return "ok";
+        }, failure),
+        MetadataService.getApiV1Agents(opts, { signal }).then((res): Outcome => {
+          if (isCurrent()) this.agents = res.agents;
+          return "ok";
+        }, failure),
+        MetadataService.getApiV1Machines(
           { ...opts, machine: machine || undefined },
           { signal },
-        );
-        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal)) {
-          this.machines = res.machines;
-          if (machine && this.machine === machine && res.resolved_machines?.length) {
-            this.machine = [...new Set(res.resolved_machines)].join(",");
-            this.writeUrl();
-          }
-        }
-      } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
-        ok = false;
-        if (e instanceof ApiError && e.code === "invalid_machine_filter") {
-          const catalog = await MetadataService.getApiV1Machines(opts, { signal }).catch(
-            () => null,
-          );
-          if (
-            catalog &&
-            ver === this.#filterOptionsVersion &&
-            this.filterOptionsRead.isCurrent(signal)
-          )
-            this.machines = catalog.machines;
-        }
-      }
-      const current =
-        ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
+        ).then(
+          (res): Outcome => {
+            if (isCurrent()) {
+              this.machines = res.machines;
+              if (machine && this.machine === machine && res.resolved_machines?.length) {
+                this.machine = [...new Set(res.resolved_machines)].join(",");
+                this.writeUrl();
+              }
+            }
+            return "ok";
+          },
+          async (e: unknown): Promise<Outcome> => {
+            const outcome = failure(e);
+            if (
+              outcome === "failed" &&
+              e instanceof ApiError &&
+              e.code === "invalid_machine_filter"
+            ) {
+              const catalog = await MetadataService.getApiV1Machines(opts, { signal }).catch(
+                () => null,
+              );
+              if (catalog && isCurrent()) this.machines = catalog.machines;
+            }
+            return outcome;
+          },
+        ),
+      ]);
+      if (outcomes.includes("aborted")) return false;
+      const ok = outcomes.every((outcome) => outcome === "ok");
+      const current = isCurrent();
       if (current) {
         // Cache only a fully successful load so a transient failure is
         // retried rather than frozen as a permanent empty list.

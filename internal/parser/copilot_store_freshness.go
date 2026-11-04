@@ -110,10 +110,12 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 	defer file.Close()
 	c.transcriptBytes += info.Size()
 	copilotTranscriptBytesRead.Add(info.Size())
+	counted := &countingReader{r: file}
+	defer func() { recordContentRead(ctx, counted.n) }()
 	h := sha256.New()
 	var started time.Time
 	sessionID := ""
-	lr := newLineReaderContext(ctx, io.TeeReader(file, h), maxLineSize)
+	lr := newLineReaderContext(ctx, io.TeeReader(counted, h), maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		if err := ctx.Err(); err != nil {

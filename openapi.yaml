@@ -1223,11 +1223,44 @@ components:
         - reclaimed_bytes
         - duration_millis
       type: object
+    DbConceptEvidence:
+      additionalProperties: false
+      properties:
+        concept:
+          type: string
+        ordinal:
+          format: int64
+          type: integer
+        ordinal_range:
+          items:
+            format: int64
+            type: integer
+          maxItems: 2
+          minItems: 2
+          type: array
+        score:
+          format: double
+          type: number
+        snippet:
+          type: string
+        transcript_revision:
+          type: string
+      required:
+        - concept
+        - ordinal
+        - ordinal_range
+        - snippet
+        - score
+      type: object
     DbContentMatch:
       additionalProperties: false
       properties:
         agent:
           type: string
+        concept_evidence:
+          items:
+            $ref: "#/components/schemas/DbConceptEvidence"
+          type: array
         context_after:
           items:
             $ref: "#/components/schemas/DbMessage"
@@ -4028,6 +4061,9 @@ components:
     DbToolCall:
       additionalProperties: false
       properties:
+        call_index:
+          format: int64
+          type: integer
         category:
           type: string
         input_json:
@@ -4052,6 +4088,7 @@ components:
       required:
         - tool_name
         - category
+        - call_index
       type: object
     DbToolCategoryCount:
       additionalProperties: false
@@ -5481,6 +5518,26 @@ components:
       required:
         - insights
       type: object
+    IntegrationsdocbankMatch:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        open_url:
+          type: string
+        path:
+          type: string
+        state:
+          enum:
+            - current
+            - prior
+            - trash
+          type: string
+      required:
+        - state
+        - name
+        - path
+      type: object
     KataStatus:
       additionalProperties: false
       properties:
@@ -6695,6 +6752,8 @@ components:
       properties:
         active_filter_applied:
           type: boolean
+        candidate_truncated:
+          type: boolean
         coverage:
           $ref: "#/components/schemas/ServiceMemoryCoverage"
         matches:
@@ -6711,6 +6770,93 @@ components:
         - matches
         - revision_bound
         - coverage
+      type: object
+    ServiceFileReferenceOccurrence:
+      additionalProperties: false
+      properties:
+        call_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+        event_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+        image_index:
+          format: int64
+          type: integer
+        match_total:
+          format: int64
+          type: integer
+        matches:
+          items:
+            $ref: "#/components/schemas/IntegrationsdocbankMatch"
+          type: array
+        media_type:
+          type: string
+        message_ordinal:
+          format: int64
+          type: integer
+        sha256:
+          type: string
+        size:
+          format: int64
+          type:
+            - integer
+            - "null"
+        state:
+          enum:
+            - found
+            - not_found
+            - unavailable
+            - limit_exceeded
+            - bytes_not_kept
+          type: string
+        tool_name:
+          type:
+            - string
+            - "null"
+        tool_use_id:
+          type:
+            - string
+            - "null"
+      required:
+        - message_ordinal
+        - call_index
+        - tool_use_id
+        - tool_name
+        - event_index
+        - image_index
+        - media_type
+        - size
+        - sha256
+        - state
+        - matches
+        - match_total
+      type: object
+    ServiceFileReferencesResult:
+      additionalProperties: false
+      properties:
+        integration:
+          enum:
+            - disabled
+            - enabled
+          type: string
+        lookup_failed:
+          description: At least one Docbank lookup failed; retry may resolve unavailable occurrences.
+          type: boolean
+        occurrences:
+          items:
+            $ref: "#/components/schemas/ServiceFileReferenceOccurrence"
+          type: array
+        transcript_revision:
+          type: string
+      required:
+        - transcript_revision
+        - integration
+        - occurrences
       type: object
     ServiceMemoryArchiveStatus:
       additionalProperties: false
@@ -8601,6 +8747,8 @@ components:
         data_version:
           format: int64
           type: integer
+        docbank_enabled:
+          type: boolean
         friction_available:
           type: boolean
         friction_build_allowed:
@@ -16969,7 +17117,6 @@ paths:
               contentMediaType: application/octet-stream
               format: binary
               type: string
-        required: true
       responses:
         "200":
           content:
@@ -18413,14 +18560,22 @@ paths:
     get:
       operationId: get-api-v1-search-content
       parameters:
-        - description: Pattern to search for
+        - description: Pattern to search for; mutually exclusive with concepts
           explode: false
           in: query
           name: pattern
-          required: true
           schema:
-            description: Pattern to search for
+            description: Pattern to search for; mutually exclusive with concepts
             type: string
+        - description: Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern
+          explode: true
+          in: query
+          name: concepts
+          schema:
+            description: Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern
+            items:
+              type: string
+            type: array
         - description: Search mode
           explode: false
           in: query
@@ -20650,6 +20805,93 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Export session as HTML
+      tags:
+        - Sessions
+  /api/v1/sessions/{id}/file-references:
+    get:
+      operationId: get-api-v1-sessions-id-file-references
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceFileReferencesResult"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Find session images in Docbank
       tags:
         - Sessions
   /api/v1/sessions/{id}/labels:

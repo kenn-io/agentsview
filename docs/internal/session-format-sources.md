@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-01
+last_edited: 2026-11-03
 ---
 
 # Session Format Source Inventory
@@ -634,6 +634,35 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records
+  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+  `function_call_output.output` is an array of `input_text` blocks containing
+  completion timing and script output; running polls return plain text.
+  Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
+  `targets` arguments as code-mode polls and stores their output as normal
+  tool results. Subagent waits keep their existing `status` handling,
+  including empty timeout statuses. They add no result event when `status`
+  is absent. Synthetic coverage in
+  `TestParseCodexSession_FunctionCalls` and
+  `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
+  an in-place reparse for Codex at data version 164.
+
+- **Code-mode waits (checked 2026-11-03 at
+  `b34808060a51e98b8cb3dcf77824703757737cda`):** The pinned
+  [wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/wait_handler.rs)
+  resumes an exec cell using a string `cell_id`. The pinned
+  [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
+  stores function-call arguments as a JSON string. The
+  [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
+  emits text blocks with script status, wall time, and output. These polls stay
+  on the incremental parse path when they bind no agent IDs through `ids` or
+  `targets`. Subagent waits still require a full parse, including the empty
+  `status` object returned on timeout by the
+  [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
+  Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
+  share this parser. Parsed content and cursor encoding are unchanged.
 
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -1851,6 +1880,12 @@ Normal sync tests use the captured beta database schema and check archived
 payloads, image keep/drop behavior, unchanged PDF/text files and references, and
 an unchanged second sync. Data version 108 makes existing imports eligible to
 recover omitted file payloads. This adds retention, not a PDF previewer.
+`TestRetainedToolResultFilesProducerFixture` uses `tool_files.json` to check
+PDF/text sizes and the text digest. Service and UI tests use separate inputs.
+Reverified the retained-file decoder on 2026-10-22 against the parser's
+unchanged `file.uri` retention. Constructed service and API regressions cover
+empty base64 bodies and MIME parameters before the base64 marker, asserting
+decoded-byte digests and visible file occurrences.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the
