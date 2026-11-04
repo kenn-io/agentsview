@@ -15,8 +15,13 @@ import (
 
 func newSecretsCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "secrets",
-		Short:        "Scan for and list detected secret leaks",
+		Use:   "secrets",
+		Short: "Scan for and list detected secret leaks",
+		Long: "Inspect redacted secret findings or run the full scanner over archived session content. " +
+			"Normal sync uses fast definite rules; a full scan also includes candidate rules. " +
+			"Findings are redacted by default, and revealing values requires an explicit option.",
+		Example: "  agentsview secrets list --json\n" +
+			"  agentsview secrets scan --help",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

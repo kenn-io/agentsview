@@ -511,11 +511,10 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 			}
 			log.Printf("pg schema: preparation indexes unavailable, insufficient privilege: %v", err)
 		}
-		// Schema DDL is current, so skip the index and column
-		// maintenance that can lock against concurrent pg serve
-		// reads (issue #887). Still run the row-level data repairs
-		// so is_automated and token-coverage flags stay correct on
-		// existing rows.
+		// Skip general index and column maintenance, and run correctness
+		// repairs so is_automated and token-coverage flags stay current.
+		// The one-time automation tracking installation still takes an
+		// exclusive sessions lock, blocking reads and writes until commit.
 		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
 			return err
 		}

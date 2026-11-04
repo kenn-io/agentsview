@@ -37,6 +37,8 @@ func newKataCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "kata",
 		Short:        "Inspect the optional Kata issue-tracker connection",
+		Long:         "Inspect the optional Kata issue-tracker connection.",
+		Example:      "  agentsview kata status",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

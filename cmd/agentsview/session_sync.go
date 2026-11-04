@@ -21,8 +21,13 @@ import (
 
 func newSessionSyncCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:          "sync <path-or-id>",
-		Short:        "Parse and insert a single session into the database",
+		Use:   "sync <path-or-id>",
+		Short: "Parse and insert a single session into the database",
+		Long: "Refresh one session by source path or ID and return its metadata. " +
+			"This is a write operation and requires a writable backend. " +
+			"An explicit remote --server interprets source paths on that server's host; --pg and read-only daemons cannot perform the refresh.",
+		Example: "  agentsview session sync <id> --json\n" +
+			"  agentsview session sync ./session.jsonl --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

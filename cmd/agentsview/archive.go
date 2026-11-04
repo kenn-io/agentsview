@@ -16,6 +16,9 @@ import (
 
 func newArchiveCommand() *cobra.Command {
 	command := &cobra.Command{Use: "archive", Short: "Retain original session files, reparse them, and move a complete archive", GroupID: groupData}
+	command.Long = "Retain and verify original provider sources so they can be reparsed or moved with their archive identities."
+	command.Example = "  agentsview archive sources\n" +
+		"  agentsview archive verify --help"
 	var captureRoots []string
 	var identityFrom string
 	var writersStopped bool

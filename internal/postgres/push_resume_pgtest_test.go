@@ -313,10 +313,12 @@ func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, first.Errors)
 
-	// NOT VALID leaves the existing row alone and rejects only the full
-	// push's rewrite of it.
+	// Reject the full push's upsert while allowing audit stamp updates.
 	_, err = f.pg.ExecContext(t.Context(),
-		`ALTER TABLE sessions ADD CONSTRAINT reject_old CHECK (id <> 'old') NOT VALID`)
+		`CREATE FUNCTION reject_old() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN RAISE EXCEPTION 'synthetic session publication failure'; END $$;
+ CREATE TRIGGER reject_old BEFORE INSERT ON sessions
+ FOR EACH ROW WHEN (NEW.id = 'old') EXECUTE FUNCTION reject_old()`)
 	require.NoError(t, err)
 	errored, err := f.sync().Push(t.Context(), true, nil)
 	require.NoError(t, err)
@@ -326,7 +328,7 @@ func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, stored, "the errored run stays recorded")
 
-	_, err = f.pg.ExecContext(t.Context(), `ALTER TABLE sessions DROP CONSTRAINT reject_old`)
+	_, err = f.pg.ExecContext(t.Context(), `DROP TRIGGER reject_old ON sessions; DROP FUNCTION reject_old()`)
 	require.NoError(t, err)
 	next, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
