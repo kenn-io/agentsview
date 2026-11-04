@@ -111,7 +111,10 @@ func newWhyCommand() *cobra.Command {
 					fmt.Fprintln(w, "  No recorded session.")
 				}
 				for _, link := range c.Links {
-					line := fmt.Sprintf("  %s  %s  %s  %s", link.Source, link.SessionID, link.Repository, link.Subject)
+					line := fmt.Sprintf("  %s  %s  %s", link.Source, link.SessionID, link.Repository)
+					if c.Lines == nil || link.Subject != c.Subject {
+						line += "  " + link.Subject
+					}
 					if link.Ambiguous {
 						line += "  (ambiguous: prefix matches several commits)  " + link.SHA
 					}
