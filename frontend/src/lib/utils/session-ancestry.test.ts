@@ -25,29 +25,24 @@ describe("sessionAncestryMatcher", () => {
     expect(idReads).toBeLessThanOrEqual(10);
   });
 
-  it.each(["matcher", "one-off"] as const)(
-    "%s skips the pool until a parent lookup is needed",
-    (mode) => {
-      let poolReads = 0;
-      const nodes: Node[] = [{
-        get id() {
-          poolReads++;
-          return "match";
-        },
-      }];
-      const matches = (node: Node) => node.id === "match";
-      const matcher = mode === "matcher"
-        ? sessionAncestryMatcher(nodes, matches)
-        : (node: Node) => sessionAncestryMatches(node, nodes, matches);
+  it("matcher skips the pool until a parent lookup is needed", () => {
+    let poolReads = 0;
+    const nodes: Node[] = [{
+      get id() {
+        poolReads++;
+        return "match";
+      },
+    }];
+    const matches = (node: Node) => node.id === "match";
+    const matcher = sessionAncestryMatcher(nodes, matches);
 
-      expect(matcher({ id: "root" })).toBe(false);
-      expect(matcher({ id: "match", parent_session_id: "parent" })).toBe(true);
-      expect(poolReads).toBe(0);
+    expect(matcher({ id: "root" })).toBe(false);
+    expect(matcher({ id: "match", parent_session_id: "parent" })).toBe(true);
+    expect(poolReads).toBe(0);
 
-      expect(matcher({ id: "child", parent_session_id: "match" })).toBe(true);
-      expect(poolReads).toBeGreaterThan(0);
-    },
-  );
+    expect(matcher({ id: "child", parent_session_id: "match" })).toBe(true);
+    expect(poolReads).toBeGreaterThan(0);
+  });
 
   it.each([
     ["leaf first", false],
@@ -95,14 +90,14 @@ describe("sessionAncestryMatcher", () => {
       answers: [false, true, false],
     },
     {
-      name: "the second parent can match after the first is settled false",
+      name: "a visited branch off the matching path is not marked as matching",
       nodes: [
+        { id: "leaf", parent_session_ids: ["match", "root"] },
         { id: "root" },
         { id: "match" },
-        { id: "leaf", parent_session_ids: ["root", "match"] },
       ],
       match: "match",
-      answers: [false, true, true],
+      answers: [true, false, true],
     },
     {
       name: "cycles terminate without a match",

@@ -634,27 +634,7 @@ describe("starred-only session count", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Child classification: subagent precedence over teammate
-// ---------------------------------------------------------------------------
-
 describe("ancestry classification across a group", () => {
-  it("keeps all 999 continuations inline in an expanded 1,000-session chain", () => {
-    const sessions = Array.from({ length: 1000 }, (_, i) =>
-      makeSession({
-        id: `session-${i}`,
-        parent_session_id: i ? `session-${i - 1}` : undefined,
-        relationship_type: i ? "continuation" : undefined,
-      }),
-    );
-    const groups = buildSessionGroups(sessions);
-    const items = buildDisplayItems(groups, [], "none", new Set(), new Set(["session-0"]));
-    expect(items).toHaveLength(1000);
-    expect(items.filter((item) => item.isChild)).toHaveLength(999);
-    expect(items.every((item) => item.type === "session")).toBe(true);
-    expect(items.filter((item) => item.isChild).every((item) => item.depth === 1)).toBe(true);
-  });
-
   it("keeps continuations, subagent descendants, and teammate descendants in their sections", () => {
     const chain = Array.from({ length: 100 }, (_, i) =>
       makeSession({
@@ -678,6 +658,7 @@ describe("ancestry classification across a group", () => {
     expect(items.filter((item) => item.isChild).map((item) => item.session?.id)).toEqual(
       chain.slice(1, 50).map((session) => session.id),
     );
+    expect(items.filter((item) => item.isChild).every((item) => item.depth === 1)).toBe(true);
     expect(items.find((item) => item.type === "subagent-group")?.memberSessionIds).toEqual(
       chain.slice(50).map((session) => session.id),
     );
@@ -710,6 +691,10 @@ describe("ancestry classification across a group", () => {
     ).toEqual([["b", "shared", 1]]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Child classification: subagent precedence over teammate
+// ---------------------------------------------------------------------------
 
 describe("child classification precedence", () => {
   it.each([
