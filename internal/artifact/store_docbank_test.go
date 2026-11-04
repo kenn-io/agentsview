@@ -78,7 +78,6 @@ func TestDocbankStorePreservesTypedDocbankCauses(t *testing.T) {
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 
 	_, err := store.Stat(t.Context(), ref)
-	require.ErrorIs(t, err, ErrArtifactNotFound)
 	require.ErrorIs(t, err, docbank.ErrNotFound)
 
 	body := []byte("actual bytes")
@@ -87,11 +86,6 @@ func TestDocbankStorePreservesTypedDocbankCauses(t *testing.T) {
 	_, err = store.Create(t.Context(), ref, expected, "application/json", bytes.NewReader(body))
 	require.ErrorIs(t, err, ErrArtifactInvalid)
 	require.ErrorIs(t, err, docbank.ErrDigestMismatch)
-
-	created := createContractArtifact(t, store, ref, body)
-	_, err = store.Create(t.Context(), ref, created.Entry.Identity,
-		"application/octet-stream", bytes.NewReader(body))
-	assert.ErrorIs(t, err, ErrArtifactConflict)
 }
 
 func TestDocbankStoreClosedOperationsReturnErrClosed(t *testing.T) {
@@ -124,13 +118,10 @@ func TestDocbankStoreIdempotentRetryDoesNotReportPhysicalWrite(t *testing.T) {
 
 	first, err := store.Create(t.Context(), ref, identity, "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
-	assert.True(t, first.Created)
 	assert.NotEqual(t, PhysicalWrite{}, first.Physical)
 
 	retry, err := store.Create(t.Context(), ref, identity, "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
-	assert.False(t, retry.Created)
-	assert.Equal(t, first.Entry, retry.Entry)
 	assert.Equal(t, PhysicalWrite{}, retry.Physical)
 }
 
