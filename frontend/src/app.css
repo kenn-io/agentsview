@@ -222,10 +222,13 @@
 :root {
   --selected-bg: var(--bg-surface);
   --selected-edge: inset 0 0 0 1px var(--border-default);
+  /* Selected rows in lists that already sit on the surface color. */
+  --selected-list-bg: var(--bg-inset);
 }
 
 :root.dark {
   --selected-bg: var(--bg-surface-hover);
+  --selected-list-bg: var(--bg-surface-hover);
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */
