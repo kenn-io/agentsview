@@ -59,7 +59,6 @@ const (
 	watcherBatchDelay              = 500 * time.Millisecond
 	watcherSyncMinInterval         = 5 * time.Second
 	deferredStartupSyncGracePeriod = 30 * time.Second
-	recursiveWatchBudget           = 8192
 )
 
 const (

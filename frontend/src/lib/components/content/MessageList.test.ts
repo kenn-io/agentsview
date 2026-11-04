@@ -288,6 +288,29 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
+  it("refreshes Docbank when the same transcript is remounted", async () => {
+    const { fileReferences } = await import("../../stores/file-references.svelte.js");
+    fileReferences.enabled = true;
+    await fileReferences.track(null, null);
+    messages.loadedRevision = "revision-1";
+    docbankLookup.mockResolvedValue({
+      integration: "enabled",
+      transcript_revision: "revision-1",
+      occurrences: [],
+    });
+    onTestFinished(() => {
+      fileReferences.enabled = false;
+    });
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await vi.waitFor(() => expect(docbankLookup).toHaveBeenCalledTimes(1));
+    await unmount(component);
+    component = undefined;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await vi.waitFor(() => expect(docbankLookup).toHaveBeenCalledTimes(2));
+  });
+
   it("keeps an ordinal jump on its message through an older load past five seconds", async () => {
     const { flushFrames } = controlFrames();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1285,3 +1308,9 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("current");
   });
 });
+
+const docbankLookup = vi.hoisted(() => vi.fn());
+vi.mock("../../api/generated/sessions/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/generated/sessions/sessions.js")>()),
+  getApiV1SessionsByIdFileReferences: docbankLookup,
+}));

@@ -7,6 +7,7 @@ import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { msg } from "../../utils/test-messages.js";
+import { fileReferences } from "../../stores/file-references.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import SubagentInline from "./SubagentInline.svelte";
@@ -81,6 +82,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 afterEach(() => {
+  fileReferences.enabled = false;
+  fileReferences.reset();
   setLocale("en");
   childSessions.clear();
   getMessages.mockReset();
@@ -128,6 +131,29 @@ describe("SubagentInline", () => {
       ui.visibleBlocks = original;
     }
   });
+
+  it.each([true, false])(
+    "explains file matches when expanded with Docbank enabled=%s",
+    async (enabled) => {
+      fileReferences.enabled = enabled;
+      getMessages.mockResolvedValueOnce({ messages: [], count: 0 });
+      getSession.mockResolvedValueOnce(makeSession());
+      const component = mount(SubagentInline, {
+        target: document.body,
+        props: { sessionId: "subagent-session-id" },
+      });
+      await tick();
+      expect(document.body.textContent).not.toContain(
+        "File matches appear when opened as a session.",
+      );
+      document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("No messages"));
+      expect(
+        document.body.textContent?.includes("File matches appear when opened as a session."),
+      ).toBe(enabled);
+      await unmount(component);
+    },
+  );
 
   it("reports the session kind when expanded messages fail", async () => {
     getMessages.mockRejectedValueOnce(new Error("Messages failed"));

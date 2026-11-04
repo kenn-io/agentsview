@@ -116,7 +116,7 @@
         {/if}
         {#if calls.length === 1}
           {@const soloCall = calls[0]!}
-          <ToolBlock
+          <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
             toolCall={soloCall}
             content=""
             label={displayToolName(soloCall)}
@@ -129,7 +129,7 @@
             searchScope={searchable ? { ordinal: message.ordinal, callIdx: 0 } : undefined}
           />
         {:else if calls.length >= 2}
-          <ParallelGroup
+          <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal}
             toolCalls={calls}
             callTimingByID={callByToolUseID}
             isRunning={isRunningTurn(message)}
@@ -137,7 +137,7 @@
           />
         {:else}
           {#each enrichSegments(parseContent(message.content, message.has_tool_use, message.id, message.content_length), message.tool_calls).filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
-            <ToolBlock
+            <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
               content={seg.content}
               label={seg.label}
               toolCall={seg.toolCall}
