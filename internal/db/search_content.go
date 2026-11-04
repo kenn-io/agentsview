@@ -62,6 +62,22 @@ type ContentSearchFilter struct {
 
 	Limit  int
 	Cursor int
+
+	// Candidates, when set, makes mode "semantic" and "hybrid" keep
+	// fetching vector candidates while fewer than Limit units pass the
+	// filters, until the vector index runs out or the candidate cap stops
+	// the search. It records which of the two happened. Multi-concept
+	// search sets it on each concept's search to tell a complete short
+	// result from a truncated one.
+	Candidates *VectorCandidates
+}
+
+// VectorCandidates reports how a semantic search's vector candidate fetch
+// ended.
+type VectorCandidates struct {
+	// Exhausted is true when the vector index had no candidates beyond the
+	// ones fetched, so every eligible unit was considered.
+	Exhausted bool
 }
 
 // ContentMatch is one matching message or tool call. Snippet is built from the
@@ -1155,7 +1171,8 @@ func classifyFTSError(err error) error {
 const SemanticOverfetchMin = 200
 
 // maxActivityExpansionCandidates caps the candidate count when an activity
-// cutoff makes SelectSurvivingVectorHits double its fetch. Starting from
+// cutoff or ContentSearchFilter.Candidates makes SelectSurvivingVectorHits
+// double its fetch. Starting from
 // SemanticOverfetchMin, the cap allows at most six fetches. It equals
 // sqlite-vec's KNN ceiling, and it also bounds the KNN and hydration work
 // that PostgreSQL and ClickHouse would otherwise do for large limits.
@@ -1164,7 +1181,9 @@ const maxActivityExpansionCandidates = 4096
 // SelectSurvivingVectorHits returns the ranked vector hits that pass the
 // filter's session scope. When an activity cutoff rejects hits and leaves
 // fewer than f.Limit units, it fetches again with twice the candidates, until
-// the engine is exhausted or the candidate cap is reached. allowedSessions
+// the engine is exhausted or the candidate cap is reached. When
+// f.Candidates is set it expands the same way whenever fewer than f.Limit
+// units survive, and records whether the engine was exhausted. allowedSessions
 // returns an entry for each otherwise eligible session; false marks a
 // session that the activity cutoff rejects.
 func SelectSurvivingVectorHits(
@@ -1192,8 +1211,12 @@ func SelectSurvivingVectorHits(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if f.Candidates != nil {
+			f.Candidates.Exhausted = exhausted
+		}
 		next := clampRecallVectorCandidates(k*2, ceiling)
-		if !activityRejected || units >= f.Limit || exhausted || next <= k {
+		expand := activityRejected || f.Candidates != nil
+		if !expand || units >= f.Limit || exhausted || next <= k {
 			return surviving, nil
 		}
 		k = next

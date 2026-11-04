@@ -845,10 +845,13 @@ supporting snippet, score, and conversation-unit range for each concept.
 
 Project, branch, agent, session, date, scope, one-shot, automated-session, and
 current-session filters apply to every concept search before the intersection.
-Each concept search considers five times the limit, at most 250 candidates. A
-session that one concept ranks below that window is dropped from the
-intersection, so the response sets `candidate_truncated` whenever a window fills
-or more sessions match than the limit.
+Each concept search considers five times the limit, at most 250 candidates.
+When filters leave fewer candidates than that, the concept search fetches again
+with twice as many vector candidates, up to the same 4096-chunk cap described
+under [Limitations](#limitations). A session that one concept ranks outside its
+window is dropped from the intersection. The response sets
+`candidate_truncated` whenever a window fills, the cap stops a concept search
+before the vector index runs out, or more sessions match than the limit.
 
 ### Inline context: `--context N`
 
@@ -1089,10 +1092,11 @@ keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
   When the recent-activity cutoff rejects otherwise eligible hits, semantic
   and hybrid searches fetch again with twice as many candidates. They start at
   `max(4 * limit, 200)` and stop at 4096 chunks on every store, which allows
-  at most six fetches. Other queries use a single candidate batch. Narrow
-  filters or scope can still return fewer than `--limit` results when eligible
-  matches lie beyond that budget. The hybrid keyword leg keeps its own bounded
-  search budget.
+  at most six fetches. Multi-concept searches expand the same way whenever
+  filters leave a concept short. Other queries use a single candidate batch.
+  Narrow filters or scope can still return fewer than `--limit` results when
+  eligible matches lie beyond that budget. The hybrid keyword leg keeps its own
+  bounded search budget.
 - **Legacy no-`source_uuid` rows re-embed on ordinal shifts.** Each embedded
   document is keyed by its first message's stable per-message UUID when the
   parser recorded one, or by `(session_id, ordinal)` when it didn't.

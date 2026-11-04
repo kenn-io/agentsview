@@ -95,6 +95,10 @@ func (f *fakeContentStore) SearchContent(
 ) (db.ContentSearchPage, error) {
 	f.lastFilter = filter
 	f.filters = append(f.filters, filter)
+	// The fake's pages are complete result sets.
+	if filter.Candidates != nil {
+		filter.Candidates.Exhausted = true
+	}
 	if page, ok := f.pagesByPattern[filter.Pattern]; ok {
 		return page, nil
 	}
@@ -240,6 +244,86 @@ func TestDirectSearchContentConceptsBoundCandidatesAndReportTruncation(t *testin
 			assert.Equal(t, tc.wantTruncated, res.CandidateTruncated)
 			require.Len(t, store.filters, 2)
 			assert.Equal(t, tc.wantLegLimit, store.filters[0].Limit)
+		})
+	}
+}
+
+// conceptVectorSearcher returns a fixed ranking for each concept and records
+// every candidate count it was asked for.
+type conceptVectorSearcher struct {
+	hits map[string][]db.VectorHit
+	ks   map[string][]int
+}
+
+func (s *conceptVectorSearcher) PrepareSemanticSearch(
+	_ context.Context, query string,
+) (db.VectorSearchPage, int, error) {
+	return func(_ context.Context, k int) ([]db.VectorHit, bool, error) {
+		s.ks[query] = append(s.ks[query], k)
+		hits := s.hits[query]
+		return hits[:min(k, len(hits))], len(hits) < k, nil
+	}, 0, nil
+}
+
+func (s *conceptVectorSearcher) ResolveMessageUnits(
+	_ context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	return make([]db.UnitRef, len(refs)), nil
+}
+
+func TestDirectSearchContentConceptsSearchPastFilteredCandidates(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedServiceSearchSession(t, d, "target", "agentsview", "auth model and retry policy")
+	seedServiceSearchSession(t, d, "noise", "elsewhere", "auth model")
+	unit := func(session string, ordinal int) db.VectorHit {
+		return db.VectorHit{
+			SessionID: session, Ordinal: ordinal, OrdinalStart: ordinal,
+			OrdinalEnd: ordinal, Score: 0.5,
+		}
+	}
+	for _, tc := range []struct {
+		name          string
+		noise         int
+		wantSessions  []string
+		wantTruncated bool
+		wantKs        []int
+	}{
+		{
+			// The first window holds only another project's units.
+			name: "match past the first window", noise: 200,
+			wantSessions: []string{"target"}, wantKs: []int{200, 400},
+		},
+		{
+			name: "match past the candidate cap", noise: 5000,
+			wantSessions: []string{}, wantTruncated: true,
+			wantKs: []int{200, 400, 800, 1600, 3200, 4096},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := make([]db.VectorHit, 0, tc.noise+1)
+			for i := range tc.noise {
+				auth = append(auth, unit("noise", i))
+			}
+			searcher := &conceptVectorSearcher{
+				hits: map[string][]db.VectorHit{
+					"auth model":   append(auth, unit("target", 0)),
+					"retry policy": {unit("target", 1)},
+				},
+				ks: map[string][]int{},
+			}
+			d.SetVectorSearcher(searcher)
+			res, err := service.NewReadOnlyBackend(d).SearchContent(t.Context(), service.ContentSearchRequest{
+				Concepts: []string{"auth model", "retry policy"},
+				Project:  "agentsview", Limit: 1,
+			})
+			require.NoError(t, err)
+			ids := make([]string, 0, len(res.Matches))
+			for _, m := range res.Matches {
+				ids = append(ids, m.SessionID)
+			}
+			assert.Equal(t, tc.wantSessions, ids)
+			assert.Equal(t, tc.wantTruncated, res.CandidateTruncated)
+			assert.Equal(t, tc.wantKs, searcher.ks["auth model"])
 		})
 	}
 }

@@ -227,9 +227,9 @@ when different exchanges carry that evidence. Results rank by the mean of each
 concept's strongest score. Each match lists `concept_evidence` in request order:
 the concept, its snippet, score, ordinal, `ordinal_range`, and
 `transcript_revision`. Concept searches do not page, so `cursor` is rejected.
-`candidate_truncated` is true when a session may be missing, either because one
-concept's candidate search filled up or because more sessions matched than the
-limit allowed.
+`candidate_truncated` is true when a session may be missing: one concept's
+candidate search filled up or stopped at its fetch cap, or more sessions matched
+than the limit allowed.
 
 A `terms` snippet shows about 60 characters of context around the first
 occurrence of each term. Terms that sit far apart in a long exchange produce

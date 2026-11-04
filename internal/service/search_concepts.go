@@ -70,7 +70,8 @@ type conceptMember struct {
 // sessions every concept found, even when different messages carry the
 // evidence. Results rank by the mean of each concept's best score; the legs
 // share one vector generation, so their scores are comparable. truncated
-// reports that a full candidate window or the limit may have hidden sessions.
+// reports that a full candidate window, the candidate fetch cap, or the
+// limit may have hidden sessions.
 func (b *directBackend) searchContentConcepts(
 	ctx context.Context, f db.ContentSearchFilter, concepts []string,
 ) (page db.ContentSearchPage, truncated bool, err error) {
@@ -86,11 +87,15 @@ func (b *directBackend) searchContentConcepts(
 		legFilter.Pattern = concept
 		legFilter.Limit = candidateLimit
 		legFilter.Cursor = 0
+		legFilter.Candidates = &db.VectorCandidates{}
 		legPage, err := b.db.SearchContent(ctx, legFilter)
 		if err != nil {
 			return db.ContentSearchPage{}, false, err
 		}
-		if len(legPage.Matches) >= candidateLimit || legPage.NextCursor > 0 {
+		// A short leg is complete only when its search ran out of vector
+		// candidates; one stopped by the fetch cap may have missed sessions.
+		if len(legPage.Matches) >= candidateLimit || legPage.NextCursor > 0 ||
+			!legFilter.Candidates.Exhausted {
 			truncated = true
 		}
 		best[i] = bestMatchPerSession(legPage.Matches)
