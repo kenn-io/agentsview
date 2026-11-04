@@ -213,6 +213,48 @@ describe("MessageList follow cancellation", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps row positions matched to message heights when sort order changes", async () => {
+    ui.followLatest = false;
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
+    const { instance } = realJumpScroll();
+    instance.setOptions({
+      ...instance.options,
+      measureElement: (row) => (row.querySelector(".is-user") ? 320 : 80),
+    });
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    instance.measure();
+    await flushScrollUpdates();
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".virtual-row")].map((row) => row.style.transform),
+    ).toEqual(["translateY(0px)", "translateY(320px)", "translateY(400px)", "translateY(720px)"]);
+
+    ui.sortNewestFirst = true;
+    await flushScrollUpdates();
+
+    const rows = [...document.querySelectorAll<HTMLElement>(".virtual-row")];
+    expect(rows.map((row) => row.querySelector(".role-label")?.textContent)).toEqual([
+      "Assistant",
+      "User",
+      "Assistant",
+      "User",
+    ]);
+    expect(rows.map((row) => row.style.transform)).toEqual([
+      "translateY(0px)",
+      "translateY(80px)",
+      "translateY(400px)",
+      "translateY(480px)",
+    ]);
+
+    ui.sortNewestFirst = false;
+    await flushScrollUpdates();
+
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".virtual-row")].map((row) => row.style.transform),
+    ).toEqual(["translateY(0px)", "translateY(320px)", "translateY(400px)", "translateY(720px)"]);
+  });
+
   it("opens a collapsed empty row when a jump targets a message inside it", async () => {
     ui.followLatest = false;
     const empty = (ordinal: number) => ({
