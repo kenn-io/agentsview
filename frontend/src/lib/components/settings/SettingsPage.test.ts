@@ -202,6 +202,13 @@ describe("SettingsPage", () => {
     expect(nav!.textContent).toContain("Session Providers");
     expect(nav!.textContent).not.toContain("Agent Directories");
 
+    // Every destination carries an icon so the list scans by shape.
+    const navItems = Array.from(nav!.querySelectorAll<HTMLElement>(".kit-settings__nav-item"));
+    expect(navItems).toHaveLength(11);
+    for (const item of navItems) {
+      expect(item.querySelector(".kit-settings__nav-icon svg"), item.textContent ?? "").not.toBeNull();
+    }
+
     const visiblePanel = () =>
       document.body.querySelector<HTMLElement>(".settings-panel:not([hidden])");
     expect(visiblePanel()?.textContent).toContain("Appearance");

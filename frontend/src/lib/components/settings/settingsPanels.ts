@@ -1,4 +1,18 @@
+import type { Component } from "svelte";
 import { m } from "../../i18n/index.js";
+import {
+  ArchiveIcon,
+  CalendarRangeIcon,
+  GitBranchIcon,
+  GlobeIcon,
+  ImageIcon,
+  LanguagesIcon,
+  PaletteIcon,
+  PlugIcon,
+  SparklesIcon,
+  SquareTerminalIcon,
+} from "../../icons.js";
+import GithubIcon from "../shared/GithubIcon.svelte";
 
 export type SettingsPanelId =
   | "appearance"
@@ -20,6 +34,8 @@ export interface SettingsPanelMeta {
   description: string;
   group: string;
   keywords: string;
+  /** Shown before the label in the settings navigation. */
+  icon: Component;
 }
 
 export function settingsPanels(): SettingsPanelMeta[] {
@@ -30,6 +46,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
   return [
     {
       id: "appearance",
+      icon: PaletteIcon,
       label: m.appearance_title(),
       title: m.appearance_title(),
       description: m.appearance_description(),
@@ -38,6 +55,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "language",
+      icon: LanguagesIcon,
       label: m.settings_language_title(),
       title: m.settings_language_title(),
       description: m.settings_language_description(),
@@ -46,6 +64,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "date-ranges",
+      icon: CalendarRangeIcon,
       label: m.settings_date_ranges_title(),
       title: m.settings_date_ranges_title(),
       description: m.settings_date_ranges_description(),
@@ -54,6 +73,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "terminal",
+      icon: SquareTerminalIcon,
       label: m.settings_terminal_title(),
       title: m.settings_terminal_title(),
       description: m.settings_terminal_description(),
@@ -62,6 +82,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "agent-directories",
+      icon: PlugIcon,
       label: m.settings_session_providers_title(),
       title: m.settings_session_providers_title(),
       description: m.settings_session_providers_description(),
@@ -70,6 +91,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "tool-result-images",
+      icon: ImageIcon,
       label: m.settings_tool_images_title(),
       title: m.settings_tool_images_title(),
       description: m.settings_tool_images_description(),
@@ -78,6 +100,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "worktree-mappings",
+      icon: GitBranchIcon,
       label: m.worktree_title(),
       title: m.worktree_title(),
       description: m.settings_worktree_moved(),
@@ -86,6 +109,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "embeddings",
+      icon: SparklesIcon,
       label: m.settings_embeddings_title(),
       title: m.settings_embeddings_title(),
       description: m.settings_embeddings_description(),
@@ -94,6 +118,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "archive-content",
+      icon: ArchiveIcon,
       label: m.settings_archive_content_title(),
       title: m.settings_archive_content_title(),
       description: m.settings_archive_content_description(),
@@ -102,6 +127,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "github",
+      icon: GithubIcon,
       label: m.settings_nav_github(),
       title: m.settings_github_title(),
       description: m.settings_github_description(),
@@ -110,6 +136,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "remote-access",
+      icon: GlobeIcon,
       label: m.settings_nav_remote_access(),
       title: m.settings_remote_title(),
       description: m.settings_remote_description(),
