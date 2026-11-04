@@ -25,7 +25,8 @@ type claudeHookSuccess struct {
 }
 
 type claudeStopHookSummary struct {
-	HookCount *int `json:"hookCount"`
+	HookLabel string `json:"hookLabel"`
+	HookCount *int   `json:"hookCount"`
 	HookInfos []struct {
 		Command    string `json:"command"`
 		PromptText string `json:"promptText"`
@@ -195,6 +196,9 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 		sections = append(sections, timeout)
 	}
 	if summary := payload.summary; summary != nil {
+		if summary.HookLabel != "" {
+			sections = append(sections, "Hook event: "+summary.HookLabel)
+		}
 		if summary.HookCount != nil {
 			sections = append(sections, fmt.Sprintf("Hook count: %d", *summary.HookCount))
 		}

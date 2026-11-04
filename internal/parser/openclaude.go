@@ -597,9 +597,12 @@ func parseOpenClaudeSession(
 	}
 
 	if len(queuedCommands) > 0 {
-		messages = mergeQueuedCommands(
-			messages, queuedCommands, 0, openClaudeQueuedCommandMessage,
+		messages, err = mergeQueuedCommandsContext(
+			ctx, messages, queuedCommands, 0, openClaudeQueuedCommandMessage,
 		)
+		if err != nil {
+			return nil, nil, err
+		}
 		firstUser, userCount, err = firstMessageAndUserCountContext(ctx, messages)
 		if err != nil {
 			return nil, nil, err

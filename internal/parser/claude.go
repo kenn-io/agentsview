@@ -1157,9 +1157,12 @@ func claudeParseSessionFrom(
 			return nil, nil, time.Time{}, 0,
 				ErrClaudeIncrementalNeedsFullParse
 		}
-		msgs = mergeQueuedCommands(
-			msgs, attachments, startOrdinal, claudeAttachmentMessage,
+		msgs, err = mergeQueuedCommandsContext(
+			ctx, msgs, attachments, startOrdinal, claudeAttachmentMessage,
 		)
+		if err != nil {
+			return nil, nil, time.Time{}, 0, err
+		}
 		for _, a := range attachments {
 			if a.timestamp.After(endedAt) {
 				endedAt = a.timestamp
@@ -2023,41 +2026,11 @@ func applyQueuedCommandsContext(
 	return r, ctx.Err()
 }
 
-// mergeQueuedCommands merges deferred attachments into messages in
+// mergeQueuedCommandsContext merges deferred attachments into messages in
 // timestamp order and renumbers ordinals starting at the given
 // offset. Messages must already be in chronological order.
 // Equal timestamps preserve the original message before the
 // attachment (attachments always follow the entry that produced them).
-func mergeQueuedCommands(
-	messages []ParsedMessage,
-	attachments []claudeAttachment,
-	startOrdinal int,
-	buildMessage func(claudeAttachment) ParsedMessage,
-) []ParsedMessage {
-	sortClaudeAttachments(attachments)
-	out := make([]ParsedMessage, 0, len(messages)+len(attachments))
-	i, j := 0, 0
-	for i < len(messages) && j < len(attachments) {
-		if queuedBefore(attachments[j], messages[i]) {
-			out = append(out, buildMessage(attachments[j]))
-			j++
-		} else {
-			out = append(out, messages[i])
-			i++
-		}
-	}
-	for ; i < len(messages); i++ {
-		out = append(out, messages[i])
-	}
-	for ; j < len(attachments); j++ {
-		out = append(out, buildMessage(attachments[j]))
-	}
-	for k := range out {
-		out[k].Ordinal = startOrdinal + k
-	}
-	return out
-}
-
 func mergeQueuedCommandsContext(
 	ctx context.Context,
 	messages []ParsedMessage,
@@ -2104,8 +2077,8 @@ func mergeQueuedCommandsContext(
 	return out, ctx.Err()
 }
 
-// sortClaudeAttachments orders each owner's attachments before either merge
-// path consumes them. Equal timestamps keep source order; undated rows go last.
+// sortClaudeAttachments orders each owner's attachments before merging.
+// Equal timestamps keep source order; undated rows go last.
 func sortClaudeAttachments(attachments []claudeAttachment) {
 	slices.SortStableFunc(attachments, func(a, b claudeAttachment) int {
 		if a.timestamp.IsZero() {

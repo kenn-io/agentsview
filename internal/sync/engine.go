@@ -16965,27 +16965,19 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	// would then delete a row the re-parse cannot reread. Only trailing
 	// hooks require a full parse; ordinary rows keep the bounded path.
 	if inc.NextOrdinal > runOrdinal+1 {
-		rows, err := e.db.Reader().Query(ctx, `
-			SELECT source_subtype FROM messages
+		var hasHook bool
+		err := e.db.Reader().QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM messages
 			WHERE session_id = ? AND ordinal >= ? AND ordinal < ?
-			  AND is_system = 1 AND source_type IN ('attachment', 'system')`,
+			  AND is_system = 1 AND source_type IN ('attachment', 'system')
+			  AND NOT (`+db.ExcludeClaudeHooksSQL("source_subtype")+`))`,
 			inc.ID, runOrdinal+1, inc.NextOrdinal,
-		)
+		).Scan(&hasHook)
 		if err != nil {
 			return nil, fmt.Errorf("read trailing Claude hook rows: %w", err)
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var subtype string
-			if err := rows.Scan(&subtype); err != nil {
-				return nil, fmt.Errorf("scan trailing Claude hook row: %w", err)
-			}
-			if parser.IsClaudeHookSubtype(subtype) {
-				return nil, nil
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("read trailing Claude hook rows: %w", err)
+		if hasHook {
+			return nil, nil
 		}
 	}
 	scanInc := *inc

@@ -155,8 +155,8 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Hook output (checked 2026-11-04):** The parser reads the
-  `hook_success` attachment shape reported in
+- **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
+  attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`, and
   in two first-hand reports with `stdout` and `stderr`:
   [claude-code#88086](https://github.com/anthropics/claude-code/issues/88086),
@@ -165,31 +165,30 @@ evidence; they do not establish whether a tool helped the task.
   `attachment.type` is `hook_success`, `hook_additional_context`, or
   `hook_cancelled`, reads the optional `hookName`, `hookEvent`, `command`,
   `toolUseID`, `content`, `stdout`, and `stderr` string members, and keeps each
-  channel's text as written. Null optional strings are treated as absent;
-  other non-string values reject the hook. For `hook_additional_context`, it
-  joins the `content` string array with newlines and skips empty output. Cancelled hooks
+  channel's text as written. Null optional strings are treated as absent; other
+  non-string values reject the hook. For `hook_additional_context`, it joins the
+  `content` string array with newlines and skips empty output. Cancelled hooks
   keep their metadata even without output. Typed `timedOut` and `timeoutMs`
   fields distinguish timeouts from explicit cancellation. Hook error attachments
   are still not imported. The parser also imports `system` records with subtype
-  `stop_hook_summary`, retaining `hookCount`, each `hookInfos` command and
-  optional `promptText`, the `hookAdditionalContext` string array joined with
-  newlines, string elements of `hookErrors`, `preventedContinuation`,
-  `stopReason`, and `toolUseID` as labeled body sections. Non-string error
-  elements are skipped individually. A summary needs errors, prompt text,
-  additional context, a stop reason, or `preventedContinuation: true` to become
-  a card; commands alone add no card. Claude Code 2.1.301's installed producer
-  constructs this summary with `Lhs`; its `wno` schema defines each hook info's
-  `command` and optional `promptText` strings, and `Cno` validates
-  `hookAdditionalContext` as a string array.
-  Its HTTP, MCP, and command cancellation constructors supply boolean
-  `timedOut` and numeric `timeoutMs`. These are installed producer evidence,
-  rather than a public persistence schema. The
+  `stop_hook_summary`, retaining `hookLabel` as the Hook event line,
+  `hookCount`, each `hookInfos` command and optional `promptText`, the
+  `hookAdditionalContext` string array joined with newlines, string elements of
+  `hookErrors`, `preventedContinuation`, `stopReason`, and `toolUseID` as
+  labeled body sections. Non-string error elements are skipped individually. A
+  summary needs errors, prompt text, additional context, a stop reason, or
+  `preventedContinuation: true` to become a card; commands alone add no card.
+  Claude Code 2.1.301's installed producer constructs this summary with `Lhs`,
+  including `hookLabel`; its `wno` schema defines each hook info's `command` and
+  optional `promptText` strings, and `Cno` validates `hookAdditionalContext` as
+  a string array. Its HTTP, MCP, and command cancellation constructors supply
+  boolean `timedOut` and numeric `timeoutMs`. These are installed producer
+  evidence, rather than a public persistence schema. The
   [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
   protocol's stdout and stderr, not transcript persistence. Full and incremental
   parsing emit system rows with a null dialogue field, like queued system rows
   and compact boundaries, so content search can find hook text when system
-  messages are included. Reverified 2026-11-04 with the system-row search test
-  for substring, regex, and FTS, including system-message exclusion. The plain
+  messages are included in substring, regex, and full-text search. The plain
   body separates hook name, hook event, command, tool-use id, content, stdout,
   and stderr without trimming or interpreting their text. Native identity fields
   are retained only when supplied. Claude Code 2.1.301's installed bundle routes
@@ -198,48 +197,33 @@ evidence; they do not establish whether a tool helped the task.
   constructors also supply or preserve timestamps. The same bundle has eight
   `hook_cancelled` constructors with `hookName`, `hookEvent`, and `toolUseID`.
   Three also carry `command`; none require output text. The timestamp-free
-  example in the original report is explicitly synthetic. On `origin/main`,
-  undated queued prompts already block later dated attachments during merging.
-  Reverified 2026-11-04 with synthetic full and incremental parser tests:
-  each owner's attachments sort stably by timestamp before merging, with
-  undated attachments last. File order can differ from timestamp order when a
-  queued prompt is persisted after a later hook. Timestamp ordering can place a
-  hook after an assistant even when its source bytes precede the response. A
-  continuation of the same message ID uses a full parse when stored rows trail
-  the last assistant, so suffix replacement cannot discard those earlier
-  attachments. Runs without trailing rows keep the bounded suffix reparse. Hooks
+  example in the original report is explicitly synthetic. Each owner's
+  attachments sort stably by timestamp before merging, with undated attachments
+  last. File order can differ from timestamp order when a queued prompt is
+  persisted after a later hook. Timestamp ordering can place a hook after an
+  assistant even when its source bytes precede the response. A continuation of
+  the same message ID uses a full parse when stored hooks trail the last
+  assistant, so suffix replacement cannot discard those earlier attachments.
+  Runs with only trailing queued prompts keep the bounded suffix reparse. Hooks
   follow their native parent into the main conversation or a fork, including
   parents hidden by `isMeta` and attachment chains through skipped empty hooks,
   cancelled hooks, and other attachment types. Hooks attached to discarded retry
   branches are dropped. Unresolved parents and linear parsing use the original
-  conversation timeline, alongside queued prompts. Reverified linear routing
-  with the synthetic full/append agreement tests; linear parsing skips parent
-  lookup because all hooks use that timeline. Synthetic tests cover
-  ordering with queued prompts, assistant snapshot merging, counts, usage, and
-  native identity. This parser stage uses existing message fields. Deferred hook
-  identities stay on stored rows but do not advance the ordinary entry-chain
-  resume cursor for any imported hook subtype. Synthetic ingest and sync tests
-  cover full/append equivalence, native and ID-less hooks, linear parent chains,
-  split responses, checkpoint offsets, counts, and retained pins. They include
-  dated and undated hooks written before an open response but sorted after it,
-  in full and usage archives. Reverified that trailing queued prompts keep
-  bounded suffix reparsing, while relocated hooks require a full parse.
-  In normal transcript mode, hook rows use a
-  collapsed Hook output card and an independent Hooks filter. Cancelled hooks
-  have a Hook cancelled label. Focused mode hides these rows without treating
-  them as new prompts. The card preserves escaped body text. Data version 164
-  reparses readable Claude, Cowork, Qoder, and iCodeMate CLI sources in place.
-  Synthetic upgrade tests preserve session and public message identities, pins,
-  notes, names, stars, and retained rows whose sources are gone; archive-only
-  archives retain their pending state without source sync. DuckDB rebuilds the
-  mirror when its source data version changes. The messages API and DuckDB
-  round-trip tests cover the existing system/source fields and preserved body. A
-  synthetic native server/browser run covers full and appended imports,
-  repeat-sync idempotence, escaped output, independent filters, and focused mode
-  at desktop and mobile widths. The existing PostgreSQL
-  `TestPushCompactComparisons` test covers source identity, the system flag,
-  and the dialogue projection fields. ClickHouse
-  runtime checks remain unverified.
+  conversation timeline, alongside queued prompts. Linear parsing skips parent
+  lookup because all hooks use that timeline. This parser stage uses existing
+  message fields. Deferred hook identities stay on stored rows but do not
+  advance the ordinary entry-chain resume cursor for any imported hook subtype.
+  In normal transcript mode, hook rows use a collapsed Hook output card and an
+  independent Hooks filter. Cancelled hooks have a Hook cancelled label. Focused
+  mode hides these rows without treating them as new prompts. The card preserves
+  escaped body text. Data version 164 reparses readable Claude, Cowork, Qoder,
+  and iCodeMate CLI sources in place. The upgrade preserves session and public
+  message identities, pins, notes, names, stars, and retained rows whose sources
+  are gone; archive-only archives retain their pending state without source
+  sync. DuckDB rebuilds the mirror when its source data version changes. The
+  messages API and DuckDB preserve the existing system/source fields and body.
+  PostgreSQL preserves source identity, the system flag, and dialogue projection
+  fields. ClickHouse runtime behavior remains unverified.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies

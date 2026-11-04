@@ -33,7 +33,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 		{"hook_cancelled", `,"timedOut":false,"timeoutMs":60000`, "", ""},
 		{"hook_cancelled", `,"timedOut":true,"timeoutMs":60000`, "\n\nTimed out after 60000 ms", ""},
 		{"hook_cancelled", `,"timedOut":true,"timeoutMs":1000000`, "\n\nTimed out after 1000000 ms", ""},
-		{"stop_hook_summary", `,"hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked", ""},
+		{"stop_hook_summary", `,"hookLabel":"PreToolUse","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook event: PreToolUse\n\nHook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked", ""},
 		{"stop_hook_summary", `,"hookErrors":["failed"]`, "Hook errors:\nfailed", ""},
 		{"stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped", ""},
 		{"stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer", ""},
