@@ -30,7 +30,8 @@ const (
 	// hashing anything.
 	codexCheckpointUnchanged
 	// codexCheckpointAppend means the checkpoint proves a safe append-only
-	// growth; the caller parses only the new tail and resumes the hash.
+	// growth for Codex or Claude; the caller parses only the new tail and
+	// resumes the hash. Claude uses only this decision.
 	codexCheckpointAppend
 	// codexCheckpointInvalid means a checkpoint exists but its proof failed
 	// (identity changed, truncation, anchor mismatch, missing hash state).
@@ -60,7 +61,8 @@ type codexCheckpointResult struct {
 }
 
 // codexCheckpointFingerprint tries to resolve a Codex source fingerprint and
-// its persisted checkpoint without reading the transcript prefix:
+// its persisted checkpoint without reading the transcript prefix. Claude
+// also uses the append decision after its existing freshness gates:
 //
 //   - unchanged: stat identity + size match the checkpoint offset, so the
 //     committed prefix is trusted (append-trust mode) and the file is skipped;
@@ -303,7 +305,8 @@ func codexCheckpointAnchorMatches(
 var codexResumeHashFn = codexResumeHash
 
 // codexResumeHash continues a persisted SHA-256 state over [offset, size) and
-// returns the new state plus the full-file digest.
+// returns the new state plus the full-file digest. An empty state starts a
+// fresh hash for Claude's first incremental append.
 func codexResumeHash(
 	path string, offset, size int64, state []byte,
 ) ([]byte, string, error) {
@@ -312,8 +315,10 @@ func codexResumeHash(
 	if !ok {
 		return nil, "", errors.New("sha256 does not support state restore")
 	}
-	if err := unmarshaler.UnmarshalBinary(state); err != nil {
-		return nil, "", fmt.Errorf("restoring hash state: %w", err)
+	if len(state) > 0 {
+		if err := unmarshaler.UnmarshalBinary(state); err != nil {
+			return nil, "", fmt.Errorf("restoring hash state: %w", err)
+		}
 	}
 	f, err := os.Open(path)
 	if err != nil {
