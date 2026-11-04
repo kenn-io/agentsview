@@ -588,6 +588,34 @@ test("Zoom menus keep the interface scale and stay aligned with their trigger", 
   ).toBeLessThanOrEqual(4);
 });
 
+test("transcript header menus open beside their triggers at 120% zoom", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("agentsview-zoom-level", "120"));
+  const sp = new SessionsPage(page);
+  await sp.goto();
+  await sp.selectFirstSession();
+  await expect.poll(() => readZoom(page)).toBe("1.2");
+
+  for (const trigger of [
+    page.locator(".view-trigger"),
+    page.getByRole("button", { name: "More actions" }),
+  ]) {
+    await trigger.click();
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    const button = (await trigger.boundingBox())!;
+    const box = (await menu.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    // The menu opens just below its trigger, right-aligned to it, and
+    // stays inside the window.
+    expect(Math.abs(box.y - (button.y + button.height))).toBeLessThanOrEqual(8);
+    expect(Math.abs(box.x + box.width - (button.x + button.width))).toBeLessThanOrEqual(8);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    await trigger.click();
+    await expect(menu).toHaveCount(0);
+  }
+});
+
 test("configured zoom is a default and browser choices stay independent", async ({
   page,
   browser,

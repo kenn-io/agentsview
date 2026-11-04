@@ -14,6 +14,7 @@
 .kit-filter-dropdown__panel,
 .kit-date-range-picker__panel,
 .kit-mention__menu,
+.kit-menu__content,
 .context-menu,
 .tooltip {
   zoom: var(--agentsview-zoom-compensation, 1);

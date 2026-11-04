@@ -146,11 +146,15 @@
         {BLOCK_LABELS[block]()}
       </MenuItem>
     {/each}
-    {#if ui.hasBlockFilters}
-      <MenuItem closeOnSelect={false} onselect={() => ui.showAllBlocks()}>
-        {m.header_transcript_show_all()}
-      </MenuItem>
-    {/if}
+    <!-- Always mounted (disabled when nothing is hidden) so keyboard focus
+         never lands on an item that disappears under it. -->
+    <MenuItem
+      closeOnSelect={false}
+      disabled={!ui.hasBlockFilters}
+      onselect={() => ui.showAllBlocks()}
+    >
+      {m.header_transcript_show_all()}
+    </MenuItem>
   </MenuContent>
 </Menu>
 
