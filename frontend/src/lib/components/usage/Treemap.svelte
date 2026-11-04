@@ -178,16 +178,16 @@
      full paint and the white labels below. */
   .treemap-container :global(.tile:not(.patterned) rect) {
     fill: color-mix(in srgb, var(--tile-color) var(--tile-tint), var(--bg-surface));
-    stroke: color-mix(in srgb, var(--tile-color) 45%, var(--bg-surface));
+    stroke: color-mix(in srgb, var(--tile-color) 65%, var(--bg-surface));
     stroke-width: 1;
   }
 
   .treemap-container {
-    --tile-tint: 32%;
+    --tile-tint: 40%;
   }
 
   :global(:root.dark) .treemap-container {
-    --tile-tint: 48%;
+    --tile-tint: 54%;
   }
 
   .treemap-container :global(.tile:not(.patterned):focus-visible rect),

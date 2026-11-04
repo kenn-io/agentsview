@@ -680,6 +680,11 @@
     background: transparent;
   }
 
+  /* A faint divider marks where one three-line item ends. */
+  .session-item:not(.compact) {
+    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border-muted) 60%, transparent);
+  }
+
   .session-item:hover {
     background: var(--bg-surface-hover);
   }
@@ -804,7 +809,7 @@
   .machine-tag {
     min-width: 0;
     flex-shrink: 20;
-    max-width: 56px;
+    max-width: 72px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
