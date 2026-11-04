@@ -955,8 +955,8 @@ describe("SessionBreadcrumb", () => {
     await tick();
     const badge = document.querySelector(".agent-badge");
     expect(badge).toBeTruthy();
-    expect(badge?.getAttribute("style")).toContain("var(--accent-rose)");
-    expect(badge?.getAttribute("style")).toContain("var(--accent-rose-foreground)");
+    // The agent shows as a colored dot next to its name.
+    expect(badge?.getAttribute("style")).toContain("--agent-color: var(--accent-rose)");
 
     unmount(component);
   });
@@ -1041,8 +1041,8 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const badge = document.querySelector(".agent-badge");
-    expect(badge?.getAttribute("style")).toContain("var(--accent-blue)");
-    expect(badge?.getAttribute("style")).toContain("var(--accent-blue-foreground)");
+    // The agent shows as a colored dot next to its name.
+    expect(badge?.getAttribute("style")).toContain("--agent-color: var(--accent-blue)");
 
     unmount(component);
   });
