@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-01
+last_edited: 2026-11-03
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -134,6 +134,9 @@ The latest release is
 
 **Bug fixes**
 
+- Codex code-mode `wait` calls now show their script output. The next sync
+  restores missing results in previously imported sessions. Subagent waits
+  keep their existing behavior.
 - Hosted PostgreSQL searches and session reads stay available while raw captures
   arrive and transcripts are published. Each hosted read uses one database
   snapshot for its content, public identities and related data.

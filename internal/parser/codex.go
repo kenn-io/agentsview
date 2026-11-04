@@ -753,17 +753,23 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		return
 	}
 	callID := payload.Get("call_id").Str
-	if callID != "" {
-		b.callNames[callID] = name
-	}
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
 	skillName := inferCodexSkillNameWithBase(ctx, name, inputJSON, b.cwd)
 	waitAgentIDs := []string(nil)
+	outputName := name
 	if isCodexWaitAgentCall(name) && callID != "" {
 		args, _ := parseCodexFunctionArgs(payload)
 		waitAgentIDs = codexWaitAgentIDs(args)
+		if name == "wait" && strings.TrimSpace(args.Get("cell_id").Str) != "" &&
+			!args.Get("ids").Exists() && !args.Get("targets").Exists() {
+			// Keep the display name, but route code-mode polls as ordinary results.
+			outputName = "code_mode_wait"
+		}
+	}
+	if callID != "" {
+		b.callNames[callID] = outputName
 	}
 
 	call := ParsedToolCall{
@@ -805,7 +811,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 			MessageOrdinal: messageOrdinal,
 			CallIndex:      0,
 		}
-		if !b.rememberToolCall(callID, name, position) {
+		if !b.rememberToolCall(callID, outputName, position) {
 			b.checkpointUnsafe = true
 		}
 	}

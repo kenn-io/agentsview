@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"image/color"
@@ -747,6 +748,74 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 }
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		toolName   string
+		args       map[string]any
+		output     any
+		wantOutput string
+		wantEvents []ParsedToolResultEvent
+	}{
+		{
+			name:       "code-mode finished wait output becomes tool result",
+			toolName:   "wait",
+			args:       map[string]any{"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000},
+			output:     jsontext.Value(testjsonl.CodexCodeModeWaitOutput),
+			wantOutput: testjsonl.CodexCodeModeWaitOutput,
+		},
+		{
+			name:       "code-mode running wait output becomes tool result",
+			toolName:   "wait",
+			args:       map[string]any{"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000},
+			output:     "Script running with cell ID 6\nWall time 30 seconds",
+			wantOutput: "Script running with cell ID 6\nWall time 30 seconds",
+		},
+		{
+			name:     "subagent wait without ids keeps status events",
+			toolName: "wait",
+			args:     map[string]any{"timeout_ms": 300000},
+			output:   `{"status":{"dddddddd-dddd-4ddd-8ddd-dddddddddddd":{"completed":"Task complete."}}}`,
+			wantEvents: []ParsedToolResultEvent{{
+				ToolUseID:         "call_wait",
+				AgentID:           "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+				SubagentSessionID: "codex:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+				Source:            "wait_output",
+				Status:            "completed",
+				Content:           "Task complete.",
+			}},
+		},
+		{
+			name:     "subagent wait completion adds no result",
+			toolName: "wait_agent",
+			args:     map[string]any{"timeout_ms": 300000},
+			output:   `{"message":"Wait completed.","timed_out":false}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			content := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON("fc-wait", "/tmp", "user", tsEarly),
+				testjsonl.CodexMsgJSON("user", "wait for the task", tsEarlyS1),
+				testjsonl.CodexFunctionCallWithCallIDJSON(tt.toolName, "call_wait", tt.args, tsEarlyS5),
+				testjsonl.CodexFunctionCallOutputJSON("call_wait", tt.output, tsLate),
+			)
+			_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+			require.Len(t, msgs, 2)
+			require.Len(t, msgs[1].ToolCalls, 1)
+			call := msgs[1].ToolCalls[0]
+			assert.Equal(t, tt.toolName, call.ToolName)
+			if tt.wantOutput == "" {
+				assertToolResultEvents(t, call.ResultEvents, tt.wantEvents)
+			} else {
+				assertToolResultEvents(t, call.ResultEvents, []ParsedToolResultEvent{{
+					ToolUseID: "call_wait",
+					Source:    "function_call_output",
+					Content:   tt.wantOutput,
+				}})
+			}
+		})
+	}
+
 	t.Run("function calls", func(t *testing.T) {
 		content := loadFixture(t, "codex/function_calls.jsonl")
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
