@@ -520,18 +520,20 @@ func installUsageFactFixture(tb testing.TB, conn *sql.Conn, sessionIDs ...string
 	require.NoError(tb, err)
 }
 
+const usageFactWriteTrackingSQL = `
+	CREATE TABLE fact_writes(operation TEXT, fact_index INTEGER);
+	CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
+		INSERT INTO fact_writes VALUES ('insert', NEW.fact_index); END;
+	CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
+		INSERT INTO fact_writes VALUES ('update', NEW.fact_index); END;
+	CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
+		INSERT INTO fact_writes VALUES ('delete', OLD.fact_index); END;`
+
 func TestUsageFactInstallPreservesUnchangedRows(t *testing.T) {
 	for _, count := range []int{8, 2048} {
 		t.Run(fmt.Sprintf("facts=%d", count), func(t *testing.T) {
 			conn, spool := usageFactInstallFixture(t, count)
-			_, err := conn.ExecContext(t.Context(), `
-				CREATE TABLE fact_writes(operation TEXT);
-				CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
-					INSERT INTO fact_writes VALUES ('insert'); END;
-				CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
-					INSERT INTO fact_writes VALUES ('update'); END;
-				CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
-					INSERT INTO fact_writes VALUES ('delete'); END;`)
+			_, err := conn.ExecContext(t.Context(), usageFactWriteTrackingSQL)
 			require.NoError(t, err)
 			for _, step := range []struct {
 				name, mutation                    string
@@ -710,14 +712,7 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 				WHEN fact_index = ? THEN ? WHEN fact_index = ? THEN ? ELSE fact_index END`,
 				usageActivityFactBase, count, usageEventFactBase, count+1)
 			require.NoError(t, err)
-			_, err = cache.db.ExecContext(t.Context(), `
-				CREATE TABLE fact_writes(operation TEXT, fact_index INTEGER);
-				CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
-					INSERT INTO fact_writes VALUES ('insert', NEW.fact_index); END;
-				CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
-					INSERT INTO fact_writes VALUES ('update', NEW.fact_index); END;
-				CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
-					INSERT INTO fact_writes VALUES ('delete', OLD.fact_index); END;`)
+			_, err = cache.db.ExecContext(t.Context(), usageFactWriteTrackingSQL)
 			require.NoError(t, err)
 			for _, step := range []struct {
 				name, mutation string

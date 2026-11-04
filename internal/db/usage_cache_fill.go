@@ -571,6 +571,9 @@ func (c *usageFillCoordinator) extractSessions(
 		return nil, nil, err
 	}
 	for id := range extracted {
+		if messageIndexes[id] == 0 && activityIndexes[id] == 0 && eventIndexes[id] == 0 {
+			continue
+		}
 		if _, err := spoolTx.ExecContext(ctx,
 			`UPDATE sessions SET message_count = ?, activity_count = ?, event_count = ? WHERE session_id = ?`,
 			messageIndexes[id], activityIndexes[id], eventIndexes[id], id,
@@ -1180,8 +1183,7 @@ func installSpoolSessions(
 		SELECT COUNT(*) FROM usage_install_sessions install
 		LEFT JOIN usage_fill_spool.sessions complete
 		  ON complete.session_id = install.session_id
-		WHERE complete.session_id IS NULL OR complete.message_count < 0
-		   OR complete.activity_count < 0 OR complete.event_count < 0`,
+		WHERE complete.session_id IS NULL`,
 	).Scan(&incomplete); err != nil {
 		return nil, err
 	}
