@@ -184,11 +184,33 @@ describe("highlightTerms", () => {
     ]);
   });
 
-  it("treats regex characters in the query literally", () => {
+  it("matches query punctuation literally and in full", () => {
     expect(highlightTerms("call a.b(c) now", "a.b(c)")).toEqual([
       { text: "call ", match: false },
-      { text: "a.b(c", match: true },
-      { text: ") now", match: false },
+      { text: "a.b(c)", match: true },
+      { text: " now", match: false },
+    ]);
+    expect(highlightTerms("it's done", "it's")).toEqual([
+      { text: "it's", match: true },
+      { text: " done", match: false },
+    ]);
+    expect(highlightTerms("axb(c) here", "a.b(c)")).toEqual([
+      { text: "axb(c) here", match: false },
+    ]);
+  });
+
+  it("strips phrase quotes but keeps the words", () => {
+    expect(highlightTerms("the goldmark parser", '"goldmark"')).toEqual([
+      { text: "the ", match: false },
+      { text: "goldmark", match: true },
+      { text: " parser", match: false },
+    ]);
+  });
+
+  it("matches non-ASCII terms spelled as typed", () => {
+    expect(highlightTerms("İstanbul office", "İstanbul")).toEqual([
+      { text: "İstanbul", match: true },
+      { text: " office", match: false },
     ]);
   });
 

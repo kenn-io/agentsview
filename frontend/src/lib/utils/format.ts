@@ -94,12 +94,20 @@ export interface HighlightSegment {
  * emphasize matches when a backend returns snippets without <mark> tags.
  */
 export function highlightTerms(text: string, query: string): HighlightSegment[] {
-  const terms = [...new Set(
-    query
-      .split(/\s+/)
-      .map((term) => term.replace(/^["'(]+|["')]+$/g, "").toLowerCase())
-      .filter((term) => term.length >= 2),
-  )].sort((a, b) => b.length - a.length);
+  // Only phrase quotes are query syntax; every other character is literal.
+  // Terms keep their spelling and the regex matches case-insensitively, so
+  // characters such as "İ" still match identical snippet text.
+  const seen = new Set<string>();
+  const terms = query
+    .split(/\s+/)
+    .map((term) => term.replace(/^"+|"+$/g, ""))
+    .filter((term) => {
+      const key = term.toLowerCase();
+      if (term.length < 2 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => b.length - a.length);
   if (terms.length === 0 || text === "") return [{ text, match: false }];
   const pattern = new RegExp(
     `(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,

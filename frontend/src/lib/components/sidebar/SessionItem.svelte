@@ -481,12 +481,15 @@
         href={sessionHref}
         onclick={handleSessionClick}
       >
-        <div class="session-top-row">
-          {#if !hideProject}
-            <span class="session-project" title={session.project}>{session.project}</span>
-          {/if}
-          <span class="session-time">{timeStr}</span>
-        </div>
+        <!-- Compact child rows keep two lines (title, then meta) to fit their slot. -->
+        {#if !compact}
+          <div class="session-top-row">
+            {#if !hideProject}
+              <span class="session-project" title={session.project}>{session.project}</span>
+            {/if}
+            <span class="session-time">{timeStr}</span>
+          </div>
+        {/if}
         <div
           class="session-name"
           class:shell={displayLabel.isShell}
@@ -501,6 +504,12 @@
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
         <div class="session-meta">
+          {#if compact}
+            {#if !hideProject}
+              <span class="session-project" title={session.project}>{session.project}</span>
+            {/if}
+            <span class="session-time">{timeStr}</span>
+          {/if}
           {#if hasUnread}
             <span
               class="session-unread-indicator"
