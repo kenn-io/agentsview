@@ -177,9 +177,6 @@ func installRawProjectionUpgrade(ctx context.Context, tx *sql.Tx, schema, tenant
 	if err != nil {
 		return err
 	}
-	if err := installPreparationIndexesPG(ctx, tx); err != nil {
-		return err
-	}
 	if err := createPartialIndexesPG(ctx, tx); err != nil {
 		return err
 	}

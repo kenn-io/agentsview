@@ -72,7 +72,7 @@ func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
 	})
 }
 
-func TestPGPreparationIndexesSerializeConcurrentInstallers(t *testing.T) {
+func TestPGPreparationIndexesConcurrentInstallersBothSucceed(t *testing.T) {
 	const schema = "agentsview_preparation_concurrent_test"
 	pgURL, store := prepareUsageSchema(t, schema)
 	pg := store.DB()
@@ -96,20 +96,6 @@ func TestPGPreparationIndexesSerializeConcurrentInstallers(t *testing.T) {
 		conn, err := Open(ctx, dsn, schema, true)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = conn.Close() })
-		if name == "preparation-index-b" {
-			// Hosted provisioning uses an existing transaction.
-			tx, err := conn.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			go func() {
-				defer func() { _ = tx.Rollback() }()
-				err := installPreparationIndexesPG(ctx, tx)
-				if err == nil {
-					err = tx.Commit()
-				}
-				results <- err
-			}()
-			continue
-		}
 		go func() { results <- (&Sync{pg: conn, schema: schema}).EnsureSchema(ctx) }()
 	}
 	require.Eventually(t, func() bool {
@@ -124,4 +110,37 @@ func TestPGPreparationIndexesSerializeConcurrentInstallers(t *testing.T) {
 	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
 		assert.True(t, pgHasIndex(t.Context(), pg, index), index)
 	}
+}
+
+func TestPGPreparationIndexesConcurrentStrictUpgrade(t *testing.T) {
+	const schema = "agentsview_preparation_strict_test"
+	pgURL, store := prepareUsageSchema(t, schema)
+	pg := store.DB()
+	// Keep the real index build observable while another publisher prepares.
+	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,machine,project,agent,data_version)
+		SELECT 'settled-'||n,'machine','project','codex',$1 FROM generate_series(1,500000)n`, db.CurrentDataVersion())
+	require.NoError(t, err)
+	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
+		_, err = pg.ExecContext(t.Context(), `DROP INDEX `+index)
+		require.NoError(t, err)
+	}
+	dsn, err := appendConnParams(pgURL, map[string]string{"application_name": "preparation-strict"})
+	require.NoError(t, err)
+	strict, err := Open(t.Context(), dsn, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = strict.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- EnsureSchema(ctx, strict, schema) }()
+	require.Eventually(t, func() bool {
+		var building bool
+		err := pg.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+			WHERE datname=current_database() AND application_name='preparation-strict'
+			AND state='active' AND query LIKE 'CREATE INDEX IF NOT EXISTS idx_sessions_data_version%')`).Scan(&building)
+		return err == nil && building
+	}, 20*time.Second, time.Millisecond, "public strict setup must reach index construction")
+	compatibleErr := (&Sync{pg: pg, schema: schema}).EnsureSchema(ctx)
+	require.NoError(t, <-result, "public strict setup must complete")
+	require.NoError(t, compatibleErr, "compatible publisher must share the upgrade")
 }
