@@ -105,8 +105,13 @@ func (c *schemaProbeConn) Prepare(string) (driver.Stmt, error) {
 func (c *schemaProbeConn) Close() error { return nil }
 
 func (c *schemaProbeConn) Begin() (driver.Tx, error) {
-	return nil, driver.ErrSkip
+	return schemaProbeTx{}, nil
 }
+
+type schemaProbeTx struct{}
+
+func (schemaProbeTx) Commit() error   { return nil }
+func (schemaProbeTx) Rollback() error { return nil }
 
 func (c *schemaProbeConn) ExecContext(
 	_ context.Context, query string, args []driver.NamedValue,

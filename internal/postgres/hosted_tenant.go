@@ -110,6 +110,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if err = createHostedContentSearchIndexes(ctx, tx); err != nil {
 		return err
 	}
+	if err = installPreparationIndexesPG(ctx, tx); err != nil {
+		return err
+	}
 	if err = createPartialIndexesPG(ctx, tx); err != nil {
 		return err
 	}

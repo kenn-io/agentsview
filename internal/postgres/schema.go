@@ -1138,6 +1138,9 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 	)
 	step = time.Now()
+	if err := createMissingPreparationIndexesPG(ctx, db); err != nil {
+		return err
+	}
 	if err := createPartialIndexesPG(ctx, db); err != nil {
 		return err
 	}
@@ -1210,11 +1213,41 @@ var preparationIndexesPG = []struct{ name, ddl string }{
 }
 
 func createMissingPreparationIndexesPG(ctx context.Context, pg *sql.DB) error {
+	missing := false
 	for _, index := range preparationIndexesPG {
-		if pgHasIndex(ctx, pg, index.name) {
+		if !pgHasIndex(ctx, pg, index.name) {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return nil
+	}
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning PG preparation index installation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := installPreparationIndexesPG(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing PG preparation index installation: %w", err)
+	}
+	return nil
+}
+
+// installPreparationIndexesPG serializes mirror and hosted index creators.
+// Recheck under the lock because another publisher may have installed them.
+func installPreparationIndexesPG(ctx context.Context, tx *sql.Tx) error {
+	if err := lockSyncMetadataRow(ctx, tx, "preparation_indexes_lock"); err != nil {
+		return err
+	}
+	for _, index := range preparationIndexesPG {
+		if pgHasIndex(ctx, tx, index.name) {
 			continue
 		}
-		if _, err := pg.ExecContext(ctx, index.ddl); err != nil {
+		if _, err := tx.ExecContext(ctx, index.ddl); err != nil {
 			return fmt.Errorf("creating PG preparation index %s: %w", index.name, err)
 		}
 	}
@@ -1267,9 +1300,6 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		// fetch (user ordinals by session), mirroring the SQLite index.
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
 		 ON messages(session_id, role)`,
-	}
-	for _, index := range preparationIndexesPG {
-		indexes = append(indexes, index.ddl)
 	}
 	for _, ddl := range indexes {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
@@ -2166,7 +2196,7 @@ func pgHasTable(ctx context.Context, db hostedQuerier, name string) bool {
 
 // pgHasIndex reports whether an index of the given name exists in the
 // current schema.
-func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
+func pgHasIndex(ctx context.Context, db hostedQuerier, name string) bool {
 	var n int
 	err := db.QueryRowContext(ctx,
 		`SELECT 1 FROM pg_indexes
