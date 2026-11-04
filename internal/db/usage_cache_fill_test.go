@@ -697,20 +697,28 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 	for _, count := range []int{8, 2048} {
 		t.Run(fmt.Sprintf("messages=%d", count), func(t *testing.T) {
 			database, cache := usageSpoolExtractionFixture(t, count)
-			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-				SessionID: "session", Ordinal: count, Role: "assistant", Model: "activity",
-				Timestamp: "2026-08-10T09:01:00Z",
-			}}))
-			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
-				Source: "session", Model: "event", InputTokens: 5, DedupKey: "event",
-			}}))
+			activities := make([]Message, 3)
+			events := make([]UsageEvent, 3)
+			for i := range activities {
+				activities[i] = Message{
+					SessionID: "session", Ordinal: count + i, Role: "assistant", Model: "activity",
+					Timestamp: "2026-08-10T09:01:00Z",
+				}
+				events[i] = UsageEvent{
+					Source: "session", Model: "event", InputTokens: 5, DedupKey: fmt.Sprintf("event-%d", i),
+				}
+			}
+			require.NoError(t, database.InsertMessages(t.Context(), activities))
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", events))
 			versions := []usageSourceVersion{{SessionID: "session"}}
 			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
 			// Simulate the dense layout from before fact kinds had separate ranges.
 			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_facts SET fact_index = CASE
-				WHEN fact_index = ? THEN ? WHEN fact_index = ? THEN ? ELSE fact_index END`,
-				usageActivityFactBase, count, usageEventFactBase, count+1)
+				WHEN fact_index >= ? THEN fact_index - ? + ?
+				WHEN fact_index >= ? THEN fact_index - ? + ? ELSE fact_index END`,
+				usageEventFactBase, usageEventFactBase, count+3,
+				usageActivityFactBase, usageActivityFactBase, count)
 			require.NoError(t, err)
 			_, err = cache.db.ExecContext(t.Context(), usageFactWriteTrackingSQL)
 			require.NoError(t, err)
@@ -718,21 +726,21 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 				name, mutation string
 				spooled, total int
 			}{
-				{"upgrade dense layout", "", 2, count + 2},
-				{"unchanged", "", 0, count + 2},
+				{"upgrade dense layout", "", 6, count + 6},
+				{"unchanged", "", 0, count + 6},
 				{"append preserves activity and event", fmt.Sprintf(`INSERT INTO messages(
 					session_id, ordinal, role, content, model, timestamp, token_usage, source_uuid)
 					VALUES ('session', %d, 'assistant', '', 'model', '2026-08-10T09:00:00Z',
-					'{"input_tokens":11}', 'appended')`, count+1), 1, count + 3},
+					'{"input_tokens":11}', 'appended')`, count+3), 1, count + 7},
 				{"edit", `UPDATE messages SET token_usage='{"input_tokens":99}'
-					WHERE session_id='session' AND ordinal=0`, 1, count + 3},
-				{"NULL to value", `UPDATE usage_events SET cost_microdollars=42`, 1, count + 3},
-				{"value to NULL", `UPDATE usage_events SET cost_microdollars=NULL`, 1, count + 3},
+					WHERE session_id='session' AND ordinal=0`, 1, count + 7},
+				{"NULL to value", `UPDATE usage_events SET cost_microdollars=42`, 3, count + 7},
+				{"value to NULL", `UPDATE usage_events SET cost_microdollars=NULL`, 3, count + 7},
 				{"activity gains usage", fmt.Sprintf(`UPDATE messages SET token_usage='{"input_tokens":7}'
-					WHERE session_id='session' AND ordinal=%d`, count), 1, count + 3},
+					WHERE session_id='session' AND ordinal=%d`, count+2), 1, count + 7},
 				{"reorder", `UPDATE messages SET ordinal=-1 WHERE ordinal=0;
 					UPDATE messages SET ordinal=0 WHERE ordinal=1;
-					UPDATE messages SET ordinal=1 WHERE ordinal=-1`, 2, count + 3},
+					UPDATE messages SET ordinal=1 WHERE ordinal=-1`, 2, count + 7},
 				{"truncate", `DELETE FROM messages WHERE ordinal>=2;
 					DELETE FROM usage_events`, 0, 2},
 				{"empty", `DELETE FROM messages`, 0, 0},
