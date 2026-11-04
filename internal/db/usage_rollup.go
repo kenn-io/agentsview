@@ -251,6 +251,11 @@ func (c *usageRollupCoordinator) Ensure(
 	if len(stale) == 0 && installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater {
 		return installs, usageRollupMetrics{}, nil
 	}
+	// The catalog digest only keys single-flight; staleness is per session.
+	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
+	if err != nil {
+		return nil, usageRollupMetrics{}, fmt.Errorf("hashing usage pricing: %w", err)
+	}
 	batch := snapshot
 	batch.Sessions = nil
 	batch.Versions = nil
@@ -273,7 +278,7 @@ func (c *usageRollupCoordinator) Ensure(
 		for _, session := range chunk.Sessions {
 			chunkFills[session.ID] = fills[session.ID]
 		}
-		built, measured, err := c.ensureChunk(ctx, chunk, chunkFills, resolver)
+		built, measured, err := c.ensureChunk(ctx, chunk, chunkFills, resolver, catalogHash)
 		metrics.DailyRows += measured.DailyRows
 		metrics.ExceptionGroups += measured.ExceptionGroups
 		metrics.ExceptionRows += measured.ExceptionRows
@@ -295,12 +300,8 @@ func (c *usageRollupCoordinator) Ensure(
 func (c *usageRollupCoordinator) ensureChunk(
 	ctx context.Context, snapshot usageQuerySnapshot,
 	fills map[string]usageFillResult, resolver *export.PricingResolver,
+	catalogHash string,
 ) (map[string]usageRollupInstall, usageRollupMetrics, error) {
-	// The catalog digest only keys single-flight; staleness is per session.
-	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
-	if err != nil {
-		return nil, usageRollupMetrics{}, fmt.Errorf("hashing usage pricing: %w", err)
-	}
 	key := usageRollupCallKey(snapshot, fills, catalogHash)
 	c.mu.Lock()
 	call := c.calls[key]
