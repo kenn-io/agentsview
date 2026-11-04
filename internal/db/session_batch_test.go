@@ -571,7 +571,6 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *t
 				require.NoError(t, err)
 				assert.Len(t, results.Matches, search.matches, search.pattern)
 			}
-
 		})
 	}
 }
