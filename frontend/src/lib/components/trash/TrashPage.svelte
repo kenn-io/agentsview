@@ -82,6 +82,22 @@
 </script>
 
 <div class="trash-page">
+  <!-- The title stays visible in every state, like the other library
+       pages; the count and Empty trash appear only with deleted sessions. -->
+  <div class="trash-header">
+    <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
+    <h2>{m.trash_title()}</h2>
+    {#if !loading && trashedSessions.length > 0}
+      <span class="trash-count">{trashedSessions.length}</span>
+      <button
+        class="empty-all-btn"
+        onclick={emptyAll}
+        disabled={emptying}
+      >
+        {emptying ? m.trash_emptying() : m.trash_empty_trash()}
+      </button>
+    {/if}
+  </div>
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
@@ -91,18 +107,6 @@
       {/snippet}
     </EmptyState>
   {:else}
-    <div class="trash-header">
-      <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
-      <h2>{m.trash_title()}</h2>
-      <span class="trash-count">{trashedSessions.length}</span>
-      <button
-        class="empty-all-btn"
-        onclick={emptyAll}
-        disabled={emptying}
-      >
-        {emptying ? m.trash_emptying() : m.trash_empty_trash()}
-      </button>
-    </div>
 
     <div class="trash-list">
       {#each trashedSessions as session (session.id)}
@@ -144,17 +148,18 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .trash-page {
-    max-width: 800px;
+    max-width: 1088px;
     margin: 0 auto;
-    padding: 40px 24px;
+    padding: 28px 24px;
   }
 
   .trash-header {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    margin-bottom: 8px;
+    margin-bottom: 16px;
   }
 
   :global(.trash-icon) {
@@ -162,7 +167,7 @@
   }
 
   .trash-header h2 {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;

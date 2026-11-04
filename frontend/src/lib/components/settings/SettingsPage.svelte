@@ -298,10 +298,16 @@
     }
   }
 
+  /* Descriptions stay one step below the item names. */
   .settings-page :global(.kit-settings__nav-summary) {
-    font-size: 11.5px;
+    font-size: 11px;
+    font-weight: 400;
     line-height: 1.3;
-    color: color-mix(in srgb, var(--text-secondary) 70%, var(--text-muted));
+    color: var(--text-muted);
+  }
+
+  .settings-page :global(.kit-settings__nav-item) {
+    font-weight: 500;
   }
 
   .settings-page :global(.kit-settings .kit-settings__footer) {

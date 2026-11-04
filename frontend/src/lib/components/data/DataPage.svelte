@@ -269,7 +269,11 @@
     flex: 1;
     flex-direction: column;
     gap: 12px;
-    padding: 12px;
+    /* Shared library page frame: a 1040px content column. */
+    width: 100%;
+    max-width: 1088px;
+    margin: 0 auto;
+    padding: 28px 24px 12px;
     min-height: 0;
     overflow: hidden;
   }
@@ -291,7 +295,8 @@
 
   h2 {
     margin: 0;
-    font-size: 14px;
+    font-size: 18px;
+    font-weight: 600;
   }
 
   .summary-strip {

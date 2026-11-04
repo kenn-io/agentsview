@@ -72,8 +72,11 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .recall-page {
     min-height: 100%;
+    max-width: 1088px;
+    margin: 0 auto;
   }
 
   .recall-workspace-header {
@@ -81,13 +84,14 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
-    padding: 1.25rem 1.5rem 0;
+    padding: 28px 24px 0;
   }
 
   .recall-workspace-header h1 {
     margin: 0;
     color: var(--text-primary);
-    font-size: 1.25rem;
+    font-size: 18px;
+    font-weight: 600;
   }
 
   .recall-workspace-header p {
