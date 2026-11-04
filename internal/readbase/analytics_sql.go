@@ -149,18 +149,39 @@ func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 			ORDER BY session_id, ordinal`
 }
 
-func AnalyticsTrendsSQL(systemPrefix string, dialect db.QueryDialect) string {
+func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), sessionWindow, systemPrefix string, sessionArgs []any, dialect db.QueryDialect) (string, []any) {
+	content := "m.content"
+	where := "s.deleted_at IS NULL"
+	var args []any
+	from, to := AnalyticsWindowBounds(f)
+	inWindow, windowArgs := windowPred("COALESCE(m.timestamp, s.started_at, s.created_at)", from, to)
+	if inWindow != "" {
+		content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
+		args = append(args, windowArgs...)
+	}
+	if sessionWindow != "" {
+		where += " AND " + sessionWindow
+		args = append(args, sessionArgs...)
+	}
+	if inWindow != "" {
+		rowWindow := inWindow
+		if len(f.MessageScopeFilter().Models) > 0 {
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+		}
+		where += " AND " + rowWindow
+		args = append(args, windowArgs...)
+	}
 	return `
 		SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, m.timestamp,
+			COALESCE(m.model, ''), ` + content + `, m.timestamp,
 			s.started_at, s.created_at
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
-		WHERE s.deleted_at IS NULL
+		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = ` + dialect.FalseLiteral() + `
 			AND ` + systemPrefix + `
-		ORDER BY m.session_id, m.ordinal`
+		ORDER BY m.session_id, m.ordinal`, args
 }
 
 const AnalyticsSessionColumns = `id, project, machine, agent, first_message,

@@ -88,3 +88,68 @@ func BenchmarkSignalsFrustration(b *testing.B) {
 		})
 	}
 }
+
+func seedTrendsSessions(b *testing.B, d *DB, prefix string, n int, baseDay string, spanDays int, body string) {
+	b.Helper()
+	ctx := b.Context()
+	_, err := d.getWriter().ExecContext(ctx, `
+		WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1)
+		INSERT INTO sessions (id, project, machine, agent, message_count, user_message_count, started_at, ended_at)
+		SELECT printf('%s-%06d', ?, n), 'bench', 'local', 'claude', 10, 5,
+			strftime('%Y-%m-%dT12:00:00Z', ?, printf('-%d days', n % ?)),
+			strftime('%Y-%m-%dT12:10:00Z', ?, printf('-%d days', n % ?))
+		FROM seq`, n, prefix, baseDay, spanDays, baseDay, spanDays)
+	require.NoError(b, err)
+	_, err = d.getWriter().ExecContext(ctx, `
+		WITH RECURSIVE o(k) AS (SELECT 0 UNION ALL SELECT k + 1 FROM o WHERE k < 9)
+		INSERT INTO messages (session_id, ordinal, role, content, timestamp, content_length)
+		SELECT s.id, o.k, CASE WHEN o.k % 2 = 0 THEN 'user' ELSE 'assistant' END, ?,
+			strftime('%Y-%m-%dT%H:%M:%SZ', s.started_at, printf('+%d minutes', o.k)), ?
+		FROM sessions s, o WHERE s.id LIKE ? || '-%'`, body, len(body), prefix)
+	require.NoError(b, err)
+}
+
+// The selected window stays fixed while three kinds of old history grow.
+func BenchmarkGetTrendsTermsOutOfRangeHistory(b *testing.B) {
+	body := strings.Repeat("the quick brown fox jumps over the lazy dog seam ", 20)
+	for _, axis := range []string{"sessions", "resumed", "untimestamped"} {
+		for _, old := range []int{0, 3000, 30000} {
+			for _, model := range []string{"", "gpt-4o"} {
+				b.Run(fmt.Sprintf("%s/history=%d/model=%s", axis, old, model), func(b *testing.B) {
+					d := testDB(b)
+					ctx := b.Context()
+					seedTrendsSessions(b, d, "recent", 300, "2026-11-01", 30, body)
+					if old > 0 {
+						switch axis {
+						case "sessions", "untimestamped":
+							seedTrendsSessions(b, d, "old", old, "2026-09-15", 700, body)
+							if axis == "untimestamped" {
+								_, err := d.getWriter().ExecContext(ctx, "UPDATE messages SET timestamp = NULL WHERE session_id LIKE 'old-%'")
+								require.NoError(b, err)
+							}
+						case "resumed":
+							_, err := d.getWriter().ExecContext(ctx, `
+								WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1)
+								INSERT INTO messages (session_id, ordinal, role, content, timestamp, content_length)
+								SELECT 'recent-000000', n + 10, CASE WHEN n % 2 = 0 THEN 'user' ELSE 'assistant' END,
+									?, '2024-01-01T12:00:00Z', ? FROM seq`, old, body, len(body))
+							require.NoError(b, err)
+						}
+					}
+					_, err := d.getWriter().ExecContext(ctx, "UPDATE messages SET model = 'gpt-4o' WHERE role = 'assistant'")
+					require.NoError(b, err)
+					terms, err := ParseTrendTerms([]string{"load bearing | load-bearing", "seam", "blast radius"})
+					require.NoError(b, err)
+					f := AnalyticsFilter{From: "2026-10-03", To: "2026-11-01", Timezone: "UTC", Model: model}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for b.Loop() {
+						resp, err := d.GetTrendsTerms(ctx, f, terms, "week")
+						require.NoError(b, err)
+						require.Equal(b, 3000, resp.MessageCount)
+					}
+				})
+			}
+		}
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/testutil"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -304,11 +306,12 @@ func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
 		s.CreatedAt = created
-		s.MessageCount = 1
-		s.UserMessageCount = 1
+		s.MessageCount = 2
+		s.UserMessageCount = 2
 	})
 	insertMessages(t, d,
-		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam", Timestamp: "2024-06-05T09:00:00Z", ContentLength: 4},
+		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam seam", Timestamp: start, ContentLength: 9},
+		Message{SessionID: "s1", Ordinal: 1, Role: "user", Content: "seam", Timestamp: "2024-06-05T09:00:00Z", ContentLength: 4},
 	)
 	terms, err := ParseTrendTerms([]string{"seam"})
 	require.NoError(t, err)
@@ -318,6 +321,7 @@ func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 	require.NoError(t, err, "GetTrendsTerms")
 	assert.Equal(t, 1, trendSeriesByTerm(got.Series)["seam"].Total,
 		"message timestamp total")
+	assert.Equal(t, 1, got.MessageCount)
 }
 
 func TestGetTrendsTermsSQLiteDoesNotFilterBySessionTimestamp(t *testing.T) {
@@ -449,4 +453,45 @@ func trendPointCounts(points []TrendPoint) []int {
 		counts[i] = point.Count
 	}
 	return counts
+}
+
+func TestGetTrendsTermsSQLiteSessionWindowMatchesMessageDates(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	cases := testutil.TrendsSessionWindowCases()
+	// SQLite can retain malformed timestamp text; typed mirrors reject it.
+	cases = append(cases, testutil.TrendsSessionWindowCase{
+		Project: "invalid-message", Started: "2024-06-05T09:00:00Z", Created: "2024-01-01T09:00:00Z",
+		Timestamp: "invalid", Timezone: "UTC", Hour: 9, Want: 1,
+	})
+	for _, tc := range cases {
+		_, err := d.getWriter().ExecContext(ctx, `INSERT INTO sessions
+			(id, project, machine, agent, started_at, created_at, message_count) VALUES (?, ?, 'local', 'claude', ?, ?, 1)`,
+			tc.Project, tc.Project, tc.Started, tc.Created)
+		require.NoError(t, err)
+		for ordinal, m := range tc.Messages() {
+			_, err = d.getWriter().ExecContext(ctx, `INSERT INTO messages
+				(session_id, ordinal, role, content, timestamp, model) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?)`, tc.Project, ordinal, m.Role, m.Content, m.Timestamp, m.Model)
+			require.NoError(t, err)
+		}
+	}
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.Project, func(t *testing.T) {
+			for _, dayHour := range []bool{false, true} {
+				f := AnalyticsFilter{From: "2024-06-05", To: "2024-06-05", Project: tc.Project, Timezone: tc.Timezone}
+				f.Model = tc.Model
+				if dayHour {
+					f.DayOfWeek = new(2)
+					f.Hour = new(tc.Hour)
+				}
+				got, err := d.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				assert.Equal(t, tc.Want, got.MessageCount)
+				require.Len(t, got.Series, 1)
+				assert.Equal(t, tc.Want, got.Series[0].Total)
+			}
+		})
+	}
 }
