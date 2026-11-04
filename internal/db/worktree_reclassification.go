@@ -35,6 +35,10 @@ const worktreeMappingSessionScopeQuery = `
 	WHERE machine = ? AND deleted_at IS NULL
 	ORDER BY sessions.id`
 
+func buildWorktreeMappingSessionScopeQuery(machine, sessionID string) (string, []any) {
+	return worktreeMappingSessionScopeQuery, []any{sessionID, machine, sessionID, machine}
+}
+
 var ErrWorktreeMappingSetChanged = errors.New(
 	"worktree reclassification preview changed",
 )
@@ -336,8 +340,7 @@ func evaluateWorktreeMappingsTx(
 		ORDER BY id`
 	args := []any{machine}
 	if sessionID != "" {
-		query = worktreeMappingSessionScopeQuery
-		args = []any{sessionID, machine, sessionID, machine}
+		query, args = buildWorktreeMappingSessionScopeQuery(machine, sessionID)
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

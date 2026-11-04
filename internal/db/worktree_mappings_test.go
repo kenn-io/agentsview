@@ -47,15 +47,15 @@ func TestWorktreeMappingSessionScopeQueryIgnoresStats(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			args := []any{"target", defaultMachine, "target", defaultMachine}
-			rows, err := d.getWriter().Query(ctx, "EXPLAIN QUERY PLAN "+worktreeMappingSessionScopeQuery, args...)
+			query, args := buildWorktreeMappingSessionScopeQuery(defaultMachine, "target")
+			rows, err := d.getWriter().Query(ctx, "EXPLAIN QUERY PLAN "+query, args...)
 			require.NoError(t, err)
 			details := strings.Join(explainQueryPlanDetails(t, rows), "\n")
 			require.NoError(t, rows.Close())
 			assert.NotContains(t, details, "SCAN sessions")
 			assert.NotContains(t, details, "idx_sessions_machine")
 
-			rows, err = d.getWriter().Query(ctx, worktreeMappingSessionScopeQuery, args...)
+			rows, err = d.getWriter().Query(ctx, query, args...)
 			require.NoError(t, err)
 			defer rows.Close()
 			var ids []string
