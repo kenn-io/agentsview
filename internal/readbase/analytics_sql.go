@@ -168,12 +168,7 @@ func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, st
 	if inWindow != "" {
 		rowWindow := inWindow
 		if len(f.MessageScopeFilter().Models) > 0 {
-			assistantWindow, assistantArgs := windowPred("m.timestamp", from, "")
-			if assistantWindow == "" {
-				assistantWindow = dialect.TrueLiteral()
-			}
-			rowWindow = "(" + inWindow + " OR (m.role = 'assistant' AND " + assistantWindow + "))"
-			windowArgs = append(windowArgs, assistantArgs...)
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
 		}
 		where += " AND " + rowWindow
 		args = append(args, windowArgs...)

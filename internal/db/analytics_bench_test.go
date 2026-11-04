@@ -110,7 +110,6 @@ func seedTrendsSessions(b *testing.B, d *DB, prefix string, n int, baseDay strin
 }
 
 // The selected window stays fixed while three kinds of old history grow.
-// Model filtering still scans old metadata and retains undated or post-window assistants.
 func BenchmarkGetTrendsTermsOutOfRangeHistory(b *testing.B) {
 	body := strings.Repeat("the quick brown fox jumps over the lazy dog seam ", 20)
 	for _, axis := range []string{"sessions", "resumed", "untimestamped"} {

@@ -11,6 +11,15 @@ type TrendsSessionWindowCase struct {
 // TrendsSessionWindowCases supplies the shared SQLite and mirror fixture.
 func TrendsSessionWindowCases() []TrendsSessionWindowCase {
 	return []TrendsSessionWindowCase{
+		{Project: "backdated-selected-reply", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-06-05T13:00:00Z", Timezone: "UTC", Model: "a", Hour: 13, Want: 1,
+			After: []TrendsWindowMessage{{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-03T10:00:00Z", Model: "a"}}},
+		{Project: "backdated-unselected-reply", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-06-05T13:00:00Z", Timezone: "UTC", Model: "a", Hour: 13, Want: 0,
+			After: []TrendsWindowMessage{
+				{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-03T10:00:00Z", Model: "other"},
+				{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-07T15:00:00Z", Model: "a"},
+			}},
+		{Project: "backdated-reply-null-user", Started: "2024-06-05T13:00:00Z", Created: "2024-06-05T13:00:00Z", Timezone: "UTC", Model: "a", Hour: 13, Want: 1,
+			After: []TrendsWindowMessage{{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-03T10:00:00Z", Model: "a"}}},
 		{Project: "old", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-01-01T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 0},
 		{Project: "resumed", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-06-05T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 1, Before: []TrendsWindowMessage{{Role: "user", Content: "seam seam", Timestamp: "2024-01-01T09:00:00Z"}}},
 		{Project: "resumed-model", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-06-05T09:00:00Z", Timezone: "UTC", Model: "gpt-4o", Hour: 9, Want: 1, Before: []TrendsWindowMessage{{Role: "user", Content: "seam seam", Timestamp: "2024-01-01T09:00:00Z"}}, After: []TrendsWindowMessage{{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-07T15:00:00Z", Model: "gpt-4o"}}},

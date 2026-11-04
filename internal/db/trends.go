@@ -87,13 +87,7 @@ func (db *DB) GetTrendsTerms(
 		if modelFiltering {
 			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
 			selectArgs = append(selectArgs, wargs...)
-			// Later and undated assistants still resolve pending user turns.
-			assistantWindow, assistantArgs := analyticsMessageWindowPred("m.timestamp", from, "")
-			if assistantWindow == "" {
-				assistantWindow = "1 = 1"
-			}
-			rowWindow = "(" + inWindow + " OR (m.role = 'assistant' AND " + assistantWindow + "))"
-			wargs = append(wargs, assistantArgs...)
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
 		}
 		where += " AND " + rowWindow
 		args = append(args, wargs...)
