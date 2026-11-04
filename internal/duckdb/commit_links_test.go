@@ -34,10 +34,20 @@ func TestDuckDBCommitLinkParity(t *testing.T) {
 	_, err = Push(t.Context(), path, local, "m", opts, false, nil)
 	require.NoError(t, err)
 	store = openPushedStore(t, path)
-	defer store.Close()
+	defer func() { require.NoError(t, store.Close()) }()
 	links, err := store.SessionCommitLinks(t.Context(), "commit-delete")
 	require.NoError(t, err)
 	assert.Empty(t, links.Commits)
+	require.NoError(t, store.Close())
+	opts.Projects = []string{"commit-project"}
+	_, err = Push(t.Context(), path, local, "m", opts, false, nil)
+	require.NoError(t, err)
+	store = openPushedStore(t, path)
+	links, err = store.SessionCommitLinks(t.Context(), "commit-delete")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 1)
+	assert.True(t, links.Commits[0].Missing)
+	assert.Nil(t, links.Commits[0].Turn)
 }
 
 func TestDuckDBRetainedCommitLinkScope(t *testing.T) {

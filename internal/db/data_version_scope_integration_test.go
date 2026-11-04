@@ -153,6 +153,64 @@ func TestClaudeFormatPRLinkUpgradePreservesSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestClaudeFormatCommandArgsUpgradeReparsesInPlace(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(164, 165)
+	assert.ElementsMatch(t, append(providers, parser.AgentGrok, parser.AgentIflow), scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	const envelope = "<command-message>explain</command-message>\n<command-name>/explain</command-name>\n<command-args>how app.<zone> gets its cert</command-args>"
+	for _, provider := range providers {
+		t.Run(string(provider), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			sessionID := "c0000000-0000-4000-8000-000000000165"
+			source := filepath.Join(root, "project", sessionID+".jsonl")
+			if provider == parser.AgentCowork {
+				workspace := filepath.Join(root, "org", "workspace")
+				localID := "local_50000000-0000-4000-8000-000000000165"
+				dbtest.WriteTestFile(t, filepath.Join(workspace, localID+".json"), []byte(`{"sessionId":"`+localID+`","cliSessionId":"`+sessionID+`"}`))
+				source = filepath.Join(workspace, localID, ".claude", "projects", "project", sessionID+".jsonl")
+			}
+			body := testjsonl.NewSessionBuilder().
+				AddClaudeUserWithSessionID("2026-11-04T12:00:00Z", envelope, sessionID).
+				AddClaudeAssistant("2026-11-04T12:00:05Z", "It is DNS-validated.").
+				String()
+			dbtest.WriteTestFile(t, source, []byte(body))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{provider: {root}}}
+			engine := sync.NewEngine(t.Context(), database, cfg)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			engine.Close()
+			var id string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
+			// Model the archive the previous parser wrote: the envelope stored raw.
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), "UPDATE messages SET content = ? WHERE session_id = ? AND ordinal = 0", envelope, id); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err := db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
+			engine = sync.NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
+			var content string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT content FROM messages WHERE session_id = ? AND ordinal = 0", id).Scan(&content))
+			assert.Equal(t, "/explain how app.<zone> gets its cert", content)
+			var count int
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
+			assert.Equal(t, 1, count)
+		})
+	}
+}
+
 func TestGrokUpgradePreservesParserRelationship(t *testing.T) {
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: db.ScopedDataVersionProviders(131, 132)}))

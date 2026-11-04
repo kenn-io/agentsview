@@ -2038,7 +2038,8 @@ deleted sessions carry `missing: true` and omit the turn. See
 retention and lookup limits. Links use stored Git summaries, including Codex
 poll results paired with the original call. Calls spanning
 repositories use the first directory; only a leading `cd` adjusts it. Archives
-retaining only transcripts or usage have no links, and mirrors return HTTP 501.
+retaining only transcripts or usage have no links, and hosted PostgreSQL returns
+HTTP 501.
 Sessions permanently deleted before this release have no links.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by

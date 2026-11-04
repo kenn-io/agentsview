@@ -254,14 +254,16 @@ failed transfer leaves the thread and its pins intact.
 Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds
 resume metadata, `parser_checkpoint_blobs` holds cursor and hash state,
 `session_signal_state` holds the incremental signal reducer, and
-`tool_call_occurrence_agent_state` holds per-agent result coordinates. The last
-table is populated lazily when a call receives a late result. Other providers do
-not maintain Codex signal state. Full writes commit the signal seed with the
-content and bind it to the stored transcript revision inside SQLite. A failed
-seed rolls back the content; there is no post-commit revision read. During a
-full resync, the disposable replacement archive defers the tool-call ID and
-result metadata indexes until after the bulk load. Rebuilding them must succeed
-before the replacement can be installed.
+`tool_call_occurrence_agent_state` holds per-agent result coordinates. Claude
+uses the first two tables for hash-only checkpoints, trusting bytes before the
+128 KiB tail anchor as append-only. The last table is populated lazily when a
+call receives a late result. Other providers do not maintain Codex signal state.
+Full writes commit the signal seed with the content and bind it to the stored
+transcript revision inside SQLite. A failed seed rolls back the content; there
+is no post-commit revision read. During a full resync, the disposable
+replacement archive defers the tool-call ID and result metadata indexes until
+after the bulk load. Rebuilding them must succeed before the replacement can be
+installed.
 
 Codex result events also retain a raw-content digest and whether the raw event
 participates in the summary. These local fields distinguish events that become
@@ -668,7 +670,10 @@ batches against one read-only cache snapshot and spool only changed or new
 rows. Comparison requires the expected install revision; installation checks
 that revision again. Complete per-session fact counts remove obsolete tails,
 and identity invalidation compares the complete cache before and after install.
-An append can still shift later activity or event indexes and spool those rows.
+Each fact kind uses its own fixed index range, so a token-message append keeps
+activity and event rows at their existing positions.
+Existing mixed sessions move their activity and event rows once, on their next
+refill.
 This reduces temporary writes; it does not make source extraction incremental.
 
 Timezone rollup identity includes both the resolved zone name and its rule
@@ -709,6 +714,15 @@ The next writable SQLite open or PostgreSQL schema setup builds the index once
 for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
+
+### PostgreSQL push preparation indexes
+
+`idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
+`idx_sessions_source_missing` bound the parser-version check and empty repair
+queries. Owner preparation installs missing indexes automatically.
+Each first build scans `sessions` and blocks writes until installation commits.
+Restricted publishers keep writing before owner installation, using the
+existing queries until the indexes are available.
 
 ### Usage archive indexes
 
@@ -770,9 +784,12 @@ resync is required.
 Writable opens and completed bulk index builds run `PRAGMA optimize = 0x10012`.
 This considers all archive tables and limits the statistics samples. Statistics
 must cover competing indexes too: analyzing only the metadata index can leave
-SQLite choosing an older index that still reads message bodies. Full resync
-defers this index during import and rebuilds it before the replacement archive
-is installed. Read-only opens do not create indexes or collect statistics.
+SQLite choosing an older index that still reads message bodies. After optimize,
+the writer raises small `*_fts_data` row estimates and reloads statistics so
+FTS5 segment deletes keep using rowid searches as an empty archive grows. Full
+resync defers this index during import and rebuilds it before the replacement
+archive is installed. Read-only opens do not create indexes or collect
+statistics.
 
 ### Transcript usage identity
 
