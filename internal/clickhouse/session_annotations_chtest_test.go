@@ -13,6 +13,7 @@ import (
 )
 
 func TestClickHouseSessionAnnotationParity(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	dbtest.SeedSessionAnnotations(t, local)
@@ -28,6 +29,7 @@ func TestClickHouseSessionAnnotationParity(t *testing.T) {
 // A mirror pushed before the annotation columns existed gains them in
 // place, and its existing rows read back as unlabeled and unlinked.
 func TestEnsureSchemaAddsAnnotationColumnsToOlderMirror(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()

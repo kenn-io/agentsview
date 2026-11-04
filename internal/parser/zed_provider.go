@@ -148,7 +148,7 @@ func zedFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFi
 	// Zed has no cheap per-thread content digest; legacy sync stored the
 	// physical DB hash on virtual thread rows while per-thread updated_at
 	// remained the mtime freshness signal.
-	hash, err := hashJSONLSourceFile(src.Container)
+	hash, err := hashJSONLSourceFileContext(ctx, src.Container)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -224,7 +224,7 @@ func zedParseContainer(
 	// fanned-out thread row, mirroring the legacy fan-out. Computed here rather
 	// than via the base's hash stamping because the value is the DB's own hash,
 	// not the request fingerprint.
-	dbHash, _ := hashJSONLSourceFile(src.Container)
+	dbHash, _ := hashJSONLSourceFileContext(ctx, src.Container)
 	results := make([]ParseResult, 0, len(metas))
 	for _, meta := range metas {
 		result, err := parseZedThreadFromDBWithSchema(

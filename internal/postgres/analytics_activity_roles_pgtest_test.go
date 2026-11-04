@@ -59,13 +59,13 @@ func TestAnalyticsActivityRoleSplitParity(t *testing.T) {
 		require.NoError(t, local.InsertMessages(ctx, sess.msgs))
 	}
 
-	ps, err := New(pgURL, "agentsview", local, "analytics-test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "analytics-test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	require.NoError(t, ps.EnsureSchema(ctx))
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err)
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err)
 	defer store.Close()
 	duckPath := filepath.Join(t.TempDir(), "analytics.duckdb")

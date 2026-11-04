@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,18 +26,18 @@ func seedSecretFindingsSession(
 	t.Helper()
 	pg := store.DB()
 
-	_, err := pg.Exec(`DELETE FROM secret_findings WHERE session_id = $1`, sid)
+	_, err := pg.ExecContext(t.Context(), `DELETE FROM secret_findings WHERE session_id = $1`, sid)
 	require.NoError(t, err, "delete secret_findings")
-	_, err = pg.Exec(`DELETE FROM messages WHERE session_id = $1`, sid)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = $1`, sid)
 	require.NoError(t, err, "delete messages")
-	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, sid)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = $1`, sid)
 	require.NoError(t, err, "delete session")
 
 	var saVal interface{} = nil
 	if startedAt != "" {
 		saVal = startedAt
 	}
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count,
@@ -51,7 +50,7 @@ func seedSecretFindingsSession(
 	require.NoError(t, err, "insert session %s", sid)
 
 	for _, m := range msgs {
-		_, err := pg.Exec(`
+		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO messages
 				(session_id, ordinal, role, content, content_length)
 			VALUES ($1, $2, $3, $4, $5)`,
@@ -61,7 +60,7 @@ func seedSecretFindingsSession(
 	}
 
 	for _, f := range findings {
-		_, err := pg.Exec(`
+		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO secret_findings
 				(session_id, rule_name, confidence, location_kind,
 				 message_ordinal, call_index, event_index,
@@ -81,11 +80,11 @@ func TestPGListSecretFindings(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSecretFindingsSession(t, store,
 		"sf-s1", "alpha-proj", "claude-code",
@@ -202,11 +201,11 @@ func TestPGListSecretFindingsPagination(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed 5 findings on a single session with a distinctive rule name.
 	findings := make([]db.SecretFinding, 5)
@@ -254,11 +253,11 @@ func TestPGListSecretFindingsDateFilter(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSecretFindingsSession(t, store,
 		"sf-date-mar", "df-proj", "claude-code",
@@ -307,12 +306,12 @@ func TestPGSecretFindingSource(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	pg := store.DB()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Clean up prior runs. The sessions table uses "id" not "session_id".
 	sid := "sf-src-s1"
@@ -320,13 +319,13 @@ func TestPGSecretFindingSource(t *testing.T) {
 		"secret_findings", "tool_result_events",
 		"tool_calls", "messages",
 	} {
-		_, err := pg.Exec("DELETE FROM "+tbl+" WHERE session_id = $1", sid)
+		_, err := pg.ExecContext(t.Context(), "DELETE FROM "+tbl+" WHERE session_id = $1", sid)
 		require.NoError(t, err, "cleanup %s", tbl)
 	}
-	_, err = pg.Exec("DELETE FROM sessions WHERE id = $1", sid)
+	_, err = pg.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = $1", sid)
 	require.NoError(t, err, "cleanup sessions")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -335,7 +334,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 		sid,
 	)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, content_length)
 		VALUES ($1, 0, 'assistant',
@@ -344,7 +343,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 	)
 	require.NoError(t, err, "insert message")
 	// Insert a tool_call at call_index=0 with result_content.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, message_ordinal, call_index, tool_name, category,
 			 tool_use_id, input_json, result_content)
@@ -354,7 +353,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 	)
 	require.NoError(t, err, "insert tool_call")
 	// Insert a tool_call at call_index=1 with a result event.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, message_ordinal, call_index, tool_name, category,
 			 tool_use_id)
@@ -362,7 +361,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 		sid,
 	)
 	require.NoError(t, err, "insert tool_call 2")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, source, status, content, event_index)

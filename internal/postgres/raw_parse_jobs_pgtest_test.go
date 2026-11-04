@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -454,13 +455,13 @@ func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T)
 	const role = "agentsview_parse_worker"
 	const rolePassword = "agentsview_parse_worker_pw"
 
-	_, _ = pg.Exec(`DROP OWNED BY ` + role)
-	_, _ = pg.Exec(`DROP ROLE IF EXISTS ` + role)
-	_, err := pg.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	_, _ = pg.ExecContext(t.Context(), `DROP OWNED BY `+role)
+	_, _ = pg.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
+	_, err := pg.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 	require.NoError(t, err, "create parse worker role")
 	t.Cleanup(func() {
-		_, _ = pg.Exec(`DROP OWNED BY ` + role)
-		_, _ = pg.Exec(`DROP ROLE IF EXISTS ` + role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 	})
 	for _, grant := range []string{
 		`GRANT USAGE ON SCHEMA ` + schemaTestSchema + ` TO ` + role,
@@ -468,13 +469,13 @@ func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T)
 		`GRANT SELECT ON ` + schemaTestSchema + `.raw_source_heads TO ` + role,
 		`GRANT SELECT, UPDATE ON ` + schemaTestSchema + `.raw_ingest_jobs TO ` + role,
 	} {
-		_, err = pg.Exec(grant)
+		_, err = pg.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 	workerURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	workerURL.User = url.UserPassword(role, rolePassword)
-	workerDB, err := Open(workerURL.String(), schemaTestSchema, true)
+	workerDB, err := Open(t.Context(), workerURL.String(), schemaTestSchema, true)
 	require.NoError(t, err, "Open parse worker")
 	t.Cleanup(func() { require.NoError(t, workerDB.Close()) })
 	workerStore, err := NewRawIngestStore(workerDB)

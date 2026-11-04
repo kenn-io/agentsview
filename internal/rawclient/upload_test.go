@@ -537,7 +537,7 @@ func TestUploadObjectRejectsOversizedChunk(t *testing.T) {
 	assert.Equal(t, rawsync.DefaultUploadChunkBytes, capped.chunkBytes)
 }
 
-func TestUploadObjectZeroLengthSkipsPatch(t *testing.T) {
+func TestUploadObjectAlreadyCompleteEmptySessionSkipsPatch(t *testing.T) {
 	t.Parallel()
 	script := &uploadScript{length: 0}
 	server := httptest.NewServer(script.handler(t))

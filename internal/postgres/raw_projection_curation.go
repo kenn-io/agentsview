@@ -111,7 +111,7 @@ func (s *RawProjectionStore) SetCuration(ctx context.Context, alias, field strin
 }
 
 func (s *RawProjectionStore) publishRawCuration(ctx context.Context, tx *sql.Tx, group string) error {
-	changes, err := s.materializeGroup(ctx, tx, group)
+	changes, err := s.materializeGroup(ctx, tx, group, nil)
 	if err != nil {
 		return err
 	}

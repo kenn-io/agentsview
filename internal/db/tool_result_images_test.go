@@ -777,3 +777,66 @@ func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
 	assert.Equal(t, int64(1), stats.Payloads)
 	assert.NotContains(t, stripped, "asset://")
 }
+
+func TestRetainedToolResultImages(t *testing.T) {
+	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	inline := `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]`
+	offloaded := `[{"type":"agentsview_image","version":1,"image_ref":"asset://` + digest + `.png","media_type":"image/png","byte_size":3}]`
+	images := RetainedToolResultImages("agent-a:\n" + inline + "\n\nagent-b:\n" + offloaded)
+	require.Len(t, images, 2)
+	for i, image := range images {
+		assert.Equal(t, i, image.Index)
+		assert.Equal(t, digest, image.SHA256)
+		require.NotNil(t, image.Size)
+		assert.Equal(t, int64(3), *image.Size)
+		assert.Equal(t, "image/png", image.MediaType)
+	}
+	for _, content := range []string{
+		strings.Replace(offloaded, `"version":1`, `"version":2`, 1),
+		strings.Replace(offloaded, `"version":1`, `"version":0`, 1),
+		`[{"type":"agentsview_image","version":2,"media_type":"image/png","byte_size":3}]`,
+		`[{"type":"input_image","image_url":"data:text/plain;base64,YWJj"}]`,
+		`[{"type":"input_image","image_url":"data:image/png;base64,!!"}]`,
+		`[{"type":"agentsview_image","image_ref":"asset://bad.png","media_type":"image/png","byte_size":3}]`,
+		`[{`,
+	} {
+		assert.Empty(t, RetainedToolResultImages(content))
+	}
+}
+
+func TestMarkdownAssetImages(t *testing.T) {
+	const ref = "asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png"
+	images := MarkdownAssetImages("![pasted](" + ref + ") [link](" + ref + ") ![remote](https://example.com/image.png) `![code](" + ref + ")`")
+	require.Len(t, images, 1)
+	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", images[0].SHA256)
+	assert.Nil(t, images[0].Size)
+	assert.Equal(t, "image/png", images[0].MediaType)
+}
+
+func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
+	data, err := os.ReadFile("../parser/testdata/opencode_v2/tool_files.json")
+	require.NoError(t, err)
+	var fixture struct {
+		Content []struct {
+			ID    string `json:"id"`
+			State struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"state"`
+		} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixture))
+	var content json.RawMessage
+	for _, tool := range fixture.Content {
+		if tool.ID == "call_files" {
+			content = tool.State.Content
+		}
+	}
+	require.NotEmpty(t, content)
+	files := RetainedToolResultImages(string(content))
+	require.Len(t, files, 2)
+	assert.Equal(t, "application/pdf", files[0].MediaType)
+	assert.Equal(t, new(int64(327)), files[0].Size)
+	assert.Equal(t, "text/plain", files[1].MediaType)
+	assert.Equal(t, new(int64(6)), files[1].Size)
+	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", files[1].SHA256)
+}

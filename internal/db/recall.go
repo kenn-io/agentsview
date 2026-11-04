@@ -211,7 +211,7 @@ func (db *DB) InsertRecallEntry(ctx context.Context, m RecallEntry) (string, err
 // copied earlier in the resync (re-synced or orphan-copied), so this normally
 // covers every entry; parser-excluded sessions are the exception. Any skipped
 // entries are logged.
-func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
+func (db *DB) CopyRecallEntriesFrom(ctx context.Context, sourcePath string) error {
 	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
 		return err
 	}
@@ -220,7 +220,6 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 
 	// Pin one connection for the ATTACH/INSERT/DETACH sequence; ATTACH is
 	// connection-scoped and the pool may otherwise switch connections.
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -233,13 +232,13 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
+		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 
 	if _, err := prepareCodexSessionIDMap(ctx, conn, false); err != nil {
 		return err
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL) }()
+	defer func() { _, _ = execWithoutCancel(ctx, conn, dropCodexSessionIDMapSQL) }()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

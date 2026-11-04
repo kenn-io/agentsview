@@ -26,6 +26,7 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -4677,6 +4678,65 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 			assert.Equal(t, tc.wantTool, got.Activity[0].ToolMs)
 			assert.Equal(t, tc.wantUnattributed, got.Activity[0].UnattributedMs)
 			assert.False(t, got.Activity[0].Running)
+		})
+	}
+}
+
+func TestTrendsTermsSessionWindowParity(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	cases := testutil.TrendsSessionWindowCases()
+	for _, tc := range cases {
+		sess := syncSession(tc.Project, tc.Project, "seam", tc.Started, len(tc.Messages()))
+		sess.CreatedAt = tc.Created
+		if tc.Started == "" {
+			sess.StartedAt = nil
+			sess.EndedAt = nil
+		}
+		var msgs []db.Message
+		for ordinal, m := range tc.Messages() {
+			msg := syncMessage(tc.Project, ordinal, m.Role, m.Content, m.Timestamp)
+			msg.Model = m.Model
+			msgs = append(msgs, msg)
+		}
+		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: sess, Messages: msgs, DataVersion: 1, ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+	}
+	// Session writes assign creation time at ingestion; pin the fallback dates.
+	conn, err := sql.Open("sqlite3", local.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	for _, tc := range cases {
+		_, err := conn.ExecContext(ctx, "UPDATE sessions SET created_at = ? WHERE id = ?", tc.Created, tc.Project)
+		require.NoError(t, err)
+	}
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	terms, err := db.ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.Project, func(t *testing.T) {
+			for _, dayHour := range []bool{false, true} {
+				f := db.AnalyticsFilter{From: "2024-06-05", To: "2024-06-05", Project: tc.Project, Timezone: tc.Timezone}
+				f.Model = tc.Model
+				if dayHour {
+					f.DayOfWeek = new(2)
+					f.Hour = new(tc.Hour)
+				}
+				got, err := store.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				want, err := local.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				assert.Equal(t, tc.Want, got.MessageCount)
+				require.Len(t, got.Series, 1)
+				assert.Equal(t, tc.Want, got.Series[0].Total)
+				assert.Equal(t, want, got)
+			}
 		})
 	}
 }

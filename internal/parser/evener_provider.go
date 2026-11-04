@@ -21,7 +21,7 @@ func newEvenerProviderFactory(def AgentDef) ProviderFactory {
 			WithFileChangedPathClassifier(evenerClassifyPath),
 			WithFileLookup(evenerFindFile),
 			WithFileFingerprint(evenerFingerprintSource),
-			WithFileParse(evenerFileParser(context.Background())),
+			WithFileParse(evenerParseFile),
 		), remote: cfg.PathRewriter != nil}
 	})}
 }
@@ -176,13 +176,13 @@ func evenerClassifyPath(root, path string, allowMissing bool) (singleFileMatch, 
 	return singleFileMatch{Path: path}, true
 }
 
-func evenerFindFile(root, id string) (singleFileMatch, bool) {
+func evenerFindFile(ctx context.Context, root, id string) (singleFileMatch, bool) {
 	if !evenerSafeID(id) {
 		return singleFileMatch{}, false
 	}
 	var found singleFileMatch
 	// The lookup reads directory names only; it never parses unrelated sessions.
-	_ = evenerDiscoverEach(context.Background(), root, func(match singleFileMatch) error {
+	_ = evenerDiscoverEach(ctx, root, func(match singleFileMatch) error {
 		if strings.TrimSuffix(filepath.Base(match.Path), evenerTranscriptSuffix) == id {
 			found = match
 		}
@@ -240,7 +240,7 @@ func evenerParentFileInfo(path string) os.FileInfo {
 	return info
 }
 
-func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
+func evenerFingerprintSource(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
 	info, err := os.Lstat(src.Path)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -252,7 +252,7 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 	// freshness is represented by the per-file digest and required content hash.
 	fp := SourceFingerprint{Size: info.Size(), MTimeNS: info.ModTime().UnixNano()}
 	h := sha256.New()
-	if err := addSiblingMetadataFingerprintPart(h, "transcript", src.Path, info); err != nil {
+	if err := addSiblingMetadataFingerprintPart(ctx, h, "transcript", src.Path, info); err != nil {
 		return SourceFingerprint{}, err
 	}
 	meta := evenerMetadataPath(src.Path)
@@ -266,7 +266,7 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 			return SourceFingerprint{}, errors.New("evener metadata is not a regular file")
 		}
 		fp.Size += mi.Size()
-		if err := addSiblingMetadataFingerprintPart(h, "metadata", meta, mi); err != nil {
+		if err := addSiblingMetadataFingerprintPart(ctx, h, "metadata", meta, mi); err != nil {
 			return SourceFingerprint{}, err
 		}
 	}
@@ -289,7 +289,7 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 			case err != nil || !info.Mode().IsRegular():
 				_, _ = fmt.Fprintf(h, "%s:unavailable\n", dependency.label)
 			default:
-				if err := addSiblingMetadataFingerprintPart(h, dependency.label, dependency.path, info); err != nil {
+				if err := addSiblingMetadataFingerprintPart(ctx, h, dependency.label, dependency.path, info); err != nil {
 					// Missing metadata permits parent import; inaccessible
 					// metadata does not. Keep their freshness markers distinct.
 					_, _ = fmt.Fprintf(h, "%s:unavailable\n", dependency.label)
@@ -301,21 +301,19 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 	return fp, nil
 }
 
-func evenerFileParser(ctx context.Context) func(singleFileSource, ParseRequest) ([]ParseResult, []string, error) {
-	return func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
-		sess, msgs, err := parseEvenerSession(ctx, src.Path, req.Machine)
-		if err != nil || sess == nil {
-			return nil, nil, err
-		}
-		// A full provider parse owns the source title, including metadata removal.
-		sess.SessionNamePresent = true
-		if req.Fingerprint.Hash != "" {
-			sess.File.Size = req.Fingerprint.Size
-			sess.File.Mtime = req.Fingerprint.MTimeNS
-			sess.File.Hash = req.Fingerprint.Hash
-		}
-		return []ParseResult{{Session: *sess, Messages: msgs}}, nil, nil
+func evenerParseFile(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
+	sess, msgs, err := parseEvenerSession(ctx, src.Path, req.Machine)
+	if err != nil || sess == nil {
+		return nil, nil, err
 	}
+	// A full provider parse owns the source title, including metadata removal.
+	sess.SessionNamePresent = true
+	if req.Fingerprint.Hash != "" {
+		sess.File.Size = req.Fingerprint.Size
+		sess.File.Mtime = req.Fingerprint.MTimeNS
+		sess.File.Hash = req.Fingerprint.Hash
+	}
+	return []ParseResult{{Session: *sess, Messages: msgs}}, nil, nil
 }
 
 func (s evenerSourceSet) Parse(ctx context.Context, req ParseRequest) (ParseOutcome, error) {
@@ -326,8 +324,6 @@ func (s evenerSourceSet) Parse(ctx context.Context, req ParseRequest) (ParseOutc
 		}
 		req.Fingerprint = fingerprint
 	}
-	// Bind the request context into the single-file parser callback.
-	s.cfg.parseFile = evenerFileParser(ctx)
 	out, err := s.singleFileSourceSet.Parse(ctx, req)
 	if err != nil {
 		return out, err

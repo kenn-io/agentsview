@@ -125,6 +125,7 @@ func (r *claudeSessionReservation) close() {
 	if r == nil || r.lock == nil {
 		return
 	}
+	// Cleanup runs after the capture context ends; the wait bounds it.
 	ctx, cancel := context.WithTimeout(context.Background(), reservationCleanupWait)
 	defer cancel()
 	guard, err := lockReservationGuard(ctx, r.dir)

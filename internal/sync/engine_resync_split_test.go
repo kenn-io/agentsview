@@ -219,7 +219,7 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 	require.False(t, stats.Aborted)
 	require.FileExists(t, tempPath)
 
-	installed, err := e.SwapResyncDatabase(tempPath)
+	installed, err := e.SwapResyncDatabase(t.Context(), tempPath)
 	require.NoError(t, err)
 	assert.True(t, installed)
 	require.NoError(t, e.ResetCachesAfterSwap(t.Context()))
@@ -257,7 +257,7 @@ func TestResyncRecomputesStaleSourceMissingSignals(t *testing.T) {
 			tempPath, stats, err := e.ResyncBuild(t.Context(), nil)
 			require.NoError(t, err)
 			require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
-			installed, err := e.SwapResyncDatabase(tempPath)
+			installed, err := e.SwapResyncDatabase(t.Context(), tempPath)
 			require.NoError(t, err)
 			require.True(t, installed)
 			require.NoError(t, e.ResetCachesAfterSwap(t.Context()))
@@ -397,7 +397,7 @@ func TestSwapWindowRejectsDirectWrites(t *testing.T) {
 	// proceeds while the writer is closed. The swap reopens the writer.
 	tempPath, _, err := e.ResyncBuild(t.Context(), nil)
 	require.NoError(t, err)
-	installed, err := e.SwapResyncDatabase(tempPath)
+	installed, err := e.SwapResyncDatabase(t.Context(), tempPath)
 	require.NoError(t, err)
 	assert.True(t, installed)
 	require.NoError(t, e.ResetCachesAfterSwap(t.Context()))
@@ -887,7 +887,7 @@ func TestResyncPublishesCompleteReplacementMainFile(t *testing.T) {
 		assert.Equal(t, want, readResyncPublicationState(t, copied))
 		require.NoError(t, copied.Close())
 
-		installed, err := e.SwapResyncDatabase(tempPath)
+		installed, err := e.SwapResyncDatabase(t.Context(), tempPath)
 		require.NoError(t, err)
 		require.True(t, installed)
 		require.NoError(t, e.ResetCachesAfterSwap(t.Context()))

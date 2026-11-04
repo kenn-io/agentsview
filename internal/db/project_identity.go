@@ -306,11 +306,10 @@ func validateArchiveSalt(salt string) (string, error) {
 // CopyArchiveIdentityFrom preserves the logical archive identity in a fresh
 // resync database before any session is parsed. The database ID is deliberately
 // not copied because it identifies the new physical generation.
-func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
+func (db *DB) CopyArchiveIdentityFrom(ctx context.Context, sourcePath string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring archive identity connection: %w", err)
@@ -733,21 +732,8 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 		return fmt.Errorf("beginning project identity observation upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertProjectIdentityObservationExec(
-		ctx, tx,
-		func(ctx context.Context, query string, args ...any) rowScanner {
-			return tx.QueryRowContext(ctx, query, args...)
-		},
-		obs,
-	); err != nil {
-		return err
-	}
-	if err := writeSessionProjectIdentitySnapshotExec(
-		ctx, tx,
-		func(ctx context.Context, query string, args ...any) rowScanner {
-			return tx.QueryRowContext(ctx, query, args...)
-		},
-		obs, snapshotProject, false, allowSnapshotProjectCorrection,
+	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection,
 	); err != nil {
 		return err
 	}
@@ -845,15 +831,15 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 		}
 	}
 	if obs.Project != "" {
-		if err := upsertProjectIdentityObservationWithSnapshotProjectTx(
-			tx, obs, snapshotProject, result.inserted, true,
+		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+			ctx, tx, obs, snapshotProject, result.inserted, true,
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
 	}
 	if !result.inserted && result.previousProject != result.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			context.Background(), tx, s.ID,
+			ctx, tx, s.ID,
 			[]string{result.previousProject, result.currentProject},
 		); err != nil {
 			return sessionUpsertResult{}, err
@@ -866,15 +852,6 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	return result, nil
 }
 
-func upsertProjectIdentityObservationTx(
-	tx *sql.Tx,
-	obs export.ProjectIdentityObservation,
-) error {
-	return upsertProjectIdentityObservationTxContext(
-		context.Background(), tx, obs,
-	)
-}
-
 func upsertProjectIdentityObservationTxContext(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -882,19 +859,6 @@ func upsertProjectIdentityObservationTxContext(
 ) error {
 	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		ctx, tx, obs, obs.Project, false, false,
-	)
-}
-
-func upsertProjectIdentityObservationWithSnapshotProjectTx(
-	tx *sql.Tx,
-	obs export.ProjectIdentityObservation,
-	snapshotProject string,
-	sessionInserted bool,
-	allowSnapshotProjectCorrection bool,
-) error {
-	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		context.Background(), tx, obs, snapshotProject, sessionInserted,
-		allowSnapshotProjectCorrection,
 	)
 }
 
@@ -907,6 +871,10 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 	allowSnapshotProjectCorrection bool,
 ) error {
 	normalized, err := normalizeProjectIdentityObservation(obs)
+	if err != nil {
+		return err
+	}
+	normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
 	if err != nil {
 		return err
 	}
@@ -1008,6 +976,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		  AND snap.remote_resolution = 'resolved'
 		  AND snap.git_remote != ''
 		  AND s.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = s.id)
 		  AND s.project != snap.project`)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -1049,6 +1018,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			WHERE snap.session_id = sessions.id
 		)
 		WHERE sessions.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id)
 		  AND EXISTS (
 			SELECT 1
 			FROM session_project_identity_snapshots snap
@@ -1076,6 +1046,9 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		); err != nil {
 			return 0, err
 		}
+	}
+	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf(

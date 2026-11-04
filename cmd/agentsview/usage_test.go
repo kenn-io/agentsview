@@ -677,7 +677,7 @@ func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{JSON: true, Offline: false})
+		runUsageDaily(t.Context(), UsageDailyConfig{JSON: true, Offline: false})
 	})
 	assert.Equal(t, "America/New_York", gotTimezone)
 }
@@ -696,7 +696,7 @@ func TestRunUsageStatuslineDefaultsToMappedLocalTimezone(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	captureStdout(t, func() {
-		runUsageStatusline(UsageStatuslineConfig{JSON: true})
+		runUsageStatusline(t.Context(), UsageStatuslineConfig{JSON: true})
 	})
 	assert.Equal(t, "America/New_York", gotTimezone)
 }
@@ -839,7 +839,7 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:     true,
 			Since:    "2026-06-01",
 			Until:    "2026-06-02",
@@ -867,7 +867,7 @@ func TestRunUsageDailyResolvesDurationSince(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	_ = captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:     true,
 			Since:    "14d",
 			Timezone: "UTC",
@@ -984,7 +984,7 @@ func TestRunUsageDailyTableSkipsDaemonSessionCounts(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{Timezone: "UTC"})
+		runUsageDaily(t.Context(), UsageDailyConfig{Timezone: "UTC"})
 	})
 
 	assert.Equal(t, "false", gotSessionCounts)
@@ -1003,7 +1003,7 @@ func TestRunUsageDailyBreakdownUsesDaemonBreakdowns(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	_ = captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:      true,
 			Breakdown: true,
 			Timezone:  "UTC",
@@ -1025,7 +1025,7 @@ func TestRunUsageDailyDefaultRangeUsesDaemonDefaults(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:     true,
 			Timezone: "UTC",
 		})
@@ -1049,7 +1049,7 @@ func TestRunUsageDailyAllPreservesEmptyRangeWithDiscoveredDaemon(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:     true,
 			All:      true,
 			Timezone: "UTC",
@@ -1074,7 +1074,7 @@ func TestRunUsageDailyNoSyncUsesDiscoveredDaemon(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:     true,
 			NoSync:   true,
 			Since:    "2026-06-01",
@@ -1097,7 +1097,7 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 	defer func() { require.NoError(t, lock.Close()) }()
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON:     true,
 			Offline:  true,
 			Since:    "2026-04-01",
@@ -1291,7 +1291,7 @@ func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON: true, Since: "2026-06-01", Until: "2026-06-01",
 			Timezone: "UTC", Offline: true, NoSync: true,
 		})
@@ -1348,7 +1348,7 @@ func TestUsageDailyJSONPricesCodexAutoReviewAsLuna(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	out := captureStdout(t, func() {
-		runUsageDaily(UsageDailyConfig{
+		runUsageDaily(t.Context(), UsageDailyConfig{
 			JSON: true, Breakdown: true, Since: "2026-10-01",
 			Until: "2026-10-01", Timezone: "UTC", Offline: true, NoSync: true,
 		})
@@ -1863,7 +1863,7 @@ func TestRunUsageDailyHintsNoTokenDataForCopilot(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	stderr := captureStderr(t, func() {
-		runUsageDaily(UsageDailyConfig{Agent: "copilot", Timezone: "UTC"})
+		runUsageDaily(t.Context(), UsageDailyConfig{Agent: "copilot", Timezone: "UTC"})
 	})
 
 	assert.Contains(t, stderr, "Copilot")
@@ -1878,7 +1878,7 @@ func TestRunUsageDailyNoHintWithoutAgentFilter(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	stderr := captureStderr(t, func() {
-		runUsageDaily(UsageDailyConfig{Timezone: "UTC"})
+		runUsageDaily(t.Context(), UsageDailyConfig{Timezone: "UTC"})
 	})
 
 	assert.NotContains(t, stderr, "token")
@@ -1892,7 +1892,7 @@ func TestRunUsageDailyNoHintWhenDataPresent(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	stderr := captureStderr(t, func() {
-		runUsageDaily(UsageDailyConfig{Agent: "codex", Timezone: "UTC"})
+		runUsageDaily(t.Context(), UsageDailyConfig{Agent: "codex", Timezone: "UTC"})
 	})
 
 	assert.NotContains(t, stderr, "token-usage")

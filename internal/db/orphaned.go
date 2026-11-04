@@ -43,9 +43,9 @@ func execWithoutCancel(
 // CloseConnections on its DB handle first). Uses ATTACH
 // DATABASE on a pinned connection for atomicity.
 func (d *DB) CopyOrphanedDataFrom(
-	sourcePath string,
+	ctx context.Context, sourcePath string,
 ) (int, error) {
-	ids, err := d.CopyOrphanedDataFromExcluding(sourcePath, nil)
+	ids, err := d.CopyOrphanedDataFromExcluding(ctx, sourcePath, nil)
 	return len(ids), err
 }
 
@@ -55,13 +55,13 @@ func (d *DB) CopyOrphanedDataFrom(
 // restored as orphans, but they also should not become permanent
 // user-deletion entries in excluded_sessions. It returns the copied session IDs.
 func (d *DB) CopyOrphanedDataFromExcluding(
+	ctx context.Context,
 	sourcePath string,
 	extraExcludedIDs []string,
 ) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -89,7 +89,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL) }()
+	defer func() { _, _ = execWithoutCancel(ctx, conn, dropCodexSessionIDMapSQL) }()
 
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _extra_excluded_orphan_ids (
@@ -286,11 +286,10 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 // parsing into a fresh DB so UpsertSession can see trashed rows
 // and reject source-file writes that would otherwise overwrite
 // the user's trash. It returns the copied session IDs.
-func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
+func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -307,8 +306,8 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
-			ctx, "DETACH DATABASE old_db",
+		_, _ = execWithoutCancel(
+			ctx, conn, "DETACH DATABASE old_db",
 		)
 	}()
 
@@ -316,7 +315,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL) }()
+	defer func() { _, _ = execWithoutCancel(ctx, conn, dropCodexSessionIDMapSQL) }()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -343,8 +342,8 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		)
 	}
 	defer func() {
-		_, _ = tx.ExecContext(
-			ctx,
+		_, _ = execWithoutCancel(
+			ctx, tx,
 			"DROP TABLE IF EXISTS _trashed_ids",
 		)
 	}()
@@ -444,11 +443,10 @@ func copiedSessionIDs(ctx context.Context, queryer interface {
 // floors across the temp-database resync swap. Transient bookkeeping such as
 // last_sync_* timestamps is deliberately left behind so the rebuilt DB reports
 // its own sync times.
-func (d *DB) CopySyncStateFrom(sourcePath string) error {
+func (d *DB) CopySyncStateFrom(ctx context.Context, sourcePath string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -1108,12 +1106,12 @@ const codexThreadIdentityDataVersion = 137
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
 func (d *DB) CopyExcludedSessionsFrom(
+	ctx context.Context,
 	sourcePath string,
 ) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -1126,8 +1124,8 @@ func (d *DB) CopyExcludedSessionsFrom(
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
-			ctx, "DETACH DATABASE old_db",
+		_, _ = execWithoutCancel(
+			ctx, conn, "DETACH DATABASE old_db",
 		)
 	}()
 
@@ -1236,17 +1234,9 @@ func (d *DB) CopyExcludedSessionsFrom(
 			return err
 		}
 		if hasLinks {
-			var hasProject bool
-			if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('commit_links', 'old_db') WHERE name='project')`).Scan(&hasProject); err != nil {
-				return fmt.Errorf("reading commit link source columns: %w", err)
-			}
-			project := "''"
-			if hasProject {
-				project = "l.project"
-			}
 			if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
     (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
-    SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,`+project+`
+    SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.project
     FROM old_db.commit_links l WHERE NOT EXISTS (SELECT 1 FROM old_db.sessions s WHERE s.id=l.session_id)`); err != nil {
 				return fmt.Errorf("copying excluded commit links: %w", err)
 			}
@@ -1264,12 +1254,12 @@ func (d *DB) CopyExcludedSessionsFrom(
 // project snapshots are restored only from source versions that recorded
 // parser-source labels reliably.
 func (d *DB) CopySessionMetadataFrom(
+	ctx context.Context,
 	sourcePath string,
 ) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -1282,8 +1272,8 @@ func (d *DB) CopySessionMetadataFrom(
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
-			ctx, "DETACH DATABASE old_db",
+		_, _ = execWithoutCancel(
+			ctx, conn, "DETACH DATABASE old_db",
 		)
 	}()
 
@@ -1292,7 +1282,7 @@ func (d *DB) CopySessionMetadataFrom(
 	if err != nil {
 		return err
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL) }()
+	defer func() { _, _ = execWithoutCancel(ctx, conn, dropCodexSessionIDMapSQL) }()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -2035,6 +2025,20 @@ func (d *DB) CopySessionMetadataFrom(
 			); err != nil {
 				return fmt.Errorf("reconciling recovered project identity root: %w", err)
 			}
+		}
+	}
+
+	// Old naming decisions win over provisional choices made while reparsing.
+	// Discard new provisional choices too: the complete source snapshots can
+	// now supply established checkout aliases regardless of parse order.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM main.repository_project_names`); err != nil {
+		return fmt.Errorf("resetting provisional repository project names: %w", err)
+	}
+	if oldDBHasTable(ctx, tx, "repository_project_names") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.repository_project_names (normalized_remote, project, reason)
+			SELECT normalized_remote, project, reason FROM old_db.repository_project_names`); err != nil {
+			return fmt.Errorf("copying repository project names: %w", err)
 		}
 	}
 
@@ -3089,7 +3093,7 @@ const dropCodexSessionIDMapSQL = `DROP VIEW IF EXISTS _codex_page_metadata; DROP
 func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacyForks bool) (version int, err error) {
 	defer func() {
 		if err != nil {
-			_, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL)
+			_, _ = execWithoutCancel(ctx, conn, dropCodexSessionIDMapSQL)
 		}
 	}()
 	if _, err := conn.ExecContext(ctx, `

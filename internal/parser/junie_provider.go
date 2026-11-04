@@ -260,7 +260,9 @@ func (s junieSourceSet) Fingerprint(
 	}
 	inode, device := sourceFileIdentity(info)
 	h := sha256.New()
-	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
+	n, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f})
+	recordContentRead(ctx, n)
+	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("hash %s: %w", src.Path, err)
 	}
 	fingerprint := SourceFingerprint{

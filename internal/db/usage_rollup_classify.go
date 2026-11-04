@@ -407,25 +407,6 @@ func usageFactIdentitiesForSessions(
 	return set, nil
 }
 
-// usageSpoolIdentitiesForSessions returns the distinct dedup identities the
-// attached fill spool carries for the given source sessions.
-func usageSpoolIdentitiesForSessions(
-	ctx context.Context, runner usageCacheStatementRunner, sessionIDs []string,
-) (usageDedupIdentitySet, error) {
-	set := newUsageDedupIdentitySet()
-	err := queryChunked(sessionIDs, func(chunk []string) error {
-		placeholders, args := InPlaceholders(chunk)
-		return scanUsageIdentityFactRows(ctx, runner, `SELECT DISTINCT
-			claude_message_id, claude_request_id, source_uuid, usage_dedup_key
-			FROM usage_fill_spool.facts
-			WHERE session_id IN `+placeholders, args, set)
-	})
-	if err != nil {
-		return set, fmt.Errorf("collecting spooled usage identities: %w", err)
-	}
-	return set, nil
-}
-
 func scanUsageIdentityFactRows(
 	ctx context.Context, runner usageCacheStatementRunner, query string,
 	args []any, set usageDedupIdentitySet,

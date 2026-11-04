@@ -351,8 +351,8 @@ func (s analyticsSQL) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
 	return row, nil
 }
 
-func (s analyticsSQL) TrendsSQL() string {
-	return readbase.AnalyticsTrendsSQL(db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect())
+func (s analyticsSQL) TrendsSQL(f db.AnalyticsFilter) (string, []any) {
+	return readbase.AnalyticsTrendsSQL(f, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect())
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }

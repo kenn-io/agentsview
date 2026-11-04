@@ -28,14 +28,14 @@ func upgradedCodexTrash(t *testing.T) *DB {
 	require.NoError(t, source.Close())
 
 	d := testDB(t)
-	require.NoError(t, d.CopyArchiveIdentityFrom(path))
-	_, err = d.CopyTrashedDataFrom(path)
+	require.NoError(t, d.CopyArchiveIdentityFrom(t.Context(), path))
+	_, err = d.CopyTrashedDataFrom(t.Context(), path)
 	require.NoError(t, err)
 	for _, id := range []string{legacyTrashPage, legacyTrashSibling} {
 		insertSession(t, d, id, "sample", func(s *Session) { s.Agent = "codex" })
 		insertMessages(t, d, Message{SessionID: id, Role: "user", Content: "Saved page"})
 	}
-	require.NoError(t, d.CopySessionMetadataFrom(path))
+	require.NoError(t, d.CopySessionMetadataFrom(t.Context(), path))
 	return d
 }
 
@@ -88,13 +88,13 @@ func TestRestoreLegacyCodexTrashEndsThreadScope(t *testing.T) {
 			path := d.Path()
 			require.NoError(t, d.Close())
 			rebuilt := testDB(t)
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(path))
-			require.NoError(t, rebuilt.CopyExcludedSessionsFrom(path))
-			_, err = rebuilt.CopyTrashedDataFrom(path)
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), path))
+			require.NoError(t, rebuilt.CopyExcludedSessionsFrom(t.Context(), path))
+			_, err = rebuilt.CopyTrashedDataFrom(t.Context(), path)
 			require.NoError(t, err)
-			_, err = rebuilt.CopyOrphanedDataFrom(path)
+			_, err = rebuilt.CopyOrphanedDataFrom(t.Context(), path)
 			require.NoError(t, err)
-			require.NoError(t, rebuilt.CopySessionMetadataFrom(path))
+			require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), path))
 			restored, err := rebuilt.GetSession(ctx, restoreID)
 			require.NoError(t, err)
 			require.NotNil(t, restored)
@@ -173,7 +173,7 @@ func TestPurgeLegacyCodexTrashRetainsThreadExclusion(t *testing.T) {
 			path := d.Path()
 			require.NoError(t, d.Close())
 			rebuilt := testDB(t)
-			require.NoError(t, rebuilt.CopyExcludedSessionsFrom(path))
+			require.NoError(t, rebuilt.CopyExcludedSessionsFrom(t.Context(), path))
 			require.ErrorIs(t, rebuilt.UpsertSession(ctx, Session{ID: legacyTrashMissingPage, Agent: "codex", Project: "sample", Machine: "local"}), ErrSessionExcluded)
 		})
 	}

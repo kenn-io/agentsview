@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -287,6 +286,7 @@ func modelCost(t *testing.T, result db.DailyUsageResult, model string) money.Mon
 }
 
 func TestDailyUsagePersistedPricesMatchSQLite(t *testing.T) {
+	t.Parallel()
 	store, _, local := newUsagePriceStore(t)
 	assertDailyUsageParity(t, local, store)
 	for _, filter := range []db.UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
@@ -311,6 +311,7 @@ func TestDailyUsagePersistedPricesMatchSQLite(t *testing.T) {
 // the persisted price records price codex-auto-review at Luna rates, matching
 // SQLite.
 func TestDailyUsageCodexAutoReviewPricesAsLuna(t *testing.T) {
+	t.Parallel()
 	local, target := seedUsagePriceFixture(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:     pricingpkg.GPT56LunaCanonical,
@@ -356,6 +357,7 @@ func TestDailyUsageCodexAutoReviewPricesAsLuna(t *testing.T) {
 }
 
 func TestDailyUsagePersistedPricesKeepRequestRounding(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newUsagePriceStore(t)
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
 		Timezone: "UTC", Agent: "claude",
@@ -386,6 +388,7 @@ func TestDailyUsagePersistedPricesKeepRequestRounding(t *testing.T) {
 }
 
 func TestDailyUsagePricesMissingRecordsForTheRead(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 	// Events without billable usage take the resolver's zero-usage path.
 	zero := fixtureSession("ch-price-zero", "delta", "zero first", "2026-01-12T05:00:00.000Z", 2)
@@ -433,6 +436,7 @@ func TestDailyUsagePricesMissingRecordsForTheRead(t *testing.T) {
 }
 
 func TestDailyUsagePricesFollowSourceUpdatesAndDeletes(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 
 	appendMessage(t, local, usagePriceTierID, "later", "2026-01-13T04:00:00.000Z")
@@ -461,6 +465,7 @@ func TestDailyUsagePricesFollowSourceUpdatesAndDeletes(t *testing.T) {
 }
 
 func TestDailyUsagePricesFollowPricingRefresh(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 	ctx := t.Context()
 	before, err := chLoadPricingCatalog(ctx, store.conn, nil)
@@ -511,6 +516,7 @@ func TestDailyUsagePricesFollowPricingRefresh(t *testing.T) {
 }
 
 func TestDailyUsageCustomRatesOverridePersistedPrices(t *testing.T) {
+	t.Parallel()
 	store, _, local := newUsagePriceStore(t)
 	custom := map[string]config.CustomModelRate{
 		"round-test": {InputMicrodollarsPerMTok: 5_000_000},
@@ -528,13 +534,14 @@ func TestDailyUsageCustomRatesOverridePersistedPrices(t *testing.T) {
 }
 
 func TestPushPricesCursorUsageAddedLater(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 	require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt: "2026-01-13T05:00:00.000Z", Model: "tier-test", Kind: "usage",
 		InputTokens: 70, OutputTokens: 7, CacheReadTokens: 9,
 		Charged: money.MustParseDollars("0.04"), DedupKey: "cursor-3",
 	}}))
-	_, err := syncer.Push(context.Background(), false, nil)
+	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	assertDailyUsageParity(t, local, store)
 	stats := dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC"})

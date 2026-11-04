@@ -418,6 +418,7 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 		require.NoError(t, te.db.UpdateSessionSignals(t.Context(), id, update))
 	}
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	dbtest.SeedMirrorPricing(t, te.db)
 	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	store, err := duckdb.NewStore(t.Context(), path)

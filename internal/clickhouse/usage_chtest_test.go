@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +14,8 @@ import (
 )
 
 func TestClickHouseUsageCostFromFixture(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(ctx, false, nil)

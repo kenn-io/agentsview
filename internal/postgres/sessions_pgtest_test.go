@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"slices"
 	"strconv"
 	"testing"
@@ -18,11 +17,11 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, relationship_type)
 		VALUES
@@ -35,7 +34,7 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	labels, err := store.GetActiveProjectLabels(context.Background())
+	labels, err := store.GetActiveProjectLabels(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"child-only", "fork-only", "test-project",
@@ -45,14 +44,14 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
-	_, err = store.DB().Exec(`INSERT INTO sessions (id, machine, project, agent, message_count)
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, message_count)
 		VALUES ('empty', 'm', 'mapping', 'claude', 0), ('populated', 'm', 'mapping', 'claude', 2)`)
 	require.NoError(t, err)
 	for _, includeEmpty := range []bool{false, true} {
-		page, err := store.ListSessions(context.Background(), db.SessionFilter{
+		page, err := store.ListSessions(t.Context(), db.SessionFilter{
 			ProjectLabels: []string{"mapping"}, IncludeEmpty: includeEmpty,
 		})
 		require.NoError(t, err)
@@ -73,11 +72,11 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, started_at, ended_at,
 			 message_count, user_message_count)
@@ -109,7 +108,7 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	`)
 	require.NoError(t, err, "seeding date-overlap sessions")
 
-	page, err := store.ListSessions(context.Background(), db.SessionFilter{
+	page, err := store.ListSessions(t.Context(), db.SessionFilter{
 		Project:  "date-overlap",
 		Date:     "2024-06-16",
 		Timezone: "America/New_York",
@@ -126,7 +125,7 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 		"date-overlap-spanning",
 	}, ids)
 
-	index, err := store.GetSidebarSessionIndex(context.Background(), db.SessionFilter{
+	index, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{
 		Project:  "date-overlap",
 		Date:     "2024-06-16",
 		Timezone: "America/New_York",
@@ -150,14 +149,14 @@ func TestListSessions_HasSecret(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	pg := store.DB()
 
 	// Seed a session with leaks and one without.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -176,7 +175,7 @@ func TestListSessions_HasSecret(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting test sessions")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.ListSessions(ctx, db.SessionFilter{
 		HasSecret: true,
 		Limit:     50,
@@ -199,7 +198,7 @@ func TestListSessions_HasSecret(t *testing.T) {
 	require.NotNil(t, found, "leaky session not found in HasSecret results")
 	assert.Equal(t, 3, found.SecretLeakCount)
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		UPDATE sessions
 		SET secrets_rules_version = 'v-current'
 		WHERE id = 'has-secret-leaky';
@@ -234,11 +233,11 @@ func TestListSessions_Sort(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count, user_message_count)
@@ -252,7 +251,7 @@ func TestListSessions_Sort(t *testing.T) {
 	`)
 	require.NoError(t, err, "seeding sort sessions")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ids := func(sessions []db.Session) []string {
 		out := make([]string, len(sessions))
 		for i, s := range sessions {
@@ -293,11 +292,11 @@ func TestListSessions_SortMultiKey(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -310,7 +309,7 @@ func TestListSessions_SortMultiKey(t *testing.T) {
 	`)
 	require.NoError(t, err, "seeding multi-key sessions")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ids := func(sessions []db.Session) []string {
 		out := make([]string, len(sessions))
 		for i, s := range sessions {
@@ -359,11 +358,11 @@ func TestListSessions_SortSecretsVersioned(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count, user_message_count,
@@ -378,7 +377,7 @@ func TestListSessions_SortSecretsVersioned(t *testing.T) {
 	`)
 	require.NoError(t, err, "seeding secret sessions")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ids := func(sessions []db.Session) []string {
 		out := make([]string, len(sessions))
 		for i, s := range sessions {
@@ -433,11 +432,11 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	_, err = store.DB().Exec(`
+	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count, user_message_count, health_score)
@@ -451,7 +450,7 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	`)
 	require.NoError(t, err, "seeding health sessions")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	var walked []string
 	cursor := ""
 	for {
@@ -475,12 +474,12 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_partial_lookup_test"
 
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
@@ -521,12 +520,12 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_suffix_test"
 
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	ctx := t.Context()
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
@@ -535,7 +534,7 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 		if deleted {
 			deletedAt = "2024-01-01T00:00:00Z"
 		}
-		_, insertErr := pg.Exec(`
+		_, insertErr := pg.ExecContext(t.Context(), `
 			INSERT INTO sessions
 				(id, machine, project, agent, message_count, created_at, ended_at, deleted_at)
 			VALUES ($1, 'test', 'project', 'claude', 1, $2, $2, $3)`,
@@ -588,7 +587,7 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 func TestGetMatchingMachineIDs(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent)

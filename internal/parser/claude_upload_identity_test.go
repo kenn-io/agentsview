@@ -31,7 +31,7 @@ func parseClaudeUploadIdentityFixture(t *testing.T, filename, content string) []
 	t.Helper()
 	path := filepath.Join(t.TempDir(), filename+".jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-	results, _, err := claudeParseFile(path, "project", "remote", claudeParseOptions{uploadIdentity: true})
+	results, _, err := claudeParseFile(t.Context(), path, "project", "remote", claudeParseOptions{uploadIdentity: true})
 	require.NoError(t, err)
 	return results
 }
@@ -98,7 +98,7 @@ func TestClaudeUploadIdentityIgnoresStagedCompanionPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "agent-root.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(uploadIdentityTranscript("root-stable", "false", "root-stable")), 0o644))
-	results, _, err := claudeParseFile(path, "project", "remote", claudeParseOptions{uploadIdentity: true})
+	results, _, err := claudeParseFile(t.Context(), path, "project", "remote", claudeParseOptions{uploadIdentity: true})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Empty(t, results[0].Session.ParentSessionID)

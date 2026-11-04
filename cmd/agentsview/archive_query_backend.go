@@ -258,7 +258,7 @@ func (b localArchiveQueryBackend) ActivityReport(
 ) (activity.Report, error) {
 	ensureFreshData(ctx, b.cfg, b.database, b.skipFreshData)
 	return resolveActivityReportPriced(
-		cfg, b.database, b.cfg.CustomModelPricing,
+		ctx, cfg, b.database, b.cfg.CustomModelPricing,
 	)
 }
 
@@ -268,7 +268,7 @@ func (b localArchiveQueryBackend) DailyUsage(
 ) (dailyUsageReport, error) {
 	ensureFreshData(ctx, b.cfg, b.database, b.skipFreshData)
 	ensureUsagePricing(
-		b.database, b.offline, b.cfg.CustomModelPricing,
+		ctx, b.database, b.offline, b.cfg.CustomModelPricing,
 	)
 	filter := localDailyUsageFilter(query)
 	var err error
@@ -323,7 +323,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
 	applyCustomPricing(b.database, b.cfg)
-	ensureUsagePricing(b.database, b.offline, b.cfg.CustomModelPricing)
+	ensureUsagePricing(ctx, b.database, b.offline, b.cfg.CustomModelPricing)
 
 	resolvedID, known := resolveRawSessionID(
 		ctx, b.database, b.cfg.AgentDirs, query.SessionID,
@@ -383,14 +383,14 @@ func (b localArchiveQueryBackend) SessionUsage(
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
 		refreshed, refErr := pricingrefresh.RefreshIfStale(
-			b.database, pricing.FetchCatalog,
+			ctx, b.database, pricing.FetchCatalogContext,
 			pricingrefresh.RefreshCooldown, time.Now(),
 		)
 		if refErr != nil {
 			fmt.Fprintf(os.Stderr,
 				"warning: pricing refresh failed: %v\n", refErr)
 		}
-		// A degraded refresh (see pricing.FetchCatalog) stores rows and
+		// A degraded refresh (see pricing.FetchCatalogContext) stores rows and
 		// reports an error at once, so re-read whenever rows changed.
 		if refreshed {
 			if u2, e := load(); e == nil && u2 != nil {

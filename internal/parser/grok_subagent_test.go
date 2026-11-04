@@ -91,7 +91,7 @@ func TestGrokSubagentKindsWithoutMetadata(t *testing.T) {
 		t.Run(tc.kind, func(t *testing.T) {
 			path := grokSummaryPath(t.TempDir(), "cwd-key", "child-session")
 			writeGrokFixtureFile(t, path, fmt.Sprintf(`{"session_kind":%q,"parent_session_id":"source-session"}`, tc.kind))
-			result, err := ParseGrokSummary(path, "project", "test-machine")
+			result, err := ParseGrokSummary(t.Context(), path, "project", "test-machine")
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, result.Session.RelationshipType)
 			assert.Equal(t, tc.wantParent, result.Session.ParentSessionID)
@@ -129,7 +129,7 @@ func TestGrokSubagentParentsWhenParentSessionIsNotParsed(t *testing.T) {
 	root := t.TempDir()
 	fixtureRoot := filepath.Join("testdata", "grok-build", "subagents")
 	require.NoError(t, os.CopyFS(root, os.DirFS(fixtureRoot)))
-	parsed, err := ParseGrokSummary(
+	parsed, err := ParseGrokSummary(t.Context(),
 		grokSummaryPath(root, "%2Fworkspace%2Fproject", grokSubagentChildID),
 		"project",
 		"test-machine",
@@ -165,7 +165,7 @@ func TestGrokMalformedSubagentMetaDoesNotParent(t *testing.T) {
 		"session_summary":"child"
 	}`)
 
-			result, err := ParseGrokSummary(
+			result, err := ParseGrokSummary(t.Context(),
 				grokSummaryPath(root, "cwd-key", childID), "project", "test-machine",
 			)
 			require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestGrokChangedPathReparentsFromSubagentMeta(t *testing.T) {
 	}`)
 	provider := newGrokTestProvider(t, root)
 
-	before, err := ParseGrokSummary(childSummary, "project", "test-machine")
+	before, err := ParseGrokSummary(t.Context(), childSummary, "project", "test-machine")
 	require.NoError(t, err)
 	assert.Equal(t, RelSubagent, before.Session.RelationshipType)
 	assert.Empty(t, before.Session.ParentSessionID)
@@ -213,7 +213,7 @@ func TestGrokChangedPathReparentsFromSubagentMeta(t *testing.T) {
 	require.Len(t, changed, 1)
 	assert.Equal(t, filepath.Clean(childSummary), filepath.Clean(changed[0].FingerprintKey))
 
-	after, err := ParseGrokSummary(childSummary, "project", "test-machine")
+	after, err := ParseGrokSummary(t.Context(), childSummary, "project", "test-machine")
 	require.NoError(t, err)
 	assert.Equal(t, RelSubagent, after.Session.RelationshipType)
 	assert.Equal(t, "grok:"+parentID, after.Session.ParentSessionID)

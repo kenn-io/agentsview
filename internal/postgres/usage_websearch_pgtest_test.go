@@ -5,7 +5,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,7 +19,7 @@ import (
 // $1/MTok in and $2/MTok out, so each turn's token cost is exactly $0.30.
 func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok,
@@ -61,7 +60,7 @@ func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 func TestStoreSessionUsageBillsWebSearchRequests(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_websearch_test")
 	seedWebSearchUsage(t, store, "claude-websearch-test")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, err := store.GetSessionUsage(ctx, "pg-websearch", true)
 	require.NoError(t, err, "GetSessionUsage")
@@ -94,7 +93,7 @@ func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_usage_websearch_asymmetric_test")
 	seedWebSearchUsage(t, store, "claude-websearch-test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp, content_length,
@@ -139,7 +138,7 @@ func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 
 func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_json_paths_test")
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok,
@@ -202,7 +201,7 @@ func TestStoreSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
 	_, store := prepareUsageSchema(
 		t, "agentsview_usage_websearch_unpriced_test")
 	seedWebSearchUsage(t, store, "some-unlisted-model")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, err := store.GetSessionUsage(ctx, "pg-websearch", true)
 	require.NoError(t, err, "GetSessionUsage")

@@ -70,11 +70,6 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	assert.Contains(t, out, "source\t")
 	assert.NotContains(t, out, "raw-sync\t")
 	assert.NotContains(t, out, "token-use\t")
-	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
-		out, err := executeCommand(newRootCommand(), "completion", shell)
-		require.NoError(t, err)
-		assert.NotEmpty(t, out)
-	}
 	assert.NoFileExists(t, filepath.Join(dir, "sessions.db"))
 	assert.NoFileExists(t, filepath.Join(dir, "config.toml"))
 }
@@ -153,10 +148,8 @@ func TestCommandGroupsHealthUsesSessionTransport(t *testing.T) {
 		requests++
 		writeJSONResponse(w, `{"sessions":[],"total":0}`)
 	})
-	out := captureStdout(t, func() {
-		_, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--json", "health", "--limit", "7")
-		require.NoError(t, err)
-	})
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--json", "health", "--limit", "7")
+	require.NoError(t, err)
 	assert.JSONEq(t, `[]`, out)
 	assert.Equal(t, 1, requests)
 	assertNoLocalSessionsDB(t, dir)

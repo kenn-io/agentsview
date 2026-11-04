@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -62,7 +61,7 @@ func TestSearchContentSemanticErrorParity(t *testing.T) {
 		{name: "valid semantic messages-only hits capability gate", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Sources: []string{"messages"}}, want: "unavailable"},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, sqliteErr := sqlite.SearchContent(ctx, tc.filter)

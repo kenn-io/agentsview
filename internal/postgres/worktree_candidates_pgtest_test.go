@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -229,6 +230,7 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	newLocalDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "new-local.db"))
 	require.NoError(t, err)
+	dbtest.SeedPricingMeta(t, newLocalDB)
 	t.Cleanup(func() { require.NoError(t, newLocalDB.Close()) })
 	require.NoError(t, newLocalDB.SetArchiveIdentityForTest(
 		ctx, archiveID, archiveSalt,

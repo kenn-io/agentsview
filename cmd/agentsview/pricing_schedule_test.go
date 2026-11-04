@@ -136,7 +136,7 @@ func TestPricingWritesWaitForResyncSwap(t *testing.T) {
 				swapDone <- engine.RunExclusive(func() error {
 					swapEntered <- nil
 					<-releaseSwap
-					if _, err := engine.SwapResyncDatabase(engine.ResyncTempPath()); err != nil {
+					if _, err := engine.SwapResyncDatabase(t.Context(), engine.ResyncTempPath()); err != nil {
 						return err
 					}
 					return engine.ResetCachesAfterSwap(t.Context())
@@ -149,7 +149,7 @@ func TestPricingWritesWaitForResyncSwap(t *testing.T) {
 			runDone := make(chan error, 1)
 			go func() {
 				if tc.seed {
-					seedPricing(database, engine)
+					seedPricing(t.Context(), database, engine)
 					runDone <- nil
 				} else {
 					job := pricingRefreshJob(database, engine)

@@ -44,7 +44,7 @@ func TestParseReasonixSession_Basic(t *testing.T) {
 		`{"role":"assistant","content":"Here's a function","reasoning_content":"I need to write a function"}`,
 	)
 
-	sess, msgs, _, err := parseReasonixSession(path, "test-machine")
+	sess, msgs, _, err := parseReasonixSession(t.Context(), path, "test-machine")
 	require.NoError(t, err)
 	require.NotNil(t, sess, "expected non-nil session")
 	require.Len(t, msgs, 2)
@@ -69,7 +69,7 @@ func TestParseReasonixSession_ToolCalls(t *testing.T) {
 		`{"role":"assistant","content":"I'll read it","tool_calls":[{"id":"call_1","name":"read_file","arguments":"{\"path\":\"config.json\"}"}]}`,
 	)
 
-	_, msgs, _, err := parseReasonixSession(path, "m")
+	_, msgs, _, err := parseReasonixSession(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 
@@ -89,7 +89,7 @@ func TestParseReasonixSession_ToolResults(t *testing.T) {
 		`{"role":"tool","content":"file contents here","tool_call_id":"call_1"}`,
 	)
 
-	_, msgs, _, err := parseReasonixSession(path, "m")
+	_, msgs, _, err := parseReasonixSession(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -112,7 +112,7 @@ func TestParseReasonixSession_TimestampSessionID(t *testing.T) {
 	timestampPath := filepath.Join(dir, "20260617-081849.643965200-deepseek-v4-pro.jsonl")
 	require.NoError(t, os.Rename(path, timestampPath))
 
-	sess, _, _, err := parseReasonixSession(timestampPath, "m")
+	sess, _, _, err := parseReasonixSession(t.Context(), timestampPath, "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "reasonix:20260617-081849.643965200-deepseek-v4-pro", sess.ID)
@@ -128,7 +128,7 @@ func TestParseReasonixSession_SubagentID(t *testing.T) {
 	subagentPath := filepath.Join(dir, "sa_20260612_105316_000000000_6b991b514f0a.jsonl")
 	require.NoError(t, os.Rename(path, subagentPath))
 
-	sess, _, _, err := parseReasonixSession(subagentPath, "m")
+	sess, _, _, err := parseReasonixSession(t.Context(), subagentPath, "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "reasonix:sa_20260612_105316_000000000_6b991b514f0a", sess.ID)
@@ -144,7 +144,7 @@ func TestParseReasonixSession_SpaceInSessionDir(t *testing.T) {
 	content := `{"role":"user","content":"Test message"}`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, _, _, err := parseReasonixSession(path, "m")
+	sess, _, _, err := parseReasonixSession(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	// Should extract just the filename, not the directory
@@ -168,7 +168,7 @@ func TestParseReasonixSession_MetadataFallback(t *testing.T) {
 	}
 	writeReasonixMetadata(t, path, meta)
 
-	sess, _, _, err := parseReasonixSession(path, "m")
+	sess, _, _, err := parseReasonixSession(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -199,7 +199,7 @@ func TestParseReasonixSession_MetadataFields(t *testing.T) {
 	}
 	writeReasonixMetadata(t, path, meta)
 
-	sess, _, _, err := parseReasonixSession(path, "m")
+	sess, _, _, err := parseReasonixSession(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "Metadata title", sess.SessionName)
@@ -239,7 +239,7 @@ func TestParseReasonixSession_PartialMetadataFallsBackToFileMtime(t *testing.T) 
 			require.NoError(t, err)
 			writeReasonixMetadata(t, path, tt.meta)
 
-			sess, _, _, err := parseReasonixSession(path, "m")
+			sess, _, _, err := parseReasonixSession(t.Context(), path, "m")
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 			assert.Equal(t, info.ModTime(), sess.StartedAt)
@@ -256,7 +256,7 @@ func TestParseReasonixSession_ArchiveWithoutMeta(t *testing.T) {
 
 	// Don't write metadata sidecar - archive files often lack .meta
 
-	sess, msgs, _, err := parseReasonixSession(path, "m")
+	sess, msgs, _, err := parseReasonixSession(t.Context(), path, "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)

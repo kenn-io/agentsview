@@ -14,6 +14,7 @@ import (
 // Existing mirrors must gain stored usage before serving, without changing
 // source rows; later pushes must compute the counters without a client change.
 func TestClickHouseStoredUsageUpgrade(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)

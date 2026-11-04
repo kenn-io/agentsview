@@ -59,7 +59,6 @@ const (
 	watcherBatchDelay              = 500 * time.Millisecond
 	watcherSyncMinInterval         = 5 * time.Second
 	deferredStartupSyncGracePeriod = 30 * time.Second
-	recursiveWatchBudget           = 8192
 )
 
 const (
@@ -93,7 +92,7 @@ func main() {
 // reported it, and returns the process exit code.
 func reportCLIError(err error, stderr io.Writer) int {
 	if !isSilentExitError(err) {
-		fmt.Fprintf(stderr, "fatal: %v\n", err)
+		writeCLIDiagnostic(stderr, err)
 	}
 	return exitCodeFromError(err)
 }
@@ -179,7 +178,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// general API auth is disabled. Ensure a token exists before publishing
 	// startup state so daemon probes and remote collectors share one token.
 	if err := ensureServeAuthToken(&cfg); err != nil {
-		log.Fatalf("Failed to generate auth token: %v", err)
+		fatal("Failed to generate auth token: %v", withCLIHint(err, "check write permissions for AGENTSVIEW_DATA_DIR and the configured auth token file; run `agentsview serve --help`"))
 	}
 	if cfg.RequireAuth {
 		// Startup output may be captured by service managers or log files,
@@ -353,7 +352,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		broadcaster, vectorServe, cfg.Vector.Embed.RunAfterSyncEnabled(),
 	)
 
-	extractSched, err := setupRecallExtraction(cfg, database, idleTracker)
+	extractSched, err := setupRecallExtraction(ctx, cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up recall extraction: %v", err)
 	}
@@ -563,7 +562,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if engine != nil {
 		pricingRefreshRunner = engine
 	}
-	seedPricing(database, pricingRefreshRunner)
+	seedPricing(ctx, database, pricingRefreshRunner)
 	codexCloudStatus := codexcloud.NewStatusBoard()
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
@@ -1363,7 +1362,7 @@ func runWorkerResyncBuild(
 			}
 			return launchErr
 		}
-		installed, serr := engine.SwapResyncDatabase(engine.ResyncTempPath())
+		installed, serr := engine.SwapResyncDatabase(recoveryCtx, engine.ResyncTempPath())
 		if installed {
 			doneStats = statsFromWorkerResult(result)
 			doneStats.ArchiveRebuilt = true
@@ -1573,10 +1572,10 @@ func runDailyTelemetryPings(ctx context.Context, interval time.Duration, cfg con
 func mustLoadConfig(cmd *cobra.Command) config.Config {
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		fatal("loading config: %v", withCLIHint(err, configRecoveryHint))
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		fatal("creating data dir: %v", withCLIHint(err, "check write permissions for AGENTSVIEW_DATA_DIR, or select a writable directory with that variable"))
 	}
 	return cfg
 }
@@ -1950,8 +1949,19 @@ func applyRequiredCursorSecret(database cursorSecretStore, cfg config.Config) er
 // Use instead of log.Fatalf after setupLogFile redirects
 // log output to the debug log file.
 func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "fatal: "+format+"\n", args...)
-	os.Exit(1)
+	message := fmt.Sprintf(format, args...)
+	cause := errors.New(message)
+	for _, arg := range args {
+		if err, ok := arg.(error); ok {
+			cause = err
+			break
+		}
+	}
+	err := processCLIError(cause)
+	if diagnostic, ok := errors.AsType[*cliDiagnosticError](err); ok && diagnostic.display == "" {
+		diagnostic.display = message
+	}
+	os.Exit(reportCLIError(withExitCode(err, 1), os.Stderr))
 }
 
 // cleanResyncTemp removes leftover temp database files from
@@ -3219,7 +3229,7 @@ func startPeriodicSync(
 			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("archive sources: %v", err)
 			}
-			recomputePendingSessions(engine, database)
+			recomputePendingSessions(ctx, engine, database)
 			engine.ReconcileCommitTrailers(ctx)
 			recomputeStaleFriction(ctx, engine)
 		})
@@ -3588,12 +3598,12 @@ func runRemoteHostSyncLoop(
 }
 
 func recomputePendingSessions(
-	engine *sync.Engine, database *db.DB,
+	ctx context.Context, engine *sync.Engine, database *db.DB,
 ) {
 	cutoff := time.Now().Add(-signals.RecencyWindow).
 		UTC().Format(time.RFC3339)
 	ids, err := database.PendingSignalSessions(
-		context.Background(), cutoff,
+		ctx, cutoff,
 	)
 	if err != nil {
 		log.Printf("deferred recompute query: %v", err)
@@ -3607,10 +3617,13 @@ func recomputePendingSessions(
 		len(ids),
 	)
 	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
 		// Errors are already logged by RecomputeSignals; the
 		// deferred-recompute loop is best-effort, the next
 		// pass will retry any that failed.
-		_ = engine.RecomputeSignals(context.Background(), id)
+		_ = engine.RecomputeSignals(ctx, id)
 	}
 }
 

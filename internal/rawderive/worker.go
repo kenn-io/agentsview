@@ -27,6 +27,8 @@ func jobErrorCode(err error) string {
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "deadline_exceeded"
+	case errors.Is(err, ErrSizeLimit):
+		return "size_limit"
 	case errors.Is(err, rawsync.ErrNotFound):
 		return "object_not_found"
 	case errors.Is(err, rawsync.ErrMissingObject):
@@ -322,7 +324,7 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 		return result
 	}
 	decision := (RetryPolicy{Base: w.RetryBase, Maximum: w.RetryMax, MaxAttempts: w.MaxAttempts}).Decide(lease.Attempt)
-	if decision.Failed {
+	if decision.Failed || errors.Is(operationErr, ErrSizeLimit) {
 		failure := w.failLease(parent, lease, stage, operationErr)
 		if failure.err != nil {
 			result.err = errors.Join(result.err, failure.err)

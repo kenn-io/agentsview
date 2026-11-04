@@ -46,7 +46,7 @@ type grokPromptContext struct {
 }
 
 func ParseGrokSummary(
-	path, projectHint, machine string,
+	ctx context.Context, path, projectHint, machine string,
 ) (ParseResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -81,7 +81,7 @@ func ParseGrokSummary(
 		sessionKind = SessionKindNonInteractive
 	}
 
-	project, cwd := grokProjectAndCwd(summary, projectHint)
+	project, cwd := grokProjectAndCwd(ctx, summary, projectHint)
 	startedAt := grokParseTime(summary.CreatedAt)
 	endedAt := grokEndedAt(summary)
 	parentSessionID := strings.TrimSpace(summary.ParentSessionID)
@@ -104,13 +104,13 @@ func ParseGrokSummary(
 	}
 
 	messages, malformed, transcriptErr := parseGrokChatHistory(
-		filepath.Join(sessionDir, "chat_history.jsonl"),
+		ctx, filepath.Join(sessionDir, "chat_history.jsonl"),
 	)
 	if transcriptErr != nil && !os.IsNotExist(transcriptErr) {
 		return ParseResult{}, transcriptErr
 	}
 	timestampAnchors, timestampErr := parseGrokUpdateTimestampAnchors(
-		filepath.Join(sessionDir, "updates.jsonl"),
+		ctx, filepath.Join(sessionDir, "updates.jsonl"),
 	)
 	if timestampErr != nil && !errors.Is(timestampErr, os.ErrNotExist) {
 		return ParseResult{}, timestampErr
@@ -214,7 +214,7 @@ func ParseGrokSummary(
 		result.Session.HasPeakContextTokens = true
 	}
 	result.UsageEvents, err = parseGrokUsageEvents(
-		filepath.Join(sessionDir, "updates.jsonl"),
+		ctx, filepath.Join(sessionDir, "updates.jsonl"),
 		result.Session.ID, summary.ModelID, startedAt, endedAt,
 	)
 	if err != nil {
@@ -254,7 +254,7 @@ func parseGrokPromptContext(path string) (grokPromptContext, error) {
 // final payload undercounts multi-turn sessions by orders of magnitude
 // and attributes everything to the session's end date (#1227).
 func parseGrokUsageEvents(
-	path, sessionID, summaryModel string,
+	ctx context.Context, path, sessionID, summaryModel string,
 	startedAt, endedAt time.Time,
 ) ([]ParsedUsageEvent, error) {
 	sessionFallback := timeString(endedAt, startedAt)
@@ -274,7 +274,7 @@ func parseGrokUsageEvents(
 	}
 	turn := 0
 	var costErr error
-	_, err := readJSONLFrom(path, 0, func(line string) {
+	_, err := readJSONLFrom(ctx, path, 0, func(line string) {
 		if costErr != nil {
 			return
 		}
@@ -380,14 +380,14 @@ func grokUsageCost(usage gjson.Result) (*money.Money, error) {
 	return &cost, nil
 }
 
-func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
+func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 
 	var (
@@ -474,7 +474,7 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 				ordinal++
 			}
 			content := strings.TrimSpace(root.Get("content").Str)
-			toolCalls := grokToolCalls(root.Get("tool_calls"))
+			toolCalls := grokToolCalls(ctx, root.Get("tool_calls"))
 			thinking := pendingThink
 			if inline := grokAssistantReasoning(root); inline != "" {
 				thinking = inline
@@ -596,10 +596,10 @@ func (b *grokTimestampAnchorBuilder) addUserText(text string) {
 }
 
 func parseGrokUpdateTimestampAnchors(
-	path string,
+	ctx context.Context, path string,
 ) ([]grokTimestampAnchor, error) {
 	var builder grokTimestampAnchorBuilder
-	_, err := readJSONLFrom(path, 0, func(line string) {
+	_, err := readJSONLFrom(ctx, path, 0, func(line string) {
 		if !gjson.Valid(line) {
 			return
 		}
@@ -1033,7 +1033,7 @@ func grokAssistantReasoning(root gjson.Result) string {
 	return strings.TrimSpace(root.Get("reasoning_content").Str)
 }
 
-func grokToolCalls(arr gjson.Result) []ParsedToolCall {
+func grokToolCalls(ctx context.Context, arr gjson.Result) []ParsedToolCall {
 	if !arr.IsArray() {
 		return nil
 	}
@@ -1052,7 +1052,7 @@ func grokToolCalls(arr gjson.Result) []ParsedToolCall {
 			ToolName:  name,
 			Category:  NormalizeToolCategory(name),
 			InputJSON: inputJSON,
-			SkillName: inferToolSkillName(context.Background(), name, inputJSON),
+			SkillName: inferToolSkillName(ctx, name, inputJSON),
 		})
 		return true
 	})
@@ -1157,7 +1157,7 @@ func decodeGrokSummary(data []byte) grokSummaryFields {
 }
 
 func grokProjectAndCwd(
-	summary grokSummaryFields, projectHint string,
+	ctx context.Context, summary grokSummaryFields, projectHint string,
 ) (project, cwd string) {
 	cwd = firstNonEmptyJSONLString(
 		strings.TrimSpace(summary.Cwd),
@@ -1168,7 +1168,7 @@ func grokProjectAndCwd(
 		cwd,
 	)
 	if projectCwd != "" {
-		if p := ExtractProjectFromCwdWithBranch(projectCwd, summary.HeadBranch); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, projectCwd, summary.HeadBranch); p != "" {
 			return p, cwd
 		}
 	}
@@ -1184,7 +1184,7 @@ func grokProjectAndCwd(
 		hint = decoded
 	}
 	if hint != "" {
-		if p := ExtractProjectFromCwdWithBranch(hint, summary.HeadBranch); p != "" {
+		if p := ExtractProjectFromCwdWithBranchContext(ctx, hint, summary.HeadBranch); p != "" {
 			return p, cwd
 		}
 		if p := GetProjectName(hint); p != "" {

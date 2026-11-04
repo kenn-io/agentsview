@@ -168,7 +168,7 @@ type vsCopilotTraceValue struct {
 // is recorded against the conversation's virtual path so that each conversation
 // in a shared trace file is tracked independently.
 func parseVisualStudioCopilotConversation(
-	tracePath, conversationID, project, machine string,
+	ctx context.Context, tracePath, conversationID, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	conversationID = canonicalVisualStudioCopilotConversationID(conversationID)
 	if conversationID == "" {
@@ -181,7 +181,7 @@ func parseVisualStudioCopilotConversation(
 		return nil, nil, fmt.Errorf("stat %s: %w", tracePath, err)
 	}
 
-	spans, err := visualStudioCopilotConversationSpans(tracePath, conversationID)
+	spans, err := visualStudioCopilotConversationSpans(ctx, tracePath, conversationID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -245,17 +245,17 @@ func buildVisualStudioCopilotConversationFromSpans(
 // the readable subset would overwrite an indexed conversation with a partial
 // transcript, so a transient unreadable sibling must fail the parse instead.
 func visualStudioCopilotConversationSpans(
-	tracePath, conversationID string,
+	ctx context.Context, tracePath, conversationID string,
 ) ([]vsCopilotSpan, error) {
 	own, err := readVisualStudioCopilotConversationTraceSpans(
-		tracePath, conversationID,
+		ctx, tracePath, conversationID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	spans := own
 	siblingSpans, err := visualStudioCopilotSiblingTraceSpans(
-		tracePath, conversationID,
+		ctx, tracePath, conversationID,
 	)
 	if err != nil {
 		return nil, err
@@ -714,11 +714,11 @@ func visualStudioCopilotSpanConversationID(span jsontext.Value) string {
 }
 
 func readVisualStudioCopilotConversationTraceSpans(
-	path, conversationID string,
+	ctx context.Context, path, conversationID string,
 ) ([]vsCopilotSpan, error) {
 	var spans []vsCopilotSpan
 	err := forEachVisualStudioCopilotTraceSpan(
-		context.Background(), path, func(span vsCopilotSpan) error {
+		ctx, path, func(span vsCopilotSpan) error {
 			prepareVisualStudioCopilotSpan(&span)
 			if sameVisualStudioCopilotConversationID(
 				span.attrMap["gen_ai.conversation.id"], conversationID,
@@ -747,7 +747,7 @@ func prepareVisualStudioCopilotSpan(span *vsCopilotSpan) {
 // appears in the listing, so the next parse succeeds and archive preservation in
 // the sync engine guards the stored transcript.
 func visualStudioCopilotSiblingTraceSpans(
-	path, conversationID string,
+	ctx context.Context, path, conversationID string,
 ) ([]vsCopilotSpan, error) {
 	siblings, err := visualStudioCopilotSiblingTraceFiles(path)
 	if err != nil {
@@ -759,7 +759,7 @@ func visualStudioCopilotSiblingTraceSpans(
 			continue
 		}
 		candidateSpans, err := readVisualStudioCopilotConversationTraceSpans(
-			sibling, conversationID,
+			ctx, sibling, conversationID,
 		)
 		if err != nil {
 			return nil, err
