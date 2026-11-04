@@ -9,10 +9,7 @@ export function sessionAncestryMatcher<T extends SessionParents>(
   all: readonly T[],
   matches: (session: T) => boolean,
 ): (session: T) => boolean {
-  const byId = new Map<string, T>();
-  for (const session of all) {
-    if (!byId.has(session.id)) byId.set(session.id, session);
-  }
+  let byId: Map<string, T> | undefined;
   const settled = new Map<string, boolean>();
   return (session) => {
     const pending: [T, string | undefined][] = [[session, undefined]];
@@ -37,6 +34,12 @@ export function sessionAncestryMatcher<T extends SessionParents>(
         ? [current.parent_session_id]
         : (current.parent_session_ids ?? []);
       for (const id of parents) {
+        if (!byId) {
+          byId = new Map<string, T>();
+          for (const session of all) {
+            if (!byId.has(session.id)) byId.set(session.id, session);
+          }
+        }
         const parent = byId.get(id);
         if (parent) pending.push([parent, current.id]);
       }
@@ -52,21 +55,5 @@ export function sessionAncestryMatches<T extends SessionParents>(
   all: readonly T[],
   matches: (session: T) => boolean,
 ): boolean {
-  const pending = [session];
-  const visited = new Set<string>();
-  while (pending.length) {
-    const current = pending.pop()!;
-    if (visited.has(current.id)) continue;
-    visited.add(current.id);
-    if (matches(current)) return true;
-    // Child-list reads supply the specific parent whose view is being shown.
-    const parents = current.parent_session_id
-      ? [current.parent_session_id]
-      : (current.parent_session_ids ?? []);
-    for (const id of parents) {
-      const parent = all.find((candidate) => candidate.id === id);
-      if (parent) pending.push(parent);
-    }
-  }
-  return false;
+  return sessionAncestryMatcher(all, matches)(session);
 }

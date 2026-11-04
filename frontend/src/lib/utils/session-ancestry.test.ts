@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { sessionAncestryMatcher } from "./session-ancestry.js";
+import { sessionAncestryMatcher, sessionAncestryMatches } from "./session-ancestry.js";
 
 interface Node {
   id: string;
@@ -8,6 +8,30 @@ interface Node {
 }
 
 describe("sessionAncestryMatcher", () => {
+  it.each(["matcher", "one-off"] as const)(
+    "%s skips the pool until a parent lookup is needed",
+    (mode) => {
+      let poolReads = 0;
+      const nodes: Node[] = [{
+        get id() {
+          poolReads++;
+          return "match";
+        },
+      }];
+      const matches = (node: Node) => node.id === "match";
+      const matcher = mode === "matcher"
+        ? sessionAncestryMatcher(nodes, matches)
+        : (node: Node) => sessionAncestryMatches(node, nodes, matches);
+
+      expect(matcher({ id: "root" })).toBe(false);
+      expect(matcher({ id: "match", parent_session_id: "parent" })).toBe(true);
+      expect(poolReads).toBe(0);
+
+      expect(matcher({ id: "child", parent_session_id: "match" })).toBe(true);
+      expect(poolReads).toBeGreaterThan(0);
+    },
+  );
+
   it.each([
     ["leaf first", false],
     ["root first", false],
