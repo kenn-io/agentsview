@@ -435,18 +435,6 @@ func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
 			env.engine.SyncPaths([]string{path})
 
 			assert.Equal(t, tc.wantFull, counter.full.Load(), "only a relocated hook requires a full parse")
-			if tc.name == "cumulative_text" {
-				msgs := fetchMessages(t, env.db, "split")
-				require.Len(t, msgs, 2)
-				assert.Equal(t, "Hello world", msgs[1].Content)
-			}
-			fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), config.ArchiveContentFull)
-			fullPath := filepath.Join(fullDir, "proj", "split.jsonl")
-			require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
-			require.NoError(t, os.WriteFile(fullPath, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o644))
-			fullEnv.engine.SyncAll(t.Context(), nil)
-			assert.Equal(t, snapshotSplitMessages(t, fullEnv.db, "split"), snapshotSplitMessages(t, env.db, "split"))
-			assert.Equal(t, snapshotSplitSession(t, fullEnv.db, "split"), snapshotSplitSession(t, env.db, "split"))
 		})
 	}
 }

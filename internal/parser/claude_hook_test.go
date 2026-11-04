@@ -15,6 +15,12 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 		stopSummary bool
 	}{
 		{
+			name:        "stop summary filters non-string errors",
+			line:        `{"hookErrors":["first",{},null,42,"second"]}`,
+			want:        claudeHookSuccess{subtype: "stop_hook_summary", summary: &claudeStopHookSummary{HookErrors: []string{"first", "second"}}},
+			stopSummary: true,
+		},
+		{
 			name:        "stop summary payload already classified by caller",
 			line:        `{"stopReason":"blocked"}`,
 			want:        claudeHookSuccess{subtype: "stop_hook_summary", summary: &claudeStopHookSummary{StopReason: "blocked"}},

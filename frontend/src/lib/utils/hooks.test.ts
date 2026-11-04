@@ -35,7 +35,6 @@ afterEach(async () => {
 
 it("keeps other system rows hidden", () => {
   expect(isSystemMessage({ ...hook(), source_subtype: "hook_error" })).toBe(true);
-  expect(isSystemMessage(msg({ ordinal: 2, is_system: true, content: "Hook output" }))).toBe(true);
   const boundary = msg({
     ordinal: 4,
     is_system: true,
@@ -52,23 +51,7 @@ describe.each(hookSubtypes)("%s output", (subtype) => {
     expect(isHookSuccessMessage(hook(subtype))).toBe(true);
   });
 
-  it("does not finish a turn or promote an intermediate reply in focused mode", () => {
-    const items = buildDisplayItems([
-      msg({ ordinal: 0 }),
-      msg({ ordinal: 1, role: "assistant", content: "intermediate" }),
-      hook(subtype),
-      msg({ ordinal: 3, role: "assistant", content: "final" }),
-      msg({ ordinal: 4 }),
-    ]);
-    expect(
-      filterDisplayItemsByTranscriptMode(items, "focused").flatMap((item) => item.ordinals),
-    ).toEqual([0, 3, 4]);
-    expect(
-      filterDisplayItemsByTranscriptMode(items, "normal").flatMap((item) => item.ordinals),
-    ).toEqual([0, 1, 2, 3, 4]);
-  });
-
-  it("uses a localized collapsed card and preserves escaped body text", () => {
+  it("uses a localized label", () => {
     const content = hook(subtype).content;
     component = mount(SystemBoundaryCard, {
       target: document.body,
@@ -81,24 +64,48 @@ describe.each(hookSubtypes)("%s output", (subtype) => {
           ? "Hook cancelled"
           : "Hook output",
     );
-    const details = document.querySelector("details");
-    expect(details).not.toBeNull();
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("pre")?.textContent).toBe(content);
-    expect(document.querySelector("script")).toBeNull();
   });
 });
 
-describe.each(hookSubtypes)("%s filters", (subtype) => {
+it("does not finish a turn or promote an intermediate reply in focused mode", () => {
+  const items = buildDisplayItems([
+    msg({ ordinal: 0 }),
+    msg({ ordinal: 1, role: "assistant", content: "intermediate" }),
+    hook(),
+    msg({ ordinal: 3, role: "assistant", content: "final" }),
+    msg({ ordinal: 4 }),
+  ]);
+  expect(
+    filterDisplayItemsByTranscriptMode(items, "focused").flatMap((item) => item.ordinals),
+  ).toEqual([0, 3, 4]);
+  expect(
+    filterDisplayItemsByTranscriptMode(items, "normal").flatMap((item) => item.ordinals),
+  ).toEqual([0, 1, 2, 3, 4]);
+});
+
+it("uses a collapsed card and preserves escaped body text", () => {
+  const content = hook().content;
+  component = mount(SystemBoundaryCard, {
+    target: document.body,
+    props: { subtype: "hook_success", content, timestamp: "" },
+  });
+  const details = document.querySelector("details");
+  expect(details).not.toBeNull();
+  expect(details?.open).toBe(false);
+  expect(details?.querySelector("pre")?.textContent).toBe(content);
+  expect(document.querySelector("script")).toBeNull();
+});
+
+describe("hook filters", () => {
   it("belongs to the Hooks filter independently of the role and system filters", () => {
-    expect(hasVisibleSegments(hook(subtype), (t) => t === "hook")).toBe(true);
-    expect(hasVisibleSegments(hook(subtype), (t) => t !== "hook")).toBe(false);
+    expect(hasVisibleSegments(hook(), (t) => t === "hook")).toBe(true);
+    expect(hasVisibleSegments(hook(), (t) => t !== "hook")).toBe(false);
   });
 
   it("uses the same filter for projected transcript rows", () => {
     const rows = [
       msg({ ordinal: 0 }),
-      hook(subtype),
+      hook(),
       msg({ ordinal: 3, role: "assistant", content: "final" }),
     ];
     const onlyHooks = projectSessionScope({

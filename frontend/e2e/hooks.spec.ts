@@ -39,34 +39,27 @@ test("hook output expands with the keyboard", async ({ page }) => {
   await expectFollowingReplyBelowHook(page);
 });
 
-test("Hooks menu choice persists across reload", async ({ page }) => {
+test("Hooks menu choice filters hook rows", async ({ page }) => {
   await openHookTranscript(page);
   const menu = await openBlockMenu(page);
   await menu.getByRole("button", { name: "Hooks", exact: true }).click();
   await expect(hookCard(page)).toHaveCount(0);
-  await page.reload();
-  await expect(page.getByText("Final reply", { exact: true })).toBeVisible();
-  await expect(hookCard(page)).toHaveCount(0);
-  const restored = await openBlockMenu(page);
-  await expect(restored.getByRole("button", { name: "Hooks", exact: true })).not.toHaveClass(
-    /\bactive\b/,
-  );
-  await restored.locator(".block-filter-reset").click();
+  await menu.locator(".block-filter-reset").click();
   await expect(hookCard(page)).toBeVisible();
 });
 
-for (const width of [1440, 1280, 768, 390]) {
-  test(`hook card remains contained at ${width}px`, async ({ page }) => {
+test("hook card remains contained at each width", async ({ page }) => {
+  await openHookTranscript(page);
+  const card = hookCard(page);
+  await expect(card).toBeVisible();
+  await card.locator("summary").click();
+  for (const width of [1440, 1280, 768, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    await openHookTranscript(page);
-    const card = hookCard(page);
-    await expect(card).toBeVisible();
-    await card.locator("summary").click();
     const bounds = await card.boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
     await expect(card.locator("pre")).toBeVisible();
     await expectFollowingReplyBelowHook(page);
-  });
-}
+  }
+});

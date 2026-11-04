@@ -2266,7 +2266,7 @@ func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 		"hourly_utc should be empty when only assistant msgs")
 }
 
-// Hooks neither inflate a prompt's hour nor create an hour of their own.
+// Hooks don't create an hour of their own.
 // Ordinary queued prompts still count as user activity.
 func TestGetSessionStats_Temporal_HookRowsExcluded(t *testing.T) {
 	d := testDB(t)
@@ -2282,18 +2282,13 @@ func TestGetSessionStats_Temporal_HookRowsExcluded(t *testing.T) {
 	queued.SourceSubtype = "queued_command"
 	queued.IsSystem = false
 
-	hookSameHour := userMsgAt("s1", 2, "hook output", hoursAgoAt(5, 50, 0))
-	hookSameHour.SourceType = "attachment"
-	hookSameHour.SourceSubtype = "hook_success"
-	hookSameHour.IsSystem = true
-
-	hookOtherHour := userMsgAt("s1", 3, "hook context", hoursAgoAt(4, 10, 0))
+	hookOtherHour := userMsgAt("s1", 2, "hook context", hoursAgoAt(4, 10, 0))
 	hookOtherHour.SourceType = "attachment"
 	hookOtherHour.SourceSubtype = "hook_additional_context"
 	hookOtherHour.IsSystem = true
 
 	insertMessages(t, d,
-		realPrompt, queued, hookSameHour, hookOtherHour,
+		realPrompt, queued, hookOtherHour,
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})

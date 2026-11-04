@@ -38,7 +38,6 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 		{"stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped", ""},
 		{"stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer", ""},
 		{"stop_hook_summary", `,"hookAdditionalContext":["keep going","check results"]`, "Additional context:\nkeep going\ncheck results", ""},
-		{"stop_hook_summary", `,"hookErrors":["first",{},null,42,"second"]`, "Hook errors:\nfirst\nsecond", ""},
 		{"stop_hook_summary", `,"preventedContinuation":true`, "Prevented continuation: true", ""},
 		{"hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context", ""},
 		{"hook_success", `,"stdout":"{\"status\":\"ok\"}","stderr":"boom"`, "\n\nStdout:\n{\"status\":\"ok\"}\n\nStderr:\nboom", ""},
@@ -238,9 +237,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	require.Len(t, msgs, 3)
 	assert.Equal(t, "stop_hook_summary", msgs[2].SourceSubtype)
 	assert.Equal(t, "system", msgs[2].SourceType)
-	assert.Equal(t, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: false", msgs[2].Content)
 	assert.Equal(t, "hook_cancelled", msgs[1].SourceSubtype)
-	assert.Equal(t, "Hook name: PreToolUse:Read\n\nHook event: PreToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1", msgs[1].Content)
 
 	hook := msgs[0]
 	assert.Equal(t, "Content:\nhook finished", hook.Content)

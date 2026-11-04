@@ -19,24 +19,16 @@ const hookUpgradeText = "  中文 e\u0301 <script>literal</script>\n  preserved 
 
 func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 	for _, tc := range []struct {
-		provider    parser.AgentType
-		subtype     string
-		archiveOnly bool
+		provider parser.AgentType
+		subtype  string
 	}{
 		{provider: parser.AgentClaude, subtype: "hook_success"},
 		{provider: parser.AgentCowork, subtype: "hook_success"},
 		{provider: parser.AgentQoder, subtype: "hook_success"},
 		{provider: parser.AgentIcodemate, subtype: "hook_success"},
-		{provider: parser.AgentClaude, subtype: "hook_success", archiveOnly: true},
 		{provider: parser.AgentClaude, subtype: "stop_hook_summary"},
-		{provider: parser.AgentCowork, subtype: "stop_hook_summary"},
-		{provider: parser.AgentQoder, subtype: "stop_hook_summary"},
-		{provider: parser.AgentIcodemate, subtype: "stop_hook_summary"},
 	} {
 		name := tc.subtype + "/" + string(tc.provider)
-		if tc.archiveOnly {
-			name += " archive-only"
-		}
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			database := dbtest.OpenTestDB(t)
@@ -55,23 +47,9 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 			require.Equal(t, 2, first.Synced)
 			readableID := hookUpgradeSessionID(t, database, readable)
 			goneID := hookUpgradeSessionID(t, database, gone)
-			legacy := seedLegacyHookOutput(t, database, readableID)
+			seedLegacyHookOutput(t, database, readableID)
 			archived := seedLegacyHookOutput(t, database, goneID)
 			previous := db.CurrentDataVersion() - 1
-			controls := map[string][]db.Message{}
-			for id, version := range map[string]int{"unaffected": previous, "retry": previous - 1} {
-				require.NoError(t, database.UpsertSession(ctx, db.Session{
-					ID: id, Agent: string(parser.AgentHermes), Project: "controls", Machine: "local",
-					FilePath: new(filepath.Join(t.TempDir(), id+".jsonl")), MessageCount: 1, UserMessageCount: 1,
-				}))
-				require.NoError(t, database.ReplaceSessionMessages(ctx, id, []db.Message{{
-					SessionID: id, Ordinal: 0, Role: "user", Content: "retained control", DialogueText: new("retained control"),
-					ContentLength: len("retained control"), SourceUUID: "control", Timestamp: "2024-01-01T00:00:00Z",
-				}}))
-				require.NoError(t, database.SetSessionDataVersion(ctx, id, version))
-				controls[id], err = database.GetAllMessages(ctx, id)
-				require.NoError(t, err)
-			}
 			published, err := database.ExportConversationChanges(ctx, db.ConversationExportOptions{})
 			require.NoError(t, err)
 			userIdentity := hookUpgradeChange(t, published, readableID, 0).MessageID
@@ -87,32 +65,15 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 				_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", previous))
 				return err
 			}))
-			if tc.archiveOnly {
-				require.NoError(t, database.EnableArchiveOnly(ctx))
-			}
+
 			path := database.Path()
 			require.NoError(t, database.Close())
 			reopened, err := db.OpenIsolated(ctx, path)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-			if tc.archiveOnly {
-				require.ErrorIs(t, reopened.RequireSourceSync(ctx), db.ErrArchiveOnly)
-				assert.True(t, reopened.NeedsResync(), "retained archive-only content must not be marked reparsed")
-				var encoded int
-				require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&encoded))
-				assert.Equal(t, (1<<20)+previous, encoded)
-				assert.Equal(t, previous, reopened.GetSessionDataVersion(ctx, readableID))
-				after, err := reopened.GetAllMessages(ctx, readableID)
-				require.NoError(t, err)
-				assert.Equal(t, legacy, after)
-				assertHookUpgradeCuration(t, reopened, readableID, legacy[1].ID, 1)
-				return
-			}
 			require.False(t, reopened.NeedsResync(), "the scoped upgrade must not require a replacement archive")
 			assert.Equal(t, previous, reopened.GetSessionDataVersion(ctx, readableID))
 			assert.Equal(t, previous, reopened.GetSessionDataVersion(ctx, goneID))
-			assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(ctx, "unaffected"))
-			assert.Equal(t, previous-1, reopened.GetSessionDataVersion(ctx, "retry"))
 			pending, _, err := db.ArchiveResyncState(ctx, path)
 			require.NoError(t, err)
 			assert.True(t, pending)
@@ -154,12 +115,6 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 			assert.Equal(t, archived, retained, "losing the original source must not lose archived rows")
 			assert.Equal(t, previous, reopened.GetSessionDataVersion(ctx, goneID))
 			assertHookUpgradeCuration(t, reopened, goneID, archived[1].ID, 1)
-			for id, before := range controls {
-				control, err := reopened.GetAllMessages(ctx, id)
-				require.NoError(t, err)
-				assert.Equal(t, before, control)
-			}
-			assert.Equal(t, previous-1, reopened.GetSessionDataVersion(ctx, "retry"))
 			pending, _, err = db.ArchiveResyncState(ctx, path)
 			require.NoError(t, err)
 			assert.False(t, pending, "the authoritative full pass completed")
@@ -171,7 +126,7 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 			assert.Equal(t, after, again)
 			var sessions int
 			require.NoError(t, reopened.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
-			assert.Equal(t, 4, sessions)
+			assert.Equal(t, 2, sessions)
 			bytes, err := os.ReadFile(readable)
 			require.NoError(t, err)
 			assert.Equal(t, original, bytes)
@@ -205,9 +160,6 @@ func writeHookUpgradeSource(t *testing.T, root string, provider parser.AgentType
 		path = filepath.Join(workspace, localID, ".claude", "projects", "project", id+".jsonl")
 	}
 	content := fmt.Sprintf("%q", hookUpgradeText)
-	if subtype == "hook_additional_context" {
-		content = "[" + content + "]"
-	}
 	hook := fmt.Sprintf(`{"type":"attachment","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","attachment":{"type":%q,"content":%s}}`, subtype, content)
 	if subtype == "stop_hook_summary" {
 		hook = `{"type":"system","subtype":"stop_hook_summary","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`

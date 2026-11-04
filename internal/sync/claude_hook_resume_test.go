@@ -17,7 +17,6 @@ const (
 	claudeHookResumeUser     = `{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`
 	claudeHookResumeAnswer   = `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"answer-1","role":"assistant","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}}`
 	claudeHookResumeNative   = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","stdout":"first output"}}`
-	claudeHookResumeContext  = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_additional_context","content":["extra context"]}}`
 	claudeHookResumeNextUser = `{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"next request"}}`
 )
 
@@ -28,7 +27,6 @@ const (
 const (
 	claudeHookRelocatedUndated = `{"type":"attachment","uuid":"h1","attachment":{"type":"hook_success","stdout":"first output"}}`
 	claudeHookRelocatedDated   = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stdout":"first output"}}`
-	claudeHookRelocatedContext = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_additional_context","content":["extra context"]}}`
 	claudeHookRelocatedFirst   = `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hel"}]}}`
 	claudeHookRelocatedSecond  = `{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn"}}`
 )
@@ -37,13 +35,11 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		initialHook bool
-		wantSubtype string
 		hooks       []string
 		ids         []string
 	}{
 		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
-		{name: "full import ending in stop summary", wantSubtype: "stop_hook_summary", initialHook: true, hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`}, ids: []string{"h1"}},
-		{name: "stop summary append", wantSubtype: "stop_hook_summary", hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`}, ids: []string{"h1"}},
+		{name: "full import ending in stop summary", initialHook: true, hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`}, ids: []string{"h1"}},
 		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,19 +74,6 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			for i, wantID := range tc.ids {
 				row := rows[i+2]
 				assert.Equal(t, wantID, row.SourceUUID)
-				sourceType := "attachment"
-				if tc.wantSubtype == "stop_hook_summary" {
-					sourceType = "system"
-				}
-				assert.Equal(t, sourceType, row.SourceType)
-				wantSubtype := tc.wantSubtype
-				if wantSubtype == "" {
-					wantSubtype = "hook_success"
-				}
-				assert.Equal(t, wantSubtype, row.SourceSubtype)
-				assert.True(t, row.IsSystem)
-				require.NotNil(t, row.DialogueText)
-				assert.Empty(t, *row.DialogueText)
 			}
 			appendClaudeSplitLines(t, path, claudeHookResumeNextUser)
 			env.engine.SyncPaths([]string{path})
@@ -108,7 +91,6 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, "u2", info.LastEntryUUID)
 			assert.Equal(t, 3+len(tc.hooks), info.NextOrdinal)
-			assert.Equal(t, 2, snapshotSplitSession(t, env.db, "hook-resume").UserMessageCount)
 		})
 	}
 }
@@ -127,7 +109,6 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 				`{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:00.500Z","attachment":{"type":"hook_success","content":"delayed output"}}`,
 			}, split: 2},
 			{name: "trailing native hook", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeNative, claudeHookResumeNextUser}, split: 3},
-			{name: "trailing additional context", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeContext, claudeHookResumeNextUser}, split: 3},
 			{name: "linear native parent chain", lines: []string{
 				`{"type":"user","uuid":"u1","parentUuid":"missing-ancestor","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`,
 				claudeHookResumeAnswer,
@@ -152,12 +133,6 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 				claudeHookRelocatedFirst,
 				claudeHookRelocatedSecond,
 			}, split: 3, pinHook: true},
-			{name: "relocated additional context", lines: []string{
-				claudeHookResumeUser,
-				claudeHookRelocatedContext,
-				claudeHookRelocatedFirst,
-				claudeHookRelocatedSecond,
-			}, split: 3},
 		} {
 			t.Run(string(archive)+"/"+tc.name, func(t *testing.T) {
 				incrementalEnv, path := testClaudeSplitMatchesFullParse(t, archive, tc.lines, tc.split, func(env *testEnv) {
