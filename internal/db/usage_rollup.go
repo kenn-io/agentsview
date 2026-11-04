@@ -215,6 +215,7 @@ type usageRollupCoordinator struct {
 	ctx      context.Context
 	mu       sync.Mutex
 	calls    map[string]*usageRollupCall
+	zones    map[string]*sync.Mutex
 	observer usageRollupObserver
 }
 
@@ -224,6 +225,7 @@ func newUsageRollupCoordinator(
 	return &usageRollupCoordinator{
 		cache: cache, ctx: ctx,
 		calls: make(map[string]*usageRollupCall),
+		zones: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -234,6 +236,65 @@ func (c *usageRollupCoordinator) Ensure(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
+	conn, err := c.cache.db.Conn(ctx)
+	if err != nil {
+		return nil, usageRollupMetrics{}, err
+	}
+	installs, stale, err := readUsageRollupInstalls(
+		ctx, conn, identity, snapshot, fills, newUsagePricingIdentities(resolver))
+	err = errors.Join(err, conn.Close())
+	if err != nil {
+		return nil, usageRollupMetrics{}, err
+	}
+	if len(stale) == 0 && installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater {
+		return installs, usageRollupMetrics{}, nil
+	}
+	batch := snapshot
+	batch.Sessions = nil
+	batch.Versions = nil
+	for i, session := range snapshot.Sessions {
+		if stale[session.ID] {
+			batch.Sessions = append(batch.Sessions, session)
+			batch.Versions = append(batch.Versions, snapshot.Versions[i])
+		}
+	}
+	var metrics usageRollupMetrics
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, metrics, err
+		}
+		size := min(len(batch.Sessions), usageFillInstallBatchSize)
+		chunk := batch
+		chunk.Sessions = batch.Sessions[:size]
+		chunk.Versions = batch.Versions[:size]
+		chunkFills := make(map[string]usageFillResult, size)
+		for _, session := range chunk.Sessions {
+			chunkFills[session.ID] = fills[session.ID]
+		}
+		built, measured, err := c.ensureChunk(ctx, chunk, chunkFills, resolver)
+		metrics.DailyRows += measured.DailyRows
+		metrics.ExceptionGroups += measured.ExceptionGroups
+		metrics.ExceptionRows += measured.ExceptionRows
+		metrics.BuildDuration += measured.BuildDuration
+		metrics.InstallDuration += measured.InstallDuration
+		if err != nil {
+			return nil, metrics, err
+		}
+		maps.Copy(installs, built)
+		batch.Sessions = batch.Sessions[size:]
+		batch.Versions = batch.Versions[size:]
+		batch.CursorHighWater = 0
+		if len(batch.Sessions) == 0 {
+			return installs, metrics, ctx.Err()
+		}
+	}
+}
+
+func (c *usageRollupCoordinator) ensureChunk(
+	ctx context.Context, snapshot usageQuerySnapshot,
+	fills map[string]usageFillResult, resolver *export.PricingResolver,
+) (map[string]usageRollupInstall, usageRollupMetrics, error) {
 	// The catalog digest only keys single-flight; staleness is per session.
 	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
 	if err != nil {
@@ -243,14 +304,24 @@ func (c *usageRollupCoordinator) Ensure(
 	c.mu.Lock()
 	call := c.calls[key]
 	if call == nil {
+		zoneKey := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key
+		zone := c.zones[zoneKey]
+		if zone == nil {
+			zone = &sync.Mutex{}
+			c.zones[zoneKey] = zone
+		}
 		call = &usageRollupCall{done: make(chan struct{})}
 		c.calls[key] = call
 		if !c.cache.startDetachedWork(func() {
 			if c.observer.beforeEnsure != nil {
 				c.observer.beforeEnsure()
 			}
+			// Wait before acquiring a pooled connection. Each detached batch
+			// finishes for reuse even if its request leaves between batches.
+			zone.Lock()
 			call.installs, call.metrics, call.err = c.ensureNow(
 				c.ctx, snapshot, fills, resolver)
+			zone.Unlock()
 			c.mu.Lock()
 			delete(c.calls, key)
 			close(call.done)
