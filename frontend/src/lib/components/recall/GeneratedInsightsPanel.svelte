@@ -553,8 +553,15 @@
   .scope-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.85rem;
-    padding: 1rem;
+    gap: 12px 16px;
+    padding: 16px;
+    --typeahead-max-width: none;
+  }
+
+  /* Every control fills its column, so the three columns share edges. */
+  .scope-field > :global(*:not(span)) {
+    width: 100%;
+    max-width: none;
   }
 
   .scope-field {
@@ -574,9 +581,9 @@
   .focus-field textarea {
     min-height: 3.75rem;
     resize: vertical;
-    border: 1px solid var(--border-primary);
+    border: 1px solid var(--border-default);
     border-radius: 6px;
-    background: var(--bg-secondary);
+    background: var(--bg-surface);
     color: var(--text-primary);
     font: inherit;
     font-weight: 400;
@@ -613,9 +620,9 @@
     flex-direction: column;
     gap: 0.2rem;
     width: 100%;
-    border: 1px solid var(--border-primary);
+    border: 1px solid var(--border-default);
     border-radius: 6px;
-    background: var(--bg-secondary);
+    background: var(--bg-inset);
     color: var(--text-primary);
     padding: 0.7rem 0.8rem;
     text-align: left;
@@ -624,7 +631,7 @@
   .generated-list button:hover,
   .generated-list button.selected {
     border-color: var(--accent-blue);
-    background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-secondary));
+    background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-inset));
   }
 
   .generated-list button span,

@@ -37,6 +37,10 @@
     { key: `${mod} 0`, action: m.shortcuts_reset_zoom() },
   ]);
 
+  // Rows that end a family (palette and find, message navigation, session
+  // navigation, session actions) get a little space below them.
+  const GROUP_ENDS = $derived(new Set([3, 7, 9, baseShortcuts.length - 1]));
+
   const shortcuts = $derived(sync.isDesktop
     ? [...baseShortcuts, ...zoomShortcuts]
     : baseShortcuts);
@@ -49,8 +53,8 @@
   onclose={() => (ui.activeModal = null)}
 >
   <div class="shortcuts-list">
-    {#each shortcuts as shortcut}
-      <div class="shortcut-row">
+    {#each shortcuts as shortcut, index}
+      <div class="shortcut-row" class:group-end={GROUP_ENDS.has(index) && index < shortcuts.length - 1}>
         <!-- kit-ui-check-ignore: reference list enumerates compound alternatives ("j / ↓") and must stay visible on touch, where KbdBadge hides itself -->
         <kbd class="shortcut-key">{shortcut.key}</kbd>
         <span class="shortcut-action">{shortcut.action}</span>
@@ -64,11 +68,19 @@
     padding: 0;
   }
 
+  /* Keys in a fixed column, descriptions left-aligned beside them. */
   .shortcut-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
-    padding: 5px 0;
+    gap: 12px;
+    padding: 3px 0;
+  }
+
+  .shortcut-row.group-end {
+    margin-bottom: 6px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--border-muted);
   }
 
   .shortcut-key {
@@ -79,12 +91,13 @@
     border-radius: var(--radius-sm);
     background: var(--bg-inset);
     color: var(--text-secondary);
-    min-width: 60px;
+    justify-self: start;
+    min-width: 28px;
     text-align: center;
   }
 
   .shortcut-action {
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: 12.5px;
+    color: var(--text-primary);
   }
 </style>
