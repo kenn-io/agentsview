@@ -531,10 +531,7 @@ export function enrichSegments(
  * `isVisible` is called with a BlockType string -- the component
  * passes `ui.isBlockVisible`, but tests can supply any predicate.
  */
-export function hasVisibleSegments(
-  msg: Message,
-  isVisible: (type: BlockType) => boolean,
-): boolean {
+export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) => boolean): boolean {
   // Hook output is a card of its own, so the hook toggle owns its
   // visibility. The generic system toggle and the role toggles must not
   // hide it, and it must not hide the other boundary cards.
