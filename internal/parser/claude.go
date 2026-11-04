@@ -2025,8 +2025,8 @@ func applyQueuedCommandsContext(
 
 // mergeQueuedCommands merges deferred attachments into messages in
 // timestamp order and renumbers ordinals starting at the given
-// offset. Both inputs are assumed to already be in chronological
-// order. Equal timestamps preserve the original message before the
+// offset. Messages must already be in chronological order.
+// Equal timestamps preserve the original message before the
 // attachment (attachments always follow the entry that produced them).
 func mergeQueuedCommands(
 	messages []ParsedMessage,
@@ -2034,6 +2034,7 @@ func mergeQueuedCommands(
 	startOrdinal int,
 	buildMessage func(claudeAttachment) ParsedMessage,
 ) []ParsedMessage {
+	sortClaudeAttachments(attachments)
 	out := make([]ParsedMessage, 0, len(messages)+len(attachments))
 	i, j := 0, 0
 	for i < len(messages) && j < len(attachments) {
@@ -2064,6 +2065,7 @@ func mergeQueuedCommandsContext(
 	startOrdinal int,
 	buildMessage func(claudeAttachment) ParsedMessage,
 ) ([]ParsedMessage, error) {
+	sortClaudeAttachments(attachments)
 	out := make([]ParsedMessage, 0, len(messages)+len(attachments))
 	i, j, steps := 0, 0, 0
 	for i < len(messages) && j < len(attachments) {
@@ -2100,6 +2102,23 @@ func mergeQueuedCommandsContext(
 		out[k].Ordinal = startOrdinal + k
 	}
 	return out, ctx.Err()
+}
+
+// sortClaudeAttachments orders each owner's attachments before either merge
+// path consumes them. Equal timestamps keep source order; undated rows go last.
+func sortClaudeAttachments(attachments []claudeAttachment) {
+	slices.SortStableFunc(attachments, func(a, b claudeAttachment) int {
+		if a.timestamp.IsZero() {
+			if b.timestamp.IsZero() {
+				return 0
+			}
+			return 1
+		}
+		if b.timestamp.IsZero() {
+			return -1
+		}
+		return a.timestamp.Compare(b.timestamp)
+	})
 }
 
 // claudeQueuedCommandMasksSplitDetection reports whether merging

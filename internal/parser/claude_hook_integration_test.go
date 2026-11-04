@@ -183,6 +183,64 @@ func TestClaudeHookImportMixedWithQueuedCommandKeepsSourceOrder(t *testing.T) {
 	assert.Equal(t, "hello", sess.FirstMessage)
 }
 
+func TestClaudeHookImportMixedWithQueuedCommandSortsAttachments(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, hookTimestamp string
+		want                []string
+	}{
+		{
+			name:          "hook persisted before earlier queued prompt",
+			hookTimestamp: `,"timestamp":"2026-01-01T00:00:03Z"`,
+			want:          []string{"request", "queued request", "Starting work", "Content:\nDone"},
+		},
+		{
+			name: "undated hook follows dated attachments",
+			want: []string{"request", "queued request", "Starting work", "Content:\nDone"},
+		},
+		{
+			name:          "equal timestamps preserve attachment source order",
+			hookTimestamp: `,"timestamp":"2026-01-01T00:00:01Z"`,
+			want:          []string{"request", "Content:\nDone", "queued request", "Starting work"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			content := testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("request", "2026-01-01T00:00:00Z"),
+				`{"type":"attachment"`+tc.hookTimestamp+`,"attachment":{"type":"hook_success","content":"Done"}}`,
+				testjsonl.ClaudeQueuedCommandJSON("queued request", "2026-01-01T00:00:01Z"),
+				testjsonl.ClaudeAssistantJSON("Starting work", "2026-01-01T00:00:02Z"),
+			)
+			path := createTestFile(t, "hook-queued-order.jsonl", content)
+
+			t.Run("full", func(t *testing.T) {
+				t.Parallel()
+				_, msgs := runClaudeParserTest(t, "hook-queued-order.jsonl", content)
+				var got []string
+				for i, msg := range msgs {
+					got = append(got, msg.Content)
+					assert.Equal(t, i, msg.Ordinal)
+				}
+				assert.Equal(t, tc.want, got)
+			})
+			t.Run("incremental", func(t *testing.T) {
+				t.Parallel()
+				msgs, _, _, err := callParseClaudeSessionFrom(path, 0, 5, "")
+				require.NoError(t, err)
+				var got []string
+				for i, msg := range msgs {
+					got = append(got, msg.Content)
+					assert.Equal(t, 5+i, msg.Ordinal)
+				}
+				assert.Equal(t, tc.want, got)
+			})
+		})
+	}
+}
+
 // A hook without a timestamp keeps the conservative queued-command
 // policy: it cannot be placed against the messages, so it sorts after
 // them.

@@ -196,7 +196,10 @@ evidence; they do not establish whether a tool helped the task.
   Three also carry `command`; none require output text. The timestamp-free
   example in the original report is explicitly synthetic. On `origin/main`,
   undated queued prompts already block later dated attachments during merging.
-  Hooks keep that conservative ordering policy. Timestamp ordering can place a
+  Reverified 2026-11-04 with synthetic full and incremental parser tests:
+  each owner's attachments sort stably by timestamp before merging, with
+  undated attachments last. File order can differ from timestamp order when a
+  queued prompt is persisted after a later hook. Timestamp ordering can place a
   hook after an assistant even when its source bytes precede the response. A
   continuation of the same message ID uses a full parse when stored rows trail
   the last assistant, so suffix replacement cannot discard those earlier
