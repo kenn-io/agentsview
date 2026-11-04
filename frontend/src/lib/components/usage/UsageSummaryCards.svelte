@@ -348,7 +348,8 @@
   .summary-cards :global(.card) {
     flex: 1;
     min-width: 120px;
-    min-height: 0;
+    /* One shared height for every card, so wrapped rows stay aligned. */
+    min-height: 86px;
     padding: 10px 12px;
     display: flex;
     flex-direction: column;

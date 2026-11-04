@@ -1537,7 +1537,6 @@
   /* The entrypoint qualifies the agent; keep it neutral so the agent
      color stays the only identity fill in the strip. */
   .agent-badge.entrypoint-badge {
-    margin-left: -6px;
     font-family: var(--font-mono);
     font-weight: 500;
     color: var(--text-secondary);

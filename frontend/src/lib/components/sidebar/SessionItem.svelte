@@ -763,9 +763,7 @@
 
   /* Agent identity: a small colored mark plus the agent name. */
   .agent-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    display: block;
     font-weight: 500;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -776,11 +774,13 @@
 
   .agent-tag::before {
     content: "";
+    display: inline-block;
     width: 6px;
     height: 6px;
+    margin-right: 4px;
+    vertical-align: 1px;
     border-radius: 2px;
     background: var(--agent-color, var(--text-muted));
-    flex-shrink: 0;
   }
 
   .machine-tag {
