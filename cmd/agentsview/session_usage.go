@@ -114,13 +114,28 @@ func sessionUsageDataForCommand(
 func resolveSessionUsageReader(cmd *cobra.Command) (
 	func(string) (*sessionUsageOutput, int, error), func(), error,
 ) {
+	noSync, _ := cmd.Flags().GetBool("no-sync")
+	backend, err := resolveSessionUsageBackend(cmd, noSync)
+	if err != nil {
+		return nil, nil, err
+	}
+	return backend.read, backend.cleanup, nil
+}
+
+type sessionUsageBackend struct {
+	read    func(string) (*sessionUsageOutput, int, error)
+	service service.SessionService
+	cleanup func()
+}
+
+// resolveSessionUsageBackend shares transport selection with archive diagnostics.
+func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageBackend, error) {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
-	noSync, _ := cmd.Flags().GetBool("no-sync")
 	query := sessionUsageQuery{
 		OwnOnly: ownOnly, NoSync: noSync,
 	}
@@ -128,42 +143,48 @@ func resolveSessionUsageReader(cmd *cobra.Command) (
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
-			return nil, nil, errors.New("--server and --pg are mutually exclusive")
+			return nil, errors.New("--server and --pg are mutually exclusive")
 		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if !query.OwnOnly {
 			if err := requireRemoteSubagentUsageSupport(
 				ctx, remote, token, !query.NoSync,
 			); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
-		return func(id string) (*sessionUsageOutput, int, error) {
-			query.SessionID = id
-			return httpSessionUsageData(ctx, remote, token, query)
-		}, nil, nil
+		return &sessionUsageBackend{
+			service: servicehttp.NewHTTPBackend(remote, token, false, ""),
+			read: func(id string) (*sessionUsageOutput, int, error) {
+				query.SessionID = id
+				return httpSessionUsageData(ctx, remote, token, query)
+			},
+		}, nil
 	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
+		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	if pgReadRequested(cmd) {
 		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
 		if err != nil {
 			closeArchiveQueryBackend(cleanup)
-			return nil, nil, fmt.Errorf("opening pg store: %w", err)
+			return nil, fmt.Errorf("opening pg store: %w", err)
 		}
-		return func(id string) (*sessionUsageOutput, int, error) {
-			query.SessionID = id
-			return storeSessionUsageData(ctx, "pg", cfg, store, query)
-		}, cleanup, nil
+		return &sessionUsageBackend{
+			service: service.NewReadOnlyBackend(store), cleanup: cleanup,
+			read: func(id string) (*sessionUsageOutput, int, error) {
+				query.SessionID = id
+				return storeSessionUsageData(ctx, "pg", cfg, store, query)
+			},
+		}, nil
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -177,12 +198,22 @@ func resolveSessionUsageReader(cmd *cobra.Command) (
 		},
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return func(id string) (*sessionUsageOutput, int, error) {
-		query.SessionID = id
-		return backend.SessionUsage(ctx, query)
-	}, cleanup, nil
+	var svc service.SessionService
+	switch b := backend.(type) {
+	case daemonArchiveQueryBackend:
+		svc = servicehttp.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, b.tr.BrowserURL)
+	case localArchiveQueryBackend:
+		svc = service.NewReadOnlyBackend(b.database)
+	}
+	return &sessionUsageBackend{
+		service: svc, cleanup: cleanup,
+		read: func(id string) (*sessionUsageOutput, int, error) {
+			query.SessionID = id
+			return backend.SessionUsage(ctx, query)
+		},
+	}, nil
 }
 
 func requireRemoteSubagentUsageSupport(
