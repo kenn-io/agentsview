@@ -390,30 +390,65 @@ func testClaudeSplitMatchesFullParse(
 // a sync that lands inside one assistant response must not re-parse the
 // whole transcript to finish it.
 func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
-	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
-	env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
+	cumulative := claudeSplitShapes["cumulative_text"]
+	for _, tc := range []struct {
+		name       string
+		lines      []string
+		splitAfter int
+		wantFull   int64
+	}{
+		{name: "cumulative_text", lines: cumulative.lines, splitAfter: cumulative.splitAfter},
+		{
+			name: "trailing_queued_prompt",
+			lines: []string{
+				cumulative.lines[0], cumulative.lines[1], cumulative.lines[2],
+				`{"type":"attachment","uuid":"q1","parentUuid":"a1","timestamp":"2024-01-01T10:00:03Z","attachment":{"type":"queued_command","prompt":"next request"}}`,
+				cumulative.lines[3],
+			},
+			splitAfter: 4,
+		},
+		{name: "parallel_tool_results", lines: claudeParallelToolShape.lines, splitAfter: claudeParallelToolShape.splitAfter},
+		{
+			name:       "relocated_hook",
+			lines:      []string{claudeHookResumeUser, claudeHookRelocatedDated, claudeHookRelocatedFirst, claudeHookRelocatedSecond},
+			splitAfter: 3,
+			wantFull:   1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
+			env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 
-	shape := claudeSplitShapes["cumulative_text"]
-	path := filepath.Join(dir, "proj", "split.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(
-		path,
-		[]byte(strings.Join(shape.lines[:shape.splitAfter], "\n")+"\n"),
-		0o644,
-	))
+			path := filepath.Join(dir, "proj", "split.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(
+				path,
+				[]byte(strings.Join(tc.lines[:tc.splitAfter], "\n")+"\n"),
+				0o644,
+			))
 
-	env.engine.SyncAll(t.Context(), nil)
-	require.Equal(t, int64(1), counter.full.Load(), "initial sync full-parses once")
+			env.engine.SyncAll(t.Context(), nil)
+			require.Equal(t, int64(1), counter.full.Load(), "initial sync full-parses once")
 
-	counter.full.Store(0)
-	appendClaudeSplitLines(t, path, shape.lines[shape.splitAfter:]...)
-	env.engine.SyncPaths([]string{path})
+			counter.full.Store(0)
+			appendClaudeSplitLines(t, path, tc.lines[tc.splitAfter:]...)
+			env.engine.SyncPaths([]string{path})
 
-	assert.Zero(t, counter.full.Load(),
-		"finishing one response must not re-parse the whole transcript")
-	msgs := fetchMessages(t, env.db, "split")
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "Hello world", msgs[1].Content)
+			assert.Equal(t, tc.wantFull, counter.full.Load(), "only a relocated hook requires a full parse")
+			if tc.name == "cumulative_text" {
+				msgs := fetchMessages(t, env.db, "split")
+				require.Len(t, msgs, 2)
+				assert.Equal(t, "Hello world", msgs[1].Content)
+			}
+			fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), config.ArchiveContentFull)
+			fullPath := filepath.Join(fullDir, "proj", "split.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+			require.NoError(t, os.WriteFile(fullPath, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o644))
+			fullEnv.engine.SyncAll(t.Context(), nil)
+			assert.Equal(t, snapshotSplitMessages(t, fullEnv.db, "split"), snapshotSplitMessages(t, env.db, "split"))
+			assert.Equal(t, snapshotSplitSession(t, fullEnv.db, "split"), snapshotSplitSession(t, env.db, "split"))
+		})
+	}
 }
 
 // TestClaudeIncrementalSplitStaysOnRunInDAGSession covers a transcript

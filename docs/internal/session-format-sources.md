@@ -215,7 +215,9 @@ evidence; they do not establish whether a tool helped the task.
   cover full/append equivalence, native and ID-less hooks, linear parent chains,
   split responses, checkpoint offsets, counts, and retained pins. They include
   dated and undated hooks written before an open response but sorted after it,
-  in full and usage archives. In normal transcript mode, hook rows use a
+  in full and usage archives. Reverified that trailing queued prompts keep
+  bounded suffix reparsing, while relocated hooks require a full parse.
+  In normal transcript mode, hook rows use a
   collapsed Hook output card and an independent Hooks filter. Cancelled hooks
   have a Hook cancelled label. Focused mode hides these rows without treating
   them as new prompts. The card preserves escaped body text. Data version 164

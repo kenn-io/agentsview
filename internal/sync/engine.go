@@ -16956,13 +16956,33 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	if !ok {
 		return nil, nil
 	}
-	// Timestamp ordering can place an attachment after this assistant even
+	// Timestamp ordering can place a hook after this assistant even
 	// when its source bytes precede the run. Replacing the stored suffix
-	// would then delete a row the re-parse cannot reread. Use the full parse
-	// when rows trail the assistant, at the cost of a whole-transcript read
-	// for this continuation. Runs without trailing rows keep the bounded path.
+	// would then delete a row the re-parse cannot reread. Only trailing
+	// hooks require a full parse; ordinary rows keep the bounded path.
 	if inc.NextOrdinal > runOrdinal+1 {
-		return nil, nil
+		rows, err := e.db.Reader().Query(ctx, `
+			SELECT source_subtype FROM messages
+			WHERE session_id = ? AND ordinal >= ? AND ordinal < ?
+			  AND is_system = 1 AND source_type IN ('attachment', 'system')`,
+			inc.ID, runOrdinal+1, inc.NextOrdinal,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("read trailing Claude hook rows: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var subtype string
+			if err := rows.Scan(&subtype); err != nil {
+				return nil, fmt.Errorf("scan trailing Claude hook row: %w", err)
+			}
+			if parser.IsClaudeHookSubtype(subtype) {
+				return nil, nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("read trailing Claude hook rows: %w", err)
+		}
 	}
 	scanInc := *inc
 	scanInc.FileSize = runStart
