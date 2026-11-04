@@ -36,7 +36,6 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import {
     agentColor,
-    agentForeground,
     agentLabel,
     entrypointBadge,
   } from "../../utils/agents.js";
@@ -998,8 +997,7 @@
     <span class="breadcrumb-meta">
       <span
         class="agent-badge"
-        style:background={agentColor(session.agent)}
-        style:color={agentForeground(session.agent)}
+        style:--agent-color={agentColor(session.agent)}
       >{agentLabel(session.agent, session.agent_label)}</span>
       {#if entrypointBadge(session.entrypoint)}
         <span class="agent-badge entrypoint-badge">{entrypointBadge(session.entrypoint)}</span>
@@ -1522,26 +1520,36 @@
     flex-shrink: 1;
   }
 
+  /* The agent reads as the sidebar's dot and label, not a filled pill. */
   .agent-badge {
-    font-size: 10px;
-    font-weight: 600;
-    line-height: 14px;
-    padding: 0 6px;
-    border-radius: var(--radius-sm);
-    border: 1px solid transparent;
-    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--text-secondary);
     flex-shrink: 0;
-    background: var(--text-muted);
+  }
+
+  .agent-badge:not(.entrypoint-badge)::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    background: var(--agent-color, var(--text-muted));
   }
 
   /* The entrypoint qualifies the agent; keep it neutral so the agent
      color stays the only identity fill in the strip. */
   .agent-badge.entrypoint-badge {
+    padding: 0 5px;
     font-family: var(--font-mono);
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-secondary);
-    background: transparent;
-    border-color: var(--border-default);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
   }
 
   .summary-badge {
@@ -2141,6 +2149,67 @@
       var(--accent-red, #e55) 10%,
       transparent
     );
+  }
+
+  /* Above phone width the strip becomes two lines: the session title with
+     its actions, then the session metadata. The meta wrapper dissolves so
+     its children can sit on either line; order and a full-width break do
+     the placement. Phones keep the single scrolling strip. */
+  @media (min-width: 641px) {
+    .session-breadcrumb {
+      flex-wrap: wrap;
+      height: auto;
+      min-height: 52px;
+      padding-top: 6px;
+      padding-bottom: 6px;
+      row-gap: 3px;
+      align-content: center;
+    }
+
+    .session-breadcrumb::after {
+      content: "";
+      order: 2;
+      flex-basis: 100%;
+      height: 0;
+    }
+
+    .breadcrumb-meta {
+      display: contents;
+    }
+
+    .breadcrumb-meta > :global(*) {
+      order: 3;
+    }
+
+    .breadcrumb-link,
+    .breadcrumb-sep {
+      font-size: 12px;
+    }
+
+    .breadcrumb-current {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 22px;
+    }
+
+    .breadcrumb-meta > .open-group,
+    .breadcrumb-meta > .actions-wrapper {
+      order: 1;
+    }
+
+    .breadcrumb-meta > .open-group {
+      margin-left: auto;
+    }
+
+    .breadcrumb-meta > .session-id {
+      margin-left: auto;
+    }
+
+    /* The ID now starts the right-hand group, so it needs no divider. */
+    .session-id::before {
+      display: none;
+    }
   }
 
   @media (max-width: 900px) {
