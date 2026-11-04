@@ -28,10 +28,13 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 	}{
 		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
-		{name: "multiple out-of-band hooks", hooks: []string{claudeHookResumeNative,
-			`{"type":"attachment","uuid":"h2","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stderr":"second output"}}`}, ids: []string{"h1", "h2"}},
+		{name: "multiple out-of-band hooks", hooks: []string{
+			claudeHookResumeNative,
+			`{"type":"attachment","uuid":"h2","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stderr":"second output"}}`,
+		}, ids: []string{"h1", "h2"}},
 		{name: "hook without native ID", hooks: []string{
-			`{"type":"attachment","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","content":"no native ID"}}`}, ids: []string{""}},
+			`{"type":"attachment","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","content":"no native ID"}}`,
+		}, ids: []string{""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}

@@ -5294,6 +5294,6 @@ func TestGetAnalyticsVelocityIgnoresHookRows(t *testing.T) {
 	}))
 	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
 	require.NoError(t, err)
-	assert.Equal(t, 10.0, resp.Overall.FirstResponseSec.P50)
-	assert.Equal(t, 10.0, resp.Overall.TurnCycleSec.P50)
+	assert.InDelta(t, 10.0, resp.Overall.FirstResponseSec.P50, 0.001)
+	assert.InDelta(t, 10.0, resp.Overall.TurnCycleSec.P50, 0.001)
 }

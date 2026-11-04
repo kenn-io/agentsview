@@ -33,6 +33,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 		{"hook_additional_context", `["hook finished","more context"]`, "hook finished\nmore context"},
 	} {
 		t.Run(tc.subtype, func(t *testing.T) {
+			t.Parallel()
 
 			content := testjsonl.JoinJSONL(
 				testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
@@ -62,7 +63,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 				hook.Content)
 			assert.Equal(t, len(hook.Content), hook.ContentLength)
 			require.NotNil(t, hook.DialogueText)
-			assert.Equal(t, "", *hook.DialogueText)
+			assert.Empty(t, *hook.DialogueText)
 
 			// The row carries no tool, thinking, token, or billing identity.
 			assert.Empty(t, hook.ToolCalls)
@@ -382,6 +383,8 @@ func TestClaudeHookImportForkOwnership(t *testing.T) {
 		{name: "other attachment bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"task_reminder"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			var content strings.Builder
 			content.WriteString(`{"type":"user","uuid":"root","message":{"content":"start"}}` + "\n")
 			parent := "root"
