@@ -1525,8 +1525,8 @@ archive has no preceding user prompt.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link
-carries `ambiguous: true` when a query matches distinct commits whose SHAs are
-not prefixes of each other. Several sessions recording the same commit do not
+carries `ambiguous: true` when a query matches distinct stored SHAs, including
+prefixes of one another. Several sessions recording the same SHA do not
 make it ambiguous.
 
 Sessions permanently deleted before this release have no links because their
