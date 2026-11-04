@@ -113,6 +113,10 @@ The latest release is
   Sessions with rows written before control-character cleanup are rewritten once.
 - `pg push` reduces writes when a session grows by rewriting only the messages
   from the first changed message onward instead of the whole session.
+- `pg push` no longer rewrites every unchanged transcript when it runs a full push
+  on its own, such as after an upgrade adds a backfill or when the archive was
+  rebuilt before the push. It still updates every session and copies changed
+  messages. `--full` still rewrites everything.
 - Homebrew installs built with `make homebrew` no longer replace themselves.
   `agentsview update` stops and tells you to run `brew upgrade agentsview`;
   `agentsview update --check` still reports new releases with the same advice.
