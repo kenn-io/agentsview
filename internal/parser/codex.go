@@ -3090,8 +3090,11 @@ func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Resu
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
 		name := payload.Get("name").Str
+		if !isCodexWaitAgentCall(name) {
+			return false
+		}
 		args, _ := parseCodexFunctionArgs(payload)
-		return isCodexWaitAgentCall(name) && !isCodexExecCellWait(name, args)
+		return !isCodexExecCellWait(name, args)
 	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload, b.agent)
 		if isCodexSubagentFunctionOutput(output) {

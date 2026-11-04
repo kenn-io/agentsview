@@ -3627,11 +3627,12 @@ func TestParseCodexSessionFrom_CodeModeWaitStaysIncremental(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	msgs, _, offset, err := parseCodexTestSessionFrom(t, path, info.Size(), 2, false)
+	msgs, _, consumed, err := parseCodexTestSessionFrom(t, path, info.Size(), 2, false)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "wait", msgs[0].ToolCalls[0].ToolName)
+	offset := info.Size() + consumed
 
 	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
@@ -3643,41 +3644,56 @@ func TestParseCodexSessionFrom_CodeModeWaitStaysIncremental(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 3, false)
+	msgs, _, consumed, err = parseCodexTestSessionFrom(t, path, offset, 3, false)
 	require.NoError(t, err)
+	assert.Empty(t, msgs, "the output append must not replay earlier tool calls")
+	info, err = os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, info.Size()-offset, consumed)
 }
 
 func TestParseCodexSessionFrom_WaitOutputRequiresFullParse(t *testing.T) {
 	t.Parallel()
 
 	childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
-	initial := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON("inc-wait-output", "/tmp", "codex_cli_rs", tsEarly),
-		testjsonl.CodexMsgJSON("user", "run child", tsEarlyS1),
-		testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
-			"agent_type": "awaiter",
-			"message":    "run it",
-		}, tsEarlyS5),
-		testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
-		testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
-			"ids": []string{childID},
-		}, tsLateS5),
-	)
-	path := createTestFile(t, "codex-wait-output-inc.jsonl", initial)
-	info, err := os.Stat(path)
-	require.NoError(t, err)
+	for _, tt := range []struct {
+		name   string
+		output string
+	}{
+		{"completed", `{"status":{"` + childID + `":{"completed":"done"}}}`},
+		{"timed out", `{"status":{},"timed_out":true}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			initial := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON("inc-wait-output", "/tmp", "codex_cli_rs", tsEarly),
+				testjsonl.CodexMsgJSON("user", "run child", tsEarlyS1),
+				testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+					"agent_type": "awaiter",
+					"message":    "run it",
+				}, tsEarlyS5),
+				testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+				testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+					"ids": []string{childID},
+				}, tsLateS5),
+			)
+			path := createTestFile(t, "codex-wait-output-inc.jsonl", initial)
+			info, err := os.Stat(path)
+			require.NoError(t, err)
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(testjsonl.JoinJSONL(
-		testjsonl.CodexFunctionCallOutputJSON("call_wait", `{"status":{"`+childID+`":{"completed":"done"}}}`, "2024-01-01T10:01:06Z"),
-	))
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err)
+			_, err = f.WriteString(testjsonl.JoinJSONL(
+				testjsonl.CodexFunctionCallOutputJSON("call_wait", tt.output, "2024-01-01T10:01:06Z"),
+			))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
 
-	_, _, _, err = parseCodexTestSessionFrom(t, path, info.Size(), 3, false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "full parse")
+			_, _, _, err = parseCodexTestSessionFrom(t, path, info.Size(), 3, false)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "full parse")
+		})
+	}
 }
 
 func TestParseCodexSessionFrom_WaitCallRequiresFullParse(t *testing.T) {
