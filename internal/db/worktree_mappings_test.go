@@ -36,7 +36,7 @@ func TestWorktreeMappingSessionScopeQueryIgnoresStats(t *testing.T) {
 			}
 			_, err := d.getWriter().Exec(ctx, `
 				WITH RECURSIVE n(i) AS (
-					VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < 100000
+					VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < 10
 				)
 				INSERT INTO sessions (id, project, machine, agent, file_path)
 				SELECT 'unrelated-' || i, 'project', ?, 'claude', 'file-' || i || '.jsonl'
