@@ -15,6 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
@@ -298,10 +301,34 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
-	syncer := &Sync{pg: restricted, schema: schema}
-	require.NoError(t, syncer.EnsureSchema(t.Context()),
-		"restricted push role must not fail on raw custody DDL")
+	indexes := []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"}
+	for _, index := range indexes {
+		_, err = admin.ExecContext(t.Context(), `DROP INDEX `+index)
+		require.NoError(t, err)
+	}
+	local := testDB(t)
+	syncer, err := New(t.Context(), restrictedURL.String(), schema, local, "restricted-publisher", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = syncer.Close() })
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err, "restricted publisher must keep pushing before owner index installation")
 	assert.True(t, syncer.schemaDone)
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "restricted-session", Project: "project", Machine: "local", Agent: "codex",
+		CreatedAt: "2026-11-01T10:00:00Z",
+	}))
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	var project string
+	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT project FROM sessions WHERE id='restricted-session'`).Scan(&project))
+	assert.Equal(t, "project", project)
+	for _, index := range indexes {
+		assert.False(t, pgHasIndex(t.Context(), admin, index), "restricted publisher cannot install %s", index)
+	}
+	require.NoError(t, (&Sync{pg: admin, schema: schema}).EnsureSchema(t.Context()))
+	for _, index := range indexes {
+		assert.True(t, pgHasIndex(t.Context(), admin, index), "owner preparation installs %s", index)
+	}
 	writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
 	require.NoError(t, err)
 	assert.True(t, writable,

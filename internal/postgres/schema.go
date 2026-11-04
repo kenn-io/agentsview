@@ -1203,13 +1203,28 @@ func EnsureSchema(
 	return nil
 }
 
+var preparationIndexesPG = []struct{ name, ddl string }{
+	{"idx_sessions_data_version", `CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`},
+	{"idx_sessions_parentless_workers", `CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL},
+	{"idx_sessions_source_missing", `CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`},
+}
+
+func createMissingPreparationIndexesPG(ctx context.Context, pg *sql.DB) error {
+	for _, index := range preparationIndexesPG {
+		if pgHasIndex(ctx, pg, index.name) {
+			continue
+		}
+		if _, err := pg.ExecContext(ctx, index.ddl); err != nil {
+			return fmt.Errorf("creating PG preparation index %s: %w", index.name, err)
+		}
+	}
+	return nil
+}
+
 // createPartialIndexesPG creates partial indexes on the PG schema.
 // Idempotent via IF NOT EXISTS.
 func createPartialIndexesPG(ctx context.Context, pg pgSessionExecer) error {
 	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`,
-		`CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL,
-		`CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.
@@ -1252,6 +1267,9 @@ func createPartialIndexesPG(ctx context.Context, pg pgSessionExecer) error {
 		// fetch (user ordinals by session), mirroring the SQLite index.
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
 		 ON messages(session_id, role)`,
+	}
+	for _, index := range preparationIndexesPG {
+		indexes = append(indexes, index.ddl)
 	}
 	for _, ddl := range indexes {
 		if _, err := pg.ExecContext(ctx, ddl); err != nil {
@@ -2506,10 +2524,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// A push may provision the schema for a read-only serve role. Include
 	// the Activity index so that upgrading through push installs it too.
 	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
-		pgHasIndex(ctx, db, "idx_tool_result_events_terminal") &&
-		pgHasIndex(ctx, db, "idx_sessions_data_version") &&
-		pgHasIndex(ctx, db, "idx_sessions_parentless_workers") &&
-		pgHasIndex(ctx, db, "idx_sessions_source_missing")
+		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a

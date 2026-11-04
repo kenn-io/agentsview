@@ -714,10 +714,10 @@ results and can delay that first startup; it does not require a session resync.
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` bound the parser-version check and empty repair
-queries. Push detects missing indexes and builds them during schema setup.
+queries. Owner preparation installs missing indexes automatically.
 Each first build scans `sessions` and blocks writes until it finishes.
-For restricted publishers, first run `agentsview replica pg push [target]`
-with the schema-owner connection to install the indexes.
+Restricted publishers keep writing before owner installation, using the
+existing queries until the indexes are available.
 
 ### Usage archive indexes
 

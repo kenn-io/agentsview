@@ -53,9 +53,9 @@ func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
 				_, err := pg.ExecContext(t.Context(), `DROP INDEX `+index)
 				require.NoError(t, err)
 				require.NoError(t, CheckSchemaCompat(t.Context(), pg), "read compatibility permits a missing preparation index")
-				require.False(t, pushSchemaCurrent(t.Context(), pg))
+				require.True(t, pushSchemaCurrent(t.Context(), pg), "missing performance indexes preserve schema compatibility")
 				require.NoError(t, (&Sync{pg: pg, schema: schema}).EnsureSchema(t.Context()))
-				require.True(t, pushSchemaCurrent(t.Context(), pg))
+				require.True(t, pgHasIndex(t.Context(), pg, index), "owner preparation installs the missing index")
 			})
 		}
 
