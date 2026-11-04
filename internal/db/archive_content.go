@@ -618,11 +618,6 @@ func dropCopiedToolContentTx(
 			return fmt.Errorf("dropping copied %s: %w", statement.label, err)
 		}
 	}
-	// Projection can remove the first user message without changing its revision.
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET automation_audit = 1
-		WHERE id`+inCopied+` AND automation_audit <> 1`); err != nil {
-		return fmt.Errorf("marking copied automation audits stale: %w", err)
-	}
 	// The source archive computed signals, secret findings, and friction from
 	// payloads this archive does not keep. Clearing the counters and version
 	// markers hides stale values and lets startup backfill recompute all three

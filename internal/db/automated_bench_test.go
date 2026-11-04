@@ -16,6 +16,10 @@ func seedAutomationAuditRows(tb testing.TB, d *DB, sessions, promptBytes int) {
 		SELECT 'session-'||x, 'project-a', 'claude', ?, 1 FROM n`,
 		sessions, strings.Repeat("x", promptBytes))
 	require.NoError(tb, err)
+	_, err = d.getWriter().Exec(tb.Context(), `
+		INSERT INTO messages(session_id, ordinal, role, content)
+		SELECT id, 0, 'user', first_message FROM sessions`)
+	require.NoError(tb, err)
 }
 
 func BenchmarkBackfillIsAutomatedUnchanged(b *testing.B) {

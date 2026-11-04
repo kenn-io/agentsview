@@ -3927,6 +3927,8 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		 ON sessions(friction_rules_version)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_automation_audit
 		 ON sessions(automation_audit)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers
+		 ON sessions(id) WHERE ` + ParentlessWorkerSQL,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
 		 ON sessions(COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, '')))
 		 WHERE deleted_at IS NULL`,
