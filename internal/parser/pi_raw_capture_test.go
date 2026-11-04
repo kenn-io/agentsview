@@ -300,18 +300,26 @@ func TestPiRawCaptureCancelledEmptyRoots(t *testing.T) {
 }
 
 func TestPiRawCaptureRejectsAmbiguousPrimarySuffix(t *testing.T) {
-	root := t.TempDir()
-	child := filepath.Join(root, "project/child.jsonl")
-	suffix := strings.TrimLeft(strings.TrimPrefix(child, filepath.VolumeName(child)), string(filepath.Separator))
-	parent := filepath.Join(root, suffix)
-	writePiRawFixture(t, parent, `{"type":"session","id":"different-parent"}`+"\n")
-	writePiRawFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
-	provider, _ := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
-	sources, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: child})
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	_, _, err = ResolveRawCapturePlan(t.Context(), provider, sources[0])
-	assert.ErrorContains(t, err, "ambiguous primary")
+	for _, agent := range []AgentType{AgentPi, AgentPrimeAgent} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			dir := root
+			if agent == AgentPi {
+				dir = filepath.Join(root, "project")
+			}
+			child := filepath.Join(dir, "child.jsonl")
+			suffix := strings.TrimLeft(strings.TrimPrefix(child, filepath.VolumeName(child)), string(filepath.Separator))
+			parent := filepath.Join(root, suffix)
+			writePiRawFixture(t, parent, `{"type":"session","id":"different-parent"}`+"\n")
+			writePiRawFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+			provider, _ := NewProvider(agent, ProviderConfig{Roots: []string{root}})
+			sources, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: child})
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			_, _, err = ResolveRawCapturePlan(t.Context(), provider, sources[0])
+			assert.ErrorContains(t, err, "ambiguous primary")
+		})
+	}
 }
 
 func TestPiRawCaptureAllowsAbsoluteInRootSymlink(t *testing.T) {

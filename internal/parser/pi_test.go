@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -680,6 +681,29 @@ func TestPiProviderOMPSubagentUsesV1ParentFilenameID(t *testing.T) {
 	assert.Equal(t, "omp:child-def", child.ID)
 	assert.Equal(t, "omp:parent-v1", child.ParentSessionID)
 	assert.Equal(t, RelSubagent, child.RelationshipType)
+}
+
+func TestPiProviderKeepsReadableV1ParentAheadOfStructuralRecovery(t *testing.T) {
+	root := t.TempDir()
+	childPath := filepath.Join(root, "project", "structural-parent", "task", "run-0", "session.jsonl")
+	structuralParent := filepath.Join(root, "project", "structural-parent.jsonl")
+	explicitParent := filepath.Join(root, "explicit", "structural-parent.jsonl")
+	writePiRawFixture(t, structuralParent, `{"type":"session","id":"structural-header"}`+"\n")
+	writePiRawFixture(t, explicitParent, `{"type":"session"}`+"\n")
+	writePiRawFixture(t, childPath, `{"type":"session","id":"child","parentSession":`+strconv.Quote(explicitParent)+"}\n")
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: childPath})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	session := outcome.Results[0].Result.Session
+	assert.Equal(t, "pi:structural-parent", session.ParentSessionID)
+	assert.Equal(t, RelSubagent, session.RelationshipType)
 }
 
 func TestPiProviderOMPSubagentFollowsSymlinkedParent(t *testing.T) {

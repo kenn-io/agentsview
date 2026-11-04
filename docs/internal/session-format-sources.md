@@ -2982,16 +2982,24 @@ schemas keep their existing ordering behavior.
   case-insensitive path aliases, and parents preceded by oversized lines.
   Capture collapses case variants only when filesystem identity confirms they
   refer to the same file, retaining the structural path for case-sensitive
-  hosted replay. Missing case-distinct parents remain forks. Raw plans preserve
-  physical JSONL bytes, including malformed files, and include existing parent
-  transcripts whose headers the parser consults.
+  hosted replay while keeping OMP V1 filename identities from the original
+  reference. Configured-root symlinks retain in-root parent dependencies under
+  stable root-relative paths, with canonical target confinement. Readable V1
+  parents without header IDs remain resolved before structural recovery. Missing
+  case-distinct parents remain forks. Raw plans preserve physical JSONL bytes,
+  including malformed files, and include existing parent transcripts whose
+  headers the parser consults.
   Dependencies must remain within the primary configured root. Hosted
   replay uses captured parents and lexical project/skill metadata; it does
   not read client working directories, skill files, or producer blobs.
   Coverage: `TestPiRawCaptureFamily`,
   `TestPiRawCaptureDeduplicatesEquivalentParentReads`,
+  `TestPiRawCaptureRejectsAmbiguousPrimarySuffix`,
   `TestPiRawCaptureKeepsCaseDistinctHardLinks`,
   `TestProviderParserHostedPiFamilyParents`,
+  `TestProviderParserHostedOMPV1KeepsOriginalFilenameIdentity`,
+  `TestProviderParserHostedPiCaptureResolvesParentThroughConfiguredRootSymlink`,
+  `TestPiProviderKeepsReadableV1ParentAheadOfStructuralRecovery`,
   `TestProviderParserHostedPiCapturePreservesCaseInsensitiveParentAliases`,
   `TestProviderParserHostedPiCaseSensitiveReplayUsesCaseDistinctParentPaths`,
   `TestProviderParserHostedPiCaseDistinctParentDoesNotImplySubagent`,

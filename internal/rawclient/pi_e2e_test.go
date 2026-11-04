@@ -24,7 +24,7 @@ func TestPiRawSyncCaptureUploadDeriveLifecycle(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
 			ctx := t.Context()
-			httpServer, auth, objects := rawclient.NewRawSyncServerForTest(t)
+			httpServer, auth, objects := NewRawSyncServerForTest(t)
 			enrollment, err := auth.EnrollDevice(ctx, "tenant-pi-test", "collector-test")
 			require.NoError(t, err)
 			checkpoint, err := rawcheckpoint.Open(ctx, filepath.Join(t.TempDir(), "checkpoint.db"))
