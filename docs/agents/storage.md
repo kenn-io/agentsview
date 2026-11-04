@@ -770,9 +770,12 @@ resync is required.
 Writable opens and completed bulk index builds run `PRAGMA optimize = 0x10012`.
 This considers all archive tables and limits the statistics samples. Statistics
 must cover competing indexes too: analyzing only the metadata index can leave
-SQLite choosing an older index that still reads message bodies. Full resync
-defers this index during import and rebuilds it before the replacement archive
-is installed. Read-only opens do not create indexes or collect statistics.
+SQLite choosing an older index that still reads message bodies. After optimize,
+the writer raises small `*_fts_data` row estimates and reloads statistics so
+FTS5 segment deletes keep using rowid searches as an empty archive grows. Full
+resync defers this index during import and rebuilds it before the replacement
+archive is installed. Read-only opens do not create indexes or collect
+statistics.
 
 ### Transcript usage identity
 
