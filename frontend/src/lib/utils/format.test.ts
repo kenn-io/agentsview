@@ -4,6 +4,7 @@ import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
   sanitizeSnippet,
+  highlightTerms,
   _resetNonceCounter,
   formatCost,
   formatTokenCount,
@@ -169,5 +170,32 @@ describe("formatTokenUsage", () => {
   it("renders an explicit placeholder for missing token metrics", () => {
     expect(formatTokenUsage(0, false, 180, true)).toBe("— ctx / 180 out");
     expect(formatTokenUsage(2400, true, 0, false)).toBe("2.4k ctx / — out");
+  });
+});
+
+describe("highlightTerms", () => {
+  it("flags case-insensitive matches of each query word", () => {
+    expect(highlightTerms("Goldmark v2 uses goldmark parser", "goldmark parser")).toEqual([
+      { text: "Goldmark", match: true },
+      { text: " v2 uses ", match: false },
+      { text: "goldmark", match: true },
+      { text: " ", match: false },
+      { text: "parser", match: true },
+    ]);
+  });
+
+  it("treats regex characters in the query literally", () => {
+    expect(highlightTerms("call a.b(c) now", "a.b(c)")).toEqual([
+      { text: "call ", match: false },
+      { text: "a.b(c", match: true },
+      { text: ") now", match: false },
+    ]);
+  });
+
+  it("returns the whole text unflagged when no term qualifies", () => {
+    expect(highlightTerms("a short note", "a")).toEqual([{ text: "a short note", match: false }]);
+    expect(highlightTerms("nothing here", "goldmark")).toEqual([
+      { text: "nothing here", match: false },
+    ]);
   });
 });

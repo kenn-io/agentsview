@@ -183,11 +183,11 @@
   }
 
   .treemap-container {
-    --tile-tint: 40%;
+    --tile-tint: 50%;
   }
 
   :global(:root.dark) .treemap-container {
-    --tile-tint: 54%;
+    --tile-tint: 62%;
   }
 
   .treemap-container :global(.tile:not(.patterned):focus-visible rect),

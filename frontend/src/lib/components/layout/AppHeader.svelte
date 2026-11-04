@@ -1009,6 +1009,11 @@
     flex-shrink: 0;
   }
 
+  .header-btn + .header-btn,
+  .header-btn + .export-wrap {
+    margin-left: 2px;
+  }
+
   .header-btn:hover:not(:disabled) {
     background: var(--bg-surface-hover);
     color: var(--text-secondary);

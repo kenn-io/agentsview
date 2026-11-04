@@ -965,7 +965,7 @@
   /* Same seam and softened fill as the bar segments, so stacked areas
      read as layers instead of one saturated mass. */
   .chart-container :global(.cost-area) {
-    fill-opacity: 0.85;
+    fill-opacity: 0.8;
   }
 
   .chart-container :global(.cost-seg.selected) {

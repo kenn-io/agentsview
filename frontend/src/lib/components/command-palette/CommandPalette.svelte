@@ -15,7 +15,7 @@
   import {
     formatRelativeTime,
     truncate,
-    sanitizeSnippet,
+    sanitizeSnippet, highlightTerms,
   } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -376,10 +376,11 @@
                 {/if}
                 {#if result.snippet && result.snippet.replace(/<\/?mark>/g, '') !== result.name}
                   <span class="item-snippet">
-                    {#if result.snippetFormat === "plain-text"}
-                      {result.snippet}
-                    {:else}
+                    {#if result.snippetFormat !== "plain-text" && /<mark>/i.test(result.snippet)}
                       {@html sanitizeSnippet(result.snippet)}
+                    {:else}
+                      <!-- Backends without match markers get the query words emphasized here. -->
+                      {#each highlightTerms(result.snippet, inputValue) as segment}{#if segment.match}<mark>{segment.text}</mark>{:else}{segment.text}{/if}{/each}
                     {/if}
                   </span>
                 {/if}
@@ -517,12 +518,16 @@
     transition: background 0.05s;
   }
 
+  :global(:root.dark) .palette-item.selected {
+    --selected-result-tint: 16%;
+  }
+
   .palette-item:hover {
     background: var(--bg-surface-hover);
   }
 
   .palette-item.selected {
-    background: color-mix(in srgb, var(--accent-blue) 9%, var(--bg-surface));
+    background: color-mix(in srgb, var(--accent-blue) var(--selected-result-tint, 9%), var(--bg-surface));
     box-shadow: inset 3px 0 0 var(--accent-blue);
   }
 
@@ -632,6 +637,13 @@
   .sort-btn.active {
     background: var(--selected-bg);
     box-shadow: var(--selected-edge), var(--shadow-sm);
+    color: var(--text-primary);
+  }
+
+  .item-snippet :global(mark) {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent-amber) 26%, transparent);
     color: var(--text-primary);
   }
 

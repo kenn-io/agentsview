@@ -327,8 +327,9 @@
 
   .setting-hint {
     font-size: 12px;
-    color: var(--text-muted);
-    max-width: 60ch;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 64ch;
   }
 
   .message-colors {
