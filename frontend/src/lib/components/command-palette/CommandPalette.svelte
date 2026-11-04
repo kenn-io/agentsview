@@ -521,9 +521,11 @@
     letter-spacing: 0.05em;
   }
 
+  /* Metadata sits on the title baseline instead of floating between the
+     title and the snippet. */
   .palette-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
     width: 100%;
     padding: 7px 14px;
@@ -538,13 +540,14 @@
   }
 
   .palette-item.selected {
-    background: var(--selected-list-bg);
-    box-shadow: inset 2px 0 0 var(--accent-blue);
+    background: color-mix(in srgb, var(--accent-blue) 9%, var(--bg-surface));
+    box-shadow: inset 3px 0 0 var(--accent-blue);
   }
 
   .item-dot {
     width: 6px;
     height: 6px;
+    margin-top: 7px;
     border-radius: 50%;
     flex-shrink: 0;
   }
@@ -580,6 +583,7 @@
     white-space: nowrap;
     flex-shrink: 0;
     min-width: 108px;
+    padding-top: 2px;
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
@@ -650,6 +654,7 @@
   }
 
   .item-id {
+    margin-top: 1px;
     width: 72px;
     text-align: right;
     font-family: var(--font-mono);

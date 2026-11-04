@@ -232,6 +232,10 @@
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */
+:root .kit-segmented .kit-segmented__btn:not(.active):not(:disabled) {
+  color: var(--text-secondary);
+}
+
 :root .kit-segmented .kit-segmented__btn.active {
   background: var(--selected-bg);
   box-shadow: var(--selected-edge), var(--shadow-sm);
