@@ -646,7 +646,7 @@ fixtures retain this field; missing identities remain source-local.
   is absent. Synthetic coverage in
   `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
-  an in-place reparse for Codex at data version 165.
+  an in-place reparse for Codex at data version 164.
 
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)

@@ -498,7 +498,7 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 }
 
 func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
-	scope := db.ScopedDataVersionProviders(164, 165)
+	scope := db.ScopedDataVersionProviders(163, 164)
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
 		scope)
