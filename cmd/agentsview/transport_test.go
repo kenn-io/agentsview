@@ -1414,7 +1414,7 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 			var cleanup func()
 			if mode == "pg" {
 				stubPGReadStore(t, seed)
-				svc, cleanup, err = newPGReadService(cfg, config.PGConfig{})
+				svc, cleanup, err = newPGReadService(t.Context(), cfg, config.PGConfig{})
 			} else {
 				svc, cleanup, err = newService(t.Context(), cfg, transport{Mode: transportDirect})
 			}
