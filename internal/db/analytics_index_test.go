@@ -20,12 +20,14 @@ func TestStartupStatsKeepFTSSegmentDeletesIndexed(t *testing.T) {
 		for _, table := range []string{
 			"messages_fts_data", "recall_entries_fts_data", "recall_evidence_fts_data",
 		} {
-			rows, err := d.getWriter().Query(t.Context(),
-				`EXPLAIN QUERY PLAN DELETE FROM `+table+` WHERE id>=? AND id<=?`, 10, 20)
-			require.NoError(t, err)
-			details := explainQueryPlanDetails(t, rows)
-			require.NoError(t, rows.Close())
-			assert.Contains(t, strings.Join(details, "\n"), "SEARCH "+table+" USING INTEGER PRIMARY KEY")
+			func() {
+				rows, err := d.getWriter().Query(t.Context(),
+					`EXPLAIN QUERY PLAN DELETE FROM `+table+` WHERE id>=? AND id<=?`, 10, 20)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				details := explainQueryPlanDetails(t, rows)
+				assert.Contains(t, strings.Join(details, "\n"), "SEARCH "+table+" USING INTEGER PRIMARY KEY")
+			}()
 		}
 	}
 	checkPlans()
