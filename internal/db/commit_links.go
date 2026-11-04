@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json/jsontext"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -239,28 +241,95 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
-	rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
- COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
- FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
- WHERE t.session_id=? AND t.category='Bash' AND t.input_json IS NOT NULL AND ((t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%') OR t.input_json LIKE '%write_stdin%' OR t.tool_name='write_stdin')
- ORDER BY m.ordinal,t.call_index`, sessionID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
 	var calls []commitCall
 	var cwd string
-	for rows.Next() {
-		var call commitCall
-		if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd, &call.toolName); err != nil {
+	load := func(filter string, args ...any) error {
+		rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
+ COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
+ FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
+ WHERE t.session_id=? AND t.category='Bash' AND t.input_json IS NOT NULL AND (`+filter+`)
+ ORDER BY m.ordinal,t.call_index`, append([]any{sessionID}, args...)...)
+		if err != nil {
 			return err
 		}
-		calls = append(calls, call)
+		defer rows.Close()
+		for rows.Next() {
+			var call commitCall
+			if err := rows.Scan(&call.MessageOrdinal, &call.CallIndex, &call.ToolUseID, &call.CommittedAt, &call.input, &call.result, &cwd, &call.toolName); err != nil {
+				return err
+			}
+			calls = append(calls, call)
+		}
+		return rows.Err()
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if err := load(`t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%'`); err != nil {
 		return err
+	}
+	if len(calls) == 0 {
+		var stored bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM commit_links WHERE session_id=?)`, sessionID).Scan(&stored); err != nil {
+			return err
+		}
+		if !stored {
+			return nil
+		}
+	}
+	running := map[int64]bool{}
+	for _, call := range calls {
+		command := signals.CommandText(call.input)
+		if commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command) {
+			if _, process := callOutput(call.result); process != 0 {
+				running[process] = true
+			}
+		}
+	}
+	if len(running) > 0 {
+		// Read poll inputs first so unrelated process output is never loaded.
+		rows, err := tx.Query(`SELECT id, input_json, tool_name FROM tool_calls
+ WHERE session_id=? AND category='Bash' AND input_json IS NOT NULL
+ AND (tool_name='write_stdin' OR (tool_name='exec' AND input_json LIKE '%write_stdin%'))
+ AND NOT (input_json LIKE '%git%' AND input_json LIKE '%commit%')`, sessionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var id, input, tool string
+			if err := rows.Scan(&id, &input, &tool); err != nil {
+				return err
+			}
+			var args struct {
+				SessionID int64 `json:"session_id"`
+			}
+			if tool == "write_stdin" {
+				_ = json.Unmarshal([]byte(input), &args)
+			} else if match := commitPollRE.FindStringSubmatch(input); match != nil {
+				args.SessionID, _ = strconv.ParseInt(match[1], 10, 64)
+			}
+			if running[args.SessionID] {
+				ids = append(ids, id)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(ids) > 0 {
+			for chunk := range slices.Chunk(ids, maxSQLVars-1) {
+				placeholders, args := InPlaceholders(chunk)
+				if err := load(`t.id IN `+placeholders, args...); err != nil {
+					return err
+				}
+			}
+			slices.SortFunc(calls, func(a, b commitCall) int {
+				if order := cmp.Compare(a.MessageOrdinal, b.MessageOrdinal); order != 0 {
+					return order
+				}
+				return cmp.Compare(a.CallIndex, b.CallIndex)
+			})
+		}
 	}
 	if _, err := tx.Exec(`DELETE FROM commit_links WHERE session_id=?`, sessionID); err != nil {
 		return err

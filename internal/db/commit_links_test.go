@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -48,6 +49,42 @@ func TestCommitLinksLateResult(t *testing.T) {
 		assert.Equal(t, 0, l.Turn.Ordinal)
 		assert.Equal(t, "Record the parser fix", l.Turn.Text)
 	}
+}
+
+func TestCommitLinksNoCandidatesSkipsRefresh(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	var messages []Message
+	for i := range 1000 {
+		poll := commitMessages("s1", `{"session_id":7,"chars":""}`, strings.Repeat("unrelated output\n", 100))[2]
+		poll.Ordinal = i
+		poll.ToolCalls[0].ToolName = "write_stdin"
+		messages = append(messages, poll)
+	}
+	insertMessages(t, d, messages...)
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	// Reject refresh writes at the SQLite boundary, even when no rows exist.
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_DELETE && table == "commit_links" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	defer func() {
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+			return nil
+		}))
+	}()
+	tx, err := conn.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, refreshSessionCommitLinksTx(tx, "s1"))
 }
 
 func TestCommitLinksParsing(t *testing.T) {
