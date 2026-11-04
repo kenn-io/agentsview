@@ -272,8 +272,8 @@ func (c *usageRollupCoordinator) Ensure(
 		}
 		size := min(len(batch.Sessions), usageFillInstallBatchSize)
 		chunk := batch
-		chunk.Sessions = batch.Sessions[:size]
-		chunk.Versions = batch.Versions[:size]
+		chunk.Sessions = slices.Clone(batch.Sessions[:size])
+		chunk.Versions = slices.Clone(batch.Versions[:size])
 		chunkFills := make(map[string]usageFillResult, size)
 		for _, session := range chunk.Sessions {
 			chunkFills[session.ID] = fills[session.ID]
