@@ -90,7 +90,7 @@ PostgreSQL. The schema is created automatically on first push.
 The next push using the schema-owner connection installs
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` on existing archives. Each first build scans
-`sessions` and blocks writes until it finishes.
+`sessions` and blocks writes until installation commits.
 Restricted publishers keep pushing before owner installation; their version and
 repair checks use the existing queries until the indexes are available.
 
