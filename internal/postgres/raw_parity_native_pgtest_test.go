@@ -47,7 +47,7 @@ func TestRawParityNativeParserWithRetainedPush(t *testing.T) {
 			f := newProjectionFixture(t, func(pg *sql.DB) {
 				var schema string
 				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
-				pusher, err := New(testPGURL(t), schema, local, "capture-device", true, storage.PusherOptions{})
+				pusher, err := New(t.Context(), testPGURL(t), schema, local, "capture-device", true, storage.PusherOptions{})
 				require.NoError(t, err)
 				defer func() { require.NoError(t, pusher.Close()) }()
 				result, err := pusher.Push(t.Context(), true, nil)

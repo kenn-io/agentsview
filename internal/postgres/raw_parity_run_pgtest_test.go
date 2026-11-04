@@ -31,7 +31,7 @@ func TestRawParityAdoptedPushProviders(t *testing.T) {
 			f := newProjectionFixture(t, func(pg *sql.DB) {
 				var schema string
 				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
-				syncer, err := New(testPGURL(t), schema, local, "archive", true, storage.PusherOptions{})
+				syncer, err := New(t.Context(), testPGURL(t), schema, local, "archive", true, storage.PusherOptions{})
 				require.NoError(t, err)
 				defer func() { require.NoError(t, syncer.Close()) }()
 				result, err := syncer.Push(t.Context(), true, nil)
