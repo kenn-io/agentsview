@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS vector_generation_machines (
     last_push_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     data_version INTEGER,
     include_automated BOOLEAN,
+    reconciliation_complete BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (generation_id, machine)
 );
 CREATE TABLE IF NOT EXISTS vector_documents (

@@ -28,18 +28,18 @@ const vectorProgressStride = 2000
 // the schema-qualified halfvec type. The type must be qualified because the
 // connection's search_path is the target schema only, while pgvector's types
 // live in whichever schema first installed the extension.
-// machineRecorded reports whether this pusher's scoped witness record already
-// existed for the generation before this push touched it: recreating the
-// vector tables restarts the id sequence, so a reused id can satisfy the memo
-// comparison while the recreated generation is empty, and the witness record
-// — keyed by local push marker plus sync/filter scope and wiped in the same
-// reset — is what survives id reuse safely.
+// machineRecorded reports whether this pusher completed a generation-wide
+// reconciliation for the generation. Recreating the vector tables restarts
+// the id sequence, so a reused id can satisfy the memo comparison while the
+// recreated generation is empty. The completion marker is keyed by local push
+// marker plus sync/filter scope and wiped in the same reset.
 type vectorGeneration struct {
 	id                   int64
 	createdAt            time.Time
 	halfvecType          string
 	machineRecorded      bool
 	compatibilityColumns bool
+	reconciliationColumn bool
 }
 
 // vectorPushScope carries the push-wide constants threaded through every
@@ -474,6 +474,7 @@ func (s *Sync) lookupVectorGeneration(
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines m
      WHERE generation_id = $1 AND machine = $2
+       AND COALESCE((to_jsonb(m)->>'reconciliation_complete')::boolean, FALSE)
        AND (NOT (to_jsonb(m) ?& ARRAY['data_version','include_automated'])
             OR ((to_jsonb(m)->>'data_version')::integer IS NOT DISTINCT FROM $3
                 AND (to_jsonb(m)->>'include_automated')::boolean IS NOT DISTINCT FROM $4)))`,
@@ -482,12 +483,13 @@ SELECT EXISTS (
 			"reading vector push machine record: %w", err,
 		)
 	}
-	compatibilityColumns, err := vectorCompatibilityColumns(ctx, s.pg)
+	compatibilityColumns, reconciliationColumn, err := vectorGenerationMachineColumns(ctx, s.pg)
 	if err != nil {
 		return vectorGeneration{}, false, err
 	}
 	return vectorGeneration{
 		compatibilityColumns: compatibilityColumns,
+		reconciliationColumn: reconciliationColumn,
 		id:                   genID,
 		createdAt:            createdAt,
 		halfvecType:          extSchema + ".halfvec",
@@ -527,6 +529,7 @@ func (s *Sync) prepareVectorBaseSchema(
 	if _, err := ensureColumns(ctx, s.pg, existing, []columnMigration{
 		{table: "vector_generation_machines", column: "data_version", def: "data_version INTEGER"},
 		{table: "vector_generation_machines", column: "include_automated", def: "include_automated BOOLEAN"},
+		{table: "vector_generation_machines", column: "reconciliation_complete", def: "reconciliation_complete BOOLEAN NOT NULL DEFAULT FALSE"},
 	}); err != nil {
 		if isInsufficientPrivilege(err) {
 			// Optional metadata must not revoke the legacy writer's capability.
@@ -950,17 +953,19 @@ func (s *Sync) resolveVectorGeneration(
 	var machineRecorded bool
 	if err := s.pg.QueryRowContext(ctx, `
 SELECT EXISTS (
-    SELECT 1 FROM vector_generation_machines
-     WHERE generation_id = $1 AND machine = $2)`,
+    SELECT 1 FROM vector_generation_machines m
+     WHERE generation_id = $1 AND machine = $2
+       AND COALESCE((to_jsonb(m)->>'reconciliation_complete')::boolean, FALSE))`,
 		genID, witnessKey).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, fmt.Errorf("reading vector push machine record: %w", err)
 	}
-	compatibilityColumns, err := vectorCompatibilityColumns(ctx, s.pg)
+	compatibilityColumns, reconciliationColumn, err := vectorGenerationMachineColumns(ctx, s.pg)
 	if err != nil {
 		return vectorGeneration{}, err
 	}
 	return vectorGeneration{
 		compatibilityColumns: compatibilityColumns,
+		reconciliationColumn: reconciliationColumn,
 		id:                   genID,
 		createdAt:            createdAt,
 		halfvecType:          extSchema + ".halfvec",
@@ -976,31 +981,53 @@ func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
 	return s.machine + "|" + s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID), nil
 }
 
-func vectorCompatibilityColumns(ctx context.Context, pg *sql.DB) (bool, error) {
+func vectorGenerationMachineColumns(ctx context.Context, pg *sql.DB) (compatibility, reconciliation bool, err error) {
 	columns, err := loadExistingColumns(ctx, pg, nil, "vector_generation_machines")
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	_, version := columns["vector_generation_machines"]["data_version"]
 	_, automated := columns["vector_generation_machines"]["include_automated"]
-	return version && automated, nil
+	_, reconciliation = columns["vector_generation_machines"]["reconciliation_complete"]
+	return version && automated, reconciliation, nil
 }
 
 func (s *Sync) markVectorGenerationMachinePending(
 	ctx context.Context, info storage.VectorGenerationInfo, gen vectorGeneration, witnessKey string,
 ) error {
-	if !gen.compatibilityColumns {
+	if !gen.compatibilityColumns && !gen.reconciliationColumn {
 		return nil
 	}
-	_, err := s.pg.ExecContext(ctx, `
-INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated)
-SELECT id, $4, now(), NULL, NULL
+	columns := []string{"generation_id", "machine", "last_push_at"}
+	selectValues := []string{"id", "$4", "now()"}
+	updates := make([]string, 0, 3)
+	args := []any{gen.id, info.Fingerprint, gen.createdAt, witnessKey}
+	if gen.compatibilityColumns {
+		columns = append(columns, "data_version", "include_automated")
+		selectValues = append(selectValues, "NULL", "NULL")
+		versionArg := fmt.Sprintf("$%d", len(args)+1)
+		automatedArg := fmt.Sprintf("$%d", len(args)+2)
+		args = append(args, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated)
+		changed := "vector_generation_machines.data_version IS DISTINCT FROM " + versionArg +
+			" OR vector_generation_machines.include_automated IS DISTINCT FROM " + automatedArg
+		updates = append(updates,
+			"data_version = CASE WHEN "+changed+" THEN NULL ELSE vector_generation_machines.data_version END",
+			"include_automated = CASE WHEN "+changed+" THEN NULL ELSE vector_generation_machines.include_automated END",
+		)
+	}
+	if gen.reconciliationColumn {
+		columns = append(columns, "reconciliation_complete")
+		selectValues = append(selectValues, "FALSE")
+		updates = append(updates, "reconciliation_complete = FALSE")
+	}
+	query := fmt.Sprintf(`
+INSERT INTO vector_generation_machines (%s)
+SELECT %s
   FROM vector_generations
  WHERE id = $1 AND fingerprint = $2 AND created_at = $3
-ON CONFLICT (generation_id, machine) DO UPDATE SET data_version = NULL, include_automated = NULL
- WHERE vector_generation_machines.data_version IS DISTINCT FROM $5
-    OR vector_generation_machines.include_automated IS DISTINCT FROM $6`,
-		gen.id, info.Fingerprint, gen.createdAt, witnessKey, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated)
+ON CONFLICT (generation_id, machine) DO UPDATE SET %s`,
+		strings.Join(columns, ", "), strings.Join(selectValues, ", "), strings.Join(updates, ", "))
+	_, err := s.pg.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("marking vector push compatibility pending: %w", err)
 	}
@@ -1024,21 +1051,31 @@ func (s *Sync) recordVectorGenerationMachine(
 		return false, fmt.Errorf("starting vector push witness transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	query := `
-INSERT INTO vector_generation_machines (generation_id, machine, last_push_at, data_version, include_automated)
-SELECT id, $4, now(), $5, $6
+	columns := []string{"generation_id", "machine", "last_push_at"}
+	selectValues := []string{"id", "$4", "now()"}
+	updates := []string{"last_push_at = EXCLUDED.last_push_at"}
+	args := []any{gen.id, info.Fingerprint, gen.createdAt, witnessKey}
+	if gen.compatibilityColumns {
+		columns = append(columns, "data_version", "include_automated")
+		selectValues = append(selectValues, "$5", "$6")
+		args = append(args, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated)
+		updates = append(updates,
+			"data_version = EXCLUDED.data_version",
+			"include_automated = EXCLUDED.include_automated",
+		)
+	}
+	if gen.reconciliationColumn {
+		columns = append(columns, "reconciliation_complete")
+		selectValues = append(selectValues, "TRUE")
+		updates = append(updates, "reconciliation_complete = EXCLUDED.reconciliation_complete")
+	}
+	query := fmt.Sprintf(`
+INSERT INTO vector_generation_machines (%s)
+SELECT %s
   FROM vector_generations
  WHERE id = $1 AND fingerprint = $2 AND created_at = $3
-ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at,
- data_version = EXCLUDED.data_version, include_automated = EXCLUDED.include_automated`
-	args := []any{gen.id, info.Fingerprint, gen.createdAt, witnessKey, nullableVectorDataVersion(info.DataVersion), info.IncludeAutomated}
-	if !gen.compatibilityColumns {
-		query = `INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
-SELECT id, $4, now() FROM vector_generations
- WHERE id=$1 AND fingerprint=$2 AND created_at=$3
-ON CONFLICT (generation_id,machine) DO UPDATE SET last_push_at=EXCLUDED.last_push_at`
-		args = args[:4]
-	}
+ON CONFLICT (generation_id, machine) DO UPDATE SET %s`,
+		strings.Join(columns, ", "), strings.Join(selectValues, ", "), strings.Join(updates, ", "))
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("recording vector push machine: %w", err)

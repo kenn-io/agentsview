@@ -805,6 +805,9 @@ SELECT COUNT(*) FROM vector_generation_machines
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
 	)
 	require.NoError(t, err, "drop machine record")
+	// A legacy generation has no compatibility metadata. Its pending NULL/NULL
+	// row must not be mistaken for a completed generation-wide reconciliation.
+	src.gen.DataVersion = 0
 
 	src.hashes = map[string]string{"A": "a2", "B": "b2"}
 	src.docs = map[string][]storage.VectorPushDoc{
