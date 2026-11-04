@@ -518,6 +518,9 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *t
 			write.Messages[0].SourceUUID = initial.SourceUUID
 			write.Messages[0].SourceParentUUID = initial.SourceParentUUID
 			write.Messages[0].Model = initial.Model
+			write.Messages[0].Content = "answerneedle [Thinking] hiddenneedle"
+			write.Messages[0].ContentLength = len(write.Messages[0].Content)
+			write.Messages[0].DialogueText = new("answerneedle")
 			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 			require.NoError(t, err)
 			before, err := d.GetAllMessages(t.Context(), "identities")
@@ -532,6 +535,7 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *t
 			write.Messages[0].SourceUUID = "incoming"
 			write.Messages[0].SourceParentUUID = "incoming-parent"
 			write.Messages[0].Model = "gpt-5"
+			write.Messages[0].DialogueText = nil
 			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 			require.NoError(t, err)
 			after, err := d.GetAllMessages(t.Context(), "identities")
@@ -553,6 +557,21 @@ func TestWriteSessionBatchAtomicCompletesOnlyEmptySourceIdentitiesAndModels(t *t
 				wantModel = initial.Model
 			}
 			assert.Equal(t, wantModel, after[0].Model)
+			assert.Equal(t, new("answerneedle"), after[0].DialogueText)
+			for _, search := range []struct {
+				pattern string
+				matches int
+			}{
+				{"answerneedle", 1}, {"hiddenneedle", 0},
+			} {
+				results, err := d.SearchContent(t.Context(), ContentSearchFilter{
+					Pattern: search.pattern, Mode: "substring", Sources: []string{"messages"},
+					IncludeOneShot: true, IncludeAutomated: true, Limit: 10,
+				})
+				require.NoError(t, err)
+				assert.Len(t, results.Matches, search.matches, search.pattern)
+			}
+
 		})
 	}
 }
