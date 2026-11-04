@@ -647,7 +647,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // source and session identities are unchanged.)
 // (164: restore code-mode wait output in Codex-format sessions. Re-parse
 // sources in place; source and session identities are unchanged.)
-const dataVersion = 164
+// (165: show slash commands whose arguments contain "<" as "/name args"
+// prompts. Re-parse Claude-format, Grok and iFlow sources in place; source
+// and session identities are unchanged.)
+const dataVersion = 165
 
 const archiveOnlyVersionBase = 1 << 20
 
