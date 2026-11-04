@@ -196,6 +196,7 @@ func validateNonnegativeUsageRates(rates export.ModelRates) error {
 
 type usageRollupCall struct {
 	done     chan struct{}
+	waiters  int // guarded by usageRollupCoordinator.mu
 	installs map[string]usageRollupInstall
 	metrics  usageRollupMetrics
 	err      error
@@ -286,7 +287,7 @@ func (c *usageRollupCoordinator) Ensure(
 		batch.Versions = batch.Versions[size:]
 		batch.CursorHighWater = 0
 		if len(batch.Sessions) == 0 {
-			return installs, metrics, ctx.Err()
+			return installs, metrics, nil
 		}
 	}
 }
@@ -316,9 +317,21 @@ func (c *usageRollupCoordinator) ensureChunk(
 			if c.observer.beforeEnsure != nil {
 				c.observer.beforeEnsure()
 			}
-			// Wait before acquiring a pooled connection. Each detached batch
-			// finishes for reuse even if its request leaves between batches.
+			// Wait before acquiring a pooled connection. Once a batch starts,
+			// it finishes for reuse even if all its callers leave.
 			zone.Lock()
+			c.mu.Lock()
+			if call.waiters == 0 {
+				call.err = context.Canceled
+				if c.calls[key] == call {
+					delete(c.calls, key)
+				}
+				close(call.done)
+				c.mu.Unlock()
+				zone.Unlock()
+				return
+			}
+			c.mu.Unlock()
 			call.installs, call.metrics, call.err = c.ensureNow(
 				c.ctx, snapshot, fills, resolver)
 			zone.Unlock()
@@ -334,9 +347,13 @@ func (c *usageRollupCoordinator) ensureChunk(
 			)
 		}
 	}
+	call.waiters++
 	c.mu.Unlock()
 	select {
 	case <-ctx.Done():
+		c.mu.Lock()
+		call.waiters--
+		c.mu.Unlock()
 		return nil, usageRollupMetrics{}, ctx.Err()
 	case <-call.done:
 		return call.installs, call.metrics, call.err

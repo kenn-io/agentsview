@@ -310,22 +310,65 @@ func TestUsageRollupSameZoneBuildsRunOneAtATime(t *testing.T) {
 	assert.Equal(t, int32(1), builds.Load())
 }
 
-func seedUsageRollupBatchSessions(t *testing.T, database *DB) {
-	t.Helper()
-	messages := make([]Message, 0, usageFillInstallBatchSize+1)
-	for i := range usageFillInstallBatchSize + 1 {
-		id := fmt.Sprintf("session-%03d", i)
-		started := "2026-08-10T09:00:00Z"
-		insertSession(t, database, id, "project-a", func(session *Session) {
-			session.StartedAt = &started
-		})
-		messages = append(messages, Message{
-			SessionID: id, Ordinal: 0, Role: "assistant",
-			Timestamp: started, Model: "model-a",
-			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
-		})
+func TestUsageRollupSkipsAbandonedQueuedChunk(t *testing.T) {
+	database := testDB(t)
+	for _, id := range []string{"session-a", "session-b"} {
+		seedUsageSnapshotSession(t, database, id, "project-a",
+			"2026-08-10T09:00:00Z", 0, 10, "model-a")
 	}
-	require.NoError(t, database.InsertMessages(t.Context(), messages))
+	snapshot, fills, cache := prepareUsageRollupTest(t, database)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	started := make(chan struct{}, 2)
+	var builds atomic.Int32
+	cache.rollup.observer.beforeEnsure = func() { started <- struct{}{} }
+	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
+		if builds.Add(1) == 1 {
+			close(held)
+			<-release
+		}
+	}
+	first := snapshot
+	first.Sessions = snapshot.Sessions[:1]
+	first.Versions = snapshot.Versions[:1]
+	second := snapshot
+	second.Sessions = snapshot.Sessions[1:]
+	second.Versions = snapshot.Versions[1:]
+	firstDone := make(chan error, 1)
+	go func() {
+		_, _, err := cache.rollup.Ensure(t.Context(), first, fills,
+			export.NewPricingResolver(snapshot.PricingRows))
+		firstDone <- err
+	}()
+	<-started
+	<-held
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	secondDone := make(chan error, 1)
+	go func() {
+		_, _, err := cache.rollup.Ensure(ctx, second, fills,
+			export.NewPricingResolver(snapshot.PricingRows))
+		secondDone <- err
+	}()
+	<-started
+	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
+	require.NoError(t, err)
+	cache.rollup.mu.Lock()
+	queued := cache.rollup.calls[usageRollupCallKey(second, fills, catalogHash)]
+	cache.rollup.mu.Unlock()
+	require.NotNil(t, queued)
+	cancel()
+	require.ErrorIs(t, <-secondDone, context.Canceled)
+	release <- struct{}{}
+	require.NoError(t, <-firstDone)
+	<-queued.done
+	assert.Equal(t, int32(1), builds.Load())
+	var installed int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`,
+		second.Sessions[0].ID).Scan(&installed))
+	assert.Zero(t, installed, "the abandoned chunk must leave its sessions uninstalled")
 }
 
 func TestUsageRollupQueuedBuildsLeaveConnectionsForWarmReads(t *testing.T) {
@@ -389,7 +432,8 @@ func TestUsageRollupQueuedBuildsLeaveConnectionsForWarmReads(t *testing.T) {
 
 func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
 	database := testDB(t)
-	seedUsageRollupBatchSessions(t, database)
+	seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
+		time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
 	snapshot, fills, cache := prepareUsageRollupTest(t, database)
 	var sizes []int
 	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
@@ -412,7 +456,8 @@ func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
 
 func TestUsageRollupCancellationResumesCommittedBatches(t *testing.T) {
 	database := testDB(t)
-	seedUsageRollupBatchSessions(t, database)
+	seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
+		time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
 	snapshot, fills, cache := prepareUsageRollupTest(t, database)
 
 	snapshot.location = time.FixedZone("batch-resume", 3600)
@@ -457,7 +502,7 @@ func TestUsageRollupCompletionWaitsForCallRemoval(t *testing.T) {
 		"2026-08-10T09:00:00Z", 0, 10, "model-a")
 	snapshot, fills, cache := prepareUsageRollupTest(t, database)
 	started := make(chan struct{})
-	cache.rollup.observer.beforeEnsure = func() {
+	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
 		cache.rollup.mu.Lock()
 		close(started)
 	}
