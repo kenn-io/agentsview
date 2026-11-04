@@ -513,7 +513,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 4px;
+    padding: 2px 4px;
+    line-height: 1.45;
     border-radius: var(--radius-sm);
     transition: background 0.1s;
   }

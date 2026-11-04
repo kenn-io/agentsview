@@ -51,17 +51,17 @@
   .parallel-group {
     /* The members drop their own bars, so the rail carries the tool marker. */
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
-    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+    background: transparent;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    margin: 6px 0;
-    padding: 4px 0;
+    margin: 4px 0;
+    padding: 0;
     overflow: hidden;
   }
   .pg-header {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    padding: 5px 12px 7px;
+    padding: 3px 10px 3px;
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-muted);

@@ -299,7 +299,7 @@
 
   .settings-page :global(.kit-settings__nav-item--active),
   .settings-page :global(.kit-settings__nav-item--active:hover) {
-    background: var(--selected-bg);
+    background: var(--selected-list-bg);
     box-shadow: var(--selected-edge);
     color: var(--text-primary);
   }

@@ -349,8 +349,8 @@
     flex: 1;
     min-width: 120px;
     /* One shared height for every card, so wrapped rows stay aligned. */
-    min-height: 90px;
-    padding: 10px 12px;
+    min-height: 84px;
+    padding: 8px 12px;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -367,7 +367,7 @@
   }
 
   .card-value {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 600;
     color: var(--text-primary);
     line-height: 1.2;
@@ -376,7 +376,7 @@
   }
 
   .summary-cards :global(.card.featured .card-value) {
-    font-size: 24px;
+    font-size: 22px;
   }
 
   .card-value.error {

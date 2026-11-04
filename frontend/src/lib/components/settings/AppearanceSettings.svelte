@@ -308,8 +308,7 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    margin-top: var(--space-3);
-    padding-top: var(--space-5);
+    padding-top: var(--space-4);
     border-top: 1px solid var(--border-muted);
   }
 

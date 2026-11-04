@@ -282,13 +282,13 @@
 
 {#snippet messageLayoutIcon(size: string)}
   {#if ui.messageLayout === "default"}
-    <LayoutListIcon {size} strokeWidth="2" aria-hidden="true" />
+    <LayoutListIcon {size} strokeWidth="1.75" aria-hidden="true" />
   {:else if ui.messageLayout === "compact"}
-    <ListCollapseIcon {size} strokeWidth="2" aria-hidden="true" />
+    <ListCollapseIcon {size} strokeWidth="1.75" aria-hidden="true" />
   {:else if ui.messageLayout === "stream"}
-    <LogsIcon {size} strokeWidth="2" aria-hidden="true" />
+    <LogsIcon {size} strokeWidth="1.75" aria-hidden="true" />
   {:else}
-    <AlignJustifyIcon {size} strokeWidth="2" aria-hidden="true" />
+    <AlignJustifyIcon {size} strokeWidth="1.75" aria-hidden="true" />
   {/if}
 {/snippet}
 
@@ -455,7 +455,7 @@
         aria-label={m.header_actions_follow_latest()}
         aria-pressed={ui.followLatest}
       >
-        <ArrowDownIcon size="14" strokeWidth="2" aria-hidden="true" />
+        <ArrowDownIcon size="16" strokeWidth="1.75" aria-hidden="true" />
       </button>
 
       <button
@@ -465,9 +465,9 @@
         aria-label={m.header_actions_toggle_sort()}
       >
         {#if ui.sortNewestFirst}
-          <ArrowDownWideNarrowIcon size="14" strokeWidth="2" aria-hidden="true" />
+          <ArrowDownWideNarrowIcon size="16" strokeWidth="1.75" aria-hidden="true" />
         {:else}
-          <ArrowUpNarrowWideIcon size="14" strokeWidth="2" aria-hidden="true" />
+          <ArrowUpNarrowWideIcon size="16" strokeWidth="1.75" aria-hidden="true" />
         {/if}
       </button>
 
@@ -478,7 +478,7 @@
         title={m.header_actions_cycle_layout({ layout: ui.messageLayout })}
         aria-label={m.header_actions_cycle_layout_label()}
       >
-        {@render messageLayoutIcon("14")}
+        {@render messageLayoutIcon("16")}
       </button>
 
       <div class="export-wrap collapsible">
@@ -494,7 +494,7 @@
           aria-label={m.header_actions_export_session()}
           aria-expanded={showExportMenu}
         >
-          <CloudUploadIcon size="14" strokeWidth="2" aria-hidden="true" />
+          <CloudUploadIcon size="16" strokeWidth="1.75" aria-hidden="true" />
         </button>
 
         {#if showExportMenu}
@@ -553,7 +553,7 @@
           aria-label={m.header_actions_publish_label()}
           aria-expanded={showPublishMenu}
         >
-          <UploadIcon size="14" strokeWidth="2" aria-hidden="true" />
+          <UploadIcon size="16" strokeWidth="1.75" aria-hidden="true" />
         </button>
 
         {#if showPublishMenu}
@@ -585,7 +585,7 @@
           title={m.header_actions_more_actions()}
           aria-label={m.header_actions_more_actions()}
         >
-          <MoreHorizontalIcon size="14" strokeWidth="2.4" aria-hidden="true" />
+          <MoreHorizontalIcon size="16" strokeWidth="2" aria-hidden="true" />
         </button>
 
         {#if showOverflow}
@@ -649,6 +649,8 @@
       </div>
     {/if}
 
+    {#if hasActiveSession}<span class="header-divider"></span>{/if}
+
     {#if !sync.archiveOnly}
     <button
       class="header-btn sync-btn"
@@ -661,7 +663,7 @@
       {#if sync.syncing}
         <span class="sync-spinner" aria-hidden="true"><Spinner size={13} /></span>
       {:else}
-        <DatabaseBackupIcon size="14" strokeWidth="2" aria-hidden="true" />
+        <DatabaseBackupIcon size="16" strokeWidth="1.75" aria-hidden="true" />
       {/if}
       <span class="sync-label" class:collapsed={navCollapsed}>{sync.readOnly ? m.header_actions_refresh() : m.header_actions_sync()}</span>
     </button>
@@ -699,9 +701,9 @@
       aria-label={m.header_actions_toggle_theme()}
     >
       {#if ui.theme === "light"}
-        <MoonIcon size="14" strokeWidth="2" aria-hidden="true" />
+        <MoonIcon size="16" strokeWidth="1.75" aria-hidden="true" />
       {:else}
-        <SunIcon size="14" strokeWidth="2" aria-hidden="true" />
+        <SunIcon size="16" strokeWidth="1.75" aria-hidden="true" />
       {/if}
     </button>
 
@@ -712,7 +714,7 @@
       title={m.header_actions_settings()}
       aria-label={m.header_actions_settings()}
     >
-      <SettingsIcon size="14" strokeWidth="2" aria-hidden="true" />
+      <SettingsIcon size="16" strokeWidth="1.75" aria-hidden="true" />
     </button>
 
     <button
@@ -1018,7 +1020,9 @@
   }
 
   .header-btn.active {
-    color: var(--accent-purple);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
+    color: var(--text-primary);
   }
 
   .header-btn.syncing {
@@ -1074,8 +1078,8 @@
   .header-divider {
     width: 1px;
     height: 14px;
-    background: var(--border-muted);
-    margin: 0 2px;
+    background: var(--border-default);
+    margin: 0 6px;
     flex-shrink: 0;
   }
 

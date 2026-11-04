@@ -515,9 +515,13 @@
     transition: background 0.05s;
   }
 
-  .palette-item:hover,
-  .palette-item.selected {
+  .palette-item:hover {
     background: var(--bg-surface-hover);
+  }
+
+  .palette-item.selected {
+    background: var(--selected-list-bg);
+    box-shadow: inset 2px 0 0 var(--accent-blue);
   }
 
   .item-dot {

@@ -116,6 +116,12 @@
     return typeof prompt === "string" && prompt.trim() ? prompt : m.tool_block_image_alt();
   });
   let structuredSummary = $derived(toolCall ? summarizeToolCall(toolCall) : null);
+  // Split a "path (+N -M)" edit summary so the counts can take diff colors;
+  // the rendered text stays identical.
+  let summaryDiffStat = $derived.by(() => {
+    const match = structuredSummary?.match(/^(.*) \((\+\d+)(?: (-\d+))?\)$/);
+    return match ? { path: match[1], add: match[2], del: match[3] ?? null } : null;
+  });
   let structuredSummaryTitle = $derived(toolCall ? summarizeToolCallPath(toolCall) : null);
   const outputModeOptions = $derived<SegmentedControlOption[]>([
     { value: "raw", label: m.tool_block_raw() },
@@ -204,7 +210,7 @@
       <SearchMatchCount count={matchCount} />
       {#if structuredSummary}
         <span class="tool-preview" title={structuredSummaryTitle ?? undefined}>
-          {structuredSummary}{#if structuredSummaryTitle}<span class="kit-sr-only">{structuredSummaryTitle}</span>{/if}
+          {#if summaryDiffStat}<span class="summary-path">{summaryDiffStat.path}</span> (<span class="stat-add">{summaryDiffStat.add}</span>{#if summaryDiffStat.del}{" "}<span class="stat-del">{summaryDiffStat.del}</span>{/if}){:else}{structuredSummary}{/if}{#if structuredSummaryTitle}<span class="kit-sr-only">{structuredSummaryTitle}</span>{/if}
         </span>
       {:else if collapsed && legacyPreview}<span class="tool-preview">{legacyPreview}</span>{/if}
       {#if durationLabel}<span class="tool-duration" class:slow={isSlow} class:running={isRunning}>{durationLabel}</span>{/if}
@@ -334,6 +340,9 @@
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
   .tool-label { font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
+  .summary-path { color: var(--text-primary); }
+  .stat-add { color: color-mix(in srgb, var(--accent-green) 75%, var(--text-primary)); }
+  .stat-del { color: color-mix(in srgb, var(--accent-red) 75%, var(--text-primary)); }
   .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
     font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 6px;

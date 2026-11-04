@@ -767,11 +767,11 @@
 
   .session-item {
     /* Scales with the sidebar so wide rows show full agent names. */
-    --side-meta-width: min(max(92px, 32%), 38%);
+    --side-meta-width: min(max(104px, 34%), 38%);
   }
 
   .session-item:has(.side-meta) .session-meta {
-    padding-right: calc(min(max(92px, 36%), 44%) + 6px);
+    padding-right: calc(min(max(104px, 38%), 44%) + 6px);
   }
 
   /* Agent identity: a small colored mark plus the agent name. */
@@ -800,8 +800,8 @@
 
   .machine-tag {
     min-width: 0;
-    flex-shrink: 4;
-    max-width: 52px;
+    flex-shrink: 20;
+    max-width: 56px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -894,6 +894,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 110px;
+    min-width: min(56px, 100%);
+    flex-shrink: 1;
   }
 
   .session-title-row {
