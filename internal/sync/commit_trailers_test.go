@@ -56,7 +56,7 @@ func TestReconcileCommitTrailersEditor(t *testing.T) {
 }
 
 func TestReconcileCommitTrailersNewCommit(t *testing.T) {
-	database, engine, repo, _, runGit := commitTrailerFixture(t)
+	database, engine, repo, first, runGit := commitTrailerFixture(t)
 	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
 	second := runGit(repo, "rev-parse", "HEAD")
 	engine.ReconcileCommitTrailers(t.Context())
@@ -64,11 +64,15 @@ func TestReconcileCommitTrailersNewCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, found.Commits[0].Links, 1)
 	assert.Equal(t, second, found.Commits[0].Links[0].SHA)
+	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 2)
+	assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
 }
 
 func TestReconcileCommitTrailersLateRepository(t *testing.T) {
 	database, engine, _, _, runGit := commitTrailerFixture(t)
-	// This checkout's commit predates every scan of the first checkout.
+	// Discover a new session checkout after the initial reconciliation.
 	late, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	runGit(late, "init", "-q", "-b", "main")
@@ -104,8 +108,28 @@ func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 1)
 	assert.Equal(t, "Scratch", list.Commits[0].Subject)
-	// Only trailer discovery looks past the removed cwd; the session's
-	// recorded project identity does not claim the enclosing checkout.
+}
+
+func TestProjectIdentityRemovedCwd(t *testing.T) {
+	testutil.IsolateGit(t)
+	database := openTestDB(t)
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Scratch\n\nAgent-Session: codex:removed"}} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	}
+	cwd := filepath.Join(repo, "temporary", "nested")
+	require.NoError(t, os.MkdirAll(cwd, 0o700))
+	require.NoError(t, os.RemoveAll(filepath.Join(repo, "temporary")))
+	session := db.Session{ID: "codex:removed", Agent: "codex", Project: "project-a", Machine: "local", Cwd: cwd}
+	require.NoError(t, database.UpsertSession(t.Context(), session))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	engine.ReconcileCommitTrailers(t.Context())
+	// A removed cwd retains its recorded root and unknown worktree relationship.
 	obs, ok := engine.projectIdentityObservation(session)
 	require.True(t, ok)
 	assert.Equal(t, filepath.ToSlash(cwd), obs.RootPath)
@@ -128,7 +152,7 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, "%s", out)
 		}
-		require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: repo, Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: filepath.Base(repo), Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
 	}
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "fair", Agent: "claude", Project: "project-a", Machine: "local"}))
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})

@@ -59,17 +59,32 @@ func TestCommitTrailersSHA256(t *testing.T) {
 func TestCommitTrailersParsing(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initRepo(t)
+	gitRun(t, repo, nil, "config", "trailer.separators", "=:")
 	sessions := []string{"kimi:wd_abc:agent-a:session_uuid-1", "codebuff:project-a:session-1", "devin:build:session-1"}
-	for _, key := range []string{"agent-session", "AGENT-SESSION", "aGeNt-SeSsIoN"} {
-		gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-11-01T10:00:00Z"}, "commit", "--allow-empty", "-qm", "Editor\n\n"+key+": "+strings.Join(sessions, "\n"+key+": "))
+	var want [][]string
+	for _, tt := range []struct {
+		key, separator string
+		sessions       []string
+	}{
+		{"agent-session", ": ", sessions},
+		{"AGENT-SESSION", ": ", sessions},
+		{"aGeNt-SeSsIoN", ": ", sessions},
+		{"Agent-Session", " \t: ", []string{"claude:editor"}},
+		{"Agent-Session", "= ", []string{"claude:editor"}},
+	} {
+		gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-11-01T10:00:00Z"}, "commit", "--allow-empty", "-qm", "Editor\n\n"+tt.key+tt.separator+strings.Join(tt.sessions, "\n"+tt.key+tt.separator))
+		want = append([][]string{tt.sessions}, want...)
+		commits, err := ScanCommitTrailers(t.Context(), repo)
+		require.NoError(t, err)
+		require.Len(t, commits, len(want))
+		for i, commit := range commits {
+			assert.Equal(t, want[i], commit.Sessions)
+			assert.Equal(t, "2026-10-30T10:10:00Z", commit.CommittedAt)
+		}
 	}
 	commits, err := ScanCommitTrailers(t.Context(), repo)
 	require.NoError(t, err)
-	require.Len(t, commits, 3)
-	for _, commit := range commits {
-		assert.Equal(t, sessions, commit.Sessions)
-		assert.Equal(t, "2026-10-30T10:10:00Z", commit.CommittedAt)
-	}
+	assert.Len(t, commits, 5)
 }
 
 func TestCommitTrailersDetachedWorktree(t *testing.T) {
@@ -84,25 +99,4 @@ func TestCommitTrailersDetachedWorktree(t *testing.T) {
 	require.Len(t, commits, 1)
 	assert.Equal(t, []string{"codex:detached"}, commits[0].Sessions)
 	assert.Empty(t, commits[0].Branch)
-}
-
-func TestCommitTrailersWhitespaceBeforeColon(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initRepo(t)
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session \t: claude:editor")
-	commits, err := ScanCommitTrailers(t.Context(), repo)
-	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	assert.Equal(t, []string{"claude:editor"}, commits[0].Sessions)
-}
-
-func TestCommitTrailersConfiguredSeparator(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initRepo(t)
-	gitRun(t, repo, nil, "config", "trailer.separators", "=:")
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session= claude:editor")
-	commits, err := ScanCommitTrailers(t.Context(), repo)
-	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	assert.Equal(t, []string{"claude:editor"}, commits[0].Sessions)
 }

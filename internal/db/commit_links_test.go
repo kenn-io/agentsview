@@ -547,6 +547,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
+	insertSession(t, old, "host-a~written", "project-a")
 	for _, id := range []string{"orphan", "trash", "deleted"} {
 		insertSession(t, old, id, "project-a")
 		insertMessages(t, old, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
@@ -557,21 +558,23 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			fresh := testDB(t)
-			fresh.SetArchiveContent(policy)
-			insertSession(t, fresh, "written", "project-a")
 			require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:written"}, CommittedAt: tsZero}}))
+			fresh.SetArchiveContent(policy)
 			_, err := fresh.CopyTrashedDataFrom(t.Context(), old.Path())
 			require.NoError(t, err)
 			_, err = fresh.CopyOrphanedDataFrom(t.Context(), old.Path())
 			require.NoError(t, err)
 			require.NoError(t, fresh.CopyExcludedSessionsFrom(t.Context(), old.Path()))
-			written, err := fresh.SessionCommitLinks(t.Context(), "written")
+			written, err := fresh.SessionCommitLinks(t.Context(), "host-a~written")
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {
 				require.Len(t, written.Commits, 1)
 				assert.Equal(t, "trailer", written.Commits[0].Source)
 			} else {
 				assert.Empty(t, written.Commits)
+				var rows int
+				require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_trailers").Scan(&rows))
+				assert.Zero(t, rows)
 			}
 			trailers, err := fresh.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
 			require.NoError(t, err)
@@ -818,38 +821,37 @@ func TestTrailerCommitMirrorRows(t *testing.T) {
 	assert.Equal(t, "trailer", rows[0].Source)
 }
 
-func TestTrailerCommitFirstBranch(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "editor", "project-a")
-	c := gitlog.TrailerCommit{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}
-	for _, branch := range []string{"", "feature", "main", ""} {
-		c.Branch = branch
-		require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{c}))
-	}
-	links, err := d.SessionCommitLinks(t.Context(), "editor")
-	require.NoError(t, err)
-	require.Len(t, links.Commits, 1)
-	assert.Equal(t, "feature", links.Commits[0].Branch)
-}
-
-func TestTrailerCommitRepositoryScanIsIdempotent(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "editor", "project-a")
-	commits := []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}
-	for _, repo := range []string{"", "/clone-a"} {
-		require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, commits))
-	}
-	for _, repo := range []string{"/clone-b", "/clone-a", "/clone-b", ""} {
-		_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=? WHERE id='editor'`, tsZero)
-		require.NoError(t, err)
-		require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, commits))
-		links, err := d.SessionCommitLinks(t.Context(), "editor")
-		require.NoError(t, err)
-		require.Len(t, links.Commits, 1)
-		assert.Equal(t, "/clone-a", links.Commits[0].Repository)
-		var modified string
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='editor'`).Scan(&modified))
-		assert.Equal(t, tsZero, modified)
+func TestTrailerCommitUpsert(t *testing.T) {
+	for _, tt := range []struct {
+		name                       string
+		branches, repositories     []string
+		wantBranch, wantRepository string
+		unchangedAfter             int
+	}{
+		{name: "first branch", branches: []string{"", "feature", "main", ""}, repositories: []string{"repo", "repo", "repo", "repo"}, wantBranch: "feature", wantRepository: "repo", unchangedAfter: 2},
+		{name: "first repository", branches: []string{"", "", "", "", "", ""}, repositories: []string{"", "/clone-a", "/clone-b", "/clone-a", "/clone-b", ""}, wantRepository: "/clone-a", unchangedAfter: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "editor", "project-a")
+			c := gitlog.TrailerCommit{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}
+			for i, repo := range tt.repositories {
+				_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=? WHERE id='editor'`, tsZero)
+				require.NoError(t, err)
+				c.Branch = tt.branches[i]
+				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, []gitlog.TrailerCommit{c}))
+				if i >= tt.unchangedAfter {
+					links, err := d.SessionCommitLinks(t.Context(), "editor")
+					require.NoError(t, err)
+					require.Len(t, links.Commits, 1)
+					assert.Equal(t, tt.wantBranch, links.Commits[0].Branch)
+					assert.Equal(t, tt.wantRepository, links.Commits[0].Repository)
+					var modified string
+					require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='editor'`).Scan(&modified))
+					assert.Equal(t, tsZero, modified)
+				}
+			}
+		})
 	}
 }
 
@@ -876,30 +878,6 @@ func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
 				assert.False(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-a"}, nil))
 				assert.Equal(t, "trailer", rows[0].Source)
 				assert.True(t, rows[0].Missing)
-			}
-		})
-	}
-}
-
-func TestTrailerCommitCopiedPolicy(t *testing.T) {
-	old := testDB(t)
-	insertSession(t, old, "host-a~editor", "project-a")
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
-		t.Run(string(policy), func(t *testing.T) {
-			fresh := testDB(t)
-			require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
-			fresh.SetArchiveContent(policy)
-			_, err := fresh.CopyOrphanedDataFrom(t.Context(), old.Path())
-			require.NoError(t, err)
-			links, err := fresh.SessionCommitLinks(t.Context(), "host-a~editor")
-			require.NoError(t, err)
-			if policy == config.ArchiveContentFull {
-				require.Len(t, links.Commits, 1)
-			} else {
-				assert.Empty(t, links.Commits)
-				var rows int
-				require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_trailers").Scan(&rows))
-				assert.Zero(t, rows)
 			}
 		})
 	}

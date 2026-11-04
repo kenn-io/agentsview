@@ -15,25 +15,30 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 	for _, tt := range []struct {
 		name, trailer, agent, want string
 		ids                        []string
+		setup                      func(*testing.T, *DB)
+		lateExact                  bool
 	}{
-		{"claude namespace", "claude:session", "claude", "host-a~session", []string{"host-a~session"}},
-		{"literal ID", "codex:session_a", "codex", "host-a~codex:session_a", []string{"host-a~codex:session_a", "host-b~codex:sessionXa"}},
-		{"archive owner", "codex:session", "codex", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb~codex:session", nil},
-		{"native colon", "codex:session:page", "codex", "host-a~codex:session:page", []string{"host-a~codex:session:page"}},
-		{"claude native colon", "claude:session:page", "claude", "host-a~session:page", []string{"host-a~session:page"}},
-		{"exact owner", "codex:session", "codex", "codex:session", []string{"codex:session", "host-a~codex:session"}},
-		{"ambiguous owners", "codex:session", "codex", "", []string{"host-a~codex:session", "host-b~codex:session"}},
-		{"different agent", "claude:session", "codex", "", []string{"host-a~codex:session"}},
+		{"claude namespace", "claude:session", "claude", "host-a~session", []string{"host-a~session"}, nil, false},
+		{"literal ID", "codex:session_a", "codex", "host-a~codex:session_a", []string{"host-a~codex:session_a", "host-b~codex:sessionXa"}, nil, false},
+		{"archive owner", "codex:session", "codex", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb~codex:session", nil, func(t *testing.T, d *DB) {
+			t.Helper()
+			_, err := d.EnsureInstallationIdentity(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			require.NoError(t, err)
+			write := archiveProvenanceWrite(t, d)
+			result, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			require.Empty(t, result.Errors)
+		}, false},
+		{"native colon", "codex:session:page", "codex", "host-a~codex:session:page", []string{"host-a~codex:session:page"}, nil, false},
+		{"claude native colon", "claude:session:page", "claude", "host-a~session:page", []string{"host-a~session:page"}, nil, false},
+		{"exact owner", "codex:session", "codex", "codex:session", []string{"codex:session", "host-a~codex:session"}, nil, false},
+		{"ambiguous owners", "codex:session", "codex", "", []string{"host-a~codex:session", "host-b~codex:session"}, nil, true},
+		{"different agent", "claude:session", "codex", "", []string{"host-a~codex:session"}, nil, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			if tt.name == "archive owner" {
-				_, err := d.EnsureInstallationIdentity(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-				require.NoError(t, err)
-				write := archiveProvenanceWrite(t, d)
-				result, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{write})
-				require.NoError(t, err)
-				require.Empty(t, result.Errors)
+			if tt.setup != nil {
+				tt.setup(t, d)
 			}
 			for _, id := range tt.ids {
 				insertSession(t, d, id, "project-a", func(s *Session) { s.Agent = tt.agent })
@@ -47,7 +52,7 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 			require.Len(t, found.Commits, 1)
 			if tt.want == "" {
 				assert.Empty(t, found.Commits[0].Links)
-				if tt.name == "ambiguous owners" {
+				if tt.lateExact {
 					insertSession(t, d, "codex:session", "project-a", func(s *Session) { s.Agent = "codex" })
 					found, err = d.CommitSessionLinks(t.Context(), []string{sha})
 					require.NoError(t, err)
@@ -157,80 +162,29 @@ func TestTrailerCommitLinksRetiredOwnerAmbiguity(t *testing.T) {
 }
 
 func TestTrailerCommitLinksLookupWork(t *testing.T) {
-	for _, lookup := range []string{"sha", "session", "empty SHA list"} {
-		t.Run(lookup, func(t *testing.T) {
-			d := testDB(t)
-			const owner = "host-a~codex:session"
-			insertSession(t, d, owner, "project-a", func(s *Session) { s.Agent = "codex" })
-			sha := strings.Repeat("a", 40)
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{"codex:session"}, CommittedAt: tsZero}}))
-			if lookup == "empty SHA list" {
-				found, err := d.CommitSessionLinks(t.Context(), nil)
-				require.NoError(t, err)
-				assert.Empty(t, found.Commits)
-				return
-			}
-			// Count SQLite session reads during query preparation, avoiding timing thresholds.
-			d.reader.Load().SetMaxOpenConns(1)
-			reads := 0
-			conn, err := d.getReader().Conn(t.Context())
-			require.NoError(t, err)
-			require.NoError(t, conn.Raw(func(raw any) error {
-				raw.(*diagnosticReaderConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
-					if op == sqlite3.SQLITE_READ && table == "sessions" {
-						reads++
-					}
-					return sqlite3.SQLITE_OK
-				})
-				return nil
-			}))
-			require.NoError(t, conn.Close())
-			read := func() int {
-				t.Helper()
-				reads = 0
-				switch lookup {
-				case "sha":
-					found, err := d.CommitSessionLinks(t.Context(), []string{sha[:7], sha})
-					require.NoError(t, err)
-					require.Len(t, found.Commits, 2)
-					for _, match := range found.Commits {
-						require.Len(t, match.Links, 1)
-						assert.Equal(t, owner, match.Links[0].SessionID)
-					}
-				case "session":
-					found, err := d.SessionCommitLinks(t.Context(), owner)
-					require.NoError(t, err)
-					require.Len(t, found.Commits, 1)
-					assert.Equal(t, sha, found.Commits[0].SHA)
-				}
-				return reads
-			}
-			baseline := read()
-			var unrelated []gitlog.TrailerCommit
-			for i := range 30 {
-				unrelated = append(unrelated, gitlog.TrailerCommit{SHA: strings.Repeat("b", 40), Sessions: []string{fmt.Sprintf("codex:unrelated-%d", i)}, CommittedAt: tsZero})
-			}
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "other-repo", unrelated))
-			assert.LessOrEqual(t, read(), baseline, "unrelated trailer owners must not add session lookups")
-		})
-	}
-}
-
-func TestTrailerCommitLinksOwnerResolutionWork(t *testing.T) {
-	for _, operation := range []string{"store", "replica"} {
+	for _, operation := range []string{"sha", "session", "store", "replica", "empty SHA list"} {
 		t.Run(operation, func(t *testing.T) {
 			d := testDB(t)
+			const owner = "host-a~codex:session"
+			sha := strings.Repeat("a", 40)
 			var commits []gitlog.TrailerCommit
-			for i := range 30 {
-				id := fmt.Sprintf("codex:session-%d", i)
-				insertSession(t, d, "host-a~"+id, "project-a", func(s *Session) { s.Agent = "codex" })
-				commits = append(commits, gitlog.TrailerCommit{SHA: fmt.Sprintf("%040x", i+1), Sessions: []string{id}, CommittedAt: tsZero})
+			switch operation {
+			case "sha", "session", "empty SHA list":
+				insertSession(t, d, owner, "project-a", func(s *Session) { s.Agent = "codex" })
+				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{"codex:session"}, CommittedAt: tsZero}}))
+			case "store", "replica":
+				for i := range 30 {
+					id := fmt.Sprintf("codex:session-%d", i)
+					insertSession(t, d, "host-a~"+id, "project-a", func(s *Session) { s.Agent = "codex" })
+					commits = append(commits, gitlog.TrailerCommit{SHA: fmt.Sprintf("%040x", i+1), Sessions: []string{id}, CommittedAt: tsZero})
+				}
 			}
-			pool := d.writer.Load()
-			if operation == "replica" {
-				pool = d.reader.Load()
-				d.reader.Load().SetMaxOpenConns(1)
+			pool := d.reader.Load()
+			pool.SetMaxOpenConns(1)
+			if operation == "store" {
+				pool = d.writer.Load()
 			}
+			// Count session reads during query preparation, avoiding timing thresholds.
 			conn, err := pool.Conn(t.Context())
 			require.NoError(t, err)
 			reads := 0
@@ -249,38 +203,64 @@ func TestTrailerCommitLinksOwnerResolutionWork(t *testing.T) {
 			measure := func(batch []gitlog.TrailerCommit) int {
 				t.Helper()
 				reads = 0
-				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", batch))
-				if operation == "replica" {
-					reads = 0
-					_, err := d.RetainedCommitLinkRows(t.Context())
+				switch operation {
+				case "empty SHA list":
+					found, err := d.CommitSessionLinks(t.Context(), nil)
 					require.NoError(t, err)
+					assert.Empty(t, found.Commits)
+				case "sha":
+					found, err := d.CommitSessionLinks(t.Context(), []string{sha[:7], sha})
+					require.NoError(t, err)
+					require.Len(t, found.Commits, 2)
+					for _, match := range found.Commits {
+						require.Len(t, match.Links, 1)
+						assert.Equal(t, owner, match.Links[0].SessionID)
+					}
+				case "session":
+					found, err := d.SessionCommitLinks(t.Context(), owner)
+					require.NoError(t, err)
+					require.Len(t, found.Commits, 1)
+					assert.Equal(t, sha, found.Commits[0].SHA)
+				case "store", "replica":
+					require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", batch))
+					if operation == "replica" {
+						reads = 0
+						_, err := d.RetainedCommitLinkRows(t.Context())
+						require.NoError(t, err)
+					}
 				}
 				return reads
 			}
-			baseline := measure(commits[:1])
-			assert.Positive(t, baseline)
-			assert.LessOrEqual(t, measure(commits[1:]), baseline, "session query work must stay bounded as trailer identities grow")
-			found, err := d.CommitSessionLinks(t.Context(), []string{commits[1].SHA})
-			require.NoError(t, err)
-			require.Len(t, found.Commits[0].Links, 1)
-			assert.Equal(t, "host-a~codex:session-1", found.Commits[0].Links[0].SessionID)
+			switch operation {
+			case "empty SHA list":
+				assert.Zero(t, measure(nil), "empty input must skip session lookups")
+			case "sha", "session":
+				baseline := measure(nil)
+				var unrelated []gitlog.TrailerCommit
+				for i := range 30 {
+					unrelated = append(unrelated, gitlog.TrailerCommit{SHA: strings.Repeat("b", 40), Sessions: []string{fmt.Sprintf("codex:unrelated-%d", i)}, CommittedAt: tsZero})
+				}
+				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "other-repo", unrelated))
+				assert.LessOrEqual(t, measure(nil), baseline, "unrelated trailer owners must not add session lookups")
+			case "store", "replica":
+				baseline := measure(commits[:1])
+				assert.Positive(t, baseline)
+				assert.LessOrEqual(t, measure(commits[1:]), baseline, "session query work must stay bounded as trailer identities grow")
+				found, err := d.CommitSessionLinks(t.Context(), []string{commits[1].SHA})
+				require.NoError(t, err)
+				require.Len(t, found.Commits[0].Links, 1)
+				assert.Equal(t, "host-a~codex:session-1", found.Commits[0].Links[0].SessionID)
+			}
 		})
 	}
 }
 
 func TestTrailerCommitLinksPrecedence(t *testing.T) {
-	for _, tc := range []struct {
-		sha       string
-		ambiguous bool
-	}{
-		{sha: "abc1234", ambiguous: false},
-		{sha: "abc1234" + strings.Repeat("0", 33), ambiguous: false},
-	} {
-		sha := tc.sha
+	for _, sha := range []string{"abc1234", "abc1234" + strings.Repeat("0", 33)} {
 		t.Run(sha, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "session-a", "project-a")
-			insertSession(t, d, "codex:thread", "project-a")
+			insertSession(t, d, "codex:thread", "project-a", func(s *Session) { s.Agent = "codex" })
 			c := gitlog.TrailerCommit{SHA: "abc1234" + strings.Repeat("0", 33), Branch: "main", Subject: "Editor", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:session-a", "codex:thread", "unknown:thread"}}
 			exact := commitMessages("session-a", `{"command":"git commit -m fix"}`, "[main "+sha+"] Exact")[2]
 			exact.Ordinal = 5
@@ -290,7 +270,7 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, found.Commits[0].Links, 2)
 			for _, l := range found.Commits[0].Links {
-				assert.Equal(t, tc.ambiguous, l.Ambiguous)
+				assert.False(t, l.Ambiguous)
 				if l.SessionID == "session-a" {
 					assert.Equal(t, "transcript", l.Source)
 					assert.Equal(t, sha, l.SHA)
@@ -304,38 +284,45 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 }
 
 func TestTrailerCommitLinksPrompt(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "session-a", "project-a")
-	messages := []Message{
-		{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
-		{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Within tolerance", Timestamp: "2026-10-30T10:14:00Z"},
-		{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
-		{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:14:00Z"},
-		{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:14:00Z"},
+	for _, tt := range []struct {
+		name, owner, agent, trailer, committedAt string
+		messages                                 []Message
+	}{
+		{
+			name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
+			messages: []Message{
+				{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
+				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Within tolerance", Timestamp: "2026-10-30T10:14:00Z"},
+				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
+				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:14:00Z"},
+				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:14:00Z"},
+			},
+		},
+		{name: "no qualifying prompt", owner: "codex:thread", agent: "codex", trailer: "codex:thread", committedAt: tsZero},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, tt.owner, "project-a", func(s *Session) { s.Agent = tt.agent })
+			if len(tt.messages) > 0 {
+				insertMessages(t, d, tt.messages...)
+			}
+			sha := strings.Repeat("a", 40)
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, CommittedAt: tt.committedAt, Sessions: []string{tt.trailer}}}))
+			if len(tt.messages) == 0 {
+				found, err := d.CommitSessionLinks(t.Context(), []string{sha})
+				require.NoError(t, err)
+				require.Len(t, found.Commits[0].Links, 1)
+				assert.Nil(t, found.Commits[0].Links[0].Turn)
+				return
+			}
+			list, err := d.SessionCommitLinks(t.Context(), tt.owner)
+			require.NoError(t, err)
+			require.Len(t, list.Commits, 1)
+			require.NotNil(t, list.Commits[0].Turn)
+			assert.True(t, list.Commits[0].Turn.Heuristic)
+			assert.Equal(t, "Within tolerance", list.Commits[0].Turn.Text)
+		})
 	}
-	insertMessages(t, d, messages...)
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-		SHA: strings.Repeat("a", 40), CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:session-a"},
-	}}))
-	list, err := d.SessionCommitLinks(t.Context(), "session-a")
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 1)
-	l := list.Commits[0]
-	require.NotNil(t, l.Turn)
-	assert.True(t, l.Turn.Heuristic)
-	assert.Equal(t, "Within tolerance", l.Turn.Text)
-}
-
-func TestTrailerCommitLinksWithoutPrompt(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "codex:thread", "project-a")
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-		SHA: strings.Repeat("a", 40), CommittedAt: tsZero, Sessions: []string{"codex:thread"},
-	}}))
-	found, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
-	require.NoError(t, err)
-	require.Len(t, found.Commits[0].Links, 1)
-	assert.Nil(t, found.Commits[0].Links[0].Turn)
 }
 
 func TestTrailerCommitLinksTranscriptRewrite(t *testing.T) {
