@@ -17,7 +17,8 @@ import (
 	"go.kenn.io/agentsview/internal/testutil"
 )
 
-func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
+func commitTrailerFixture(t *testing.T) (*db.DB, *Engine, string, string, func(string, ...string) string) {
+	t.Helper()
 	testutil.IsolateGit(t)
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -42,37 +43,55 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}})
 	t.Cleanup(engine.Close)
 	engine.SyncAll(t.Context(), nil)
+	return database, engine, repo, first, runGit
+}
+
+func TestReconcileCommitTrailersEditor(t *testing.T) {
+	database, _, _, first, _ := commitTrailerFixture(t)
 	found, err := database.CommitSessionLinks(t.Context(), []string{first[:7]})
 	require.NoError(t, err)
 	require.Len(t, found.Commits[0].Links, 1)
 	l := found.Commits[0].Links[0]
 	assert.Equal(t, first, l.SHA)
 	assert.Equal(t, "trailer", l.Source)
+}
+
+func TestReconcileCommitTrailersNewCommit(t *testing.T) {
+	database, engine, repo, _, runGit := commitTrailerFixture(t)
 	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
 	second := runGit(repo, "rev-parse", "HEAD")
 	engine.ReconcileCommitTrailers(t.Context())
-	found, err = database.CommitSessionLinks(t.Context(), []string{second[:7]})
+	found, err := database.CommitSessionLinks(t.Context(), []string{second[:7]})
 	require.NoError(t, err)
 	require.Len(t, found.Commits[0].Links, 1)
 	assert.Equal(t, second, found.Commits[0].Links[0].SHA)
+}
+
+func TestReconcileCommitTrailersUnchangedRefs(t *testing.T) {
+	_, engine, _, _, _ := commitTrailerFixture(t)
 	// Count actual Git invocations on platforms that can execute a shell wrapper.
-	if runtime.GOOS != "windows" {
-		realGit, err := exec.LookPath("git")
-		require.NoError(t, err)
-		bin := t.TempDir()
-		trace := filepath.Join(bin, "trace")
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TRAILER_TEST_TRACE\"\nexec \"$TRAILER_TEST_GIT\" \"$@\"\n"), 0o700))
-		t.Setenv("TRAILER_TEST_TRACE", trace)
-		t.Setenv("TRAILER_TEST_GIT", realGit)
-		oldPath := os.Getenv("PATH")
-		t.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
-		engine.ReconcileCommitTrailers(t.Context())
-		t.Setenv("PATH", oldPath)
-		traced, err := os.ReadFile(trace)
-		require.NoError(t, err)
-		assert.Contains(t, string(traced), "show-ref --head")
-		assert.NotContains(t, string(traced), "log --all")
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a shell wrapper")
 	}
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := t.TempDir()
+	trace := filepath.Join(bin, "trace")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TRAILER_TEST_TRACE\"\nexec \"$TRAILER_TEST_GIT\" \"$@\"\n"), 0o700))
+	t.Setenv("TRAILER_TEST_TRACE", trace)
+	t.Setenv("TRAILER_TEST_GIT", realGit)
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
+	engine.ReconcileCommitTrailers(t.Context())
+	t.Setenv("PATH", oldPath)
+	traced, err := os.ReadFile(trace)
+	require.NoError(t, err)
+	assert.Contains(t, string(traced), "show-ref --head")
+	assert.NotContains(t, string(traced), "log --all")
+}
+
+func TestReconcileCommitTrailersLateRepository(t *testing.T) {
+	database, engine, _, _, runGit := commitTrailerFixture(t)
 	// This checkout's commit predates every scan of the first checkout.
 	late, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -84,17 +103,41 @@ func TestReconcileCommitTrailersEditorAndLateRepository(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 1)
 	assert.Equal(t, "trailer", list.Commits[0].Source)
-	// A failed history scan leaves the previous checkpoint intact.
-	key := "commit_trailers:" + late
+}
+
+func TestReconcileCommitTrailersFailedHistoryScan(t *testing.T) {
+	database, engine, repo, _, runGit := commitTrailerFixture(t)
+	repo, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
+	key := "commit_trailers:" + repo
 	before, err := database.GetSyncState(t.Context(), key)
 	require.NoError(t, err)
-	broken := runGit(late, "rev-parse", "HEAD")
-	runGit(late, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Broken\n\nAgent-Session: codex:older")
-	require.NoError(t, os.Remove(filepath.Join(late, ".git", "objects", broken[:2], broken[2:])))
+	require.NotEmpty(t, before)
+	// Remove an unscanned parent, leaving HEAD and the saved tip intact.
+	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Parent")
+	parent := runGit(repo, "rev-parse", "HEAD")
+	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Broken\n\nAgent-Session: claude:editor-session")
+	object := filepath.Join(repo, ".git", "objects", parent[:2], parent[2:])
+	contents, err := os.ReadFile(object)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(object))
+	runGit(repo, "show-ref", "--head")
+	cmd := exec.CommandContext(t.Context(), "git", "log", "--all")
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "%s", out)
 	engine.ReconcileCommitTrailers(t.Context())
 	after, err := database.GetSyncState(t.Context(), key)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+	// Restoring the object must let the pending commit appear on retry.
+	require.NoError(t, os.WriteFile(object, contents, 0o600))
+	engine.ReconcileCommitTrailers(t.Context())
+	sha := runGit(repo, "rev-parse", "HEAD")
+	found, err := database.CommitSessionLinks(t.Context(), []string{sha})
+	require.NoError(t, err)
+	require.Len(t, found.Commits[0].Links, 1)
+	assert.Equal(t, sha, found.Commits[0].Links[0].SHA)
 }
 
 func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {

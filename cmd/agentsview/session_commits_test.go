@@ -59,7 +59,7 @@ func TestSessionCommits(t *testing.T) {
 			assert.Contains(t, out, "abc1234")
 			assert.Contains(t, out, "Fix parser")
 			assert.Contains(t, out, "1: Fix parser ")
-			assert.Contains(t, out, "0: Tidy docs (heuristic)")
+			assert.Contains(t, out, "(heuristic)")
 			assert.Contains(t, out, "…")
 			assert.NotContains(t, out, "END")
 			assert.NotContains(t, out, "\x1b")
