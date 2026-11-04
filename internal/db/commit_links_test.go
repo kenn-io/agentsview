@@ -748,6 +748,55 @@ func TestTrailerCommitFirstBranch(t *testing.T) {
 	assert.Equal(t, "feature", links.Commits[0].Branch)
 }
 
+func TestTrailerCommitRepositoryScanIsIdempotent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "editor", "project-a")
+	commits := []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}
+	for _, repo := range []string{"", "/clone-a"} {
+		require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, commits))
+	}
+	for _, repo := range []string{"/clone-b", "/clone-a", "/clone-b", ""} {
+		_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=? WHERE id='editor'`, tsZero)
+		require.NoError(t, err)
+		require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, commits))
+		links, err := d.SessionCommitLinks(t.Context(), "editor")
+		require.NoError(t, err)
+		require.Len(t, links.Commits, 1)
+		assert.Equal(t, "/clone-a", links.Commits[0].Repository)
+		var modified string
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='editor'`).Scan(&modified))
+		assert.Equal(t, tsZero, modified)
+	}
+}
+
+func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
+	for _, id := range []string{"editor", "host-a~editor"} {
+		t.Run(id, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, id, "project-a")
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
+			session, err := d.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			session.Project = "project-b"
+			require.NoError(t, d.UpsertSession(t.Context(), *session))
+			require.NoError(t, d.DeleteSession(t.Context(), id))
+			for _, archive := range []*DB{d, testDB(t)} {
+				if archive != d {
+					require.NoError(t, archive.CopyExcludedSessionsFrom(t.Context(), d.Path()))
+				}
+				rows, err := archive.RetainedCommitLinkRows(t.Context())
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				assert.Equal(t, "project-b", rows[0].Project)
+				assert.True(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-b"}, nil))
+				assert.False(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-a"}, nil))
+				assert.Equal(t, "trailer", rows[0].Source)
+				assert.True(t, rows[0].Missing)
+			}
+		})
+	}
+}
+
 func TestTrailerCommitCopiedPolicy(t *testing.T) {
 	old := testDB(t)
 	insertSession(t, old, "host-a~editor", "project-a")

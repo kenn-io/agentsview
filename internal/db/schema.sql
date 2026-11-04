@@ -1735,6 +1735,7 @@ CREATE TABLE IF NOT EXISTS commit_trailers (
     subject TEXT NOT NULL,
     repository TEXT NOT NULL,
     committed_at TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (session_id, sha)
 );
 CREATE INDEX IF NOT EXISTS idx_commit_trailers_sha ON commit_trailers(sha);

@@ -471,7 +471,7 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  SELECT o.session_id,t.sha,t.branch,t.subject,t.repository,
  COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=o.session_id AND ` + commitUserPrompt + `
  AND julianday(m.timestamp)<=julianday(t.committed_at,'+5 minutes') ORDER BY m.ordinal DESC LIMIT 1),-1),
- -1,'',t.committed_at,'','trailer' FROM commit_trailers t JOIN trailer_owners o ON o.trailer_id=t.session_id
+ -1,'',t.committed_at,t.project,'trailer' FROM commit_trailers t JOIN trailer_owners o ON o.trailer_id=t.session_id
  WHERE NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=o.session_id AND substr(t.sha,1,length(c.sha))=c.sha)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
@@ -504,8 +504,8 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 					return err
 				}
 				result, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
- ON CONFLICT(session_id,sha) DO UPDATE SET branch=COALESCE(NULLIF(commit_trailers.branch,''),excluded.branch),subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at
- WHERE (commit_trailers.branch='' AND excluded.branch<>'') OR commit_trailers.subject<>excluded.subject OR commit_trailers.repository<>excluded.repository OR commit_trailers.committed_at<>excluded.committed_at`, value, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt)
+ ON CONFLICT(session_id,sha) DO UPDATE SET branch=COALESCE(NULLIF(commit_trailers.branch,''),excluded.branch),subject=excluded.subject,repository=COALESCE(NULLIF(commit_trailers.repository,''),excluded.repository),committed_at=excluded.committed_at
+ WHERE (commit_trailers.branch='' AND excluded.branch<>'') OR commit_trailers.subject<>excluded.subject OR (commit_trailers.repository='' AND excluded.repository<>'') OR commit_trailers.committed_at<>excluded.committed_at`, value, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt)
 				if err != nil {
 					return err
 				}
@@ -558,6 +558,33 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 }
 
 type TrailerRepository struct{ Machine, Cwd string }
+
+// Preserve the resolved owner's current project before its session is purged.
+func retainTrailerProjectsTx(ctx context.Context, tx *sql.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var identities []string
+	for _, id := range ids {
+		identities = append(identities, sessionTrailerIdentities(id)...)
+	}
+	encoded, err := json.Marshal(identities)
+	if err != nil {
+		return err
+	}
+	owners, err := resolveTrailerOwners(ctx, tx, `session_id IN (SELECT value FROM json_each(?))`, string(encoded))
+	if err != nil {
+		return err
+	}
+	selected, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE commit_trailers SET project=(
+ SELECT s.project FROM sessions s JOIN json_each(?1) o ON o.value=s.id WHERE o.key=commit_trailers.session_id)
+ WHERE session_id IN (SELECT o.key FROM json_each(?1) o JOIN json_each(?2) selected ON selected.value=o.value)`, owners, string(selected))
+	return err
+}
 
 func (d *DB) TrailerRepositories(ctx context.Context) ([]TrailerRepository, error) {
 	rows, err := d.getReader().QueryContext(ctx, `SELECT DISTINCT machine,cwd FROM sessions WHERE cwd<>''`)
