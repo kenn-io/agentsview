@@ -624,44 +624,11 @@ func (c *usageFillCoordinator) extractUsageAppends(
 		if err != nil {
 			return err
 		}
-		rows, err := archive.QueryContext(ctx, `SELECT ordinal, role, COALESCE(timestamp, ''),
-			model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid
-			FROM messages INDEXED BY idx_messages_session_ordinal
-			WHERE session_id=? AND ordinal>COALESCE(?, -1) ORDER BY timestamp, ordinal`, id, ordinal)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
 		if _, err := comparison.ExecContext(ctx, `SAVEPOINT usage_append`); err != nil {
-			_ = rows.Close()
 			return err
 		}
-		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison, compare: true}
-		eligible := true
-		for rows.Next() {
-			var input usagefacts.MessageInput
-			if err := rows.Scan(&input.Ordinal, &input.Role, &input.Timestamp, &input.Model,
-				&input.ProviderID, &input.TokenUsage, &input.ClaudeMessageID, &input.ClaudeRequestID, &input.SourceUUID); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			if c.observer.messageNormalized != nil {
-				c.observer.messageNormalized()
-			}
-			fact, ok := usagefacts.FromMessage(input)
-			if input.Timestamp == "" || input.Timestamp < tail || (ok && !fact.TokenEligible) {
-				eligible = false
-				break
-			}
-			if ok {
-				if err := delta.Add(id, count, fact); err != nil {
-					_ = rows.Close()
-					return err
-				}
-				count++
-			}
-		}
-		err = errors.Join(rows.Err(), rows.Close())
+		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
+		count, eligible, err := c.extractUsageAppendFacts(ctx, archive, &delta, id, ordinal, tail, count)
 		if err != nil {
 			return err
 		}
@@ -681,6 +648,42 @@ func (c *usageFillCoordinator) extractUsageAppends(
 		}
 	}
 	return nil
+}
+
+func (c *usageFillCoordinator) extractUsageAppendFacts(
+	ctx context.Context, archive *sql.Tx, delta *usageFactSpoolWriter,
+	id string, ordinal sql.NullInt64, tail string, count int,
+) (int, bool, error) {
+	rows, err := archive.QueryContext(ctx, `SELECT ordinal, role, COALESCE(timestamp, ''),
+		model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid
+		FROM messages INDEXED BY idx_messages_session_ordinal
+		WHERE session_id=? AND ordinal>COALESCE(?, -1) ORDER BY timestamp, ordinal`, id, ordinal)
+	if err != nil {
+		return count, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var input usagefacts.MessageInput
+		if err := rows.Scan(&input.Ordinal, &input.Role, &input.Timestamp, &input.Model,
+			&input.ProviderID, &input.TokenUsage, &input.ClaudeMessageID, &input.ClaudeRequestID, &input.SourceUUID); err != nil {
+			return count, false, err
+		}
+		if c.observer.messageNormalized != nil {
+			c.observer.messageNormalized()
+		}
+		fact, ok := usagefacts.FromMessage(input)
+		if !ok {
+			continue
+		}
+		if input.Timestamp == "" || input.Timestamp < tail || !fact.TokenEligible {
+			return count, false, nil
+		}
+		if err := delta.Add(id, count, fact); err != nil {
+			return count, false, err
+		}
+		count++
+	}
+	return count, true, rows.Err()
 }
 
 func extractUsageMessageFacts(

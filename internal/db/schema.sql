@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_hash   TEXT,
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
+    usage_generation TEXT,
     parent_session_id TEXT,
     parser_parent_session_id TEXT,
     parser_relationship_type TEXT,

@@ -668,9 +668,11 @@ one session at a time livelocks the request.
 Refills retain token-message histories when the archive generation proves the
 existing messages unchanged, the install revision matches, and no activity-only
 facts or usage events exist. They seek past the saved message ordinal and
-normalize only appended messages. A backdated or NULL timestamp, an appended
-activity-only fact, an edit, a deletion, or a usage event falls back to complete
-extraction. Claude suffix replacement and late Codex usage updates also use
+normalize only appended messages. The `sessions.usage_generation` column and
+message triggers prove the retained prefix. Edits rotate the generation; deletes
+clear it once until the next insert creates a fresh one. A backdated or NULL
+fact timestamp, an appended activity-only fact, an edit, a deletion, or a usage
+event falls back to complete extraction. Claude suffix replacement and late Codex usage updates also use
 complete extraction. Full extractions compare facts in bounded
 batches against one read-only cache snapshot and spool only changed or new
 rows. Comparison requires the expected install revision; installation checks

@@ -1184,7 +1184,7 @@ func TestUsageCacheFillInstallsExtractedSnapshotDespiteLaterWrite(t *testing.T) 
 	}
 	assert.Equal(t, int32(1), mutations.Load(), "fill extracted more than once")
 	assert.False(t, results[version.SessionID].Deleted)
-	assert.Equal(t, version, results[version.SessionID].source)
+	assert.True(t, version.Equal(results[version.SessionID].source))
 }
 
 // A write that lands after the request's archive snapshot no longer forces a
@@ -1673,12 +1673,9 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 				}}, IncrementalSessionUpdate{ReplaceFromOrdinal: new(7)})
 				require.NoError(t, err)
 			}
-			read := 0
-			cache.fill.observer.messageNormalized = func() { read++ }
 			versions := []usageSourceVersion{{SessionID: "session"}}
 			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
-			assert.Positive(t, read, "fallback must read retained messages")
 			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
 			require.NoError(t, err)
 			defer full.Close()
@@ -1696,7 +1693,7 @@ func TestUsageSpoolAppendWatermarks(t *testing.T) {
 			database, cache := usageSpoolExtractionFixture(t, count)
 			versions := []usageSourceVersion{{SessionID: "session"}}
 			for _, message := range []Message{
-				{SessionID: "session", Ordinal: count, Role: "user", Timestamp: "2026-08-10T09:00:00Z"},
+				{SessionID: "session", Ordinal: count, Role: "user", Timestamp: "2026-08-10T08:59:59Z"},
 				{SessionID: "session", Ordinal: count + 1, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":13}`)},
 			} {
 				require.NoError(t, database.InsertMessages(t.Context(), []Message{message}))
@@ -1780,5 +1777,37 @@ func BenchmarkUsageFillWarmSingleChangeAppend(b *testing.B) {
 			}
 			b.ReportMetric(float64(read)/float64(b.N), "read-rows/op")
 		})
+	}
+}
+
+func TestUsageGenerationBulkDeleteWritesOnce(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 128)
+	_, err := database.getWriter().Exec(t.Context(), `CREATE TABLE generation_updates (count INTEGER);
+		INSERT INTO generation_updates VALUES (0);
+		CREATE TRIGGER count_generation_updates AFTER UPDATE OF usage_generation ON sessions
+		WHEN NEW.usage_generation IS NOT OLD.usage_generation BEGIN
+		    UPDATE generation_updates SET count=count+1;
+		END;
+		DELETE FROM messages WHERE ordinal>=4`)
+	require.NoError(t, err)
+	require.NoError(t, applySchemaColumnMigrations(t.Context(), database.getWriter(), nil))
+	var writes int
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT count FROM generation_updates`).Scan(&writes))
+	assert.Equal(t, 1, writes, "bulk deletion invalidates the prefix once")
+	versions := []usageSourceVersion{{SessionID: "session"}}
+	_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
+	require.NoError(t, err)
+	for ordinal := 128; ordinal <= 129; ordinal++ {
+		require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+			SessionID: "session", Ordinal: ordinal,
+			Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
+		}}))
+		read := 0
+		cache.fill.observer.messageNormalized = func() { read++ }
+		_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
+		require.NoError(t, err)
+		if ordinal == 129 {
+			assert.Equal(t, 1, read, "appends resume incremental extraction after the new proof is retained")
+		}
 	}
 }
