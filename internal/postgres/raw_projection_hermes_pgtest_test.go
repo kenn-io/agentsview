@@ -41,7 +41,7 @@ INSERT INTO messages(session_id,role,content) VALUES('parent','user','parent con
 	parsed := parse()
 	require.Len(t, parsed.Outcome.Results, 2)
 	f := newProjectionFixture(t)
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	var manifests []rawsync.CanonicalManifest
 	var receipts, children, parents []string
@@ -171,7 +171,7 @@ WHERE b.source_id=$1 AND b.member_id=$2`, rawSourceID(m), "hermes:"+member).Scan
 	childID := publicID(childManifest, "child")
 	parentID := publicID(parentManifest, "parent")
 	assert.NotEqual(t, childID, parentID)
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	child, err := h.GetSessionFull(t.Context(), childID)
 	require.NoError(t, err)

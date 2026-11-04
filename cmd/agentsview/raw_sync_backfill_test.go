@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -721,6 +722,81 @@ func TestRawSyncBackfillResumeDiscoversSavedRootsWhenResolutionChanges(t *testin
 	assert.Equal(t, spec, resumed)
 	roots := selected[0].Provider.(interface{ ConfiguredRoots() []string }).ConfiguredRoots()
 	assert.Equal(t, []string{saved[0].LocalPath}, roots)
+}
+
+func TestRawSyncBackfillHermesProfilesSymlinkKeepsContainerOnResume(t *testing.T) {
+	base := t.TempDir()
+	profilesLink := filepath.Join(base, ".hermes", "profiles")
+	firstTarget := filepath.Join(base, "profile-store")
+	firstProfile := filepath.Join(firstTarget, "profile-a")
+	require.NoError(t, os.MkdirAll(filepath.Dir(profilesLink), 0o700))
+	require.NoError(t, os.MkdirAll(firstProfile, 0o700))
+	state := hermesfixture.OpenState(t, firstProfile)
+	_, err := state.ExecContext(t.Context(), `INSERT INTO sessions (id, source, started_at) VALUES ('profile-session', 'cli', 1778767200)`)
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	requireSymlinkOrSkip(t, firstTarget, profilesLink)
+
+	store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentHermes: {profilesLink},
+	}}
+	backfill := rawSyncBackfillConfig{
+		RunID: "run-hermes-profiles", DeviceID: "device-a", Server: "https://sync.example.test",
+		Providers: []string{"hermes"}, Format: "json", BatchSize: 8,
+	}
+	selected, err := selectRawSyncBackfillProviders(cfg, backfill.Providers)
+	require.NoError(t, err)
+	spec, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+	require.NoError(t, err)
+	assertHermesProfileSources := func(want ...string) {
+		t.Helper()
+		discovery, err := parser.DiscoverRawCaptureSources(t.Context(), selected[0].Provider)
+		require.NoError(t, err)
+		require.True(t, discovery.Complete)
+		got := make([]string, 0, len(discovery.Sources))
+		for _, source := range discovery.Sources {
+			got = append(got, source.DisplayPath)
+		}
+		assert.ElementsMatch(t, want, got)
+	}
+	canonicalProfilePath := func(profile string) string {
+		t.Helper()
+		resolved, err := filepath.EvalSymlinks(profile)
+		require.NoError(t, err)
+		return filepath.Join(resolved, "state.db")
+	}
+	assertHermesProfileSources(canonicalProfilePath(firstProfile))
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err)
+
+	lateProfile := filepath.Join(firstTarget, "profile-later")
+	require.NoError(t, os.MkdirAll(lateProfile, 0o700))
+	lateState := hermesfixture.OpenState(t, lateProfile)
+	_, err = lateState.ExecContext(t.Context(), `INSERT INTO sessions (id, source, started_at) VALUES ('late-profile-session', 'cli', 1778767200)`)
+	require.NoError(t, err)
+	require.NoError(t, lateState.Close())
+
+	secondTarget := filepath.Join(base, "replacement-store")
+	secondProfile := filepath.Join(secondTarget, "profile-b")
+	require.NoError(t, os.MkdirAll(secondProfile, 0o700))
+	secondState := hermesfixture.OpenState(t, secondProfile)
+	require.NoError(t, secondState.Close())
+	require.NoError(t, os.Remove(profilesLink))
+	requireSymlinkOrSkip(t, secondTarget, profilesLink)
+
+	selected, err = selectRawSyncBackfillProviders(cfg, backfill.Providers)
+	require.NoError(t, err)
+	resumed, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+	require.NoError(t, err)
+	assert.Equal(t, spec, resumed)
+	assertHermesProfileSources(
+		canonicalProfilePath(firstProfile),
+		canonicalProfilePath(lateProfile),
+	)
 }
 
 func TestRawSyncBackfillOwnsOverlappingRootsLikeWatch(t *testing.T) {

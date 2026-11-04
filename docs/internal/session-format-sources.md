@@ -3910,6 +3910,16 @@ schemas keep their existing ordering behavior.
   temporarily lacking a database. Hosted snapshots preserve omitted archived
   members. See [Hermes raw capture](../hosted-raw-sync.md#hermes-homes-and-profiles)
   for root availability, retention and timezone limits.
+- **Profiles and backfill check (2026-11-03):** Reverified the pinned
+  [profiles guide](https://github.com/NousResearch/hermes-agent/blob/c4b2beea778ceca1462b91282589338b5e80781f/website/docs/user-guide/profiles.md)
+  and
+  [session-storage guide](https://github.com/NousResearch/hermes-agent/blob/c4b2beea778ceca1462b91282589338b5e80781f/website/docs/developer-guide/session-storage.md):
+  named profiles are separate Hermes homes below
+  `~/.hermes/profiles/<name>/`, and each home stores its own `state.db`.
+  `HERMES_HOME` identifies the selected profile home. The parent `profiles`
+  directory is a dynamic container, so a configured symlink to that container
+  must retain its container role after raw backfill canonicalizes and resumes
+  saved roots.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.

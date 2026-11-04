@@ -471,6 +471,13 @@ func (a *Auditor) nextKnownSourcePage(
 		rootIndex := (start + offset) % len(roots)
 		a.nextKnownRoot[provider] = (rootIndex + 1) % len(roots)
 		*traversalRemaining--
+		if roots[rootIndex].Optional {
+			if _, err := os.Stat(roots[rootIndex].Path); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return nil, nil, err
+			}
+		}
 		if !rawAuditRootsComplete(ctx, []parser.WatchRoot{roots[rootIndex]}) {
 			continue
 		}

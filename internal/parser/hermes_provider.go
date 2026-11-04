@@ -94,7 +94,7 @@ func (f hermesProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		Caps:    caps,
 		Config:  cfg,
 		spec:    f.spec,
-		sources: newHermesSourceSet(f.spec.agent, cfg.Roots),
+		sources: newHermesSourceSetWithConfig(f.spec.agent, cfg),
 	}
 }
 
@@ -423,8 +423,9 @@ type hermesSourceSet struct {
 	// the store layout but must not share a discovery namespace: keying
 	// sources by agent keeps an Augure Desktop session ID from colliding
 	// with a Hermes one.
-	agent AgentType
-	roots []string
+	agent              AgentType
+	roots              []string
+	profilesContainers map[string]struct{}
 }
 
 func newHermesSourceSet(agent AgentType, roots []string) hermesSourceSet {
@@ -434,6 +435,28 @@ func newHermesSourceSet(agent AgentType, roots []string) hermesSourceSet {
 	return hermesSourceSet{agent: agent, roots: cleanJSONLRoots(roots)}
 }
 
+func newHermesSourceSetWithConfig(agent AgentType, cfg ProviderConfig) hermesSourceSet {
+	sources := newHermesSourceSet(agent, cfg.Roots)
+	for root, enabled := range cfg.RawCaptureHermesProfilesContainerRoots {
+		if !enabled {
+			continue
+		}
+		if sources.profilesContainers == nil {
+			sources.profilesContainers = make(map[string]struct{})
+		}
+		sources.profilesContainers[filepath.Clean(root)] = struct{}{}
+	}
+	return sources
+}
+
+func (s hermesSourceSet) isProfilesContainer(root string) bool {
+	if isHermesProfilesContainer(root) {
+		return true
+	}
+	_, ok := s.profilesContainers[filepath.Clean(root)]
+	return ok
+}
+
 // The default Hermes roots include the stable profiles container rather than
 // its current children. Expanding direct children during discovery lets a
 // long-running provider see profiles created after initialization.
@@ -441,6 +464,12 @@ func isHermesProfilesContainer(root string) bool {
 	root = filepath.Clean(root)
 	return filepath.Base(root) == "profiles" &&
 		filepath.Base(filepath.Dir(root)) == ".hermes"
+}
+
+// IsHermesProfilesContainer reports whether root is the dynamic Hermes profile
+// container rather than one profile home.
+func IsHermesProfilesContainer(root string) bool {
+	return isHermesProfilesContainer(root)
 }
 
 // hermesProfileArchiveRoots expands a profiles container into its current
@@ -479,7 +508,7 @@ func (s hermesSourceSet) expandedRoots() ([]string, error) {
 	var roots []string
 	var expandErr error
 	for _, root := range s.roots {
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			profileRoots, err := hermesProfileArchiveRoots(root)
 			if err != nil {
 				expandErr = errors.Join(expandErr, err)
@@ -792,7 +821,7 @@ func (m *hermesStateMembership) Close() {
 func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			roots = append(roots, WatchRoot{
 				Path:         root,
 				Recursive:    true,
@@ -911,7 +940,7 @@ func (s hermesSourceSet) reconciliationScopePlan(
 			root:  root,
 			match: absoluteHermesPath(root),
 		}
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			// The container is one coverage identity: profile membership is
 			// dynamic, so a pass covers it only by traversing the container
 			// itself, and discovery reports an unreadable container as
@@ -1129,7 +1158,7 @@ func (s hermesSourceSet) SourcesForChangedPath(
 	}
 	allowMissing := jsonlMissingPathFallbackAllowed(req)
 	for _, root := range s.roots {
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			if req.WatchRoot != "" && !samePath(root, req.WatchRoot) {
 				continue
 			}

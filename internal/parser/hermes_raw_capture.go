@@ -78,7 +78,7 @@ func (p *hermesProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yiel
 		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return false, err
 		}
-		profiles := isHermesProfilesContainer(configured)
+		profiles := p.sources.isProfilesContainer(configured)
 		sessions := filepath.Base(configured) == "sessions"
 		if _, err := os.Stat(configured); err != nil {
 			if ctx.Err() != nil {
@@ -242,7 +242,7 @@ func (p *hermesProvider) RawCaptureSourcesForChangedPath(ctx context.Context, re
 			return nil, err
 		}
 		root := hermesRawEventPath(configured)
-		if isHermesProfilesContainer(configured) {
+		if p.sources.isProfilesContainer(configured) {
 			if !hermesPathWithinOrSame(changed, root) {
 				continue
 			}

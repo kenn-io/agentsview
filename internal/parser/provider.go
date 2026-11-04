@@ -58,8 +58,11 @@ type ProviderConfig struct {
 	// RawCaptureProjectDirs preserves registry-derived project paths when a
 	// finite backfill rebuilds providers from its saved data directories.
 	RawCaptureProjectDirs map[string]string
-	Roots                 []string
-	Machine               string
+	// RawCaptureHermesProfilesContainerRoots preserves Hermes profile-container
+	// semantics when a backfill rebuilds a provider from canonical roots.
+	RawCaptureHermesProfilesContainerRoots map[string]bool
+	Roots                                  []string
+	Machine                                string
 	// StableSourceSnapshots reports that source files cannot change during
 	// parsing. Bounded capture enables it after copying quiescent transcripts
 	// so providers can classify an invalid end-of-file record as durable.
@@ -87,6 +90,7 @@ func (cfg ProviderConfig) Clone() ProviderConfig {
 	cfg.Roots = cfg.RootsCopy()
 	cfg.MetadataDirs = cloneMetadataDirs(cfg.MetadataDirs)
 	cfg.RawCaptureProjectDirs = maps.Clone(cfg.RawCaptureProjectDirs)
+	cfg.RawCaptureHermesProfilesContainerRoots = maps.Clone(cfg.RawCaptureHermesProfilesContainerRoots)
 	cfg.SourceMachines = maps.Clone(cfg.SourceMachines)
 	return cfg
 }
