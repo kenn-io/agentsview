@@ -174,6 +174,13 @@ func sameCaseInsensitivePathAlias(root, first, second string) bool {
 	return true
 }
 
+func piRawCaptureRootRelativePath(configuredRoot, canonicalRoot, candidate string) (string, bool) {
+	if rel, ok := relUnder(configuredRoot, candidate); ok {
+		return rel, true
+	}
+	return relUnder(canonicalRoot, candidate)
+}
+
 func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawCapturePlan, error) {
 	if err := ctx.Err(); err != nil {
 		return RawCapturePlan{}, err
@@ -230,8 +237,10 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 			}
 		}
 		// An uncaptured client reference is not permission to probe the worker.
-		if p.Config.PathRewriter != nil && !pathUnderRoot(src.Root, path) {
-			return "", false
+		if p.Config.PathRewriter != nil {
+			if _, ok := piRawCaptureRootRelativePath(src.Root, root, path); !ok {
+				return "", false
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			readErr = err
@@ -250,13 +259,9 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 			readErr = err
 			return "", false
 		}
-		if !info.Mode().IsRegular() || !pathUnderRoot(root, resolved) || !pathUnderRoot(src.Root, path) {
+		rel, inConfiguredRoot := piRawCaptureRootRelativePath(src.Root, root, path)
+		if !info.Mode().IsRegular() || !pathUnderRoot(root, resolved) || !inConfiguredRoot {
 			readErr = invalidRawCapturePlan("pi parent or primary is outside its configured root or is not a regular file")
-			return "", false
-		}
-		rel, err := filepath.Rel(src.Root, path)
-		if err != nil {
-			readErr = err
 			return "", false
 		}
 		logical := filepath.ToSlash(rel)

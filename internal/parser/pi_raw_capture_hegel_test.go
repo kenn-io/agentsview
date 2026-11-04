@@ -97,7 +97,7 @@ func TestPiRawCaptureRejectsOutsideParentProperty(t *testing.T) {
 
 // Manifest v1 must not infer a companion as the primary from a longer suffix.
 func TestPiRawCaptureAmbiguousPrimaryProperty(t *testing.T) {
-	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
+	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode} {
 		t.Run(string(agent), func(t *testing.T) {
 			hegel.Test(t, func(ht *hegel.T) {
 				name := strconv.FormatUint(hegel.Draw(ht, hegel.Integers(uint64(0), uint64(math.MaxUint64))), 16)

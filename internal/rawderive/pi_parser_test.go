@@ -246,6 +246,36 @@ func TestProviderParserHostedPiCapturePreservesCaseInsensitiveParentAliases(t *t
 	}
 }
 
+func TestProviderParserHostedPiCaptureResolvesParentThroughConfiguredRootSymlink(t *testing.T) {
+	canonicalRoot := t.TempDir()
+	configuredRoot := filepath.Join(t.TempDir(), "sessions")
+	if err := os.Symlink(canonicalRoot, configuredRoot); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	parent := filepath.Join(canonicalRoot, "project", "parent.jsonl")
+	child := filepath.Join(canonicalRoot, "project", "child.jsonl")
+	writePiDeriveFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
+	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
+
+	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: []string{configuredRoot}})
+	require.True(t, ok)
+	configuredChild := filepath.Join(configuredRoot, "project", "child.jsonl")
+	sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: configuredChild})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, local.Results, 1)
+	assert.Equal(t, "pi:parent-header", local.Results[0].Result.Session.ParentSessionID)
+
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
+	require.Len(t, manifest.Manifest.Entries, 2)
+	require.NoError(t, os.RemoveAll(canonicalRoot))
+	hosted := derivePiManifest(t, manifest, objects)
+	require.Len(t, hosted.Outcome.Results, 1)
+	assert.Equal(t, local.Results[0].Result.Session.ParentSessionID, hosted.Outcome.Results[0].Result.Session.ParentSessionID)
+}
+
 func TestProviderParserHostedPiCaseSensitiveReplayUsesCaseDistinctParentPaths(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMO} {
 		t.Run(string(agent), func(t *testing.T) {
