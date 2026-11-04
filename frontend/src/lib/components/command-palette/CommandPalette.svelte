@@ -484,6 +484,7 @@
   }
 
   .palette-controls {
+    --kit-control-font-size: 12px;
     --typeahead-min-width: 120px;
     --typeahead-max-width: 140px;
     display: flex;
@@ -620,7 +621,7 @@
 
   .sort-btn {
     padding: 3px 10px;
-    font-size: 11px;
+    font-size: 12px;
     border: none;
     border-radius: var(--radius-sm);
     background: none;

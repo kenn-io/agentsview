@@ -1067,8 +1067,8 @@
   }
 
   .virtual-row.selected > :global(*) {
-    outline: 1.5px solid color-mix(in srgb, var(--accent-blue) 85%, transparent);
-    outline-offset: -1.5px;
+    outline: 1px solid color-mix(in srgb, var(--accent-blue) 65%, transparent);
+    outline-offset: -1px;
     border-radius: var(--radius-md, 6px);
   }
 

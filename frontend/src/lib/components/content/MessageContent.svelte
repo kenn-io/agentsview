@@ -386,7 +386,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
   .text-content { font-size: 14px; line-height: 1.7; color: var(--text-primary); word-wrap: break-word; }
   /* Keep prose near 100 characters per line; tool output and diffs keep the full width. */
-  .text-content.markdown { max-width: 88ch; }
+  .text-content.markdown { max-width: 96ch; }
   .code-fence-block {
     display: flex;
     flex-direction: column;

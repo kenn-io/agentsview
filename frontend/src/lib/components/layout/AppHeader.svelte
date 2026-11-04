@@ -481,6 +481,8 @@
         {@render messageLayoutIcon("16")}
       </button>
 
+      <span class="header-divider collapsible"></span>
+
       <div class="export-wrap collapsible">
         <button
           class="header-btn"
@@ -1009,8 +1011,7 @@
     flex-shrink: 0;
   }
 
-  .header-btn + .header-btn,
-  .header-btn + .export-wrap {
+  .header-btn + .header-btn {
     margin-left: 2px;
   }
 

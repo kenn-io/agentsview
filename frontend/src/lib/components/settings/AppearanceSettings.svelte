@@ -313,7 +313,7 @@
   }
 
   .setting-row.column > .setting-label {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
   }

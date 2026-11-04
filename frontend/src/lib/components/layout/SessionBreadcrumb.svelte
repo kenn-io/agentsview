@@ -1749,6 +1749,18 @@
     background: var(--border-default);
   }
 
+  /* Usage figures lead the strip; the ID steps back. */
+  .token-badge,
+  .cost-badge,
+  .usage-breakdown-trigger {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .session-id {
+    color: color-mix(in srgb, var(--text-muted) 85%, transparent);
+  }
+
   .session-id:hover {
     color: var(--text-secondary);
     background: var(--bg-surface-hover);

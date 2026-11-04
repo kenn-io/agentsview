@@ -347,8 +347,7 @@
   .tool-duration {
     font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); padding: 0 6px;
     font-variant-numeric: tabular-nums; border: 1px solid transparent;
-    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
-    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: center;
+    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: right;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
