@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver as StdReceiver, SyncSender, TrySendError};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -86,6 +86,8 @@ const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
 const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
 const STATUS_PROBE_FAILURE_FAIL_AFTER: u32 = 30;
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
+
+static LOGIN_SHELL_ENV: OnceLock<Vec<(OsString, OsString)>> = OnceLock::new();
 // Stopping the detached daemon before an update install must outlast
 // both a daemon that is still mid-startup (serve stop refuses with
 // "retry once it is ready" while the startup sync runs, which takes
@@ -1088,7 +1090,7 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
     build_sidecar_env(
         std::env::vars_os().collect(),
         if should_probe {
-            read_login_shell_env().unwrap_or_default()
+            cached_login_shell_env()
         } else {
             Vec::new()
         },
@@ -1097,6 +1099,15 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
         is_windows,
         is_windows,
     )
+}
+
+// The login shell is a snapshot of the user's launch environment. Cache both
+// successful and failed probes for this desktop process so repeated sidecar
+// commands do not rerun shell startup or repeat a 3s timeout.
+fn cached_login_shell_env() -> Vec<(OsString, OsString)> {
+    LOGIN_SHELL_ENV
+        .get_or_init(|| read_login_shell_env().unwrap_or_default())
+        .clone()
 }
 
 // read_login_shell_env invokes the user's login shell and
@@ -6237,6 +6248,101 @@ agentsview running at http://127.0.0.1:18082
         assert!(should_probe_login_shell(None, false));
         assert!(!should_probe_login_shell(Some(&OsString::from("1")), false));
         assert!(!should_probe_login_shell(None, true));
+    }
+
+    #[cfg(unix)]
+    fn run_sidecar_env_cache_child(
+        test_name: &str,
+        child_marker: &str,
+        script_body: &str,
+    ) -> Vec<u8> {
+        let dir = tempdir().expect("tempdir");
+        let shell = dir.path().join("login-shell-probe");
+        let counter = dir.path().join("probe-count");
+        fs::write(&shell, script_body).expect("write login shell probe");
+        let mut permissions = fs::metadata(&shell)
+            .expect("read login shell probe metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&shell, permissions).expect("make login shell probe executable");
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", test_name, "--nocapture"])
+            .env(child_marker, "1")
+            .env("SHELL", &shell)
+            .env("HOME", dir.path())
+            .env("AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER", &counter)
+            .env_remove("AGENTSVIEW_DESKTOP_PATH")
+            .env_remove("AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV")
+            .env_remove("SHELL_CACHE_RETRY")
+            .env_remove("SHELL_CACHE_VALUE")
+            .output()
+            .expect("run isolated login shell cache test");
+
+        assert!(
+            output.status.success(),
+            "isolated test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read(counter).expect("read login shell probe count")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_env_caches_successful_login_shell_probe() {
+        const CHILD_MARKER: &str = "AGENTSVIEW_LOGIN_SHELL_CACHE_SUCCESS_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let first: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let second: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let key = OsString::from("SHELL_CACHE_VALUE");
+            let expected = OsString::from("first");
+            assert_eq!(first.get(&key), Some(&expected));
+            assert_eq!(second.get(&key), Some(&expected));
+            return;
+        }
+
+        let count = run_sidecar_env_cache_child(
+            "tests::sidecar_env_caches_successful_login_shell_probe",
+            CHILD_MARKER,
+            concat!(
+                "#!/bin/sh\n",
+                "printf x >> \"$AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER\"\n",
+                "export SHELL_CACHE_VALUE=first\n",
+                "exec /usr/bin/env -0\n",
+            ),
+        );
+        assert_eq!(count, b"x");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_env_caches_failed_login_shell_probe() {
+        const CHILD_MARKER: &str = "AGENTSVIEW_LOGIN_SHELL_CACHE_FAILURE_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let first: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let second: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let key = OsString::from("SHELL_CACHE_RETRY");
+            assert_eq!(first.get(&key), None);
+            assert_eq!(second.get(&key), None);
+            return;
+        }
+
+        let count = run_sidecar_env_cache_child(
+            "tests::sidecar_env_caches_failed_login_shell_probe",
+            CHILD_MARKER,
+            concat!(
+                "#!/bin/sh\n",
+                "printf x >> \"$AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER\"\n",
+                "count=$(wc -c < \"$AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER\")\n",
+                "if [ \"$count\" -gt 1 ]; then\n",
+                "  export SHELL_CACHE_RETRY=unexpected\n",
+                "  exec /usr/bin/env -0\n",
+                "fi\n",
+                "exit 42\n",
+            ),
+        );
+        assert_eq!(count, b"x");
     }
 
     #[test]
