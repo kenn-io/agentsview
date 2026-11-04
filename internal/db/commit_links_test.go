@@ -101,6 +101,7 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"failed", "git commit -m fix", "nothing to commit", 0},
 		{"printed", "cat out.txt", "[main abc1234] Fix parser", 0},
 		{"printed commit documentation", "cat docs/git-commit.md", "[main abc1234] Fix parser", 0},
+		{"searched commit documentation", "grep -n 'git commit' docs/x.md; sed -n 20,24p docs/x.md", "[main 463dc4f] Example commit", 0},
 		{"shown commit documentation", "git show HEAD:docs/commit.md", "[main abc1234] Fix parser", 0},
 		{"log grep", "git log --grep=commit", "[main abc1234] Fix parser", 0},
 		{"commit filename", "git commit.md", "[main abc1234] Fix parser", 0},
