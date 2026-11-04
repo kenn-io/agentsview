@@ -52,6 +52,7 @@
       .map((panel) => ({
         id: panel.id,
         label: panel.label,
+        icon: panel.icon,
         group: panel.group,
         summary: panel.description,
       }));
