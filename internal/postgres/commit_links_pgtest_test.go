@@ -23,7 +23,7 @@ func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
 				INSERT INTO sessions(id,project,machine,agent)
 				VALUES ('live','project','test','claude')`)
 			require.NoError(t, err)
-			store, err := NewStore(testPGURL(t), syncer.schema, true)
+			store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			if emptyTrash {
@@ -46,10 +46,10 @@ func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
 
 func TestHostedCommitLinksUnavailable(t *testing.T) {
 	f := newHostedFixture(t, "tenant-a")
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	backend := service.NewDirectBackend(store, nil)
+	backend := service.NewReadOnlyBackend(store)
 	_, err = backend.SessionCommits(t.Context(), "session-a")
 	assert.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
 	_, err = backend.CommitSessions(t.Context(), []string{"abc1234"})
@@ -63,7 +63,7 @@ func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
 			dbtest.SeedCommitLinks(t, local)
 			_, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)
-			store, err := NewStore(testPGURL(t), syncer.schema, true)
+			store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 			require.NoError(t, err)
 			defer store.Close()
 			err = store.SoftDeleteSession(ctx, "commit-live")
@@ -103,7 +103,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 	dbtest.SeedCommitLinks(t, local)
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
@@ -153,7 +153,7 @@ func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
 	syncer.projects = []string{"commit-project"}
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	// A resident row belonging to another archive must keep its own summary.
@@ -185,7 +185,7 @@ func TestPGRetainedCommitLinkScope(t *testing.T) {
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_retained_commit_scope_test")
 	dbtest.SeedCommitLinks(t, local)
 	require.NoError(t, syncer.EnsureSchema(ctx))
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, store.Close()) }()
 	dbtest.AssertRetainedCommitLinkScope(t, local, func() db.CommitLinkReader { return store }, func(projects, exclude []string) {
