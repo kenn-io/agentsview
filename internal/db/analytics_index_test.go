@@ -1,12 +1,46 @@
 package db
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStartupStatsKeepFTSSegmentDeletesIndexed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	checkPlans := func() {
+		t.Helper()
+		for _, table := range []string{
+			"messages_fts_data", "recall_entries_fts_data", "recall_evidence_fts_data",
+		} {
+			func() {
+				rows, err := d.getWriter().Query(t.Context(),
+					`EXPLAIN QUERY PLAN DELETE FROM `+table+` WHERE id>=? AND id<=?`, 10, 20)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				details := explainQueryPlanDetails(t, rows)
+				assert.Contains(t, strings.Join(details, "\n"), "SEARCH "+table+" USING INTEGER PRIMARY KEY")
+			}()
+		}
+	}
+	checkPlans()
+
+	for _, id := range []string{"a", "b", "c"} {
+		insertSession(t, d, id, "project")
+		insertMessages(t, d, userMsg(id, 0, "Investigate authentication latency"))
+	}
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	checkPlans()
+}
 
 func TestAnalyticsMetadataIndexLifecycle(t *testing.T) {
 	for _, lifecycle := range []string{"reopen", "upgrade", "bulk import"} {
