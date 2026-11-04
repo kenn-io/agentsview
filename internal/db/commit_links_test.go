@@ -217,6 +217,62 @@ func TestCommitLinksCodeModePollBatch(t *testing.T) {
 	}
 }
 
+func TestCommitLinksCodeModePollAndCommit(t *testing.T) {
+	for _, tt := range []struct {
+		name, output string
+	}{
+		{"summary in mixed call", "[main abc1234] First\n"},
+		{"summary in later poll", "still running"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages := commitMessages("s1", `{"cmd":"git commit -m first","workdir":"/first"}`, `{"session_id":7,"output":""}`)
+			messages[2].ToolCalls[0].ToolName = "exec_command"
+			messages = append(messages, userMsg("s1", 3, "Record the second fix"))
+			firstOutput, err := json.Marshal(map[string]any{"session_id": 7, "output": tt.output})
+			require.NoError(t, err)
+			result, err := json.Marshal([]map[string]string{
+				{"type": "input_text", "text": string(firstOutput)},
+				{"type": "input_text", "text": `{"output":"[main def5678] Second\n"}`},
+			})
+			require.NoError(t, err)
+			mixed := commitMessages("s1", `text(await tools.write_stdin({session_id:7})); text(await tools.exec_command({cmd:"git commit -m second",workdir:"/second"}))`, string(result))[2]
+			mixed.Ordinal = 4
+			mixed.Timestamp = "2026-01-02T03:04:05Z"
+			mixed.ToolCalls[0].ToolName = "exec"
+			mixed.ToolCalls[0].ToolUseID = "second-call"
+			poll := commitMessages("s1", `{"session_id":7}`, `{"output":"[main abc1234] First\n"}`)[2]
+			poll.Ordinal = 5
+			poll.ToolCalls[0].ToolName = "write_stdin"
+			poll.ToolCalls[0].ToolUseID = "poll"
+			insertMessages(t, d, append(messages, mixed, poll)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 2)
+			for _, link := range got.Commits {
+				require.NotNil(t, link.Turn)
+				switch link.SHA {
+				case "abc1234":
+					assert.Equal(t, "commit-call", link.ToolUseID)
+					assert.Equal(t, 2, link.MessageOrdinal)
+					assert.Equal(t, tsZero, link.CommittedAt)
+					assert.Equal(t, "/first", link.Repository)
+					assert.Equal(t, "Record the parser fix", link.Turn.Text)
+				case "def5678":
+					assert.Equal(t, "second-call", link.ToolUseID)
+					assert.Equal(t, 4, link.MessageOrdinal)
+					assert.Equal(t, "2026-01-02T03:04:05Z", link.CommittedAt)
+					assert.Equal(t, "/second", link.Repository)
+					assert.Equal(t, "Record the second fix", link.Turn.Text)
+				default:
+					require.FailNow(t, "unexpected commit", "%s", link.SHA)
+				}
+			}
+		})
+	}
+}
+
 func TestCommitLinksCodeModeCellWait(t *testing.T) {
 	for _, cellID := range []string{"7", "g26:48"} {
 		t.Run(cellID, func(t *testing.T) {
@@ -288,6 +344,7 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		calls            []callResult
 	}{
 		{"Codex JavaScript workdir", "/repo", []callResult{{`text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`}}},
+		{"Codex JavaScript directory text in subject", "/repo", []callResult{{`text(await tools.exec_command({cmd:"git commit -m \"Document cwd: '/wrong'\"",workdir:"/repo"}))`, "[main abc1234] Document cwd: '/wrong'"}}},
 		{"Codex JavaScript leading cd", "/repo", []callResult{{`text(await tools.exec_command({cmd:"cd /repo && git commit -m fix"}))`, "[main abc1234] Fix parser"}}},
 		{"Codex JavaScript escaped command", "/my repo", []callResult{{`text(await tools.exec_command({cmd:"cd \"/my repo\" && git commit -m fix",workdir:"/work"}))`, "[main abc1234] Fix parser"}}},
 		{"JSON workdir", "/repo", []callResult{{`{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"}, {`{"cmd":"git commit -m \"Document cwd: '/wrong'\"","workdir":"/repo"}`, "[main abc1234] Document cwd: '/wrong'"}, {`{"cmd":"git commit -m \"Document workdir: '/wrong'\"","cwd":"/repo"}`, "[main abc1234] Document workdir: '/wrong'"}}},
