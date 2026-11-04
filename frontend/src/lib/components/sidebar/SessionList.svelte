@@ -30,7 +30,7 @@
     buildDisplayItems,
     computeTotalSize,
     findStart,
-    isSubagentDescendant,
+    subagentDescendantMatcher,
     selectPrimaryId,
   } from "./session-list-utils.js";
 
@@ -676,7 +676,7 @@
             (s) => s.id === item.group!.primarySessionId,
           ) ?? item.group.sessions[0]}
           {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
-          {@const groupHasSubagents = children.some((s) => isSubagentDescendant(s, item.group!.sessions))}
+          {@const groupHasSubagents = children.some(subagentDescendantMatcher(item.group!.sessions))}
           {@const groupHasTeammates = children.some((s) => s.is_teammate ?? s.first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem
