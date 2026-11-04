@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Assistants searching your history through MCP can now ask for sessions that
+  covered several ideas at once, such as an auth change and its retry policy,
+  even when they came up in different parts of the conversation. Pass two to
+  five `concepts` to `search_content`. Each result shows the passage that
+  matched each idea. This needs the semantic search index.
+
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
   this executable's processing version a fresh attempt budget.

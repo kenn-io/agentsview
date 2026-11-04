@@ -829,6 +829,30 @@ falls back to the default. Responses state the effective mode and scope and
 which default exclusions applied; `next_cursor` is present when another page
 exists.
 
+### MCP multi-concept semantic search
+
+Pass `concepts` with two to five distinct natural-language ideas when recall
+must find one session that covers all of them. Do not also pass `pattern`.
+`mode` defaults to `semantic`; an explicit mode must also be `semantic`. The
+HTTP API takes the same list as repeated `concepts` query parameters and
+requires the `X-AgentsView-Search-Intent: semantic` header.
+
+AgentsView runs one semantic search per concept and keeps only the sessions
+every search found. The concepts may match different exchanges. A session's
+score is the mean of its best score for each concept; equal means keep the order
+of the per-concept rankings. Every result includes `concept_evidence` with the
+supporting snippet, score, and conversation-unit range for each concept.
+
+Project, branch, agent, session, date, scope, one-shot, automated-session, and
+current-session filters apply to every concept search before the intersection.
+Each concept search considers five times the limit, at most 250 candidates.
+When filters leave fewer candidates than that, the concept search fetches again
+with twice as many vector candidates, up to the same 4096-chunk cap described
+under [Limitations](#limitations). A session that one concept ranks outside its
+window is dropped from the intersection. The response sets
+`candidate_truncated` whenever a window fills, the cap stops a concept search
+before the vector index runs out, or more sessions match than the limit.
+
 ### Inline context: `--context N`
 
 ```bash
@@ -1068,10 +1092,11 @@ keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
   When the recent-activity cutoff rejects otherwise eligible hits, semantic
   and hybrid searches fetch again with twice as many candidates. They start at
   `max(4 * limit, 200)` and stop at 4096 chunks on every store, which allows
-  at most six fetches. Other queries use a single candidate batch. Narrow
-  filters or scope can still return fewer than `--limit` results when eligible
-  matches lie beyond that budget. The hybrid keyword leg keeps its own bounded
-  search budget.
+  at most six fetches. Multi-concept searches expand the same way whenever
+  filters leave a concept short. Other queries use a single candidate batch.
+  Narrow filters or scope can still return fewer than `--limit` results when
+  eligible matches lie beyond that budget. The hybrid keyword leg keeps its own
+  bounded search budget.
 - **Legacy no-`source_uuid` rows re-embed on ordinal shifts.** Each embedded
   document is keyed by its first message's stable per-message UUID when the
   parser recorded one, or by `(session_id, ordinal)` when it didn't.
