@@ -773,7 +773,8 @@
   /* Clip the meta line to its box so nothing paints under the slot. */
   .session-item:has(.side-meta) .session-meta {
     overflow: hidden;
-    padding-right: calc(min(max(104px, 38%), 44%) + 6px);
+    /* A margin, not padding, so the clip edge stops before the slot. */
+    margin-right: calc(min(max(104px, 38%), 44%) + 6px);
   }
 
   /* Agent identity: a small colored mark plus the agent name. */
