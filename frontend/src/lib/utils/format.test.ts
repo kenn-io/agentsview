@@ -228,6 +228,40 @@ describe("highlightTerms", () => {
     ]);
   });
 
+  it("uses phrase syntax only when the query starts with a quote, like the backend", () => {
+    // Not leading: every word is literal, quotes included.
+    expect(highlightTerms('fix "bug" here; fix bug', 'fix "bug"')).toEqual([
+      { text: "fix", match: true },
+      { text: " ", match: false },
+      { text: '"bug"', match: true },
+      { text: " here; ", match: false },
+      { text: "fix", match: true },
+      { text: " bug", match: false },
+    ]);
+    // Leading: a doubled quote inside a phrase is one literal quote.
+    expect(highlightTerms('she said "hi" twice', '"said ""hi"""')).toEqual([
+      { text: "she ", match: false },
+      { text: 'said "hi"', match: true },
+      { text: " twice", match: false },
+    ]);
+  });
+
+  it("folds Unicode case and keeps distinct spellings of one word", () => {
+    // U+212A KELVIN SIGN folds to K only under Unicode case folding.
+    expect(highlightTerms("Kelvin scale", "kelvin")).toEqual([
+      { text: "Kelvin", match: true },
+      { text: " scale", match: false },
+    ]);
+    // Dotted capital I lowercases to i plus a combining dot; both spellings
+    // in the query must stay and both must highlight.
+    const lower = "İstanbul".toLowerCase();
+    expect(highlightTerms(`İstanbul and ${lower}`, `İstanbul ${lower}`)).toEqual([
+      { text: "İstanbul", match: true },
+      { text: " and ", match: false },
+      { text: lower, match: true },
+    ]);
+  });
+
   it("matches non-ASCII terms spelled as typed", () => {
     expect(highlightTerms("İstanbul office", "İstanbul")).toEqual([
       { text: "İstanbul", match: true },

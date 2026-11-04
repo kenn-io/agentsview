@@ -93,15 +93,49 @@ export interface HighlightSegment {
  * occurrences of the query's words (two or more characters). Used to
  * emphasize matches when a backend returns snippets without <mark> tags.
  */
+/**
+ * Split a search query into terms the way the backend does (see
+ * PrepareFTSQuery and FTSTerms in internal/db/search.go): a query that starts
+ * with a double quote uses FTS syntax, where quoted runs are single terms and
+ * a doubled quote inside one is a literal quote; any other query is literal
+ * whitespace-separated words, quotes included.
+ */
+function searchTerms(raw: string): string[] {
+  const query = raw.trim();
+  if (!query.startsWith('"')) return query.split(/\s+/).filter(Boolean);
+  const terms: string[] = [];
+  let current = "";
+  let inQuote = false;
+  let hasTerm = false;
+  for (let i = 0; i < query.length; i++) {
+    const c = query[i]!;
+    if (c === '"') {
+      if (inQuote && query[i + 1] === '"') {
+        current += '"';
+        hasTerm = true;
+        i++;
+        continue;
+      }
+      inQuote = !inQuote;
+      hasTerm = true;
+    } else if (!inQuote && /\s/.test(c)) {
+      if (hasTerm) terms.push(current);
+      current = "";
+      hasTerm = false;
+    } else {
+      current += c;
+      hasTerm = true;
+    }
+  }
+  if (hasTerm) terms.push(current);
+  return terms;
+}
+
 export function highlightTerms(text: string, query: string): HighlightSegment[] {
-  // A fully quoted "phrase" is one term; anything else is a literal word,
-  // quotes included. Terms keep their exact spelling and the regex uses
-  // Unicode case folding, so "İstanbul" and the Kelvin sign match as typed.
-  const terms = [...new Set(
-    [...query.matchAll(/"([^"]+)"|(\S+)/g)]
-      .map((found) => found[1] ?? found[2] ?? "")
-      .filter((term) => term.length >= 2),
-  )].sort((a, b) => b.length - a.length);
+  // Terms keep their exact spelling and the regex uses Unicode case folding,
+  // so "İstanbul" and the Kelvin sign match as typed.
+  const terms = [...new Set(searchTerms(query).filter((term) => term.length >= 2))]
+    .sort((a, b) => b.length - a.length);
   if (terms.length === 0 || text === "") return [{ text, match: false }];
   const pattern = new RegExp(
     `(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
