@@ -591,10 +591,13 @@ func (s antigravitySourceSet) summaryStoreExpectations(
 			if p := summaries.parent(id); p != "" {
 				parent = antigravityIDPrefix + p
 			}
-			// Only the store names an app or IDE parent.
-			expectations = append(expectations, summaryExpectation(
-				s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent, true,
-			))
+			// Only the store names an app or IDE parent or workspace, so a row
+			// with no workspace folder means a parse stores no cwd.
+			expectation := summaryExpectation(s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent, true)
+			if expectation.Source.CwdResolution.State == SourceCwdUnspecified {
+				expectation.CwdKnown = true
+			}
+			expectations = append(expectations, expectation)
 		}
 	}
 	return expectations, ctx.Err()

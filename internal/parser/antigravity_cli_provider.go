@@ -581,11 +581,19 @@ func (s antigravityCLISourceSet) summaryStoreExpectations(
 				if !ok {
 					continue
 				}
-				// A reader sidecar's parent wins over the store's.
-				_, sidecarErr := os.Stat(strings.TrimSuffix(path, filepath.Ext(path)) + ".trajectory.json")
-				expectations = append(expectations, summaryExpectation(
-					source, antigravityCLIIDPrefix+rawID, parent, errors.Is(sidecarErr, fs.ErrNotExist),
-				))
+				expectation := summaryExpectation(source, antigravityCLIIDPrefix+rawID, parent, true)
+				sidecar := strings.TrimSuffix(path, filepath.Ext(path)) + ".trajectory.json"
+				if _, err := os.Stat(sidecar); !errors.Is(err, fs.ErrNotExist) {
+					// A reader sidecar's parent wins over the store's when the
+					// sidecar parses and names one, as in parseSessionWithStatus.
+					expectation.ResolveParent = func() (string, error) {
+						if p := antigravityCLISidecarParent(sidecar); p != "" {
+							return antigravityCLIIDPrefix + p, nil
+						}
+						return parent, nil
+					}
+				}
+				expectations = append(expectations, expectation)
 			}
 		}
 	}

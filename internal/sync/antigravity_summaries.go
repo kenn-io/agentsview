@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -51,14 +52,43 @@ func (e *Engine) summaryStoreChangedSources(
 		if !e.summaryRootOwns(agent, root, stored.FilePath) {
 			continue
 		}
+		// A stale row has an unfinished update, such as a cwd reconciled by
+		// a parse that then failed, so it routes until a parse succeeds.
+		stale := stored.DataVersion < db.CurrentDataVersion()
 		cwdChanged := expectation.CwdKnown && stored.Cwd != expectation.Cwd
-		parentChanged := expectation.ParentKnown &&
-			stored.ParserParentSessionID != applyIDPrefixToID(e.idPrefix, expectation.ParentSessionID)
-		if cwdChanged || parentChanged {
+		parentChanged, err := e.summaryParentChanged(expectation, stored.ParserParentSessionID)
+		if err != nil {
+			return nil, err
+		}
+		if stale || cwdChanged || parentChanged {
 			sources = append(sources, expectation.Source)
 		}
 	}
 	return sources, nil
+}
+
+// summaryParentChanged reports whether a parse would store a parent other
+// than storedParent. A source whose parent may come from elsewhere first is
+// resolved only when the store disagrees with the archive, so the common
+// path stays a comparison.
+func (e *Engine) summaryParentChanged(
+	expectation parser.SummaryStoreExpectation, storedParent string,
+) (bool, error) {
+	if !expectation.ParentKnown {
+		return false, nil
+	}
+	want := expectation.ParentSessionID
+	if storedParent == applyIDPrefixToID(e.idPrefix, want) {
+		return false, nil
+	}
+	if expectation.ResolveParent != nil {
+		resolved, err := expectation.ResolveParent()
+		if err != nil {
+			return false, err
+		}
+		want = resolved
+	}
+	return storedParent != applyIDPrefixToID(e.idPrefix, want), nil
 }
 
 // summaryRootOwns reports whether the session archived from storedPath belongs
@@ -78,6 +108,10 @@ func (e *Engine) summaryRootOwns(agent parser.AgentType, root, storedPath string
 	return ok && sameReconciliationSourcePath(owner, root)
 }
 
+type sessionSourceMetadataReader interface {
+	GetSessionSourceMetadataByAgentPath(ctx context.Context, path, agent string) (db.SessionSourceMetadata, bool, error)
+}
+
 // archivedSessionHasSourceMetadata reports whether the live session archived
 // from path holds a working directory, parser parent, or parser project, the
 // values a provider declaring UnavailableCwdKeepsArchivedSession takes from
@@ -85,7 +119,13 @@ func (e *Engine) summaryRootOwns(agent parser.AgentType, root, storedPath string
 func (e *Engine) archivedSessionHasSourceMetadata(
 	ctx context.Context, path string, agent parser.AgentType,
 ) (bool, error) {
-	meta, ok, err := e.db.GetSessionSourceMetadataByAgentPath(ctx, path, string(agent))
+	// During a rebuild e.db is the empty replacement; the old archive holds
+	// the values to protect.
+	var reader sessionSourceMetadataReader = e.db
+	if archived, ok := e.archiveStore.(sessionSourceMetadataReader); ok {
+		reader = archived
+	}
+	meta, ok, err := reader.GetSessionSourceMetadataByAgentPath(ctx, path, string(agent))
 	if err != nil || !ok {
 		return false, err
 	}

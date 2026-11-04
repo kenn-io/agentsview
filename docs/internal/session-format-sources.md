@@ -660,16 +660,15 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Code-mode wait output (checked 2026-11-03):** A local rollout records
-  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
+  arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing
   completion timing and script output; running polls return plain text.
   Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
   `targets` arguments as code-mode polls and stores their output as normal
   tool results. Subagent waits keep their existing `status` handling,
-  including empty timeout statuses. They add no result event when `status`
-  is absent. Synthetic coverage in
-  `TestParseCodexSession_FunctionCalls` and
+  including empty timeout statuses. They add no result event when `status` is
+  absent. Synthetic coverage in `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
 
@@ -695,8 +694,8 @@ fixtures retain this field; missing identities remain source-local.
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
   this existing shape synthetically through native capture, materialization
-  and the isolated parser, with one large string and many smaller messages.
-  It verifies lossless outcomes above the former transport ceiling, not a
+  and the isolated parser, with one large string and many smaller messages. It
+  verifies lossless outcomes above the former transport ceiling, not a
   producer size limit or a new provider format.
 
 - **Generated images (checked 2026-10-29 at
@@ -4551,14 +4550,17 @@ schemas keep their existing ordering behavior.
   that are otherwise unchanged. A store write routes only the sessions whose
   archived working directory or parent differs from what the store says,
   including CLI `implicit/` sessions, and only sessions archived from the same
-  root; a title-only write routes none. Parents are compared both ways where
-  the store decides them: always for the app and IDE, and for CLI conversations
-  without a reader sidecar. With a cwd allow-list, a session not archived
-  yet is routed once the store gives it an allowed workspace. The comparison
-  uses the archive, so it holds after a restart, on a retry after failed
-  processing, and for remote imports that plan without discovery. A remote
-  session's workspace change alone is not routed; the next full import applies
-  it.
+  root; a title-only write routes none. Parents are compared both ways. A CLI
+  reader sidecar's parent wins when the sidecar parses and names one, as in
+  parsing, and it is read only when the store's parent disagrees with the
+  archive. An app or IDE row with no workspace folder clears the archived cwd. A
+  session whose archived row is stale, such as one whose cwd a failed parse
+  reconciled, routes until a parse succeeds. With a cwd allow-list, a session
+  not archived yet is routed once the store gives it an allowed workspace. The
+  comparison uses the archive, so it holds after a restart, on a retry after
+  failed processing, and for remote imports that plan without discovery. A
+  remote session's workspace change alone is not routed; the next full import
+  applies it.
 
 - **Unavailable store:** While a store that was read before cannot be read or
   has disappeared, its last good read stands in, so the outage neither changes
@@ -4568,9 +4570,10 @@ schemas keep their existing ordering behavior.
   remote roots included, likewise leaves alone any archived session holding a
   store-supplied working directory, parent, or project; a project the user
   assigned does not count. A CLI root without a store is normal for older
-  builds, so CLI sessions do not wait for one; a CLI conversation whose
-  working directory came only from a removed store loses it on its next
-  reparse.
+  builds, so CLI sessions do not wait for one; remote archives snapshot both
+  providers' stores so a checkpoint during transfer cannot mix versions; a CLI
+  conversation whose working directory came only from a removed store loses it
+  on its next reparse.
 
 - **Change detection (checked 2026-10-20):** Parsing opens conversation
   databases and the title store read-only, which rewrites their `-shm` WAL

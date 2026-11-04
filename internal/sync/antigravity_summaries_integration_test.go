@@ -284,12 +284,62 @@ func TestAntigravityUnreadableSummaryStoreKeepsArchivedMetadata(t *testing.T) {
 	}
 }
 
-// A store change whose first processing fails is routed again on retry,
-// because the archive still disagrees with the store. A parent shows this: it
-// reaches the archive only through a successful reparse.
+// A store change whose first processing fails is routed again on retry. A
+// failed parse can still reconcile the archived cwd, so for a workspace-only
+// change the row's stale data version, not a cwd mismatch, keeps it routed
+// until the project catches up.
 func TestAntigravitySummaryStoreChangeSurvivesFailedProcessing(t *testing.T) {
-	root := t.TempDir()
+	tests := map[string]struct {
+		change testjsonl.AntigravitySummary
+		check  func(t *testing.T, got *db.Session)
+	}{
+		"parent": {
+			change: testjsonl.AntigravitySummary{WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: antigravitySummaryParent},
+			check: func(t *testing.T, got *db.Session) {
+				t.Helper()
+				assert.Equal(t, new("antigravity:"+antigravitySummaryParent), got.ParentSessionID)
+			},
+		},
+		"workspace": {
+			change: testjsonl.AntigravitySummary{WorkspaceURIs: `["file:///tmp/moved-proj"]`},
+			check: func(t *testing.T, got *db.Session) {
+				t.Helper()
+				assert.Equal(t, "/tmp/moved-proj", got.Cwd)
+				assert.Equal(t, "moved_proj", got.Project)
+			},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			tc := antigravitySummaryCases()["app and IDE"]
+			tc.write(t, root)
+			store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+				tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`},
+			})
+			engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+			id := string(tc.agent) + ":" + tc.id
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+			testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{tc.id: tt.change})
+			dbPath := filepath.Join(root, "conversations", tc.id+".db")
+			require.NoError(t, os.WriteFile(dbPath, []byte("not a database"), 0o644))
+			require.Error(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			require.Equal(t, "ws_proj", antigravityStoredSession(t, archive, id).Project, "the failed parse wrote no project")
+
+			require.NoError(t, os.Remove(dbPath))
+			copyAntigravityCLITestSchemaTemplate(t, dbPath)
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			tt.check(t, antigravityStoredSession(t, archive, id))
+		})
+	}
+}
+
+// Clearing a conversation's workspace in the store routes it, so the archive
+// drops the old cwd and project as a full parse would.
+func TestAntigravitySummaryStoreClearedWorkspaceRoutes(t *testing.T) {
 	tc := antigravitySummaryCases()["app and IDE"]
+	root := t.TempDir()
 	tc.write(t, root)
 	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
 		tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`},
@@ -297,20 +347,59 @@ func TestAntigravitySummaryStoreChangeSurvivesFailedProcessing(t *testing.T) {
 	engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
 	id := string(tc.agent) + ":" + tc.id
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, "/tmp/ws-proj", antigravityStoredSession(t, archive, id).Cwd)
+
+	testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{tc.id: {WorkspaceURIs: `[]`}})
+	require.NoError(t, antigravityEngineOn(t, tc.agent, root, archive).SyncPathsContext(t.Context(), []string{store}))
+	cleared := antigravityStoredSession(t, archive, id)
+	assert.Empty(t, cleared.Cwd)
+	assert.Empty(t, cleared.Project)
+}
+
+// A CLI reader sidecar's parent wins over the store's only when the sidecar
+// names one. With a sidecar that names none, a store parent change routes.
+func TestAntigravitySummaryStoreRoutesCLIParentPastParentlessSidecar(t *testing.T) {
+	tc := antigravitySummaryCases()["CLI"]
+	root := t.TempDir()
+	tc.write(t, root)
+	sidecar := filepath.Join(root, "conversations", tc.id+".trajectory.json")
+	require.NoError(t, os.WriteFile(sidecar, []byte(`{}`), 0o644))
+	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`},
+	})
+	engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+	id := string(tc.agent) + ":" + tc.id
+	engine.SyncAll(t.Context(), nil)
+	require.Nil(t, antigravityStoredSession(t, archive, id).ParentSessionID)
 
 	testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
 		tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: antigravitySummaryParent},
 	})
-	dbPath := filepath.Join(root, "conversations", tc.id+".db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("not a database"), 0o644))
-	require.Error(t, engine.SyncPathsContext(t.Context(), []string{store}))
-	require.Nil(t, antigravityStoredSession(t, archive, id).ParentSessionID)
-
-	require.NoError(t, os.Remove(dbPath))
-	copyAntigravityCLITestSchemaTemplate(t, dbPath)
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+	require.NoError(t, antigravityEngineOn(t, tc.agent, root, archive).SyncPathsContext(t.Context(), []string{store}))
 	assert.Equal(t, new(string(tc.agent)+":"+antigravitySummaryParent),
 		antigravityStoredSession(t, archive, id).ParentSessionID)
+}
+
+// A full resync after a restart with the app or IDE store missing keeps the
+// archived parent and project, read from the old archive rather than the
+// empty replacement the rebuild writes into.
+func TestAntigravityMissingSummaryStoreSurvivesFullResync(t *testing.T) {
+	tc := antigravitySummaryCases()["app and IDE"]
+	root := t.TempDir()
+	tc.write(t, root)
+	engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+	id := string(tc.agent) + ":" + tc.id
+	path := tc.path(root)
+	parent := string(tc.agent) + ":" + antigravitySummaryParent
+	require.NoError(t, archive.UpsertSession(t.Context(), db.Session{
+		ID: id, Agent: string(tc.agent), Machine: "host-a", FilePath: &path,
+		Project: "ws_proj", ParentSessionID: &parent,
+	}))
+
+	engine.ResyncAll(t.Context(), nil)
+	kept := antigravityStoredSession(t, archive, id)
+	assert.Equal(t, "ws_proj", kept.Project)
+	assert.Equal(t, &parent, kept.ParentSessionID)
 }
 
 // After a restart, an app or IDE root whose store is gone leaves alone every

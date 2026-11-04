@@ -266,10 +266,14 @@ type SummaryStoreExpectation struct {
 	// directory; Cwd is then the value a parse stores.
 	Cwd      string
 	CwdKnown bool
-	// ParentKnown reports whether the store decides the session's parent;
-	// ParentSessionID is then the parent a parse stores, or "" for none.
+	// ParentKnown reports whether the store can decide the session's parent;
+	// ParentSessionID is then the store's parent, or "" for none.
 	ParentSessionID string
 	ParentKnown     bool
+	// ResolveParent, when set, returns the parent a parse actually stores,
+	// which a source the parser reads first can override. It is called only
+	// when the store's parent disagrees with the archive.
+	ResolveParent func() (string, error)
 }
 
 // SummaryStoreExpectationLister lists, for a summary store write, every
