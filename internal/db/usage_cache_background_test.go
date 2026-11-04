@@ -593,6 +593,8 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
 
+	// Give the first re-warm stale prices so it reaches the build hook.
+	setPrice(2_000_000)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
