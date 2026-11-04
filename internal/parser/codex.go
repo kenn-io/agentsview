@@ -1570,7 +1570,8 @@ func isCodexWaitAgentCall(name string) bool {
 
 // Code-mode wait resumes an exec cell and binds no agents.
 func isCodexExecCellWait(name string, args gjson.Result) bool {
-	return name == "wait" && args.Get("cell_id").Str != ""
+	return name == "wait" && args.Get("cell_id").Str != "" &&
+		len(codexWaitAgentIDs(args)) == 0
 }
 
 func parseCodexSubagentNotification(

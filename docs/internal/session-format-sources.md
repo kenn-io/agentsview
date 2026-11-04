@@ -651,15 +651,18 @@ fixtures retain this field; missing identities remain source-local.
 - **Code-mode waits (checked 2026-11-03 at
   `b34808060a51e98b8cb3dcf77824703757737cda`):** The pinned
   [wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/wait_handler.rs)
-  resumes an exec cell using a string `cell_id`. Its
+  resumes an exec cell using a string `cell_id`. The pinned
+  [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
+  stores function-call arguments as a JSON string. The
   [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
-  emits text blocks with script status, wall time, and output. These polls
-  stay on the incremental parse path. Subagent waits still require a full
-  parse, including the empty `status` object returned on timeout by the
+  emits text blocks with script status, wall time, and output. These polls stay
+  on the incremental parse path when they bind no agent IDs through `ids` or
+  `targets`. Subagent waits still require a full parse, including the empty
+  `status` object returned on timeout by the
   [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
   Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
-  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure
-  Code share this parser. Parsed content and cursor encoding are unchanged.
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
+  share this parser. Parsed content and cursor encoding are unchanged.
 
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
