@@ -395,9 +395,23 @@
     letter-spacing: -0.01em;
   }
 
+  /* A fixed width keeps the bar from reflowing (and the tabs from
+     collapsing) when the picker opens into its filter field; the list
+     gets its own wider panel so long project names stay readable. */
   .project-picker {
     display: flex;
+    width: 112px;
     min-width: 0;
+    --typeahead-min-width: 0px;
+    --typeahead-panel-min-width: 340px;
+  }
+
+  .project-picker :global(.kit-typeahead) {
+    width: 100%;
+  }
+
+  .project-picker :global(.kit-typeahead__option) {
+    font-size: 12.5px;
   }
 
   /* FitStages' sizing contract: the host is sized by the flexible search
