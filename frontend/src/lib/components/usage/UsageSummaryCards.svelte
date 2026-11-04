@@ -177,6 +177,8 @@
     value: () => string;
     sub?: () => string;
     featured?: boolean;
+    /** Context counts (projects, models, days) read one step quieter. */
+    context?: boolean;
   }
 
   const cards = $derived.by(() => {
@@ -221,6 +223,7 @@
         },
         {
           label: () => m.analytics_summary_projects(),
+          context: true,
           value: () =>
             String(
               usage.summary?.projectTotals.length ?? 0,
@@ -228,10 +231,12 @@
         },
         {
           label: () => m.usage_models(),
+          context: true,
           value: () => String(usage.summary?.modelTotals.length ?? 0),
         },
         {
           label: () => m.analytics_summary_active_days(),
+          context: true,
           value: () => String(activeDays),
         },
       ] satisfies Card[];
@@ -287,6 +292,7 @@
       },
       {
         label: () => m.analytics_summary_projects(),
+        context: true,
         value: () =>
           String(
             usage.summary?.projectTotals.length ?? 0,
@@ -294,11 +300,13 @@
       },
       {
         label: () => m.usage_models(),
+        context: true,
         value: () =>
           String(usage.summary?.modelTotals.length ?? 0),
       },
       {
         label: () => m.analytics_summary_active_days(),
+        context: true,
         value: () => String(activeDays),
       },
     ];
@@ -311,7 +319,7 @@
     <Card
       level="default"
       padding="none"
-      class={card.featured ? "card featured" : "card"}
+      class={card.featured ? "card featured" : card.context ? "card context" : "card"}
     >
       {#if usage.errors.summary}
         <span class="card-value error">--</span>
@@ -381,6 +389,11 @@
 
   .summary-cards :global(.card.featured .card-value) {
     font-size: 22px;
+  }
+
+  .summary-cards :global(.card.context .card-value) {
+    font-weight: 500;
+    color: var(--text-secondary);
   }
 
   .card-value.error {

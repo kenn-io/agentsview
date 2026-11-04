@@ -481,26 +481,26 @@
         href={sessionHref}
         onclick={handleSessionClick}
       >
-        <div class="session-title-row">
-          <div
-            class="session-name"
-            class:shell={displayLabel.isShell}
-            title={displayLabel.text}
-            ondblclick={handleDblClick}
-          >
-            {#if displayLabel.isShell}
-              <code>{displayLabel.text}</code>
-            {:else}
-              {displayLabel.text}
-            {/if}
-          </div>
-          <span class="session-time">{timeStr}</span>
-        </div>
-        {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
-        <div class="session-meta">
+        <div class="session-top-row">
           {#if !hideProject}
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
+          <span class="session-time">{timeStr}</span>
+        </div>
+        <div
+          class="session-name"
+          class:shell={displayLabel.isShell}
+          title={displayLabel.text}
+          ondblclick={handleDblClick}
+        >
+          {#if displayLabel.isShell}
+            <code>{displayLabel.text}</code>
+          {:else}
+            {displayLabel.text}
+          {/if}
+        </div>
+        {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
+        <div class="session-meta">
           {#if hasUnread}
             <span
               class="session-unread-indicator"
@@ -659,7 +659,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 42px;
+    height: 54px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -753,7 +753,7 @@
   .side-meta {
     position: absolute;
     right: 10px;
-    top: calc(50% + 1px);
+    bottom: 5px;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -840,7 +840,7 @@
   }
 
   .session-name {
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--text-primary);
     white-space: nowrap;
@@ -901,16 +901,21 @@
     flex-shrink: 1;
   }
 
-  .session-title-row {
+  /* Three lines, after the T3 Code pattern: project and time, the title
+     at full width, then counts and the agent slot. */
+  .session-top-row {
     display: flex;
     align-items: baseline;
     gap: 8px;
     min-width: 0;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--text-muted);
   }
 
-  .session-title-row .session-name {
+  .session-top-row .session-project {
     flex: 1 1 auto;
-    min-width: 0;
+    max-width: none;
   }
 
   .session-time {
