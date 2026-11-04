@@ -1227,17 +1227,9 @@ func (d *DB) CopyExcludedSessionsFrom(
 			return err
 		}
 		if hasLinks {
-			var hasProject bool
-			if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('commit_links', 'old_db') WHERE name='project')`).Scan(&hasProject); err != nil {
-				return fmt.Errorf("reading commit link source columns: %w", err)
-			}
-			project := "''"
-			if hasProject {
-				project = "l.project"
-			}
 			if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
     (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
-    SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,`+project+`
+    SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.project
     FROM old_db.commit_links l WHERE NOT EXISTS (SELECT 1 FROM old_db.sessions s WHERE s.id=l.session_id)`); err != nil {
 				return fmt.Errorf("copying excluded commit links: %w", err)
 			}

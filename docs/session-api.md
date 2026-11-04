@@ -1539,15 +1539,6 @@ poll links to the original commit call when its process ID matches. Polls with
 no originating commit call produce no links. Each session records a SHA once,
 at its first matching call.
 
-Quiet commits link only when the same call prints exactly one SHA through
-`git rev-parse HEAD` or `git log -1 --oneline`, including the equivalent
-`--oneline -1`, `-n 1 --oneline`, and `--oneline -n 1` forms. The log must read
-HEAD, with no revision argument or exactly `HEAD`. Quiet links leave the branch
-empty. The subject comes from the readback, or the commit's own `-m` message
-when the readback has no subject. The readback must run only after the commit
-succeeds, chained directly with `&&`. Without that evidence, quiet commits have
-no link.
-
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
 directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative
 paths join onto the base using the transcript's path style; `~` paths stay
