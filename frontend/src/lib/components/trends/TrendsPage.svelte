@@ -273,7 +273,7 @@
     </div>
     <div class="head-actions">
       <button class="secondary" onclick={resetTerms}>{m.trends_reset()}</button>
-      <button class="primary" onclick={refresh} disabled={trends.loading.terms}>
+      <button class="secondary" onclick={refresh} disabled={trends.loading.terms}>
         {trends.loading.terms ? m.trends_refreshing() : m.trends_refresh()}
       </button>
     </div>
@@ -454,23 +454,11 @@
     cursor: default;
   }
 
-  .primary,
   .secondary {
     height: 32px;
     padding: 0 12px;
     font-size: 12px;
     font-weight: 600;
-  }
-
-  .primary {
-    background: var(--accent-blue);
-    border-color: var(--accent-blue);
-    color: var(--accent-blue-foreground);
-  }
-
-  .primary:hover:not(:disabled) {
-    filter: brightness(0.95);
-    background: var(--accent-blue);
   }
 
   .toolbar {

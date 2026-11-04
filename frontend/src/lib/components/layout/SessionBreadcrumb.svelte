@@ -2159,14 +2159,26 @@
      its actions, then the session metadata. The meta wrapper dissolves so
      its children can sit on either line; order and a full-width break do
      the placement. Phones keep the single scrolling strip. */
+  /* With a mouse, header controls stay 26px tall so the two-line header
+     stays close to a single toolbar's height. Touch keeps 44px targets. */
+  @media (min-width: 641px) and (pointer: fine) {
+    .breadcrumb-meta > :global(.transcript-controls) {
+      --kit-control-height: 26px;
+    }
+
+    .breadcrumb-meta > :global(.transcript-controls .control-btn) {
+      height: 26px;
+    }
+  }
+
   @media (min-width: 641px) {
     .session-breadcrumb {
       flex-wrap: wrap;
       height: auto;
-      min-height: 52px;
-      padding-top: 6px;
-      padding-bottom: 6px;
-      row-gap: 3px;
+      min-height: 0;
+      padding-top: 4px;
+      padding-bottom: 4px;
+      row-gap: 2px;
       align-content: center;
     }
 

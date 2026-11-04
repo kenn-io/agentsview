@@ -243,6 +243,19 @@
   box-shadow: var(--selected-edge), var(--shadow-sm);
 }
 
+:root .kit-top-bar .kit-top-bar__tab {
+  /* Ten destinations share the bar with search: quieter, tighter tabs keep
+     them below the page content and leave search its full width. */
+  padding: 3px 9px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+:root .kit-top-bar .kit-top-bar__tab:hover:not(:disabled),
+:root .kit-top-bar .kit-top-bar__tab.active {
+  color: var(--text-primary);
+}
+
 html,
 body {
   height: 100%;

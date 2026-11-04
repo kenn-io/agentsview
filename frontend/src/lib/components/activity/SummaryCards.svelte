@@ -142,9 +142,11 @@
     display: contents;
   }
 
+  /* The lead card gets the neutral selected surface used by Usage's
+     totals, not an accent outline that reads as a clickable choice. */
   .summary-cards :global(.card.featured) {
-    border-width: 2px;
-    border-color: var(--accent-blue);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
   }
 
   .card-value {

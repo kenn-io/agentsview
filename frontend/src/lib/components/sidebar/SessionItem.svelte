@@ -668,7 +668,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 45px;
+    height: 52px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -691,7 +691,7 @@
 
   /* A faint divider marks where one three-line item ends. */
   .session-item:not(.compact) {
-    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border-muted) 60%, transparent);
+    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border-muted) 40%, transparent);
   }
 
   .session-item:hover {
@@ -767,7 +767,7 @@
   .side-meta {
     position: absolute;
     right: 10px;
-    bottom: 3px;
+    bottom: 4px;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -846,6 +846,14 @@
   .session-info {
     min-width: 0;
     flex: 1;
+  }
+
+  /* Small, even gaps keep the three lines apart without growing the row
+     past one glance. */
+  .session-item:not(.compact) .session-info-link {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .session-info-link {
