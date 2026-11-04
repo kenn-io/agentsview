@@ -1150,22 +1150,17 @@ func TestUsageCacheFillReportsDeletedSession(t *testing.T) {
 func TestUsageCacheFillInstallsExtractedSnapshotDespiteLaterWrite(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
-		t.Context(), UsageFilter{}, usageQueryKindToken,
+		t.Context(), UsageFilter{From: "2026-08-10", To: "2026-08-10"}, usageQueryKindToken,
 	)
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	var version usageSourceVersion
-	for _, candidate := range snapshot.Versions {
-		if candidate.SessionID == "inside-message" {
-			version = candidate
-			break
-		}
-	}
-	require.Equal(t, "inside-message", version.SessionID)
+	version := snapshot.Versions[0]
+	var expectedGeneration string
+	var expectedOrdinal sql.NullInt64
 	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation,
 		(SELECT MAX(ordinal) FROM messages WHERE session_id=sessions.id) FROM sessions WHERE id=?`,
-		version.SessionID).Scan(&version.UsageGeneration, &version.MessageOrdinal))
+		version.SessionID).Scan(&expectedGeneration, &expectedOrdinal))
 	var mutations atomic.Int32
 	var mutationErr atomic.Value
 	cache.fill.observer = usageFillObserver{
@@ -1190,7 +1185,9 @@ func TestUsageCacheFillInstallsExtractedSnapshotDespiteLaterWrite(t *testing.T) 
 	}
 	assert.Equal(t, int32(1), mutations.Load(), "fill extracted more than once")
 	assert.False(t, results[version.SessionID].Deleted)
-	assert.Equal(t, version, results[version.SessionID].source)
+	assert.True(t, version.Equal(results[version.SessionID].source))
+	assert.Equal(t, expectedGeneration, results[version.SessionID].source.UsageGeneration)
+	assert.Equal(t, expectedOrdinal, results[version.SessionID].source.MessageOrdinal)
 }
 
 // A write that lands after the request's archive snapshot no longer forces a
@@ -1649,7 +1646,6 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 			assert.Equal(t, 2, read, "one appended message and one edited history share the extraction batch")
 			_, err = database.getWriter().Exec(t.Context(), `DELETE FROM messages WHERE session_id='session' AND ordinal>=4`)
 			require.NoError(t, err)
-			read = 0
 			_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
 
