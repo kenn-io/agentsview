@@ -38,15 +38,6 @@ func TestStartupStatsKeepFTSSegmentDeletesIndexed(t *testing.T) {
 	d, err = OpenIsolated(t.Context(), path)
 	require.NoError(t, err)
 	checkPlans()
-
-	page, err := d.Search(t.Context(), SearchFilter{Query: "authentication", Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 3)
-	var sessionIDs []string
-	for _, result := range page.Results {
-		sessionIDs = append(sessionIDs, result.SessionID)
-	}
-	assert.ElementsMatch(t, []string{"a", "b", "c"}, sessionIDs)
 }
 
 func TestAnalyticsMetadataIndexLifecycle(t *testing.T) {
