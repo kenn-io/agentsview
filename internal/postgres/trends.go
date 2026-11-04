@@ -30,10 +30,23 @@ func (s *Store) GetTrendsTerms(
 	preds := []string{buildAnalyticsWhereWithDate(
 		sessionFilter, "", pb, false, "s.id", s.sessionDialect(),
 	)}
+	if sessionWindow := pgAnalyticsMessageWindow(f, pgDateCol, pb); sessionWindow != "" {
+		messageWindow := pgAnalyticsMessageWindow(f, "wm.timestamp", pb)
+		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE ("+sessionWindow+" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp IS NOT NULL AND "+messageWindow+")))")
+	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
+	content := "m.content"
+	if inWindow := pgAnalyticsMessageWindow(f, "COALESCE(m.timestamp, s.started_at, s.created_at)", pb); inWindow != "" {
+		rowWindow := inWindow
+		if modelFiltering {
+			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+		}
+		preds = append(preds, rowWindow)
+	}
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content,
+			COALESCE(m.model, ''), ` + content + `,
 			COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
 				'YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
 			COALESCE(TO_CHAR(s.started_at AT TIME ZONE 'UTC',

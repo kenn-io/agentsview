@@ -87,7 +87,7 @@ func ReplicaTarget(pg config.PGConfig) storage.ReplicaTarget {
 func (Backend) ValidateTarget(storage.ReplicaTarget) error { return nil }
 
 func (Backend) NewPusher(
-	_ context.Context, target storage.ReplicaTarget, local *db.DB,
+	ctx context.Context, target storage.ReplicaTarget, local *db.DB,
 	opts storage.PusherOptions,
 ) (storage.Pusher, error) {
 	// The PostgreSQL push has a fixed batch size, so a requested one would
@@ -99,7 +99,7 @@ func (Backend) NewPusher(
 		)
 	}
 	s, err := New(
-		target.URL, target.Schema, local,
+		ctx, target.URL, target.Schema, local,
 		target.MachineName, target.AllowInsecure, opts,
 	)
 	if err != nil {
@@ -109,9 +109,9 @@ func (Backend) NewPusher(
 }
 
 func (Backend) OpenStore(
-	target storage.ReplicaTarget,
+	ctx context.Context, target storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
-	store, err := NewStore(target.URL, target.Schema, target.AllowInsecure)
+	store, err := NewStore(ctx, target.URL, target.Schema, target.AllowInsecure)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func (Backend) OpenStore(
 func (Backend) OpenServeStore(
 	ctx context.Context, target storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
-	store, err := NewStore(target.URL, target.Schema, target.AllowInsecure)
+	store, err := NewStore(ctx, target.URL, target.Schema, target.AllowInsecure)
 	if err != nil {
 		return nil, err
 	}
@@ -195,21 +195,25 @@ func checkSchemaUsage(ctx context.Context, pg *sql.DB, schema string) error {
 }
 
 func prepareServeStore(ctx context.Context, store *Store, schema string) error {
-	if err := EnsureSchema(ctx, store.DB(), schema); err != nil {
+	pool, err := store.requireOwnedPool()
+	if err != nil {
+		return err
+	}
+	if err := EnsureSchema(ctx, pool, schema); err != nil {
 		if !IsReadOnlyError(err) {
 			return fmt.Errorf("schema migration failed: %w", err)
 		}
 	}
-	if err := checkSchemaUsage(ctx, store.DB(), schema); err != nil {
+	if err := checkSchemaUsage(ctx, pool, schema); err != nil {
 		if errors.Is(err, errNoSchemaUsage) {
 			return serveGrantError(err, schema)
 		}
 		return err
 	}
-	if err := CheckSchemaCompat(ctx, store.DB()); err != nil {
+	if err := CheckSchemaCompat(ctx, pool); err != nil {
 		return serveSchemaError(err, schema)
 	}
-	if err := CheckDataVersionCompat(ctx, store.DB()); err != nil {
+	if err := CheckDataVersionCompat(ctx, pool); err != nil {
 		return err
 	}
 	if err := store.DetectInsightGenerationAvailability(ctx); err != nil {
@@ -277,7 +281,11 @@ func (Backend) VectorGenerations(
 	if err != nil {
 		return nil, err
 	}
-	return ListVectorGenerationInfo(ctx, pgStore.DB())
+	pool, err := pgStore.requireOwnedPool()
+	if err != nil {
+		return nil, err
+	}
+	return ListVectorGenerationInfo(ctx, pool)
 }
 
 // OpenVectorSearcher serves the pushed generation matching gen.Fingerprint.
@@ -293,14 +301,18 @@ func (Backend) OpenVectorSearcher(
 	if err != nil {
 		return nil, "", err
 	}
-	genID, dim, ok, err := LookupVectorGeneration(ctx, pgStore.DB(), gen.Fingerprint)
+	pool, err := pgStore.requireOwnedPool()
+	if err != nil {
+		return nil, "", err
+	}
+	genID, dim, ok, err := LookupVectorGeneration(ctx, pool, gen.Fingerprint)
 	if err != nil {
 		return nil, "", fmt.Errorf("looking up PG vector generation: %w", err)
 	}
 	if !ok {
 		return nil, "PostgreSQL has no embedding generation matching fingerprint " + gen.Fingerprint, nil
 	}
-	tableOK, err := VectorChunkTableExists(ctx, pgStore.DB(), genID)
+	tableOK, err := VectorChunkTableExists(ctx, pool, genID)
 	if err != nil {
 		return nil, "", fmt.Errorf("probing PG vector chunk table: %w", err)
 	}
@@ -309,7 +321,7 @@ func (Backend) OpenVectorSearcher(
 			"PG generation %d matches fingerprint %s but its chunk table is "+
 				"missing (interrupted push?)", genID, gen.Fingerprint), nil
 	}
-	return NewVectorSearcher(pgStore.DB(), genID, dim, maxInputChars, encode), "", nil
+	return NewVectorSearcher(pool, genID, dim, maxInputChars, encode), "", nil
 }
 
 // asStore unwraps the concrete PostgreSQL store a replica-neutral caller

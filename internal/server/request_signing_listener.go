@@ -41,7 +41,7 @@ func (s *Server) StartRestrictedListener(ctx context.Context, policyFile string)
 	if err != nil || ip == nil || !ip.IsLoopback() {
 		return nil, errors.New("machine signing listener must bind a loopback IP")
 	}
-	handler, closeState, err := s.RestrictedHandler(policyFile)
+	handler, closeState, err := s.RestrictedHandler(ctx, policyFile)
 	if err != nil {
 		return nil, err
 	}

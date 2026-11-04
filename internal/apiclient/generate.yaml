@@ -20,6 +20,7 @@ filter:
       - get-api-v1-sessions-id-messages
       - get-api-v1-sessions-id-commits
       - post-api-v1-commits-sessions
+      - get-api-v1-sessions-id-file-references
       - get-api-v1-sessions-id-tool-calls
       - get-api-v1-sessions-id-tool-sequences
       - get-api-v1-sessions-id-children

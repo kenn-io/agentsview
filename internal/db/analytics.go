@@ -4016,6 +4016,7 @@ type SignalsProjectRow struct {
 // from its own SELECT and feed them into AggregateSignals
 // without duplicating the aggregation logic.
 type SignalRow struct {
+	transcriptVersion           string
 	ID                          string
 	Agent                       string
 	Project                     string
@@ -4087,7 +4088,8 @@ func (db *DB) GetAnalyticsSignals(
 		short_prompt_count, unstructured_start,
 		missing_success_criteria_count,
 		missing_verification_count, duplicate_prompt_count,
-		no_code_context_count, runaway_tool_loop_count
+		no_code_context_count, runaway_tool_loop_count,
+		transcript_revision || '|' || created_at
 		FROM sessions WHERE ` + where
 
 	rows, err := db.getReader().QueryContext(
@@ -4120,6 +4122,7 @@ func (db *DB) GetAnalyticsSignals(
 			&r.MissingVerificationCount,
 			&r.DuplicatePromptCount,
 			&r.NoCodeContextCount, &r.RunawayToolLoopCount,
+			&r.transcriptVersion,
 		); err != nil {
 			return SignalsAnalyticsResponse{},
 				fmt.Errorf(
@@ -4182,8 +4185,10 @@ func (db *DB) GetAnalyticsSignalSessions(
 	if err != nil {
 		return SignalSessionsResponse{}, err
 	}
-	if err := db.populateFrustrationMarkers(ctx, rows); err != nil {
-		return SignalSessionsResponse{}, err
+	if signal == "frustration_marker_count" {
+		if err := db.populateFrustrationMarkers(ctx, rows); err != nil {
+			return SignalSessionsResponse{}, err
+		}
 	}
 	candidates := SignalCandidates(rows, signal, limit)
 	messages, err := db.signalMessages(ctx, candidates, f)
@@ -4225,7 +4230,8 @@ func (db *DB) signalRows(
 		short_prompt_count, unstructured_start,
 		missing_success_criteria_count,
 		missing_verification_count, duplicate_prompt_count,
-		no_code_context_count, runaway_tool_loop_count
+		no_code_context_count, runaway_tool_loop_count,
+		transcript_revision || '|' || created_at
 		FROM sessions WHERE ` + where
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -4264,13 +4270,21 @@ func (db *DB) populateFrustrationMarkers(
 	if len(rows) == 0 {
 		return nil
 	}
+	m := &db.frustrationMemo
+	m.mu.Lock()
+	generation := m.generation
+	m.mu.Unlock()
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
+		if count, ok := m.lookup(generation, rows[i].ID, rows[i].transcriptVersion); ok {
+			rows[i].FrustrationMarkerCount = count
+			continue
+		}
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	return queryChunked(ids, func(chunk []string) error {
+	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, content, is_system
 			FROM messages
@@ -4308,6 +4322,17 @@ func (db *DB) populateFrustrationMarkers(
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		r := rows[idx[id]]
+		m.store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
+	}
+	return nil
 }
 
 func scanSignalRow(rs rowScanner, loc *time.Location) (SignalRow, error) {
@@ -4328,6 +4353,7 @@ func scanSignalRow(rs rowScanner, loc *time.Location) (SignalRow, error) {
 		&r.MissingVerificationCount,
 		&r.DuplicatePromptCount,
 		&r.NoCodeContextCount, &r.RunawayToolLoopCount,
+		&r.transcriptVersion,
 	); err != nil {
 		return SignalRow{}, fmt.Errorf(
 			"scanning signal row: %w", err,

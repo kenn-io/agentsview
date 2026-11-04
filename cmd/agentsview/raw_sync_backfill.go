@@ -25,10 +25,7 @@ import (
 	"go.kenn.io/agentsview/internal/rawwatch"
 )
 
-const (
-	defaultRawSyncBackfillBatch = 128
-	rawSyncBackfillExitCode     = 2
-)
+const defaultRawSyncBackfillBatch = 128
 
 type rawSyncBackfillConfig struct {
 	Server            string

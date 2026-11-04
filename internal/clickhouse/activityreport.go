@@ -794,9 +794,12 @@ func (s *Store) activityReportUsage(
 			UsageDedupKey:     r.usageDedupKey,
 		})
 	}
-	mask, attribution, webSearchRequests := activity.UsageSurvivorSelectionForSessions(
-		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
+		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
+	if err != nil {
+		return nil, nil, err
+	}
 	out = make([]activity.UsageRow, 0, count)
 	i := -1
 	for r := range ordered {

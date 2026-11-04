@@ -36,14 +36,14 @@ func newKiloLegacyProviderFactory(def AgentDef) ProviderFactory {
 						)
 					},
 				),
-				WithFileLookup(func(root, rawID string) (singleFileMatch, bool) {
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
 					return kiloLegacyFindFile(root, rawID)
 				}),
-				WithFileFingerprint(func(src singleFileSource) (SourceFingerprint, error) {
-					return kiloLegacyFingerprintSource(src.Path)
+				WithFileFingerprint(func(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
+					return kiloLegacyFingerprintSource(ctx, src.Path)
 				}),
-				WithFileParse(func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
-					return kiloLegacyParseFile(src, req)
+				WithFileParse(func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
+					return kiloLegacyParseFile(ctx, src, req)
 				}),
 			)
 		},
@@ -184,11 +184,11 @@ func kiloLegacyFindFile(root, rawID string) (singleFileMatch, bool) {
 // folded into the composite fingerprint but parsed by
 // parseKiloLegacySession.
 func kiloLegacyParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	taskDir := filepath.Dir(src.Path)
 	sess, msgs, err := parseKiloLegacySession(
-		taskDir, req.Source.ProjectHint, req.Machine,
+		ctx, taskDir, req.Source.ProjectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err

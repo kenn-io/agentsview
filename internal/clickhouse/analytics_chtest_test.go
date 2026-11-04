@@ -3,7 +3,7 @@
 package clickhouse
 
 import (
-	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 
@@ -13,11 +13,13 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestStoreAnalyticsReads(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	filter := db.AnalyticsFilter{
 		From: "2026-01-01",
 		To:   "2026-01-31",
@@ -110,7 +112,8 @@ func TestStoreAnalyticsReads(t *testing.T) {
 }
 
 func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name      string
 		populated bool
@@ -145,6 +148,7 @@ func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
 // their sessions with a SQL subquery rather than an ID list: session shape
 // autonomy buckets and velocity messages and tool counts.
 func TestAnalyticsSessionSetQueriesMatchSQLite(t *testing.T) {
+	t.Parallel()
 	store, _, local := newPushedStore(t)
 	ctx := t.Context()
 	filter := db.AnalyticsFilter{
@@ -175,6 +179,7 @@ func TestAnalyticsSessionSetQueriesMatchSQLite(t *testing.T) {
 // other split behind the stacked activity timeline on assistant-only,
 // system-only, and mixed days.
 func TestAnalyticsActivityRoleSplitMatchesSQLite(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	ctx := t.Context()
 	type row struct {
@@ -245,6 +250,7 @@ func TestAnalyticsActivityRoleSplitMatchesSQLite(t *testing.T) {
 // bounds. Unclamped, From=0001-01-01 pads to 0000-12-31T10:00:00Z, which
 // parseDateTime64BestEffort reads as a recent date and drops older sessions.
 func TestAnalyticsSummaryFromYearOne(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	ctx := t.Context()
 	const id = "ch-year-one"
@@ -269,4 +275,53 @@ func TestAnalyticsSummaryFromYearOne(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, summary.TotalSessions)
 	assert.Equal(t, 1, summary.TotalMessages)
+}
+
+func TestTrendsTermsSessionWindowParity(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	cases := testutil.TrendsSessionWindowCases()
+	for _, tc := range cases {
+		sess := fixtureSession(tc.Project, tc.Project, "seam", tc.Started, len(tc.Messages()))
+		if tc.Started == "" {
+			sess.StartedAt = nil
+			sess.EndedAt = nil
+		}
+		var msgs []db.Message
+		for ordinal, m := range tc.Messages() {
+			msg := fixtureMessage(tc.Project, ordinal, m.Role, m.Content, m.Timestamp)
+			msg.Model = m.Model
+			msgs = append(msgs, msg)
+		}
+		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: sess, Messages: msgs, DataVersion: 1, ReplaceMessages: true}})
+		require.NoError(t, err)
+		// Ingestion assigns creation time; pin the fixture's fallback date.
+		require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, "UPDATE sessions SET created_at = ? WHERE id = ?", tc.Created, tc.Project)
+			return err
+		}))
+	}
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	terms, err := db.ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.Project, func(t *testing.T) {
+			for _, dayHour := range []bool{false, true} {
+				f := db.AnalyticsFilter{From: "2024-06-05", To: "2024-06-05", Project: tc.Project, Timezone: tc.Timezone, Model: tc.Model}
+				if dayHour {
+					f.DayOfWeek = new(2)
+					f.Hour = new(tc.Hour)
+				}
+				got, err := store.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				assert.Equal(t, tc.Want, got.MessageCount)
+				require.Len(t, got.Series, 1)
+				assert.Equal(t, tc.Want, got.Series[0].Total)
+				want, err := local.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				assert.Equal(t, want, got)
+			}
+		})
+	}
 }

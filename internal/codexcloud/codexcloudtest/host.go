@@ -302,7 +302,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	defer h.drop(c)
 	for {
-		_, data, err := c.Read(context.Background())
+		_, data, err := c.Read(r.Context())
 		if err != nil {
 			return
 		}
@@ -341,7 +341,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if c.Write(context.Background(), websocket.MessageText, out) != nil {
+		if c.Write(r.Context(), websocket.MessageText, out) != nil {
 			return
 		}
 	}

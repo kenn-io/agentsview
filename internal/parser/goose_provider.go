@@ -17,8 +17,10 @@ func newGooseProviderFactory(def AgentDef) ProviderFactory {
 		spec:           gooseProviderSpec,
 		normalizeRoots: normalizeGooseRoots,
 		tracker: &sqliteChangeTracker{
-			agent:  AgentGoose,
-			open:   openGooseDB,
+			agent: AgentGoose,
+			open: func(_ context.Context, dbPath string, stableSnapshot bool) (*sql.DB, error) {
+				return openGooseDB(dbPath, stableSnapshot)
+			},
 			schema: gooseCursorSchema,
 		},
 	}

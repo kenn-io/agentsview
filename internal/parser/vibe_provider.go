@@ -26,7 +26,9 @@ func newVibeProviderFactory(def AgentDef) ProviderFactory {
 				WithStreamingFileDiscovery(vibeDiscoverEach),
 				WithFileWatchRoots(vibeWatchRoots),
 				WithFileChangedPathClassifier(vibeClassifyPath),
-				WithFileLookup(vibeFindFile),
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
+					return vibeFindFile(root, rawID)
+				}),
 				WithFileFingerprint(vibeFingerprintSource),
 				WithFileParse(vibeParseFile),
 			)}
@@ -280,9 +282,9 @@ func isVibeMessagesFile(path string) bool {
 	return !info.IsDir()
 }
 
-func vibeFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
+func vibeFingerprintSource(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
 	if vibeIsUnifiedAnchor(src.Path) {
-		return vibeUnifiedFingerprint(filepath.Dir(src.Path))
+		return vibeUnifiedFingerprint(ctx, filepath.Dir(src.Path))
 	}
 	info, err := os.Stat(src.Path)
 	if err != nil {
@@ -302,7 +304,7 @@ func vibeFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 			mtime = metaMTime
 		}
 	}
-	hash, err := hashJSONLSourceFile(src.Path)
+	hash, err := hashJSONLSourceFileContext(ctx, src.Path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -314,9 +316,9 @@ func vibeFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 }
 
 func vibeParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, usageEvents, err := parseVibeSession(src.Path, "", req.Machine)
+	sess, msgs, usageEvents, err := parseVibeSession(ctx, src.Path, "", req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

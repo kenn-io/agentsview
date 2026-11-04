@@ -63,7 +63,7 @@ func TestHostedSidebarPagesKeepMixedParentGraphs(t *testing.T) {
 		('legacy-child','legacy','legacy','claude','legacy-root','subagent',2,1,'2026-01-04','2026-01-04'),
 		('legacy-orphan','orphan','legacy','claude','missing','subagent',2,1,'2026-01-03','2026-01-03')`)
 	require.NoError(t, err)
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	h.SetCursorSecret([]byte("synthetic mixed sidebar cursor"))
 	for _, tc := range []struct {

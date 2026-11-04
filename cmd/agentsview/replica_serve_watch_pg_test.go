@@ -32,10 +32,10 @@ func TestReplicaServeWatchPublication(t *testing.T) {
 			isolateDefaultAgentDirs(t, t.TempDir())
 			schema := fmt.Sprintf("serve_watch_%d", time.Now().UnixNano())
 			t.Setenv("AGENTSVIEW_PG_URL", dsn)
-			admin, err := postgres.Open(dsn, schema, true)
+			admin, err := postgres.Open(t.Context(), dsn, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() {
-				_, err := admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+				_, err := admin.ExecContext(context.WithoutCancel(t.Context()), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 				assert.NoError(t, err)
 				assert.NoError(t, admin.Close())
 			})
@@ -65,7 +65,7 @@ allow_insecure = true
 				server.Endpoint = endpoint.URL + "/v1"
 				cfg.Vector.Embeddings.Servers["local"] = server
 			}
-			startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", &ReplicaPushConfig{Embed: embed, Debounce: time.Second, Interval: time.Second})
+			startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", &ReplicaPushConfig{Embed: embed, Debounce: time.Second, Interval: time.Second})
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(startup.ctx)
 			startup.ctx = ctx
@@ -83,7 +83,11 @@ allow_insecure = true
 			client := &http.Client{Timeout: 10 * time.Second}
 			sessionURL := fmt.Sprintf("http://%s:%d/api/v1/sessions/combined-session/messages", startup.cfg.Host, startup.cfg.Port)
 			published := func(content string) bool {
-				response, err := client.Get(sessionURL)
+				request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, sessionURL, nil)
+				if err != nil {
+					return false
+				}
+				response, err := client.Do(request)
 				if err != nil {
 					return false
 				}

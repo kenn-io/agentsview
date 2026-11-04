@@ -648,7 +648,11 @@ func parseMuseSession(
 	session.Project = ExtractProjectFromCwdWithBranchContext(
 		ctx, session.Cwd, session.GitBranch,
 	)
-	session.FirstMessage, session.UserMessageCount = firstMessageAndUserCount(messages)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	session.FirstMessage, session.UserMessageCount = firstMessage, userCount
 	// Session totals come from the assistant messages. Usage that no
 	// message carries is still priced through its usage event; outside a
 	// live tool-only response, real logs have not produced such usage.

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-02
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -215,14 +215,20 @@ thread creation. No external sandbox helper is required.
 | Attempts per selected generation             | Default 5; maximum 10; 6 / 11 after interruption |
 | Retry backoff                                | Exponential from 1 second, capped at 60 seconds  |
 | Lease / heartbeat                            | 60 seconds / 10 seconds                          |
-| Materialized source bytes                    | 512 MiB                                          |
-| Parser stdout / stderr                       | 32 MiB / 64 KiB                                  |
-| Child address space / data                   | 2 GiB / 512 MiB                                  |
+| Materialized source bytes                    | 1 GiB                                            |
+| Parser stdout / stderr                       | 512 MiB / 64 KiB                                 |
+| Child address space / data                   | 4 GiB / 1 GiB                                    |
+| Child Go memory target                       | 768 MiB                                          |
 | Child CPU / open descriptors                 | 30 seconds / 64                                  |
 | Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                           |
 
 Custody may accept files larger than the materialization limit. Such captures
-remain retained but cannot be projected by this worker. Accepted source bytes
+remain retained but cannot be projected by this worker. Materialization or
+parser-output byte-limit rejection fails that selected generation immediately
+with a `size_limit` diagnostic. Other failures retain bounded retries. Streaming
+the parser result avoids a separate complete JSON buffer; the parser, hosting
+process and projection still retain normalized content in memory. The child
+memory limits do not bound the hosting process. Accepted source bytes
 are untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
@@ -283,9 +289,12 @@ retry their transaction on serialization failure (`SQLSTATE 40001`) if
 publication or curation holds a conflicting identity lock. Ordinary legacy
 content and curation writes do not take those identity locks.
 
-Search and session reads use the published sessions while new raw captures wait
-for processing. Reads retry if published content or public identities change
-during the read.
+Search and session reads keep one read-only PostgreSQL snapshot for each hosted
+store operation, including transcript rows, public identities, links and pins.
+Concurrent publication does not invalidate that operation. A later operation
+can see a newer publication; a composed HTTP response is not one shared snapshot.
+Activity-report source probes still check live content, identity and parser
+selection revisions so report construction can detect changed inputs.
 
 Selecting a parser job does not expire browsing cursors. Publishing changed
 identities does; the sidebar and activity report reload when their next page
@@ -304,8 +313,9 @@ and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version or the Friction Log
-rules, schedule current heads explicitly in bounded batches:
+After an executable upgrade changes the parser data version, Friction Log
+rules or hosted parser runtime version, schedule current heads explicitly in
+bounded batches:
 
 ```bash
 agentsview replica pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
@@ -316,6 +326,8 @@ selects at most 1–256 heads and atomically saves its keyset checkpoint. The ru
 ID is bound to the executable's processing version. Equal manifest/version
 selection is idempotent: a new run ID does not resurrect completed or exhausted
 jobs for that same selection. Startup and idle polls perform no reparse scan.
+Use a new run ID after the processing version changes; an earlier run is bound
+to its original version. Upgrading alone does not reselect retained failures.
 
 After fixing the cause of a failed job, give it a fresh attempt budget:
 
@@ -456,6 +468,17 @@ AgentsView data directory. `agentsview source raw status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
 
+Deterministic rejections permanently block the rejected capture so independent
+sources can continue uploading. These include `invalid_request` and
+`checksum_mismatch` errors, plus HTTP 413 responses decoded as server JSON
+errors. Codeless HTTP 400 responses, credential failures, expired upload
+sessions, other conflicts, request timeouts, rate limits, server failures,
+missing-object responses, and non-JSON proxy replies remain retryable.
+Source-head conflicts reconcile with the server's current head. Each signed
+retry uses a fresh signature. After correcting a permanent rejection, a later
+capture or audit can replace the blocked capture; that capture itself is not
+retried.
+
 When a complete audit finds that a previously captured file is gone, the watcher
 uploads a tombstone for it. The server keeps the sessions already derived from
 that file; see
@@ -585,6 +608,11 @@ The implemented routes are:
 | `HEAD /api/v1/raw-sync/uploads/{id}`    | Access token with the `upload` scope    | Read the accepted upload offset         |
 | `PATCH /api/v1/raw-sync/uploads/{id}`   | Access token with the `upload` scope    | Append and finalize object bytes        |
 | `POST /api/v1/raw-sync/manifests`       | Access token with the `commit` scope    | Validate and commit one raw generation  |
+
+An empty PATCH finalizes an upload whose accepted offset equals its
+object length, including a zero-byte source file. The server still verifies
+the object's length and SHA-256 digest. An empty PATCH before the full length
+is rejected.
 
 These machine routes use their own device credentials and scoped tokens. They do
 not accept the shared bearer token that can protect the rest of a remote
@@ -816,7 +844,7 @@ results from a signed server omit browser session links, because the machine
 listener serves no browser UI.
 
 | Grant       | Supported operations                                                                                                                                                                                                                                                                                           |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| -------------------------------------------- | ------------------------------------------------ |
 | Contributor | Device token exchange, missing-object negotiation, resumable upload initiation/PATCH/HEAD, manifest commit, raw status and health                                                                                                                                                                              |
 | Reader      | Version/ping, session lists and stored session/message/tool/activity/timing/usage reads, usage summaries and pairwise comparisons, recent edits, tool and signal analytics, activity reports, projects/machines/agents/branches, search, recall reads and queries, memory status, session/server event streams |
 

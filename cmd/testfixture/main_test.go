@@ -17,7 +17,7 @@ func TestCreateProjectReclassificationFixture(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
-	require.NoError(t, createProjectReclassificationFixture(database, base))
+	require.NoError(t, createProjectReclassificationFixture(t.Context(), database, base))
 
 	const (
 		machine      = "remote-example-host"

@@ -146,7 +146,7 @@ func (m Materializer) Materialize(
 	for _, entry := range manifest.Manifest.Entries {
 		if entry.Length > m.MaxTotalBytes-total {
 			return nil, fmt.Errorf(
-				"%w: materialization exceeds %d bytes", rawsync.ErrInvalid, m.MaxTotalBytes,
+				"%w: %w: materialization exceeds %d bytes", rawsync.ErrInvalid, ErrSizeLimit, m.MaxTotalBytes,
 			)
 		}
 		total += entry.Length

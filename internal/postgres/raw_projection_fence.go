@@ -23,12 +23,13 @@ type RawProjectionOptions struct {
 type RawProjectionStore struct {
 	curationGuard func(context.Context, *sql.Tx, string, RawIdentity) error
 	db            *sql.DB
+	readTx        *sql.Tx
 	options       RawProjectionOptions
 }
 
 var _ rawderive.ProjectionSink = (*RawProjectionStore)(nil)
 
-func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*RawProjectionStore, error) {
+func NewRawProjectionStore(ctx context.Context, database *sql.DB, options RawProjectionOptions) (*RawProjectionStore, error) {
 	if options.Content.ToolResultImages == config.ToolResultImagesOffload {
 		return nil, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
@@ -44,7 +45,6 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if database == nil {
 		return nil, errors.New("raw projection requires a database")
 	}
-	ctx := context.Background()
 	var schema string
 	if err := database.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
 		return nil, err

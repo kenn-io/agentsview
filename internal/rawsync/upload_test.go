@@ -149,26 +149,49 @@ func TestUploadServiceReturnsCurrentOffsetAfterConcurrentCompletion(t *testing.T
 func TestUploadServiceChecksumMismatchResetsSession(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
-	store := newMemoryUploadSessionStore()
-	custody := newMemoryUploadCustody()
-	service := newUploadServiceForTest(t, store, custody, now)
-	identity := AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
-	object := objectRefForBytes(t, []byte("expected"))
-	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name        string
+		length      int64
+		chunk       []byte
+		wantInvalid bool
+		checkReset  bool
+	}{
+		{name: "corrupt bytes", length: 8, chunk: []byte("corrupt!"), checkReset: true},
+		{name: "before end", length: 8, wantInvalid: true},
+		{name: "wrong empty digest", length: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err = service.Append(
-		t.Context(), identity, session.ID, 0, []byte("corrupt!"),
-	)
+			now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+			store := newMemoryUploadSessionStore()
+			custody := newMemoryUploadCustody()
+			service := newUploadServiceForTest(t, store, custody, now)
+			identity := AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
+			object := objectRefForBytes(t, []byte("expected"))
+			object.Length = tc.length
 
-	var mismatch *UploadChecksumMismatchError
-	require.ErrorAs(t, err, &mismatch)
-	assert.Zero(t, mismatch.CurrentOffset)
-	assert.Zero(t, store.session.Offset)
-	assert.Empty(t, store.data)
-	assert.Equal(t, 1, store.resetCalls)
-	assert.Zero(t, custody.finalizeCalls)
+			session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
+			require.NoError(t, err)
+
+			_, err = service.Append(t.Context(), identity, session.ID, 0, tc.chunk)
+
+			if tc.wantInvalid {
+				require.ErrorIs(t, err, ErrInvalid)
+				require.ErrorContains(t, err, "empty upload chunk made no progress")
+			} else {
+				var mismatch *UploadChecksumMismatchError
+				require.ErrorAs(t, err, &mismatch)
+				assert.Zero(t, mismatch.CurrentOffset)
+			}
+			if tc.checkReset {
+				assert.Zero(t, store.session.Offset)
+				assert.Empty(t, store.data)
+				assert.Equal(t, 1, store.resetCalls)
+			}
+			assert.Zero(t, custody.finalizeCalls)
+		})
+	}
 }
 
 func TestUploadServiceDoesNotReportResetOffsetWhenResetFails(t *testing.T) {

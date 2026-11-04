@@ -61,7 +61,7 @@ func TestHostedSkillInferenceKeepsNamesLexical(t *testing.T) {
 func TestInferCursorSkillNameFromReadFile(t *testing.T) {
 	path := writeTestSkill(t, "foo", "foo")
 
-	_, _, toolCalls := extractAssistantContent([]string{
+	_, _, toolCalls := extractAssistantContent(t.Context(), []string{
 		"[Tool call] ReadFile",
 		"  path=" + path,
 	})
@@ -74,7 +74,7 @@ func TestInferCursorSkillNameFromReadFile(t *testing.T) {
 func TestInferCursorSkillNameFromShellCommand(t *testing.T) {
 	path := writeTestSkill(t, "foo", "foo")
 
-	_, _, toolCalls := extractAssistantContent([]string{
+	_, _, toolCalls := extractAssistantContent(t.Context(), []string{
 		"[Tool call] Shell",
 		"  command=cat " + path,
 	})
@@ -87,7 +87,7 @@ func TestInferCursorSkillNameFromShellCommand(t *testing.T) {
 func TestInferCursorSkillNameIgnoresShellWriteCommand(t *testing.T) {
 	path := writeTestSkill(t, "foo", "foo")
 
-	_, _, toolCalls := extractAssistantContent([]string{
+	_, _, toolCalls := extractAssistantContent(t.Context(), []string{
 		"[Tool call] Shell",
 		"  command=cp " + path + " /tmp/SKILL.md",
 	})
@@ -99,7 +99,7 @@ func TestInferCursorSkillNameIgnoresShellWriteCommand(t *testing.T) {
 func TestInferCursorSkillNameUsesFrontmatterName(t *testing.T) {
 	path := writeTestSkill(t, "index", "data-analytics:index")
 
-	_, _, toolCalls := extractAssistantContent([]string{
+	_, _, toolCalls := extractAssistantContent(t.Context(), []string{
 		"[Tool call] ReadFile",
 		`  {"path":` + quoteJSON(t, path) + `}`,
 	})
@@ -134,7 +134,7 @@ func TestInferCursorSkillNameIgnoresDiscoveryAndNonSkillPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, toolCalls := extractAssistantContent(
+			_, _, toolCalls := extractAssistantContent(t.Context(),
 				splitTestLines(tt.line),
 			)
 			require.Len(t, toolCalls, 1)

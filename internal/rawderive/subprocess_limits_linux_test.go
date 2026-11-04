@@ -4,10 +4,14 @@ package rawderive
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -16,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // Race tracing allocates outside Go's heap and exceeds the production
@@ -42,16 +47,19 @@ func TestSandboxKernelControls(t *testing.T) {
 			require.NoError(t, os.WriteFile(outside, []byte("outside"), 0o400))
 			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "--sandbox-kernel-test", mode, source, jail, outside)
-			cmd.Env = []string{"GOMAXPROCS=2", "GOMEMLIMIT=384MiB"}
+			childCtx, stopChild := context.WithCancel(ctx)
+			defer stopChild()
+			cmd := exec.CommandContext(childCtx, os.Args[0], "--sandbox-kernel-test", mode, source, jail, outside)
+			cmd.Env = []string{"GOMAXPROCS=2", "GOMEMLIMIT=" + parserGoMemoryLimit}
 			require.NoError(t, configureParserNamespace(cmd))
 			start := time.Now()
-			out, err := runParserProcess(ctx, cancel, cmd, nil, parserOutputLimit, parserErrorLimit)
+			var checks map[string]bool
+			err := runParserProcess(ctx, stopChild, cmd, nil, parserOutputLimit, parserErrorLimit, func(src io.Reader) error {
+				return json.NewDecoder(src).Decode(&checks)
+			})
 			require.NotNil(t, cmd.ProcessState)
 			if mode == "denials" {
 				require.NoError(t, err)
-				var checks map[string]bool
-				require.NoError(t, json.Unmarshal(out, &checks))
 				require.GreaterOrEqual(t, len(checks), 14)
 				for key, value := range checks {
 					assert.True(t, value, key)
@@ -121,4 +129,77 @@ func TestSandboxProviderJSONAndSQLite(t *testing.T) {
 			assert.Equal(t, expected, got, "kernel boundary preserves complete normalized provider semantics")
 		})
 	}
+}
+
+func TestSandboxCodexOutcomesAboveFormerLimit(t *testing.T) {
+	p, err := NewSubprocessParser(30 * time.Second)
+	require.NoError(t, err)
+	if err = p.Preflight(t.Context()); err != nil {
+		if os.Getenv("RAW_SANDBOX_REQUIRED") == "1" {
+			require.NoError(t, err)
+		}
+		t.Skip("kernel isolation unavailable")
+	}
+	for _, tc := range []struct {
+		name           string
+		messages, size int
+	}{
+		{"large_value", 1, 33 << 20},
+		{"many_messages", 2048, 17 << 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "33333333-3333-4333-8333-333333333333"
+			root := t.TempDir()
+			path := filepath.Join(root, "rollout-2026-09-08T10-00-00-"+id+".jsonl")
+			file, err := os.Create(path)
+			require.NoError(t, err)
+			_, err = io.WriteString(file, testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-09-08T10:00:00Z")+"\n")
+			require.NoError(t, err)
+			content := strings.Repeat("x", tc.size)
+			for i := range tc.messages {
+				role := "user"
+				if i%2 != 0 {
+					role = "assistant"
+				}
+				_, err = io.WriteString(file, testjsonl.CodexMsgJSON(role, content, "2026-09-08T10:00:01Z")+"\n")
+				require.NoError(t, err)
+			}
+			require.NoError(t, file.Close())
+			provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{FullSessionID: "codex:" + id})
+			require.NoError(t, err)
+			require.True(t, found)
+			manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, source)
+			tree, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: MaxMaterializedBytes}).Materialize(t.Context(), manifest)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, tree.Cleanup()) })
+			out, err := p.Parse(t.Context(), manifest, tree)
+			require.NoError(t, err)
+			require.Len(t, out.Outcome.Results, 1)
+			assert.True(t, out.Outcome.ResultSetComplete)
+			assert.Empty(t, out.Outcome.SourceErrors)
+			parsed := out.Outcome.Results[0]
+			assert.Equal(t, parser.DataVersionCurrent, parsed.DataVersion)
+			require.Len(t, parsed.Result.Messages, tc.messages)
+			contentDigest := sha256.Sum256([]byte(content))
+			for _, message := range parsed.Result.Messages {
+				require.Equal(t, contentDigest, sha256.Sum256([]byte(message.Content)))
+			}
+			var wire byteCountWriter
+			require.NoError(t, encodeParserOutcome(&wire, out))
+			assert.Greater(t, wire.bytes, int64(32<<20), "the complete provider outcome exceeds the former IPC ceiling")
+			unchanged, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, manifest.Manifest.Entries[0].Objects[0].SHA256, fmt.Sprintf("%x", sha256.Sum256(unchanged)))
+			require.NoError(t, p.Preflight(t.Context()), "a large import leaves the next job usable")
+		})
+	}
+}
+
+type byteCountWriter struct{ bytes int64 }
+
+func (w *byteCountWriter) Write(p []byte) (int, error) {
+	w.bytes += int64(len(p))
+	return len(p), nil
 }

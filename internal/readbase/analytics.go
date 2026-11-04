@@ -31,7 +31,7 @@ type AnalyticsBackend interface {
 	// TopSessionsSQL returns an ordered query without LIMIT or a trailing semicolon.
 	TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime bool) (string, []any)
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
-	TrendsSQL() string
+	TrendsSQL(db.AnalyticsFilter) (string, []any)
 	FormatTime(any) string
 	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
@@ -959,7 +959,8 @@ func (s *Analytics) GetTrendsTerms(
 	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
-	rows, err := s.backend.QueryContext(ctx, s.backend.TrendsSQL())
+	query, args := s.backend.TrendsSQL(f)
+	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.TrendsTermsResponse{}, err
 	}

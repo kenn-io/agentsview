@@ -179,6 +179,13 @@ text then compares normally.
 Use `--full` to bypass both layers and re-push everything, for example, after a
 schema reset or when message content was rewritten in place.
 
+A push can also become full on its own, for example when an upgrade adds a
+backfill, after an archive rebuild, or when PostgreSQL lost this archive's push
+marker. Such a push still checks and updates every session, but it compares
+each transcript with PostgreSQL and rewrites only changed messages. Only
+`--full`, a push resuming an interrupted `--full` push, or a push that rebuilt
+the local archive itself rewrites every transcript.
+
 Every push sends the most recently active sessions first, so recent activity
 reaches PostgreSQL before older history. A full push that stops partway, for
 example because the process restarted, resumes on the next push: sessions it

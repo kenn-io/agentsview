@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-01
+last_edited: 2026-11-03
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -24,13 +24,16 @@ The latest release is
 - Find the session and prompt behind a Git commit through the session API, or
   list a session's commits with `agentsview session commits <id>`. Links come
   from stored Git summaries, including Codex output received through later
-  polls. Quiet commits link when the same call prints its SHA through
-  `git rev-parse HEAD` or single-entry `git log --oneline` output, chained after
-  the commit with `&&`. Repository paths follow the first directory in each call
+  polls. Repository paths follow the first directory in each call
   and only a leading `cd`.
   Transcript-only and usage-only archives retain no links. Deleted sessions
   remain visible as missing records. Sessions permanently deleted before this
   release have no links.
+- Assistants searching your history through MCP can now ask for sessions that
+  covered several ideas at once, such as an auth change and its retry policy,
+  even when they came up in different parts of the conversation. Pass two to
+  five `concepts` to `search_content`. Each result shows the passage that
+  matched each idea. This needs the semantic search index.
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
@@ -128,15 +131,35 @@ The latest release is
   Sessions with rows written before control-character cleanup are rewritten once.
 - `pg push` reduces writes when a session grows by rewriting only the messages
   from the first changed message onward instead of the whole session.
+- `pg push` no longer rewrites every unchanged transcript when it runs a full push
+  on its own, such as after an upgrade adds a backfill or when the archive was
+  rebuilt before the push. It still updates every session and copies changed
+  messages. `--full` still rewrites everything.
 - Homebrew installs built with `make homebrew` no longer replace themselves.
   `agentsview update` stops and tells you to run `brew upgrade agentsview`;
   `agentsview update --check` still reports new releases with the same advice.
+- `debug.log` now shows what each watcher-triggered sync cost, so you can tell
+  why the daemon keeps reading the disk without root tools. Each
+  `watcher: N file(s) changed` line is now followed by a `sync: changed paths:`
+  line. It reports how many of those paths were session files, how many
+  sessions were updated or unchanged, how many sessions had their content read
+  because their file details alone could not show whether they changed, how
+  many bytes were read, and how long the sync took. For a few less common
+  agents, the read figures can be lower than the real reads.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
+- Codex code-mode `wait` calls now show their script output. The next sync
+  restores missing results in previously imported sessions. Subagent waits
+  keep their existing behavior.
+- On Linux, large Claude archives keep Claude and Codex on live file watches
+  instead of two-minute rescans that delay session updates.
+- Hosted PostgreSQL searches and session reads stay available while raw captures
+  arrive and transcripts are published. Each hosted read uses one database
+  snapshot for its content, public identities and related data.
 - DeepSeek Harness sessions that were missing from the archive now import. This
   covers compressed session logs written without zstd content checksums, and
   sessions that ran shell commands, which log `job/registered` and
@@ -149,11 +172,21 @@ The latest release is
 - Hosted transcript jobs whose workers keep stopping now fail with error class
   `lease` after one run past `raw_max_attempts`, instead of retrying forever.
   Workers from an older processing generation can no longer change a newer lease.
-- Hosted PostgreSQL searches and session reads no longer fail solely because
-  newly accepted raw captures are waiting for processing. Changes to published
-  content or public identities still cause reads to retry.
 - Crashed or still-running Copilot CLI sessions now show tokens and estimated
   cost.
+- Hosted raw imports can process larger captured sources and parser results
+  without retaining an extra complete JSON output buffer. Source reconstruction
+  and parser output remain bounded at 1 GiB and 512 MiB. Byte-limit rejections
+  fail immediately with a `size_limit` diagnostic. After upgrading, operators
+  explicitly schedule retained sources with `pg raw-reparse` under a new run ID.
+- Hosted imports and session curation skip transcript reads when no effective
+  pins need them, and validate pinned content only at the referenced ordinals.
+- Large hosted imports use less temporary memory when comparing session content.
+- Hosted imports avoid fetching a transcript from PostgreSQL again when the same
+  transaction has just saved that captured version.
+  Existing content identities are preserved.
+- Hosted updates load prior transcript content only when provider history needs
+  it, retaining metadata without decoding an unused older transcript.
 - Oh My Pi subagent runs now appear under the correct parent, including runs
   started by other subagents. Newer OMP transcripts that record parent file paths
   are supported alongside older transcripts. Available OMP sources are
@@ -161,6 +194,12 @@ The latest release is
 - Oversized debug logs retain their last 10 MB in `debug.log.1` to help
   investigate a stalled server. Successful rotation clears the active log;
   a busy lock or failed backup leaves it intact.
+- Imported sessions with a recorded repository URL no longer split into separate
+  projects just because their worktree folders are unavailable. The first
+  writable startup after upgrading repairs existing SQLite archives
+  automatically, even when source files are gone. Explicit project rules still
+  take priority. Use `db repair-projects` to preview any remaining corrections.
+
 - Claude Code token and cost totals now include responses that contain only an
   empty thinking block. These responses still show nothing in the transcript,
   but their usage was dropped. Existing Claude-format sources are reprocessed on

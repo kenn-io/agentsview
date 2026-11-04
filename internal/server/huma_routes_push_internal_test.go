@@ -64,6 +64,7 @@ func (stubVectorPushSource) BeginExport(
 // TestPGPushProgressLoggerThrottlesAndReportsPhases pins the daemon-side
 // push heartbeat: reports inside the throttle window log nothing, and the
 // vector phase logs its own counters instead of the session line.
+// Serial: replaces the push log interval and process-wide log output.
 func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
 	origInterval := pushProgressLogInterval
 	pushProgressLogInterval = time.Hour
@@ -456,6 +457,7 @@ func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
 }
 
 func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
+	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/claude-ai/sync")
@@ -465,6 +467,7 @@ func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
 }
 
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {
+	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/sync/remotes")
@@ -476,6 +479,7 @@ func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 // CLI's daemon-delegated push renders the streamed progress) while still
 // declaring a plain JSON response for non-streaming clients.
 func TestPushRoutesAreStreaming(t *testing.T) {
+	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
@@ -522,6 +526,7 @@ func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
 // full push forced. Per-batch pushes and runner-less servers keep the
 // in-process SyncThenRun path, whose sync does land the session.
 func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		stale         bool
@@ -562,6 +567,7 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			runnerCalls := 0
 			workCalls := 0
 			var opts []syncRouteFixtureOption
@@ -1046,6 +1052,7 @@ func TestPGPushFullRoutesResyncThroughWorkerRunner(t *testing.T) {
 // TestNewPushProgressStreamSenderThrottles pins the SSE fan-out throttle: the
 // session loop reports per session, and forwarding every report would emit
 // one SSE event per row.
+// Serial: replaces the push stream interval every server reads.
 func TestNewPushProgressStreamSenderThrottles(t *testing.T) {
 	origInterval := pushProgressStreamInterval
 	pushProgressStreamInterval = time.Hour
@@ -1185,8 +1192,10 @@ func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
 // the result and marks the mirror result. A push that rebuilt nothing reports
 // neither, so a client whose stream drops keeps its --full request.
 func TestMirrorPushReportsArchiveRebuild(t *testing.T) {
+	t.Parallel()
 	for _, rebuild := range []bool{false, true} {
 		t.Run(fmt.Sprintf("rebuild=%t", rebuild), func(t *testing.T) {
+			t.Parallel()
 			var f *syncRouteFixture
 			f = newSyncRouteFixture(t, withLocalResyncRunner(func(
 				ctx context.Context, _ func(syncpkg.Progress),
@@ -1322,6 +1331,7 @@ func (failingPusher) Close() error { return nil }
 // The replica route reports whether the copy started: a failed connect
 // started nothing, and a failed copy may have recorded a full push the mirror
 // resumes.
+// Serial: subtests push through one shared server.
 func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	for _, tt := range []struct {
@@ -1361,6 +1371,7 @@ func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
 // as started. Every mirror pushes in full after a rebuild, and a client that
 // kept --full would make the daemon rebuild the archive on every retry.
 func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
+	t.Parallel()
 	var f *syncRouteFixture
 	f = newSyncRouteFixture(t, withLocalResyncRunner(func(
 		ctx context.Context, _ func(syncpkg.Progress),

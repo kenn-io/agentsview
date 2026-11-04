@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +19,7 @@ import (
 )
 
 func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
+	t.Parallel()
 	failBeforeSessionRows := &pushHooks{beforeSessionRows: func([]db.Session) error {
 		return errors.New("simulated crash before session rows")
 	}}
@@ -32,7 +32,7 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 			change: func(t *testing.T, local *db.DB, _ Target, s *Sync) {
 				appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:30:00.000Z")
 				s.hooks = failBeforeSessionRows
-				_, err := s.Push(context.Background(), false, nil)
+				_, err := s.Push(t.Context(), false, nil)
 				require.NoError(t, err)
 			},
 		},
@@ -41,7 +41,7 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 			change: func(t *testing.T, local *db.DB, _ Target, s *Sync) {
 				require.NoError(t, local.ReplaceSessionMessages(t.Context(), fixtureAlphaID, nil))
 				s.hooks = failBeforeSessionRows
-				_, err := s.Push(context.Background(), false, nil)
+				_, err := s.Push(t.Context(), false, nil)
 				require.NoError(t, err)
 			},
 		},
@@ -73,7 +73,7 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local, target := seedFixture(t)
 			s := newTestSync(t, local, target, storage.PusherOptions{})
 			_, err := s.Push(ctx, false, nil)
@@ -84,7 +84,7 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
 			get := func() *httptest.ResponseRecorder {
-				req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
 				req.RemoteAddr = "127.0.0.1:1234"
 				res := httptest.NewRecorder()
 				handler.ServeHTTP(res, req)
@@ -103,7 +103,8 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 }
 
 func TestToolSequencesServeAfterPublicationRecovers(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:30:00.000Z")
@@ -118,7 +119,7 @@ func TestToolSequencesServeAfterPublicationRecovers(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -126,7 +127,8 @@ func TestToolSequencesServeAfterPublicationRecovers(t *testing.T) {
 }
 
 func TestToolSequencesServeSessionsWithoutStoredMessages(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	const id = "ch-metadata-only"
 	// Metadata-only and usage-only sessions keep a positive message_count with no stored message rows.
@@ -143,7 +145,7 @@ func TestToolSequencesServeSessionsWithoutStoredMessages(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/tool-sequences", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/tool-sequences", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -151,7 +153,8 @@ func TestToolSequencesServeSessionsWithoutStoredMessages(t *testing.T) {
 }
 
 func TestToolSequencesRefuseEmptiedUntimedTranscript(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	const id = "ch-untimed"
 	// Untimed messages leave last_message_at null, so only the stored count shows they went missing.
@@ -173,7 +176,7 @@ func TestToolSequencesRefuseEmptiedUntimedTranscript(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
 	get := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/tool-sequences", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/tool-sequences", nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
@@ -192,7 +195,8 @@ func TestToolSequencesRefuseEmptiedUntimedTranscript(t *testing.T) {
 }
 
 func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	_, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -215,7 +219,7 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
 	get := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)

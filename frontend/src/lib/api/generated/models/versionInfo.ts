@@ -8,6 +8,7 @@ export interface VersionInfo {
   build_date: string;
   commit: string;
   data_version: number;
+  docbank_enabled?: boolean;
   friction_available: boolean;
   friction_build_allowed: boolean;
   friction_readable?: boolean;

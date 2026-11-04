@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"slices"
 	"time"
 
@@ -32,11 +31,13 @@ const rawEffectivePinCandidatesSQL = `WITH eligible AS (
 // Legacy and raw references share the same deterministic page, so unresolved
 // pins compete by durable creation time, not by transient materialization IDs.
 func (s *RawProjectionStore) pinReferencePage(ctx context.Context, id, project string) ([]db.PinnedMessage, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	tx, owned, err := s.readTransaction(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if owned {
+		defer func() { _ = tx.Rollback() }()
+	}
 	rows, err := tx.QueryContext(ctx, rawEffectivePinCandidatesSQL+`, candidates AS (
  SELECT session_id,message_key,ordinal,note,created_at,0::bigint legacy_id FROM effective
  UNION ALL
@@ -138,8 +139,10 @@ func (s *RawProjectionStore) pinReferencePage(ctx context.Context, id, project s
 			}
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return nil, err
+	if owned {
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
 	}
 	return pins, nil
 }

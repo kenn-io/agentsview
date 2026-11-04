@@ -41,7 +41,7 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 						require.Zero(t, shared, "fixture aliases must not serialize the requests before row locks")
 					} else {
 						_, _, store := newCodexTrashMirror(t)
-						observer, writer = store.pg, store.pg
+						observer, writer = store.DB(), store.DB()
 						require.NoError(t, observer.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema))
 						dsn = testPGURL(t)
 					}
@@ -55,9 +55,9 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 						require.NoError(t, err)
 						var pg *sql.DB
 						if hosted {
-							pg, err = OpenHosted(opDSN, schema, tenant, false)
+							pg, err = OpenHosted(t.Context(), opDSN, schema, tenant, false)
 						} else {
-							pg, err = Open(opDSN, schema, true)
+							pg, err = Open(t.Context(), opDSN, schema, true)
 						}
 						require.NoError(t, err)
 						t.Cleanup(func() { require.NoError(t, pg.Close()) })
@@ -67,7 +67,7 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 							EmptyTrash(context.Context) (int, error)
 						}
 						if hosted {
-							endpoint, err = newHostedAdapter(pg, tenant)
+							endpoint, err = newHostedAdapter(t.Context(), pg, tenant)
 							require.NoError(t, err)
 						} else {
 							endpoint = &Store{pg: pg}
@@ -148,10 +148,10 @@ func TestHostedCodexPurgeRetriesBusyPageIdentity(t *testing.T) {
 			require.NoError(t, err)
 			dsn, err := appendConnParams(f.dsn, map[string]string{"application_name": "codex_identity_purge"})
 			require.NoError(t, err)
-			pg, err := OpenHosted(dsn, f.schema, f.tenant, false)
+			pg, err := OpenHosted(t.Context(), dsn, f.schema, f.tenant, false)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
-			h, err := newHostedAdapter(pg, f.tenant)
+			h, err := newHostedAdapter(t.Context(), pg, f.tenant)
 			require.NoError(t, err)
 			gate, err := f.runtime.BeginTx(ctx, nil)
 			require.NoError(t, err)

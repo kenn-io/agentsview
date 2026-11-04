@@ -237,7 +237,7 @@ func TestClaudeFullParseHonorsContextBetweenLines(t *testing.T) {
 	ctx := newCancelOnErrCheckContext(t, 4)
 
 	_, _, err := claudeParseFile(
-		path, "project", "machine", claudeParseOptions{ctx: ctx},
+		ctx, path, "project", "machine", claudeParseOptions{},
 	)
 
 	require.ErrorIs(t, err, context.Canceled)

@@ -17,7 +17,7 @@ func (h *HostedStore) GetSessionFull(ctx context.Context, id string) (*db.Sessio
 }
 
 func (h *HostedStore) getSession(ctx context.Context, id string, full bool) (*db.Session, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (*db.Session, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (*db.Session, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			return nil, err
@@ -40,7 +40,7 @@ func (h *HostedStore) getSession(ctx context.Context, id string, full bool) (*db
 }
 
 func (h *HostedStore) ListSessions(ctx context.Context, f db.SessionFilter) (db.SessionPage, error) {
-	return hostedRead(ctx, h, func(rev hostedRevision) (db.SessionPage, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, rev hostedRevision) (db.SessionPage, error) {
 		q := f
 		var err error
 		if f.IDs != nil {
@@ -75,7 +75,7 @@ func (h *HostedStore) ListSessions(ctx context.Context, f db.SessionFilter) (db.
 }
 
 func (h *HostedStore) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
-	return hostedRead(ctx, h, func(rev hostedRevision) (db.SidebarSessionIndex, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, rev hostedRevision) (db.SidebarSessionIndex, error) {
 		q := f
 		var err error
 		q.Cursor, err = h.openCursor(f.Cursor, rev)
@@ -102,7 +102,7 @@ func (h *HostedStore) GetSidebarSessionIndex(ctx context.Context, f db.SessionFi
 }
 
 func (h *HostedStore) GetChildSessions(ctx context.Context, id string) ([]db.Session, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) ([]db.Session, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) ([]db.Session, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			return nil, err
@@ -150,7 +150,7 @@ func (h *HostedStore) findAliases(ctx context.Context, term string, limit int, s
 	if limit <= 0 || limit > db.MaxSessionLimit {
 		limit = db.MaxSessionLimit
 	}
-	return hostedRead(ctx, h, func(_ hostedRevision) ([]string, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) ([]string, error) {
 		predicate := `strpos(a.alias_id,$1)>0`
 		if suffix {
 			predicate = `(a.alias_id=$1 OR right(a.alias_id,length($1)+1)=':'||$1 OR right(a.alias_id,length($1)+1)='~'||$1)`
@@ -190,24 +190,26 @@ func (h *HostedStore) findAliases(ctx context.Context, term string, limit int, s
 }
 
 func (h *HostedStore) GetMessages(ctx context.Context, id string, from, limit int, asc bool) ([]db.Message, error) {
-	return h.readMessages(ctx, id, func(p string) ([]db.Message, error) { return h.physical.GetMessages(ctx, p, from, limit, asc) })
+	return h.readMessages(ctx, id, func(h *HostedStore, p string) ([]db.Message, error) {
+		return h.physical.GetMessages(ctx, p, from, limit, asc)
+	})
 }
 
 func (h *HostedStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
-	return h.readMessages(ctx, id, func(p string) ([]db.Message, error) { return h.physical.GetMessagesWindow(ctx, p, w) })
+	return h.readMessages(ctx, id, func(h *HostedStore, p string) ([]db.Message, error) { return h.physical.GetMessagesWindow(ctx, p, w) })
 }
 
 func (h *HostedStore) GetAllMessages(ctx context.Context, id string) ([]db.Message, error) {
-	return h.readMessages(ctx, id, func(p string) ([]db.Message, error) { return h.physical.GetAllMessages(ctx, p) })
+	return h.readMessages(ctx, id, func(h *HostedStore, p string) ([]db.Message, error) { return h.physical.GetAllMessages(ctx, p) })
 }
 
-func (h *HostedStore) readMessages(ctx context.Context, id string, read func(string) ([]db.Message, error)) ([]db.Message, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) ([]db.Message, error) {
+func (h *HostedStore) readMessages(ctx context.Context, id string, read func(*HostedStore, string) ([]db.Message, error)) ([]db.Message, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) ([]db.Message, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			return nil, err
 		}
-		msgs, err := read(target.SessionID)
+		msgs, err := read(h, target.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -218,31 +220,35 @@ func (h *HostedStore) readMessages(ctx context.Context, id string, read func(str
 	})
 }
 
-func hostedDetail[T any](ctx context.Context, h *HostedStore, id string, read func(string) (T, error)) (T, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (T, error) {
+func hostedDetail[T any](ctx context.Context, h *HostedStore, id string, read func(*HostedStore, string) (T, error)) (T, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (T, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil || target.SessionID == "" {
 			var zero T
 			return zero, err
 		}
-		return read(target.SessionID)
+		return read(h, target.SessionID)
 	})
 }
 
 func (h *HostedStore) GetResumeModelCounts(ctx context.Context, id string) ([]db.ModelCount, error) {
-	return hostedDetail(ctx, h, id, func(p string) ([]db.ModelCount, error) { return h.physical.GetResumeModelCounts(ctx, p) })
+	return hostedDetail(ctx, h, id, func(h *HostedStore, p string) ([]db.ModelCount, error) {
+		return h.physical.GetResumeModelCounts(ctx, p)
+	})
 }
 
 func (h *HostedStore) GetSessionActivity(ctx context.Context, id string) (*db.SessionActivityResponse, error) {
-	return hostedDetail(ctx, h, id, func(p string) (*db.SessionActivityResponse, error) { return h.physical.GetSessionActivity(ctx, p) })
+	return hostedDetail(ctx, h, id, func(h *HostedStore, p string) (*db.SessionActivityResponse, error) {
+		return h.physical.GetSessionActivity(ctx, p)
+	})
 }
 
 func (h *HostedStore) SearchSession(ctx context.Context, id, query string) ([]int, error) {
-	return hostedDetail(ctx, h, id, func(p string) ([]int, error) { return h.physical.SearchSession(ctx, p, query) })
+	return hostedDetail(ctx, h, id, func(h *HostedStore, p string) ([]int, error) { return h.physical.SearchSession(ctx, p, query) })
 }
 
 func (h *HostedStore) GetProviderResumeID(ctx context.Context, id string) (string, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (string, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (string, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil {
 			return "", err

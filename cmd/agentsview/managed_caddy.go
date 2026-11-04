@@ -327,7 +327,10 @@ func startManagedCaddy(
 		return nil, fmt.Errorf("validating managed caddy config: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// Caddy outlives parent's cancellation on purpose: managedCaddy.Stop owns
+	// its lifetime, so the serve runtime stops it in order with the HTTP
+	// server shutdown and also releases the process guard.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	cmd := exec.CommandContext(
 		ctx,
 		cfg.Proxy.Bin,

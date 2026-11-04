@@ -40,7 +40,7 @@ func TestProviderToolResultFailureMetadata(t *testing.T) {
 				require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
 				uploader, ok := provider.(parser.ClaudeUploadParser)
 				require.True(t, ok)
-				results, err := uploader.ParseUploadedTranscript(path, "project-a", "local")
+				results, err := uploader.ParseUploadedTranscript(t.Context(), path, "project-a", "local")
 				require.NoError(t, err)
 				require.Len(t, results, 1)
 				parsed = results[0]

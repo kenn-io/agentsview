@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-29
+last_edited: 2026-11-03
 ---
 
 # Session Format Source Inventory
@@ -162,6 +162,7 @@ evidence; they do not establish whether a tool helped the task.
   through directory symlinks. `TestSkillInferenceSkipsProtectedPaths` covers
   this with synthetic files, the explicit opt-in, and ordinary unprotected
   paths. No producer format changed.
+
 - **Blank thinking usage (2026-10-27):** Reverified against the synthetic
   transcript in [#2469](https://github.com/kenn-io/agentsview/issues/2469),
   kept in `internal/parser/testdata/claude/blank_thinking_usage.jsonl`. An
@@ -172,6 +173,7 @@ evidence; they do not establish whether a tool helped the task.
   response. It is stored as a hidden system row that keeps its usage; a blank
   record with all-zero usage is still skipped. Data version 150 reparses
   Claude-format sources in place.
+
 - **Screenshot intake (checked 2026-10-24):** A frozen native-file selection
   retained JSONL envelopes, message and tool identifiers, subagent
   transcripts, and companion text files. Decoded-string sanitization followed
@@ -633,6 +635,45 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records
+  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+  `function_call_output.output` is an array of `input_text` blocks containing
+  completion timing and script output; running polls return plain text.
+  Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
+  `targets` arguments as code-mode polls and stores their output as normal
+  tool results. Subagent waits keep their existing `status` handling,
+  including empty timeout statuses. They add no result event when `status`
+  is absent. Synthetic coverage in
+  `TestParseCodexSession_FunctionCalls` and
+  `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
+  an in-place reparse for Codex at data version 164.
+
+- **Code-mode waits (checked 2026-11-03 at
+  `b34808060a51e98b8cb3dcf77824703757737cda`):** The pinned
+  [wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/wait_handler.rs)
+  resumes an exec cell using a string `cell_id`. The pinned
+  [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
+  stores function-call arguments as a JSON string. The
+  [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
+  emits text blocks with script status, wall time, and output. These polls stay
+  on the incremental parse path when they bind no agent IDs through `ids` or
+  `targets`. Subagent waits still require a full parse, including the empty
+  `status` object returned on timeout by the
+  [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
+  Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
+  share this parser. Parsed content and cursor encoding are unchanged.
+
+- **Hosted capacity (reverified 2026-11-01):** The pinned
+  [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
+  stores text strings in response items; the
+  [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
+  persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
+  this existing shape synthetically through native capture, materialization
+  and the isolated parser, with one large string and many smaller messages.
+  It verifies lossless outcomes above the former transport ceiling, not a
+  producer size limit or a new provider format.
+
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -666,6 +707,7 @@ fixtures retain this field; missing identities remain source-local.
   `model_provider_id` as `openai` and `service_tier` as `priority`; Codex can
   omit that selected tier from requests for models that do not advertise
   support.
+
 - **Screenshot intake (checked 2026-10-24):** Ordinary sync accepted sanitized
   native JSONL with `encrypted_content` explicitly omitted. The local parser's
   `extractCodexInboundAgentMessage` also accepts plaintext under that field
@@ -674,6 +716,17 @@ fixtures retain this field; missing identities remain source-local.
   and review that loss when curating a screenshot generation. The corpus
   procedure does not change the parser or claim complete conversation
   retention.
+
+- **Repository attribution (checked 2026-10-28):** The pinned
+  [GitInfo schema](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/protocol.rs)
+  carries optional `repository_url` and `branch` fields in session metadata.
+  A working directory can name a temporary worktree while the recorded URL
+  still identifies its repository. The parser retains both values. SQLite
+  ingestion now uses the recorded URL to resolve an otherwise unidentified
+  checkout's effective project, without probing the source machine's paths.
+  `TestCodexRemoteWorktreeProjectSurvivesAppendAndRebuild` exercises sibling,
+  nested, managed, and scratch worktrees through import, append, and rebuild.
+  This is an archive attribution policy, not a provider format change.
 
 - **Dialogue classification (checked 2026-10-22):** The pinned
   [response schema](https://github.com/openai/codex/blob/c71297b9a9b3f7995445eff8d768837814ac06f8/codex-rs/protocol/src/models.rs#L31-L96)
@@ -1466,27 +1519,28 @@ fixtures retain this field; missing identities remain source-local.
 - **Usage and cost:** Per-call store rows take precedence over
   `session.usage_record` receipts and replace all shutdown token rollups.
   Shutdown token rows before the first usable receipt are summed, just as in
-  sessions without receipts. Shutdowns written after that receipt are cumulative
-  snapshots of what receipts already record, so their token rows are dropped.
-  See the published schema evidence below. Receipts preserve each
+  sessions without receipts. Shutdowns written after that receipt are
+  cumulative snapshots of what receipts already record, so their token rows
+  are dropped. See the published schema evidence below. Receipts preserve each
   request's timestamp, input, output, cache-read, cache-write, and reasoning
   tokens. Without per-call usage, shutdown metrics supply totals, then known
-  per-message output is the fallback. Known-model tokens use catalog estimates.
-  A usable receipt after the latest reported-cost shutdown clears that stale
-  cost only when receipts supply the per-call usage.
+  per-message output is the fallback. Known-model tokens use catalog
+  estimates. A usable receipt after the latest reported-cost shutdown clears
+  that stale cost only when receipts supply the per-call usage.
 
 - **Receipt schema:** Reverified 2026-10-31 against the published
   [Copilot CLI 1.0.105 Linux x64 package](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
   (SHA1 `43322d0817b8564afcfe00f3929c00b033bca116`). The embedded schema
-  describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated" and
-  `accountingSnapshot` as "captured atomically with receipt watermarks". It defines
-  `session.usage_checkpoint` for "reconstructing aggregate accounting on resume".
-  It defines `session.usage_record` with `data.usage.model` and token fields
-  under `data.usage`: `inputTokens`, `outputTokens`, `cacheReadTokens`,
-  `cacheWriteTokens`, and `reasoningTokens`. Fresh input subtracts cache reads
-  and writes. Receipts use request pricing and their event timestamp without a
-  message ordinal. Data version 163 reparses available Copilot CLI sources in
-  place without changing session or source identities.
+  describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated"
+  and `accountingSnapshot` as "captured atomically with receipt watermarks".
+  It defines `session.usage_checkpoint` for "reconstructing aggregate
+  accounting on resume". It defines `session.usage_record` with
+  `data.usage.model` and token fields under `data.usage`: `inputTokens`,
+  `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, and
+  `reasoningTokens`. Fresh input subtracts cache reads and writes. Receipts
+  use request pricing and their event timestamp without a message ordinal.
+  Data version 163 reparses available Copilot CLI sources in place without
+  changing session or source identities.
 
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
@@ -1837,6 +1891,12 @@ Normal sync tests use the captured beta database schema and check archived
 payloads, image keep/drop behavior, unchanged PDF/text files and references, and
 an unchanged second sync. Data version 108 makes existing imports eligible to
 recover omitted file payloads. This adds retention, not a PDF previewer.
+`TestRetainedToolResultFilesProducerFixture` uses `tool_files.json` to check
+PDF/text sizes and the text digest. Service and UI tests use separate inputs.
+Reverified the retained-file decoder on 2026-10-22 against the parser's
+unchanged `file.uri` retention. Constructed service and API regressions cover
+empty base64 bodies and MIME parameters before the base64 marker, asserting
+decoded-byte digests and visible file occurrences.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the

@@ -163,7 +163,10 @@ func parseOpenCodeReviewFile(
 	} else {
 		status = classifyOpenCodeReviewTermination(state.messages)
 	}
-	firstMessage, userCount := firstMessageAndUserCount(state.messages)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, state.messages)
+	if err != nil {
+		return nil, err
+	}
 
 	sessionID := state.sessionID
 	parentID := state.resumedFrom

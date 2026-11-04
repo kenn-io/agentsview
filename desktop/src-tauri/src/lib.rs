@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver as StdReceiver, SyncSender, TrySendError};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -79,11 +79,15 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 /// noticed soon after it ends, and well above the request cost of one
 /// loopback GET.
 const BACKEND_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+const BACKEND_READY_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+const BACKEND_LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
 const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
 const STATUS_PROBE_FAILURE_FAIL_AFTER: u32 = 30;
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
+
+static LOGIN_SHELL_ENV: OnceLock<Vec<(OsString, OsString)>> = OnceLock::new();
 // Stopping the detached daemon before an update install must outlast
 // both a daemon that is still mid-startup (serve stop refuses with
 // "retry once it is ready" while the startup sync runs, which takes
@@ -1086,7 +1090,7 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
     build_sidecar_env(
         std::env::vars_os().collect(),
         if should_probe {
-            read_login_shell_env().unwrap_or_default()
+            cached_login_shell_env()
         } else {
             Vec::new()
         },
@@ -1095,6 +1099,15 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
         is_windows,
         is_windows,
     )
+}
+
+// The login shell is a snapshot of the user's launch environment. Cache both
+// successful and failed probes for this desktop process so repeated sidecar
+// commands do not rerun shell startup or repeat a 3s timeout.
+fn cached_login_shell_env() -> Vec<(OsString, OsString)> {
+    LOGIN_SHELL_ENV
+        .get_or_init(|| read_login_shell_env().unwrap_or_default())
+        .clone()
 }
 
 // read_login_shell_env invokes the user's login shell and
@@ -1760,9 +1773,7 @@ fn forward_sidecar_logs(
                             );
                         }
                         if let Some(status) = stdout_update.status {
-                            let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
-                            let _ =
-                                window.eval(format!("window.__setStatus('{escaped}');").as_str());
+                            let _ = window.eval(status_update_script(status.as_str()).as_str());
                         }
                         if let Some(port) = stdout_update.port {
                             save_sidecar_port(window.app_handle(), port);
@@ -2055,6 +2066,10 @@ fn js_string_literal(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+fn status_update_script(status: &str) -> String {
+    format!("window.__setStatus({});", js_string_literal(status))
+}
+
 fn startup_failure_footer(handle: &AppHandle) -> String {
     match desktop_log_file_path(handle) {
         Ok(path) => format!(
@@ -2331,8 +2346,7 @@ fn poll_background_status_after_launcher_exit(
                     failed_status_probes = 0;
                     unhealthy_since = None;
                     if !long_startup_notice_shown && !status.trim().is_empty() {
-                        let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
-                        let _ = window.eval(format!("window.__setStatus('{escaped}');").as_str());
+                        let _ = window.eval(status_update_script(status.as_str()).as_str());
                     }
                 }
                 BackendStatusProbe::Unhealthy(status) => {
@@ -4081,6 +4095,12 @@ struct BackendProbeState {
     last: Option<(u16, bool)>,
 }
 
+#[derive(serde::Deserialize)]
+struct BackendPingResponse {
+    ok: bool,
+    service: String,
+}
+
 impl BackendProbeState {
     /// Records one probe result and reports whether the current page needs
     /// to be reloaded.
@@ -4088,11 +4108,10 @@ impl BackendProbeState {
     /// The window is reloaded when a reachable backend is not the one the
     /// window was last known to be on: it answers on a different port, or it
     /// answers again after having been unreachable. A backend that comes back
-    /// on the same port may be a different process, and the version endpoint
-    /// carries no per-process identity to tell them apart, so the
-    /// down-then-up transition is the signal. Recovery fires once per
-    /// transition, never on every probe, and never while the backend is down,
-    /// because there would be nothing to reload.
+    /// on the same port may be a different process, so the down-then-up
+    /// transition is the signal. Recovery fires once per transition, never on
+    /// every probe, and never while the backend is down, because there would
+    /// be nothing to reload.
     ///
     /// The first observation never reloads: start-up has already pointed the
     /// window at the backend.
@@ -4120,7 +4139,7 @@ fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
     thread::spawn(move || {
         loop {
             if let Some(port) = current_backend_port(&handle) {
-                let reachable = backend_endpoint_ready(port);
+                let reachable = backend_liveness_ready(port);
                 let deep_link_state = handle.state::<DeepLinkState>();
                 if let Ok(mut dispatch) = deep_link_state.dispatch.lock() {
                     // Recheck after HTTP: startup may have published a new port.
@@ -4166,24 +4185,37 @@ fn wait_for_server_stopped(port: u16, timeout: Duration) -> bool {
 fn backend_endpoint_ready(port: u16) -> bool {
     let request =
         format!("GET /api/v1/version HTTP/1.1\r\nHost: {HOST}:{port}\r\nConnection: close\r\n\r\n");
-    let response = match read_http_response(port, request.as_str()) {
+    let response = match read_http_response(port, request.as_str(), BACKEND_READY_PROBE_TIMEOUT) {
         Some(resp) => resp,
         None => return false,
     };
-    response.starts_with(b"HTTP/1.1 401 ")
-        || response.starts_with(b"HTTP/1.0 401 ")
+    response_is_auth_challenge(response.as_slice())
         || version_response_looks_valid(response.as_slice())
 }
 
-fn read_http_response(port: u16, request: &str) -> Option<Vec<u8>> {
+fn backend_liveness_ready(port: u16) -> bool {
+    // Runtime recovery only needs process liveness. Unlike the version
+    // endpoint, this probe does not wait for archive-backed state.
+    let request =
+        format!("GET /api/ping HTTP/1.1\r\nHost: {HOST}:{port}\r\nConnection: close\r\n\r\n");
+    let response = match read_http_response(port, request.as_str(), BACKEND_LIVENESS_PROBE_TIMEOUT)
+    {
+        Some(resp) => resp,
+        None => return false,
+    };
+    response_is_auth_challenge(response.as_slice())
+        || ping_response_looks_valid(response.as_slice())
+}
+
+fn read_http_response(port: u16, request: &str, timeout: Duration) -> Option<Vec<u8>> {
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    let mut stream = match TcpStream::connect_timeout(&addr.into(), Duration::from_millis(250)) {
+    let mut stream = match TcpStream::connect_timeout(&addr.into(), timeout) {
         Ok(stream) => stream,
         Err(_) => return None,
     };
 
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
 
     if stream.write_all(request.as_bytes()).is_err() {
         return None;
@@ -4199,15 +4231,25 @@ fn read_http_response(port: u16, request: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-fn version_response_looks_valid(response: &[u8]) -> bool {
+fn response_is_auth_challenge(response: &[u8]) -> bool {
+    response.starts_with(b"HTTP/1.1 401 ") || response.starts_with(b"HTTP/1.0 401 ")
+}
+
+fn success_response_body(response: &[u8]) -> Option<&[u8]> {
     if !(response.starts_with(b"HTTP/1.1 200") || response.starts_with(b"HTTP/1.0 200")) {
-        return false;
+        return None;
     }
-    let body = if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
-        &response[(idx + 4)..]
-    } else if let Some(idx) = response.windows(2).position(|w| w == b"\n\n") {
-        &response[(idx + 2)..]
-    } else {
+    if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+        return Some(&response[(idx + 4)..]);
+    }
+    response
+        .windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|idx| &response[(idx + 2)..])
+}
+
+fn version_response_looks_valid(response: &[u8]) -> bool {
+    let Some(body) = success_response_body(response) else {
         return false;
     };
     let body = String::from_utf8_lossy(body);
@@ -4216,6 +4258,14 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
         && body.contains("\"build_date\"")
         && body.contains("\"api_version\"")
         && body.contains("\"data_version\"")
+}
+
+fn ping_response_looks_valid(response: &[u8]) -> bool {
+    let Some(body) = success_response_body(response) else {
+        return false;
+    };
+    serde_json::from_slice::<BackendPingResponse>(body)
+        .is_ok_and(|ping| ping.ok && ping.service == "agentsview")
 }
 
 #[tauri::command]
@@ -4634,6 +4684,16 @@ mod tests {
         assert!(script.contains("fatal: opening database"));
         assert!(script.contains("role', 'alert'"));
         assert!(script.contains("Attach logs"));
+    }
+
+    #[test]
+    fn status_update_script_serializes_multiline_startup_status() {
+        let status = "agentsview is starting up.\n  phase: opening user's \"main\" database\n  log: C:\\AgentsView\\serve.log";
+
+        assert_eq!(
+            status_update_script(status),
+            r#"window.__setStatus("agentsview is starting up.\n  phase: opening user's \"main\" database\n  log: C:\\AgentsView\\serve.log");"#
+        );
     }
 
     #[test]
@@ -6054,6 +6114,76 @@ agentsview running at http://127.0.0.1:18082
         assert!(!ready, "empty response");
     }
 
+    #[test]
+    fn backend_liveness_probe_uses_ping_endpoint() {
+        let response = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"healthy\":true,\"service\":\"agentsview\",\"pid\":42}";
+        let (port, request) = spawn_response_server(response);
+        let ready = backend_liveness_ready(port);
+        let request = request.join().expect("response server should finish");
+
+        assert!(request.starts_with("GET /api/ping HTTP/1.1\r\n"));
+        assert!(request.contains(&format!("Host: {HOST}:{port}\r\n")));
+        assert!(!request.contains("/api/v1/version"));
+        assert!(!request.contains("Authorization:"));
+        assert!(ready);
+    }
+
+    #[test]
+    fn backend_liveness_probe_preserves_status_boundaries() {
+        let cases: &[(&str, &[u8], bool)] = &[
+            (
+                "HTTP/1.0 401",
+                b"HTTP/1.0 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "HTTP/1.1 401",
+                b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "healthy agentsview",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"healthy\":true,\"service\":\"agentsview\",\"pid\":42}",
+                true,
+            ),
+            (
+                "stalled agentsview",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"healthy\":false,\"service\":\"agentsview\",\"pid\":42}",
+                true,
+            ),
+            (
+                "not ok",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":false,\"service\":\"agentsview\"}",
+                false,
+            ),
+            (
+                "wrong service",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ok\":true,\"service\":\"other\"}",
+                false,
+            ),
+            (
+                "unrelated HTML 200",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n<html></html>",
+                false,
+            ),
+            ("403", b"HTTP/1.1 403 Forbidden\r\n\r\n", false),
+            ("503", b"HTTP/1.1 503 Service Unavailable\r\n\r\n", false),
+            ("HTTP/1.1 4010", b"HTTP/1.1 4010 Invalid\r\n\r\n", false),
+        ];
+
+        for &(name, response, expected) in cases {
+            let (port, request) = spawn_response_server(response);
+            let ready = backend_liveness_ready(port);
+            request.join().expect("response server should finish");
+            assert_eq!(ready, expected, "{name}");
+        }
+
+        let (port, request) = spawn_response_server(b"");
+        let ready = backend_liveness_ready(port);
+        request.join().expect("response server should finish");
+        assert!(!ready, "empty response");
+    }
+
     fn spawn_response_server(response: &[u8]) -> (u16, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind response server");
         listener
@@ -6118,6 +6248,101 @@ agentsview running at http://127.0.0.1:18082
         assert!(should_probe_login_shell(None, false));
         assert!(!should_probe_login_shell(Some(&OsString::from("1")), false));
         assert!(!should_probe_login_shell(None, true));
+    }
+
+    #[cfg(unix)]
+    fn run_sidecar_env_cache_child(
+        test_name: &str,
+        child_marker: &str,
+        script_body: &str,
+    ) -> Vec<u8> {
+        let dir = tempdir().expect("tempdir");
+        let shell = dir.path().join("login-shell-probe");
+        let counter = dir.path().join("probe-count");
+        fs::write(&shell, script_body).expect("write login shell probe");
+        let mut permissions = fs::metadata(&shell)
+            .expect("read login shell probe metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&shell, permissions).expect("make login shell probe executable");
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", test_name, "--nocapture"])
+            .env(child_marker, "1")
+            .env("SHELL", &shell)
+            .env("HOME", dir.path())
+            .env("AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER", &counter)
+            .env_remove("AGENTSVIEW_DESKTOP_PATH")
+            .env_remove("AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV")
+            .env_remove("SHELL_CACHE_RETRY")
+            .env_remove("SHELL_CACHE_VALUE")
+            .output()
+            .expect("run isolated login shell cache test");
+
+        assert!(
+            output.status.success(),
+            "isolated test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read(counter).expect("read login shell probe count")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_env_caches_successful_login_shell_probe() {
+        const CHILD_MARKER: &str = "AGENTSVIEW_LOGIN_SHELL_CACHE_SUCCESS_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let first: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let second: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let key = OsString::from("SHELL_CACHE_VALUE");
+            let expected = OsString::from("first");
+            assert_eq!(first.get(&key), Some(&expected));
+            assert_eq!(second.get(&key), Some(&expected));
+            return;
+        }
+
+        let count = run_sidecar_env_cache_child(
+            "tests::sidecar_env_caches_successful_login_shell_probe",
+            CHILD_MARKER,
+            concat!(
+                "#!/bin/sh\n",
+                "printf x >> \"$AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER\"\n",
+                "export SHELL_CACHE_VALUE=first\n",
+                "exec /usr/bin/env -0\n",
+            ),
+        );
+        assert_eq!(count, b"x");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_env_caches_failed_login_shell_probe() {
+        const CHILD_MARKER: &str = "AGENTSVIEW_LOGIN_SHELL_CACHE_FAILURE_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let first: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let second: HashMap<_, _> = sidecar_env().into_iter().collect();
+            let key = OsString::from("SHELL_CACHE_RETRY");
+            assert_eq!(first.get(&key), None);
+            assert_eq!(second.get(&key), None);
+            return;
+        }
+
+        let count = run_sidecar_env_cache_child(
+            "tests::sidecar_env_caches_failed_login_shell_probe",
+            CHILD_MARKER,
+            concat!(
+                "#!/bin/sh\n",
+                "printf x >> \"$AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER\"\n",
+                "count=$(wc -c < \"$AGENTSVIEW_LOGIN_SHELL_CACHE_COUNTER\")\n",
+                "if [ \"$count\" -gt 1 ]; then\n",
+                "  export SHELL_CACHE_RETRY=unexpected\n",
+                "  exec /usr/bin/env -0\n",
+                "fi\n",
+                "exit 42\n",
+            ),
+        );
+        assert_eq!(count, b"x");
     }
 
     #[test]

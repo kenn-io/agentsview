@@ -46,13 +46,14 @@ function getHighlighter(): Promise<HighlighterCore> {
   if (highlighterPromise !== null) return highlighterPromise;
 
   highlighterPromise = (async () => {
-    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme] = await Promise.all([
-      import("shiki/core"),
-      import("shiki/engine/javascript"),
-      import("shiki/themes/catppuccin-mocha.mjs"),
-    ]);
-
-    const langModules = await Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load()));
+    // Grammars do not depend on the core modules, so every chunk loads at once.
+    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme, langModules] =
+      await Promise.all([
+        import("shiki/core"),
+        import("shiki/engine/javascript"),
+        import("shiki/themes/catppuccin-mocha.mjs"),
+        Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load())),
+      ]);
 
     const hl = await createHighlighterCore({
       themes: [theme.default ?? theme],

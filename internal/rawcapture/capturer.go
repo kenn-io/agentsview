@@ -160,12 +160,13 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 	finishPublication := func() {}
 	defer func() {
 		if !committed {
-			cleanupErr := c.discardObjects(
-				context.Background(), installed,
-			)
+			// Cleanup runs even when ctx ended so installed objects and the
+			// reservation do not leak.
+			cleanupCtx := context.WithoutCancel(ctx)
+			cleanupErr := c.discardObjects(cleanupCtx, installed)
 			if cleanupErr == nil && !cleanupIncomplete {
 				cleanupErr = c.store.ReleaseReservation(
-					context.Background(), reservation.ID,
+					cleanupCtx, reservation.ID,
 				)
 			}
 			resultErr = errors.Join(resultErr, cleanupErr)

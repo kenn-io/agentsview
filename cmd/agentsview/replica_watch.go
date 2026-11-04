@@ -285,6 +285,7 @@ const (
 // catch-up push, then pushes triggered by file changes (debounced)
 // and a periodic floor tick, until interrupted.
 func runReplicaPushWatch(
+	ctx context.Context,
 	backend storage.Replica,
 	cfg ReplicaPushConfig,
 	targetName string,
@@ -299,7 +300,7 @@ func runReplicaPushWatch(
 	}
 	setupLogFileNamed(appCfg.DataDir, name+"-watch.log")
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	run, cleanup, err := prepareReplicaPushWatch(ctx, backend, appCfg, cfg, targetName, false)
 	if err != nil {

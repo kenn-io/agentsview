@@ -3042,5 +3042,18 @@
   "friction_session_error": "摩擦发现不可用。",
   "friction_session_empty": "此会话中没有摩擦发现。",
   "friction_session_jump": "消息 {ordinal}",
-  "friction_session_jump_title": "跳转到消息 {ordinal}"
+  "friction_session_jump_title": "跳转到消息 {ordinal}",
+  "docbank_subagent_open_session": "作为会话打开后会显示文件匹配。",
+  "docbank_checking": "正在查询 Docbank…",
+  "docbank_current": "当前版本",
+  "docbank_prior": "历史版本",
+  "docbank_trash": "回收站",
+  "docbank_not_found": "Docbank 中未找到",
+  "docbank_read_unavailable": "无法读取会话文件",
+  "docbank_unavailable": "Docbank 不可用",
+  "docbank_limit_exceeded": "已达到 Docbank 查询上限",
+  "docbank_bytes_not_kept": "未保留图片字节",
+  "docbank_file": "文件 {n} · {mediaType} · {size}",
+  "docbank_file_without_size": "文件 {n} · {mediaType}",
+  "docbank_more": "Docbank 中还有 {count} 项"
 }

@@ -38,6 +38,7 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
 	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
 	s.get(group, "/sessions/{id}/commits", "List session commits", s.humaSessionCommits)
+	s.get(group, "/sessions/{id}/file-references", "Find session images in Docbank", s.humaFileReferences)
 	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
 	s.get(group, "/sessions/{id}/tool-sequences", "Get session tool sequences", s.humaToolSequences)
 	s.get(group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
@@ -1421,7 +1422,7 @@ func (s *Server) humaUploadSession(
 			"claude provider does not support uploads")
 	}
 	results, err := uploader.ParseUploadedTranscript(
-		upload.tempPath, project, machine,
+		ctx, upload.tempPath, project, machine,
 	)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest,
@@ -1859,4 +1860,25 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			Cwd:      launchDir,
 		},
 	}, nil
+}
+
+func (s *Server) humaFileReferences(ctx context.Context, in *idPathInput) (*jsonOutput[service.FileReferencesResult], error) {
+	result, err := service.FileReferences(ctx, s.sessions, in.ID)
+	if err != nil {
+		return nil, fileReferencesError(err)
+	}
+	return &jsonOutput[service.FileReferencesResult]{Body: result}, nil
+}
+
+func fileReferencesError(err error) error {
+	switch {
+	case errors.Is(err, service.ErrSessionNotFound):
+		return apiError(http.StatusNotFound, "session not found")
+	case errors.Is(err, service.ErrRevisionBoundReadUnavailable):
+		return apiError(http.StatusNotImplemented, err.Error())
+	case errors.Is(err, service.ErrSourceChanged):
+		return apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
+	default:
+		return serverError(err)
+	}
 }

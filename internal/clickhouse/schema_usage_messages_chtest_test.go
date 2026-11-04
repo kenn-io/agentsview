@@ -15,6 +15,7 @@ import (
 // A backfill racing with a retry must not undo the retry, and removing usage
 // from a message must remove its contribution even if the ordinal is retained.
 func TestClickHouseUsageMessagesReplacement(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	query, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC"},
@@ -85,6 +86,7 @@ func TestClickHouseUsageMessagesReplacement(t *testing.T) {
 // A push writes messages before it publishes the session row, and an
 // interrupted push never publishes it. Usage must not read as zero meanwhile.
 func TestClickHouseUsageSurvivesUnpublishedPush(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	const id = "usage-unpublished-push"

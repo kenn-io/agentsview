@@ -21,7 +21,6 @@ const (
 	commitLinksBackfillKey = "commit_links_backfill_v1"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
 	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
-	commitJSString         = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|` + "`(?:\\\\.|[^`\\\\])*`)"
 )
 
 var (
@@ -35,16 +34,8 @@ var (
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
-	commitOperationRE         = regexp.MustCompile(`\btools\.(exec_command|write_stdin)\s*\(\s*(\{(?:` + commitJSString + "|[^{}\"'`])*\\})\\s*\\)")
-	commitPropertyRE          = regexp.MustCompile(`("(?:cmd|command|workdir|cwd|session_id)"|'(?:cmd|command|workdir|cwd|session_id)'|\b(?:cmd|command|workdir|cwd|session_id))\s*:\s*(` + commitJSString + `|[0-9]+)\s*[,}]`)
+	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
-	commitQuietRE             = regexp.MustCompile(`\bcommit\s+[^;&|\n]*(?:-q\b|--quiet\b)`)
-	commitReadbackRE          = regexp.MustCompile(`\bcommit\s+((?:[^;&|\n"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*)&&\s*(git\s+(?:rev-parse|log)\b[^;&|\n]*)`)
-	commitArgumentRE          = regexp.MustCompile(commitCommandToken)
-	commitRevParseRE          = regexp.MustCompile(`^git\s+rev-parse\s+HEAD\s*$`)
-	commitLogRE               = regexp.MustCompile(`^git\s+log\s+(?:-1\s+--oneline|--oneline\s+(?:-1|-n\s+1)|-n\s+1\s+--oneline)(?:\s+HEAD)?\s*$`)
-	commitFullLineRE          = regexp.MustCompile(`(?m)^([0-9a-f]{40}|[0-9a-f]{64})\r?$`)
-	commitLogLineRE           = regexp.MustCompile(`(?m)^([0-9a-f]{7,64}) ([^\r\n]*)\r?$`)
 )
 
 // CommitLinkReader is the optional archive capability used by HTTP and CLI reads.
@@ -155,80 +146,6 @@ type commitCall struct {
 	input, result, toolName string
 }
 
-// commitOperations pairs literal code-mode calls with their ordered result
-// blocks. Leave ambiguous batches unlinked rather than guessing ownership.
-func commitOperations(call commitCall) []commitCall {
-	if call.toolName != "exec" {
-		return []commitCall{call}
-	}
-	operations := commitOperationRE.FindAllStringSubmatch(call.input, -1)
-	if len(operations) == 0 {
-		return []commitCall{call}
-	}
-	results := []string{call.result}
-	if len(operations) > 1 {
-		var blocks []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal([]byte(call.result), &blocks) != nil || len(blocks) != len(operations) {
-			return nil
-		}
-		results = make([]string, 0, len(blocks))
-		for _, block := range blocks {
-			if block.Type != "input_text" {
-				return nil
-			}
-			results = append(results, block.Text)
-		}
-	}
-	var calls []commitCall
-	for i, operation := range operations {
-		args := map[string]any{}
-		for _, property := range commitPropertyRE.FindAllStringSubmatch(operation[2], -1) {
-			key, value := strings.Trim(property[1], `"'`), property[2]
-			if value[0] == '"' || value[0] == '\'' || value[0] == '`' {
-				quote := value[0]
-				rest := value[1 : len(value)-1]
-				var decoded strings.Builder
-				for rest != "" {
-					if quote == '`' {
-						if strings.HasPrefix(rest, "${") {
-							return nil
-						}
-						if strings.HasPrefix(rest, "\\`") || strings.HasPrefix(rest, `\$`) {
-							decoded.WriteByte(rest[1])
-							rest = rest[2:]
-							continue
-						}
-					}
-					r, _, tail, err := strconv.UnquoteChar(rest, quote)
-					if err != nil {
-						return nil
-					}
-					decoded.WriteRune(r)
-					rest = tail
-				}
-				args[key] = decoded.String()
-			} else {
-				n, err := strconv.ParseInt(value, 10, 64)
-				if err != nil {
-					return nil
-				}
-				args[key] = n
-			}
-		}
-		input, err := json.Marshal(args)
-		if err != nil {
-			return nil
-		}
-		nested := call
-		nested.input, nested.result, nested.toolName = string(input), results[i], operation[1]
-		calls = append(calls, nested)
-	}
-	return calls
-}
-
 // callOutput decodes shell results and their running process IDs.
 func callOutput(result string) (string, int64) {
 	var payload struct {
@@ -267,44 +184,11 @@ func callOutput(result string) (string, int64) {
 	return result, 0
 }
 
-func commitMessageSubject(arguments string) string {
-	tokens := commitArgumentRE.FindAllString(arguments, -1)
-	for i, token := range tokens {
-		if (token == "-m" || token == "--message") && i+1 < len(tokens) {
-			message := tokens[i+1]
-			if len(message) >= 2 && strings.ContainsAny(message[:1], "\"'") {
-				quote := message[0]
-				message = message[1 : len(message)-1]
-				if quote == '"' {
-					var decoded strings.Builder
-					for j := 0; j < len(message); j++ {
-						if message[j] == '\\' && j+1 < len(message) && strings.ContainsRune("\"\\$`\n", rune(message[j+1])) {
-							j++
-							if message[j] == '\n' {
-								continue
-							}
-						}
-						decoded.WriteByte(message[j])
-					}
-					message = decoded.String()
-				}
-			}
-			subject, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
-			return strings.TrimSpace(subject)
-		}
-	}
-	return ""
-}
-
 func commitLinks(calls []commitCall, cwd string) []CommitLink {
-	var operations []commitCall
-	for _, call := range calls {
-		operations = append(operations, commitOperations(call)...)
-	}
 	var links []CommitLink
 	pending := map[string]commitCall{}
 	seen := map[string]bool{}
-	for _, call := range operations {
+	for _, call := range calls {
 		output, running := callOutput(call.result)
 		owner := call
 		command := signals.CommandText(call.input)
@@ -319,13 +203,17 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				pollID = strconv.FormatInt(args.SessionID, 10)
 			}
 		}
+		if !isCommit && call.toolName == "exec" {
+			if match := commitPollRE.FindStringSubmatch(call.input); match != nil {
+				isPoll, pollID = true, match[1]
+			}
+		}
 		if isPoll {
 			original, ok := pending[pollID]
 			if !ok {
 				continue
 			}
 			owner = original
-			command = signals.CommandText(owner.input)
 			if running == 0 {
 				delete(pending, pollID)
 			}
@@ -333,25 +221,6 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 			continue
 		}
 		matches := commitSummaryRE.FindAllStringSubmatch(output, -1)
-		readback := commitReadbackRE.FindStringSubmatch(command)
-		if commitQuietRE.MatchString(command) && readback != nil {
-			var quiet [][]string
-			if commitRevParseRE.MatchString(readback[2]) {
-				quiet = commitFullLineRE.FindAllStringSubmatch(output, -1)
-			} else if commitLogRE.MatchString(readback[2]) {
-				quiet = commitLogLineRE.FindAllStringSubmatch(output, -1)
-			}
-			if len(quiet) == 1 {
-				subject := ""
-				if len(quiet[0]) > 2 {
-					subject = quiet[0][2]
-				}
-				if subject == "" {
-					subject = commitMessageSubject(readback[1])
-				}
-				matches = append(matches, []string{"", "", quiet[0][1], subject})
-			}
-		}
 		if running != 0 {
 			pending[strconv.FormatInt(running, 10)] = owner
 		}

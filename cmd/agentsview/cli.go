@@ -27,8 +27,6 @@ const (
 	groupMeta  = "meta"
 )
 
-const dataVersionTooNewExitCode = 3
-
 type cliExitError struct {
 	code   int
 	err    error
@@ -60,6 +58,9 @@ func withSilentExitCode(err error, code int) error {
 func exitCodeFromError(err error) int {
 	if exitErr, ok := errors.AsType[*cliExitError](err); ok {
 		return exitErr.code
+	}
+	if diagnostic, ok := errors.AsType[*cliDiagnosticError](err); ok && diagnostic.code != 0 {
+		return diagnostic.code
 	}
 	return 1
 }
@@ -293,7 +294,7 @@ func newServeStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServeStatus(mustLoadConfig(cmd))
+			runServeStatus(cmd.Context(), mustLoadConfig(cmd))
 		},
 	}
 }
@@ -325,7 +326,7 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDaemonRestart(cmd.OutOrStdout(), deps)
+			return runDaemonRestart(cmd.Context(), cmd.OutOrStdout(), deps)
 		},
 	}
 }
@@ -369,7 +370,7 @@ func newSyncCommand() *cobra.Command {
 	return newSyncCommandWithRunner(runSync)
 }
 
-func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
+func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Command {
 	var cfg SyncConfig
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -399,7 +400,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			run(cfg)
+			run(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -511,8 +512,8 @@ func newTokenUseCommand() *cobra.Command {
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runTokenUse(cmd.Context(), args)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTokenUse(cmd, args)
 		},
 	}
 }
@@ -539,7 +540,7 @@ func newImportCommand() *cobra.Command {
 			if syncBrowser {
 				return syncClaudeAIChrome(cmd.Context())
 			}
-			return importSessions(ImportConfig{Type: importType, Path: args[0], Replace: replace})
+			return importSessions(cmd.Context(), ImportConfig{Type: importType, Path: args[0], Replace: replace})
 		},
 	}
 	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync Claude.ai through Chrome")
@@ -576,9 +577,9 @@ func newHealthCommand() *cobra.Command {
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			runHealth(cmd, args, cfg)
+			return runHealth(cmd, args, cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -612,10 +613,11 @@ func newUsageDailyCommand() *cobra.Command {
 		Short:        "Daily cost summary",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runUsageDaily(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageDaily(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -637,10 +639,11 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Short:        "One-line cost summary for today",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runUsageStatusline(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageStatusline(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -672,10 +675,11 @@ func newActivityReportCommand() *cobra.Command {
 		Short:        "Activity report over a date range",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runActivityReport(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runActivityReport(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Preset, "preset", "", "Range preset: day, week, month, custom")
@@ -745,7 +749,7 @@ func newDuckDBPushCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBPush(cfg)
+			runDuckDBPush(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and DuckDB push")
@@ -765,7 +769,7 @@ func newDuckDBStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBStatus()
+			runDuckDBStatus(cmd.Context())
 		},
 	}
 }
@@ -781,7 +785,7 @@ func newDuckDBServeCommand() *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runDuckDBServe(appCfg, basePath)
+			runDuckDBServe(cmd.Context(), appCfg, basePath)
 			return nil
 		},
 	}
@@ -811,7 +815,7 @@ func newDuckDBQuackCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBQuackServe(serveCfg)
+			runDuckDBQuackServe(cmd.Context(), serveCfg)
 		},
 	}
 	serveCmd.Flags().StringVar(

@@ -29,9 +29,9 @@ func newZencoderSourceSet(roots []string) JSONLSourceSet {
 }
 
 func zencoderParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseZencoderSession(path, req.Machine)
+	sess, msgs, err := parseZencoderSession(ctx, path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
