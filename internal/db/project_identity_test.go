@@ -1732,7 +1732,7 @@ func TestCopySessionMetadataKeepsFreshIdentityOverEmptyPlaceholder(t *testing.T)
 		SessionID: "session-a", Project: "app", Machine: "host", RootPath: root,
 	}))
 
-	require.NoError(t, fresh.CopySessionMetadataFrom(oldPath))
+	require.NoError(t, fresh.CopySessionMetadataFrom(ctx, oldPath))
 	publishable, err := fresh.ListPublishableSessionProjectIdentitySnapshots(ctx, []string{"session-a"}, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, publishable, 1, "an evidence-free placeholder must not replace the fresh identity")
