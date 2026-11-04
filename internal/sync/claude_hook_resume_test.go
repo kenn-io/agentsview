@@ -40,8 +40,8 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 		ids         []string
 	}{
 		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
-		{name: "full import ending in stop summary", wantSubtype: "stop_hook_summary", initialHook: true, hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`}, ids: []string{"h1"}},
-		{name: "stop summary append", wantSubtype: "stop_hook_summary", hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`}, ids: []string{"h1"}},
+		{name: "full import ending in stop summary", wantSubtype: "stop_hook_summary", initialHook: true, hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`}, ids: []string{"h1"}},
+		{name: "stop summary append", wantSubtype: "stop_hook_summary", hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`}, ids: []string{"h1"}},
 		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 		{name: "multiple out-of-band hooks", hooks: []string{
 			claudeHookResumeNative,
@@ -128,6 +128,11 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 			lines []string
 			split int
 		}{
+			{name: "hook-only append older than stored tail", lines: []string{
+				claudeHookResumeUser,
+				claudeHookResumeAnswer,
+				`{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:00.500Z","attachment":{"type":"hook_success","content":"delayed output"}}`,
+			}, split: 2},
 			{name: "trailing native hook", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeNative, claudeHookResumeNextUser}, split: 3},
 			{name: "trailing additional context", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeContext, claudeHookResumeNextUser}, split: 3},
 			{name: "linear native parent chain", lines: []string{

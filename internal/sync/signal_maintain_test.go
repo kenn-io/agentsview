@@ -919,6 +919,21 @@ func TestIncrementalSignalMaintainerHandlesCommittedUsageUpdate(t *testing.T) {
 // debounced full recompute runs (loading history) and keeps signals
 // current.
 func TestIncrementalSignalMaintainerDeclinesForUserMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  parser.ParsedMessage
+		want bool
+	}{
+		{"user prompt", parser.ParsedMessage{Role: parser.RoleUser, Content: "please fix the failing test"}, true},
+		{"hook system row", parser.ParsedMessage{Role: parser.RoleUser, Content: "Content:\nhook output", IsSystem: true, SourceSubtype: "hook_success"}, false},
+		{"blank prompt", parser.ParsedMessage{Role: parser.RoleUser, Content: " \n"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inc := incrementalUpdate{msgs: []parser.ParsedMessage{tc.msg}}
+			assert.Equal(t, tc.want, inc.hasSubstantiveUserMessage())
+		})
+	}
+
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
 	require.NoError(t, os.MkdirAll(day, 0o755))

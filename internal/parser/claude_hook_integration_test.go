@@ -32,9 +32,14 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 		{"hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished"},
 		{"hook_cancelled", `,"timedOut":false,"timeoutMs":60000`, ""},
 		{"hook_cancelled", `,"timedOut":true,"timeoutMs":60000`, "\n\nTimed out after 60000 ms"},
+		{"hook_cancelled", `,"timedOut":true,"timeoutMs":1000000`, "\n\nTimed out after 1000000 ms"},
 		{"stop_hook_summary", `,"hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked"},
 		{"stop_hook_summary", `,"hookErrors":["failed"]`, "Hook errors:\nfailed"},
 		{"stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped"},
+		{"stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer"},
+		{"stop_hook_summary", `,"hookAdditionalContext":["keep going","check results"]`, "Additional context:\nkeep going\ncheck results"},
+		{"stop_hook_summary", `,"hookErrors":["first",{},null,42,"second"]`, "Hook errors:\nfirst\nsecond"},
+		{"stop_hook_summary", `,"preventedContinuation":true`, "Prevented continuation: true"},
 		{"hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context"},
 	} {
 		t.Run(tc.subtype, func(t *testing.T) {
@@ -236,7 +241,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 		`"uuid":"hook-1","parentUuid":"unknown-parent",` +
 		`"attachment":{"type":"hook_success","content":"hook finished"}}` + "\n" +
 		`{"type":"attachment","timestamp":"2026-01-01T00:00:03Z","uuid":"cancelled-1","parentUuid":"hook-1","attachment":{"type":"hook_cancelled","hookName":"PreToolUse:Read","hookEvent":"PreToolUse","command":"echo hook","toolUseID":"tool-1"}}` + "\n"
-	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:04Z","uuid":"summary-1","parentUuid":"cancelled-1","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}` + "\n"
+	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:04Z","uuid":"summary-1","parentUuid":"cancelled-1","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}` + "\n"
 	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:05Z","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
@@ -251,7 +256,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	require.Len(t, msgs, 3)
 	assert.Equal(t, "stop_hook_summary", msgs[2].SourceSubtype)
 	assert.Equal(t, "system", msgs[2].SourceType)
-	assert.Equal(t, "Hook count: 1\n\nCommand: echo hook\n\nPrevented continuation: false", msgs[2].Content)
+	assert.Equal(t, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: false", msgs[2].Content)
 	assert.Equal(t, "hook_cancelled", msgs[1].SourceSubtype)
 	assert.Equal(t, "Hook name: PreToolUse:Read\n\nHook event: PreToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1", msgs[1].Content)
 
@@ -403,7 +408,7 @@ func TestClaudeHookImportForkOwnership(t *testing.T) {
 		{name: "attachment chain", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":"bridge"}}`},
 		{name: "empty hook bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":""}}`},
 		{name: "cancelled hook bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_cancelled"}}`},
-		{name: "stop summary bridge", parent: "bridge", meta: `{"type":"system","subtype":"stop_hook_summary","uuid":"bridge","parentUuid":"fork","hookInfos":[{"command":"echo hook"}]}`},
+		{name: "stop summary bridge", parent: "bridge", meta: `{"type":"system","subtype":"stop_hook_summary","uuid":"bridge","parentUuid":"fork","hookInfos":[{"command":"echo hook","promptText":"check answer"}]}`},
 		{name: "empty stop summary bridge", parent: "bridge", meta: `{"type":"system","subtype":"stop_hook_summary","uuid":"bridge","parentUuid":"fork","hookInfos":[]}`},
 		{name: "other attachment bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"task_reminder"}}`},
 	} {

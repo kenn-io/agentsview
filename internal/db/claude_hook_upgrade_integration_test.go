@@ -210,7 +210,7 @@ func writeHookUpgradeSource(t *testing.T, root string, provider parser.AgentType
 	}
 	hook := fmt.Sprintf(`{"type":"attachment","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","attachment":{"type":%q,"content":%s}}`, subtype, content)
 	if subtype == "stop_hook_summary" {
-		hook = `{"type":"system","subtype":"stop_hook_summary","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`
+		hook = `{"type":"system","subtype":"stop_hook_summary","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`
 	}
 	body := fmt.Sprintf(`{"type":"user","uuid":"u1","sessionId":%q,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}
 %s

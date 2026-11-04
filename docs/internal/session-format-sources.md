@@ -170,11 +170,16 @@ evidence; they do not establish whether a tool helped the task.
   keep their metadata even without output. Typed `timedOut` and `timeoutMs`
   fields distinguish timeouts from explicit cancellation. Hook error attachments
   are still not imported. The parser also imports `system` records with subtype
-  `stop_hook_summary`, retaining `hookCount`, each `hookInfos` command,
-  `hookErrors`, `preventedContinuation`, `stopReason`, and `toolUseID` as labeled
-  body sections. Summaries without hook infos, errors, or a stop reason are
-  skipped. Claude Code 2.1.301's installed producer constructs this summary
-  with `Lhs`; its `wno` schema defines each hook info's `command` string.
+  `stop_hook_summary`, retaining `hookCount`, each `hookInfos` command and
+  optional `promptText`, the `hookAdditionalContext` string array joined with
+  newlines, string elements of `hookErrors`, `preventedContinuation`,
+  `stopReason`, and `toolUseID` as labeled body sections. Non-string error
+  elements are skipped individually. A summary needs errors, prompt text,
+  additional context, a stop reason, or `preventedContinuation: true` to become
+  a card; commands alone add no card. Claude Code 2.1.301's installed producer
+  constructs this summary with `Lhs`; its `wno` schema defines each hook info's
+  `command` and optional `promptText` strings, and `Cno` validates
+  `hookAdditionalContext` as a string array.
   Its HTTP, MCP, and command cancellation constructors supply boolean
   `timedOut` and numeric `timeoutMs`. These are installed producer evidence,
   rather than a public persistence schema. The

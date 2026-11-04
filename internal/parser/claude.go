@@ -872,6 +872,8 @@ type claudeIncrementalScan struct {
 	// continuation, so such appends stay incremental. nil keeps the
 	// conservative fallback.
 	storedTailClaudeMessageID *string
+	// storedTailTimestamp bounds appends that can keep stored ordinals.
+	storedTailTimestamp time.Time
 	// storedSessionName is the session_name already persisted for this
 	// session ("" when the row carries none), or nil when the call site
 	// cannot supply it. An appended ai-title can only change the stored
@@ -1136,6 +1138,11 @@ func claudeParseSessionFrom(
 		return nil, nil, time.Time{}, 0, err
 	}
 	if len(attachments) > 0 {
+		for _, a := range attachments {
+			if a.hook != nil && !a.timestamp.IsZero() && a.timestamp.Before(scan.storedTailTimestamp) {
+				return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+			}
+		}
 		// The engine's cross-sync split detection compares only the
 		// FIRST returned message's ClaudeMessageID against the stored
 		// tail. A deferred attachment — a queued command or a hook

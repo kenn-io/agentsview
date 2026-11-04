@@ -11693,7 +11693,7 @@ type incrementalUpdate struct {
 // fall back to the debounced full recompute.
 func (inc *incrementalUpdate) hasSubstantiveUserMessage() bool {
 	for _, m := range inc.msgs {
-		if m.Role == parser.RoleUser &&
+		if m.Role == parser.RoleUser && !m.IsSystem &&
 			strings.TrimSpace(m.Content) != "" {
 			return true
 		}
@@ -16340,11 +16340,20 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// same-message.id continuation; without it, every routine queued
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
+		var storedTailTimestamp time.Time
 		var storedSessionName *string
 		var storedPRLinks map[string]struct{}
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
+			tail, terr := e.db.GetMessageByOrdinal(ctx, inc.ID, inc.NextOrdinal-1)
+			if terr != nil {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+					fmt.Errorf("read stored Claude tail: %w", terr)
+			}
+			if tail != nil {
+				storedTailTimestamp, _ = db.ParseStoredTimestamp(tail.Timestamp)
+			}
 			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
 			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
@@ -16379,6 +16388,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredUserMessageCount:    inc.UserMsgCount,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
+				StoredTailTimestamp:       storedTailTimestamp,
 				StoredSessionName:         storedSessionName,
 				StoredPRLinks:             storedPRLinks,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,

@@ -163,6 +163,8 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 		{name: "additional context mixed array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["first",1]}}`},
 		{name: "additional context string", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":"first"}}`},
 		{name: "empty stop summary", line: `{"type":"system","subtype":"stop_hook_summary","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}`},
+		{name: "command-only stop summary", line: `{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`},
+		{name: "stop summary with only non-string errors", line: `{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"echo hook"}],"hookErrors":[{},null,42]}`},
 		{name: "cancelled string timeout flag", line: `{"type":"attachment","attachment":{"type":"hook_cancelled","timedOut":"true","timeoutMs":60000}}`},
 		{name: "cancelled string timeout duration", line: `{"type":"attachment","attachment":{"type":"hook_cancelled","timedOut":true,"timeoutMs":"60000"}}`},
 		{name: "attachment missing", line: `{"type":"attachment"}`},

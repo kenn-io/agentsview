@@ -26,9 +26,11 @@ type claudeHookSuccess struct {
 type claudeStopHookSummary struct {
 	HookCount *int `json:"hookCount"`
 	HookInfos []struct {
-		Command string `json:"command"`
+		Command    string `json:"command"`
+		PromptText string `json:"promptText"`
 	} `json:"hookInfos"`
-	HookErrors            []string `json:"hookErrors"`
+	HookErrors            []string `json:"-"`
+	HookAdditionalContext []string `json:"hookAdditionalContext"`
 	PreventedContinuation *bool    `json:"preventedContinuation"`
 	StopReason            string   `json:"stopReason"`
 	ToolUseID             string   `json:"toolUseID"`
@@ -48,7 +50,18 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 		if err := json.Unmarshal([]byte(line), &summary); err != nil {
 			return claudeHookSuccess{}, false
 		}
-		if len(summary.HookInfos) == 0 && len(summary.HookErrors) == 0 && summary.StopReason == "" {
+		for _, value := range gjson.Get(line, "hookErrors").Array() {
+			if value.Type == gjson.String {
+				summary.HookErrors = append(summary.HookErrors, value.Str)
+			}
+		}
+		hasContent := len(summary.HookErrors) > 0 || summary.StopReason != "" ||
+			strings.Join(summary.HookAdditionalContext, "\n") != "" ||
+			(summary.PreventedContinuation != nil && *summary.PreventedContinuation)
+		for _, info := range summary.HookInfos {
+			hasContent = hasContent || info.PromptText != ""
+		}
+		if !hasContent {
 			return claudeHookSuccess{}, false
 		}
 		return claudeHookSuccess{subtype: "stop_hook_summary", toolUseID: summary.ToolUseID, summary: &summary}, true
@@ -171,7 +184,7 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 	if payload.timedOut {
 		timeout := "Timed out"
 		if payload.timeoutMs != nil {
-			timeout = fmt.Sprintf("Timed out after %g ms", *payload.timeoutMs)
+			timeout = fmt.Sprintf("Timed out after %.0f ms", *payload.timeoutMs)
 		}
 		sections = append(sections, timeout)
 	}
@@ -180,7 +193,15 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 			sections = append(sections, fmt.Sprintf("Hook count: %d", *summary.HookCount))
 		}
 		for _, info := range summary.HookInfos {
-			sections = append(sections, "Command: "+info.Command)
+			if info.Command != "" {
+				sections = append(sections, "Command: "+info.Command)
+			}
+			if info.PromptText != "" {
+				sections = append(sections, "Prompt text:\n"+info.PromptText)
+			}
+		}
+		if context := strings.Join(summary.HookAdditionalContext, "\n"); context != "" {
+			sections = append(sections, "Additional context:\n"+context)
 		}
 		if len(summary.HookErrors) > 0 {
 			sections = append(sections, "Hook errors:\n"+strings.Join(summary.HookErrors, "\n"))
