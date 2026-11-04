@@ -498,15 +498,17 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 }
 
 func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
-	version := db.CurrentDataVersion()
+	scope := db.ScopedDataVersionProviders(163, 164)
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
-		db.ScopedDataVersionProviders(version-1, version))
+		scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
-	const output = `[{"type":"input_text","text":"Script completed\nWall time 9.6 seconds\nOutput:\n"},{"type":"input_text","text":"script stdout\n"}]`
+	const output = testjsonl.CodexCodeModeWaitOutput
 	sessionID := "codex:" + id
 	source := filepath.Join(root, "rollout-"+id+".jsonl")
 	body := testjsonl.JoinJSONL(

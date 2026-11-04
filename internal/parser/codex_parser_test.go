@@ -749,7 +749,7 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
 	t.Run("code-mode wait output becomes tool result", func(t *testing.T) {
-		const output = `[{"type":"input_text","text":"Script completed\nWall time 9.6 seconds\nOutput:\n"},{"type":"input_text","text":"script stdout\n"}]`
+		const output = testjsonl.CodexCodeModeWaitOutput
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("fc-code-mode-wait", "/tmp", "user", tsEarly),
 			testjsonl.CodexMsgJSON("user", "wait for the script", tsEarlyS1),
