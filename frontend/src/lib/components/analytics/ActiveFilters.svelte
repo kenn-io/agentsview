@@ -319,7 +319,7 @@
   }
 
   .filters-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -377,7 +377,7 @@
   .clear-all {
     height: 22px;
     padding: 0 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     border-radius: var(--radius-sm);

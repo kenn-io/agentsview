@@ -192,7 +192,7 @@
   }
 
   .count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;
   }
@@ -248,7 +248,7 @@
   .bar-value,
   .session-value,
   .last-used {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;
   }
@@ -266,7 +266,7 @@
     min-width: 0;
     padding: 0 4px 6px;
     color: var(--text-muted);
-    font-size: 9px;
+    font-size: 10.5px;
   }
 
   .agent-breakdown {
@@ -311,7 +311,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;

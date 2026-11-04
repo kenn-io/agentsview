@@ -684,7 +684,7 @@
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -717,7 +717,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -832,7 +832,7 @@
   }
 
   .timeline-container :global(.x-label) {
-    font-size: 9px;
+    font-size: 10.5px;
     fill: var(--text-muted);
     font-family: var(--font-sans);
   }
@@ -843,7 +843,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;

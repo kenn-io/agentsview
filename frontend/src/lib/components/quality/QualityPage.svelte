@@ -989,7 +989,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .toolbar-scope span {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -1128,14 +1128,18 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     letter-spacing: 0.04em;
   }
 
+  /* Badges fit their text, even inside column layouts that stretch. */
   .badge {
     display: inline-flex;
+    align-self: flex-start;
+    justify-self: start;
+    width: fit-content;
     align-items: center;
     height: 18px;
     padding: 0 6px;
     border-radius: 3px;
     border: 1px solid var(--border-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -1393,7 +1397,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .driver-row small {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -1428,7 +1432,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     height: auto !important;
     margin-right: 8px;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1451,7 +1455,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .examples-label {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;

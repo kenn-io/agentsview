@@ -182,7 +182,7 @@
 
   .table-header {
     border-bottom: 1px solid var(--border-muted);
-    font-size: 9px;
+    font-size: 10.5px;
     color: var(--text-muted);
     font-weight: 500;
   }
@@ -214,7 +214,7 @@
     min-width: 80px;
     text-align: left;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .empty {

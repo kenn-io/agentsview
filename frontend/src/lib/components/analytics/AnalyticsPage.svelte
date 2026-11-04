@@ -900,7 +900,7 @@
   .tz-label {
     font-weight: 400;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     margin-left: 4px;
   }
 

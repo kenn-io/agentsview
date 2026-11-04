@@ -153,7 +153,7 @@
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -195,7 +195,7 @@
 
   .bar-label {
     width: 48px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
     flex-shrink: 0;
@@ -218,7 +218,7 @@
 
   .bar-count {
     width: 32px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary);
     text-align: right;
     flex-shrink: 0;
@@ -226,7 +226,7 @@
 
   .shape-footer {
     margin-top: 8px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
   }

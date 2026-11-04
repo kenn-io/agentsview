@@ -287,7 +287,7 @@
 
   .insight-model {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 400;
     opacity: 0.7;
     text-transform: none;

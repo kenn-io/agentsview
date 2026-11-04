@@ -267,7 +267,7 @@
   }
 
   .count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -287,7 +287,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
     color: var(--accent-blue);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -425,7 +425,7 @@
     flex-shrink: 0;
     padding: 1px 5px;
     border-radius: 999px;
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 600;
     --badge-color: var(--accent-orange);
     color: var(--badge-color);

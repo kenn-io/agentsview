@@ -485,7 +485,7 @@
     border-radius: var(--radius-sm);
     background: var(--bg-inset);
     color: var(--text-secondary);
-    font-size: 10px;
+    font-size: 11px;
     cursor: pointer;
     transition: opacity 0.1s, background 0.1s;
   }
@@ -558,7 +558,7 @@
     padding: 5px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
