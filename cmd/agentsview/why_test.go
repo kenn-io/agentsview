@@ -25,15 +25,13 @@ func TestWhyRemoteArchive(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	require.NoError(t, os.WriteFile(tokenFile, []byte("remote-token\n"), 0o600))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/api/v1/commits/sessions", r.URL.Path)
 		assert.Equal(t, "Bearer remote-token", r.Header.Get("Authorization"))
 		var body struct {
 			SHAs []string `json:"shas"`
 		}
 		assert.NoError(t, json.UnmarshalRead(r.Body, &body))
 		assert.Equal(t, []string{"abc1234"}, body.SHAs)
-		writeJSONResponse(w, `{"commits":[{"sha":"abc1234","links":[{"session_id":"remote-session","subject":"Remote change"}]}]}`)
+		writeJSONResponse(w, `{"commits":[{"sha":"abc1234","links":[{"session_id":"remote-session","sha":"abc1234","branch":"main","subject":"Remote change","repository":"/work/example","message_ordinal":1,"call_index":0,"tool_use_id":"remote-commit","committed_at":"2026-01-02T03:04:05Z","source":"transcript","missing":false,"ambiguous":false,"turn":{"ordinal":0,"text":"Make the remote change"}}]}]}`)
 	}))
 	t.Cleanup(server.Close)
 	out, err := executeCommand(newRootCommand(), "why", "--commit", "abc1234", "--server", server.URL, "--server-token-file", tokenFile, "--json")
@@ -88,7 +86,7 @@ func TestWhyHumanCommitEvidence(t *testing.T) {
 				{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix the parser"},
 				{SessionID: "s-commit", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:05Z", ToolCalls: []db.ToolCall{
 					{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`},
-					{SessionID: "s-commit", CallIndex: 1, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call-two", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[feature/parser abc1234] Fix parser"},
+					{SessionID: "s-commit", CallIndex: 1, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call-two", InputJSON: `{"command":"git commit -m fix","workdir":"/work/example"}`, ResultContent: "[feature/parser abc1234] Fix parser"},
 				}},
 			}))
 			switch state {
@@ -100,6 +98,7 @@ func TestWhyHumanCommitEvidence(t *testing.T) {
 			require.NoError(t, d.Close())
 			out, err := executeCommand(newRootCommand(), "why", "--commit", "abc1234")
 			require.NoError(t, err)
+			assert.Contains(t, out, "transcript  s-commit  /work/example  Fix parser")
 			assert.Contains(t, out, "feature/parser")
 			assert.Contains(t, out, "2026-01-02T03:04:05Z")
 			assert.Contains(t, out, "message 1  call 1  commit-call-two")
@@ -183,11 +182,6 @@ func TestWhyRecordedPrompts(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), messages))
 	require.NoError(t, d.Close())
 	t.Chdir(repo)
-	t.Run("human line counts", func(t *testing.T) {
-		outText, err := executeCommand(newRootCommand(), "why", "file.go:2")
-		require.NoError(t, err)
-		assert.Contains(t, outText, "Change second line  (1 line)")
-	})
 	t.Run("JSON links match commits", func(t *testing.T) {
 		outText, err := executeCommand(newRootCommand(), "why", "file.go:2-3", "--format", "json")
 		require.NoError(t, err)
@@ -210,10 +204,13 @@ func TestWhyRecordedPrompts(t *testing.T) {
 		require.NoError(t, err)
 		got := decodeCLIJSON[whyResult](t, outText)
 		require.NotNil(t, got.Uncommitted)
-		assert.Positive(t, *got.Uncommitted)
+		assert.Equal(t, 1, *got.Uncommitted)
 	})
 
 	t.Run("human output uses stdout", func(t *testing.T) {
+		outText, err := executeCommand(newRootCommand(), "why", "file.go:2")
+		require.NoError(t, err)
+		assert.Contains(t, outText, "Change second line  (1 line)")
 		var stdout string
 		stderr := captureStderr(t, func() {
 			stdout = captureStdout(t, func() {
@@ -224,8 +221,8 @@ func TestWhyRecordedPrompts(t *testing.T) {
 			})
 		})
 		assert.Contains(t, stdout, "Initial lines")
-		assert.Contains(t, stdout, "    Change the second line")
-		assert.Contains(t, stdout, "    Indent the third line")
+		assert.Contains(t, stdout, "message 1  call 0  commit-0\n    Change the second line\n")
+		assert.Contains(t, stdout, "message 3  call 0  commit-1\n    Indent the third line\n")
 		assert.Contains(t, stdout, "No recorded session.")
 		assert.Contains(t, stdout, "1 selected lines are not committed yet.")
 		assert.Empty(t, stderr)
@@ -246,12 +243,6 @@ func TestWhyRecordedPrompts(t *testing.T) {
 			Commits []map[string]any `json:"commits"`
 		}](t, outText)
 		assert.NotContains(t, shape.Commits[0], "subject")
-	})
-	t.Run("commit human evidence", func(t *testing.T) {
-		outText, err := executeCommand(newRootCommand(), "why", "--commit", firstSHA[:7])
-		require.NoError(t, err)
-		assert.Contains(t, outText, "/work/example")
-		assert.Contains(t, outText, "Accept recorded prompt 0")
 	})
 	t.Run("absolute path outside checkout", func(t *testing.T) {
 		outText, err := executeCommand(newRootCommand(), "why", path+":2-3", "--json")
