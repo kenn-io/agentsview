@@ -504,7 +504,7 @@ func installUsageFactFixture(tb testing.TB, conn *sql.Conn, sessionIDs ...string
 	for i, id := range sessionIDs {
 		versions[i].SessionID = id
 		_, err := conn.ExecContext(tb.Context(), `
-			INSERT OR REPLACE INTO usage_fill_spool.sessions(session_id, fact_count)
+			INSERT OR REPLACE INTO usage_fill_spool.sessions(session_id, message_count)
 			SELECT ?, COUNT(*) FROM usage_fill_spool.facts WHERE session_id=?`, id, id)
 		require.NoError(tb, err)
 	}
@@ -697,6 +697,7 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 			database, cache := usageSpoolExtractionFixture(t, count)
 			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 				SessionID: "session", Ordinal: count, Role: "assistant", Model: "activity",
+				Timestamp: "2026-08-10T09:01:00Z",
 			}}))
 			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
 				Source: "session", Model: "event", InputTokens: 5, DedupKey: "event",
@@ -704,19 +705,36 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 			versions := []usageSourceVersion{{SessionID: "session"}}
 			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
+			// Simulate the dense layout from before fact kinds had separate ranges.
+			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_facts SET fact_index = CASE
+				WHEN fact_index = ? THEN ? WHEN fact_index = ? THEN ? ELSE fact_index END`,
+				usageActivityFactBase, count, usageEventFactBase, count+1)
+			require.NoError(t, err)
+			_, err = cache.db.ExecContext(t.Context(), `
+				CREATE TABLE fact_writes(operation TEXT, fact_index INTEGER);
+				CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('insert', NEW.fact_index); END;
+				CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('update', NEW.fact_index); END;
+				CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('delete', OLD.fact_index); END;`)
+			require.NoError(t, err)
 			for _, step := range []struct {
 				name, mutation string
 				spooled, total int
 			}{
+				{"upgrade dense layout", "", 2, count + 2},
 				{"unchanged", "", 0, count + 2},
-				{"append shifts activity and event", fmt.Sprintf(`INSERT INTO messages(
+				{"append preserves activity and event", fmt.Sprintf(`INSERT INTO messages(
 					session_id, ordinal, role, content, model, timestamp, token_usage, source_uuid)
 					VALUES ('session', %d, 'assistant', '', 'model', '2026-08-10T09:00:00Z',
-					'{"input_tokens":11}', 'appended')`, count+1), 3, count + 3},
+					'{"input_tokens":11}', 'appended')`, count+1), 1, count + 3},
 				{"edit", `UPDATE messages SET token_usage='{"input_tokens":99}'
 					WHERE session_id='session' AND ordinal=0`, 1, count + 3},
 				{"NULL to value", `UPDATE usage_events SET cost_microdollars=42`, 1, count + 3},
 				{"value to NULL", `UPDATE usage_events SET cost_microdollars=NULL`, 1, count + 3},
+				{"activity gains usage", fmt.Sprintf(`UPDATE messages SET token_usage='{"input_tokens":7}'
+					WHERE session_id='session' AND ordinal=%d`, count), 1, count + 3},
 				{"reorder", `UPDATE messages SET ordinal=-1 WHERE ordinal=0;
 					UPDATE messages SET ordinal=0 WHERE ordinal=1;
 					UPDATE messages SET ordinal=1 WHERE ordinal=-1`, 2, count + 3},
@@ -734,14 +752,34 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 				require.NoError(t, err, step.name)
 				var spooled, total int
 				require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&spooled))
-				require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT fact_count FROM sessions
+				require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT message_count + activity_count + event_count FROM sessions
 					WHERE session_id='session'`).Scan(&total))
 				assert.Equal(t, step.spooled, spooled, step.name)
 				assert.Equal(t, step.total, total, step.name)
+				_, err = cache.db.ExecContext(t.Context(), `DELETE FROM fact_writes`)
+				require.NoError(t, err)
 				_, lost, err := cache.fill.installSpool(t.Context(), spool,
 					[]usageSourceVersion{extracted["session"]}, nil, expected)
 				require.NoError(t, err, step.name)
 				assert.Empty(t, lost, step.name)
+				switch step.name {
+				case "upgrade dense layout":
+					var messageWrites int
+					require.NoError(t, cache.db.QueryRowContext(t.Context(),
+						`SELECT COUNT(*) FROM fact_writes WHERE fact_index < ?`, count).Scan(&messageWrites))
+					assert.Zero(t, messageWrites)
+				case "append preserves activity and event":
+					var inserted, otherWrites int
+					require.NoError(t, cache.db.QueryRowContext(t.Context(),
+						`SELECT COUNT(*) FROM fact_writes WHERE operation='insert' AND fact_index=?`, count).Scan(&inserted))
+					assert.Equal(t, 1, inserted)
+					require.NoError(t, cache.db.QueryRowContext(t.Context(),
+						`SELECT COUNT(*) FROM fact_writes WHERE operation!='insert' OR fact_index!=?`, count).Scan(&otherWrites))
+					assert.Zero(t, otherWrites)
+					filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+					assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter),
+						getDailyUsageRollupForTest(t, database, filter))
+				}
 				require.NoError(t, spool.Close())
 				full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
 				require.NoError(t, err)

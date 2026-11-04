@@ -668,7 +668,8 @@ batches against one read-only cache snapshot and spool only changed or new
 rows. Comparison requires the expected install revision; installation checks
 that revision again. Complete per-session fact counts remove obsolete tails,
 and identity invalidation compares the complete cache before and after install.
-An append can still shift later activity or event indexes and spool those rows.
+Each fact kind uses its own fixed index range, so a token-message append keeps
+activity and event rows at their existing positions.
 This reduces temporary writes; it does not make source extraction incremental.
 
 Timezone rollup identity includes both the resolved zone name and its rule

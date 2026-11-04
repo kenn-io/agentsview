@@ -23,6 +23,10 @@ const (
 	usageCursorCopyBatchSize      = 1_000
 	usageFillNotificationDebounce = 100 * time.Millisecond
 	usageFillNotificationCapacity = 1024
+	// Readers use only relative order within a session. Separate ranges keep
+	// appends to one fact kind from moving facts of another kind.
+	usageActivityFactBase = 1 << 29
+	usageEventFactBase    = 1 << 30
 )
 
 var errUsageCacheSourceChanged = errors.New("usage cache source archive changed")
@@ -433,7 +437,9 @@ func newUsageFactSpool(ctx context.Context) (*usageFactSpool, error) {
 		CREATE TABLE sessions (
 			session_id TEXT PRIMARY KEY,
 			install_revision INTEGER,
-			fact_count INTEGER NOT NULL DEFAULT 0
+			message_count INTEGER NOT NULL DEFAULT 0,
+			activity_count INTEGER NOT NULL DEFAULT 0,
+			event_count INTEGER NOT NULL DEFAULT 0
 		) WITHOUT ROWID`); err != nil {
 		_ = database.Close()
 		_ = removeUsageCacheFiles(path)
@@ -548,23 +554,26 @@ func (c *usageFillCoordinator) extractSessions(
 			return nil, nil, err
 		}
 	}
-	indexes := make(map[string]int, len(versions))
+	messageIndexes := make(map[string]int, len(versions))
+	activityIndexes := make(map[string]int, len(versions))
+	eventIndexes := make(map[string]int, len(versions))
 	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, compare: true}
-	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, indexes); err != nil {
+	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes); err != nil {
 		return nil, nil, err
 	}
-	if err := extractUsageActivityFacts(ctx, tx, &spoolWriter, indexes); err != nil {
+	if err := extractUsageActivityFacts(ctx, tx, &spoolWriter, activityIndexes); err != nil {
 		return nil, nil, err
 	}
-	if err := extractUsageEventFacts(ctx, tx, &spoolWriter, indexes); err != nil {
+	if err := extractUsageEventFacts(ctx, tx, &spoolWriter, eventIndexes); err != nil {
 		return nil, nil, err
 	}
 	if err := spoolWriter.Flush(); err != nil {
 		return nil, nil, err
 	}
-	for id, count := range indexes {
+	for id := range extracted {
 		if _, err := spoolTx.ExecContext(ctx,
-			`UPDATE sessions SET fact_count = ? WHERE session_id = ?`, count, id,
+			`UPDATE sessions SET message_count = ?, activity_count = ?, event_count = ? WHERE session_id = ?`,
+			messageIndexes[id], activityIndexes[id], eventIndexes[id], id,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -632,7 +641,7 @@ func extractUsageActivityFacts(
 		}
 		fact, ok := usagefacts.FromMessage(input)
 		if ok {
-			if err := spool.Add(sessionID, indexes[sessionID], fact); err != nil {
+			if err := spool.Add(sessionID, usageActivityFactBase+indexes[sessionID], fact); err != nil {
 				return err
 			}
 			indexes[sessionID]++
@@ -678,7 +687,7 @@ func extractUsageEventFacts(
 		}
 		fact, ok := usagefacts.FromEvent(input)
 		if ok {
-			if err := spool.Add(sessionID, indexes[sessionID], fact); err != nil {
+			if err := spool.Add(sessionID, usageEventFactBase+indexes[sessionID], fact); err != nil {
 				return err
 			}
 			indexes[sessionID]++
@@ -1171,7 +1180,8 @@ func installSpoolSessions(
 		SELECT COUNT(*) FROM usage_install_sessions install
 		LEFT JOIN usage_fill_spool.sessions complete
 		  ON complete.session_id = install.session_id
-		WHERE complete.session_id IS NULL OR complete.fact_count < 0`,
+		WHERE complete.session_id IS NULL OR complete.message_count < 0
+		   OR complete.activity_count < 0 OR complete.event_count < 0`,
 	).Scan(&incomplete); err != nil {
 		return nil, err
 	}
@@ -1203,11 +1213,15 @@ func installSpoolSessions(
 			JOIN usage_cached_sessions cached
 			  ON cached.session_id = complete.session_id
 			WHERE cached.id = usage_facts.cached_session_id
-			  AND usage_facts.fact_index >= complete.fact_count
-		)`); err != nil {
+			  AND NOT (
+			    usage_facts.fact_index < complete.message_count
+			    OR usage_facts.fact_index - ? >= 0 AND usage_facts.fact_index - ? < complete.activity_count
+			    OR usage_facts.fact_index - ? >= 0 AND usage_facts.fact_index - ? < complete.event_count
+			  )
+		)`, usageActivityFactBase, usageActivityFactBase, usageEventFactBase, usageEventFactBase); err != nil {
 		return nil, err
 	}
-	// Extraction assigns dense indexes to the complete snapshot, but spools
+	// Extraction assigns indexes per fact kind to the complete snapshot, but spools
 	// only changed/new facts. Retain equal facts and their identity indexes.
 	// IS NOT compares nullable fields without treating NULL as a change.
 	if _, err := cacheConn.ExecContext(ctx, `INSERT INTO usage_facts(
