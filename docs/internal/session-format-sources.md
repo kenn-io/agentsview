@@ -200,10 +200,12 @@ evidence; they do not establish whether a tool helped the task.
   example in the original report is explicitly synthetic. Each owner's
   attachments sort stably by timestamp before merging, with undated attachments
   last. File order can differ from timestamp order when a queued prompt is
-  persisted after a later hook. Timestamp ordering can place a hook after an
-  assistant even when its source bytes precede the response. A continuation of
-  the same message ID uses a full parse when stored hooks trail the last
-  assistant, so suffix replacement cannot discard those earlier attachments.
+  persisted after a later hook. Incremental parsing falls back to a full parse
+  when any dated appended attachment precedes the stored tail's timestamp.
+  Timestamp ordering can place a hook after an assistant even when its source
+  bytes precede the response. A continuation of the same message ID uses a full
+  parse when stored hooks trail the last assistant, so suffix replacement cannot
+  discard those earlier attachments.
   Runs with only trailing queued prompts keep the bounded suffix reparse. Hooks
   follow their native parent into the main conversation or a fork, including
   parents hidden by `isMeta` and attachment chains through skipped empty hooks,

@@ -105,6 +105,12 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 				claudeHookResumeAnswer,
 				`{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:00.500Z","attachment":{"type":"hook_success","content":"delayed output"}}`,
 			}, split: 2},
+			{name: "queued prompt older than stored hook", lines: []string{
+				claudeHookResumeUser,
+				claudeHookResumeAnswer,
+				claudeHookResumeNative,
+				`{"type":"attachment","timestamp":"2024-01-01T00:00:01.500Z","attachment":{"type":"queued_command","prompt":"queued request"}}`,
+			}, split: 3},
 			{name: "trailing native hook", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeNative, claudeHookResumeNextUser}, split: 3},
 			{name: "linear native parent chain", lines: []string{
 				`{"type":"user","uuid":"u1","parentUuid":"missing-ancestor","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`,

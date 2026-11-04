@@ -1140,7 +1140,7 @@ func claudeParseSessionFrom(
 	}
 	if len(attachments) > 0 {
 		for _, a := range attachments {
-			if a.hook != nil && !a.timestamp.IsZero() && a.timestamp.Before(scan.storedTailTimestamp) {
+			if !a.timestamp.IsZero() && a.timestamp.Before(scan.storedTailTimestamp) {
 				return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 			}
 		}
