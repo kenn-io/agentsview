@@ -909,7 +909,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-secondary);
   }
 

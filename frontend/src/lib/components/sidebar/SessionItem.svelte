@@ -659,7 +659,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 50px;
+    height: 48px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -694,7 +694,7 @@
     position: absolute;
     left: 0;
     top: 5px;
-    bottom: 4px;
+    bottom: 3px;
     width: 3px;
     border-radius: 0 2px 2px 0;
     background: var(--accent-blue);
@@ -753,7 +753,7 @@
   .side-meta {
     position: absolute;
     right: 10px;
-    bottom: 4px;
+    bottom: 3px;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -774,7 +774,7 @@
   .session-item:has(.side-meta) .session-meta {
     overflow: hidden;
     /* A margin, not padding, so the clip edge stops before the slot. */
-    margin-right: calc(min(max(118px, 42%), 46%) + 6px);
+    margin-right: calc(min(max(118px, 42%), 46%) + 12px);
   }
 
   /* Agent identity: a small colored mark plus the agent name. */
@@ -846,7 +846,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    line-height: 1.3;
+    line-height: 16px;
     letter-spacing: -0.005em;
   }
 

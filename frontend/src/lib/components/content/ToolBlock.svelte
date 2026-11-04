@@ -345,9 +345,9 @@
   .stat-del { color: color-mix(in srgb, var(--accent-red) 75%, var(--text-primary)); }
   .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
-    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 6px;
-    font-variant-numeric: tabular-nums; border: 1px solid transparent;
-    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto;
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 0 6px;
+    font-variant-numeric: tabular-nums; border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; min-width: 56px; text-align: center;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }

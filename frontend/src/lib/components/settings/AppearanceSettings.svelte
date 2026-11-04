@@ -359,6 +359,16 @@
     color: var(--text-primary);
   }
 
+  /* Presets match the hex field's rhythm instead of a dense strip. */
+  .role-colors :global(.kit-color-input--sm .kit-color-input__swatch) {
+    width: 20px;
+    height: 20px;
+  }
+
+  .role-colors :global(.kit-color-input__swatches) {
+    gap: 6px;
+  }
+
   .role-color-controls {
     display: flex;
     flex-wrap: wrap;
