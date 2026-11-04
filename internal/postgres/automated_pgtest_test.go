@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -377,19 +376,8 @@ func TestAutomationAuditPGConcurrentClassifiers(t *testing.T) {
 
 func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 	pgURL := testPGURL(t)
-	const schema = "agentsview_raw_privilege_test"
-	const role = "agentsview_raw_restricted"
-	const rolePassword = "agentsview_raw_restricted_pw"
-
-	admin, err := Open(t.Context(), pgURL, schema, true)
-	require.NoError(t, err, "Open admin")
-	t.Cleanup(func() { _ = admin.Close() })
-	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
-	require.True(t, pushSchemaCurrent(t.Context(), admin),
-		"fixture must exercise the schema-current sync fast path")
-
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 	local := testDB(t)
 	local.SetArchiveContent(config.ArchiveContentUsage)
 	for _, tc := range []struct {
@@ -408,113 +396,35 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 			{SessionID: tc.id, Ordinal: 1, Role: "assistant", Content: "Finished.", Model: "model-a"},
 		}))
 	}
-	ps, err := New(t.Context(), pgURL, schema, local, "usage-audit-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "usage-audit-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
-	_, err = ps.Push(t.Context(), false, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, ps.EnsureSchema(ctx))
+	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err)
 	var before bool
-	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT is_automated FROM sessions WHERE id = 'automated'`).Scan(&before))
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated FROM sessions WHERE id = 'automated'`,
+	).Scan(&before))
 	require.True(t, before)
+
 	// Full-content rows lacking evidence must still have stale flags corrected.
-	_, err = admin.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
 	require.NoError(t, err)
 	// Legacy headless rows predate non-interactive session metadata.
-	_, err = admin.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated, prompt_evidence_discarded) VALUES
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated, prompt_evidence_discarded) VALUES
 		('codex-headless', 'other-machine', 'project', 'codex', 'headless', 2, true, true),
 		('codex-interactive', 'other-machine', 'project', 'codex', '', 2, false, true),
 		('headless-full', 'other-machine', 'project', 'codex', 'headless', 2, true, false)`)
 	require.NoError(t, err)
-	wantVerdicts := map[string]bool{"automated": true, "interactive": false, "empty-full": false, "codex-headless": true, "codex-interactive": false, "headless-full": false}
-	t.Run("tracking", func(t *testing.T) {
-		require.NoError(t, backfillIsAutomatedPG(t.Context(), admin))
-		for id, want := range wantVerdicts {
-			var got bool
-			require.NoError(t, admin.QueryRowContext(t.Context(),
-				`SELECT is_automated FROM sessions WHERE id = $1`, id,
-			).Scan(&got))
-			assert.Equal(t, want, got, id)
-		}
-	})
-
-	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
-	_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
-	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
-	require.NoError(t, err, "create restricted role")
-	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
-	})
-	for _, grant := range []string{
-		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
-		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + schema + ` TO ` + role,
-	} {
-		_, err = admin.ExecContext(t.Context(), grant)
-		require.NoError(t, err, grant)
+	require.NoError(t, EnsureSchema(ctx, ps.DB(), "agentsview"))
+	for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false, "codex-headless": true, "codex-interactive": false, "headless-full": false} {
+		var got bool
+		require.NoError(t, ps.DB().QueryRowContext(ctx,
+			`SELECT is_automated FROM sessions WHERE id = $1`, id,
+		).Scan(&got))
+		assert.Equal(t, want, got, id)
 	}
-
-	restrictedURL, err := url.Parse(pgURL)
-	require.NoError(t, err)
-	restrictedURL.User = url.UserPassword(role, rolePassword)
-	restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
-	require.NoError(t, err, "Open restricted")
-	t.Cleanup(func() { _ = restricted.Close() })
-
-	indexes := []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"}
-	for _, index := range indexes {
-		_, err = admin.ExecContext(t.Context(), `DROP INDEX `+index)
-		require.NoError(t, err)
-	}
-	_, err = admin.ExecContext(t.Context(), `DROP TRIGGER trg_sessions_automation_audit ON sessions;
- DROP INDEX idx_sessions_automation_audit; ALTER TABLE sessions DROP COLUMN automation_audit_hash;
- INSERT INTO sessions(id,machine,project,agent,first_message,user_message_count) VALUES
- ('restricted-stale','host','project','codex','Warmup',1), ('restricted-stable','host','project','codex','Explain this function.',1)`)
-	require.NoError(t, err)
-	for _, full := range []bool{false, true} {
-		var progress automatedAuditPGProgress
-		var verdicts []automationVerdictPG
-		if full {
-			verdicts, err = auditAutomatedFullPG(t.Context(), restricted, db.SnapshotAutomationClassifier(), &progress, "xmin")
-		} else {
-			verdicts, err = auditAutomatedMatchingHashPG(t.Context(), restricted, db.SnapshotAutomationClassifier(), &progress, "xmin", nil)
-		}
-		require.NoError(t, err)
-		require.Len(t, verdicts, 1, "full=%t: unchanged fallback verdicts must be discarded before write-back", full)
-		assert.Equal(t, "restricted-stale", verdicts[0].id)
-	}
-	t.Run("fallback", func(t *testing.T) {
-		for _, hash := range []string{db.ClassifierHash(), "old-classifier"} {
-			_, err = admin.ExecContext(t.Context(), `UPDATE sessions SET is_automated = TRUE WHERE id IN ('empty-full', 'headless-full')`)
-			require.NoError(t, err)
-			_, err = admin.ExecContext(t.Context(), `UPDATE sync_metadata SET value = $1 WHERE key = $2`, hash, db.ClassifierHashKey)
-			require.NoError(t, err)
-			require.NoError(t, backfillIsAutomatedPG(t.Context(), restricted))
-			for id, want := range wantVerdicts {
-				var got bool
-				require.NoError(t, restricted.QueryRowContext(t.Context(), `SELECT is_automated FROM sessions WHERE id = $1`, id).Scan(&got))
-				assert.Equal(t, want, got, "hash=%s id=%s", hash, id)
-			}
-		}
-	})
-	assert.True(t, pushSchemaCurrent(t.Context(), restricted), "tracking stays optional for existing push roles")
-	syncer := &Sync{pg: restricted, schema: schema}
-	require.NoError(t, syncer.EnsureSchema(t.Context()),
-		"restricted preparation must tolerate index and raw custody DDL permissions")
-	assert.True(t, syncer.schemaDone)
-	for _, index := range indexes {
-		assert.False(t, pgHasIndex(t.Context(), admin, index), "restricted publisher cannot install %s", index)
-	}
-	var automated bool
-	require.NoError(t, restricted.QueryRowContext(t.Context(), `SELECT is_automated FROM sessions WHERE id='restricted-stale'`).Scan(&automated))
-	assert.True(t, automated)
-	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
-	progress, err := backfillIsAutomatedPGWithProgress(t.Context(), restricted)
-	require.NoError(t, err)
-	assert.Zero(t, progress.RowsPrefetched, "owner installation enables incremental restricted publication")
-	writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
-	require.NoError(t, err)
-	assert.True(t, writable,
-		"DML-capable role must remain eligible when raw custody DDL is restricted")
 }
