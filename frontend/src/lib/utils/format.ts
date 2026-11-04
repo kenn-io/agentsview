@@ -83,6 +83,40 @@ export function _resetNonceCounter(value = 0): void {
   nonceCounter = value;
 }
 
+export interface HighlightSegment {
+  text: string;
+  match: boolean;
+}
+
+/**
+ * Split plain snippet text into segments, flagging case-insensitive
+ * occurrences of the query's words (two or more characters). Used to
+ * emphasize matches when a backend returns snippets without <mark> tags.
+ */
+export function highlightTerms(text: string, query: string): HighlightSegment[] {
+  const terms = [...new Set(
+    query
+      .split(/\s+/)
+      .map((term) => term.replace(/^["'(]+|["')]+$/g, "").toLowerCase())
+      .filter((term) => term.length >= 2),
+  )].sort((a, b) => b.length - a.length);
+  if (terms.length === 0 || text === "") return [{ text, match: false }];
+  const pattern = new RegExp(
+    `(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "gi",
+  );
+  const segments: HighlightSegment[] = [];
+  let last = 0;
+  for (const found of text.matchAll(pattern)) {
+    const start = found.index ?? 0;
+    if (start > last) segments.push({ text: text.slice(last, start), match: false });
+    segments.push({ text: found[0], match: true });
+    last = start + found[0].length;
+  }
+  if (last < text.length) segments.push({ text: text.slice(last), match: false });
+  return segments;
+}
+
 /**
  * Sanitize an HTML snippet from FTS search results.
  * Only allows <mark> tags for highlighting; strips everything else.

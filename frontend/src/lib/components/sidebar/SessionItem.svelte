@@ -786,7 +786,8 @@
   .agent-tag {
     display: block;
     min-width: 0;
-    flex-shrink: 1;
+    flex-shrink: 0;
+    max-width: 100%;
     font-weight: 500;
     color: var(--text-secondary);
     white-space: nowrap;
