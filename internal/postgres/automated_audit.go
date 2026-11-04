@@ -74,14 +74,14 @@ func backfillIsAutomatedPGWithProgress(
 		if err != nil {
 			return progress, err
 		}
-		for start := 0; start < len(ids); start += 500 {
-			batch, err := auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, ids[start:min(start+500, len(ids))])
+		if err := pgQueryChunked(ids, func(chunk []string) error {
+			batch, err := auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, chunk)
 			if err != nil {
-				return progress, err
+				return err
 			}
-			if err := writeAutomationVerdictsPG(ctx, pg, batch, column, current); err != nil {
-				return progress, err
-			}
+			return writeAutomationVerdictsPG(ctx, pg, batch, column, current)
+		}); err != nil {
+			return progress, err
 		}
 	} else if stored == current {
 		verdicts, err = auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, nil)
@@ -158,11 +158,7 @@ func auditAutomatedMatchingHashPG(
 	pb := &paramBuilder{}
 	pb.add(db.AutomationEvidencePrefixBytes)
 	if ids != nil {
-		placeholders := make([]string, len(ids))
-		for i, id := range ids {
-			placeholders[i] = pb.add(id)
-		}
-		filter = " WHERE s.id IN (" + strings.Join(placeholders, ",") + ")"
+		filter = " WHERE s.id IN " + pgInPlaceholders(ids, pb)
 	}
 	rows, err := pg.QueryContext(ctx,
 		`SELECT
