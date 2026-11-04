@@ -293,8 +293,15 @@
   /* Local overrides of kit-ui SettingsLayout: readable nav summaries and
      the app-wide neutral selected state. */
   .settings-page :global(.kit-settings__nav-summary) {
-    font-size: 11px;
+    font-size: 11.5px;
     line-height: 1.35;
+  }
+
+  /* Start the panel near the navigation instead of centering it in the
+     remaining width. */
+  .settings-page :global(.kit-settings__panel) {
+    margin: 0;
+    padding-left: var(--space-8);
   }
 
   .settings-page :global(.kit-settings__nav-item--active),

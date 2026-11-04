@@ -1005,7 +1005,7 @@
     justify-content: center;
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     transition: background 0.12s, color 0.12s;
     flex-shrink: 0;

@@ -571,7 +571,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: 12px;
-    color: var(--text-muted);
+    color: color-mix(in srgb, var(--text-secondary) 80%, var(--text-muted));
   }
 
   .item-meta {
@@ -650,6 +650,8 @@
   }
 
   .item-id {
+    width: 72px;
+    text-align: right;
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-muted);
