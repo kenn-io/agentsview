@@ -173,6 +173,21 @@
     stroke: white;
   }
 
+  /* Solid tiles render as a tinted wash with a colored edge so labels can
+     use theme text in both modes. Patterned (color-blind) tiles keep the
+     full paint and the white labels below. */
+  .treemap-container :global(.tile:not(.patterned) rect) {
+    fill: color-mix(in srgb, var(--tile-color) 30%, var(--bg-surface));
+    stroke: color-mix(in srgb, var(--tile-color) 70%, var(--bg-surface));
+    stroke-width: 1;
+  }
+
+  .treemap-container :global(.tile:not(.patterned):focus-visible rect),
+  .treemap-container :global(.tile:not(.patterned)[aria-pressed="true"] rect) {
+    stroke: var(--text-primary);
+    stroke-width: 2;
+  }
+
   .treemap-container :global(.tile-label) {
     fill: white;
     font-size: 11px;
@@ -182,7 +197,6 @@
   }
 
   .treemap-container :global(.tile-value) {
-    /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.85;
     font-size: 11px;
@@ -192,7 +206,6 @@
   }
 
   .treemap-container :global(.tile-meta) {
-    /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.7;
     font-size: 9px;
@@ -206,5 +219,21 @@
     font-weight: 500;
     font-family: var(--font-sans);
     pointer-events: none;
+  }
+
+  .treemap-container :global(.tile:not(.patterned) .tile-label),
+  .treemap-container :global(.tile:not(.patterned) .tile-label-sm) {
+    fill: var(--text-primary);
+  }
+
+  .treemap-container :global(.tile:not(.patterned) .tile-value) {
+    fill: var(--text-secondary);
+    fill-opacity: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .treemap-container :global(.tile:not(.patterned) .tile-meta) {
+    fill: var(--text-muted);
+    fill-opacity: 1;
   }
 </style>

@@ -517,6 +517,12 @@
           {#if childCount > 0 && !onToggleExpand}
             <span class="continuation-badge">x{continuationCount}</span>
           {/if}
+          {#if !compact && !hideAgent && entrypointBadge(session.entrypoint)}
+            <span
+              class="entrypoint-tag"
+              title={entrypointBadge(session.entrypoint)}
+            >{entrypointBadge(session.entrypoint)}</span>
+          {/if}
         </div>
       </a>
     {/if}
@@ -542,15 +548,9 @@
       {#if !hideAgent}
         <span
           class="agent-tag"
-          style:color={agentColor}
+          style:--agent-color={agentColor}
           title={agentLabel(session.agent, session.agent_label)}
         >{agentLabel(session.agent, session.agent_label)}</span>
-        {#if entrypointBadge(session.entrypoint)}
-          <span
-            class="entrypoint-tag"
-            title={entrypointBadge(session.entrypoint)}
-          >{entrypointBadge(session.entrypoint)}</span>
-        {/if}
       {/if}
       {#if showMachine}
         <span class="machine-tag" title={machineDisplay.title}>
@@ -750,43 +750,54 @@
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: var(--space-1);
+    justify-content: center;
+    gap: 2px;
     min-width: 0;
     flex-shrink: 0;
-    max-width: 40%;
-    margin-left: 4px;
+    max-width: 34%;
+    margin-left: 6px;
+    font-size: 10px;
+    line-height: 13px;
+    color: var(--text-muted);
   }
 
-  /* Agent tag on the right side */
+  /* Agent identity: a small colored mark plus the agent name. */
   .agent-tag {
-    font-size: 8px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    line-height: 1;
-    opacity: 0.7;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+    color: var(--text-secondary);
     white-space: nowrap;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .entrypoint-tag {
-    opacity: 0.75;
-    font-size: 0.9em;
-    white-space: nowrap;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .agent-tag::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 2px;
+    background: var(--agent-color, var(--text-muted));
+    flex-shrink: 0;
   }
 
   .machine-tag {
-    font-size: 9px;
-    line-height: 1;
-    color: var(--text-muted);
-    opacity: 0.9;
+    max-width: 68px;
     white-space: nowrap;
-    max-width: 74px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Project names win the space; the entrypoint truncates first. */
+  .entrypoint-tag {
+    min-width: 0;
+    flex-shrink: 100;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
