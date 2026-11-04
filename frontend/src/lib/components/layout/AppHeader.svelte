@@ -16,7 +16,6 @@
     ArrowDownToLineIcon,
     ArrowDownWideNarrowIcon,
     ArrowUpNarrowWideIcon,
-    CheckIcon,
     FileDownIcon,
     CopyIcon,
     DatabaseBackupIcon,
@@ -52,10 +51,6 @@
   const modKey = isMac ? "⌘" : "Ctrl";
 
   let showImportModal = $state(false);
-  let copiedMarkdownLink = $state(false);
-  let copiedMarkdownLinkTimer:
-    | ReturnType<typeof setTimeout>
-    | undefined;
 
   /** True while TopBar has collapsed the nav tabs into its dropdown —
    * side-region snippets read it to drop their labels. */
@@ -116,11 +111,6 @@
     const ok = await copyToClipboard(url);
     if (!ok) return;
     reportTelemetry("export_run", { format: "markdown_link" });
-    copiedMarkdownLink = true;
-    clearTimeout(copiedMarkdownLinkTimer);
-    copiedMarkdownLinkTimer = setTimeout(() => {
-      copiedMarkdownLink = false;
-    }, 1500);
   }
 
   async function handleCopySourceFilePath() {
@@ -649,11 +639,17 @@
   @media (pointer: coarse) {
     .header-btn,
     .hamburger,
-    .import-btn,
-    :global(.overflow-btn),
-    :global(.view-trigger) {
+    .import-btn {
       min-width: 44px;
       min-height: 44px;
+    }
+
+    /* kit-ui MenuTrigger sizes itself from --kit-control-height. */
+    :global(.overflow-btn),
+    :global(.view-trigger) {
+      --kit-control-height: 44px;
+      min-width: 44px;
+      height: 44px;
     }
   }
 </style>

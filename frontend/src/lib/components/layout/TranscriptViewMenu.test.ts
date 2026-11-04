@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
+import { registerShortcuts } from "../../utils/keyboard.js";
 import TranscriptViewMenu from "./TranscriptViewMenu.svelte";
 
 function trigger(): HTMLButtonElement {
@@ -91,5 +93,28 @@ describe("TranscriptViewMenu", () => {
     ui.toggleBlock("thinking");
     await tick();
     expect(trigger().classList.contains("filtered")).toBe(true);
+  });
+
+  it("closes on Escape without closing the open session", async () => {
+    const unregister = registerShortcuts({ navigateMessage: () => {}, navigateUserPrompt: () => {} });
+    sessions.activeSessionId = "s1";
+    try {
+      await open();
+      expect(document.querySelector('[role="menu"]')).not.toBeNull();
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      await tick();
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+      expect(sessions.activeSessionId).toBe("s1");
+    } finally {
+      unregister();
+      sessions.activeSessionId = null;
+    }
+  });
+
+  it("keeps Show all mounted while nothing is hidden", async () => {
+    await open();
+    expect(item("menuitem", "Show all").getAttribute("aria-disabled")).toBe("true");
   });
 });
