@@ -3448,6 +3448,9 @@ func (e *Engine) resyncBuildLocked(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	if err := newDB.CopyCommitTrailersFrom(ctx, origPath); err != nil {
+		log.Printf("resync: pre-sync copy commit trailers: %v", err)
+	}
 	trashedCopied := 0
 	var copiedSessionIDs []string
 	if ids, err := newDB.CopyTrashedDataFrom(ctx, origPath); err != nil {

@@ -546,7 +546,7 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 		for id := range changed {
 			identities = append(identities, id)
 		}
-		owners, err := trailerIdentityOwners(ctx, tx, identities)
+		owners, err := trailerIdentityOwners(identities)
 		if err != nil {
 			return err
 		}
@@ -568,11 +568,7 @@ func retainTrailerProjectsTx(ctx context.Context, tx *sql.Tx, ids []string) erro
 	for _, id := range ids {
 		identities = append(identities, sessionTrailerIdentities(id)...)
 	}
-	encoded, err := json.Marshal(identities)
-	if err != nil {
-		return err
-	}
-	owners, err := resolveTrailerOwners(ctx, tx, `session_id IN (SELECT value FROM json_each(?))`, string(encoded))
+	owners, err := trailerIdentityOwners(identities)
 	if err != nil {
 		return err
 	}
@@ -639,70 +635,28 @@ func resolveTrailerOwners(ctx context.Context, tx *sql.Tx, where string, args ..
 	if err != nil {
 		return "", err
 	}
-	return trailerIdentityOwners(ctx, tx, identities)
+	return trailerIdentityOwners(identities)
 }
 
-func trailerIdentityOwners(ctx context.Context, tx *sql.Tx, identities []string) (string, error) {
-	ids, err := findTrailerOwnerIDs(ctx, tx)
-	if err != nil {
-		return "", err
-	}
+func trailerIdentityOwners(identities []string) (string, error) {
 	owners := make(map[string]string, len(identities))
 	for _, value := range identities {
 		agent, id, ok := strings.Cut(value, ":")
 		def, known := parser.AgentByType(parser.AgentType(agent))
-		if !ok || !known {
-			continue
+		if ok && known {
+			owners[value] = def.IDPrefix + id
 		}
-		sessionID := def.IDPrefix + id
-		matches := ids[value]
-		// An exact archive ID takes precedence over suffix matches.
-		if !slices.Contains(matches, sessionID) && len(matches) > 0 {
-			if len(matches) > 1 {
-				continue
-			}
-			sessionID = matches[0]
-		}
-		owners[value] = sessionID
 	}
 	encoded, err := json.Marshal(owners)
 	return string(encoded), err
 }
 
-// Scan owners once per batch, including trashed and permanently deleted sessions.
-func findTrailerOwnerIDs(ctx context.Context, tx *sql.Tx) (map[string][]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id,agent FROM sessions WHERE id NOT IN (SELECT id FROM excluded_sessions) UNION ALL SELECT id,'*' FROM excluded_sessions`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	ids := make(map[string][]string)
-	for rows.Next() {
-		var id, agent string
-		if err := rows.Scan(&id, &agent); err != nil {
-			return nil, err
-		}
-		for _, value := range sessionTrailerIdentities(id) {
-			if agent == "*" || strings.HasPrefix(value, agent+":") {
-				ids[value] = append(ids[value], id)
-			}
-		}
-	}
-	return ids, rows.Err()
-}
-
-// Enumerate the trailer identities that could resolve to this archive ID.
-// Keep every colon suffix because native IDs can themselves contain colons.
+// Enumerate the trailer identities for this archive ID.
 func sessionTrailerIdentities(id string) []string {
 	var identities []string
-	for i := range id {
-		if i != 0 && id[i-1] != ':' && id[i-1] != '~' {
-			continue
-		}
-		for _, def := range parser.Registry {
-			if raw, ok := strings.CutPrefix(id[i:], def.IDPrefix); ok {
-				identities = append(identities, string(def.Type)+":"+raw)
-			}
+	for _, def := range parser.Registry {
+		if raw, ok := strings.CutPrefix(id, def.IDPrefix); ok {
+			identities = append(identities, string(def.Type)+":"+raw)
 		}
 	}
 	return identities

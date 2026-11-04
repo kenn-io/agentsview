@@ -1102,6 +1102,34 @@ const codexLegacyPageHeaderDataVersion = 134
 // codexThreadIdentityDataVersion preserves the first session_meta identity.
 const codexThreadIdentityDataVersion = 137
 
+// CopyCommitTrailersFrom preserves Git evidence before rebuild reconciliation.
+func (d *DB) CopyCommitTrailersFrom(ctx context.Context, sourcePath string) error {
+	if d.ArchiveContent().OmitsToolContent() {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	conn, err := d.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS old_db", sourcePath); err != nil {
+		return fmt.Errorf("attaching source db: %w", err)
+	}
+	defer func() { _, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db") }()
+	var hasTrailers bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_trailers')`).Scan(&hasTrailers); err != nil {
+		return err
+	}
+	if hasTrailers {
+		if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailers SELECT * FROM old_db.commit_trailers`); err != nil {
+			return fmt.Errorf("copying commit trailers: %w", err)
+		}
+	}
+	return nil
+}
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
@@ -1217,15 +1245,6 @@ func (d *DB) CopyExcludedSessionsFrom(
 			if err := excludeLegacyCodexPagesByFileName(ctx, conn); err != nil {
 				return err
 			}
-		}
-	}
-	var hasTrailers bool
-	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_trailers')`).Scan(&hasTrailers); err != nil {
-		return err
-	}
-	if hasTrailers && !d.ArchiveContent().OmitsToolContent() {
-		if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailers SELECT * FROM old_db.commit_trailers`); err != nil {
-			return fmt.Errorf("copying commit trailers: %w", err)
 		}
 	}
 	if d.ArchiveContent() == config.ArchiveContentFull {

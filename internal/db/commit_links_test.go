@@ -547,7 +547,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
-	insertSession(t, old, "host-a~written", "project-a")
+	insertSession(t, old, "written", "project-a")
 	for _, id := range []string{"orphan", "trash", "deleted"} {
 		insertSession(t, old, id, "project-a")
 		insertMessages(t, old, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
@@ -565,7 +565,8 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 			_, err = fresh.CopyOrphanedDataFrom(t.Context(), old.Path())
 			require.NoError(t, err)
 			require.NoError(t, fresh.CopyExcludedSessionsFrom(t.Context(), old.Path()))
-			written, err := fresh.SessionCommitLinks(t.Context(), "host-a~written")
+			require.NoError(t, fresh.CopyCommitTrailersFrom(t.Context(), old.Path()))
+			written, err := fresh.SessionCommitLinks(t.Context(), "written")
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {
 				require.Len(t, written.Commits, 1)
@@ -856,29 +857,27 @@ func TestTrailerCommitUpsert(t *testing.T) {
 }
 
 func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
-	for _, id := range []string{"editor", "host-a~editor"} {
-		t.Run(id, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, id, "project-a")
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
-			session, err := d.GetSession(t.Context(), id)
-			require.NoError(t, err)
-			session.Project = "project-b"
-			require.NoError(t, d.UpsertSession(t.Context(), *session))
-			require.NoError(t, d.DeleteSession(t.Context(), id))
-			for _, archive := range []*DB{d, testDB(t)} {
-				if archive != d {
-					require.NoError(t, archive.CopyExcludedSessionsFrom(t.Context(), d.Path()))
-				}
-				rows, err := archive.RetainedCommitLinkRows(t.Context())
-				require.NoError(t, err)
-				require.Len(t, rows, 1)
-				assert.Equal(t, "project-b", rows[0].Project)
-				assert.True(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-b"}, nil))
-				assert.False(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-a"}, nil))
-				assert.Equal(t, "trailer", rows[0].Source)
-				assert.True(t, rows[0].Missing)
-			}
-		})
+	const id = "editor"
+	d := testDB(t)
+	insertSession(t, d, id, "project-a")
+	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
+	session, err := d.GetSession(t.Context(), id)
+	require.NoError(t, err)
+	session.Project = "project-b"
+	require.NoError(t, d.UpsertSession(t.Context(), *session))
+	require.NoError(t, d.DeleteSession(t.Context(), id))
+	for _, archive := range []*DB{d, testDB(t)} {
+		if archive != d {
+			require.NoError(t, archive.CopyExcludedSessionsFrom(t.Context(), d.Path()))
+			require.NoError(t, archive.CopyCommitTrailersFrom(t.Context(), d.Path()))
+		}
+		rows, err := archive.RetainedCommitLinkRows(t.Context())
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.Equal(t, "project-b", rows[0].Project)
+		assert.True(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-b"}, nil))
+		assert.False(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-a"}, nil))
+		assert.Equal(t, "trailer", rows[0].Source)
+		assert.True(t, rows[0].Missing)
 	}
 }

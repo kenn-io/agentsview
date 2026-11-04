@@ -187,6 +187,21 @@ func TestReconcileCommitTrailersPrunesRewrittenHistory(t *testing.T) {
 	assert.Empty(t, found.Commits[0].Links)
 }
 
+func TestResyncKeepsPrunedCommitTrailersRemoved(t *testing.T) {
+	database, engine, repo, first, runGit := commitTrailerFixture(t)
+	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--amend", "--allow-empty", "-qm", "Amended\n\nAgent-Session: claude:editor-session")
+	second := runGit(repo, "rev-parse", "HEAD")
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
+	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 1)
+	assert.Equal(t, second, list.Commits[0].SHA)
+	found, err := database.CommitSessionLinks(t.Context(), []string{first})
+	require.NoError(t, err)
+	assert.Empty(t, found.Commits[0].Links)
+}
+
 func TestReconcileCommitTrailersKeepsFailedOrMissingRepository(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "failed", true: "missing"}[missing], func(t *testing.T) {

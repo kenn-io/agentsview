@@ -1017,7 +1017,7 @@ func (s *Sync) sessionFingerprints(
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
 			PlanUsage      string
-			CommitLinks    []db.CommitLinkRow
+			CommitLinks    []db.CommitLinkRow `json:",omitzero"`
 		}{
 			SessionFields: duckSessionFingerprintFields(
 				sess, db.MirroredSessionMachine(sess, s.machine),
