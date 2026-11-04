@@ -1911,7 +1911,7 @@ func (s *Store) queryVelocityMsgs(
 		timestamp,
 		content_length
 		FROM messages
-		WHERE session_id IN ` + ph + `
+		WHERE is_system = FALSE AND session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`
 
 	rows, err := s.pg.QueryContext(ctx, q, pb.args...)

@@ -5,6 +5,8 @@ import { SessionsService } from "../../api/generated/index";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
+import { ui } from "../../stores/ui.svelte.js";
+import { msg } from "../../utils/test-messages.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import SubagentInline from "./SubagentInline.svelte";
@@ -88,6 +90,45 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
+  it("renders child hooks as collapsed cards and follows the Hooks toggle", async () => {
+    const original = new Set(ui.visibleBlocks);
+    getMessages.mockResolvedValue({
+      messages: [
+        msg({
+          is_system: true,
+          source_type: "attachment",
+          source_subtype: "hook_additional_context",
+          content: "Content:\nchild hook context",
+        }),
+      ],
+      count: 1,
+    });
+    getSession.mockResolvedValue(makeSession());
+    ui.setBlockVisible("hook", true);
+    const component = mount(SubagentInline, {
+      target: document.body,
+      props: { sessionId: "subagent-session-id" },
+    });
+    try {
+      await tick();
+      document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+      await vi.waitFor(() => expect(document.querySelector("details")).not.toBeNull());
+      expect(document.querySelector(".label")?.textContent).toBe("Hook output");
+      expect(document.querySelector("details")?.open).toBe(false);
+      expect(document.querySelector("pre")?.textContent).toBe("Content:\nchild hook context");
+      ui.setBlockVisible("hook", false);
+      await tick();
+      expect(document.querySelector("details")).toBeNull();
+      expect(document.body.textContent).not.toContain("child hook context");
+      ui.setBlockVisible("hook", true);
+      await tick();
+      expect(document.querySelector("details")?.open).toBe(false);
+    } finally {
+      await unmount(component);
+      ui.visibleBlocks = original;
+    }
+  });
+
   it("reports the session kind when expanded messages fail", async () => {
     getMessages.mockRejectedValueOnce(new Error("Messages failed"));
     getSession.mockResolvedValueOnce(makeSession());

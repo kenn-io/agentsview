@@ -1,7 +1,9 @@
 package parser
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +16,7 @@ import (
 func claudeHookImportRows(msgs []ParsedMessage) []ParsedMessage {
 	var rows []ParsedMessage
 	for _, m := range msgs {
-		if m.SourceSubtype == "hook_success" {
+		if m.SourceSubtype == "hook_success" || m.SourceSubtype == "hook_additional_context" {
 			rows = append(rows, m)
 		}
 	}
@@ -26,50 +28,57 @@ func claudeHookImportRows(msgs []ParsedMessage) []ParsedMessage {
 // and the recorded content, with the recorded text kept verbatim.
 func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct{ subtype, content, body string }{
+		{"hook_success", `"hook finished"`, "hook finished"},
+		{"hook_additional_context", `["hook finished","more context"]`, "hook finished\nmore context"},
+	} {
+		t.Run(tc.subtype, func(t *testing.T) {
 
-	content := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:01Z",`+
-			`"uuid":"hook-row","parentUuid":"native-parent",`+
-			`"isSidechain":true,"promptSource":"synthetic-origin",`+
-			`"attachment":{"type":"hook_success","hookName":"example-hook",`+
-			`"hookEvent":"PostToolUse","content":"hook finished"}}`,
-		testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
-	)
+			content := testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
+				`{"type":"attachment","timestamp":"2026-01-01T00:00:01Z",`+
+					`"uuid":"hook-row","parentUuid":"native-parent",`+
+					`"isSidechain":true,"promptSource":"synthetic-origin",`+
+					`"attachment":{"type":"`+tc.subtype+`","hookName":"example-hook",`+
+					`"hookEvent":"PostToolUse","content":`+tc.content+`}}`,
+				testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
+			)
 
-	sess, msgs := runClaudeParserTest(t, "hook-body.jsonl", content)
-	require.Len(t, msgs, 3)
+			sess, msgs := runClaudeParserTest(t, "hook-body.jsonl", content)
+			require.Len(t, msgs, 3)
 
-	hook := msgs[1]
-	assert.Equal(t, RoleUser, hook.Role)
-	assert.True(t, hook.IsSystem)
-	assert.Equal(t, "attachment", hook.SourceType)
-	assert.Equal(t, "hook_success", hook.SourceSubtype)
-	assert.Equal(t, "hook-row", hook.SourceUUID)
-	assert.Equal(t, "native-parent", hook.SourceParentUUID)
-	assert.True(t, hook.IsSidechain)
-	assert.Equal(t, "synthetic-origin", hook.PromptSource)
-	assert.Equal(t,
-		"Hook name: example-hook\n\nHook event: PostToolUse\n\n"+
-			"Content:\nhook finished",
-		hook.Content)
-	assert.Equal(t, len(hook.Content), hook.ContentLength)
-	require.NotNil(t, hook.DialogueText)
-	assert.Equal(t, "", *hook.DialogueText)
+			hook := msgs[1]
+			assert.Equal(t, RoleUser, hook.Role)
+			assert.True(t, hook.IsSystem)
+			assert.Equal(t, "attachment", hook.SourceType)
+			assert.Equal(t, tc.subtype, hook.SourceSubtype)
+			assert.Equal(t, "hook-row", hook.SourceUUID)
+			assert.Equal(t, "native-parent", hook.SourceParentUUID)
+			assert.True(t, hook.IsSidechain)
+			assert.Equal(t, "synthetic-origin", hook.PromptSource)
+			assert.Equal(t,
+				"Hook name: example-hook\n\nHook event: PostToolUse\n\n"+
+					"Content:\n"+tc.body,
+				hook.Content)
+			assert.Equal(t, len(hook.Content), hook.ContentLength)
+			require.NotNil(t, hook.DialogueText)
+			assert.Equal(t, "", *hook.DialogueText)
 
-	// The row carries no tool, thinking, token, or billing identity.
-	assert.Empty(t, hook.ToolCalls)
-	assert.Empty(t, hook.ToolResults)
-	assert.Empty(t, hook.ThinkingText)
-	assert.False(t, hook.HasThinking)
-	assert.False(t, hook.HasToolUse)
-	assert.Empty(t, hook.Model)
-	assert.Empty(t, hook.ProviderID)
-	assert.Empty(t, hook.TokenUsage)
-	assert.Empty(t, hook.ClaudeMessageID)
+			// The row carries no tool, thinking, token, or billing identity.
+			assert.Empty(t, hook.ToolCalls)
+			assert.Empty(t, hook.ToolResults)
+			assert.Empty(t, hook.ThinkingText)
+			assert.False(t, hook.HasThinking)
+			assert.False(t, hook.HasToolUse)
+			assert.Empty(t, hook.Model)
+			assert.Empty(t, hook.ProviderID)
+			assert.Empty(t, hook.TokenUsage)
+			assert.Empty(t, hook.ClaudeMessageID)
 
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, "hello", sess.FirstMessage)
+			assert.Equal(t, 1, sess.UserMessageCount)
+			assert.Equal(t, "hello", sess.FirstMessage)
+		})
+	}
 }
 
 // The stdout and stderr channels keep their own sections, and a
@@ -225,39 +234,47 @@ func TestClaudeHookImportWithoutTimestampSortsAfterMessages(t *testing.T) {
 // the appended line, and the session end covers the hook.
 func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct{ subtype, content, body string }{
+		{"hook_success", `"hook finished"`, "hook finished"},
+		{"hook_additional_context", `["hook finished","more context"]`, "hook finished\nmore context"},
+	} {
+		t.Run(tc.subtype, func(t *testing.T) {
 
-	initial := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-		testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:01Z"),
-	)
-	path := createTestFile(t, "hook-incremental.jsonl", initial)
-	info, err := os.Stat(path)
-	require.NoError(t, err)
+			initial := testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
+				testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:01Z"),
+			)
+			path := createTestFile(t, "hook-incremental.jsonl", initial)
+			info, err := os.Stat(path)
+			require.NoError(t, err)
 
-	appended := `{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",` +
-		`"uuid":"hook-1","parentUuid":"unknown-parent",` +
-		`"attachment":{"type":"hook_success","content":"hook ran"}}` + "\n"
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+			appended := `{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",` +
+				`"uuid":"hook-1","parentUuid":"unknown-parent",` +
+				`"attachment":{"type":"` + tc.subtype + `","content":` + tc.content + `}}` + "\n"
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err)
+			_, err = f.WriteString(appended)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
 
-	msgs, endedAt, consumed, err := callParseClaudeSessionFrom(
-		path, info.Size(), 2, "",
-	)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
+			msgs, endedAt, consumed, err := callParseClaudeSessionFrom(
+				path, info.Size(), 2, "",
+			)
+			require.NoError(t, err)
+			require.Len(t, msgs, 1)
 
-	hook := msgs[0]
-	assert.Equal(t, 2, hook.Ordinal)
-	assert.Equal(t, "hook_success", hook.SourceSubtype)
-	assert.Equal(t, "attachment", hook.SourceType)
-	assert.True(t, hook.IsSystem)
-	assert.Equal(t, RoleUser, hook.Role)
-	assert.Equal(t, int64(len(appended)), consumed)
-	assert.Equal(t,
-		"2026-01-01T00:00:02Z", endedAt.Format(time.RFC3339))
+			hook := msgs[0]
+			assert.Equal(t, "Content:\n"+tc.body, hook.Content)
+			assert.Equal(t, 2, hook.Ordinal)
+			assert.Equal(t, tc.subtype, hook.SourceSubtype)
+			assert.Equal(t, "attachment", hook.SourceType)
+			assert.True(t, hook.IsSystem)
+			assert.Equal(t, RoleUser, hook.Role)
+			assert.Equal(t, int64(len(appended)), consumed)
+			assert.Equal(t,
+				"2026-01-01T00:00:02Z", endedAt.Format(time.RFC3339))
+		})
+	}
 }
 
 // A hook written between the chunks of one response must not hide the
@@ -410,6 +427,8 @@ func TestClaudeHookImportSkipsUnsupportedAndBlankHooks(t *testing.T) {
 			`"attachment":{"type":"hook_success","content":"   "}}`,
 		`{"type":"attachment","timestamp":"2026-01-01T00:00:03Z",`+
 			`"attachment":{"type":"hook_success"}}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[]}}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[""]}}`,
 		testjsonl.ClaudeAssistantJSON("ok", "2026-01-01T00:00:04Z"),
 	)
 
@@ -422,5 +441,42 @@ func TestClaudeHookImportSkipsUnsupportedAndBlankHooks(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
-// A hook without a native parent belongs to the original result only,
-// and a hook whose native parent sits on a fork belongs to that fork.
+// Hooks follow fork parents even when the parent is hidden or another hook.
+func TestClaudeHookImportForkOwnership(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, parent, meta string }{
+		{name: "fork", parent: "fork"},
+		{name: "hidden fork entry", parent: "hidden", meta: `{"type":"user","uuid":"hidden","parentUuid":"fork","isMeta":true,"message":{"content":"hidden context"}}`},
+		{name: "attachment chain", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":"bridge"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var content strings.Builder
+			content.WriteString(`{"type":"user","uuid":"root","message":{"content":"start"}}` + "\n")
+			parent := "root"
+			for i := range 5 {
+				uuid := fmt.Sprintf("main-%d", i)
+				fmt.Fprintf(&content, `{"type":"user","uuid":%q,"parentUuid":%q,"message":{"content":"main prompt"}}`+"\n", uuid, parent)
+				parent = uuid
+			}
+			content.WriteString(`{"type":"user","uuid":"fork","parentUuid":"root","message":{"content":"fork prompt"}}` + "\n")
+			if tc.meta != "" {
+				content.WriteString(tc.meta + "\n")
+			}
+			fmt.Fprintf(&content, `{"type":"attachment","uuid":"hook","parentUuid":%q,"attachment":{"type":"hook_additional_context","content":["fork context"]}}`+"\n", tc.parent)
+			path := createTestFile(t, "hook-fork.jsonl", content.String())
+			results, err := parseClaudeSession(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			assert.Empty(t, claudeHookImportRows(results[0].Messages))
+			var hooks []ParsedMessage
+			for _, m := range results[1].Messages {
+				if m.SourceUUID == "hook" {
+					hooks = append(hooks, m)
+				}
+				assert.NotEqual(t, "hidden", m.SourceUUID)
+			}
+			require.Len(t, hooks, 1)
+			assert.Equal(t, "Content:\nfork context", hooks[0].Content)
+		})
+	}
+}

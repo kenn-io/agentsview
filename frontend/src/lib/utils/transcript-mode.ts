@@ -8,7 +8,12 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 // is injected by tooling. Treating them as turn boundaries split one
 // exchange into many and promoted every "still waiting" status line before
 // them to a final answer.
-const MID_TURN_SYSTEM_SUBTYPES = new Set(["task_notification", "stop_hook", "hook_success"]);
+const MID_TURN_SYSTEM_SUBTYPES = new Set([
+  "task_notification",
+  "stop_hook",
+  "hook_success",
+  "hook_additional_context",
+]);
 
 function isMidTurnSystemMessage(m: Message): boolean {
   return (

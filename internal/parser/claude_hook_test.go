@@ -14,11 +14,22 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 		want claudeHookSuccess
 	}{
 		{
+			name: "additional context joins strings",
+			line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["first","second"],"hookName":"SessionStart:startup","hookEvent":"SessionStart"}}`,
+			want: claudeHookSuccess{subtype: "hook_additional_context", content: "first\nsecond", hookName: "SessionStart:startup", hookEvent: "SessionStart"},
+		},
+		{
+			name: "additional context preserves whitespace",
+			line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["  "]}}`,
+			want: claudeHookSuccess{subtype: "hook_additional_context", content: "  "},
+		},
+		{
 			name: "content with both metadata fields",
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"hookName":"example-hook","hookEvent":"PostToolUse",` +
 				`"content":"hook finished"}}`,
 			want: claudeHookSuccess{
+				subtype:   "hook_success",
 				hookName:  "example-hook",
 				hookEvent: "PostToolUse",
 				content:   "hook finished",
@@ -29,7 +40,8 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"stdout":"{\"status\":\"ok\",\"items\":[1,2]}"}}`,
 			want: claudeHookSuccess{
-				stdout: `{"status":"ok","items":[1,2]}`,
+				subtype: "hook_success",
+				stdout:  `{"status":"ok","items":[1,2]}`,
 			},
 		},
 		{
@@ -37,8 +49,9 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"stdout":"out text","stderr":"err text"}}`,
 			want: claudeHookSuccess{
-				stdout: "out text",
-				stderr: "err text",
+				subtype: "hook_success",
+				stdout:  "out text",
+				stderr:  "err text",
 			},
 		},
 		{
@@ -47,6 +60,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 				`"content":"body text","stdout":"out text",` +
 				`"stderr":"err text"}}`,
 			want: claudeHookSuccess{
+				subtype: "hook_success",
 				content: "body text",
 				stdout:  "out text",
 				stderr:  "err text",
@@ -57,7 +71,8 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"stderr":"err text"}}`,
 			want: claudeHookSuccess{
-				stderr: "err text",
+				subtype: "hook_success",
+				stderr:  "err text",
 			},
 		},
 		{
@@ -65,6 +80,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"content":"hook finished"}}`,
 			want: claudeHookSuccess{
+				subtype: "hook_success",
 				content: "hook finished",
 			},
 		},
@@ -73,6 +89,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"hookName":"","hookEvent":"","content":"hook finished"}}`,
 			want: claudeHookSuccess{
+				subtype: "hook_success",
 				content: "hook finished",
 			},
 		},
@@ -81,6 +98,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"hookName":"SessionStart:startup","content":"session started"}}`,
 			want: claudeHookSuccess{
+				subtype:  "hook_success",
 				hookName: "SessionStart:startup",
 				content:  "session started",
 			},
@@ -90,6 +108,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"content":"  第一行\n第二行 e\u0301\n"}}`,
 			want: claudeHookSuccess{
+				subtype: "hook_success",
 				content: "  第一行\n第二行 e\u0301\n",
 			},
 		},
@@ -99,6 +118,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 				`"hookName":"  example-hook  ","hookEvent":"\tPostToolUse\n",` +
 				`"content":"body text","stdout":"  ","stderr":"\n"}}`,
 			want: claudeHookSuccess{
+				subtype:   "hook_success",
 				hookName:  "  example-hook  ",
 				hookEvent: "\tPostToolUse\n",
 				content:   "body text",
@@ -112,6 +132,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 				`"attachment":{"type":"hook_success","content":"hook finished",` +
 				`"exitCode":0,"extra":{"nested":true}}}`,
 			want: claudeHookSuccess{
+				subtype: "hook_success",
 				content: "hook finished",
 			},
 		},
@@ -130,6 +151,10 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 		name string
 		line string
 	}{
+		{name: "additional context empty array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":[]}}`},
+		{name: "additional context empty joined body", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":[""]}}`},
+		{name: "additional context mixed array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["first",1]}}`},
+		{name: "additional context string", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":"first"}}`},
 		{name: "attachment missing", line: `{"type":"attachment"}`},
 		{
 			name: "attachment not an object",

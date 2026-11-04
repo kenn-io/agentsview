@@ -13,6 +13,10 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
+  import { hasVisibleSegments } from "../../utils/content-parser.js";
+  import { isHookSuccessMessage } from "../../utils/messages.js";
+  import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import MessageContent from "./MessageContent.svelte";
   import {
     ChevronRightIcon,
@@ -172,11 +176,21 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
         <div class="subagent-status subagent-error" {@attach errorTelemetry("session")}>{error}</div>
       {:else if messages && messages.length > 0}
         {#each messages as message}
-          <MessageContent
-            {message}
-            session={tokenSourceSession}
-            isSubagentContext={true}
-          />
+          {#if isHookSuccessMessage(message)}
+            {#if hasVisibleSegments(message, (type) => ui.isBlockVisible(type))}
+              <SystemBoundaryCard
+                subtype={message.source_subtype!}
+                content={message.content}
+                timestamp={message.timestamp}
+              />
+            {/if}
+          {:else}
+            <MessageContent
+              {message}
+              session={tokenSourceSession}
+              isSubagentContext={true}
+            />
+          {/if}
         {/each}
       {:else if messages}
         <div class="subagent-status">{m.subagent_inline_no_messages()}</div>

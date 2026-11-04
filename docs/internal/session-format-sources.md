@@ -155,17 +155,21 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Hook success attachments (checked 2026-11-03):** The parser reads the
+- **Hook output attachments (checked 2026-11-03):** The parser reads the
   `hook_success` attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`, and
   in two first-hand reports with `stdout` and `stderr`:
   [claude-code#88086](https://github.com/anthropics/claude-code/issues/88086),
   [claude-code#85951](https://github.com/anthropics/claude-code/issues/85951).
   It accepts only a JSON object whose `type` is `attachment` and whose
-  `attachment.type` is `hook_success`, reads the optional `hookName`,
-  `hookEvent`, `content`, `stdout`, and `stderr` string members, and keeps each
-  channel's text as written. These are reported transcript shapes, not a public
-  producer source or an authoritative persistence schema. The
+  `attachment.type` is `hook_success` or `hook_additional_context`, reads the
+  optional `hookName`, `hookEvent`, `content`, `stdout`, and `stderr` string
+  members, and keeps each channel's text as written. For
+  `hook_additional_context`, it joins the `content` string array with newlines
+  and skips empty output. `hook_cancelled` attachments and the
+  `stop_hook_summary` system record are still not imported. These are reported
+  transcript shapes, not a public producer source or an authoritative
+  persistence schema. The
   [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
   protocol's stdout and stderr, not transcript persistence. Full and incremental
   parsing emit system rows with an explicitly empty dialogue field. The plain
@@ -174,18 +178,20 @@ evidence; they do not establish whether a tool helped the task.
   when supplied. Claude Code 2.1.301's installed bundle routes all seven
   `hook_success` constructors through `en`, whose attachment envelope stamps
   hooks with `new Date().toISOString()`. Its other attachment constructors also
-  supply or preserve timestamps. The timestamp-free example in
-  the original report is explicitly synthetic. On `origin/main`, undated queued
-  prompts already block later dated attachments during merging. A
+  supply or preserve timestamps. The timestamp-free example in the original
+  report is explicitly synthetic. On `origin/main`, undated queued prompts
+  already block later dated attachments during merging. A
   full-versus-incremental sync probe retained both an undated queued prompt on
   main and an undated hook on this branch across a same-message-ID continuation:
   sync reparses the open response suffix, including its attachments. Hooks use
-  the same merge path; this change leaves undated-record ordering intact. All
-  hooks stay on the original conversation timeline, alongside queued prompts.
-  Synthetic tests cover ordering with queued prompts, assistant snapshot
-  merging, counts, usage, and native identity. This parser stage uses existing
-  message fields. Deferred hook identities stay on stored rows but do not
-  advance the ordinary entry-chain resume cursor. Synthetic ingest and sync
+  the same merge path; this change leaves undated-record ordering intact. Hooks
+  follow their native parent into the main conversation or a fork, including
+  parents hidden by `isMeta` and attachment chains. Unresolved parents and
+  linear parsing use the original conversation timeline, alongside queued
+  prompts. Synthetic tests cover ordering with queued prompts, assistant
+  snapshot merging, counts, usage, and native identity. This parser stage uses
+  existing message fields. Deferred hook identities stay on stored rows but do
+  not advance the ordinary entry-chain resume cursor. Synthetic ingest and sync
   tests cover full/append equivalence, native and ID-less hooks, linear parent
   chains, split responses, checkpoint offsets, counts, and retained pins. In
   normal transcript mode, hook rows use a collapsed Hook output card and an
@@ -200,8 +206,8 @@ evidence; they do not establish whether a tool helped the task.
   synthetic native server/browser run covers full and appended imports,
   repeat-sync idempotence, escaped output, independent filters, and focused mode
   at desktop and mobile widths. A PostgreSQL push test preserves the hook body,
-  source identity, system flag, and empty dialogue projection. ClickHouse runtime
-  checks remain unverified.
+  source identity, system flag, and empty dialogue projection. ClickHouse
+  runtime checks remain unverified.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies

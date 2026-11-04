@@ -3306,7 +3306,7 @@ func (db *DB) queryVelocityMsgs(
 	q := `SELECT session_id, ordinal, role,
 		COALESCE(timestamp, ''), content_length
 		FROM messages
-		WHERE session_id IN ` + ph + `
+		WHERE is_system = 0 AND session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`
 
 	rows, err := db.getReader().QueryContext(ctx, q, args...)

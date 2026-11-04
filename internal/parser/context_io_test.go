@@ -96,7 +96,7 @@ func TestClaudeDAGPostProcessingStopsAfterContextCancellation(t *testing.T) {
 	}
 	ctx := newCancelOnErrCheckContext(t, 2)
 
-	_, err := parseDAG(
+	_, _, err := parseDAG(
 		ctx, entries, "session", "project", "machine", "",
 		FileInfo{}, nil, time.Time{}, time.Time{}, claudeSessionMeta{},
 	)

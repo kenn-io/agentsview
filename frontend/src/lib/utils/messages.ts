@@ -33,6 +33,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "stop_hook",
   "peer_message",
   "hook_success",
+  "hook_additional_context",
 ]);
 
 /**
@@ -51,13 +52,14 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
  * Reports whether the message carries hook output that the parser kept
  * as a non-dialogue system row. Only this exact shape counts: the row
  * must be system-flagged, come from an attachment source and carry the
- * hook_success subtype. Neither the role nor the body text implies a
- * hook, and an unrelated source type is never promoted by sharing the
- * subtype.
+ * hook_success or hook_additional_context subtype. Neither the role nor
+ * the body text implies a hook.
  */
 export function isHookSuccessMessage(m: Message): boolean {
   return (
-    m.is_system === true && m.source_type === "attachment" && m.source_subtype === "hook_success"
+    m.is_system === true &&
+    m.source_type === "attachment" &&
+    (m.source_subtype === "hook_success" || m.source_subtype === "hook_additional_context")
   );
 }
 

@@ -484,11 +484,12 @@ func claudeParseFile(
 
 	var (
 		results  []ParseResult
+		owners   map[string]int
 		parseErr error
 	)
 	// If all user/assistant entries have uuids, use DAG-aware processing.
 	if hasAnyUUID && allHaveUUID {
-		results, parseErr = parseDAG(
+		results, owners, parseErr = parseDAG(
 			ctx, entries, sessionID, project, machine,
 			parentSessionID, fileInfo, subagentMap,
 			globalStart, globalEnd, meta,
@@ -505,12 +506,43 @@ func claudeParseFile(
 		return nil, nil, parseErr
 	}
 
-	// Deferred attachments belong to the original conversation timeline.
+	// Hooks follow their native parent into a branch. Queued commands keep
+	// their original timeline routing, as do unresolved hook parents.
 	if len(attachments) > 0 && len(results) > 0 {
-		var err error
-		results[0], err = applyQueuedCommandsContext(ctx, results[0], attachments)
-		if err != nil {
-			return nil, nil, err
+		parents := make(map[string]string, len(attachments))
+		for _, a := range attachments {
+			if a.sourceUUID != "" {
+				parents[a.sourceUUID] = a.sourceParentUUID
+			}
+		}
+		byResult := make([][]claudeAttachment, len(results))
+		for _, a := range attachments {
+			owner := 0
+			if a.hook != nil {
+				parent := a.sourceParentUUID
+				for range len(attachments) + 1 {
+					if i, ok := owners[parent]; ok {
+						owner = i
+						break
+					}
+					var ok bool
+					parent, ok = parents[parent]
+					if !ok {
+						break
+					}
+				}
+			}
+			byResult[owner] = append(byResult[owner], a)
+		}
+		for i, pending := range byResult {
+			if len(pending) == 0 {
+				continue
+			}
+			var err error
+			results[i], err = applyQueuedCommandsContext(ctx, results[i], pending)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 
@@ -1627,7 +1659,7 @@ func parseDAG(
 	subagentMap map[string]string,
 	globalStart, globalEnd time.Time,
 	meta claudeSessionMeta,
-) ([]ParseResult, error) {
+) ([]ParseResult, map[string]int, error) {
 	// Build parent -> children ordered by line position and
 	// collect the set of all uuids for connectivity checks.
 	children := make(map[string][]int, len(entries))
@@ -1635,7 +1667,7 @@ func parseDAG(
 	var roots []int
 	for i, e := range entries {
 		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if e.uuid != "" {
 			uuidSet[e.uuid] = struct{}{}
@@ -1651,23 +1683,25 @@ func parseDAG(
 	// references resolve to an existing entry's uuid. If not,
 	// fall back to linear parsing to avoid dropping messages.
 	if len(roots) != 1 {
-		return parseLinear(
+		results, err := parseLinear(
 			ctx, entries, sessionID, project, machine,
 			parentSessionID, fileInfo, subagentMap,
 			globalStart, globalEnd, meta,
 		)
+		return results, nil, err
 	}
 	for i, e := range entries {
 		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if e.parentUuid != "" {
 			if _, ok := uuidSet[e.parentUuid]; !ok {
-				return parseLinear(
+				results, err := parseLinear(
 					ctx, entries, sessionID, project, machine,
 					parentSessionID, fileInfo, subagentMap,
 					globalStart, globalEnd, meta,
 				)
+				return results, nil, err
 			}
 		}
 	}
@@ -1751,25 +1785,31 @@ func parseDAG(
 
 	mainPath, err := walkBranch(roots[0], sessionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	branches = append(
 		branches,
 		branch{indices: mainPath, parentID: parentSessionID},
 	)
 	branches = append(branches, forkBranches...)
+	owners := make(map[string]int, len(entries))
+	for i, b := range branches {
+		for _, idx := range b.indices {
+			owners[entries[idx].uuid] = i
+		}
+	}
 
 	// Build results for each branch.
 	var results []ParseResult
 
 	for i, b := range branches {
 		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		branchEntries := make([]dagEntry, len(b.indices))
 		for j, idx := range b.indices {
 			if err := contextErrEvery(ctx, j); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			branchEntries[j] = entries[idx]
 		}
@@ -1778,7 +1818,7 @@ func parseDAG(
 			ctx, branchEntries,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		// Main session uses global bounds to capture timestamps
 		// from non-message events (e.g. queue-operation).
@@ -1789,12 +1829,12 @@ func parseDAG(
 		if err := annotateSubagentSessionsContext(
 			ctx, messages, subagentMap,
 		); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		firstMsg, userCount, err := firstMessageAndUserCountContext(ctx, messages)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		sid := sessionID
@@ -1829,7 +1869,7 @@ func parseDAG(
 		if err := accumulateMessageTokenUsageContext(
 			ctx, &sess, messages,
 		); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		results = append(results, ParseResult{
@@ -1838,7 +1878,7 @@ func parseDAG(
 		})
 	}
 
-	return results, nil
+	return results, owners, nil
 }
 
 func collectToolResultAgentID(line string, subagentMap map[string]string) {

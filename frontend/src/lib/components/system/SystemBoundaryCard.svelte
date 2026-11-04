@@ -17,6 +17,7 @@
     stop_hook: m.system_boundary_stop_hook(),
     peer_message: m.system_boundary_peer_message(),
     hook_success: m.system_boundary_hook_success(),
+    hook_additional_context: m.system_boundary_hook_success(),
   });
 
   let label = $derived(LABELS[subtype] ?? subtype);
