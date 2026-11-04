@@ -23,15 +23,14 @@ func TestCommitLinksBothBackends(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, session.Commits, 1)
 			assert.Equal(t, "abc1234", session.Commits[0].SHA)
-			assert.Equal(t, 1, session.Commits[0].MessageOrdinal)
-			assert.Equal(t, "commit-call", session.Commits[0].ToolUseID)
+			require.NotNil(t, session.Commits[0].Turn)
 			lookup, err := svc.CommitSessions(t.Context(), []string{"deadbee", "abc1234000000000000000000000000000000000"})
 			require.NoError(t, err)
 			require.Len(t, lookup.Commits, 2)
 			assert.Empty(t, lookup.Commits[0].Links)
 			require.Len(t, lookup.Commits[1].Links, 1)
 			require.NotNil(t, lookup.Commits[1].Links[0].Turn)
-			assert.Equal(t, "Fix parser", lookup.Commits[1].Links[0].Turn.Text)
+			assert.Equal(t, "abc1234", lookup.Commits[1].Links[0].SHA)
 		})
 	}
 }

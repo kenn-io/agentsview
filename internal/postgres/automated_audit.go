@@ -98,10 +98,12 @@ func backfillIsAutomatedPGWithProgress(
 	return progress, nil
 }
 
-func repairParentlessWorkersPG(ctx context.Context, pg *sql.DB) error {
-	if _, err := pg.ExecContext(ctx, `UPDATE sessions
+const repairParentlessWorkersSQL = `UPDATE sessions
 		SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE `+db.ParentlessWorkerSQL); err != nil {
+		WHERE ` + db.ParentlessWorkerSQL
+
+func repairParentlessWorkersPG(ctx context.Context, pg *sql.DB) error {
+	if _, err := pg.ExecContext(ctx, repairParentlessWorkersSQL); err != nil {
 		return fmt.Errorf("repairing PG parentless workers: %w", err)
 	}
 	return nil

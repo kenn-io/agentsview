@@ -217,7 +217,14 @@ func TestTrailerCommitLinksLookupWork(t *testing.T) {
 }
 
 func TestTrailerCommitLinksPrecedence(t *testing.T) {
-	for _, sha := range []string{"abc1234", "abc1234" + strings.Repeat("0", 33)} {
+	for _, tc := range []struct {
+		sha       string
+		ambiguous bool
+	}{
+		{sha: "abc1234", ambiguous: true},
+		{sha: "abc1234" + strings.Repeat("0", 33), ambiguous: false},
+	} {
+		sha := tc.sha
 		t.Run(sha, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "session-a", "project-a")
@@ -231,7 +238,7 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, found.Commits[0].Links, 2)
 			for _, l := range found.Commits[0].Links {
-				assert.False(t, l.Ambiguous)
+				assert.Equal(t, tc.ambiguous, l.Ambiguous)
 				if l.SessionID == "session-a" {
 					assert.Equal(t, "transcript", l.Source)
 					assert.Equal(t, sha, l.SHA)

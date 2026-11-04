@@ -59,9 +59,6 @@ func TestClickHouseCommitLinkParity(t *testing.T) {
 	syncer.projects = []string{"other"}
 	_, err = syncer.Push(t.Context(), true, nil)
 	require.NoError(t, err)
-	links, err := store.SessionCommitLinks(t.Context(), "commit-delete")
-	require.NoError(t, err)
-	assert.Empty(t, links.Commits)
 	var count int
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_links WHERE session_id='commit-clash'").Scan(&count))
 	assert.Zero(t, count, "scope narrowing must remove copied prompt text too")

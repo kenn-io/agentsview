@@ -47,8 +47,7 @@ func TestSessionCommits(t *testing.T) {
 				require.NotNil(t, exact)
 				assert.Equal(t, "abc1234", exact.SHA)
 				assert.Equal(t, "s-commit", exact.SessionID)
-				require.NotNil(t, exact.Turn)
-				assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", exact.Turn.Text)
+				assert.Equal(t, &db.CommitTurn{Ordinal: 1, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, exact.Turn)
 				return
 			}
 			assert.Contains(t, out, "trailer")

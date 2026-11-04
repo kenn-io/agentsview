@@ -1151,6 +1151,9 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 	)
 	step = time.Now()
+	if err := createMissingPreparationIndexesPG(ctx, db); err != nil {
+		return err
+	}
 	if err := createPartialIndexesPG(ctx, db); err != nil {
 		return err
 	}
@@ -1214,6 +1217,38 @@ func EnsureSchema(
 		time.Since(start).Round(time.Millisecond),
 	)
 	return nil
+}
+
+var preparationIndexesPG = []struct{ name, ddl string }{
+	{"idx_sessions_data_version", `CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`},
+	{"idx_sessions_parentless_workers", `CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL},
+	{"idx_sessions_source_missing", `CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`},
+}
+
+// createMissingPreparationIndexesPG serializes publishers upgrading the same
+// archive, since concurrent IF NOT EXISTS creation can still collide.
+func createMissingPreparationIndexesPG(ctx context.Context, pg *sql.DB) error {
+	missing := false
+	for _, index := range preparationIndexesPG {
+		missing = missing || !pgHasIndex(ctx, pg, index.name)
+	}
+	if !missing {
+		return nil
+	}
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning PG preparation index installation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSyncMetadataRow(ctx, tx, "preparation_indexes_lock"); err != nil {
+		return err
+	}
+	for _, index := range preparationIndexesPG {
+		if _, err := tx.ExecContext(ctx, index.ddl); err != nil {
+			return fmt.Errorf("creating PG preparation index %s: %w", index.name, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // createPartialIndexesPG creates partial indexes on the PG schema.
@@ -1384,17 +1419,19 @@ func backfillCodexThreadScopePG(ctx context.Context, pg pgSessionExecer) error {
 	return nil
 }
 
-// repairLegacySourceMissingDeletionPG restores mirror rows written while
-// source absence was represented as deletion. Source availability is local
-// SQLite sync state; PostgreSQL retains only user-owned deletion state.
-func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error {
-	_, err := pg.ExecContext(ctx, `
+const repairLegacySourceMissingDeletionSQL = `
 		UPDATE sessions
 		SET deleted_at = NULL,
 		    source_deleted_at = NULL,
 		    deletion_cause = NULL,
 		    updated_at = NOW()
-		WHERE deletion_cause = 'source_missing'`)
+		WHERE deletion_cause = 'source_missing'`
+
+// repairLegacySourceMissingDeletionPG restores mirror rows written while
+// source absence was represented as deletion. Source availability is local
+// SQLite sync state; PostgreSQL retains only user-owned deletion state.
+func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error {
+	_, err := pg.ExecContext(ctx, repairLegacySourceMissingDeletionSQL)
 	if err != nil {
 		return fmt.Errorf("repairing legacy PG source-missing deletions: %w", err)
 	}
@@ -2525,10 +2562,12 @@ func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
 	return checkDataVersionCompat(ctx, pg)
 }
 
+const maxDataVersionSQL = `SELECT COALESCE(MAX(data_version), 0) FROM sessions`
+
 func checkDataVersionCompat(ctx context.Context, pg hostedQuerier) error {
 	var version int
 	err := pg.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`,
+		maxDataVersionSQL,
 	).Scan(&version)
 	if err != nil {
 		if isUndefinedTable(err) || isUndefinedColumn(err) {

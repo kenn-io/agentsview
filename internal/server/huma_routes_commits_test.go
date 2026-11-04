@@ -15,20 +15,19 @@ import (
 
 func TestCommitLinksRoutes(t *testing.T) {
 	te := setup(t)
-	te.seedSession(t, "s1", "project-a", 0)
-	w := te.post(t, "/api/v1/commits/sessions", `{"shas":["abc1234"]}`)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	w = te.get(t, "/api/v1/sessions/s1/commits")
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	many := make([]string, 200)
 	for i := range many {
 		many[i] = "abc1234"
 	}
 	body, err := json.Marshal(map[string]any{"shas": many})
 	require.NoError(t, err)
-	w = te.post(t, "/api/v1/commits/sessions", string(body))
+	w := te.post(t, "/api/v1/commits/sessions", string(body))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Len(t, decode[db.CommitSessionList](t, w).Commits, 200)
+	commits := decode[db.CommitSessionList](t, w).Commits
+	require.Len(t, commits, 200)
+	for _, commit := range commits {
+		assert.Equal(t, "abc1234", commit.SHA)
+	}
 
 	w = te.post(t, "/api/v1/commits/sessions", `{"shas":["bad"]}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())

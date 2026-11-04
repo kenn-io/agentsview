@@ -4,17 +4,13 @@ package postgres
 
 import (
 	"database/sql"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
@@ -27,7 +23,7 @@ func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
 				INSERT INTO sessions(id,project,machine,agent)
 				VALUES ('live','project','test','claude')`)
 			require.NoError(t, err)
-			store, err := NewStore(testPGURL(t), syncer.schema, true)
+			store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			if emptyTrash {
@@ -50,24 +46,14 @@ func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
 
 func TestHostedCommitLinksUnavailable(t *testing.T) {
 	f := newHostedFixture(t, "tenant-a")
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "test"}, store, nil).Handler()
-	for _, request := range []struct{ method, path, body string }{
-		{http.MethodGet, "/api/v1/sessions/session-a/commits", ""},
-		{http.MethodPost, "/api/v1/commits/sessions", `{"shas":["abc1234"]}`},
-	} {
-		t.Run(request.path, func(t *testing.T) {
-			req := httptest.NewRequest(request.method, "http://127.0.0.1:0"+request.path, strings.NewReader(request.body))
-			req.RemoteAddr = "127.0.0.1:1234"
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Origin", "http://127.0.0.1:0")
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, req)
-			assert.Equal(t, http.StatusNotImplemented, response.Code, response.Body.String())
-		})
-	}
+	backend := service.NewReadOnlyBackend(store)
+	_, err = backend.SessionCommits(t.Context(), "session-a")
+	assert.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
+	_, err = backend.CommitSessions(t.Context(), []string{"abc1234"})
+	assert.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
 }
 
 func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
@@ -77,7 +63,7 @@ func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
 			dbtest.SeedCommitLinks(t, local)
 			_, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)
-			store, err := NewStore(testPGURL(t), syncer.schema, true)
+			store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 			require.NoError(t, err)
 			defer store.Close()
 			err = store.SoftDeleteSession(ctx, "commit-live")
@@ -117,7 +103,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 	dbtest.SeedCommitLinks(t, local)
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
@@ -125,7 +111,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	links, err := store.SessionCommitLinks(ctx, "commit-live")
 	require.NoError(t, err)
-	assert.Equal(t, "Save the change", links.Commits[0].Turn.Text)
+	assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
 	// The rollout marker must republish sessions whose cursor already exists.
 	_, err = pg.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id='commit-live'`)
 	require.NoError(t, err)
@@ -152,7 +138,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.Len(t, links.Commits, 1)
 	require.NotNil(t, links.Commits[0].Turn)
 	assert.False(t, links.Commits[0].Missing)
-	assert.Equal(t, "Save the change", links.Commits[0].Turn.Text)
+	assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
 	_, err = pg.ExecContext(ctx, `DROP TABLE commit_links`)
 	require.NoError(t, err)
 	_, err = store.SessionCommitLinks(ctx, "commit-live")
@@ -167,7 +153,7 @@ func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
 	syncer.projects = []string{"commit-project"}
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	// A resident row belonging to another archive must keep its own summary.
@@ -199,7 +185,7 @@ func TestPGRetainedCommitLinkScope(t *testing.T) {
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_retained_commit_scope_test")
 	dbtest.SeedCommitLinks(t, local)
 	require.NoError(t, syncer.EnsureSchema(ctx))
-	store, err := NewStore(testPGURL(t), syncer.schema, true)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, store.Close()) }()
 	dbtest.AssertRetainedCommitLinkScope(t, local, func() db.CommitLinkReader { return store }, func(projects, exclude []string) {

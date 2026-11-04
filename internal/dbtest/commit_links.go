@@ -19,7 +19,7 @@ func SeedCommitLinks(t *testing.T, d *db.DB) {
 		}
 		result := "[main " + sha + "] Save the change"
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{
-			{SessionID: id, Ordinal: 0, Role: "user", Content: "Save the change"},
+			{SessionID: id, Ordinal: 0, Role: "user", Content: "Record the parser fix"},
 			{SessionID: id, Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}}},
 		}))
 	}
@@ -42,6 +42,11 @@ func AssertCommitLinkParity(t *testing.T, local *db.DB, store db.CommitLinkReade
 		got, err := store.SessionCommitLinks(t.Context(), id)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
+		if id == "commit-live" {
+			require.Len(t, got.Commits, 1)
+			require.NotNil(t, got.Commits[0].Turn)
+			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+		}
 	}
 	// Exercise the advertised batch limit with SHA-256 queries.
 	batch := make([]string, 200)
