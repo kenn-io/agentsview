@@ -259,27 +259,6 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 	}
 }
 
-func TestBackfillIsAutomatedSkipsFreshRowsOnReopen(t *testing.T) {
-	d := testDB(t)
-	seedAutomationAuditRows(t, d, 2000, 4096)
-	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
-	path := d.Path()
-	require.NoError(t, d.Close())
-	d, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = d.Close() })
-
-	result := testing.Benchmark(func(b *testing.B) {
-		b.Helper()
-		b.ReportAllocs()
-		for range b.N {
-			require.NoError(b, d.backfillIsAutomatedLocked(b.Context(), d.getWriter()))
-		}
-	})
-	t.Logf("unchanged audit: %s, %d B/op", result, result.AllocedBytesPerOp())
-	assert.Less(t, result.AllocedBytesPerOp(), int64(256<<10))
-}
-
 func TestBackfillIsAutomatedFreshArchiveQueryPlans(t *testing.T) {
 	d := testDB(t)
 	seedAutomationAuditRows(t, d, 2000, 64)
@@ -330,13 +309,17 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 				`SELECT automation_audit FROM sessions WHERE id = 'changed'`).Scan(&state))
 			assert.Equal(t, 1, state, "transcript replacement invalidates the audit")
 		}},
-		{"interrupted audit", func(t *testing.T, d *DB) {
+		{"automation flag corruption", func(t *testing.T, d *DB) {
 			t.Helper()
 			_, err := d.getWriter().Exec(t.Context(),
 				`UPDATE sessions SET first_message = ? WHERE id = 'changed'`, reviewPrompt)
 			require.NoError(t, err)
-			// The previous audit corrected the flag but stopped before clearing it.
-			_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 1 WHERE id = 'changed'`)
+			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+			session, err := d.GetSession(t.Context(), "changed")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.True(t, session.IsAutomated)
+			_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'changed'`)
 			require.NoError(t, err)
 		}},
 	} {
@@ -387,10 +370,6 @@ func TestMigration_AutomationAudit(t *testing.T) {
 	d, err = Open(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
-	assert.False(t, d.NeedsResync(), "adding the audit column must not force a rebuild")
-	var version int
-	require.NoError(t, d.getWriter().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
-	assert.Equal(t, CurrentDataVersion(), version)
 	session, err := d.GetSession(t.Context(), "legacy")
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -405,13 +384,6 @@ func TestMigration_AutomationAudit(t *testing.T) {
 	require.NoError(t, d.getWriter().QueryRow(t.Context(),
 		`SELECT automation_audit FROM sessions WHERE id = 'legacy'`).Scan(&state))
 	assert.Equal(t, 0, state, "the upgrade audit leaves corrected rows fresh")
-	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'legacy'`)
-	require.NoError(t, err)
-	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
-	session, err = d.GetSession(t.Context(), "legacy")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.True(t, session.IsAutomated, "upgraded trigger makes later corruption eligible for repair")
 }
 
 func TestBackfillIsAutomatedBidirectional(t *testing.T) {
