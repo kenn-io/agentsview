@@ -162,45 +162,49 @@ evidence; they do not establish whether a tool helped the task.
   [claude-code#88086](https://github.com/anthropics/claude-code/issues/88086),
   [claude-code#85951](https://github.com/anthropics/claude-code/issues/85951).
   It accepts only a JSON object whose `type` is `attachment` and whose
-  `attachment.type` is `hook_success` or `hook_additional_context`, reads the
-  optional `hookName`, `hookEvent`, `content`, `stdout`, and `stderr` string
-  members, and keeps each channel's text as written. For
-  `hook_additional_context`, it joins the `content` string array with newlines
-  and skips empty output. `hook_cancelled` attachments and the
+  `attachment.type` is `hook_success`, `hook_additional_context`, or
+  `hook_cancelled`, reads the optional `hookName`, `hookEvent`, `command`,
+  `toolUseID`, `content`, `stdout`, and `stderr` string members, and keeps each
+  channel's text as written. For `hook_additional_context`, it joins the
+  `content` string array with newlines and skips empty output. Cancelled hooks
+  keep their metadata even without output. Hook errors and the
   `stop_hook_summary` system record are still not imported. These are reported
   transcript shapes, not a public producer source or an authoritative
   persistence schema. The
   [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
   protocol's stdout and stderr, not transcript persistence. Full and incremental
   parsing emit system rows with an explicitly empty dialogue field. The plain
-  body separates hook name, hook event, content, stdout, and stderr without
-  trimming or interpreting their text. Native identity fields are retained only
-  when supplied. Claude Code 2.1.301's installed bundle routes all seven
-  `hook_success` constructors through `en`, whose attachment envelope stamps
-  hooks with `new Date().toISOString()`. Its other attachment constructors also
-  supply or preserve timestamps. The timestamp-free example in the original
-  report is explicitly synthetic. On `origin/main`, undated queued prompts
-  already block later dated attachments during merging. Hooks keep that
-  conservative ordering policy. Timestamp ordering can place a hook after an
-  assistant even when its source bytes precede the response. A continuation of
-  the same message ID uses a full parse when stored rows trail the last
-  assistant, so suffix replacement cannot discard those earlier attachments.
-  Runs without trailing rows keep the bounded suffix reparse. Hooks follow
-  their native parent into the main conversation or a fork, including parents
-  hidden by `isMeta` and attachment chains through skipped empty hooks,
-  cancelled hooks, and other attachment types. Unresolved parents and linear
-  parsing use the original conversation timeline, alongside queued prompts.
-  Synthetic tests cover ordering with queued prompts, assistant
-  snapshot merging, counts, usage, and native identity. This parser stage uses
-  existing message fields. Deferred hook identities stay on stored rows but do
-  not advance the ordinary entry-chain resume cursor for either imported hook
-  subtype. Synthetic ingest and sync tests cover full/append equivalence, native
-  and ID-less hooks, linear parent chains, split responses, checkpoint offsets,
-  counts, and retained pins. They include dated and undated hooks written
-  before an open response but sorted after it, in full and usage archives. In
-  normal transcript mode, hook rows use a collapsed Hook output card and an
-  independent Hooks filter. Focused mode hides these rows without treating them
-  as new prompts. The card preserves escaped body text. Data version 164
+  body separates hook name, hook event, command, tool-use id, content, stdout,
+  and stderr without trimming or interpreting their text. Native identity fields
+  are retained only when supplied. Claude Code 2.1.301's installed bundle routes
+  all seven `hook_success` constructors through `en`, whose attachment envelope
+  stamps hooks with `new Date().toISOString()`. Its other attachment
+  constructors also supply or preserve timestamps. The same bundle has eight
+  `hook_cancelled` constructors with `hookName`, `hookEvent`, and `toolUseID`.
+  Three also carry `command`; none require output text. The timestamp-free
+  example in the original report is explicitly synthetic. On `origin/main`,
+  undated queued prompts already block later dated attachments during merging.
+  Hooks keep that conservative ordering policy. Timestamp ordering can place a
+  hook after an assistant even when its source bytes precede the response. A
+  continuation of the same message ID uses a full parse when stored rows trail
+  the last assistant, so suffix replacement cannot discard those earlier
+  attachments. Runs without trailing rows keep the bounded suffix reparse. Hooks
+  follow their native parent into the main conversation or a fork, including
+  parents hidden by `isMeta` and attachment chains through skipped empty hooks,
+  cancelled hooks, and other attachment types. Hooks attached to discarded retry
+  branches are dropped. Unresolved parents and linear parsing use the original
+  conversation timeline, alongside queued prompts. Synthetic tests cover
+  ordering with queued prompts, assistant snapshot merging, counts, usage, and
+  native identity. This parser stage uses existing message fields. Deferred hook
+  identities stay on stored rows but do not advance the ordinary entry-chain
+  resume cursor for any imported hook subtype. Synthetic ingest and sync tests
+  cover full/append equivalence, native and ID-less hooks, linear parent chains,
+  split responses, checkpoint offsets, counts, and retained pins. They include
+  dated and undated hooks written before an open response but sorted after it,
+  in full and usage archives. In normal transcript mode, hook rows use a
+  collapsed Hook output card and an independent Hooks filter. Cancelled hooks
+  have a Hook cancelled label. Focused mode hides these rows without treating
+  them as new prompts. The card preserves escaped body text. Data version 164
   reparses readable Claude, Cowork, Qoder, and iCodeMate CLI sources in place.
   Synthetic upgrade tests preserve session and public message identities, pins,
   notes, names, stars, and retained rows whose sources are gone; archive-only

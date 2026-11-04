@@ -2234,6 +2234,7 @@
   "system_boundary_task_notification": "Tapşırıq bildirişi",
   "system_boundary_stop_hook": "Dayandırma hadisəsi emalçısının rəyi",
   "system_boundary_hook_success": "Hook çıxışı",
+  "system_boundary_hook_cancelled": "Hook ləğv edildi",
   "system_boundary_peer_message": "Başqa sessiyadan mesaj",
   "system_boundary_title": "Sistem sərhədi: {subtype}",
   "system_boundary_show_content": "Məzmunu göstər",

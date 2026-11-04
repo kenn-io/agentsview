@@ -1,4 +1,4 @@
-import { createMockSessions } from "./helpers/mock-sessions.js";
+import { createMockSessions, handleSessionsRoute } from "./helpers/mock-sessions.js";
 import type { Page } from "@playwright/test";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 import { msg } from "../src/lib/utils/test-messages.js";
@@ -10,8 +10,7 @@ export const HOOK_TEXT =
   "long-output-".repeat(35) +
   '"}\n\nStderr:\n  preserved whitespace  \n';
 
-export async function installHooksFixture(page: Page, includeHook = true) {
-  const unknownRequests: string[] = [];
+export async function installHooksFixture(page: Page) {
   const timestamp = "2024-01-01T00:00:00Z";
   const row = (
     ordinal: number,
@@ -32,16 +31,12 @@ export async function installHooksFixture(page: Page, includeHook = true) {
   const messages = [
     row(0, "user", "Synthetic request"),
     row(1, "assistant", "Intermediate reply"),
-    ...(includeHook
-      ? [
-          row(2, "user", HOOK_TEXT, {
-            is_system: true,
-            source_type: "attachment",
-            source_subtype: "hook_success",
-            source_uuid: "synthetic-hook",
-          }),
-        ]
-      : []),
+    row(2, "user", HOOK_TEXT, {
+      is_system: true,
+      source_type: "attachment",
+      source_subtype: "hook_success",
+      source_uuid: "synthetic-hook",
+    }),
     row(3, "assistant", "Final reply"),
     row(4, "user", "Existing boundary content", {
       is_system: true,
@@ -68,13 +63,19 @@ export async function installHooksFixture(page: Page, includeHook = true) {
       if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
     }
   });
+  const sessionsHandler = handleSessionsRoute([{ sessions: [session], project: null }]);
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let body: unknown = {};
-    if (path.endsWith("/sessions") || path.endsWith("/sidebar-index"))
-      body = { sessions: [session], total: 1, next_cursor: null };
-    else if (path.endsWith(`/sessions/${HOOK_SESSION_ID}`)) body = session;
-    else if (path.includes(`/sessions/${HOOK_SESSION_ID}/messages`))
+    if (
+      path.endsWith("/sessions") ||
+      path.endsWith("/sidebar-index") ||
+      path.endsWith(`/sessions/${HOOK_SESSION_ID}`)
+    ) {
+      await sessionsHandler(route);
+      return;
+    }
+    if (path.includes(`/sessions/${HOOK_SESSION_ID}/messages`))
       body = { messages, count: messages.length };
     else if (path.endsWith("/version"))
       body = {
@@ -123,8 +124,8 @@ export async function installHooksFixture(page: Page, includeHook = true) {
     else if (path.endsWith("/events")) {
       await route.fulfill({ contentType: "text/event-stream", body: ": synthetic fixture\n\n" });
       return;
-    } else unknownRequests.push(route.request().method() + " " + path);
+    }
     await route.fulfill({ json: body });
   });
-  return { session, messages, unknownRequests };
+  return { session, messages };
 }

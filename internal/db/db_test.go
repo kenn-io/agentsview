@@ -8336,6 +8336,20 @@ func TestGetSessionForIncremental(t *testing.T) {
 		assert.True(t, info.HasPeakContextTokens, "HasPeakContextTokens = false, want true")
 	})
 
+	t.Run("hook after pending assistant", func(t *testing.T) {
+		path := "/tmp/sessions/pending-hook.jsonl"
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "pending-hook", Agent: "claude", FilePath: new(path)}))
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{
+			{SessionID: "pending-hook", Ordinal: 0, Role: "user", Content: "request"},
+			{SessionID: "pending-hook", Ordinal: 1, Role: "assistant", Content: "answer"},
+			{SessionID: "pending-hook", Ordinal: 2, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", Content: "hook output"},
+		}))
+		info, ok := d.GetSessionForIncremental(t.Context(), path, "claude")
+		require.True(t, ok)
+		require.NotNil(t, info.PendingUsageOrdinal)
+		assert.Equal(t, 1, *info.PendingUsageOrdinal)
+	})
+
 	t.Run("wrong_agent", func(t *testing.T) {
 		_, ok := d.GetSessionForIncremental(t.Context(),
 			"/tmp/sessions/test.jsonl", "traex",

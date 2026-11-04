@@ -16,7 +16,7 @@ import (
 func claudeHookImportRows(msgs []ParsedMessage) []ParsedMessage {
 	var rows []ParsedMessage
 	for _, m := range msgs {
-		if m.SourceSubtype == "hook_success" || m.SourceSubtype == "hook_additional_context" {
+		if m.SourceSubtype == "hook_success" || m.SourceSubtype == "hook_additional_context" || m.SourceSubtype == "hook_cancelled" {
 			rows = append(rows, m)
 		}
 	}
@@ -29,8 +29,9 @@ func claudeHookImportRows(msgs []ParsedMessage) []ParsedMessage {
 func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ subtype, content, body string }{
-		{"hook_success", `"hook finished"`, "hook finished"},
-		{"hook_additional_context", `["hook finished","more context"]`, "hook finished\nmore context"},
+		{"hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished"},
+		{"hook_cancelled", "", ""},
+		{"hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context"},
 	} {
 		t.Run(tc.subtype, func(t *testing.T) {
 			t.Parallel()
@@ -41,7 +42,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 					`"uuid":"hook-row","parentUuid":"native-parent",`+
 					`"isSidechain":true,"promptSource":"synthetic-origin",`+
 					`"attachment":{"type":"`+tc.subtype+`","hookName":"example-hook",`+
-					`"hookEvent":"PostToolUse","content":`+tc.content+`}}`,
+					`"hookEvent":"PostToolUse","command":"echo hook","toolUseID":"tool-1"`+tc.content+`}}`,
 				testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
 			)
 
@@ -59,7 +60,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 			assert.Equal(t, "synthetic-origin", hook.PromptSource)
 			assert.Equal(t,
 				"Hook name: example-hook\n\nHook event: PostToolUse\n\n"+
-					"Content:\n"+tc.body,
+					"Command: echo hook\n\nTool-use id: tool-1"+tc.body,
 				hook.Content)
 			assert.Equal(t, len(hook.Content), hook.ContentLength)
 			require.NotNil(t, hook.DialogueText)
@@ -223,7 +224,8 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 
 	appended := `{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",` +
 		`"uuid":"hook-1","parentUuid":"unknown-parent",` +
-		`"attachment":{"type":"hook_success","content":"hook finished"}}` + "\n"
+		`"attachment":{"type":"hook_success","content":"hook finished"}}` + "\n" +
+		`{"type":"attachment","timestamp":"2026-01-01T00:00:03Z","uuid":"cancelled-1","parentUuid":"hook-1","attachment":{"type":"hook_cancelled","hookName":"PreToolUse:Read","hookEvent":"PreToolUse","command":"echo hook","toolUseID":"tool-1"}}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
 	_, err = f.WriteString(appended)
@@ -234,7 +236,9 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 		path, info.Size(), 2, "",
 	)
 	require.NoError(t, err)
-	require.Len(t, msgs, 1)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "hook_cancelled", msgs[1].SourceSubtype)
+	assert.Equal(t, "Hook name: PreToolUse:Read\n\nHook event: PreToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1", msgs[1].Content)
 
 	hook := msgs[0]
 	assert.Equal(t, "Content:\nhook finished", hook.Content)
@@ -245,7 +249,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	assert.Equal(t, RoleUser, hook.Role)
 	assert.Equal(t, int64(len(appended)), consumed)
 	assert.Equal(t,
-		"2026-01-01T00:00:02Z", endedAt.Format(time.RFC3339))
+		"2026-01-01T00:00:03Z", endedAt.Format(time.RFC3339))
 }
 
 // A hook written between the chunks of one response must not hide the
@@ -374,8 +378,12 @@ func TestClaudeHookImportFullParseMergesSnapshotsAcrossHook(t *testing.T) {
 // Hooks follow fork parents even when the parent is hidden or another hook.
 func TestClaudeHookImportForkOwnership(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, parent, meta string }{
+	for _, tc := range []struct {
+		name, parent, meta string
+		discarded          bool
+	}{
 		{name: "fork", parent: "fork"},
+		{name: "discarded retry reply", parent: "replaced", discarded: true, meta: `{"type":"assistant","uuid":"replaced","parentUuid":"fork","message":{"content":"old reply"}}` + "\n" + `{"type":"assistant","uuid":"kept","parentUuid":"fork","message":{"content":"new reply"}}`},
 		{name: "hidden fork entry", parent: "hidden", meta: `{"type":"user","uuid":"hidden","parentUuid":"fork","isMeta":true,"message":{"content":"hidden context"}}`},
 		{name: "attachment chain", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":"bridge"}}`},
 		{name: "empty hook bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":""}}`},
@@ -409,6 +417,10 @@ func TestClaudeHookImportForkOwnership(t *testing.T) {
 					hooks = append(hooks, m)
 				}
 				assert.NotEqual(t, "hidden", m.SourceUUID)
+			}
+			if tc.discarded {
+				assert.Empty(t, hooks)
+				return
 			}
 			require.Len(t, hooks, 1)
 			assert.Equal(t, "Content:\nfork context", hooks[0].Content)

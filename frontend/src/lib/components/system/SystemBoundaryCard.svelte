@@ -16,6 +16,7 @@
     task_notification: m.system_boundary_task_notification(),
     stop_hook: m.system_boundary_stop_hook(),
     peer_message: m.system_boundary_peer_message(),
+    hook_cancelled: m.system_boundary_hook_cancelled(),
     hook_success: m.system_boundary_hook_success(),
     hook_additional_context: m.system_boundary_hook_success(),
   });

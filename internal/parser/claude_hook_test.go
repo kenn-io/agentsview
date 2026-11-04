@@ -14,6 +14,11 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 		want claudeHookSuccess
 	}{
 		{
+			name: "cancelled without output",
+			line: `{"type":"attachment","attachment":{"type":"hook_cancelled","hookName":"PreToolUse:Read","hookEvent":"PreToolUse"}}`,
+			want: claudeHookSuccess{subtype: "hook_cancelled", hookName: "PreToolUse:Read", hookEvent: "PreToolUse"},
+		},
+		{
 			name: "additional context joins strings",
 			line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["first","second"],"hookName":"SessionStart:startup","hookEvent":"SessionStart"}}`,
 			want: claudeHookSuccess{subtype: "hook_additional_context", content: "first\nsecond", hookName: "SessionStart:startup", hookEvent: "SessionStart"},
@@ -24,14 +29,16 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			want: claudeHookSuccess{subtype: "hook_additional_context", content: "  "},
 		},
 		{
-			name: "content with both metadata fields",
+			name: "content with all metadata fields",
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"hookName":"example-hook","hookEvent":"PostToolUse",` +
+				`"hookName":"example-hook","hookEvent":"PostToolUse","command":"echo hook","toolUseID":"tool-1",` +
 				`"content":"hook finished"}}`,
 			want: claudeHookSuccess{
 				subtype:   "hook_success",
 				hookName:  "example-hook",
 				hookEvent: "PostToolUse",
+				command:   "echo hook",
+				toolUseID: "tool-1",
 				content:   "hook finished",
 			},
 		},
@@ -227,7 +234,7 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 }
 
 func TestExtractClaudeHookSuccessRejectsInvalidMembers(t *testing.T) {
-	members := []string{"hookName", "hookEvent", "content", "stdout", "stderr"}
+	members := []string{"hookName", "hookEvent", "command", "toolUseID", "content", "stdout", "stderr"}
 	values := []string{
 		"null", "true", "false", "42", "1.5",
 		`{"nested":"value"}`, `["value"]`,

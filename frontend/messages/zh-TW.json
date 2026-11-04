@@ -2147,6 +2147,7 @@
   "system_boundary_task_notification": "任務通知",
   "system_boundary_stop_hook": "停止 Hook 回饋",
   "system_boundary_hook_success": "Hook 輸出",
+  "system_boundary_hook_cancelled": "Hook 已取消",
   "system_boundary_peer_message": "來自其他工作階段的訊息",
   "system_boundary_title": "系統邊界：{subtype}",
   "system_boundary_show_content": "顯示內容",

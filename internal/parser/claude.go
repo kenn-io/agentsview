@@ -530,6 +530,9 @@ func claudeParseFile(
 					}
 				}
 			}
+			if owner < 0 {
+				continue
+			}
 			byResult[owner] = append(byResult[owner], a)
 		}
 		for i, pending := range byResult {
@@ -1791,6 +1794,9 @@ func parseDAG(
 	)
 	branches = append(branches, forkBranches...)
 	owners := make(map[string]int, len(entries))
+	for _, entry := range entries {
+		owners[entry.uuid] = -1 // Known entries on discarded retry branches have no owner.
+	}
 	for i, b := range branches {
 		for _, idx := range b.indices {
 			owners[entries[idx].uuid] = i

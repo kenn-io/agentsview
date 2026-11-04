@@ -12,6 +12,8 @@ type claudeHookSuccess struct {
 	subtype   string
 	hookName  string
 	hookEvent string
+	command   string
+	toolUseID string
 	content   string
 	stdout    string
 	stderr    string
@@ -19,7 +21,7 @@ type claudeHookSuccess struct {
 
 // IsClaudeHookSubtype reports whether the parser imports this hook subtype.
 func IsClaudeHookSubtype(subtype string) bool {
-	return subtype == "hook_success" || subtype == "hook_additional_context"
+	return subtype == "hook_success" || subtype == "hook_additional_context" || subtype == "hook_cancelled"
 }
 
 // extractClaudeHookSuccess decodes the hook output payload of one
@@ -28,8 +30,7 @@ func IsClaudeHookSubtype(subtype string) bool {
 func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 	attachment := gjson.Get(line, "attachment")
 	attachmentType := attachment.Get("type")
-	if attachmentType.Type != gjson.String ||
-		!IsClaudeHookSubtype(attachmentType.Str) {
+	if !IsClaudeHookSubtype(attachmentType.Str) {
 		return claudeHookSuccess{}, false
 	}
 	payload := claudeHookSuccess{subtype: attachmentType.Str}
@@ -39,6 +40,8 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 	}{
 		{key: "hookName", target: &payload.hookName},
 		{key: "hookEvent", target: &payload.hookEvent},
+		{key: "command", target: &payload.command},
+		{key: "toolUseID", target: &payload.toolUseID},
 		{key: "content", target: &payload.content},
 		{key: "stdout", target: &payload.stdout},
 		{key: "stderr", target: &payload.stderr},
@@ -73,6 +76,9 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 		}
 		return payload, true
 	}
+	if payload.subtype == "hook_cancelled" {
+		return payload, true
+	}
 	if strings.TrimSpace(payload.content) == "" &&
 		strings.TrimSpace(payload.stdout) == "" &&
 		strings.TrimSpace(payload.stderr) == "" {
@@ -83,9 +89,8 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 
 // extractClaudeHookAttachment decodes one transcript line into a
 // deferred hook attachment. It reuses the strict hook output decoder,
-// so an unsupported attachment type, a malformed payload, and a hook
-// without any output stay skipped. The record's own top-level
-// identity is carried as written; it is never synthesized.
+// skipping unsupported types, malformed payloads, and empty output unless
+// the hook was cancelled. The record keeps its own top-level identity.
 func extractClaudeHookAttachment(line string) (claudeAttachment, bool) {
 	payload, ok := extractClaudeHookSuccess(line)
 	if !ok {
@@ -96,6 +101,8 @@ func extractClaudeHookAttachment(line string) (claudeAttachment, bool) {
 	payload.subtype = strings.Clone(payload.subtype)
 	payload.hookName = strings.Clone(payload.hookName)
 	payload.hookEvent = strings.Clone(payload.hookEvent)
+	payload.command = strings.Clone(payload.command)
+	payload.toolUseID = strings.Clone(payload.toolUseID)
 	payload.content = strings.Clone(payload.content)
 	payload.stdout = strings.Clone(payload.stdout)
 	payload.stderr = strings.Clone(payload.stderr)
@@ -109,17 +116,23 @@ func extractClaudeHookAttachment(line string) (claudeAttachment, bool) {
 	}, true
 }
 
-// claudeHookSuccessBody renders a decoded hook_success payload as a
+// claudeHookSuccessBody renders a decoded hook payload as a
 // plain, inspectable body. Every recorded channel keeps its own
 // section, the recorded text is copied verbatim, and a section appears
 // only when its decoded value is not the empty string.
 func claudeHookSuccessBody(payload claudeHookSuccess) string {
-	sections := make([]string, 0, 5)
+	sections := make([]string, 0, 7)
 	if payload.hookName != "" {
 		sections = append(sections, "Hook name: "+payload.hookName)
 	}
 	if payload.hookEvent != "" {
 		sections = append(sections, "Hook event: "+payload.hookEvent)
+	}
+	if payload.command != "" {
+		sections = append(sections, "Command: "+payload.command)
+	}
+	if payload.toolUseID != "" {
+		sections = append(sections, "Tool-use id: "+payload.toolUseID)
 	}
 	if payload.content != "" {
 		sections = append(sections, "Content:\n"+payload.content)

@@ -10,6 +10,8 @@ import { buildDisplayItems } from "./display-items.js";
 import { isSystemMessage } from "./messages.js";
 import { filterDisplayItemsByTranscriptMode } from "./transcript-mode.js";
 
+const hookSubtypes = ["hook_success", "hook_additional_context", "hook_cancelled"];
+
 const hook = (subtype = "hook_success") =>
   msg({
     ordinal: 2,
@@ -26,7 +28,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-describe.each(["hook_success", "hook_additional_context"])("%s output", (subtype) => {
+describe.each(hookSubtypes)("%s output", (subtype) => {
   it("promotes hook output and keeps other system rows hidden", () => {
     expect(isSystemMessage(hook(subtype))).toBe(false);
     expect(isSystemMessage({ ...hook(subtype), source_subtype: "hook_error" })).toBe(true);
@@ -60,7 +62,9 @@ describe.each(["hook_success", "hook_additional_context"])("%s output", (subtype
       target: document.body,
       props: { subtype, content, timestamp: "" },
     });
-    expect(document.querySelector(".label")?.textContent).toBe("Hook output");
+    expect(document.querySelector(".label")?.textContent).toBe(
+      subtype === "hook_cancelled" ? "Hook cancelled" : "Hook output",
+    );
     const details = document.querySelector("details");
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
@@ -69,10 +73,10 @@ describe.each(["hook_success", "hook_additional_context"])("%s output", (subtype
   });
 });
 
-describe("hook filters", () => {
+describe.each(hookSubtypes)("%s filters", (subtype) => {
   it("belongs to the Hooks filter independently of the role and system filters", () => {
-    expect(hasVisibleSegments(hook(), (t) => t === "hook")).toBe(true);
-    expect(hasVisibleSegments(hook(), (t) => t !== "hook")).toBe(false);
+    expect(hasVisibleSegments(hook(subtype), (t) => t === "hook")).toBe(true);
+    expect(hasVisibleSegments(hook(subtype), (t) => t !== "hook")).toBe(false);
     const boundary = msg({
       ordinal: 4,
       is_system: true,
@@ -86,7 +90,7 @@ describe("hook filters", () => {
   it("uses the same filter for projected transcript rows", () => {
     const rows = [
       msg({ ordinal: 0 }),
-      hook(),
+      hook(subtype),
       msg({ ordinal: 3, role: "assistant", content: "final" }),
     ];
     const onlyHooks = projectSessionScope({
