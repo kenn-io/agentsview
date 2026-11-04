@@ -943,6 +943,25 @@ describe("SessionBreadcrumb", () => {
     await unmount(component);
   });
 
+  it("shows the transcript controls beside the title only on wide screens", async () => {
+    ui.isMobileViewport = false;
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    expect(document.querySelector(".session-breadcrumb .view-trigger")).not.toBeNull();
+    expect(
+      document.querySelector('.session-breadcrumb button[aria-label="Follow latest messages"]'),
+    ).not.toBeNull();
+
+    ui.isMobileViewport = true;
+    await tick();
+    expect(document.querySelector(".session-breadcrumb .view-trigger")).toBeNull();
+    ui.isMobileViewport = false;
+    unmount(component);
+  });
+
   it("renders gemini with rose badge color", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,

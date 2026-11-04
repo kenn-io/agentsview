@@ -151,6 +151,13 @@ describe("AppHeader export actions", () => {
     expect(document.querySelector(".import-btn")).toBeNull();
   });
 
+  it("leaves the transcript controls to the session header on wide screens", async () => {
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+    expect(document.querySelector(".view-trigger")).toBeNull();
+    expect(document.querySelector('button[aria-label="Follow latest messages"]')).toBeNull();
+  });
+
   it("copies markdown export link from the actions menu", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
@@ -187,7 +194,8 @@ describe("AppHeader export actions", () => {
     );
   });
 
-  it("toggles follow latest from the session header", async () => {
+  it("shows the transcript controls in the top bar on narrow screens", async () => {
+    ui.isMobileViewport = true;
     component = mount(AppHeader, { target: document.body });
     await tick();
 

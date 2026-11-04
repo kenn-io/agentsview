@@ -57,6 +57,7 @@
   "header_transcript_visibility": "Block Visibility",
   "header_transcript_show_all": "Show all",
   "header_view_trigger": "View: {layout}",
+  "header_view_trigger_focused": "View: {layout} · Prompts only",
   "header_view_trigger_label": "Transcript view: {layout}",
   "header_view_trigger_title": "Choose the layout, content, and block types for this transcript",
   "header_view_menu_label": "Transcript view",
