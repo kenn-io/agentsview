@@ -830,6 +830,9 @@ func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			})
 			continue
 		}
+		if s.agent == AgentHermes {
+			root = hermesRawEventPath(root)
+		}
 		roots = append(roots, hermesWatchRoots(s.agent, root)...)
 	}
 	return WatchPlan{Roots: roots}, nil
@@ -1675,7 +1678,8 @@ func (s hermesSourceSet) sourceForChangedPath(
 }
 
 func hermesStatePathAffectsArchive(path, stateDB string) bool {
-	return samePath(path, stateDB) || samePath(path, stateDB+"-wal")
+	return sameHermesEventPath(path, stateDB) ||
+		sameHermesEventPath(path, stateDB+"-wal")
 }
 
 func (s hermesSourceSet) sourceRef(root, path string) (SourceRef, bool) {
@@ -1789,22 +1793,26 @@ func ResolveHermesShallowWatchRoots(root string) []string {
 func hermesWatchRootMatches(root, watchRoot string) bool {
 	root = filepath.Clean(root)
 	watchRoot = filepath.Clean(watchRoot)
-	if samePath(root, watchRoot) {
+	if sameHermesEventPath(root, watchRoot) {
 		return true
 	}
 	if stateDB, sessionsDir, ok := hermesArchiveRootPaths(root); ok {
-		return samePath(watchRoot, filepath.Dir(stateDB)) ||
-			samePath(watchRoot, sessionsDir)
+		return sameHermesEventPath(watchRoot, filepath.Dir(stateDB)) ||
+			sameHermesEventPath(watchRoot, sessionsDir)
 	}
 	switch filepath.Base(root) {
 	case "state.db":
-		return samePath(watchRoot, filepath.Dir(root)) ||
-			samePath(watchRoot, filepath.Join(filepath.Dir(root), "sessions"))
+		return sameHermesEventPath(watchRoot, filepath.Dir(root)) ||
+			sameHermesEventPath(watchRoot, filepath.Join(filepath.Dir(root), "sessions"))
 	case "sessions":
-		return samePath(watchRoot, filepath.Dir(root))
+		return sameHermesEventPath(watchRoot, filepath.Dir(root))
 	default:
-		return samePath(watchRoot, filepath.Join(root, "sessions"))
+		return sameHermesEventPath(watchRoot, filepath.Join(root, "sessions"))
 	}
+}
+
+func sameHermesEventPath(first, second string) bool {
+	return samePath(hermesRawEventPath(first), hermesRawEventPath(second))
 }
 
 func hermesArchivePathsForEvent(root, path string) (stateDB, sessionsDir string, ok bool) {

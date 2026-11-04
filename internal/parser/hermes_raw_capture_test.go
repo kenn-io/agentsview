@@ -154,6 +154,49 @@ func TestHermesRawCaptureFlatTranscriptRoot(t *testing.T) {
 	assert.Equal(t, canonicalRawCaptureTestPath(t, file), plan.Entries[0].LocalPath)
 }
 
+func TestHermesRawCaptureConfiguredSessionsHomeWithDatabase(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "sessions")
+	writeHermesRawTranscript(t, home, "one.jsonl")
+	createHermesStateDB(t, home)
+	p := hermesRawFixtureProvider(t, home)
+
+	d, err := DiscoverRawCaptureSources(t.Context(), p)
+	require.NoError(t, err)
+	require.True(t, d.Complete)
+	require.Len(t, d.Sources, 1)
+	canonical := canonicalRawCaptureTestPath(t, home)
+	assert.Equal(t, filepath.Join(canonical, "state.db"), d.Sources[0].Key)
+
+	plan, ok, err := ResolveRawCapturePlan(t.Context(), p, d.Sources[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, canonical, plan.CaptureRoot)
+	assert.Equal(t, "state.db", plan.SnapshotPath)
+	require.Len(t, plan.Entries, 2)
+	assert.ElementsMatch(
+		t,
+		[]string{"state.db", "sessions/one.jsonl"},
+		[]string{plan.Entries[0].Path, plan.Entries[1].Path},
+	)
+
+	watchProvider, ok := p.(interface {
+		WatchPlan(context.Context) (WatchPlan, error)
+	})
+	require.True(t, ok)
+	watchPlan, err := watchProvider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, watchPlan.Roots, 2)
+	assert.Equal(t, canonical, watchPlan.Roots[0].Path)
+	assert.Equal(t, filepath.Join(canonical, "sessions"), watchPlan.Roots[1].Path)
+
+	changed, err := RawCaptureSourcesForChangedPath(t.Context(), p, ChangedPathRequest{
+		Path: filepath.Join(home, "state.db-wal"), WatchRoot: home,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, d.Sources[0].Key, changed[0].Key)
+}
+
 func TestHermesRawCaptureIncompleteAndInterrupted(t *testing.T) {
 	t.Run("missing configured root", func(t *testing.T) {
 		missingRoot := filepath.Join(t.TempDir(), "missing")
@@ -306,13 +349,100 @@ func TestHermesRawCaptureSessionsSymlinkDiscoveryAndEvents(t *testing.T) {
 	assert.Equal(t, "sessions/one.jsonl", plan.Entries[0].Path)
 	assert.Equal(t, canonicalRawCaptureTestPath(t, transcript), plan.Entries[0].LocalPath)
 
+	watchProvider, ok := p.(interface {
+		WatchPlan(context.Context) (WatchPlan, error)
+	})
+	require.True(t, ok)
+	watchPlan, err := watchProvider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, watchPlan.Roots, 2)
+	assert.Equal(t, canonicalHome, watchPlan.Roots[0].Path)
+	assert.Equal(t, filepath.Join(canonicalHome, "sessions"), watchPlan.Roots[1].Path)
+
+	for _, changedPath := range []string{
+		filepath.Join(canonicalHome, "state.db"),
+		filepath.Join(canonicalHome, "state.db-wal"),
+	} {
+		changed, err := RawCaptureSourcesForChangedPath(t.Context(), p, ChangedPathRequest{
+			Path: changedPath, WatchRoot: canonicalHome,
+		})
+		require.NoError(t, err)
+		require.Len(t, changed, 1)
+		assert.Equal(t, source.Key, changed[0].Key)
+	}
+
 	events, err := RawCaptureSourcesForChangedPath(
 		t.Context(), p,
-		ChangedPathRequest{Path: filepath.Join(configuredSessions, "one.jsonl"), WatchRoot: configuredSessions},
+		ChangedPathRequest{
+			Path:      filepath.Join(canonicalHome, "sessions", "one.jsonl"),
+			WatchRoot: filepath.Join(canonicalHome, "sessions"),
+		},
 	)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, source.Key, events[0].Key)
+}
+
+func TestHermesRawCaptureSessionsSymlinkToFlatTranscriptRoot(t *testing.T) {
+	configuredHome := t.TempDir()
+	flatRoot := filepath.Join(t.TempDir(), "transcript-store")
+	require.NoError(t, os.MkdirAll(flatRoot, 0o700))
+	file := filepath.Join(flatRoot, "one.jsonl")
+	require.NoError(t, os.WriteFile(file, []byte(`{"role":"user","content":"Hello"}`+"\n"), 0o600))
+	configuredSessions := filepath.Join(configuredHome, "sessions")
+	if err := os.Symlink(flatRoot, configuredSessions); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	p := hermesRawFixtureProvider(t, configuredSessions)
+
+	d, err := DiscoverRawCaptureSources(t.Context(), p)
+	require.NoError(t, err)
+	require.True(t, d.Complete)
+	require.Len(t, d.Sources, 1)
+	canonical := canonicalRawCaptureTestPath(t, flatRoot)
+	assert.Equal(t, filepath.Join(canonical, "state.db"), d.Sources[0].Key)
+
+	plan, ok, err := ResolveRawCapturePlan(t.Context(), p, d.Sources[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, canonical, plan.CaptureRoot)
+	require.Len(t, plan.Entries, 1)
+	assert.Equal(t, "sessions/one.jsonl", plan.Entries[0].Path)
+	assert.Equal(t, canonicalRawCaptureTestPath(t, file), plan.Entries[0].LocalPath)
+
+	watchProvider, ok := p.(interface {
+		WatchPlan(context.Context) (WatchPlan, error)
+	})
+	require.True(t, ok)
+	watchPlan, err := watchProvider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, watchPlan.Roots, 1)
+	assert.Equal(t, canonical, watchPlan.Roots[0].Path)
+	assert.True(t, watchPlan.Roots[0].Recursive)
+
+	local, err := p.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, local, 1)
+	rebound, ok, err := ResolveRawSnapshotSessions(t.Context(), p, d.Sources[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, rebound, 1)
+	keys := func(sources []SourceRef) []string {
+		out := make([]string, 0, len(sources))
+		for _, source := range sources {
+			out = append(out, hermesRawEventPath(source.Key))
+		}
+		slices.Sort(out)
+		return out
+	}
+	assert.Equal(t, keys(local), keys(rebound))
+
+	changed, err := RawCaptureSourcesForChangedPath(t.Context(), p, ChangedPathRequest{
+		Path: filepath.Join(canonical, "one.jsonl"), WatchRoot: canonical,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, d.Sources[0].Key, changed[0].Key)
 }
 
 func TestHermesRawChangedPathWorkDoesNotGrowWithOtherProfiles(t *testing.T) {

@@ -152,8 +152,8 @@ INSERT INTO messages(session_id,role,content) VALUES('child','user','child conte
 
 	f := newProjectionFixture(t)
 	childManifest, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentHermes, "profiles-root", "profiles/first/state.db")
-	parentManifest, _ := f.acceptScoped(t, "device-a", "parent", "", parser.AgentHermes, "profiles-root", "profiles/second/state.db")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, childManifest), childManifest, childParsed))
+	parentManifest, _ := f.acceptScoped(t, "device-a", "parent", "", parser.AgentHermes, "profiles-root", "profiles/second/state.db")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parentManifest), parentManifest, parentParsed))
 
 	publicID := func(m rawsync.CanonicalManifest, member string) string {

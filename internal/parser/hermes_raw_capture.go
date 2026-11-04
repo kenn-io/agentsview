@@ -14,6 +14,27 @@ import (
 // The configured owner can instead be its sessions directory or profiles parent.
 type hermesRawSource struct{ ConfiguredRoot, Home string }
 
+func hermesRawHomeForConfiguredRoot(configured, resolved string) string {
+	if filepath.Base(configured) != "sessions" ||
+		filepath.Base(resolved) != "sessions" ||
+		hermesRawHomeHasOwnLayout(resolved) {
+		return resolved
+	}
+	return filepath.Dir(resolved)
+}
+
+func hermesRawHomeHasOwnLayout(root string) bool {
+	if _, err := os.Lstat(filepath.Join(root, "state.db")); err == nil ||
+		!errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	info, err := os.Stat(filepath.Join(root, "sessions"))
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	return info.IsDir()
+}
+
 func withHermesRawCapture(agent AgentType, caps Capabilities) Capabilities {
 	if agent == AgentHermes {
 		caps.RawCapture = RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeSQLiteArchive, Append: RawCaptureAppendReplaceOnly, Snapshot: RawCaptureSnapshotOnlineBackup}
@@ -79,7 +100,6 @@ func (p *hermesProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yiel
 			return false, err
 		}
 		profiles := p.sources.isProfilesContainer(configured)
-		sessions := filepath.Base(configured) == "sessions"
 		if _, err := os.Stat(configured); err != nil {
 			if ctx.Err() != nil {
 				return false, ctx.Err()
@@ -103,10 +123,7 @@ func (p *hermesProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yiel
 					return visit(hermesRawSource{ConfiguredRoot: root, Home: filepath.Join(root, entry.Name())})
 				})
 			} else {
-				home := root
-				if sessions {
-					home = hermesRawEventPath(filepath.Dir(root))
-				}
+				home := hermesRawHomeForConfiguredRoot(configured, root)
 				err = visit(hermesRawSource{ConfiguredRoot: root, Home: home})
 			}
 		}
@@ -270,10 +287,7 @@ func (p *hermesProvider) RawCaptureSourcesForChangedPath(ctx context.Context, re
 			}
 			continue
 		}
-		home := root
-		if filepath.Base(configured) == "sessions" {
-			home = hermesRawEventPath(filepath.Dir(root))
-		}
+		home := hermesRawHomeForConfiguredRoot(configured, root)
 		if hermesRawChangeAffectsHome(changed, home, root) {
 			if err := visit(hermesRawSource{ConfiguredRoot: root, Home: home}); err != nil {
 				return nil, err

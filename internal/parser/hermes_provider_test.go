@@ -21,6 +21,7 @@ import (
 
 func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	root := t.TempDir()
+	canonicalRoot := canonicalRawCaptureTestPath(t, root)
 	jsonlPath := filepath.Join(root, "child.jsonl")
 	jsonPath := filepath.Join(root, "session_jsononly.json")
 	writeSourceFile(t, jsonlPath, hermesProviderJSONLFixture("jsonl question"))
@@ -36,7 +37,7 @@ func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.Equal(t, canonicalRoot, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"state.db", "state.db-wal", "*.jsonl", "session_*.json"}, plan.Roots[0].IncludeGlobs)
 
@@ -103,6 +104,7 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 	sessionsDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 	createHermesStateDB(t, root)
+	canonicalRoot := canonicalRawCaptureTestPath(t, root)
 	transcriptPath := filepath.Join(sessionsDir, "session_child.json")
 	writeSourceFile(t, transcriptPath, hermesProviderJSONFixture("transcript question"))
 	stateDB := filepath.Join(root, "state.db")
@@ -116,10 +118,10 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
-	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.Equal(t, canonicalRoot, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
-	assert.Equal(t, sessionsDir, plan.Roots[1].Path)
+	assert.Equal(t, filepath.Join(canonicalRoot, "sessions"), plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
 	assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
 
@@ -844,6 +846,9 @@ func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 	createHermesStateDB(t, root)
 	stateDB := filepath.Join(root, "state.db")
+	canonicalRoot := canonicalRawCaptureTestPath(t, root)
+	canonicalSessionsDir := canonicalRawCaptureTestPath(t, sessionsDir)
+	canonicalStateDB := filepath.Join(canonicalRoot, "state.db")
 
 	for _, tc := range []struct {
 		name       string
@@ -863,16 +868,16 @@ func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 			plan, err := provider.WatchPlan(t.Context())
 			require.NoError(t, err)
 			require.Len(t, plan.Roots, 2)
-			assert.Equal(t, root, plan.Roots[0].Path)
+			assert.Equal(t, canonicalRoot, plan.Roots[0].Path)
 			assert.False(t, plan.Roots[0].Recursive)
 			assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
-			assert.Equal(t, sessionsDir, plan.Roots[1].Path)
+			assert.Equal(t, canonicalSessionsDir, plan.Roots[1].Path)
 			assert.True(t, plan.Roots[1].Recursive)
 			assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
 
 			changed, err := provider.SourcesForChangedPath(
 				t.Context(),
-				ChangedPathRequest{Path: stateDB, EventKind: "write", WatchRoot: root},
+				ChangedPathRequest{Path: canonicalStateDB, EventKind: "write", WatchRoot: canonicalRoot},
 			)
 			require.NoError(t, err)
 			require.Len(t, changed, 1)
@@ -1120,8 +1125,9 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 	t.Run("state db exists before sessions directory", func(t *testing.T) {
 		root := t.TempDir()
 		createHermesStateDB(t, root)
+		canonicalRoot := canonicalRawCaptureTestPath(t, root)
 		stateDB := filepath.Join(root, "state.db")
-		sessionsDir := filepath.Join(root, "sessions")
+		canonicalSessionsDir := filepath.Join(canonicalRoot, "sessions")
 
 		provider, ok := NewProvider(AgentHermes, ProviderConfig{
 			Roots:   []string{root},
@@ -1132,10 +1138,10 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 		plan, err := provider.WatchPlan(t.Context())
 		require.NoError(t, err)
 		require.Len(t, plan.Roots, 2)
-		assert.Equal(t, root, plan.Roots[0].Path)
+		assert.Equal(t, canonicalRoot, plan.Roots[0].Path)
 		assert.False(t, plan.Roots[0].Recursive)
 		assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
-		assert.Equal(t, sessionsDir, plan.Roots[1].Path)
+		assert.Equal(t, canonicalSessionsDir, plan.Roots[1].Path)
 		assert.True(t, plan.Roots[1].Recursive)
 		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
 
@@ -1150,8 +1156,9 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 
 	t.Run("direct state db root before file exists", func(t *testing.T) {
 		root := t.TempDir()
+		canonicalRoot := canonicalRawCaptureTestPath(t, root)
 		stateDB := filepath.Join(root, "state.db")
-		sessionsDir := filepath.Join(root, "sessions")
+		canonicalSessionsDir := filepath.Join(canonicalRoot, "sessions")
 
 		provider, ok := NewProvider(AgentHermes, ProviderConfig{
 			Roots:   []string{stateDB},
@@ -1162,10 +1169,10 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 		plan, err := provider.WatchPlan(t.Context())
 		require.NoError(t, err)
 		require.Len(t, plan.Roots, 2)
-		assert.Equal(t, root, plan.Roots[0].Path)
+		assert.Equal(t, canonicalRoot, plan.Roots[0].Path)
 		assert.False(t, plan.Roots[0].Recursive)
 		assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
-		assert.Equal(t, sessionsDir, plan.Roots[1].Path)
+		assert.Equal(t, canonicalSessionsDir, plan.Roots[1].Path)
 		assert.True(t, plan.Roots[1].Recursive)
 		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
 
@@ -1181,8 +1188,10 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 
 	t.Run("sessions directory root before state db exists", func(t *testing.T) {
 		root := t.TempDir()
+		canonicalRoot := canonicalRawCaptureTestPath(t, root)
 		stateDB := filepath.Join(root, "state.db")
 		sessionsDir := filepath.Join(root, "sessions")
+		canonicalSessionsDir := filepath.Join(canonicalRoot, "sessions")
 		require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 
 		provider, ok := NewProvider(AgentHermes, ProviderConfig{
@@ -1194,10 +1203,10 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 		plan, err := provider.WatchPlan(t.Context())
 		require.NoError(t, err)
 		require.Len(t, plan.Roots, 2)
-		assert.Equal(t, root, plan.Roots[0].Path)
+		assert.Equal(t, canonicalRoot, plan.Roots[0].Path)
 		assert.False(t, plan.Roots[0].Recursive)
 		assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
-		assert.Equal(t, sessionsDir, plan.Roots[1].Path)
+		assert.Equal(t, canonicalSessionsDir, plan.Roots[1].Path)
 		assert.True(t, plan.Roots[1].Recursive)
 		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
 
@@ -1400,7 +1409,6 @@ func TestHermesDefaultRootsDiscoverWindowsStateDB(t *testing.T) {
 
 	t.Run("watch_plan_before_hermes_home_exists", func(t *testing.T) {
 		home := t.TempDir()
-		windowsRoot := filepath.Join(home, "AppData", "Local", "hermes", "sessions")
 		var def AgentDef
 		for _, candidate := range Registry {
 			if candidate.Type == AgentHermes {
@@ -1417,14 +1425,16 @@ func TestHermesDefaultRootsDiscoverWindowsStateDB(t *testing.T) {
 
 		plan, err := provider.WatchPlan(t.Context())
 		require.NoError(t, err)
-		hermesHome := filepath.Dir(windowsRoot)
+		canonicalHome := canonicalRawCaptureTestPath(t, home)
+		hermesHome := filepath.Join(canonicalHome, "AppData", "Local", "hermes")
+		canonicalWindowsRoot := filepath.Join(hermesHome, "sessions")
 		var homeWatch, sessionsWatch *WatchRoot
 		for i := range plan.Roots {
 			root := &plan.Roots[i]
 			if samePath(root.Path, hermesHome) {
 				homeWatch = root
 			}
-			if samePath(root.Path, windowsRoot) {
+			if samePath(root.Path, canonicalWindowsRoot) {
 				sessionsWatch = root
 			}
 			assert.False(t, samePath(root.Path, hermesHome) && root.Recursive)
