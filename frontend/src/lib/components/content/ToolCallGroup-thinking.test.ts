@@ -30,7 +30,7 @@ function message(ordinal: number, structured: boolean): Message {
     context_tokens: 0,
     output_tokens: 0,
     tool_calls: structured
-      ? [{ tool_name: "Bash", category: "Bash", result_content: "ordinary output" }]
+      ? [{ call_index: 0, tool_name: "Bash", category: "Bash", result_content: "ordinary output" }]
       : undefined,
   };
 }
