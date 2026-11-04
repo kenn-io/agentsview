@@ -12593,6 +12593,16 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
+	// Claude keeps its existing freshness gates and uses only proven appends.
+	// As for Codex, bytes before the tail anchor are trusted as append-only.
+	if file.Agent == parser.AgentClaude && !sourceForceReplace && !forceSourceCwdParse {
+		if cpResult, err := e.codexCheckpointFingerprint(ctx, source, file); err == nil && cpResult.decision == codexCheckpointAppend {
+			fingerprint = cpResult.fingerprint
+			codexCheckpoint = cpResult.checkpoint
+			codexFullHash = cpResult.fingerprint.Hash
+			codexHashState = cpResult.hashState
+		}
+	}
 	// codexFingerprintFromParse marks a never-synced Codex-format source
 	// whose fingerprint is derived from the parser's single-pass hash
 	// state instead of a separate full-file fingerprint read.
@@ -12817,6 +12827,17 @@ func (e *Engine) processProviderFile(
 			incRes.incremental.providerStatHash = preParseStatHash
 		}
 		return incRes, true
+	}
+	// A Claude checkpoint proves only the append path. A full parse needs
+	// an authoritative fingerprint, including bytes before the tail anchor.
+	if file.Agent == parser.AgentClaude && codexCheckpoint != nil {
+		var meter parser.ContentReadMeter
+		fingerprint, err = e.providerFingerprint(parser.WithContentReadMeter(ctx, &meter), provider, source)
+		if err != nil {
+			return processResult{err: err}, true
+		}
+		e.countContentCheck(meter.Bytes())
+		cacheKey = providerProcessCacheKey(file, source, fingerprint, providerSemantics)
 	}
 	// An explicit full pass must replace the stored message stream after
 	// bypassing incremental append. Otherwise a complete parse can still be
@@ -16676,6 +16697,12 @@ func (e *Engine) tryIncrementalJSONL(
 			)
 			incHash = fullHash
 		}
+	} else if agent == parser.AgentClaude && e.pathRewriter == nil && !e.db.ArchiveContent().OmitsToolContent() {
+		if state, hash, err := codexResumeHashFn(file.Path, 0, newOffset, nil); err == nil {
+			incHash = hash
+			hashState = state
+			resumeOK = true
+		}
 	} else if isCodexFormatAgent(agent) || agent == parser.AgentClaude {
 		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
 			incHash = hash
@@ -16683,15 +16710,18 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	// Persist the advanced parser checkpoint in the same transaction as the
-	// delta when this append was resumed from one.
+	// delta, including Claude's first append that bootstraps the hash state.
 	var nextCheckpoint *db.ParserCheckpoint
 	var nextCheckpointBlobs *db.ParserCheckpointBlobs
 	// Only persist the advanced checkpoint when the resumable hash state was
 	// proven to cover the new offset. On reconstruction failure the write
 	// keeps the previous checkpoint: its offset now disagrees with the
-	// committed file size, so the next gate rebuilds authoritatively instead
-	// of resuming from stale state at a newer offset and omitting bytes.
-	if checkpoint != nil && len(cursor) > 0 && hashState != nil && resumeOK {
+	// committed file size, so the next gate rejects the stale state instead
+	// of resuming at a newer offset and omitting bytes.
+	if (agent == parser.AgentClaude || checkpoint != nil && len(cursor) > 0) && hashState != nil && resumeOK {
+		if agent == parser.AgentClaude {
+			cursor = []byte{}
+		}
 		cpNextOrdinal := inc.NextOrdinal
 		if len(newMsgs) > 0 {
 			cpNextOrdinal = nextParsedOrdinal(inc.NextOrdinal, newMsgs)
@@ -16839,6 +16869,11 @@ func (e *Engine) tryIncrementalJSONL(
 			}
 			switch {
 			case update != nil:
+				if nextCheckpoint != nil {
+					nextCheckpoint.NextOrdinal = update.nextOrdinal
+				}
+				update.checkpoint = nextCheckpoint
+				update.checkpointBlobs = nextCheckpointBlobs
 				log.Printf(
 					"incremental %s %s: appended chunk shares"+
 						" message.id with stored tail, "+
@@ -20219,7 +20254,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// Fold checkpoint-backed Codex deltas transactionally. Other append paths
 	// retain their debounced recompute instead of paying for state reads and
 	// signal writes on every streamed assistant message.
-	if inc.checkpoint != nil && !e.disableSignalRecompute &&
+	if isCodexFormatAgent(inc.agent) && inc.checkpoint != nil && !e.disableSignalRecompute &&
 		!inc.hasSubstantiveUserMessage() &&
 		!inc.hasCompactBoundary() &&
 		!inc.hasResultSubagentLink() {

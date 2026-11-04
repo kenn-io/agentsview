@@ -257,7 +257,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.5
 

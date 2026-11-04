@@ -1007,6 +1007,24 @@ func TestExtractCommandText(t *testing.T) {
 			true,
 		},
 		{
+			"args containing angle brackets",
+			"<command-message>explain</command-message>\n<command-name>/explain</command-name>\n<command-args>The cert covers app.<zone> and uses Map<string, number></command-args>",
+			"/explain The cert covers app.<zone> and uses Map<string, number>",
+			true,
+		},
+		{
+			"multiline args containing a closing tag lookalike",
+			"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>check </div> handling\nin the template</command-args>",
+			"/review check </div> handling\nin the template",
+			true,
+		},
+		{
+			"args with angle brackets followed by prose not rewritten",
+			"<command-name>/explain</command-name>\n<command-args>a <b> c</command-args> and then some prose",
+			"",
+			false,
+		},
+		{
 			"BOM-prefixed command envelope",
 			"\uFEFF<command-name>/commit</command-name>\n<command-message>commit</command-message>",
 			"/commit",

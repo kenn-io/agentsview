@@ -505,6 +505,12 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		return err
 	}
 	if pushSchemaCurrent(ctx, s.pg) {
+		if err := createMissingPreparationIndexesPG(ctx, s.pg); err != nil {
+			if !isInsufficientPrivilege(err) {
+				return err
+			}
+			log.Printf("pg schema: preparation indexes unavailable, insufficient privilege: %v", err)
+		}
 		// Schema DDL is current, so skip the index and column
 		// maintenance that can lock against concurrent pg serve
 		// reads (issue #887). Still run the row-level data repairs
