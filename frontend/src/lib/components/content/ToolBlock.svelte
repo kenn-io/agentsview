@@ -205,7 +205,7 @@
         contentOverrideSeq = inSessionSearch.navigationRevision;
       }
     }}>
-      <span class="tool-chevron" class:open={!collapsed}><ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" /></span>
+      <span class="tool-chevron" class:open={!collapsed}><ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" /></span>
       {#if label}<span class="tool-label">{label}</span>{/if}
       <SearchMatchCount count={matchCount} />
       {#if structuredSummary}
@@ -260,7 +260,7 @@
           userOutputCollapsed = !outputCollapsed;
           outputOverrideSeq = inSessionSearch.navigationRevision;
         }}>
-          <span class="tool-chevron" class:open={!outputCollapsed}><ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" /></span>
+          <span class="tool-chevron" class:open={!outputCollapsed}><ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" /></span>
           <span class="output-label">{m.tool_block_output()}</span>
           <SearchMatchCount searchKey={outputKey} />
           {#if outputCollapsed && outputPreviewLine}<span class="tool-preview">{outputPreviewLine}</span>{/if}
@@ -295,7 +295,7 @@
         userHistoryCollapsed = !historyCollapsed;
         historyOverrideSeq = inSessionSearch.navigationRevision;
       }}>
-        <span class="tool-chevron" class:open={!historyCollapsed}><ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" /></span>
+        <span class="tool-chevron" class:open={!historyCollapsed}><ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" /></span>
         <span class="output-label">{m.tool_block_history()}</span>
         <SearchMatchCount count={historyCount} />
         {#if historyCollapsed && historyPreviewLine}<span class="tool-preview">{historyPreviewLine}</span>{/if}
@@ -351,8 +351,8 @@
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
-  .tool-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px; border-top: 1px solid var(--border-muted); }
-  .meta-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); background: var(--bg-inset); padding: 2px 6px; border-radius: var(--radius-sm); }
+  .tool-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 4px 14px; border-top: 1px solid var(--border-muted); }
+  .meta-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 0; }
   .meta-label { color: var(--text-secondary); font-weight: 500; }
   .show-more-btn {
     display: block; width: 100%; padding: 4px 14px; font-family: var(--font-mono); font-size: 11px;

@@ -950,7 +950,7 @@
 
   .chart-container :global(.y-label),
   .chart-container :global(.x-label) {
-    font-size: 10px;
+    font-size: 11px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }

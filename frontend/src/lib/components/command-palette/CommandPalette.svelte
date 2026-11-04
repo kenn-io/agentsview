@@ -544,6 +544,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: 13px;
+    font-weight: 500;
     color: var(--text-primary);
   }
 
@@ -552,14 +553,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--text-muted);
   }
 
   .item-meta {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     white-space: nowrap;
     flex-shrink: 0;
+    min-width: 108px;
+    text-align: right;
     font-variant-numeric: tabular-nums;
   }
 

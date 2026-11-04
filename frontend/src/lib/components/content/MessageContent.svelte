@@ -117,6 +117,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let accentForeground = $derived(isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
   let roleInk = $derived(isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
   let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
+  // Assistant turns are the bulk of a transcript, so their rail steps back;
+  // the user turn keeps the full-strength rail as the anchor.
+  let railColor = $derived(isUser
+    ? "var(--role-user-accent)"
+    : "color-mix(in srgb, var(--role-assistant-accent) 50%, transparent)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
   let pinFailed = $state(false);
@@ -220,7 +225,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 </script>
 
-<div class="message" class:is-user={isUser} class:compact style:border-left-color={accentColor} style:background={roleBg}>
+<div class="message" class:is-user={isUser} class:compact style:border-left-color={railColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
     <span class="role-label" style:color={roleInk}>{roleLabel}</span>
@@ -340,7 +345,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 <style>
   .message {
     border-left: var(--role-assistant-bar-width) var(--role-assistant-bar-style);
-    padding: 12px 18px 14px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: 10px 16px 12px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
   .message.is-user { border-left: var(--role-user-bar-width) var(--role-user-bar-style); }
   .message-header { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 6px; }

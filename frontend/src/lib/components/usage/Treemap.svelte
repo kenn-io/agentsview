@@ -177,9 +177,17 @@
      use theme text in both modes. Patterned (color-blind) tiles keep the
      full paint and the white labels below. */
   .treemap-container :global(.tile:not(.patterned) rect) {
-    fill: color-mix(in srgb, var(--tile-color) 30%, var(--bg-surface));
-    stroke: color-mix(in srgb, var(--tile-color) 70%, var(--bg-surface));
+    fill: color-mix(in srgb, var(--tile-color) var(--tile-tint), var(--bg-surface));
+    stroke: color-mix(in srgb, var(--tile-color) 85%, var(--bg-surface));
     stroke-width: 1;
+  }
+
+  .treemap-container {
+    --tile-tint: 32%;
+  }
+
+  :global(:root.dark) .treemap-container {
+    --tile-tint: 40%;
   }
 
   .treemap-container :global(.tile:not(.patterned):focus-visible rect),
