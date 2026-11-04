@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
+	"fmt"
 
 	"go.kenn.io/agentsview/internal/rawparity"
 )
@@ -19,8 +21,8 @@ func LoadRawParityLinks(ctx context.Context, tx *sql.Tx, id string) ([]rawparity
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT e.kind,e.ordinal,e.call_index,e.event_index,
- COALESCE(array_agg(DISTINCT target.session_id ORDER BY target.session_id)
-  FILTER(WHERE target.session_id IS NOT NULL),'{}'::text[]),bool_or(target.session_id IS NULL)
+ array_to_json(COALESCE(array_agg(DISTINCT target.session_id ORDER BY target.session_id)
+  FILTER(WHERE target.session_id IS NOT NULL),'{}'::text[]))::text,bool_or(target.session_id IS NULL)
  FROM raw_session_links e
  JOIN raw_session_branches owner ON owner.branch_id=e.branch_id AND owner.active
  JOIN raw_source_projections owner_source ON owner_source.source_id=owner.source_id
@@ -63,8 +65,12 @@ func LoadRawParityLinks(ctx context.Context, tx *sql.Tx, id string) ([]rawparity
 	links := []rawparity.Link{}
 	for rows.Next() {
 		var link rawparity.Link
-		if err := rows.Scan(&link.Kind, &link.Ordinal, &link.CallIndex, &link.EventIndex, &link.Targets, &link.Missing); err != nil {
+		var targetsJSON string
+		if err := rows.Scan(&link.Kind, &link.Ordinal, &link.CallIndex, &link.EventIndex, &targetsJSON, &link.Missing); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(targetsJSON), &link.Targets); err != nil {
+			return nil, fmt.Errorf("decoding raw parity targets: %w", err)
 		}
 		links = append(links, link)
 	}
