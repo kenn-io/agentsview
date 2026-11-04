@@ -30,7 +30,7 @@ var (
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
-	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|('"/]|\\[nrt])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\\])`)
+	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\\])`)
 	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
@@ -249,6 +249,11 @@ func commitPollIDs(input, tool string) []string {
 	return nil
 }
 
+// invokesGitCommit reports whether command runs git commit rather than quoting it as text.
+func invokesGitCommit(command string) bool {
+	return commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command)
+}
+
 func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	var links []CommitLink
 	pending := map[string]commitCall{}
@@ -256,7 +261,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	for _, call := range calls {
 		outputs, running := callOutput(call.result)
 		command := signals.CommandText(call.input)
-		isCommit := commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command)
+		isCommit := invokesGitCommit(command)
 		pollIDs := commitPollIDs(call.input, call.toolName)
 		if isCommit {
 			for _, process := range running {
@@ -345,7 +350,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	running := map[string]bool{}
 	for _, call := range calls {
 		command := signals.CommandText(call.input)
-		if commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command) {
+		if invokesGitCommit(command) {
 			_, processes := callOutput(call.result)
 			for _, process := range processes {
 				running[process] = true
