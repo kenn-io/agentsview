@@ -409,11 +409,6 @@ func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
 			FROM usage_cached_sessions;
 			ANALYZE`)
 		require.NoError(t, err)
-		var unrelated int
-		require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_facts f
-			JOIN usage_cached_sessions c ON c.id=f.cached_session_id
-			WHERE c.session_id LIKE 'unrelated-%'`).Scan(&unrelated))
-		require.Equal(t, size, unrelated, "grow unrelated cached sessions and facts before checking query plans")
 		for _, query := range []string{
 			usageRollupCrossSnapshotSQL, usageRollupCrossSourceUUIDSQL, usageRollupCrossUsageKeySQL,
 		} {

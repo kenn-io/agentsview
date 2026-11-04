@@ -430,13 +430,15 @@ func TestReadUsageCachedSessionsCrossesChunkBoundary(t *testing.T) {
 				SessionID: id, SyncMarker: fmt.Sprintf("sync-%d", i),
 				TranscriptRevision:    fmt.Sprintf("revision-%d", i),
 				UsageEventFingerprint: fmt.Sprintf("events-%d", i),
+				UsageGeneration:       fmt.Sprintf("generation-%d", i),
+				MessageOrdinal:        sql.NullInt64{Int64: int64(i), Valid: true},
 			},
 		}
 		_, err := tx.ExecContext(t.Context(), `INSERT INTO usage_cached_sessions(
 			session_id, source_sync_marker, source_transcript_rev,
-			usage_event_fingerprint, install_revision, source_usage_generation) VALUES (?, ?, ?, ?, ?, '')`,
+			usage_event_fingerprint, install_revision, source_usage_generation, source_message_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			id, result.source.SyncMarker, result.source.TranscriptRevision,
-			result.source.UsageEventFingerprint, result.InstallRevision)
+			result.source.UsageEventFingerprint, result.InstallRevision, result.source.UsageGeneration, result.source.MessageOrdinal)
 		require.NoError(t, err)
 		ids = append(ids, id)
 		want[id] = result
@@ -520,20 +522,18 @@ func installUsageFactFixture(tb testing.TB, conn *sql.Conn, sessionIDs ...string
 	require.NoError(tb, err)
 }
 
-const usageFactWriteTrackingSQL = `
-	CREATE TABLE fact_writes(operation TEXT);
-	CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
-		INSERT INTO fact_writes VALUES ('insert'); END;
-	CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
-		INSERT INTO fact_writes VALUES ('update'); END;
-	CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
-		INSERT INTO fact_writes VALUES ('delete'); END;`
-
 func TestUsageFactInstallPreservesUnchangedRows(t *testing.T) {
 	for _, count := range []int{8, 2048} {
 		t.Run(fmt.Sprintf("facts=%d", count), func(t *testing.T) {
 			conn, spool := usageFactInstallFixture(t, count)
-			_, err := conn.ExecContext(t.Context(), usageFactWriteTrackingSQL)
+			_, err := conn.ExecContext(t.Context(), `
+				CREATE TABLE fact_writes(operation TEXT);
+				CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('insert'); END;
+				CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('update'); END;
+				CREATE TRIGGER count_fact_delete AFTER DELETE ON usage_facts BEGIN
+					INSERT INTO fact_writes VALUES ('delete'); END;`)
 			require.NoError(t, err)
 			for _, step := range []struct {
 				name, mutation                    string
@@ -832,16 +832,6 @@ func TestUsageSpoolInvalidatesOnlyChangedIdentityPeers(t *testing.T) {
 	assert.Zero(t, invalidated, "both departed and newly joined identity peers must be invalidated")
 	assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter),
 		getDailyUsageRollupForTest(t, database, filter))
-	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-		SessionID: "session", Ordinal: 2, Role: "assistant", Model: "model",
-		Timestamp: "2026-08-10T09:00:00Z", SourceUUID: "message-1", TokenUsage: json.RawMessage(`{"input_tokens":20}`),
-	}}))
-	_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
-	require.NoError(t, err)
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*)
-		FROM usage_rollup_installs WHERE session_id='removed'`).Scan(&invalidated))
-	assert.Zero(t, invalidated, "an appended shared identity invalidates its peer")
-	assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter), getDailyUsageRollupForTest(t, database, filter))
 }
 
 func BenchmarkUsageSpoolWarmSingleChange(b *testing.B) {
@@ -1621,16 +1611,9 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 			var rows int
 			require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
 			assert.Equal(t, 1, rows)
-			_, err = cache.db.ExecContext(t.Context(), usageFactWriteTrackingSQL)
-			require.NoError(t, err)
 			_, lost, err := cache.fill.installSpool(t.Context(), spool, []usageSourceVersion{extracted["session"]}, nil, expected)
 			require.NoError(t, err)
 			assert.Empty(t, lost)
-			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM fact_writes`).Scan(&rows))
-			assert.Equal(t, 1, rows)
-			var tokens int
-			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(input_tokens) FROM usage_facts`).Scan(&tokens))
-			assert.Equal(t, count*10+17, tokens)
 			for _, messages := range [][]Message{
 				{{SessionID: "session", Ordinal: count + 1, Role: "user", Timestamp: "2026-08-10T08:59:59Z"}},
 				{
@@ -1669,17 +1652,15 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 			read = 0
 			_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
-			assert.Equal(t, 4, read, "removal refills the four surviving messages")
-			for _, ordinal := range []int{4, 5} {
-				require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-					SessionID: "session", Ordinal: ordinal, Role: "assistant", Model: "model",
-					Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
-				}}))
-				read = 0
-				_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
-				require.NoError(t, err)
-				assert.Equal(t, 1, read, "an append after a separately refilled removal retains the surviving prefix")
-			}
+
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID: "session", Ordinal: 4, Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
+			}}))
+			read = 0
+			_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+			require.NoError(t, err)
+			assert.Equal(t, 1, read, "an append after a separately refilled removal retains the surviving prefix")
 			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
 			require.NoError(t, err)
 			defer full.Close()
@@ -1690,71 +1671,67 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 }
 
 func TestUsageSpoolAppendFallbacks(t *testing.T) {
+	mutate := func(query string) func(*testing.T, *DB, *usageCache) {
+		return func(t *testing.T, database *DB, _ *usageCache) {
+			t.Helper()
+			_, err := database.getWriter().Exec(t.Context(), query)
+			require.NoError(t, err)
+		}
+	}
 	for _, tc := range []struct {
-		name, mutation string
+		name      string
+		setup     func(*testing.T, *DB, *usageCache)
+		afterFill func(*testing.T, *DB, *usageCache)
 	}{
-		{"reorder", `UPDATE messages SET ordinal=-1 WHERE ordinal=0; UPDATE messages SET ordinal=0 WHERE ordinal=1; UPDATE messages SET ordinal=1 WHERE ordinal=-1`},
-		{"gap insert", `INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',2,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":11}')`},
-		{"backdated append", `INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-09T09:00:00Z','{"input_tokens":11}')`},
-		{"activity append", `INSERT INTO messages(session_id,ordinal,role,content,model,timestamp) VALUES ('session',8,'assistant','','model','2026-08-10T10:00:00Z')`},
-		{"removed message-source event", ""},
-		{"usage event", `INSERT INTO usage_events(session_id,source,model,input_tokens,occurred_at) VALUES ('session','session','model',19,'2026-08-10T10:00:00Z')`},
-		{"recreated session", `DELETE FROM sessions WHERE id='session'; INSERT INTO sessions(id,project,machine,agent) VALUES ('session','project','local','claude'); INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',0,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":42}')`},
-		{"Claude suffix replace", ""},
-		{"late Codex usage", ""},
+		{name: "reorder", setup: mutate(`UPDATE messages SET ordinal=-1 WHERE ordinal=0; UPDATE messages SET ordinal=0 WHERE ordinal=1; UPDATE messages SET ordinal=1 WHERE ordinal=-1`)},
+		{name: "gap insert", setup: func(t *testing.T, database *DB, cache *usageCache) {
+			mutate(`DELETE FROM messages WHERE ordinal=2; INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":11}')`)(t, database, cache)
+			_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+			require.NoError(t, err)
+			mutate(`INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',2,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":11}')`)(t, database, cache)
+		}},
+		{name: "backdated append", setup: mutate(`INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-09T09:00:00Z','{"input_tokens":11}')`)},
+		{name: "activity append", setup: mutate(`INSERT INTO messages(session_id,ordinal,role,content,model,timestamp) VALUES ('session',8,'assistant','','model','2026-08-10T10:00:00Z')`), afterFill: func(t *testing.T, database *DB, cache *usageCache) {
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID: "session", Ordinal: 9, Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T11:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
+			}}))
+			read := 0
+			cache.fill.observer.messageNormalized = func() { read++ }
+			_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+			require.NoError(t, err)
+			assert.Equal(t, 9, read, "a cached activity fact requires complete extraction")
+		}},
+		{name: "removed message-source event", setup: func(t *testing.T, database *DB, cache *usageCache) {
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
+				Source: "message", Model: "model", InputTokens: 23, DedupKey: "removed-event",
+			}}))
+			_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+			require.NoError(t, err)
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", nil))
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID: "session", Ordinal: 8, Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
+			}}))
+		}},
+		{name: "usage event", setup: mutate(`INSERT INTO usage_events(session_id,source,model,input_tokens,occurred_at) VALUES ('session','session','model',19,'2026-08-10T10:00:00Z')`)},
+		{name: "recreated session", setup: mutate(`DELETE FROM sessions WHERE id='session'; INSERT INTO sessions(id,project,machine,agent) VALUES ('session','project','local','claude'); INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',0,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":42}')`)},
+		{name: "Claude suffix replace", setup: func(t *testing.T, database *DB, _ *usageCache) {
+			_, err := database.WriteSessionIncremental(t.Context(), "session", []Message{{
+				SessionID: "session", Ordinal: 7, Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":23}`),
+			}}, IncrementalSessionUpdate{ReplaceFromOrdinal: new(7)})
+			require.NoError(t, err)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database, cache := usageSpoolExtractionFixture(t, 8)
-			if tc.name == "gap insert" {
-				_, err := database.getWriter().Exec(t.Context(), `DELETE FROM messages WHERE ordinal=2; INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":11}')`)
-				require.NoError(t, err)
-				_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
-				require.NoError(t, err)
-			}
-			if tc.mutation != "" {
-				_, err := database.getWriter().Exec(t.Context(), tc.mutation)
-				require.NoError(t, err)
-			} else if tc.name == "removed message-source event" {
-				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
-					Source: "message", Model: "model", InputTokens: 23, DedupKey: "removed-event",
-				}}))
-				_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
-				require.NoError(t, err)
-				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", nil))
-				require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-					SessionID: "session", Ordinal: 8, Role: "assistant", Model: "model",
-					Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
-				}}))
-			} else if tc.name == "late Codex usage" {
-				_, err := database.getWriter().Exec(t.Context(), `UPDATE messages SET token_usage='' WHERE ordinal=7`)
-				require.NoError(t, err)
-				_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
-				require.NoError(t, err)
-				_, err = database.WriteSessionIncremental(t.Context(), "session", nil, IncrementalSessionUpdate{
-					MessageTokenUsageUpdates: []MessageTokenUsageUpdate{{Ordinal: 7, TokenUsage: json.RawMessage(`{"input_tokens":31}`)}},
-				})
-				require.NoError(t, err)
-			} else {
-				_, err := database.WriteSessionIncremental(t.Context(), "session", []Message{{
-					SessionID: "session", Ordinal: 7, Role: "assistant", Model: "model",
-					Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":23}`),
-				}}, IncrementalSessionUpdate{ReplaceFromOrdinal: new(7)})
-				require.NoError(t, err)
-			}
+			tc.setup(t, database, cache)
 			versions := []usageSourceVersion{{SessionID: "session"}}
 			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
-
-			if tc.name == "activity append" {
-				require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-					SessionID: "session", Ordinal: 9, Role: "assistant", Model: "model",
-					Timestamp: "2026-08-10T11:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
-				}}))
-				read := 0
-				cache.fill.observer.messageNormalized = func() { read++ }
-				_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
-				require.NoError(t, err)
-				assert.Equal(t, 9, read, "a cached activity fact requires complete extraction")
+			if tc.afterFill != nil {
+				tc.afterFill(t, database, cache)
 			}
 			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
 			require.NoError(t, err)

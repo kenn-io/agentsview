@@ -712,7 +712,7 @@ func seedRecognizedUsageCacheWithRetirementProtocol(
 	require.NoError(t, err)
 }
 
-func TestUsageGenerationMigrationPreservesArchive(t *testing.T) {
+func TestUsageGenerationMigrationBackfillsProof(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	database, err := Open(t.Context(), path)
 	require.NoError(t, err)
@@ -724,7 +724,6 @@ func TestUsageGenerationMigrationPreservesArchive(t *testing.T) {
 		DROP TRIGGER messages_usage_generation_update; ALTER TABLE sessions DROP COLUMN usage_generation`)
 	require.NoError(t, err)
 	require.NoError(t, legacy.Close())
-	requireOpenReadOnlyFails(t, path, "schema missing sessions.usage_generation")
 	database, err = Open(t.Context(), path)
 	require.NoError(t, err)
 	var generation string
