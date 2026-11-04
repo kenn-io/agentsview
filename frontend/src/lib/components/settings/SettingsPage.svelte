@@ -308,6 +308,22 @@
     padding-block: var(--space-3);
   }
 
+  /* One row grid for every panel: a label column, then the control.
+     Panels keep their own markup; this replaces their per-panel
+     space-between rows so controls start on a shared edge everywhere.
+     Rows with a single child (checkboxes, notes) span both columns. */
+  .settings-page :global(.kit-settings__panel .setting-row:not(.column)) {
+    display: grid;
+    grid-template-columns: 148px minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+    gap: 12px;
+  }
+
+  .settings-page :global(.kit-settings__panel .setting-row:not(.column) > :only-child) {
+    grid-column: 1 / -1;
+  }
+
   /* Room below the panel so the sticky footer never clips the preview. */
   .settings-page :global(.kit-settings .kit-settings__panel) {
     padding-bottom: calc(var(--space-8) + var(--space-6));
@@ -316,7 +332,8 @@
   .settings-page :global(.kit-settings__nav-item--active),
   .settings-page :global(.kit-settings__nav-item--active:hover) {
     background: var(--selected-list-bg);
-    box-shadow: var(--selected-edge);
+    /* Same cue as the selected search result: a fill and an accent edge. */
+    box-shadow: inset 3px 0 0 var(--accent-blue);
     color: var(--text-primary);
   }
 
