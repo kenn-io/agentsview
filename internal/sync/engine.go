@@ -12593,6 +12593,7 @@ func (e *Engine) processProviderFile(
 	}
 
 	// Claude keeps its existing freshness gates and uses only proven appends.
+	// As for Codex, bytes before the tail anchor are trusted as append-only.
 	if file.Agent == parser.AgentClaude && !sourceForceReplace && !forceSourceCwdParse {
 		if cpResult, err := e.codexCheckpointFingerprint(ctx, source, file); err == nil && cpResult.decision == codexCheckpointAppend {
 			fingerprint = cpResult.fingerprint
