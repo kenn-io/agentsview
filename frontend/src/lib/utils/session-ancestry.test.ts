@@ -10,29 +10,33 @@ interface Node {
 describe("sessionAncestryMatcher", () => {
   it("keeps one-off parent lookups bounded when the parent is near the front", () => {
     let idReads = 0;
-    const nodes = Array.from({ length: 500 }, (_, i) => ({
+    const nodes: Node[] = Array.from({ length: 500 }, (_, i) => ({
       get id() {
         idReads++;
         return `session-${i}`;
       },
     }));
 
-    expect(sessionAncestryMatches(
-      { id: "child", parent_session_id: "session-1" },
-      nodes,
-      (node) => node.id === "session-1",
-    )).toBe(true);
+    expect(
+      sessionAncestryMatches(
+        { id: "child", parent_session_id: "session-1" },
+        nodes,
+        (node) => node.id === "session-1",
+      ),
+    ).toBe(true);
     expect(idReads).toBeLessThanOrEqual(10);
   });
 
   it("matcher skips the pool until a parent lookup is needed", () => {
     let poolReads = 0;
-    const nodes: Node[] = [{
-      get id() {
-        poolReads++;
-        return "match";
+    const nodes: Node[] = [
+      {
+        get id() {
+          poolReads++;
+          return "match";
+        },
       },
-    }];
+    ];
     const matches = (node: Node) => node.id === "match";
     const matcher = sessionAncestryMatcher(nodes, matches);
 
