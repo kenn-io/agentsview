@@ -52,6 +52,7 @@ func TestBlameCommits(t *testing.T) {
 
 	_, err = BlameCommits(t.Context(), repo, "a.txt", 20, 30)
 	require.ErrorContains(t, err, "has only 3 lines")
+	assert.Contains(t, err.Error(), filepath.Join(repo, "a.txt"))
 	assert.Equal(t, 1, strings.Count(err.Error(), "has only 3 lines"))
 }
 

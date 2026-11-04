@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	gitdb "go.kenn.io/agentsview/internal/db/git"
 )
@@ -79,15 +79,7 @@ func newWhyCommand() *cobra.Command {
 					result.Commits = append(result.Commits, whyCommit{SHA: c.SHA, Subject: c.Subject, Lines: new(c.Lines)})
 				}
 			}
-			cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
-			if err != nil {
-				return err
-			}
-			tr, err := detectClientTransportContext(cmd.Context(), &cfg, 0)
-			if err != nil {
-				return err
-			}
-			svc, cleanup, err := newService(cmd.Context(), cfg, tr)
+			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
 			}
@@ -106,7 +98,7 @@ func newWhyCommand() *cobra.Command {
 				}
 			}
 			if outputFormat(cmd) == "json" {
-				return json.MarshalWrite(cmd.OutOrStdout(), result)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), result)
 			}
 			w := &errWriter{w: cmd.OutOrStdout()}
 			for _, c := range result.Commits {
@@ -143,6 +135,9 @@ func newWhyCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&commit, "commit", "", "Commit SHA or prefix")
+	cmd.Flags().String("server", "", "Remote daemon URL")
+	cmd.Flags().String("server-token-file", "", "File containing bearer token for explicit --server requests")
+	cmd.Flags().Bool("pg", false, "Read session data from configured PostgreSQL")
 	registerFormatFlags(cmd.Flags())
 	return cmd
 }

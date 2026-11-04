@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	gitcmd "go.kenn.io/kit/git/cmd"
@@ -33,7 +34,7 @@ func BlameCommits(ctx context.Context, dir, path string, start, end int) (BlameR
 	runner.NullGlobalConfig = false
 	out, _, err := runner.Run(ctx, dir, nil, args...)
 	if err != nil {
-		return BlameResult{}, err
+		return BlameResult{}, fmt.Errorf("git blame %s: %w", filepath.Join(dir, path), err)
 	}
 	result := BlameResult{}
 	indices := make(map[string]int)

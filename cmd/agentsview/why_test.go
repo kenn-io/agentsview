@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +16,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/testutil"
 )
 
+func TestWhyRemoteArchive(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("remote-token\n"), 0o600))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v1/commits/sessions", r.URL.Path)
+		assert.Equal(t, "Bearer remote-token", r.Header.Get("Authorization"))
+		var body struct {
+			SHAs []string `json:"shas"`
+		}
+		assert.NoError(t, json.UnmarshalRead(r.Body, &body))
+		assert.Equal(t, []string{"abc1234"}, body.SHAs)
+		writeJSONResponse(w, `{"commits":[{"sha":"abc1234","links":[{"session_id":"remote-session","subject":"Remote change"}]}]}`)
+	}))
+	t.Cleanup(server.Close)
+	out, err := executeCommand(newRootCommand(), "why", "--commit", "abc1234", "--server", server.URL, "--server-token-file", tokenFile, "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[whyResult](t, out)
+	require.Len(t, got.Commits, 1)
+	require.Len(t, got.Commits[0].Links, 1)
+	assert.Equal(t, "remote-session", got.Commits[0].Links[0].SessionID)
+	assert.True(t, strings.HasSuffix(out, "\n"), "JSON output must end with a newline")
+	assertNoLocalSessionsDB(t, dataDir)
+}
+
+func TestWhyPGArchive(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
+	stub := stubPGReadStore(t, pgDB)
+	out, err := executeCommand(newRootCommand(), "why", "--commit", "abc1234", "--pg", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[whyResult](t, out)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.True(t, stub.Opened)
+	assert.Equal(t, "postgres://example.test/agentsview", stub.PG.URL)
+	assert.True(t, stub.CleanupCalled)
+	assertNoLocalSessionsDB(t, dataDir)
+}
+
 func TestWhyWriteFailure(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	seedSessionArchiveRows(t, dataDir, sessionSeed{id: "claude:writer", project: "project-a"})
+	seedSession(t, dataDir, "claude:writer", "project-a")
 	for _, format := range []string{"human", "json"} {
 		t.Run(format, func(t *testing.T) {
 			sentinel := errors.New("output unavailable")
@@ -86,8 +132,7 @@ func TestWhyRecordedPrompts(t *testing.T) {
 	secondSHA := strings.TrimSpace(string(out))
 
 	dataDir := newAgentDataDir(t)
-	// Seed only archive rows so the command must answer without a daemon.
-	seedSessionArchiveRows(t, dataDir, sessionSeed{id: "claude:recorded", project: "project-a"})
+	seedSession(t, dataDir, "claude:recorded", "project-a")
 	d, err := db.Open(t.Context(), sessionsDBPath(dataDir))
 	require.NoError(t, err)
 	recordFixtureInstallation(t, d)
@@ -198,7 +243,7 @@ func TestWhyRecordedPrompts(t *testing.T) {
 	})
 	t.Run("argument validation", func(t *testing.T) {
 		_, err := executeCommand(newRootCommand(), "why", "--commit", "invalid")
-		require.ErrorIs(t, err, db.ErrInvalidCommitSHA)
+		require.ErrorContains(t, err, db.ErrInvalidCommitSHA.Error())
 		for _, args := range [][]string{{"why"}, {"why", "file.go", "--commit", firstSHA}} {
 			_, err := executeCommand(newRootCommand(), args...)
 			require.ErrorContains(t, err, "exactly one")
