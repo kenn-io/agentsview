@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"encoding/json/v2"
 	"log"
 	"maps"
 	"os"
@@ -12,11 +11,6 @@ import (
 
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
-
-type trailerScanState struct {
-	Fingerprint string   `json:"fingerprint"`
-	Tips        []string `json:"tips"`
-}
 
 // ReconcileCommitTrailers discovers editor commits independently of source writes.
 func (e *Engine) ReconcileCommitTrailers(ctx context.Context) {
@@ -97,34 +91,9 @@ func (e *Engine) survivingTrailerCwd(machine, cwd string) string {
 }
 
 func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path string) error {
-	fingerprint, tips, err := gitlog.RefsFingerprint(ctx, path)
-	if err != nil || fingerprint == "" {
-		return err
-	}
-	key := "commit_trailers:" + repo
-	value, err := e.db.GetSyncState(ctx, key)
+	commits, err := gitlog.ScanCommitTrailers(ctx, path)
 	if err != nil {
 		return err
 	}
-	var previous trailerScanState
-	if value != "" {
-		if err := json.Unmarshal([]byte(value), &previous); err != nil {
-			return err
-		}
-	}
-	if fingerprint == previous.Fingerprint {
-		return nil
-	}
-	commits, err := gitlog.ScanCommitTrailers(ctx, path, previous.Tips)
-	if err != nil {
-		return err
-	}
-	if err := e.db.StoreTrailerCommitLinks(ctx, repo, commits); err != nil {
-		return err
-	}
-	state, err := json.Marshal(trailerScanState{Fingerprint: fingerprint, Tips: tips})
-	if err != nil {
-		return err
-	}
-	return e.db.SetSyncState(ctx, key, string(state))
+	return e.db.StoreTrailerCommitLinks(ctx, repo, commits)
 }

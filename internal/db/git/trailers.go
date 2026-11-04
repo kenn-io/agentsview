@@ -2,7 +2,6 @@ package git
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"regexp"
 	"strings"
@@ -24,51 +23,15 @@ var (
 	trailerSHARE   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 )
 
-// RefsFingerprint returns both the fingerprint and its reachable tips for the
-// next incremental scan. An unborn repository has neither.
-func RefsFingerprint(ctx context.Context, repo string) (string, []string, error) {
-	out, stderr, err := gitcmd.New().Run(ctx, repo, nil, "show-ref", "--head")
-	if gitcmd.IsExitCode(err, 1) {
-		return "", nil, nil
-	}
-	if err != nil {
-		return "", nil, fmt.Errorf("git show-ref: %w: %s", err, stderr)
-	}
-	worktrees, stderr, err := gitcmd.New().Run(ctx, repo, nil, "worktree", "list", "--porcelain")
-	if err != nil {
-		return "", nil, fmt.Errorf("git worktree list: %w: %s", err, stderr)
-	}
-	var tips []string
-	for line := range strings.Lines(string(out)) {
-		sha, _, _ := strings.Cut(line, " ")
-		tips = append(tips, sha)
-	}
-	for line := range strings.Lines(string(worktrees)) {
-		if sha, ok := strings.CutPrefix(strings.TrimSpace(line), "HEAD "); ok {
-			tips = append(tips, sha)
-		}
-	}
-	out = append(out, worktrees...)
-	return fmt.Sprintf("%x", sha256.Sum256(out)), tips, nil
-}
-
-// ScanCommitTrailers reads new reachable commits. Missing saved tips cause one
-// full scan, as garbage collection may remove history after a rebase.
-func ScanCommitTrailers(ctx context.Context, repo string, previous []string) ([]TrailerCommit, error) {
+// ScanCommitTrailers reads trailers from all reachable commits.
+func ScanCommitTrailers(ctx context.Context, repo string) ([]TrailerCommit, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	runner := gitcmd.New()
 	runner.StdoutLimit = 32 << 20
-	var revisions strings.Builder
-	for _, tip := range previous {
-		revisions.WriteString("^" + tip + "\n")
-	}
 	// --all includes HEAD from every worktree, including detached worktrees.
-	args := []string{"log", "--all", "--stdin", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session:", "--format=%H%x1f%aI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
-	out, stderr, err := runner.Run(ctx, repo, strings.NewReader(revisions.String()), args...)
-	if err != nil && strings.Contains(string(stderr), "bad object") {
-		out, stderr, err = runner.Run(ctx, repo, nil, args...)
-	}
+	args := []string{"log", "--all", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session:", "--format=%H%x1f%aI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
+	out, stderr, err := runner.Run(ctx, repo, nil, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git trailer log: %w: %s", err, stderr)
 	}

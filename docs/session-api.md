@@ -1559,7 +1559,7 @@ links. Merge commits count.
 
 `agentsview sync` scans repositories used by local sessions. Under
 `agentsview serve`, editor commits appear at the next scheduled pass, within 15
-minutes. Changed refs trigger incremental history reads, including fetched older
+minutes. Each pass rereads every repository's history, including fetched older
 branches. Only checkouts a local session ran in are read. If a checkout has
 disappeared, another session must still resolve to its repository to read new
 commits. Stored rows survive checkout removal, rebases, and archive rebuilds
