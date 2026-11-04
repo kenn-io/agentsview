@@ -929,30 +929,24 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 			return true
 		})
 	default:
-		b.appendFunctionCallOutput(ctx, callID, payload, raw, ts)
-	}
-}
-
-func (b *codexSessionBuilder) appendFunctionCallOutput(ctx context.Context,
-	callID string, payload gjson.Result, raw string, ts time.Time,
-) {
-	if text := strings.TrimSpace(raw); text != "" {
-		source := "function_call_output"
-		status := ""
-		if payload.Get("type").Str == "custom_tool_call_output" {
-			source = "custom_tool_call_output"
-			status = payload.Get("status").Str
-			if status == "" {
-				status = "completed"
+		if text := strings.TrimSpace(raw); text != "" {
+			source := "function_call_output"
+			status := ""
+			if payload.Get("type").Str == "custom_tool_call_output" {
+				source = "custom_tool_call_output"
+				status = payload.Get("status").Str
+				if status == "" {
+					status = "completed"
+				}
 			}
+			b.appendToolResultEvent(ctx, callID, ParsedToolResultEvent{
+				ToolUseID: callID,
+				Source:    source,
+				Status:    status,
+				Content:   text,
+				Timestamp: ts,
+			})
 		}
-		b.appendToolResultEvent(ctx, callID, ParsedToolResultEvent{
-			ToolUseID: callID,
-			Source:    source,
-			Status:    status,
-			Content:   text,
-			Timestamp: ts,
-		})
 	}
 }
 
