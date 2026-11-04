@@ -471,7 +471,7 @@
 
   .toggle-btn {
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
@@ -541,7 +541,7 @@
   .rail-rank {
     width: 14px;
     text-align: right;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     color: var(--text-muted);
     font-family: var(--font-mono);
@@ -573,7 +573,7 @@
 
   .rail-label {
     flex: 1;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
@@ -581,7 +581,8 @@
   }
 
   .rail-cost {
-    font-size: 10px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
     font-weight: 500;
     font-family: var(--font-mono);
     color: var(--text-primary);

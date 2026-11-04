@@ -152,7 +152,7 @@
 
 <style>
   .tool-group {
-    border-left: calc(var(--role-tool-bar-width) + 1px) var(--role-tool-bar-style) var(--role-tool-accent);
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
     padding: 8px 12px;

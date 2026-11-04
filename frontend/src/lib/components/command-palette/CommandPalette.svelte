@@ -547,8 +547,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
-    color: var(--text-muted);
+    font-size: 12px;
+    color: var(--text-secondary);
   }
 
   .item-meta {
@@ -591,33 +591,42 @@
     color: var(--text-secondary);
   }
 
+  /* Matches the shared segmented-control look: an inset track with a
+     raised selected option. */
   .palette-sort {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     margin-left: auto;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .sort-btn {
-    padding: 2px 8px;
+    padding: 3px 10px;
     font-size: 11px;
-    border: 1px solid var(--border-default);
+    border: none;
     border-radius: var(--radius-sm);
     background: none;
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-sans);
+    font-weight: 500;
+  }
+
+  .sort-btn:hover:not(.active) {
+    color: var(--text-secondary);
   }
 
   .sort-btn.active {
-    background: var(--bg-inset);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge), var(--shadow-sm);
     color: var(--text-primary);
-    border-color: var(--border-default);
-    font-weight: 500;
   }
 
   .item-id {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;

@@ -351,13 +351,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .role-label { font-size: 12px; font-weight: 600; letter-spacing: 0; }
   .timestamp { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .header-meta { margin-left: auto; display: flex; align-items: center; gap: 12px; min-width: 0; }
-  .message-tokens { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
+  .message-tokens { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
   .message-model {
     font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px;
     background: var(--bg-tertiary); white-space: nowrap; flex-shrink: 0; opacity: 0.8;
   }
   .turn-summary {
-    font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
     padding: 1px 0; border-radius: var(--radius-sm); border: 1px solid transparent;
     white-space: nowrap; flex-shrink: 0;
   }

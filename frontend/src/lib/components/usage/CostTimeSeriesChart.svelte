@@ -908,9 +908,9 @@
   .legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    color: var(--text-muted);
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .legend-item.dimmed {
@@ -950,7 +950,7 @@
 
   .chart-container :global(.y-label),
   .chart-container :global(.x-label) {
-    font-size: 9px;
+    font-size: 10px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
@@ -965,9 +965,7 @@
   /* Same seam and softened fill as the bar segments, so stacked areas
      read as layers instead of one saturated mass. */
   .chart-container :global(.cost-area) {
-    fill-opacity: 0.78;
-    stroke: var(--bg-surface);
-    stroke-width: 1;
+    fill-opacity: 0.85;
   }
 
   .chart-container :global(.cost-seg.selected) {

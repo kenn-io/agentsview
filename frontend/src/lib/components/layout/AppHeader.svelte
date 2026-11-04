@@ -849,12 +849,9 @@
   }
 
   .pill.active {
-    background: color-mix(
-      in srgb,
-      var(--accent-blue) 12%,
-      transparent
-    );
-    color: var(--accent-blue);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
+    color: var(--text-primary);
     font-weight: 600;
   }
 
@@ -1003,7 +1000,7 @@
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-sm);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 12px;
     font-weight: 600;
     transition: background 0.12s, color 0.12s;

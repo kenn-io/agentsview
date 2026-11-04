@@ -286,16 +286,37 @@
     gap: var(--space-5);
   }
 
+  /* One label column for every row, so controls start on a shared edge
+     instead of floating at the far right. */
   .setting-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--setting-label-width) minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
+    justify-items: start;
     gap: 12px;
   }
 
+  .appearance-settings {
+    --setting-label-width: 148px;
+  }
+
+  .setting-row > :global(:only-child) {
+    grid-column: 1 / -1;
+  }
+
   .setting-row.column {
+    display: flex;
     flex-direction: column;
     align-items: flex-start;
+    margin-top: var(--space-3);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .setting-row.column > .setting-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   .setting-label {
@@ -324,9 +345,9 @@
 
   .role-colors {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: var(--setting-label-width) minmax(0, 1fr);
     align-items: center;
-    gap: var(--space-4) var(--space-5);
+    gap: var(--space-4) 12px;
     width: 100%;
   }
 
@@ -375,8 +396,8 @@
 
   @media (max-width: 640px) {
     .setting-row.option-row {
-      flex-direction: column;
-      align-items: stretch;
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: stretch;
     }
 
     .option-row .setting-label {

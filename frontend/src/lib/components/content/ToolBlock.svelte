@@ -334,9 +334,9 @@
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
   .tool-label { font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
-  .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
-    font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); padding: 1px 6px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 6px;
     font-variant-numeric: tabular-nums; border: 1px solid transparent;
     border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto;
   }
@@ -386,7 +386,7 @@
     border-top: 1px solid var(--border-muted); padding: 4px 0; max-height: 400px; overflow-y: auto;
   }
   .diff-line { display: inline-block; min-width: 100%; padding: 0 14px; white-space: pre; }
-  .diff-hunk { color: var(--text-muted); background: color-mix(in srgb, var(--accent-blue, #58a6ff) 6%, transparent); padding: 2px 14px; margin: 2px 0; }
+  .diff-hunk { color: color-mix(in srgb, var(--accent-blue, #58a6ff) 70%, var(--text-primary)); background: color-mix(in srgb, var(--accent-blue, #58a6ff) 7%, transparent); padding: 2px 14px; margin: 2px 0; }
   .diff-add {
     color: color-mix(in srgb, var(--accent-green, #3fb950) 70%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-green, #3fb950) 9%, transparent);

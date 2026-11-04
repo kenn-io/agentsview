@@ -2,7 +2,7 @@ import { BREAKPOINTS } from "@kenn-io/kit-ui";
 import brand from "@kenn-io/kit-ui/brand.json";
 
 export const SIDEBAR_WIDTH_KEY = "agentsview-sidebar-width";
-export const SIDEBAR_WIDTH_DEFAULT = 260;
+export const SIDEBAR_WIDTH_DEFAULT = 280;
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_STORAGE_MAX = 520;
 export const SIDEBAR_CONTENT_MIN = 480;
