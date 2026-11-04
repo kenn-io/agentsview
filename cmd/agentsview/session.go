@@ -21,8 +21,16 @@ import (
 
 func newSessionCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "session",
-		Short:        "Programmatic access to session data",
+		Use:   "session",
+		Short: "Programmatic access to session data",
+		Long: "Find sessions, inspect transcripts and tool calls, search content, and read usage. " +
+			"Start with list and copy a full opaque ID into later commands. " +
+			"Local reads use the daemon. --server and --pg are mutually exclusive. " +
+			"--server-token-file or AGENTSVIEW_SERVER_TOKEN supplies remote authentication. " +
+			"Most read commands offer human or JSON output; watch and export have dedicated stream formats.",
+		Example: "  agentsview session list --since 7d --json\n" +
+			"  agentsview session get <id> --json\n" +
+			"  agentsview session list --server http://127.0.0.1:8080 --json",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

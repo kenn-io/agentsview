@@ -43,7 +43,11 @@ func newSessionUsageCommand() *cobra.Command {
 			"otherwise they return exit 2. " +
 			"--no-sync and HTTP --own-only read only the archive; missing IDs return exit 2. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
-			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.",
+			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
+			"Exit 0 means token data, cost, or plan figures are present. " +
+			"A report without any of those figures is printed before a silent exit 3.",
+		Example: "  agentsview session usage <id> --json\n" +
+			"  agentsview session usage <id> --own-only --no-sync --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

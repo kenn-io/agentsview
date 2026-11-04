@@ -33,8 +33,16 @@ func newSessionSearchCommand() *cobra.Command {
 		limit, cursor, contextN                  int
 	)
 	cmd := &cobra.Command{
-		Use:          "search <pattern>",
-		Short:        "Search message and tool content across sessions",
+		Use:   "search <pattern>",
+		Short: "Search message and tool content across sessions",
+		Long: "Search archived message and tool content with redacted snippets. " +
+			"The default is substring search across available sources. " +
+			"Choose at most one of --regex, --fts, --semantic, or --hybrid. " +
+			"FTS and semantic/hybrid modes search messages only; semantic modes need an embedding index. " +
+			"JSON returns a numeric next_cursor for further matches; repeat the query, search mode, backend, and filters when continuing.",
+		Example: "  agentsview session search 'connection reset' --since 14d --in messages,tool_result --json\n" +
+			"  agentsview session search 'connection AND reset' --fts --json\n" +
+			"  agentsview session search 'why the build failed' --hybrid --scope top --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
