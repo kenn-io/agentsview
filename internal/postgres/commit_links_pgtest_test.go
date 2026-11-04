@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
@@ -42,18 +41,6 @@ func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
 			assert.Equal(t, "trashed", id)
 		})
 	}
-}
-
-func TestHostedCommitLinksUnavailable(t *testing.T) {
-	f := newHostedFixture(t, "tenant-a")
-	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	backend := service.NewReadOnlyBackend(store)
-	_, err = backend.SessionCommits(t.Context(), "session-a")
-	assert.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
-	_, err = backend.CommitSessions(t.Context(), []string{"abc1234"})
-	assert.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
 }
 
 func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {

@@ -35,25 +35,25 @@ func TestDuckDBCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	store = openPushedStore(t, path)
 	dbtest.AssertCommitLinkParity(t, local, store)
-	require.NoError(t, store.Close())
-	opts.Projects = []string{"other"}
-	_, err = Push(t.Context(), path, local, "m", opts, false, nil)
-	require.NoError(t, err)
-	store = openPushedStore(t, path)
 	defer func() { require.NoError(t, store.Close()) }()
-	links, err := store.SessionCommitLinks(t.Context(), "commit-delete")
-	require.NoError(t, err)
-	assert.Empty(t, links.Commits)
-	require.NoError(t, store.Close())
-	opts.Projects = []string{"commit-project"}
-	_, err = Push(t.Context(), path, local, "m", opts, false, nil)
-	require.NoError(t, err)
-	store = openPushedStore(t, path)
-	links, err = store.SessionCommitLinks(t.Context(), "commit-delete")
-	require.NoError(t, err)
-	require.Len(t, links.Commits, 1)
-	assert.True(t, links.Commits[0].Missing)
-	assert.Nil(t, links.Commits[0].Turn)
+	// The shared scope helper forces publication; keep incremental scope changes here.
+	for _, project := range []string{"other", "commit-project"} {
+		require.NoError(t, store.Close())
+		opts.Projects = []string{project}
+		_, err = Push(t.Context(), path, local, "m", opts, false, nil)
+		require.NoError(t, err)
+		store = openPushedStore(t, path)
+		links, err := store.SessionCommitLinks(t.Context(), "commit-delete")
+		require.NoError(t, err)
+		if project == "other" {
+			assert.Empty(t, links.Commits)
+		} else {
+			require.Len(t, links.Commits, 1)
+			assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
+			assert.True(t, links.Commits[0].Missing)
+			assert.Nil(t, links.Commits[0].Turn)
+		}
+	}
 }
 
 func TestDuckDBRetainedCommitLinkScope(t *testing.T) {

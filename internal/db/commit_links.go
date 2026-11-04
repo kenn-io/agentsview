@@ -128,7 +128,7 @@ func commitRepository(input, cwd string) string {
 		dir = fields.Cwd
 	}
 	if dir == "" && !jsontext.Value(input).IsValid() {
-		if match := commitWorkdirRE.FindStringSubmatch(input); match != nil {
+		if match := commitWorkdirRE.FindStringSubmatch(commitCommandRE.ReplaceAllString(input, "")); match != nil {
 			dir = match[1]
 			if strings.HasPrefix(dir, "\"") {
 				_ = json.Unmarshal([]byte(match[1]), &dir)
@@ -268,7 +268,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		pollIDs := commitPollIDs(call.input, call.toolName)
 		if isCommit {
 			for _, process := range running {
-				pending[process] = call
+				pending[process] = cmp.Or(pending[process], call)
 			}
 		} else if len(pollIDs) == 0 {
 			continue
@@ -287,7 +287,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 			}
 		}
 		for _, output := range outputs {
-			owner := call
+			owner := cmp.Or(pending[output.process], call)
 			if singlePoll {
 				owner = singleOwner
 			} else if !isCommit {
@@ -787,7 +787,7 @@ func MarkCommitAmbiguity(links []CommitLink) {
 	}
 	ambiguous := false
 	for _, link := range links {
-		if link.SHA != longest {
+		if !strings.HasPrefix(longest, link.SHA) {
 			ambiguous = true
 		}
 	}
