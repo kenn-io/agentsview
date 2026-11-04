@@ -308,7 +308,7 @@ func claudeParseFile(
 				qc.prompt = strings.Clone(qc.prompt)
 				attachments = append(attachments, qc)
 			} else if hook, ok := extractClaudeHookAttachment(
-				string(lineBytes),
+				string(lineBytes), false,
 			); ok {
 				attachments = append(attachments, hook)
 			}
@@ -343,7 +343,7 @@ func claudeParseFile(
 				if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" {
 					attachmentParents[strings.Clone(uuid)] = strings.Clone(gjson.GetBytes(lineBytes, "parentUuid").Str)
 				}
-				if hook, ok := extractClaudeHookAttachment(string(lineBytes)); ok {
+				if hook, ok := extractClaudeHookAttachment(string(lineBytes), true); ok {
 					attachments = append(attachments, hook)
 				}
 			}
@@ -505,6 +505,7 @@ func claudeParseFile(
 			ctx, entries, sessionID, project, machine,
 			parentSessionID, fileInfo, subagentMap,
 			globalStart, globalEnd, meta,
+			slices.ContainsFunc(attachments, func(a claudeAttachment) bool { return a.hook != nil }),
 		)
 	} else {
 		// Fall back to linear processing.
@@ -942,7 +943,7 @@ func claudeParseSessionFrom(
 			}
 			if entryType == "system" {
 				if gjson.Get(line, "subtype").Str == "stop_hook_summary" {
-					if hook, ok := extractClaudeHookAttachment(line); ok {
+					if hook, ok := extractClaudeHookAttachment(line, true); ok {
 						attachments = append(attachments, hook)
 					}
 				}
@@ -967,7 +968,7 @@ func claudeParseSessionFrom(
 			if entryType == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
 					attachments = append(attachments, qc)
-				} else if hook, ok := extractClaudeHookAttachment(line); ok {
+				} else if hook, ok := extractClaudeHookAttachment(line, false); ok {
 					attachments = append(attachments, hook)
 				}
 				return
@@ -1680,6 +1681,7 @@ func parseDAG(
 	subagentMap map[string]string,
 	globalStart, globalEnd time.Time,
 	meta claudeSessionMeta,
+	collectHookOwners bool,
 ) ([]ParseResult, map[string]int, error) {
 	// Build parent -> children ordered by line position and
 	// collect the set of all uuids for connectivity checks.
@@ -1813,13 +1815,16 @@ func parseDAG(
 		branch{indices: mainPath, parentID: parentSessionID},
 	)
 	branches = append(branches, forkBranches...)
-	owners := make(map[string]int, len(entries))
-	for _, entry := range entries {
-		owners[entry.uuid] = -1 // Known entries on discarded retry branches have no owner.
-	}
-	for i, b := range branches {
-		for _, idx := range b.indices {
-			owners[entries[idx].uuid] = i
+	var owners map[string]int
+	if collectHookOwners {
+		owners = make(map[string]int, len(entries))
+		for _, entry := range entries {
+			owners[entry.uuid] = -1 // Known entries on discarded retry branches have no owner.
+		}
+		for i, b := range branches {
+			for _, idx := range b.indices {
+				owners[entries[idx].uuid] = i
+			}
 		}
 	}
 

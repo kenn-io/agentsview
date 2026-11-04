@@ -9,10 +9,17 @@ import (
 
 func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 	tests := []struct {
-		name string
-		line string
-		want claudeHookSuccess
+		name        string
+		line        string
+		want        claudeHookSuccess
+		stopSummary bool
 	}{
+		{
+			name:        "stop summary payload already classified by caller",
+			line:        `{"stopReason":"blocked"}`,
+			want:        claudeHookSuccess{subtype: "stop_hook_summary", summary: &claudeStopHookSummary{StopReason: "blocked"}},
+			stopSummary: true,
+		},
 		{
 			name: "cancelled without output",
 			line: `{"type":"attachment","attachment":{"type":"hook_cancelled","hookName":"PreToolUse:Read","hookEvent":"PreToolUse"}}`,
@@ -146,7 +153,7 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := extractClaudeHookSuccess(tt.line)
+			got, ok := extractClaudeHookSuccess(tt.line, tt.stopSummary)
 			require.True(t, ok)
 			assert.Equal(t, tt.want, got)
 		})
@@ -155,16 +162,17 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 
 func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 	tests := []struct {
-		name string
-		line string
+		name        string
+		line        string
+		stopSummary bool
 	}{
 		{name: "additional context empty array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":[]}}`},
 		{name: "additional context empty joined body", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":[""]}}`},
 		{name: "additional context mixed array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["first",1]}}`},
 		{name: "additional context string", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":"first"}}`},
-		{name: "empty stop summary", line: `{"type":"system","subtype":"stop_hook_summary","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}`},
-		{name: "command-only stop summary", line: `{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`},
-		{name: "stop summary with only non-string errors", line: `{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"echo hook"}],"hookErrors":[{},null,42]}`},
+		{name: "empty stop summary", stopSummary: true, line: `{"type":"system","subtype":"stop_hook_summary","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}`},
+		{name: "command-only stop summary", stopSummary: true, line: `{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`},
+		{name: "stop summary with only non-string errors", stopSummary: true, line: `{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"echo hook"}],"hookErrors":[{},null,42]}`},
 		{name: "cancelled string timeout flag", line: `{"type":"attachment","attachment":{"type":"hook_cancelled","timedOut":"true","timeoutMs":60000}}`},
 		{name: "cancelled string timeout duration", line: `{"type":"attachment","attachment":{"type":"hook_cancelled","timedOut":true,"timeoutMs":"60000"}}`},
 		{name: "attachment missing", line: `{"type":"attachment"}`},
@@ -231,7 +239,7 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := extractClaudeHookSuccess(tt.line)
+			got, ok := extractClaudeHookSuccess(tt.line, tt.stopSummary)
 			require.False(t, ok)
 			assert.Equal(t, claudeHookSuccess{}, got)
 		})
@@ -250,7 +258,7 @@ func TestExtractClaudeHookSuccessRejectsInvalidMembers(t *testing.T) {
 				line := `{"type":"attachment","attachment":{"type":"hook_success",` +
 					`"` + member + `":` + value + `,"` +
 					claudeHookFallbackMember(member) + `":"text"}}`
-				got, ok := extractClaudeHookSuccess(line)
+				got, ok := extractClaudeHookSuccess(line, false)
 				require.False(t, ok)
 				assert.Equal(t, claudeHookSuccess{}, got)
 			})

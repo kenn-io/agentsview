@@ -558,6 +558,28 @@ func TestGenerateExportHTML_PreservesNonGoalSystemPrefixedRows(t *testing.T) {
 		"&lt;task-notification&gt;done&lt;/task-notification&gt;",
 		"Stop hook feedback: blocked",
 	})
+	for _, tc := range []struct{ subtype, label string }{
+		{"hook_success", "Hook output"},
+		{"hook_additional_context", "Hook output"},
+		{"hook_cancelled", "Hook cancelled"},
+		{"stop_hook_summary", "Stop hook summary"},
+	} {
+		t.Run(tc.subtype, func(t *testing.T) {
+			t.Parallel()
+			msg := db.Message{
+				Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: tc.subtype,
+				Content: "Stdout:\n[Thinking]literal <output>[/Thinking]\n[Bash]\necho hook",
+			}
+			if tc.subtype == "stop_hook_summary" {
+				msg.SourceType = "system"
+			}
+			out := generateExportHTML(session, []db.Message{msg})
+			assert.Contains(t, out, tc.label)
+			assert.Contains(t, out, "Stdout:\n[Thinking]literal &lt;output&gt;[/Thinking]\n[Bash]\necho hook")
+			assert.NotContains(t, out, `<div class="thinking`)
+			assert.NotContains(t, out, `<div class="tool`)
+		})
+	}
 }
 
 func TestFocusedExportOrdinals(t *testing.T) {
@@ -821,6 +843,28 @@ func TestGenerateExportMarkdown_Structure(t *testing.T) {
 		`<tool_body><![CDATA[` + "\ninspect repo\n" + `]]></tool_body>`,
 		`<tool_result><![CDATA[` + "\ndone\n" + `]]></tool_result>`,
 	})
+	for _, tc := range []struct{ subtype, label string }{
+		{"hook_success", "Hook output"},
+		{"hook_additional_context", "Hook output"},
+		{"hook_cancelled", "Hook cancelled"},
+		{"stop_hook_summary", "Stop hook summary"},
+	} {
+		t.Run(tc.subtype, func(t *testing.T) {
+			t.Parallel()
+			msg := db.Message{
+				Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: tc.subtype,
+				Content: "Stdout:\n[Thinking]literal <output>[/Thinking]\n[Bash]\necho hook",
+			}
+			if tc.subtype == "stop_hook_summary" {
+				msg.SourceType = "system"
+			}
+			out := generateExportMarkdown(session, []db.Message{msg}, exportMarkdownOptions{})
+			assert.Contains(t, out, `label="`+tc.label+`"`)
+			assert.Contains(t, out, "Stdout:\n[Thinking]literal &lt;output&gt;[/Thinking]\n[Bash]\necho hook")
+			assert.NotContains(t, out, "<thinking>")
+			assert.NotContains(t, out, "<tool_call")
+		})
+	}
 }
 
 func TestGenerateExportMarkdown_SerializesCodeSkillAndCDATAFallback(t *testing.T) {

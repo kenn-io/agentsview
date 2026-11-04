@@ -225,8 +225,9 @@ evidence; they do not establish whether a tool helped the task.
   round-trip tests cover the existing system/source fields and preserved body. A
   synthetic native server/browser run covers full and appended imports,
   repeat-sync idempotence, escaped output, independent filters, and focused mode
-  at desktop and mobile widths. A PostgreSQL push test preserves the hook body,
-  source identity, system flag, and empty dialogue projection. ClickHouse
+  at desktop and mobile widths. The existing PostgreSQL
+  `TestPushCompactComparisons` test covers source identity, the system flag,
+  and the dialogue projection fields. ClickHouse
   runtime checks remain unverified.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`

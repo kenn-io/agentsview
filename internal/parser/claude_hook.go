@@ -44,8 +44,8 @@ func IsClaudeHookSubtype(subtype string) bool {
 // extractClaudeHookSuccess decodes the hook output payload of one
 // transcript line. It decodes the payload only: it does not store, order,
 // or display the result.
-func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
-	if gjson.Get(line, "type").Str == "system" && gjson.Get(line, "subtype").Str == "stop_hook_summary" {
+func extractClaudeHookSuccess(line string, stopSummary bool) (claudeHookSuccess, bool) {
+	if stopSummary {
 		var summary claudeStopHookSummary
 		if err := json.Unmarshal([]byte(line), &summary); err != nil {
 			return claudeHookSuccess{}, false
@@ -138,8 +138,8 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 // deferred hook attachment. It reuses the strict hook output decoder,
 // skipping unsupported types, malformed payloads, and empty output unless
 // the hook was cancelled or has summary metadata. The record keeps its identity.
-func extractClaudeHookAttachment(line string) (claudeAttachment, bool) {
-	payload, ok := extractClaudeHookSuccess(line)
+func extractClaudeHookAttachment(line string, stopSummary bool) (claudeAttachment, bool) {
+	payload, ok := extractClaudeHookSuccess(line, stopSummary)
 	if !ok {
 		return claudeAttachment{}, false
 	}

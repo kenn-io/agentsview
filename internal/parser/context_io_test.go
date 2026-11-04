@@ -94,14 +94,26 @@ func TestClaudeDAGPostProcessingStopsAfterContextCancellation(t *testing.T) {
 			entryType: "user", line: `{"type":"user","message":{"content":"x"}}`,
 		}
 	}
-	ctx := newCancelOnErrCheckContext(t, 2)
-
-	_, _, err := parseDAG(
-		ctx, entries, "session", "project", "machine", "",
-		FileInfo{}, nil, time.Time{}, time.Time{}, claudeSessionMeta{},
-	)
-
-	require.ErrorIs(t, err, context.Canceled)
+	for _, cancelled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cancelled=%t", cancelled), func(t *testing.T) {
+			ctx := t.Context()
+			if cancelled {
+				ctx = newCancelOnErrCheckContext(t, 2)
+			}
+			results, owners, err := parseDAG(
+				ctx, entries, "session", "project", "machine", "",
+				FileInfo{}, nil, time.Time{}, time.Time{}, claudeSessionMeta{}, false,
+			)
+			if cancelled {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				assert.Len(t, results[0].Messages, len(entries))
+				assert.Nil(t, owners, "sessions without hooks need no ownership map")
+			}
+		})
+	}
 }
 
 func TestClaudeSubtreeUserTurnsStopsAfterContextCancellation(t *testing.T) {
