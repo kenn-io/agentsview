@@ -18,6 +18,9 @@ func TestCommitLinksRoutes(t *testing.T) {
 	te.seedSession(t, "s1", "project-a", 0)
 	w := te.post(t, "/api/v1/commits/sessions", `{"shas":["abc1234"]}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	commits := decode[db.CommitSessionList](t, w).Commits
+	require.Len(t, commits, 1)
+	assert.Equal(t, "abc1234", commits[0].SHA)
 	w = te.get(t, "/api/v1/sessions/s1/commits")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	many := make([]string, 200)

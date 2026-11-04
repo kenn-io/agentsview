@@ -73,6 +73,7 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"multiple", "git commit -m one; git commit -m two", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", 2},
 		{"global option", `git -c user.name=Example --no-pager commit -m fix`, "[main abc1234] Fix parser", 1},
 		{"quoted global option", `git -c 'user.name=Example User' commit -m fix`, "[main abc1234] Fix parser", 1},
+		{"output delta", "git commit -m fix", `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -83,22 +84,11 @@ func TestCommitLinksParsing(t *testing.T) {
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, tt.count)
-		})
-	}
-
-	for _, tt := range []struct{ name, input, result string }{
-		{"output delta", `{"command":"git commit -m fix"}`, `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-			insertMessages(t, d, commitMessages("s1", tt.input, tt.result)...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, 1)
-			assert.Equal(t, "abc1234", got.Commits[0].SHA)
-			assert.Equal(t, "main", got.Commits[0].Branch)
-			assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+			if tt.count == 1 {
+				assert.Equal(t, "abc1234", got.Commits[0].SHA)
+				assert.Equal(t, "main", got.Commits[0].Branch)
+				assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+			}
 		})
 	}
 }
@@ -360,6 +350,22 @@ func TestCommitLinksWritePolicy(t *testing.T) {
 			insertSession(t, d, "s1", "project-a")
 			messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")
 			insertMessages(t, d, messages...)
+			initial, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			if policy == config.ArchiveContentFull {
+				require.Len(t, initial.Commits, 1)
+			} else {
+				assert.Empty(t, initial.Commits)
+			}
+			d = testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages = commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")
+			insertMessages(t, d, messages...)
+			before, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, before.Commits, 1)
+			d.SetArchiveContent(policy)
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", messages))
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {
@@ -460,17 +466,23 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 
 func TestCommitLinksTranscriptNativePoll(t *testing.T) {
 	d := testDB(t)
-	d.SetArchiveContent(config.ArchiveContentTranscripts)
 	insertSession(t, d, "s1", "project-a")
-	messages := commitMessages("s1", `{"session_id":7,"chars":""}`, `{"output":"[main abc1234] Fix parser\n"}`)
-	messages[2].ToolCalls[0].ToolName = "write_stdin"
+	messages := commitMessages("s1", `{"cmd":"git commit -m fix"}`, `{"session_id":7,"output":""}`)
+	messages[2].ToolCalls[0].ToolName = "exec_command"
+	poll := commitMessages("s1", `{"session_id":7,"chars":""}`, `{"output":"[main abc1234] Fix parser\n"}`)[2]
+	poll.Ordinal = 3
+	poll.ToolCalls[0].ToolName = "write_stdin"
+	poll.ToolCalls[0].ToolUseID = "poll"
+	messages = append(messages, poll)
 	insertMessages(t, d, messages...)
+	before, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, before.Commits, 1)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", messages))
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
 	assert.Empty(t, got.Commits)
-	messages[2].Ordinal = 3
-	messages[2].ToolCalls[0].ToolUseID = "later-poll"
-	insertMessages(t, d, messages[2])
 }
 
 func TestCommitLinkMirrorRows(t *testing.T) {
