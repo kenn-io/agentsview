@@ -571,9 +571,6 @@ func (c *usageFillCoordinator) extractSessions(
 		return nil, nil, err
 	}
 	for id := range extracted {
-		if messageIndexes[id] == 0 && activityIndexes[id] == 0 && eventIndexes[id] == 0 {
-			continue
-		}
 		if _, err := spoolTx.ExecContext(ctx,
 			`UPDATE sessions SET message_count = ?, activity_count = ?, event_count = ? WHERE session_id = ?`,
 			messageIndexes[id], activityIndexes[id], eventIndexes[id], id,

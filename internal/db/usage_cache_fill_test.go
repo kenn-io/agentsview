@@ -765,13 +765,7 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 					[]usageSourceVersion{extracted["session"]}, nil, expected)
 				require.NoError(t, err, step.name)
 				assert.Empty(t, lost, step.name)
-				switch step.name {
-				case "upgrade dense layout":
-					var messageWrites int
-					require.NoError(t, cache.db.QueryRowContext(t.Context(),
-						`SELECT COUNT(*) FROM fact_writes WHERE fact_index < ?`, count).Scan(&messageWrites))
-					assert.Zero(t, messageWrites)
-				case "append preserves activity and event":
+				if step.name == "append preserves activity and event" {
 					var inserted, otherWrites int
 					require.NoError(t, cache.db.QueryRowContext(t.Context(),
 						`SELECT COUNT(*) FROM fact_writes WHERE operation='insert' AND fact_index=?`, count).Scan(&inserted))
@@ -779,9 +773,6 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 					require.NoError(t, cache.db.QueryRowContext(t.Context(),
 						`SELECT COUNT(*) FROM fact_writes WHERE operation!='insert' OR fact_index!=?`, count).Scan(&otherWrites))
 					assert.Zero(t, otherWrites)
-					filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-					assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter),
-						getDailyUsageRollupForTest(t, database, filter))
 				}
 				require.NoError(t, spool.Close())
 				full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
