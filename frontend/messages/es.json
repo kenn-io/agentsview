@@ -59,6 +59,7 @@
   "header_transcript_visibility": "Visibilidad de bloques",
   "header_transcript_show_all": "Mostrar todo",
   "header_view_trigger": "Vista: {layout}",
+  "header_view_trigger_focused": "Vista: {layout} · Solo solicitudes",
   "header_view_trigger_label": "Vista de la transcripción: {layout}",
   "header_view_trigger_title": "Elige el diseño, el contenido y los tipos de bloque de esta transcripción",
   "header_view_menu_label": "Vista de la transcripción",

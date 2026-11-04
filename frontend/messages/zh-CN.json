@@ -57,6 +57,7 @@
   "header_transcript_visibility": "Block 可见性",
   "header_transcript_show_all": "全部显示",
   "header_view_trigger": "视图：{layout}",
+  "header_view_trigger_focused": "视图：{layout} · 仅提示",
   "header_view_trigger_label": "对话视图：{layout}",
   "header_view_trigger_title": "选择此对话的布局、内容和块类型",
   "header_view_menu_label": "对话视图",

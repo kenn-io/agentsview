@@ -69,6 +69,7 @@
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
   import { Table, TableHeaderCell } from "@kenn-io/kit-ui";
 
@@ -1050,6 +1051,9 @@
       >
         {getGradeLabel(session.health_grade)}
       </button>
+      {#if !ui.isMobileViewport}
+        <TranscriptControls />
+      {/if}
       {#if showDropdown}
         <span class="open-group">
           <button
@@ -2193,13 +2197,15 @@
       line-height: 22px;
     }
 
+    .breadcrumb-meta > :global(.transcript-controls),
     .breadcrumb-meta > .open-group,
     .breadcrumb-meta > .actions-wrapper {
       order: 1;
     }
 
-    .breadcrumb-meta > .open-group {
+    .breadcrumb-meta > :global(.transcript-controls) {
       margin-left: auto;
+      margin-right: 6px;
     }
 
     .breadcrumb-meta > .session-id {

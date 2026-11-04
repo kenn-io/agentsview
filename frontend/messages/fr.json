@@ -57,6 +57,7 @@
   "header_transcript_visibility": "Visibilité des blocs",
   "header_transcript_show_all": "Tout afficher",
   "header_view_trigger": "Vue : {layout}",
+  "header_view_trigger_focused": "Vue : {layout} · Requêtes seules",
   "header_view_trigger_label": "Vue de la transcription : {layout}",
   "header_view_trigger_title": "Choisir la mise en page, le contenu et les types de blocs de cette transcription",
   "header_view_menu_label": "Vue de la transcription",

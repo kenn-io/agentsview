@@ -13,9 +13,6 @@
     type TopBarTab,
   } from "@kenn-io/kit-ui";
   import {
-    ArrowDownToLineIcon,
-    ArrowDownWideNarrowIcon,
-    ArrowUpNarrowWideIcon,
     FileDownIcon,
     CopyIcon,
     DatabaseBackupIcon,
@@ -43,7 +40,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { reportTelemetry } from "../../utils/telemetry.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
-  import TranscriptViewMenu from "./TranscriptViewMenu.svelte";
+  import TranscriptControls from "./TranscriptControls.svelte";
   import ImportModal from "../import/ImportModal.svelte";
   import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
 
@@ -221,32 +218,10 @@
   {/snippet}
 
   {#snippet right()}
-    {#if hasActiveSession}
-      <TranscriptViewMenu />
-      <!-- Follow latest stays visible: it is live state, and its pressed
-           look is the only sign that the view is pinned to new messages. -->
-      <button
-        class="header-btn"
-        class:active={ui.followLatest}
-        onclick={() => ui.toggleFollowLatest()}
-        title={m.header_actions_follow_latest()}
-        aria-label={m.header_actions_follow_latest()}
-        aria-pressed={ui.followLatest}
-      >
-        <ArrowDownToLineIcon size="16" strokeWidth="1.75" aria-hidden="true" />
-      </button>
-      <button
-        class="header-btn"
-        onclick={() => ui.toggleSort()}
-        title={m.header_actions_toggle_sort()}
-        aria-label={m.header_actions_toggle_sort()}
-      >
-        {#if ui.sortNewestFirst}
-          <ArrowDownWideNarrowIcon size="16" strokeWidth="1.75" aria-hidden="true" />
-        {:else}
-          <ArrowUpNarrowWideIcon size="16" strokeWidth="1.75" aria-hidden="true" />
-        {/if}
-      </button>
+    <!-- On wide screens the transcript controls sit beside the session
+         title instead, so this bar stays the same on every page. -->
+    {#if hasActiveSession && ui.isMobileViewport}
+      <TranscriptControls />
       <span class="header-divider"></span>
     {/if}
 
@@ -497,6 +472,9 @@
   /* kit-ui MenuTrigger renders the overflow button, so scoped
      .header-btn rules cannot reach it. */
   :global(.overflow-btn) {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
     width: 28px;
     height: 28px;
     display: flex;

@@ -46,7 +46,7 @@
   const layoutName = $derived(
     (LAYOUTS.find((layout) => layout.id === ui.messageLayout) ?? LAYOUTS[0]!).name(),
   );
-  const filtered = $derived(ui.transcriptMode === "focused" || ui.hasBlockFilters);
+  const filtered = $derived(ui.hasBlockFilters);
 </script>
 
 <!-- A schematic of each layout: role header bars, message blocks, and tool
@@ -98,7 +98,10 @@
     ariaLabel={m.header_view_trigger_label({ layout: layoutName })}
   >
     <LayoutListIcon size="14" strokeWidth="1.75" aria-hidden="true" />
-    <span class="view-trigger-label">{m.header_view_trigger({ layout: layoutName })}</span>
+    <span class="view-trigger-label">{ui.transcriptMode === "focused"
+      ? m.header_view_trigger_focused({ layout: layoutName })
+      : m.header_view_trigger({ layout: layoutName })}</span>
+    {#if ui.hasBlockFilters}<span class="view-filter-dot" aria-hidden="true"></span>{/if}
     <ChevronDownIcon size="12" strokeWidth="2" aria-hidden="true" />
   </MenuTrigger>
   <MenuContent ariaLabel={m.header_view_menu_label()} class="view-menu">
@@ -179,9 +182,24 @@
     background: var(--bg-surface-hover);
   }
 
-  /* Hidden content gets a small accent so a filtered view is noticeable. */
-  :global(.view-trigger.filtered) {
-    border-color: color-mix(in srgb, var(--accent-amber) 55%, var(--border-default));
+  /* A stable minimum width keeps neighbors (and the search field) from
+     shifting when the layout name changes. */
+  :global(.view-trigger) {
+    min-width: 132px;
+    justify-content: flex-start;
+  }
+
+  :global(.view-trigger) :global(svg:last-child) {
+    margin-left: auto;
+  }
+
+  /* Hidden block types get a small accent dot; amber is avoided because it
+     marks tool calls in the transcript. */
+  .view-filter-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-blue);
   }
 
   :global(.view-menu) {
