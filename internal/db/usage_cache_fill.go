@@ -604,7 +604,7 @@ func (c *usageFillCoordinator) extractUsageAppends(
 	indexes map[string]int,
 ) error {
 	for id, version := range versions {
-		if version.UsageGeneration == "" || version.UsageEventFingerprint != "" || !expected[id].Exists {
+		if version.UsageGeneration == "" || version.UsageEventFingerprint != "" {
 			continue
 		}
 		var ordinal sql.NullInt64

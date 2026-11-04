@@ -1617,13 +1617,47 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 			var tokens int
 			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(input_tokens) FROM usage_facts`).Scan(&tokens))
 			assert.Equal(t, count*10+17, tokens)
+			for _, messages := range [][]Message{
+				{{SessionID: "session", Ordinal: count + 1, Role: "user", Timestamp: "2026-08-10T08:59:59Z"}},
+				{
+					{SessionID: "session", Ordinal: count + 2, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:02:00Z", TokenUsage: json.RawMessage(`{"input_tokens":13}`)},
+					{SessionID: "session", Ordinal: count + 3, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:01:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`)},
+				},
+				{{SessionID: "session", Ordinal: count + 4, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:02:00Z", TokenUsage: json.RawMessage(`{"input_tokens":19}`)}},
+			} {
+				require.NoError(t, database.InsertMessages(t.Context(), messages))
+				read = 0
+				cache.fill.observer.messageNormalized = func() { read++ }
+				_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
+				require.NoError(t, err)
+				assert.Equal(t, len(messages), read, "seek past every consumed message, including user messages and out-of-order token facts")
+				var ordinal int
+				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_message_ordinal FROM usage_cached_sessions WHERE session_id='session'`).Scan(&ordinal))
+				assert.Equal(t, messages[len(messages)-1].Ordinal, ordinal)
+			}
+			insertSession(t, database, "fallback", "project")
+			insertMessages(t, database, Message{
+				SessionID: "fallback", Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":11}`),
+			})
+			_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "fallback"}})
+			require.NoError(t, err)
+			_, err = database.getWriter().Exec(t.Context(), `UPDATE messages SET token_usage='{"input_tokens":31}' WHERE session_id='fallback'`)
+			require.NoError(t, err)
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID: "session", Ordinal: count + 5, Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T09:02:00Z", TokenUsage: json.RawMessage(`{"input_tokens":23}`),
+			}}))
+			versions = append(versions, usageSourceVersion{SessionID: "fallback"})
 			read = 0
+			_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
+			require.NoError(t, err)
+			assert.Equal(t, 2, read, "one appended message and one edited history share the extraction batch")
 			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
 			require.NoError(t, err)
 			defer full.Close()
-			assert.Equal(t, count+1, read, "full extraction reproduces the previous history-length cost")
-			assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY fact_index`),
-				usageSpoolFactValues(t, cache.db, `SELECT * FROM usage_facts ORDER BY fact_index`))
+			assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY session_id, fact_index`),
+				usageSpoolFactValues(t, cache.db, `SELECT f.* FROM usage_facts f JOIN usage_cached_sessions c ON c.id=f.cached_session_id ORDER BY c.session_id, f.fact_index`))
 		})
 	}
 }
