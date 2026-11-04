@@ -5,6 +5,7 @@ package postgres
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"slices"
 	"testing"
@@ -28,9 +29,9 @@ type projectionFixture struct {
 	objects rawsync.ObjectStore
 }
 
-func newProjectionFixture(t *testing.T) projectionFixture {
+func newProjectionFixture(t *testing.T, beforeAdoption ...func(*sql.DB)) projectionFixture {
 	t.Helper()
-	f := newHostedFixture(t, "tenant-projection")
+	f := newHostedFixture(t, "tenant-projection", beforeAdoption...)
 	repo, err := artifact.OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repo.Close()) })
@@ -96,7 +97,7 @@ func (f projectionFixture) tombstone(t *testing.T, previous rawsync.CanonicalMan
 func projectionOutcome(content string) rawderive.ParsedManifest {
 	return rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true, Results: []parser.ParseResultOutcome{{Result: parser.ParseResult{
 		Session:     parser.ParsedSession{ID: "codex:portable", SourceSessionID: "portable", Agent: parser.AgentCodex, Project: "synthetic", Machine: "capture-device", StartedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-		Messages:    []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleUser, Content: content}, {Ordinal: 1, Role: parser.RoleAssistant, Content: "checking", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call-1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}}},
+		Messages:    []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleUser, Content: content, ContentLength: len(content)}, {Ordinal: 1, Role: parser.RoleAssistant, Content: "checking", ContentLength: len("checking"), ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call-1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}}},
 		UsageEvents: []parser.ParsedUsageEvent{{Source: "turn", Model: "synthetic-model", InputTokens: 11, OutputTokens: 7}},
 	}}}}}
 }

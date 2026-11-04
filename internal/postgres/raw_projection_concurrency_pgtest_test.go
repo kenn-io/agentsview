@@ -4,13 +4,16 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/rawderive"
-	"go.kenn.io/agentsview/internal/rawsync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawderive"
+	"go.kenn.io/agentsview/internal/rawsync"
 )
 
 func TestRawProjectionCurationResolvesMembershipAfterConcurrentSplit(t *testing.T) {
@@ -56,6 +59,106 @@ func TestRawProjectionCurationResolvesMembershipAfterConcurrentSplit(t *testing.
 	stars, err := (&Store{pg: f.runtime}).ListStarredSessionIDs(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []string{ra.SessionID}, stars)
+}
+
+func TestRawProjectionCurationWaitsAcrossPromotionAndTranscriptExtension(t *testing.T) {
+	f := newProjectionFixture(t)
+	native, nativeAccepted := f.accept(t, "device-b", "native", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, native), native, projectionOutcome("hello")))
+
+	legacyOutcome := projectionOutcome("hello")
+	legacyOutcome.Outcome.Results[0].Result.Session.SourceSessionID = ""
+	legacy, legacyAccepted := f.accept(t, "device-a", "legacy", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, legacy), legacy, legacyOutcome))
+	var legacyGroup, legacyBranch string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_id,branch_id FROM raw_session_branches WHERE source_id=$1`, rawSourceID(legacy)).Scan(&legacyGroup, &legacyBranch))
+	alias := "codex:portable~" + legacyBranch
+	before, err := f.sink.Resolve(t.Context(), alias)
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, before.State)
+	require.Equal(t, legacyGroup, before.GroupID)
+
+	promoting, _ := f.accept(t, "device-a", "promoted", legacyAccepted.Receipt)
+	promotionLease := f.lease(t, promoting)
+	extending, _ := f.accept(t, "device-b", "continued", nativeAccepted.Receipt)
+	extensionLease := f.lease(t, extending)
+	extensionOutcome := projectionOutcome("hello")
+	extensionOutcome.Outcome.Results[0].Result.Messages = append(extensionOutcome.Outcome.Results[0].Result.Messages, parser.ParsedMessage{
+		Ordinal: 2, Role: parser.RoleAssistant, Content: "continued", ContentLength: len("continued"),
+	})
+
+	f.parkOn(t, "UPDATE", "raw_session_branches", "NEW.active = false")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = gate.Rollback() }()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+
+	projected := make(chan error, 1)
+	go func() { projected <- f.sink.Project(ctx, promotionLease, promoting, projectionOutcome("hello")) }()
+	waiting := func(count int) func() bool {
+		return func() bool {
+			var got int
+			err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock'`, f.role).Scan(&got)
+			return err == nil && got >= count
+		}
+	}
+	require.Eventually(t, waiting(1), 3*time.Second, 10*time.Millisecond)
+
+	resolved := make(chan RawIdentity, 1)
+	releaseCuration := make(chan struct{})
+	f.sink.curationGuard = func(ctx context.Context, _ *sql.Tx, gotAlias string, target RawIdentity) error {
+		if gotAlias != alias {
+			return nil
+		}
+		resolved <- target
+		select {
+		case <-releaseCuration:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	curated := make(chan error, 1)
+	go func() { curated <- f.sink.SetCuration(ctx, alias, "starred", true) }()
+	require.Eventually(t, waiting(2), 3*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, gate.Commit())
+	require.NoError(t, <-projected)
+	var nativeGroup string
+	require.NoError(t, f.runtime.QueryRowContext(ctx, `SELECT group_id FROM raw_session_branches WHERE source_id=$1`, rawSourceID(native)).Scan(&nativeGroup))
+	var target RawIdentity
+	select {
+	case target = <-resolved:
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err(), "wait for curation to resolve the promoted alias")
+	}
+	require.Equal(t, RawIdentityUnique, target.State)
+	require.Equal(t, nativeGroup, target.GroupID)
+
+	extended := make(chan error, 1)
+	go func() { extended <- f.sink.Project(ctx, extensionLease, extending, extensionOutcome) }()
+	require.Eventually(t, waiting(1), 3*time.Second, 10*time.Millisecond, "a source extension must wait until curation commits")
+	releaseCuration <- struct{}{}
+	require.NoError(t, <-curated)
+	require.NoError(t, <-extended)
+
+	after, err := f.sink.Resolve(t.Context(), alias)
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, after.State)
+	assert.Equal(t, nativeGroup, after.GroupID)
+	stars, err := (&Store{pg: f.runtime}).ListStarredSessionIDs(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, stars, after.SessionID)
+
+	var extendedSession string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT session_id FROM raw_session_branches WHERE source_id=$1 AND active`, rawSourceID(extending)).Scan(&extendedSession))
+	messages, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), extendedSession, 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	assert.Equal(t, "continued", messages[2].Content)
 }
 
 // parkOn makes every matching row write wait on the fixture's advisory gate.

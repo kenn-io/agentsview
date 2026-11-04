@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-01
+last_edited: 2026-11-03
 ---
 
 # Session Format Source Inventory
@@ -645,6 +645,25 @@ fixtures retain this field; missing identities remain source-local.
   It verifies lossless outcomes above the former transport ceiling, not a
   producer size limit or a new provider format.
 
+- **Native identity (reverified 2026-11-03):** The pinned
+  [session metadata schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/protocol.rs#L3359-L3368)
+  records the stable thread ID in `session_meta.id`. The parser keeps this
+  evidence in `SourceSessionID`; a verified revert page keeps its complete
+  `<thread>_<rollout>` key so it cannot merge into the thread. Filename-only
+  fallback IDs leave that evidence empty. TraeX and Augure Code share these
+  rules. Data version 164 reparses these sources in place without changing
+  their stored session IDs. `TestCodexFormatRetainsNativeIdentityEvidence`
+  covers native, filename-only, current-page and older-page shapes, and
+  `TestRawParityNativeParserWithRetainedPush` covers real parsing, retained
+  pushed history and captures from two devices.
+  `TestRawNativeIdentityUpgradePreservesCuration` verifies that a hosted
+  reparse promotes a source-local identity while retaining names, stars, pins,
+  trash, purge decisions, old variant URLs and contribution history. Conflicting
+  saved names or pin notes abort the promotion atomically. Later captures use
+  the established native branch. Trash and purge decisions follow only the
+  promoted source member; they do not broaden to other destination branches.
+  `TestRawNativeIdentityUpgradeAcceptsLaterCapture` and
+  `TestRawNativeIdentityUpgradeKeepsOtherBranchesLive` verify these boundaries.
 - **Generated images (checked 2026-10-29 at
   `3535c22b43e5d7a67322f6e85b267ef65577c227`):** The pinned
   [response schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -3595,6 +3614,14 @@ schemas keep their existing ordering behavior.
 
 ## Codex Cloud (`codex-cloud`)
 
+- **Stored accounting parity (reverified 2026-11-01):** Synthetic parser and
+  projection fixtures confirm plan reports remain separate from token events.
+  Hosted parity loads the complete `session_plan_usage` row, including row
+  presence, decimal credits, nullable percentages, groups, outcomes and live
+  capture coverage. The `counted_under` root resolves through source-owned
+  `usage_root` evidence before comparison. `TestRawParityLoadsPlanUsage` and
+  `TestRawParityPhysicalUsageRoot` cover these physical reads; this check adds
+  no claim about new hosted-service fields.
 - **Format:** AgentsView-written mirror files,
   `{dataDir}/sources/codex-cloud/<accountKey>/<threadId>.jsonl.zstd`. Each
   file holds JSON lines in independent zstd frames with content checksums.
@@ -5001,6 +5028,16 @@ schemas keep their existing ordering behavior.
 
 ## Evener (`evener`)
 
+- **Native identity (reverified 2026-11-03):** The pinned
+  [transcript header](https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go#L41-L56)
+  records `session_id`. The parser now retains it in `SourceSessionID`, letting
+  identical native captures share a group across devices. Data version 164
+  reparses Evener sources without changing their archive IDs or source paths.
+  `TestEvenerSemanticSession`, `TestRawParityNativeParserWithRetainedPush` and
+  `TestNativeIdentityUpgradePreservesArchiveSessions` cover those boundaries.
+  The shared hosted promotion path is covered by
+  `TestRawNativeIdentityUpgradePreservesCuration`, including saved curation,
+  deletion decisions and conflicting names or pin notes.
 - **Format:** newline-framed semantic transcript v2; header followed by entries
   containing a sequence number and semantic turn. Optional metadata is a
   sibling `<session-id>.meta.json`.
