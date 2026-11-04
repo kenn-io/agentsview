@@ -515,8 +515,7 @@ func (s windsurfSourceSet) Fingerprint(
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
-		n, copyErr := io.Copy(h, manifest)
-		recordContentRead(ctx, n)
+		_, copyErr := io.Copy(h, manifest)
 		closeErr := manifest.Close()
 		if copyErr != nil {
 			return SourceFingerprint{}, copyErr
