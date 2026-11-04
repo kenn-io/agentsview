@@ -659,7 +659,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 54px;
+    height: 50px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -694,7 +694,7 @@
     position: absolute;
     left: 0;
     top: 5px;
-    bottom: 5px;
+    bottom: 4px;
     width: 3px;
     border-radius: 0 2px 2px 0;
     background: var(--accent-blue);
@@ -753,28 +753,28 @@
   .side-meta {
     position: absolute;
     right: 10px;
-    bottom: 5px;
+    bottom: 4px;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 4px;
     width: var(--side-meta-width);
-    font-size: 10.5px;
-    line-height: 14px;
+    font-size: 11px;
+    line-height: 13px;
     color: var(--text-muted);
     pointer-events: auto;
   }
 
   .session-item {
     /* Scales with the sidebar so wide rows show full agent names. */
-    --side-meta-width: min(max(104px, 34%), 38%);
+    --side-meta-width: min(max(118px, 38%), 40%);
   }
 
   /* Clip the meta line to its box so nothing paints under the slot. */
   .session-item:has(.side-meta) .session-meta {
     overflow: hidden;
     /* A margin, not padding, so the clip edge stops before the slot. */
-    margin-right: calc(min(max(104px, 38%), 44%) + 6px);
+    margin-right: calc(min(max(118px, 42%), 46%) + 6px);
   }
 
   /* Agent identity: a small colored mark plus the agent name. */
@@ -909,7 +909,7 @@
     gap: 8px;
     min-width: 0;
     font-size: 11px;
-    line-height: 14px;
+    line-height: 13px;
     color: var(--text-muted);
   }
 

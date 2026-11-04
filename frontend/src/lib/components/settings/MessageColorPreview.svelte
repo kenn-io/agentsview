@@ -30,7 +30,7 @@
     flex-direction: column;
     gap: var(--space-3);
     width: 100%;
-    max-width: 520px;
+    max-width: none;
     font-size: var(--font-size-sm);
   }
 

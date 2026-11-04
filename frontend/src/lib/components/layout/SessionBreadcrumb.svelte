@@ -1730,6 +1730,25 @@
     flex-shrink: 0;
   }
 
+  /* Thin dividers split the strip into identity, run, and usage groups. */
+  .session-id,
+  .token-badge--desktop {
+    position: relative;
+    margin-left: 6px;
+  }
+
+  .session-id::before,
+  .token-badge--desktop::before {
+    content: "";
+    position: absolute;
+    left: -9px;
+    top: 50%;
+    width: 1px;
+    height: 12px;
+    transform: translateY(-50%);
+    background: var(--border-default);
+  }
+
   .session-id:hover {
     color: var(--text-secondary);
     background: var(--bg-surface-hover);

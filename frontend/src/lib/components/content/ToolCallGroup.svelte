@@ -155,9 +155,9 @@
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
-    padding: 8px 12px;
+    padding: 6px 10px;
   }
-  .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
   .gear-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
   .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
   .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }

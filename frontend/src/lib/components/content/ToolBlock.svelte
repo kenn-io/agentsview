@@ -331,7 +331,7 @@
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
   .tool-header {
-    display: flex; align-items: center; gap: 8px; padding: 5px 10px; width: 100%;
+    display: flex; align-items: center; gap: 8px; padding: 4px 10px; width: 100%;
     text-align: left; font-size: 12px; color: var(--text-secondary); min-width: 0;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0; transition: background 0.1s;
     user-select: text; flex: 1 1 auto;
