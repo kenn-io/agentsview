@@ -124,7 +124,7 @@ func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	// recorded project identity does not claim the enclosing checkout.
 	obs, ok := engine.projectIdentityObservation(session)
 	require.True(t, ok)
-	assert.Equal(t, cwd, obs.RootPath)
+	assert.Equal(t, filepath.ToSlash(cwd), obs.RootPath)
 	assert.Empty(t, obs.RepositoryPath)
 	assert.Equal(t, export.WorktreeUnknown, obs.WorktreeRelationship)
 }
