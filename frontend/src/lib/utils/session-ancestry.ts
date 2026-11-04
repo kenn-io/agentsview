@@ -10,6 +10,21 @@ export function sessionAncestryMatcher<T extends SessionParents>(
   matches: (session: T) => boolean,
 ): (session: T) => boolean {
   let byId: Map<string, T> | undefined;
+  return ancestryMatcher((id) => {
+    if (!byId) {
+      byId = new Map<string, T>();
+      for (const session of all) {
+        if (!byId.has(session.id)) byId.set(session.id, session);
+      }
+    }
+    return byId.get(id);
+  }, matches);
+}
+
+function ancestryMatcher<T extends SessionParents>(
+  findParent: (id: string) => T | undefined,
+  matches: (session: T) => boolean,
+): (session: T) => boolean {
   const settled = new Map<string, boolean>();
   return (session) => {
     const pending: [T, string | undefined][] = [[session, undefined]];
@@ -34,13 +49,7 @@ export function sessionAncestryMatcher<T extends SessionParents>(
         ? [current.parent_session_id]
         : (current.parent_session_ids ?? []);
       for (const id of parents) {
-        if (!byId) {
-          byId = new Map<string, T>();
-          for (const session of all) {
-            if (!byId.has(session.id)) byId.set(session.id, session);
-          }
-        }
-        const parent = byId.get(id);
+        const parent = findParent(id);
         if (parent) pending.push([parent, current.id]);
       }
     }
@@ -55,5 +64,5 @@ export function sessionAncestryMatches<T extends SessionParents>(
   all: readonly T[],
   matches: (session: T) => boolean,
 ): boolean {
-  return sessionAncestryMatcher(all, matches)(session);
+  return ancestryMatcher((id) => all.find((parent) => parent.id === id), matches)(session);
 }
