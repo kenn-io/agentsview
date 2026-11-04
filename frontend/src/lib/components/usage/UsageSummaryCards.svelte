@@ -389,11 +389,11 @@
 
   .summary-cards :global(.card.context) {
     border-color: var(--border-muted);
-    background: transparent;
     box-shadow: none;
   }
 
   .summary-cards :global(.card.context .card-value) {
+    font-size: 16px;
     font-weight: 500;
     color: var(--text-secondary);
   }

@@ -356,14 +356,15 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .role-label { font-size: 12px; font-weight: 600; letter-spacing: 0; }
   .timestamp { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .header-meta { margin-left: auto; display: flex; align-items: center; gap: 16px; min-width: 0; }
-  .message-tokens { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-muted); white-space: nowrap; }
+  .message-tokens { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); white-space: nowrap; }
   .message-model {
     font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px;
     background: var(--bg-tertiary); white-space: nowrap; flex-shrink: 0; opacity: 0.8;
   }
   .turn-summary {
     font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums;
-    padding: 1px 0; border-radius: var(--radius-sm); border: 1px solid transparent;
+    padding: 1px 7px; border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
     white-space: nowrap; flex-shrink: 0;
   }
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }

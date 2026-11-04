@@ -359,6 +359,11 @@
     color: var(--text-primary);
   }
 
+  /* The zoom value reads at the same strength as the neighboring controls. */
+  .setting-row :global(.kit-typeahead__value-text) {
+    color: var(--text-primary);
+  }
+
   /* Presets match the hex field's rhythm instead of a dense strip. */
   .role-colors :global(.kit-color-input--sm .kit-color-input__swatch) {
     width: 20px;

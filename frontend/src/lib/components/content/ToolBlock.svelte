@@ -346,12 +346,13 @@
   .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
     font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 0 6px;
-    font-variant-numeric: tabular-nums; border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; min-width: 56px; text-align: center;
+    font-variant-numeric: tabular-nums; border: 1px solid transparent;
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: center;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
-  .tool-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 4px 14px; border-top: 1px solid var(--border-muted); }
+  .tool-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 2px 14px; border-top: 1px solid var(--border-muted); }
   .meta-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 0; }
   .meta-label { color: var(--text-secondary); font-weight: 500; }
   .show-more-btn {

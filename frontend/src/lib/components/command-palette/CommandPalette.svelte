@@ -555,8 +555,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 12px;
-    color: color-mix(in srgb, var(--text-secondary) 80%, var(--text-muted));
+    font-size: 12.5px;
+    color: var(--text-secondary);
   }
 
   .item-meta {

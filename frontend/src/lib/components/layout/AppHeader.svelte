@@ -9,11 +9,11 @@
   } from "@kenn-io/kit-ui";
   import {
     AlignJustifyIcon,
-    ArrowDownIcon,
+    ArrowDownToLineIcon,
     ArrowDownWideNarrowIcon,
     ArrowUpNarrowWideIcon,
     CheckIcon,
-    CloudUploadIcon,
+    FileDownIcon,
     CopyIcon,
     DatabaseBackupIcon,
     DownloadIcon,
@@ -30,7 +30,7 @@
     SearchIcon,
     SettingsIcon,
     SunIcon,
-    UploadIcon,
+    Share2Icon,
   } from "../../icons.js";
   import {
     ui,
@@ -455,7 +455,7 @@
         aria-label={m.header_actions_follow_latest()}
         aria-pressed={ui.followLatest}
       >
-        <ArrowDownIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+        <ArrowDownToLineIcon size="16" strokeWidth="1.75" aria-hidden="true" />
       </button>
 
       <button
@@ -494,7 +494,7 @@
           aria-label={m.header_actions_export_session()}
           aria-expanded={showExportMenu}
         >
-          <CloudUploadIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+          <FileDownIcon size="16" strokeWidth="1.75" aria-hidden="true" />
         </button>
 
         {#if showExportMenu}
@@ -506,7 +506,7 @@
                 showExportMenu = false;
               }}
             >
-              <CloudUploadIcon size="13" strokeWidth="2" aria-hidden="true" />
+              <FileDownIcon size="13" strokeWidth="2" aria-hidden="true" />
               <span>{m.header_actions_download_html()}</span>
             </button>
             <button
@@ -553,7 +553,7 @@
           aria-label={m.header_actions_publish_label()}
           aria-expanded={showPublishMenu}
         >
-          <UploadIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+          <Share2Icon size="16" strokeWidth="1.75" aria-hidden="true" />
         </button>
 
         {#if showPublishMenu}
@@ -601,7 +601,7 @@
               class="overflow-item"
               onclick={() => { handleExport(); showOverflow = false; }}
             >
-              <CloudUploadIcon size="13" strokeWidth="2" aria-hidden="true" />
+              <FileDownIcon size="13" strokeWidth="2" aria-hidden="true" />
               <span>{m.header_actions_download_html()}</span>
             </button>
             <button
@@ -634,7 +634,7 @@
               class="overflow-item"
               onclick={() => openPublish(false)}
             >
-              <UploadIcon size="13" strokeWidth="2" aria-hidden="true" />
+              <Share2Icon size="13" strokeWidth="2" aria-hidden="true" />
               <span>{m.header_actions_publish_public()}</span>
             </button>
             <button

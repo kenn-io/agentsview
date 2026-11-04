@@ -299,6 +299,7 @@
   .settings-page :global(.kit-settings__nav-summary) {
     font-size: 11.5px;
     line-height: 1.3;
+    color: color-mix(in srgb, var(--text-secondary) 70%, var(--text-muted));
   }
 
   .settings-page :global(.kit-settings .kit-settings__footer) {
