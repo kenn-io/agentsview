@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -228,8 +229,12 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 		b.Helper()
 		b.ReportAllocs()
 		for range b.N {
+			b.StopTimer()
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET automation_audit = 1`)
+			require.NoError(t, err)
+			b.StartTimer()
 			d.mu.Lock()
-			err := d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
+			err = d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
 			d.mu.Unlock()
 			if err != nil {
 				require.NoError(t, err)
@@ -252,6 +257,139 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 		require.NotNil(t, session, "missing %s", id)
 		assert.Equal(t, want, session.IsAutomated, id)
 	}
+}
+
+func TestBackfillIsAutomatedSkipsFreshRowsOnReopen(t *testing.T) {
+	d := testDB(t)
+	seedAutomationAuditRows(t, d, 2000, 4096)
+	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+
+	result := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
+		b.ReportAllocs()
+		for range b.N {
+			require.NoError(b, d.backfillIsAutomatedLocked(b.Context(), d.getWriter()))
+		}
+	})
+	t.Logf("unchanged audit: %s, %d B/op", result, result.AllocedBytesPerOp())
+	assert.Less(t, result.AllocedBytesPerOp(), int64(256<<10))
+}
+
+func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
+	const reviewPrompt = "You are a code reviewer. Review the code."
+	for _, tc := range []struct {
+		name   string
+		change func(*testing.T, *DB)
+	}{
+		{"first message", func(t *testing.T, d *DB) {
+			t.Helper()
+			_, err := d.getWriter().Exec(t.Context(),
+				`UPDATE sessions SET first_message = ? WHERE id = 'changed'`, reviewPrompt)
+			require.NoError(t, err)
+		}},
+		{"import", func(t *testing.T, d *DB) {
+			t.Helper()
+			_, err := d.getWriter().Exec(t.Context(), `
+				INSERT INTO sessions(id, project, agent, first_message, user_message_count, is_automated)
+				VALUES ('imported', 'project-a', 'claude', ?, 1, 0)`, reviewPrompt)
+			require.NoError(t, err)
+		}},
+		{"transcript replacement", func(t *testing.T, d *DB) {
+			t.Helper()
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "changed",
+				[]Message{userMsg("changed", 0, reviewPrompt)}))
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'changed'`)
+			require.NoError(t, err)
+			var state int
+			require.NoError(t, d.getWriter().QueryRow(t.Context(),
+				`SELECT automation_audit FROM sessions WHERE id = 'changed'`).Scan(&state))
+			assert.Equal(t, 1, state, "transcript replacement invalidates the audit")
+		}},
+		{"interrupted audit", func(t *testing.T, d *DB) {
+			t.Helper()
+			_, err := d.getWriter().Exec(t.Context(),
+				`UPDATE sessions SET first_message = ? WHERE id = 'changed'`, reviewPrompt)
+			require.NoError(t, err)
+			_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET automation_audit = 2 WHERE id = 'changed'`)
+			require.NoError(t, err)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "changed", "project-a", func(s *Session) {
+				s.FirstMessage = Ptr("Explain this function.")
+				s.UserMessageCount = 1
+			})
+			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+			tc.change(t, d)
+			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+			id := "changed"
+			if tc.name == "import" {
+				id = "imported"
+			}
+			session, err := d.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.True(t, session.IsAutomated)
+			// Corrections invalidate their own claim, then settle on the next run.
+			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+			var state int
+			require.NoError(t, d.getWriter().QueryRow(t.Context(),
+				`SELECT automation_audit FROM sessions WHERE id = ?`, id).Scan(&state))
+			assert.Equal(t, 0, state)
+		})
+	}
+}
+
+func TestMigration_AutomationAudit(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "legacy", "project-a", func(s *Session) {
+		s.FirstMessage = Ptr("You are a code reviewer. Review the code.")
+		s.UserMessageCount = 1
+	})
+	path := d.Path()
+	require.NoError(t, d.Close())
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.ExecContext(t.Context(), `
+		DROP TRIGGER trg_sessions_automation_audit;
+		DROP INDEX idx_sessions_automation_audit;
+		ALTER TABLE sessions DROP COLUMN automation_audit;
+		UPDATE sessions SET is_automated = 0 WHERE id = 'legacy'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	d, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	session, err := d.GetSession(t.Context(), "legacy")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.True(t, session.IsAutomated, "upgrade audits existing rows despite the matching hash")
+	var objects int
+	require.NoError(t, d.getWriter().QueryRow(t.Context(), `
+		SELECT count(*) FROM sqlite_master
+		WHERE (type = 'index' AND name = 'idx_sessions_automation_audit')
+		   OR (type = 'trigger' AND name = 'trg_sessions_automation_audit')`).Scan(&objects))
+	assert.Equal(t, 2, objects)
+	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+	var state int
+	require.NoError(t, d.getWriter().QueryRow(t.Context(),
+		`SELECT automation_audit FROM sessions WHERE id = 'legacy'`).Scan(&state))
+	assert.Equal(t, 0, state, "upgraded row becomes fresh after its correction settles")
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'legacy'`)
+	require.NoError(t, err)
+	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+	session, err = d.GetSession(t.Context(), "legacy")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.True(t, session.IsAutomated, "upgraded trigger makes later corruption eligible for repair")
 }
 
 func TestBackfillIsAutomatedBidirectional(t *testing.T) {

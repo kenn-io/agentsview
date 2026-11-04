@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     has_total_output_tokens INTEGER NOT NULL DEFAULT 0,
     has_peak_context_tokens INTEGER NOT NULL DEFAULT 0,
     is_automated INTEGER NOT NULL DEFAULT 0,
+    automation_audit INTEGER NOT NULL DEFAULT 1,
     tool_failure_signal_count INTEGER NOT NULL DEFAULT 0,
     tool_retry_count INTEGER NOT NULL DEFAULT 0,
     edit_churn_count INTEGER NOT NULL DEFAULT 0,
