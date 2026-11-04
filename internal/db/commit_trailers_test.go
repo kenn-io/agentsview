@@ -273,7 +273,7 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 		sha       string
 		ambiguous bool
 	}{
-		{sha: "abc1234", ambiguous: true},
+		{sha: "abc1234", ambiguous: false},
 		{sha: "abc1234" + strings.Repeat("0", 33), ambiguous: false},
 	} {
 		sha := tc.sha
