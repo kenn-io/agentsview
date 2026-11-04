@@ -147,6 +147,107 @@ func TestCommitLinksCodeModeBatch(t *testing.T) {
 	}
 }
 
+func TestCommitLinksCodeModeRunningBatch(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m first"})); text(await tools.exec_command({cmd:"git commit -m second"}))`, `[{"type":"input_text","text":"{\"session_id\":7,\"output\":\"\"}"},{"type":"input_text","text":"{\"session_id\":8,\"output\":\"\"}"}]`)
+	messages[2].ToolCalls[0].ToolName = "exec"
+	for i, poll := range []struct{ input, output string }{
+		{`{"session_id":7}`, `{"output":"[main abc1234] First\n"}`},
+		{`{"session_id":8}`, `{"output":"[main def5678] Second\n"}`},
+	} {
+		message := commitMessages("s1", poll.input, poll.output)[2]
+		message.Ordinal = 3 + i
+		message.ToolCalls[0].ToolName = "write_stdin"
+		message.ToolCalls[0].ToolUseID = "poll"
+		messages = append(messages, message)
+	}
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 2)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.Equal(t, "def5678", got.Commits[1].SHA)
+	for _, link := range got.Commits {
+		assert.Equal(t, "commit-call", link.ToolUseID)
+		assert.Equal(t, 2, link.MessageOrdinal)
+	}
+}
+
+func TestCommitLinksCodeModePollBatch(t *testing.T) {
+	for _, output := range []struct {
+		name, result string
+		count        int
+	}{
+		{"identified", `[{"type":"input_text","text":"{\"session_id\":8,\"output\":\"[main def5678] Second\\n\"}"},{"type":"input_text","text":"{\"session_id\":7,\"output\":\"[main abc1234] First\\n\"}"}]`, 2},
+		{"unidentified", `[{"type":"input_text","text":"{\"output\":\"[main def5678] Second\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main abc1234] First\\n\"}"}]`, 0},
+	} {
+		t.Run(output.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages := commitMessages("s1", `{"cmd":"git commit -m first","workdir":"/first"}`, `{"session_id":7,"output":""}`)
+			messages[2].ToolCalls[0].ToolName = "exec_command"
+			messages = append(messages, userMsg("s1", 3, "Record the second fix"))
+			second := commitMessages("s1", `{"cmd":"git commit -m second","workdir":"/second"}`, `{"session_id":8,"output":""}`)[2]
+			second.Ordinal = 4
+			second.ToolCalls[0].ToolName = "exec_command"
+			second.ToolCalls[0].ToolUseID = "second-call"
+			poll := commitMessages("s1", `text(await tools.write_stdin({session_id:7})); text(await tools.write_stdin({session_id:8}))`, output.result)[2]
+			poll.Ordinal = 5
+			poll.ToolCalls[0].ToolName = "exec"
+			poll.ToolCalls[0].ToolUseID = "poll"
+			insertMessages(t, d, append(messages, second, poll)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, output.count)
+			for _, link := range got.Commits {
+				require.NotNil(t, link.Turn)
+				switch link.SHA {
+				case "abc1234":
+					assert.Equal(t, "commit-call", link.ToolUseID)
+					assert.Equal(t, 2, link.MessageOrdinal)
+					assert.Equal(t, "/first", link.Repository)
+					assert.Equal(t, "Record the parser fix", link.Turn.Text)
+				case "def5678":
+					assert.Equal(t, "second-call", link.ToolUseID)
+					assert.Equal(t, 4, link.MessageOrdinal)
+					assert.Equal(t, "/second", link.Repository)
+					assert.Equal(t, "Record the second fix", link.Turn.Text)
+				default:
+					require.FailNow(t, "unexpected commit", "%s", link.SHA)
+				}
+			}
+		})
+	}
+}
+
+func TestCommitLinksCodeModeCellWait(t *testing.T) {
+	for _, cellID := range []string{"7", "g26:48"} {
+		t.Run(cellID, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, "Script running with cell ID "+cellID)
+			messages[2].ToolCalls[0].ToolName = "exec"
+			for i, output := range []string{"Script running with cell ID " + cellID, "[main abc1234] Fix parser"} {
+				poll := commitMessages("s1", `{"cell_id":"`+cellID+`"}`, output)[2]
+				poll.Ordinal = 3 + i
+				poll.ToolCalls[0].ToolName = "wait"
+				poll.ToolCalls[0].Category = "Other"
+				poll.ToolCalls[0].ToolUseID = "poll"
+				messages = append(messages, poll)
+			}
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "commit-call", got.Commits[0].ToolUseID)
+			assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
+			assert.Equal(t, "/repo", got.Commits[0].Repository)
+		})
+	}
+}
+
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	for _, tt := range []struct{ name, cwd, command, repository string }{
 		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
@@ -183,6 +284,8 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	}
 	for _, tt := range []struct{ name, input, result, repository string }{
 		{"Codex JavaScript workdir", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, "/repo"},
+		{"Codex JavaScript leading cd", `text(await tools.exec_command({cmd:"cd /repo && git commit -m fix"}))`, "[main abc1234] Fix parser", "/repo"},
+		{"Codex JavaScript escaped command", `text(await tools.exec_command({cmd:"cd \"/my repo\" && git commit -m fix",workdir:"/work"}))`, "[main abc1234] Fix parser", "/my repo"},
 		{"JSON workdir", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser", "/repo"},
 		{"JSON workdir before message text", `{"cmd":"git commit -m \"Document cwd: '/wrong'\"","workdir":"/repo"}`, "[main abc1234] Document cwd: '/wrong'", "/repo"},
 		{"JSON cwd before message text", `{"cmd":"git commit -m \"Document workdir: '/wrong'\"","cwd":"/repo"}`, "[main abc1234] Document workdir: '/wrong'", "/repo"},

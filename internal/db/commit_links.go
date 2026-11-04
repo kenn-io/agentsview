@@ -34,10 +34,12 @@ var (
 	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
+	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
+	commitCellRE              = regexp.MustCompile(`(?m)^Script running with cell ID (\S+)\r?$`)
 )
 
 // CommitLinkReader is the optional archive capability used by HTTP and CLI reads.
@@ -134,6 +136,23 @@ func commitRepository(input, cwd string) string {
 		cwd = resolve(cwd, dir)
 	}
 	command := signals.CommandText(input)
+	if !jsontext.Value(input).IsValid() {
+		if match := commitCommandRE.FindStringSubmatch(input); match != nil {
+			literal := match[1]
+			var decoded strings.Builder
+			for rest := literal[1 : len(literal)-1]; rest != ""; {
+				r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+				if err != nil {
+					break
+				}
+				decoded.WriteRune(r)
+				rest = tail
+				if rest == "" {
+					command = decoded.String()
+				}
+			}
+		}
+	}
 	if match := commitCDRE.FindStringSubmatch(command); match != nil {
 		cwd = resolve(cwd, match[1])
 	}
@@ -148,19 +167,31 @@ type commitCall struct {
 	input, result, toolName string
 }
 
-// callOutput decodes shell results and their running process IDs.
-func callOutput(result string) (string, int64) {
+// commitOutput keeps an explicitly identified result separate from other results.
+type commitOutput struct {
+	text, process string
+}
+
+// callOutput decodes shell results and all their running process or cell IDs.
+func callOutput(result string) ([]commitOutput, []string) {
 	var payload struct {
 		Output      *string `json:"output"`
 		OutputDelta *string `json:"output_delta"`
 		SessionID   int64   `json:"session_id"`
 	}
 	if json.Unmarshal([]byte(result), &payload) == nil {
-		if payload.Output != nil {
-			return *payload.Output, payload.SessionID
+		output := payload.Output
+		if output == nil {
+			output = payload.OutputDelta
 		}
-		if payload.OutputDelta != nil {
-			return *payload.OutputDelta, payload.SessionID
+		if output != nil {
+			var running []string
+			process := ""
+			if payload.SessionID != 0 {
+				process = strconv.FormatInt(payload.SessionID, 10)
+				running = append(running, process)
+			}
+			return []commitOutput{{text: *output, process: process}}, running
 		}
 	}
 	var blocks []struct {
@@ -168,22 +199,54 @@ func callOutput(result string) (string, int64) {
 		Text string `json:"text"`
 	}
 	if json.Unmarshal([]byte(result), &blocks) == nil && len(blocks) > 0 && blocks[0].Type == "input_text" {
-		var outputs []string
-		var running int64
+		var outputs []commitOutput
+		var running []string
 		for _, block := range blocks {
-			output, process := callOutput(block.Text)
-			outputs = append(outputs, output)
-			if process != 0 {
-				running = process
+			output, processes := callOutput(block.Text)
+			outputs = append(outputs, output...)
+			running = append(running, processes...)
+		}
+		return outputs, running
+	}
+	var running []string
+	for _, match := range commitRunningRE.FindAllStringSubmatch(result, -1) {
+		running = append(running, match[1])
+	}
+	for _, match := range commitCellRE.FindAllStringSubmatch(result, -1) {
+		running = append(running, "cell:"+match[1])
+	}
+	process := ""
+	if len(running) == 1 {
+		process = running[0]
+	}
+	return []commitOutput{{text: result, process: process}}, running
+}
+
+func commitPollIDs(input, tool string) []string {
+	var args struct {
+		SessionID int64  `json:"session_id"`
+		CellID    string `json:"cell_id"`
+	}
+	switch tool {
+	case "write_stdin", "wait":
+		if json.Unmarshal([]byte(input), &args) == nil {
+			if tool == "wait" && args.CellID != "" {
+				return []string{"cell:" + args.CellID}
+			}
+			if tool == "write_stdin" && args.SessionID != 0 {
+				return []string{strconv.FormatInt(args.SessionID, 10)}
 			}
 		}
-		return strings.Join(outputs, "\n"), running
+	case "exec":
+		var ids []string
+		for _, match := range commitPollRE.FindAllStringSubmatch(input, -1) {
+			if !slices.Contains(ids, match[1]) {
+				ids = append(ids, match[1])
+			}
+		}
+		return ids
 	}
-	if match := commitRunningRE.FindStringSubmatch(result); match != nil {
-		process, _ := strconv.ParseInt(match[1], 10, 64)
-		return result, process
-	}
-	return result, 0
+	return nil
 }
 
 func commitLinks(calls []commitCall, cwd string) []CommitLink {
@@ -191,50 +254,55 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	pending := map[string]commitCall{}
 	seen := map[string]bool{}
 	for _, call := range calls {
-		output, running := callOutput(call.result)
-		owner := call
+		outputs, running := callOutput(call.result)
 		command := signals.CommandText(call.input)
 		isCommit := commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command)
-		pollID := ""
-		isPoll := call.toolName == "write_stdin"
-		if isPoll {
-			var args struct {
-				SessionID int64 `json:"session_id"`
+		pollIDs := commitPollIDs(call.input, call.toolName)
+		if isCommit {
+			for _, process := range running {
+				pending[process] = call
 			}
-			if json.Unmarshal([]byte(call.input), &args) == nil {
-				pollID = strconv.FormatInt(args.SessionID, 10)
-			}
+		} else if len(pollIDs) == 0 {
+			continue
 		}
-		if !isCommit && call.toolName == "exec" {
-			if match := commitPollRE.FindStringSubmatch(call.input); match != nil {
-				isPoll, pollID = true, match[1]
-			}
-		}
-		if isPoll {
-			original, ok := pending[pollID]
+		// One poll owns every output block, even when its process has finished.
+		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1
+		if singlePoll {
+			var ok bool
+			singleOwner, ok = pending[pollIDs[0]]
 			if !ok {
 				continue
 			}
-			owner = original
-			if running == 0 {
-				delete(pending, pollID)
+			delete(pending, pollIDs[0])
+			for _, process := range running {
+				pending[process] = singleOwner
 			}
-		} else if !isCommit {
-			continue
 		}
-		matches := commitSummaryRE.FindAllStringSubmatch(output, -1)
-		if running != 0 {
-			pending[strconv.FormatInt(running, 10)] = owner
-		}
-		for _, match := range matches {
-			if seen[match[2]] {
-				continue
+		for _, output := range outputs {
+			owner := call
+			if singlePoll {
+				owner = singleOwner
+			} else if !isCommit {
+				pollID := output.process
+				if !slices.Contains(pollIDs, pollID) {
+					continue
+				}
+				original, ok := pending[pollID]
+				if !ok {
+					continue
+				}
+				owner = original
 			}
-			seen[match[2]] = true
-			link := owner.CommitLink
-			link.SHA, link.Branch, link.Subject = match[2], match[1], match[3]
-			link.Repository = commitRepository(owner.input, cwd)
-			links = append(links, link)
+			for _, match := range commitSummaryRE.FindAllStringSubmatch(output.text, -1) {
+				if seen[match[2]] {
+					continue
+				}
+				seen[match[2]] = true
+				link := owner.CommitLink
+				link.SHA, link.Branch, link.Subject = match[2], match[1], match[3]
+				link.Repository = commitRepository(owner.input, cwd)
+				links = append(links, link)
+			}
 		}
 	}
 	return links
@@ -247,7 +315,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
  COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
  FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
- WHERE t.session_id=? AND t.category='Bash' AND t.input_json IS NOT NULL AND (`+filter+`)
+ WHERE t.session_id=? AND (t.category='Bash' OR t.tool_name='wait') AND t.input_json IS NOT NULL AND (`+filter+`)
  ORDER BY m.ordinal,t.call_index`, append([]any{sessionID}, args...)...)
 		if err != nil {
 			return err
@@ -274,11 +342,12 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			return nil
 		}
 	}
-	running := map[int64]bool{}
+	running := map[string]bool{}
 	for _, call := range calls {
 		command := signals.CommandText(call.input)
 		if commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command) {
-			if _, process := callOutput(call.result); process != 0 {
+			_, processes := callOutput(call.result)
+			for _, process := range processes {
 				running[process] = true
 			}
 		}
@@ -286,8 +355,9 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	if len(running) > 0 {
 		// Read poll inputs first so unrelated process output is never loaded.
 		rows, err := tx.Query(`SELECT id, input_json, tool_name FROM tool_calls
- WHERE session_id=? AND category='Bash' AND input_json IS NOT NULL
- AND (tool_name='write_stdin' OR (tool_name='exec' AND input_json LIKE '%write_stdin%'))
+ WHERE session_id=? AND input_json IS NOT NULL
+ AND ((category='Bash' AND (tool_name='write_stdin' OR (tool_name='exec' AND input_json LIKE '%write_stdin%')))
+ OR (tool_name='wait' AND input_json LIKE '%cell_id%'))
  AND NOT (input_json LIKE '%git%' AND input_json LIKE '%commit%')`, sessionID)
 		if err != nil {
 			return err
@@ -299,16 +369,11 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			if err := rows.Scan(&id, &input, &tool); err != nil {
 				return err
 			}
-			var args struct {
-				SessionID int64 `json:"session_id"`
-			}
-			if tool == "write_stdin" {
-				_ = json.Unmarshal([]byte(input), &args)
-			} else if match := commitPollRE.FindStringSubmatch(input); match != nil {
-				args.SessionID, _ = strconv.ParseInt(match[1], 10, 64)
-			}
-			if running[args.SessionID] {
-				ids = append(ids, id)
+			for _, process := range commitPollIDs(input, tool) {
+				if running[process] {
+					ids = append(ids, id)
+					break
+				}
 			}
 		}
 		err = rows.Err()
