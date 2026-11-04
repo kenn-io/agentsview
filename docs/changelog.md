@@ -13,8 +13,8 @@ The latest release is
 
 - Find the session and prompt behind file lines with `agentsview why path:N-M`,
   or look up a commit with `agentsview why --commit SHA`. The command uses local
-  Git blame and archived commit links without starting a daemon or calling a
-  model. Add `--json` for scripts.
+  Git blame and archived commit links without calling a model. Add `--json` for
+  scripts.
 
 - Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
   replicas after pushing the archive. Deleted sessions remain visible as missing

@@ -412,8 +412,7 @@ prefixes return all recorded candidates. Add `--format json` or `--json` for
 scripts. Each commit keeps its own session links and the prompt before each
 commit call, even when one session made several commits.
 
-The command reads the archive through an existing daemon or opens SQLite
-read-only. It starts no daemon and calls no model. Run `agentsview source sync`
+The command calls no model. Run `agentsview source sync`
 first if you need newer records. A transcript link identifies the session that
 ran the commit; it doesn't prove who wrote each line. Deleted or trashed sessions
 appear as missing records without a prompt.
