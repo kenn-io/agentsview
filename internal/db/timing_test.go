@@ -52,7 +52,7 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	timingInsertMessage(t, d, "solo", 2, "user",
 		"PreToolUse hook output", "2026-04-26T10:00:02Z", false)
 	_, err := d.getWriter().ExecContext(ctx,
-		`UPDATE messages SET is_system = 1, source_subtype = 'hook_success' WHERE session_id = 'solo' AND ordinal = 2`)
+		`UPDATE messages SET is_system = 1, source_type = 'attachment', source_subtype = 'hook_success' WHERE session_id = 'solo' AND ordinal = 2`)
 	require.NoError(t, err)
 	timingInsertMessage(t, d, "solo", 3, "user",
 		"ok", "2026-04-26T10:00:31Z", false)

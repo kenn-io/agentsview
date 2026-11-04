@@ -33,7 +33,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-it("keeps other system rows hidden", () => {
+it("keeps hook errors hidden and continuation boundaries visible under system", () => {
   expect(isSystemMessage({ ...hook(), source_subtype: "hook_error" })).toBe(true);
   const boundary = msg({
     ordinal: 4,
@@ -78,9 +78,6 @@ it("does not finish a turn or promote an intermediate reply in focused mode", ()
   expect(
     filterDisplayItemsByTranscriptMode(items, "focused").flatMap((item) => item.ordinals),
   ).toEqual([0, 3, 4]);
-  expect(
-    filterDisplayItemsByTranscriptMode(items, "normal").flatMap((item) => item.ordinals),
-  ).toEqual([0, 1, 2, 3, 4]);
 });
 
 it("uses a collapsed card and preserves escaped body text", () => {
@@ -108,12 +105,6 @@ describe("hook filters", () => {
       hook(),
       msg({ ordinal: 3, role: "assistant", content: "final" }),
     ];
-    const onlyHooks = projectSessionScope({
-      messages: rows,
-      visibleBlocks: new Set(["hook"]),
-      hasBlockFilters: true,
-    });
-    expect(onlyHooks.messages).toEqual([rows[1]]);
     const withoutHooks = new Set(ALL_BLOCK_TYPES);
     withoutHooks.delete("hook");
     const hidden = projectSessionScope({

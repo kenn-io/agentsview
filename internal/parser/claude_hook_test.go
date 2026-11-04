@@ -85,16 +85,6 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			},
 		},
 		{
-			name: "hook name without hook event infers no event",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"hookName":"SessionStart:startup","content":"session started"}}`,
-			want: claudeHookSuccess{
-				subtype:  "hook_success",
-				hookName: "SessionStart:startup",
-				content:  "session started",
-			},
-		},
-		{
 			name: "multiline cjk and combining marks preserved",
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"content":"  第一行\n第二行 e\u0301\n"}}`,

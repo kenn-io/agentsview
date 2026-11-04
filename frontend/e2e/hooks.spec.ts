@@ -29,16 +29,6 @@ async function expectFollowingReplyBelowHook(page: Page) {
     .toBe(true);
 }
 
-test("hook output expands with the keyboard", async ({ page }) => {
-  await openHookTranscript(page);
-  const card = hookCard(page);
-  await expect(card).toBeVisible();
-  await card.locator("summary").focus();
-  await page.keyboard.press("Enter");
-  await expect(card.locator("pre")).toBeVisible();
-  await expectFollowingReplyBelowHook(page);
-});
-
 test("Hooks menu choice filters hook rows", async ({ page }) => {
   await openHookTranscript(page);
   const menu = await openBlockMenu(page);
@@ -52,7 +42,8 @@ test("hook card remains contained at each width", async ({ page }) => {
   await openHookTranscript(page);
   const card = hookCard(page);
   await expect(card).toBeVisible();
-  await card.locator("summary").click();
+  await card.locator("summary").focus();
+  await page.keyboard.press("Enter");
   for (const width of [1440, 1280, 768, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const bounds = await card.boundingBox();

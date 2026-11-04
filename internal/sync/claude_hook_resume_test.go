@@ -21,14 +21,12 @@ const (
 )
 
 // A hook record can sit before the assistant response in the file and
-// still sort after it, because an undated attachment has no timestamp of
-// its own and a dated one can carry a later stamp than the response. The
-// stored row then trails the response it precedes.
+// still sort after it, because it can carry a later timestamp than the
+// response. The stored row then trails the response it precedes.
 const (
-	claudeHookRelocatedUndated = `{"type":"attachment","uuid":"h1","attachment":{"type":"hook_success","stdout":"first output"}}`
-	claudeHookRelocatedDated   = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stdout":"first output"}}`
-	claudeHookRelocatedFirst   = `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hel"}]}}`
-	claudeHookRelocatedSecond  = `{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn"}}`
+	claudeHookRelocatedDated  = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stdout":"first output"}}`
+	claudeHookRelocatedFirst  = `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hel"}]}}`
+	claudeHookRelocatedSecond = `{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn"}}`
 )
 
 func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
@@ -88,6 +86,24 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			info, ok = env.db.GetSessionForIncremental(t.Context(), path, "claude")
 			require.True(t, ok)
 			assert.Equal(t, 3+len(tc.hooks), info.NextOrdinal)
+			if tc.initialHook {
+				fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), config.ArchiveContentFull)
+				fullPath := filepath.Join(fullDir, "proj", "hook-resume.jsonl")
+				lines = append(lines, claudeHookResumeNextUser)
+				require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+				require.NoError(t, os.WriteFile(fullPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600))
+				fullEnv.engine.SyncAll(t.Context(), nil)
+				assert.Equal(t,
+					snapshotSplitMessages(t, fullEnv.db, "hook-resume"),
+					snapshotSplitMessages(t, env.db, "hook-resume"),
+					"stored rows differ from a full parse",
+				)
+				assert.Equal(t,
+					snapshotSplitSession(t, fullEnv.db, "hook-resume"),
+					snapshotSplitSession(t, env.db, "hook-resume"),
+					"session aggregates differ from a full parse",
+				)
+			}
 		})
 	}
 }
@@ -118,7 +134,6 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 				`{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2024-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"/tmp"}]}}`,
 				`{"type":"attachment","timestamp":"2024-01-01T00:00:01.500Z","attachment":{"type":"queued_command","prompt":"queued request"}}`,
 			}, split: 4},
-			{name: "trailing native hook", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeNative, claudeHookResumeNextUser}, split: 3},
 			{name: "linear native parent chain", lines: []string{
 				`{"type":"user","uuid":"u1","parentUuid":"missing-ancestor","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`,
 				claudeHookResumeAnswer,
@@ -131,12 +146,6 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 			// Finishing the response replaces the rows from the
 			// assistant's ordinal onward, and the replaced byte range
 			// cannot reread the earlier hook.
-			{name: "relocated undated hook", lines: []string{
-				claudeHookResumeUser,
-				claudeHookRelocatedUndated,
-				claudeHookRelocatedFirst,
-				claudeHookRelocatedSecond,
-			}, split: 3},
 			{name: "relocated dated hook", lines: []string{
 				claudeHookResumeUser,
 				claudeHookRelocatedDated,

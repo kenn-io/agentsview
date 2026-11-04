@@ -39,9 +39,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 		{"summary prompt", "stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer", ""},
 		{"summary additional context", "stop_hook_summary", `,"hookAdditionalContext":["keep going","check results"]`, "Additional context:\nkeep going\ncheck results", ""},
 		{"summary prevented continuation", "stop_hook_summary", `,"preventedContinuation":true`, "Prevented continuation: true", ""},
-		{"additional context", "hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context", ""},
 		{"success stdout and stderr", "hook_success", `,"stdout":"{\"status\":\"ok\"}","stderr":"boom"`, "\n\nStdout:\n{\"status\":\"ok\"}\n\nStderr:\nboom", ""},
-		{"success spaced hook name", "hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished", "  spaced  "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

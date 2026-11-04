@@ -1353,9 +1353,9 @@ func TestStoreAnalyticsTopSessionsDurationUsesClampedActiveDuration(t *testing.T
 	require.NoError(t, err, "inserting messages")
 	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO messages
-			(session_id, ordinal, role, content, timestamp, is_system, source_subtype)
+			(session_id, ordinal, role, content, timestamp, is_system, source_type, source_subtype)
 		VALUES ('pg-clamp-wall', 3, 'user', 'hook output',
-			'2027-07-15T11:10:00Z'::timestamptz, TRUE, 'hook_success')
+			'2027-07-15T11:10:00Z'::timestamptz, TRUE, 'attachment', 'hook_success')
 	`)
 	require.NoError(t, err, "inserting trailing hook")
 

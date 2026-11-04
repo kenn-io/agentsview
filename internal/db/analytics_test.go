@@ -3397,7 +3397,7 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 			Message{
 				SessionID: "wall-dominant", Ordinal: 3, Role: "user",
 				Content: "hook output", Timestamp: "2024-06-02T11:10:00Z",
-				IsSystem: true, SourceSubtype: "hook_success",
+				IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success",
 			},
 		)
 

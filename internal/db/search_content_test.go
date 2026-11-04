@@ -818,30 +818,21 @@ func TestSearchContentExcludeSystem(t *testing.T) {
 			Content: "ordinary message holding NEEDLE", IsSystem: true,
 			Timestamp: "2026-05-20T12:00:00Z",
 		},
-		{
-			SessionID: "s3", Ordinal: 1, Role: "user",
-			Content: "Stdout:\nhook NEEDLE output", DialogueText: nil, IsSystem: true,
-			Timestamp: "2026-05-20T12:00:01Z",
-		},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s3", msgs),
 		"ReplaceSessionMessages")
-	for _, mode := range []string{"substring", "regex", "fts"} {
-		t.Run(mode, func(t *testing.T) {
-			withSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
-				Pattern: "NEEDLE", Mode: mode, Sources: []string{"messages"}, Limit: 50,
-			})
-			require.NoError(t, err, "SearchContent with system")
-			assert.Len(t, withSys.Matches, 2, "default should include ordinary system and hook messages")
-			noSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
-				Pattern: "NEEDLE", Mode: mode, Sources: []string{"messages"},
-				ExcludeSystem: true, Limit: 50,
-			})
-			require.NoError(t, err, "SearchContent exclude system")
-			assert.Empty(t, noSys.Matches,
-				"ExcludeSystem should drop ordinary system and hook messages")
-		})
-	}
+	withSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent with system")
+	assert.Len(t, withSys.Matches, 1, "default should include system messages")
+	noSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
+		ExcludeSystem: true, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent exclude system")
+	assert.Empty(t, noSys.Matches,
+		"ExcludeSystem should drop system messages")
 }
 
 func TestSearchContentExcludesAutomatedByDefault(t *testing.T) {

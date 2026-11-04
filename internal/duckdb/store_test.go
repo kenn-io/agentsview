@@ -1510,7 +1510,7 @@ func TestAnalyticsTopSessionsDurationUsesActiveDuration(t *testing.T) {
 				{
 					SessionID: "duck-wall-dominant", Ordinal: 3, Role: "user",
 					Content: "hook output", Timestamp: "2026-01-20T11:10:00.000Z",
-					IsSystem: true, SourceSubtype: "hook_success",
+					IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success",
 				},
 			},
 			DataVersion:     1,
