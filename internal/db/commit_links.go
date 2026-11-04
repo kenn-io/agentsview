@@ -541,7 +541,7 @@ func MarkCommitAmbiguity(links []CommitLink) {
 	}
 	ambiguous := false
 	for _, link := range links {
-		if !strings.HasPrefix(longest, link.SHA) {
+		if link.SHA != longest {
 			ambiguous = true
 		}
 	}

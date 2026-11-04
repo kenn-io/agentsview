@@ -362,6 +362,24 @@ func TestCommitLinksPurgeExcludedPages(t *testing.T) {
 	}
 }
 
+func TestCommitLinksMixedLengthAmbiguity(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+	insertSession(t, d, "s2", "project-b")
+	insertMessages(t, d, commitMessages("s2", `{"command":"git commit -m other"}`, "[main abc1234ff7] Other fix")...)
+
+	found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234ff7"})
+	require.NoError(t, err)
+	require.Len(t, found.Commits, 1)
+	require.Len(t, found.Commits[0].Links, 2)
+	assert.Equal(t, "abc1234", found.Commits[0].Links[0].SHA)
+	assert.Equal(t, "abc1234ff7", found.Commits[0].Links[1].SHA)
+	for _, link := range found.Commits[0].Links {
+		assert.True(t, link.Ambiguous, "stored SHA %s", link.SHA)
+	}
+}
+
 func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"s1", "s2"} {
