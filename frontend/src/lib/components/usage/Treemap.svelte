@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Chart, Group, Layer, Rect, Text } from "layerchart";
+  import { mixHexColors, parseHexColor, readableInk } from "@kenn-io/kit-ui";
   import { Treemap as LayerTreemap } from "layerchart/hierarchy";
   import { hierarchy } from "d3-hierarchy";
   import { m } from "../../i18n/index.js";
@@ -55,6 +56,17 @@
   let measuredWidth = $state(0);
   const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
 
+  // Tiles use the same series color as the chart and legend. The label ink
+  // flips to black or white per tile, and the fill moves 12% away from the
+  // ink, so mid-tone hues still keep labels above 4.5:1.
+  function tilePaint(color: string): { fill: string; ink: string } | null {
+    const hex = parseHexColor(color);
+    if (!hex) return null;
+    const ink = readableInk(hex, ["#111318", "#ffffff"]);
+    const fill = mixHexColors(hex, ink === "#ffffff" ? "#000000" : "#ffffff", 0.88);
+    return { fill, ink };
+  }
+
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -85,6 +97,8 @@
               class:dimmed={tile.dimmed}
               class:patterned={tile.style.fill !== "solid"}
               style:--tile-color={tile.style.color}
+              style:--tile-fill={tilePaint(tile.style.color)?.fill}
+              style:--tile-ink={tilePaint(tile.style.color)?.ink}
               clip-path={`url(#${clipId})`}
               tabindex={onSelect ? 0 : undefined}
               role={onSelect ? "button" : undefined}
@@ -173,21 +187,12 @@
     stroke: white;
   }
 
-  /* Solid tiles render as a tinted wash with a colored edge so labels can
-     use theme text in both modes. Patterned (color-blind) tiles keep the
-     full paint and the white labels below. */
+  /* Solid tiles keep their series color so a project matches across the
+     legend, chart, and treemap; a surface-colored seam separates tiles. */
   .treemap-container :global(.tile:not(.patterned) rect) {
-    fill: color-mix(in srgb, var(--tile-color) var(--tile-tint), var(--bg-surface));
-    stroke: color-mix(in srgb, var(--tile-color) 65%, var(--bg-surface));
+    fill: var(--tile-fill, var(--tile-color));
+    stroke: var(--bg-surface);
     stroke-width: 1;
-  }
-
-  .treemap-container {
-    --tile-tint: 50%;
-  }
-
-  :global(:root.dark) .treemap-container {
-    --tile-tint: 70%;
   }
 
   .treemap-container :global(.tile:not(.patterned):focus-visible rect),
@@ -230,20 +235,18 @@
   }
 
   .treemap-container :global(.tile:not(.patterned) .tile-label),
-  .treemap-container :global(.tile:not(.patterned) .tile-label-sm) {
-    fill: var(--text-primary);
+  .treemap-container :global(.tile:not(.patterned) .tile-label-sm),
+  .treemap-container :global(.tile:not(.patterned) .tile-value),
+  .treemap-container :global(.tile:not(.patterned) .tile-meta) {
+    fill: var(--tile-ink, white);
   }
 
-  /* Primary text at reduced opacity stays above 4.5:1 on every tinted
-     tile, including the darkest palette hues mixed into a light surface. */
   .treemap-container :global(.tile:not(.patterned) .tile-value) {
-    fill: var(--text-primary);
-    fill-opacity: 0.85;
+    fill-opacity: 0.92;
     font-variant-numeric: tabular-nums;
   }
 
   .treemap-container :global(.tile:not(.patterned) .tile-meta) {
-    fill: var(--text-primary);
-    fill-opacity: 0.8;
+    fill-opacity: 0.9;
   }
 </style>

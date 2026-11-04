@@ -722,7 +722,7 @@
     </button>
 
     <button
-      class="header-btn"
+      class="header-btn help-btn"
       onclick={() => (ui.activeModal = "shortcuts")}
       title={m.header_actions_keyboard_shortcuts_shortcut()}
       aria-label={m.header_actions_keyboard_shortcuts()}
@@ -1011,6 +1011,11 @@
     font-weight: 600;
     transition: background 0.12s, color 0.12s;
     flex-shrink: 0;
+  }
+
+  .help-btn {
+    color: var(--text-muted);
+    font-weight: 500;
   }
 
   .header-btn + .header-btn {

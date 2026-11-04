@@ -284,7 +284,7 @@
         value={inputValue}
         oninput={handleInput}
       />
-      <KbdBadge keys={["⎋"]} joiner="compact" ariaLabel="Escape" />
+      <KbdBadge keys={["Esc"]} joiner="compact" ariaLabel="Escape" />
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -535,6 +535,11 @@
     font-size: 13px;
     color: var(--text-primary);
     transition: background 0.05s;
+  }
+
+:global(:root.dark) .item-snippet :global(mark) {
+    background: color-mix(in srgb, var(--accent-amber) 35%, transparent);
+    color: #fff;
   }
 
   :global(:root.dark) .palette-item.selected {

@@ -44,6 +44,13 @@
 </div>
 
 <style>
+  /* Inside a tool group the group rail already marks the run, so a nested
+     thinking row drops its own rail and keeps only the purple label. */
+  :global(.tool-group-body) .thinking-block {
+    border-left: none;
+    background: transparent;
+  }
+
   .thinking-block {
     border-left: var(--role-thinking-bar-width) var(--role-thinking-bar-style) var(--role-thinking-accent);
     background: var(--thinking-bg);
