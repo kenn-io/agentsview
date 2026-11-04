@@ -255,245 +255,169 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 }
 
 func TestUsageRollupSameZoneBuildsRunOneAtATime(t *testing.T) {
-	database := testDB(t)
-	for _, id := range []string{"session-a", "session-b"} {
-		seedUsageSnapshotSession(t, database, id, "project-a",
-			"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	for _, tc := range []struct {
+		name      string
+		queued    int
+		warmRead  bool
+		abandoned bool
+	}{
+		{name: "overlapping sessions", queued: 1},
+		{name: "warm reads with queued builds", queued: readerMaxOpenConns, warmRead: true},
+		{name: "abandoned queued chunk", queued: 1, abandoned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testDB(t)
+			for i := range tc.queued + 1 {
+				seedUsageSnapshotSession(t, database, fmt.Sprintf("session-%d", i), "project-a",
+					"2026-08-10T09:00:00Z", 0, 10, "model-a")
+			}
+			snapshot, fills, cache := prepareUsageRollupTest(t, database)
+			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+			var warm DailyUsageResult
+			if tc.warmRead {
+				var err error
+				warm, err = database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				require.NotEmpty(t, warm.Daily)
+			}
+			snapshot.location = time.FixedZone("queued-builds", 3600)
+			held := make(chan struct{})
+			release := make(chan struct{})
+			defer close(release)
+			started := make(chan struct{}, tc.queued+1)
+			var builds atomic.Int32
+			cache.rollup.observer.beforeEnsure = func() { started <- struct{}{} }
+			cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
+				if builds.Add(1) == 1 {
+					close(held)
+					<-release
+				}
+			}
+			type outcome struct {
+				installs map[string]usageRollupInstall
+				err      error
+			}
+			start := func(ctx context.Context, batch usageQuerySnapshot) <-chan outcome {
+				done := make(chan outcome, 1)
+				go func() {
+					installs, _, err := cache.rollup.Ensure(ctx, batch, fills,
+						export.NewPricingResolver(batch.PricingRows))
+					done <- outcome{installs, err}
+				}()
+				return done
+			}
+			first := snapshot
+			if tc.abandoned {
+				first.Sessions = snapshot.Sessions[:1]
+				first.Versions = snapshot.Versions[:1]
+			}
+			firstDone := start(t.Context(), first)
+			<-held
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			queuedDone := make([]<-chan outcome, 0, tc.queued)
+			var batch usageQuerySnapshot
+			for i := range tc.queued {
+				batch = snapshot
+				batch.Sessions = snapshot.Sessions[i+1 : i+2]
+				batch.Versions = snapshot.Versions[i+1 : i+2]
+				queuedDone = append(queuedDone, start(ctx, batch))
+			}
+			for range tc.queued + 1 {
+				<-started
+			}
+			var abandonedCall *usageRollupCall
+			if tc.abandoned {
+				catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
+				require.NoError(t, err)
+				cache.rollup.mu.Lock()
+				abandonedCall = cache.rollup.calls[usageRollupCallKey(batch, fills, catalogHash)]
+				cache.rollup.mu.Unlock()
+				require.NotNil(t, abandonedCall)
+				cancel()
+				require.ErrorIs(t, (<-queuedDone[0]).err, context.Canceled)
+			}
+			if tc.warmRead {
+				readCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+				defer stop()
+				got, err := database.GetDailyUsage(readCtx, filter)
+				require.NoError(t, err, "queued cold builds blocked a warm usage read")
+				assert.Equal(t, warm.Daily, got.Daily)
+			}
+			assert.Equal(t, int32(1), builds.Load(), "the first build must hold the timezone slot")
+			release <- struct{}{}
+			one := <-firstDone
+			require.NoError(t, one.err)
+			if tc.abandoned {
+				<-abandonedCall.done
+				var installed int
+				require.NoError(t, cache.db.QueryRowContext(t.Context(),
+					`SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`,
+					batch.Sessions[0].ID).Scan(&installed))
+				assert.Zero(t, installed, "the abandoned chunk must leave its session uninstalled")
+			} else {
+				for i, done := range queuedDone {
+					two := <-done
+					require.NoError(t, two.err)
+					id := snapshot.Sessions[i+1].ID
+					require.Contains(t, two.installs, id)
+					assert.Equal(t, one.installs[id], two.installs[id])
+				}
+			}
+			assert.Equal(t, int32(1), builds.Load(), "queued chunks must reuse installs or skip abandoned work")
+		})
 	}
-	snapshot, fills, cache := prepareUsageRollupTest(t, database)
-	batch := snapshot
-	batch.Sessions = snapshot.Sessions[1:]
-	batch.Versions = snapshot.Versions[1:]
-	started := make(chan struct{}, 2)
-	held := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release)
-	var builds atomic.Int32
-	cache.rollup.observer.beforeEnsure = func() { started <- struct{}{} }
-	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
-		if builds.Add(1) == 1 {
-			close(held)
-			<-release
-		}
-	}
-	type outcome struct {
-		installs map[string]usageRollupInstall
-		err      error
-	}
-	first := make(chan outcome, 1)
-	second := make(chan outcome, 1)
-	go func() {
-		installs, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills,
-			export.NewPricingResolver(snapshot.PricingRows))
-		first <- outcome{installs, err}
-	}()
-	<-started
-	<-held
-	go func() {
-		installs, _, err := cache.rollup.Ensure(t.Context(), batch, fills,
-			export.NewPricingResolver(batch.PricingRows))
-		second <- outcome{installs, err}
-	}()
-	<-started
-	select {
-	case <-second:
-		t.Fatal("the second snapshot completed while the timezone build was held")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the first build holds the timezone slot
-	}
-	assert.Equal(t, int32(1), builds.Load())
-	// Unblock without closing twice in deferred cleanup.
-	release <- struct{}{}
-	one, two := <-first, <-second
-	require.NoError(t, one.err)
-	require.NoError(t, two.err)
-	assert.Equal(t, one.installs[batch.Sessions[0].ID], two.installs[batch.Sessions[0].ID])
-	assert.Equal(t, int32(1), builds.Load())
-}
-
-func TestUsageRollupSkipsAbandonedQueuedChunk(t *testing.T) {
-	database := testDB(t)
-	for _, id := range []string{"session-a", "session-b"} {
-		seedUsageSnapshotSession(t, database, id, "project-a",
-			"2026-08-10T09:00:00Z", 0, 10, "model-a")
-	}
-	snapshot, fills, cache := prepareUsageRollupTest(t, database)
-	held := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release)
-	started := make(chan struct{}, 2)
-	var builds atomic.Int32
-	cache.rollup.observer.beforeEnsure = func() { started <- struct{}{} }
-	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
-		if builds.Add(1) == 1 {
-			close(held)
-			<-release
-		}
-	}
-	first := snapshot
-	first.Sessions = snapshot.Sessions[:1]
-	first.Versions = snapshot.Versions[:1]
-	second := snapshot
-	second.Sessions = snapshot.Sessions[1:]
-	second.Versions = snapshot.Versions[1:]
-	firstDone := make(chan error, 1)
-	go func() {
-		_, _, err := cache.rollup.Ensure(t.Context(), first, fills,
-			export.NewPricingResolver(snapshot.PricingRows))
-		firstDone <- err
-	}()
-	<-started
-	<-held
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	secondDone := make(chan error, 1)
-	go func() {
-		_, _, err := cache.rollup.Ensure(ctx, second, fills,
-			export.NewPricingResolver(snapshot.PricingRows))
-		secondDone <- err
-	}()
-	<-started
-	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
-	require.NoError(t, err)
-	cache.rollup.mu.Lock()
-	queued := cache.rollup.calls[usageRollupCallKey(second, fills, catalogHash)]
-	cache.rollup.mu.Unlock()
-	require.NotNil(t, queued)
-	cancel()
-	require.ErrorIs(t, <-secondDone, context.Canceled)
-	release <- struct{}{}
-	require.NoError(t, <-firstDone)
-	<-queued.done
-	assert.Equal(t, int32(1), builds.Load())
-	var installed int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(),
-		`SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`,
-		second.Sessions[0].ID).Scan(&installed))
-	assert.Zero(t, installed, "the abandoned chunk must leave its sessions uninstalled")
-}
-
-func TestUsageRollupQueuedBuildsLeaveConnectionsForWarmReads(t *testing.T) {
-	database := testDB(t)
-	for i := range readerMaxOpenConns + 1 {
-		seedUsageSnapshotSession(t, database, fmt.Sprintf("session-%d", i), "project-a",
-			"2026-08-10T09:00:00Z", 0, 10, "model-a")
-	}
-	snapshot, fills, cache := prepareUsageRollupTest(t, database)
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	warm, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	require.NotEmpty(t, warm.Daily)
-
-	snapshot.location = time.FixedZone("queued-builds", 3600)
-	held := make(chan struct{})
-	release := make(chan struct{})
-	started := make(chan struct{}, readerMaxOpenConns+1)
-	var builds atomic.Int32
-	cache.rollup.observer.beforeEnsure = func() { started <- struct{}{} }
-	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
-		if builds.Add(1) == 1 {
-			close(held)
-			<-release
-		}
-	}
-	done := make(chan error, readerMaxOpenConns+1)
-	launched := 0
-	defer func() {
-		close(release)
-		for range launched {
-			require.NoError(t, <-done)
-		}
-	}()
-	start := func(index int) {
-		batch := snapshot
-		batch.Sessions = snapshot.Sessions[index : index+1]
-		batch.Versions = snapshot.Versions[index : index+1]
-		launched++
-		go func() {
-			_, _, err := cache.rollup.Ensure(t.Context(), batch, fills,
-				export.NewPricingResolver(batch.PricingRows))
-			done <- err
-		}()
-	}
-	start(0)
-	<-held
-	for i := range readerMaxOpenConns {
-		start(i + 1)
-	}
-	for range readerMaxOpenConns + 1 {
-		<-started
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	got, err := database.GetDailyUsage(ctx, filter)
-	require.NoError(t, err, "queued cold builds blocked a warm usage read")
-	assert.Equal(t, warm.Daily, got.Daily)
-	assert.Equal(t, int32(1), builds.Load(), "the first build must still hold the timezone slot")
 }
 
 func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
-	database := testDB(t)
-	seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
-		time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
-	snapshot, fills, cache := prepareUsageRollupTest(t, database)
-	var sizes []int
-	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
-		sizes = append(sizes, len(builds))
-	}
-	_, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills,
-		export.NewPricingResolver(snapshot.PricingRows))
-	require.NoError(t, err)
-	assert.Equal(t, []int{256, 1}, sizes)
-	result, err := database.GetDailyUsage(t.Context(), UsageFilter{
-		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
-	})
-	require.NoError(t, err)
-	var total int
-	for _, day := range result.Daily {
-		total += day.InputTokens
-	}
-	assert.Equal(t, 257, total)
-}
-
-func TestUsageRollupCancellationResumesCommittedBatches(t *testing.T) {
-	database := testDB(t)
-	seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
-		time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
-	snapshot, fills, cache := prepareUsageRollupTest(t, database)
-
-	snapshot.location = time.FixedZone("batch-resume", 3600)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	var sizes []int
-	var cancelledCall *usageRollupCall
-	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
-		sizes = append(sizes, len(builds))
-		if len(sizes) == 1 {
-			cache.rollup.mu.Lock()
-			for _, call := range cache.rollup.calls {
-				cancelledCall = call
+	for _, cancelFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel_first=%t", cancelFirst), func(t *testing.T) {
+			database := testDB(t)
+			seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
+				time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+			snapshot, fills, cache := prepareUsageRollupTest(t, database)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var sizes []int
+			var cancelledCall *usageRollupCall
+			cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+				sizes = append(sizes, len(builds))
+				if cancelFirst && len(sizes) == 1 {
+					cache.rollup.mu.Lock()
+					for _, call := range cache.rollup.calls {
+						cancelledCall = call
+					}
+					cache.rollup.mu.Unlock()
+					// Cancellation leaves this detached batch to commit for the next request.
+					cancel()
+				}
 			}
-			cache.rollup.mu.Unlock()
-			// Cancellation leaves this detached batch to commit for the next request.
-			cancel()
-		}
+			_, _, err := cache.rollup.Ensure(ctx, snapshot, fills,
+				export.NewPricingResolver(snapshot.PricingRows))
+			if cancelFirst {
+				require.ErrorIs(t, err, context.Canceled)
+				require.NotNil(t, cancelledCall)
+				<-cancelledCall.done
+				require.NoError(t, cancelledCall.err)
+				assert.Equal(t, []int{256}, sizes)
+				assert.Equal(t, 256, usageCacheCount(t, cache, "usage_rollup_installs"))
+				_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills,
+					export.NewPricingResolver(snapshot.PricingRows))
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []int{256, 1}, sizes)
+			assert.Equal(t, 257, usageCacheCount(t, cache, "usage_rollup_installs"))
+			result, err := database.GetDailyUsage(t.Context(), UsageFilter{
+				From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			})
+			require.NoError(t, err)
+			var total int
+			for _, day := range result.Daily {
+				total += day.InputTokens
+			}
+			assert.Equal(t, 257, total)
+		})
 	}
-	_, _, err := cache.rollup.Ensure(ctx, snapshot, fills,
-		export.NewPricingResolver(snapshot.PricingRows))
-	require.ErrorIs(t, err, context.Canceled)
-	require.NotNil(t, cancelledCall)
-	<-cancelledCall.done
-	require.NoError(t, cancelledCall.err)
-	assert.Equal(t, []int{256}, sizes)
-	assert.Equal(t, 256, usageCacheCount(t, cache, "usage_rollup_installs"))
-	sizes = nil
-	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
-		sizes = append(sizes, len(builds))
-	}
-	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills,
-		export.NewPricingResolver(snapshot.PricingRows))
-	require.NoError(t, err)
-	assert.Equal(t, []int{1}, sizes)
-	assert.Equal(t, 257, usageCacheCount(t, cache, "usage_rollup_installs"))
 }
 
 func TestUsageRollupCompletionWaitsForCallRemoval(t *testing.T) {
@@ -885,7 +809,7 @@ func TestUsageRollupConnectedSnapshotChangeRebuildsOnlyChangedSession(t *testing
 		"the changed sibling must immediately replace the snapshot winner")
 }
 
-func TestUsageRollupOlderBuildCannotReplaceNewerFacts(t *testing.T) {
+func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "rollup-race", "project-a",
 		"2026-08-10T09:00:00Z", 0, 10, "model-a")
@@ -924,21 +848,11 @@ func TestUsageRollupOlderBuildCannotReplaceNewerFacts(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	newSnapshot, newFills, _ := prepareUsageRollupTest(t, database)
-	newDone := make(chan rollupOutcome, 1)
-	go func() {
-		installs, _, ensureErr := cache.rollup.Ensure(
-			t.Context(), newSnapshot, newFills,
-			export.NewPricingResolver(newSnapshot.PricingRows))
-		newDone <- rollupOutcome{installs: installs, err: ensureErr}
-	}()
 	close(releaseOld)
-	newOutcome := <-newDone
-	require.NoError(t, newOutcome.err)
-	newInstalls := newOutcome.installs
 	oldOutcome := <-oldDone
 	require.NoError(t, oldOutcome.err)
-	assert.Equal(t, newInstalls["rollup-race"].InstallRevision,
-		oldOutcome.installs["rollup-race"].InstallRevision)
+	assert.Equal(t, newFills["rollup-race"].InstallRevision,
+		oldOutcome.installs["rollup-race"].FactRevision)
 
 	filter := UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
@@ -966,32 +880,18 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	oldFills, err := cache.fill.Ensure(
 		t.Context(), nil, oldSnapshot.CursorHighWater)
 	require.NoError(t, err)
-	oldBuilt := make(chan struct{})
-	releaseOld := make(chan struct{})
-	var blocked atomic.Bool
-	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
-		for _, build := range builds {
-			if build.SessionID != usageRollupCursorSessionID ||
-				build.FactRevision != oldSnapshot.CursorHighWater ||
-				!blocked.CompareAndSwap(false, true) {
-				continue
-			}
-			close(oldBuilt)
-			<-releaseOld
-		}
-	}
-	type cursorRollupOutcome struct {
-		installs map[string]usageRollupInstall
-		err      error
-	}
-	oldDone := make(chan cursorRollupOutcome, 1)
-	go func() {
-		installs, _, ensureErr := cache.rollup.Ensure(
-			t.Context(), oldSnapshot, oldFills,
-			export.NewPricingResolver(oldSnapshot.PricingRows))
-		oldDone <- cursorRollupOutcome{installs: installs, err: ensureErr}
-	}()
-	<-oldBuilt
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	pricing := newUsagePricingIdentities(export.NewPricingResolver(oldSnapshot.PricingRows))
+	oldBuild, err := loadCursorUsageRollupBuild(
+		t.Context(), conn, oldSnapshot.CursorHighWater, oldSnapshot.location, pricing)
+	require.NoError(t, err)
+	// Prepare the empty session scope used by Cursor-only rollup installs.
+	_, err = loadUsageRollupFacts(t.Context(), conn, nil)
+	require.NoError(t, err)
+	cross, err := loadUsageRollupCrossIdentities(t.Context(), conn)
+	require.NoError(t, err)
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt: "2026-08-10T10:00:00Z", Model: "cursor-model",
 		InputTokens: 2, DedupKey: "cursor-two",
@@ -1002,21 +902,28 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	newFills, err := cache.fill.Ensure(
 		t.Context(), nil, newSnapshot.CursorHighWater)
 	require.NoError(t, err)
-	newDone := make(chan cursorRollupOutcome, 1)
-	go func() {
-		installs, _, ensureErr := cache.rollup.Ensure(
-			t.Context(), newSnapshot, newFills,
-			export.NewPricingResolver(newSnapshot.PricingRows))
-		newDone <- cursorRollupOutcome{installs: installs, err: ensureErr}
-	}()
-	close(releaseOld)
-	newOutcome := <-newDone
-	require.NoError(t, newOutcome.err)
-	newInstalls := newOutcome.installs
-	oldOutcome := <-oldDone
-	require.NoError(t, oldOutcome.err)
+	newBuild, err := loadCursorUsageRollupBuild(
+		t.Context(), conn, newSnapshot.CursorHighWater, newSnapshot.location, pricing)
+	require.NoError(t, err)
+	identity := usageTimezoneIdentityFor(newSnapshot.location, newSnapshot.Intervals)
+	require.NoError(t, installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
+		[]usageRollupBuild{newBuild}, cross))
+	newInstalls, stale, err := readUsageRollupInstalls(
+		t.Context(), conn, identity, newSnapshot, newFills, pricing)
+	require.NoError(t, err)
+	assert.Empty(t, stale)
 	assert.Equal(t, newSnapshot.CursorHighWater,
 		newInstalls[usageRollupCursorSessionID].FactRevision)
+
+	err = installUsageRollupBuilds(t.Context(), conn, identity, oldSnapshot.location,
+		[]usageRollupBuild{oldBuild}, cross)
+	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+	oldInstalls, stale, err := readUsageRollupInstalls(
+		t.Context(), conn, identity, oldSnapshot, oldFills, pricing)
+	require.NoError(t, err)
+	assert.Empty(t, stale)
+	assert.Equal(t, newInstalls[usageRollupCursorSessionID], oldInstalls[usageRollupCursorSessionID],
+		"rejecting the older build must preserve the newer install")
 
 	result, err := cache.usageRollupQuery(
 		t.Context(), newSnapshot, filter, newInstalls,
