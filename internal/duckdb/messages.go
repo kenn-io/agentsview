@@ -85,6 +85,7 @@ func (s *Store) queryTurnRows(
 			COALESCE(source_subtype, ''), content_length
 		FROM messages
 		WHERE session_id = ?
+			AND is_system = FALSE
 		ORDER BY ordinal`,
 		sess.ID,
 	)

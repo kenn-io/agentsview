@@ -525,7 +525,7 @@ func claudeParseFile(
 		byResult := make([][]claudeAttachment, len(results))
 		for _, a := range attachments {
 			owner := 0
-			if a.hook != nil {
+			if a.hook != nil && owners != nil {
 				parent := a.sourceParentUUID
 				for range len(attachmentParents) + 1 {
 					if i, ok := owners[parent]; ok {

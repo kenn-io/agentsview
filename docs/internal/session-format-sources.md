@@ -205,7 +205,9 @@ evidence; they do not establish whether a tool helped the task.
   parents hidden by `isMeta` and attachment chains through skipped empty hooks,
   cancelled hooks, and other attachment types. Hooks attached to discarded retry
   branches are dropped. Unresolved parents and linear parsing use the original
-  conversation timeline, alongside queued prompts. Synthetic tests cover
+  conversation timeline, alongside queued prompts. Reverified linear routing
+  with the synthetic full/append agreement tests; linear parsing skips parent
+  lookup because all hooks use that timeline. Synthetic tests cover
   ordering with queued prompts, assistant snapshot merging, counts, usage, and
   native identity. This parser stage uses existing message fields. Deferred hook
   identities stay on stored rows but do not advance the ordinary entry-chain

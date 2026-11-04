@@ -160,27 +160,14 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 			}, split: 3},
 		} {
 			t.Run(string(archive)+"/"+tc.name, func(t *testing.T) {
-				incrementalEnv, incrementalDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), archive)
-				fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), archive)
-				path := filepath.Join(incrementalDir, "proj", "split.jsonl")
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-				require.NoError(t, os.WriteFile(path, []byte(strings.Join(tc.lines[:tc.split], "\n")+"\n"), 0o600))
-				incrementalEnv.engine.SyncAll(t.Context(), nil)
-				if tc.pinHook && archive == config.ArchiveContentFull {
-					before := fetchMessages(t, incrementalEnv.db, "split")
-					require.Len(t, before, 3)
-					_, err := incrementalEnv.db.PinMessage(t.Context(), "split", before[2].ID, nil)
-					require.NoError(t, err)
-				}
-				appendClaudeSplitLines(t, path, tc.lines[tc.split:]...)
-				incrementalEnv.engine.SyncPaths([]string{path})
-
-				fullPath := filepath.Join(fullDir, "proj", "split.jsonl")
-				require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
-				require.NoError(t, os.WriteFile(fullPath, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o600))
-				fullEnv.engine.SyncAll(t.Context(), nil)
-				assert.Equal(t, snapshotSplitMessages(t, fullEnv.db, "split"), snapshotSplitMessages(t, incrementalEnv.db, "split"))
-				assert.Equal(t, snapshotSplitSession(t, fullEnv.db, "split"), snapshotSplitSession(t, incrementalEnv.db, "split"))
+				incrementalEnv, path := testClaudeSplitMatchesFullParse(t, archive, tc.lines, tc.split, func(env *testEnv) {
+					if tc.pinHook && archive == config.ArchiveContentFull {
+						before := fetchMessages(t, env.db, "split")
+						require.Len(t, before, 3)
+						_, err := env.db.PinMessage(t.Context(), "split", before[2].ID, nil)
+						require.NoError(t, err)
+					}
+				})
 				if tc.pinHook && archive == config.ArchiveContentFull {
 					after := fetchMessages(t, incrementalEnv.db, "split")
 					require.Len(t, after, 3)
