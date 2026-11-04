@@ -230,7 +230,14 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if _, err := fmt.Fprintf(w, "Observed usage rows: uncached input %d; cache read %d; cache write %d; output %d (coverage may be incomplete)\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(w, "Request count: unavailable (usage rows may not be requests)\nCache miss reasons: unavailable\nContext observations: %d; compactions: %v; inferred compactions: %d\n", len(d.Context), d.Compactions, d.InferredCompactions)
+	// Request counts and cache-miss reasons are never available, so they live
+	// only in the JSON coverage object. Explicit markers leave the inferred
+	// count at zero, so it is shown only when there are none.
+	inferred := ""
+	if len(d.Compactions) == 0 {
+		inferred = fmt.Sprintf("; inferred compactions: %d", d.InferredCompactions)
+	}
+	_, err := fmt.Fprintf(w, "Context observations: %d; compactions: %v%s\n", len(d.Context), d.Compactions, inferred)
 	if err != nil {
 		return err
 	}

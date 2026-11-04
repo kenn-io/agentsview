@@ -176,14 +176,33 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	assert.Equal(t, string(one), string(two))
 	assert.NotContains(t, string(one), "secret")
 	assert.NotContains(t, string(one), "private-project")
+	var coverage struct {
+		Coverage map[string]any `json:"coverage"`
+	}
+	require.NoError(t, json.Unmarshal(one, &coverage))
+	assert.Contains(t, coverage.Coverage, "request_count")
+	assert.Nil(t, coverage.Coverage["request_count"])
+	assert.NotEmpty(t, coverage.Coverage["request_count_status"])
+	assert.NotEmpty(t, coverage.Coverage["cache_miss_reasons"])
 	var human strings.Builder
 	require.NoError(t, renderSessionDiagnosis(&human, got))
-	assert.Contains(t, human.String(), "cache read 60")
-	assert.Contains(t, human.String(), "  Child: child via read (#6)\n")
 	assert.Equal(t, 1, strings.Count(human.String(), "Session:"), "usage output already names the session")
-	assert.Contains(t, human.String(), "  Retry candidate: shell x3 (#3–#5; identical recorded arguments)\n")
-	assert.NotContains(t, human.String(), "retry runs:", "retry candidates are listed, so no separate count")
 	assert.NotContains(t, human.String(), "secret")
+	// The usage block above this point belongs to session usage. Everything
+	// the diagnosis adds must vary with the session; fixed coverage notices
+	// stay in the JSON coverage object.
+	_, evidence, found := strings.Cut(human.String(), "Observed usage rows:")
+	require.True(t, found)
+	assert.Equal(t, " uncached input 45; cache read 60; cache write 20; output 12 (coverage may be incomplete)\n"+
+		"Context observations: 1; compactions: [7]\n"+
+		"  Context #3: 120 tokens (model-a)\n"+
+		"Largest tool results (length is not billed tokens):\n"+
+		"  #4 shell: 900\n"+
+		"  #6 read: 100\n"+
+		"  #5 shell: 50\n"+
+		"  #3 shell: 20\n"+
+		"  Child: child via read (#6)\n"+
+		"  Retry candidate: shell x3 (#3–#5; identical recorded arguments)\n", evidence)
 }
 
 func TestSessionDiagnosisMissingEvidence(t *testing.T) {
@@ -233,7 +252,11 @@ func TestSessionDiagnosisInferredCompactions(t *testing.T) {
 			}
 			var human strings.Builder
 			require.NoError(t, renderSessionDiagnosis(&human, got))
-			assert.Contains(t, human.String(), "inferred compactions: "+strconv.Itoa(tt.want))
+			if tt.boundary {
+				assert.NotContains(t, human.String(), "inferred compactions", "explicit markers always leave the inferred count at zero")
+			} else {
+				assert.Contains(t, human.String(), "compactions: []; inferred compactions: "+strconv.Itoa(tt.want)+"\n")
+			}
 		})
 	}
 }
