@@ -1692,21 +1692,29 @@ func TestUsageSpoolAppendWatermarks(t *testing.T) {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			database, cache := usageSpoolExtractionFixture(t, count)
 			versions := []usageSourceVersion{{SessionID: "session"}}
-			for _, message := range []Message{
-				{SessionID: "session", Ordinal: count, Role: "user", Timestamp: "2026-08-10T08:59:59Z"},
-				{SessionID: "session", Ordinal: count + 1, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":13}`)},
+			for _, messages := range [][]Message{
+				{{SessionID: "session", Ordinal: count, Role: "user", Timestamp: "2026-08-10T08:59:59Z"}},
+				{
+					{SessionID: "session", Ordinal: count + 1, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:02:00Z", TokenUsage: json.RawMessage(`{"input_tokens":13}`)},
+					{SessionID: "session", Ordinal: count + 2, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:01:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`)},
+				},
+				{{SessionID: "session", Ordinal: count + 3, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:02:00Z", TokenUsage: json.RawMessage(`{"input_tokens":19}`)}},
 			} {
-				require.NoError(t, database.InsertMessages(t.Context(), []Message{message}))
+				require.NoError(t, database.InsertMessages(t.Context(), messages))
 				read := 0
 				cache.fill.observer.messageNormalized = func() { read++ }
 				_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 				require.NoError(t, err)
-				assert.Equal(t, 1, read, "advance past user messages even when they produce no fact")
+				assert.Equal(t, len(messages), read, "seek past every consumed message, including user messages and out-of-order token facts")
 				var ordinal int
 				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_message_ordinal FROM usage_cached_sessions WHERE session_id='session'`).Scan(&ordinal))
-				assert.Equal(t, message.Ordinal, ordinal)
+				assert.Equal(t, messages[len(messages)-1].Ordinal, ordinal)
 			}
-			assert.Equal(t, count+1, usageCacheCount(t, cache, "usage_facts"))
+			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
+			require.NoError(t, err)
+			defer full.Close()
+			assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY fact_index`),
+				usageSpoolFactValues(t, cache.db, `SELECT * FROM usage_facts ORDER BY fact_index`))
 		})
 	}
 }

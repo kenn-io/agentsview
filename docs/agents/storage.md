@@ -668,21 +668,20 @@ one session at a time livelocks the request.
 Refills retain token-message histories when the archive generation proves the
 existing messages unchanged, the install revision matches, and no activity-only
 facts or usage events exist. They seek past the saved message ordinal and
-normalize only appended messages. The `sessions.usage_generation` column and
-message triggers prove the retained prefix. Edits rotate the generation; deletes
-clear it once until the next insert creates a fresh one. A backdated or NULL
-fact timestamp, an appended activity-only fact, an edit, a deletion, or a usage
-event falls back to complete extraction. Claude suffix replacement and late Codex usage updates also use
-complete extraction. Full extractions compare facts in bounded
-batches against one read-only cache snapshot and spool only changed or new
-rows. Comparison requires the expected install revision; installation checks
-that revision again. Complete per-session fact counts remove obsolete tails,
-and identity invalidation compares the complete cache before and after install.
-Each fact kind uses its own fixed index range, so a token-message append keeps
-activity and event rows at their existing positions.
-Existing mixed sessions move their activity and event rows once, on their next
-refill.
-Mixed histories still require complete source extraction.
+normalize only appended messages. Message triggers maintain
+`sessions.usage_generation`. Edits and deletes rotate the generation. A
+backdated fact timestamp, an appended activity-only fact, an edit, a deletion,
+or a usage event falls back to complete extraction. Claude suffix replacement
+and late Codex usage updates also use complete extraction.
+
+Full extractions compare facts in bounded batches against one read-only cache
+snapshot and spool only changed or new rows. Comparison requires the expected
+install revision; installation checks that revision again. Complete per-session
+fact counts remove obsolete tails, and identity invalidation compares the
+complete cache before and after install. Each fact kind uses its own fixed index
+range, so a token-message append keeps activity and event rows at their existing
+positions. Existing mixed sessions move their activity and event rows once, on
+their next refill.
 
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but

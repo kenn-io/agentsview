@@ -563,7 +563,7 @@ func (c *usageFillCoordinator) extractSessions(
 	if err := c.extractUsageAppends(ctx, tx, spoolTx, extracted, expected, messageIndexes); err != nil {
 		return nil, nil, err
 	}
-	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes, c.observer.messageNormalized); err != nil {
+	if _, err := c.extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes, usageFillMessageFactsSQL, nil); err != nil {
 		return nil, nil, err
 	}
 	if err := extractUsageActivityFacts(ctx, tx, &spoolWriter, activityIndexes); err != nil {
@@ -628,7 +628,8 @@ func (c *usageFillCoordinator) extractUsageAppends(
 			return err
 		}
 		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
-		count, eligible, err := c.extractUsageAppendFacts(ctx, archive, &delta, id, ordinal, tail, count)
+		deltaIndexes := map[string]int{id: count}
+		eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageFillAppendFactsSQL, &tail, id, ordinal)
 		if err != nil {
 			return err
 		}
@@ -636,7 +637,7 @@ func (c *usageFillCoordinator) extractUsageAppends(
 			if err := delta.Flush(); err != nil {
 				return err
 			}
-			indexes[id] = count
+			indexes[id] = deltaIndexes[id]
 			if _, err := archive.ExecContext(ctx, `DELETE FROM usage_fill_sessions WHERE session_id=?`, id); err != nil {
 				return err
 			}
@@ -650,49 +651,13 @@ func (c *usageFillCoordinator) extractUsageAppends(
 	return nil
 }
 
-func (c *usageFillCoordinator) extractUsageAppendFacts(
-	ctx context.Context, archive *sql.Tx, delta *usageFactSpoolWriter,
-	id string, ordinal sql.NullInt64, tail string, count int,
-) (int, bool, error) {
-	rows, err := archive.QueryContext(ctx, `SELECT ordinal, role, COALESCE(timestamp, ''),
-		model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid
-		FROM messages INDEXED BY idx_messages_session_ordinal
-		WHERE session_id=? AND ordinal>COALESCE(?, -1) ORDER BY timestamp, ordinal`, id, ordinal)
-	if err != nil {
-		return count, false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var input usagefacts.MessageInput
-		if err := rows.Scan(&input.Ordinal, &input.Role, &input.Timestamp, &input.Model,
-			&input.ProviderID, &input.TokenUsage, &input.ClaudeMessageID, &input.ClaudeRequestID, &input.SourceUUID); err != nil {
-			return count, false, err
-		}
-		if c.observer.messageNormalized != nil {
-			c.observer.messageNormalized()
-		}
-		fact, ok := usagefacts.FromMessage(input)
-		if !ok {
-			continue
-		}
-		if input.Timestamp == "" || input.Timestamp < tail || !fact.TokenEligible {
-			return count, false, nil
-		}
-		if err := delta.Add(id, count, fact); err != nil {
-			return count, false, err
-		}
-		count++
-	}
-	return count, true, rows.Err()
-}
-
-func extractUsageMessageFacts(
+func (c *usageFillCoordinator) extractUsageMessageFacts(
 	ctx context.Context, archive *sql.Tx, spool *usageFactSpoolWriter,
-	indexes map[string]int, normalized func(),
-) error {
-	rows, err := archive.QueryContext(ctx, usageFillMessageFactsSQL)
+	indexes map[string]int, query string, tail *string, args ...any,
+) (bool, error) {
+	rows, err := archive.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("extracting token usage messages: %w", err)
+		return false, fmt.Errorf("extracting token usage messages: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -703,20 +668,24 @@ func extractUsageMessageFacts(
 			&input.Model, &input.ProviderID, &input.TokenUsage, &input.ClaudeMessageID,
 			&input.ClaudeRequestID, &input.SourceUUID,
 		); err != nil {
-			return err
+			return false, err
 		}
-		if normalized != nil {
-			normalized()
+		if c.observer.messageNormalized != nil {
+			c.observer.messageNormalized()
 		}
 		fact, ok := usagefacts.FromMessage(input)
-		if ok {
-			if err := spool.Add(sessionID, indexes[sessionID], fact); err != nil {
-				return err
-			}
-			indexes[sessionID]++
+		if !ok {
+			continue
 		}
+		if tail != nil && (input.Timestamp == "" || input.Timestamp < *tail || !fact.TokenEligible) {
+			return false, nil
+		}
+		if err := spool.Add(sessionID, indexes[sessionID], fact); err != nil {
+			return false, err
+		}
+		indexes[sessionID]++
 	}
-	return rows.Err()
+	return true, rows.Err()
 }
 
 func extractUsageActivityFacts(
@@ -919,10 +888,17 @@ func boolInt(value bool) int {
 	return 0
 }
 
-const usageFillMessageFactsSQL = `
+const usageFillMessageColumnsSQL = `
 	SELECT m.session_id, m.ordinal, m.role, COALESCE(m.timestamp, ''),
 	       m.model, m.provider_id, m.token_usage, m.claude_message_id,
-	       m.claude_request_id, m.source_uuid
+	       m.claude_request_id, m.source_uuid`
+
+const usageFillAppendFactsSQL = usageFillMessageColumnsSQL + `
+	FROM messages m INDEXED BY idx_messages_session_ordinal
+	WHERE m.session_id=? AND m.ordinal>COALESCE(?, -1)
+	ORDER BY m.timestamp, m.ordinal`
+
+const usageFillMessageFactsSQL = usageFillMessageColumnsSQL + `
 	FROM usage_fill_sessions f
 	CROSS JOIN messages m INDEXED BY idx_messages_usage_session_covering
 	  ON m.session_id = f.session_id
