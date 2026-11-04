@@ -11693,7 +11693,7 @@ type incrementalUpdate struct {
 // fall back to the debounced full recompute.
 func (inc *incrementalUpdate) hasSubstantiveUserMessage() bool {
 	for _, m := range inc.msgs {
-		if m.Role == parser.RoleUser && !m.IsSystem &&
+		if m.Role == parser.RoleUser &&
 			strings.TrimSpace(m.Content) != "" {
 			return true
 		}

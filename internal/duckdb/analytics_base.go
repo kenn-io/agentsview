@@ -309,6 +309,7 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 				) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = s.id
+					AND m2.is_system = FALSE
 			) inner2
 		)`, db.ActiveGapCapMs)
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"

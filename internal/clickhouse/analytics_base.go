@@ -328,6 +328,7 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 						)) - toUnixTimestamp64Micro(timestamp)) / 1000.0
 					)) AS delta_ms
 				FROM messages
+				WHERE is_system = 0
 			)
 			GROUP BY session_id
 		) ad ON ad.session_id = s.id

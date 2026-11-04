@@ -2410,6 +2410,7 @@ func (s *Store) GetAnalyticsTopSessions(
 				AS BIGINT) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = sessions.id
+					AND m2.is_system = FALSE
 			) inner2
 		), 0)`, db.ActiveGapCapMs)
 

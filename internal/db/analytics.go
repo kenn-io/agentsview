@@ -5435,6 +5435,7 @@ func sqliteActiveDurationExpr(sessionIDCol string) string {
 				) AS delta_ms
 			FROM messages m2
 				WHERE m2.session_id = %[2]s
+					AND m2.is_system = 0
 			) inner2)`, ActiveGapCapMs, sessionIDCol)
 }
 

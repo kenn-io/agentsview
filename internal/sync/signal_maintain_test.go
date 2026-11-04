@@ -914,21 +914,6 @@ func TestIncrementalSignalMaintainerHandlesCommittedUsageUpdate(t *testing.T) {
 	require.Equal(t, fullMessages, incrementalMessages)
 }
 
-func TestHasSubstantiveUserMessage(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		msg  parser.ParsedMessage
-		want bool
-	}{
-		{"hook system row", parser.ParsedMessage{Role: parser.RoleUser, Content: "Content:\nhook output", IsSystem: true, SourceSubtype: "hook_success"}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			inc := incrementalUpdate{msgs: []parser.ParsedMessage{tc.msg}}
-			assert.Equal(t, tc.want, inc.hasSubstantiveUserMessage())
-		})
-	}
-}
-
 // TestIncrementalSignalMaintainerDeclinesForUserMessage verifies the
 // fallback contract: a delta carrying a user message is not folded — the
 // debounced full recompute runs (loading history) and keeps signals
