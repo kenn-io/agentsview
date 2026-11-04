@@ -3,6 +3,7 @@
      the localized trigger label) and maps it onto kit-ui's sectioned
      item model; all popover markup and behavior live in kit-ui. -->
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import {
     FilterDropdown,
     type FilterDropdownItem,
@@ -76,7 +77,7 @@
       if (filteredCount === 1) return `${label}: ${excludedCsv}`;
       return m.usage_filter_selected({
         label,
-        countLabel: filteredCount.toLocaleString(),
+        countLabel: formatCount(filteredCount),
       });
     }
     if (visibleCount === 1 && unlistedFilteredCount === 0) {
@@ -96,7 +97,7 @@
     }
     return m.usage_filter_hidden({
       label,
-      countLabel: filteredCount.toLocaleString(),
+      countLabel: formatCount(filteredCount),
     });
   });
 

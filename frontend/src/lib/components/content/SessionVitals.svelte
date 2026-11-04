@@ -14,7 +14,7 @@
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatNumber, formatCount } from "../../utils/format.js";
   import type {
     DbCallTiming as CallTiming,
     DbSessionTiming as SessionTiming,
@@ -445,7 +445,7 @@
         <div class="stat-grid">
           <div>
             <div class="lbl">{m.session_vitals_tool_calls()}</div>
-            <div class="val">{timing.tool_call_count}</div>
+            <div class="val">{formatCount(timing.tool_call_count)}</div>
           </div>
           <div>
             <div class="lbl">{m.session_vitals_tool_time()}</div>
@@ -471,11 +471,11 @@
           </div>
           <div>
             <div class="lbl">{m.session_vitals_turns()}</div>
-            <div class="val">{timing.turn_count}</div>
+            <div class="val">{formatCount(timing.turn_count)}</div>
           </div>
           <div>
             <div class="lbl">{m.session_vitals_subagents()}</div>
-            <div class="val">{timing.subagent_count}</div>
+            <div class="val">{formatCount(timing.subagent_count)}</div>
           </div>
         </div>
       {/if}
@@ -673,7 +673,7 @@
             <span class="v-meta">
               {m.session_vitals_calls_summary({
                 count: timing.tool_call_count,
-                countLabel: formatNumber(timing.tool_call_count),
+                countLabel: formatCount(timing.tool_call_count),
                 runningCount: timing.running ? 1 : 0,
               })}
             </span>

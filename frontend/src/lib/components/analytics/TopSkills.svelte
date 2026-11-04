@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chip } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import PanelStatus from "./PanelStatus.svelte";
@@ -43,7 +44,7 @@
     if (top.length === 0) return m.shared_none();
     return top
       .map((item) => {
-        return `${item.project}: ${item.count}`;
+        return `${item.project}: ${formatCount(item.count)}`;
       })
       .join(", ");
   }
@@ -77,7 +78,7 @@
       m.analytics_top_skills_tooltip({
         skill: skill.skill_name,
         count: skill.call_count,
-        countLabel: skill.call_count.toLocaleString(),
+        countLabel: formatCount(skill.call_count),
         pct: skill.pct,
       }),
     );
@@ -95,9 +96,9 @@
       <span class="count">
         {m.analytics_top_skills_count({
           calls: analytics.skills.total_skill_calls,
-          callsLabel: analytics.skills.total_skill_calls.toLocaleString(),
+          callsLabel: formatCount(analytics.skills.total_skill_calls),
           skills: analytics.skills.distinct_skills,
-          skillsLabel: analytics.skills.distinct_skills.toLocaleString(),
+          skillsLabel: formatCount(analytics.skills.distinct_skills),
         })}
       </span>
     {/if}
@@ -126,12 +127,12 @@
             ></span>
           </span>
           <span class="bar-value">
-            {skill.call_count.toLocaleString()}
+            {formatCount(skill.call_count)}
           </span>
           <span class="session-value">
             {m.analytics_session_shape_session_count({
               count: skill.session_count,
-              countLabel: skill.session_count.toLocaleString(),
+              countLabel: formatCount(skill.session_count),
             })}
           </span>
           <span class="last-used">
@@ -145,7 +146,7 @@
               {#each skill.agent_breakdown as agent}
                 <Chip size="xs" uppercase={false} class="agent-chip">
                   <span class="agent-name">{agent.agent}</span>
-                  <span class="agent-count">{agent.count.toLocaleString()}</span>
+                  <span class="agent-count">{formatCount(agent.count)}</span>
                   <span class="agent-pct">
                     {agentPct(agent, skill.call_count)}
                   </span>

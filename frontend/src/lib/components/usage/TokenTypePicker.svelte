@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import {
     FilterDropdown,
     type FilterDropdownItem,
@@ -40,7 +41,7 @@
       });
     }
     return m.usage_token_types_multiple({
-      countLabel: String(value.length),
+      countLabel: formatCount(value.length),
     });
   });
 

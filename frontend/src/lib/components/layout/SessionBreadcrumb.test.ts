@@ -1168,7 +1168,7 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const tokenBadge = document.querySelector(".token-badge");
-    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4k ctx / 180 out");
+    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2,400 ctx / 180 out");
 
     unmount(component);
   });
@@ -1287,7 +1287,7 @@ describe("SessionBreadcrumb", () => {
     await tick();
 
     const mobileTokenBadge = document.querySelector(".token-badge--mobile");
-    expect(mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4k ctx / 180 out");
+    expect(mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2,400 ctx / 180 out");
 
     unmount(component);
   });

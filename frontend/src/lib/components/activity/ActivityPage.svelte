@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { onMount, untrack } from "svelte";
@@ -181,7 +182,7 @@
     },
     ...activity.agents.map((agent) => ({
       name: agent.name,
-      label: `${agent.name} (${agent.session_count})`,
+      label: `${agent.name} (${formatCount(agent.session_count)})`,
       displayLabel: agent.name,
       count: agent.session_count,
     })),

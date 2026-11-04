@@ -13,7 +13,7 @@
   import { TREEMAP_LABEL_SCALES, type TreemapLabelScale } from "./treemapLabelSize.js";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import type { DbTopSessionEntry } from "../../api/generated/index.js";
 
@@ -334,7 +334,7 @@
             height={260}
             onSelect={zoomedProject ? undefined : handleSelect}
             onOpen={!zoomedProject && groupBy === "project" ? handleOpen : undefined}
-            formatValue={isTokenMode ? formatTokenCount : undefined}
+            formatValue={isTokenMode ? formatCount : undefined}
             {labelScale}
           />
         </div>
@@ -365,7 +365,7 @@
                 {row.planOnly
                   ? m.plan_usage_title()
                   : isTokenMode
-                    ? formatTokenCount(row.value)
+                    ? formatCount(row.value)
                     : formatMoney(moneyFromMicrodollars(row.value))}
               </span>
             </div>
@@ -412,7 +412,7 @@
               {row.planOnly
                 ? m.plan_usage_title()
                 : isTokenMode
-                  ? formatTokenCount(row.value)
+                  ? formatCount(row.value)
                   : formatMoney(moneyFromMicrodollars(row.value))}
             </span>
           </div>

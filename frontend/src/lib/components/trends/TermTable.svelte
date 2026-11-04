@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Table } from "@kenn-io/kit-ui";
   import { seriesDashArray, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { m } from "../../i18n/index.js";
@@ -29,7 +30,7 @@
   }
 
   function formatMetric(value: number): string {
-    if (!normalized) return Math.round(value).toLocaleString();
+    if (!normalized) return formatCount(Math.round(value));
     return value.toLocaleString(undefined, {
       maximumFractionDigits: value < 10 ? 2 : 1,
     });

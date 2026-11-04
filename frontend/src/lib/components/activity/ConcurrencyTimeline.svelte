@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chart, Layer, Line, Rect, Spline, Text } from "layerchart";
   import { scaleLinear } from "d3-scale";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
@@ -272,18 +273,6 @@
     return overlayMetric === "cost" ? b.cost.microdollars : b.output_tokens;
   }
 
-  function trimDecimal(v: number, digits: number): string {
-    return v.toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
-  }
-
-  function fmtCompact(v: number): string {
-    const abs = Math.abs(v);
-    if (abs >= 1_000_000) return `${trimDecimal(v / 1_000_000, 1)}M`;
-    if (abs >= 1_000) return `${trimDecimal(v / 1_000, 1)}k`;
-    if (Number.isInteger(v)) return String(v);
-    return trimDecimal(v, 1);
-  }
-
   function fmtCompactValue(v: number): string {
     return new Intl.NumberFormat(getLocale(), {
       notation: "compact",
@@ -310,7 +299,7 @@
   // The combined peak is the tallest stacked bar: its segments sum to
   // report.peak.agents at that instant.
   const peakLabel = $derived.by(() => {
-    const count = report.peak.agents.toLocaleString(getLocale());
+    const count = formatCount(report.peak.agents);
     return report.peak.at
       ? m.activity_peak_at({ count, time: peakTimeLabel(Date.parse(report.peak.at)) })
       : m.activity_peak_label({ count });
@@ -318,7 +307,7 @@
 
   function fmtOverlayTick(v: number): string {
     if (overlayMetric === "cost") return formatMoney(moneyFromMicrodollars(v));
-    return fmtCompact(v);
+    return formatCount(v);
   }
 
   let containerEl: HTMLDivElement | undefined = $state();
@@ -499,7 +488,7 @@
   const yTicks = $derived(
     Array.from({ length: Math.round(yScale.max / yScale.step) + 1 }, (_, i) => ({
       y: PLOT_BOTTOM - ((i * yScale.step) / yScale.max) * PLOT_H,
-      label: (i * yScale.step).toLocaleString(getLocale()),
+      label: formatCount(i * yScale.step),
     })),
   );
 
@@ -732,7 +721,7 @@
     </div>
     <span class="chart-peak">{metric === "concurrency"
       ? peakLabel
-      : m.activity_total_count({ count: messageTotal.toLocaleString(getLocale()) })}</span>
+      : m.activity_total_count({ count: formatCount(messageTotal) })}</span>
   </div>
 
   <div
@@ -868,7 +857,7 @@
             tabindex={0}
             aria-pressed={isBarSelected(bar)}
             aria-label={metric === "concurrency" ? m.activity_filter_active_in_range() : m.activity_message_bucket_label({
-              range: fmtBucketRange(b), metric: metricLabel, count: b[metric].toLocaleString(getLocale()),
+              range: fmtBucketRange(b), metric: metricLabel, count: formatCount(b[metric]),
             })}
             onmouseenter={(event) => showSlotTip(event, b)}
             onmouseleave={hideTip}
@@ -894,17 +883,17 @@
             {#each classes as cls (cls.kind)}
               <div>
                 <dt>{cls.label}</dt>
-                <dd>{tooltip.bucket[cls.atPeak].toLocaleString(getLocale())}</dd>
+                <dd>{formatCount(tooltip.bucket[cls.atPeak])}</dd>
               </div>
             {/each}
             <div>
               <dt>{m.activity_combined_peak()}</dt>
-              <dd>{tooltip.bucket.max_agents.toLocaleString(getLocale())}</dd>
+              <dd>{formatCount(tooltip.bucket.max_agents)}</dd>
             </div>
             {#each classes as cls (cls.kind)}
               <div>
                 <dt>{cls.peakLabel}</dt>
-                <dd>{tooltip.bucket[cls.max].toLocaleString(getLocale())}</dd>
+                <dd>{formatCount(tooltip.bucket[cls.max])}</dd>
               </div>
             {/each}
             <div>
@@ -914,20 +903,20 @@
           {:else}
             <div>
               <dt>{m.activity_user_messages()}</dt>
-              <dd>{tooltip.bucket.user_messages.toLocaleString(getLocale())}</dd>
+              <dd>{formatCount(tooltip.bucket.user_messages)}</dd>
             </div>
             <div>
               <dt>{m.activity_assistant_messages()}</dt>
-              <dd>{tooltip.bucket.assistant_messages.toLocaleString(getLocale())}</dd>
+              <dd>{formatCount(tooltip.bucket.assistant_messages)}</dd>
             </div>
           {/if}
           <div>
             <dt>{m.usage_uncached_input()}</dt>
-            <dd>{fmtCompactValue(tooltip.bucket.input_tokens ?? 0)}</dd>
+            <dd>{formatCount(tooltip.bucket.input_tokens ?? 0)}</dd>
           </div>
           <div>
             <dt>{m.usage_output_tokens()}</dt>
-            <dd>{fmtCompactValue(tooltip.bucket.output_tokens)}</dd>
+            <dd>{formatCount(tooltip.bucket.output_tokens)}</dd>
           </div>
           <div>
             <dt>{m.activity_cost()}</dt>

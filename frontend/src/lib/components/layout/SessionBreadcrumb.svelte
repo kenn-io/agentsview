@@ -40,7 +40,7 @@
     agentLabel,
     entrypointBadge,
   } from "../../utils/agents.js";
-  import { formatCost, formatTokenUsage } from "../../utils/format.js";
+  import { formatCost, formatTokenUsage, formatCount } from "../../utils/format.js";
   import type { Money } from "../../money.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
@@ -427,7 +427,7 @@
         sessionCostIsRollup
       ? m.session_breadcrumb_total_cost_title({
           count: sessionRollupSubagentCount,
-          countLabel: sessionRollupSubagentCount.toLocaleString(),
+          countLabel: formatCount(sessionRollupSubagentCount),
         })
       : m.session_breadcrumb_estimated_session_cost(),
   );
@@ -579,23 +579,19 @@
     return idx >= 0 ? id.slice(idx + 1) : id;
   }
 
-  function formatTokenCount(value: number): string {
-    return Math.max(0, value).toLocaleString();
-  }
-
   function formatBreakdownContext(entry: SessionUsageBreakdownEntry): string {
     const context =
       entry.input_tokens +
       entry.cache_creation_input_tokens +
       entry.cache_read_input_tokens;
-    return formatTokenCount(context);
+    return formatCount(Math.max(0, context));
   }
 
   function formatBreakdownTitle(entry: SessionUsageBreakdownEntry): string {
     const parts = [
       entry.model || entry.source,
       `${formatBreakdownContext(entry)} ctx`,
-      `${formatTokenCount(entry.output_tokens)} out`,
+      `${formatCount(Math.max(0, entry.output_tokens))} out`,
     ];
     if (entry.has_cost) {
       parts.push(formatCost(entry.cost));
@@ -1018,9 +1014,11 @@
           class="malformed-badge"
           title={m.session_breadcrumb_malformed_lines_tooltip({
             count: session.parser_malformed_lines,
+            countLabel: formatCount(session.parser_malformed_lines),
           })}
         >{m.session_breadcrumb_malformed_lines({
           count: session.parser_malformed_lines,
+          countLabel: formatCount(session.parser_malformed_lines),
         })}</span>
       {/if}
       {#if (session.agent === "antigravity" || session.agent === "antigravity-cli") && session.decode_confidence === "low"}
@@ -1222,7 +1220,7 @@
           >
             {m.session_breadcrumb_usage_breakdown_steps({
               count: sessionUsageBreakdownCount,
-              countLabel: sessionUsageBreakdownCount.toLocaleString(),
+              countLabel: formatCount(sessionUsageBreakdownCount),
             })}
           </summary>
           {#if usageBreakdownOpen}
@@ -1247,7 +1245,7 @@
                   <span class="usage-breakdown-tokens">
                     {formatBreakdownContext(row)} ctx
                     <span aria-hidden="true">/</span>
-                    {formatTokenCount(row.output_tokens)} out
+                    {formatCount(Math.max(0, row.output_tokens))} out
                   </span>
                   {#if row.has_cost}
                     <span class="usage-breakdown-cost">

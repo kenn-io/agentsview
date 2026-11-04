@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
   import PanelStatus from "./PanelStatus.svelte";
@@ -76,7 +77,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${label}: ${cell.value.toLocaleString(getLocale())} ${metricLabel(analytics.metric)}`,
+      text: `${label}: ${formatCount(cell.value)} ${metricLabel(analytics.metric)}`,
     };
   }
 

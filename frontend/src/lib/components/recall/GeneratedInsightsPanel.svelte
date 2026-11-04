@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, onMount } from "svelte";
   import {
@@ -15,7 +16,7 @@
     AutomatedScope,
     CannedInsightKind,
   } from "../../api/types.js";
-  import { getLocale, m } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { router, getBasePath } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -70,7 +71,7 @@
       .sort((a, b) => b.session_count - a.session_count)
       .map((agent) => ({
         name: agent.name,
-        label: `${agentLabel(agent.name)} (${agent.session_count})`,
+        label: `${agentLabel(agent.name)} (${formatCount(agent.session_count)})`,
         displayLabel: agentLabel(agent.name),
         count: agent.session_count,
       })),
@@ -455,7 +456,7 @@
                   <span class="generated-meta-chip">
                     {m.tool_effectiveness_calls_judged({
                       count: selectedToolReport.call_count,
-                      countLabel: selectedToolReport.call_count.toLocaleString(getLocale()),
+                      countLabel: formatCount(selectedToolReport.call_count),
                     })}
                   </span>
                 {/if}

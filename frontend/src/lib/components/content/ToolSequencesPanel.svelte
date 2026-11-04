@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import type { ErrorKind } from "../../utils/telemetry.js";
   import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
@@ -9,7 +10,7 @@
     SessionToolSequenceCall,
     SessionToolSequencesResponse,
   } from "../../api/generated/index.js";
-  import { getLocale, m } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { ChevronRightIcon, InfoIcon, WorkflowIcon } from "../../icons.js";
   import { type ScrollCall } from "../../stores/ui.svelte.js";
   import { TOOL_OUTCOMES, outcomeLabel, type ToolOutcome } from "../../utils/tool-outcomes.js";
@@ -73,7 +74,7 @@
   const openCalls = new SvelteSet<string>();
 
   function countArgs(count: number) {
-    return { count, countLabel: count.toLocaleString(getLocale()) };
+    return { count, countLabel: formatCount(count) };
   }
 
   function toggle(set: SvelteSet<string>, key: string) {
@@ -149,7 +150,7 @@
   }
 
   function previewNote(total: number, omitted: number) {
-    return m.tool_sequences_preview_shows({ ...countArgs(total), shownLabel: (total - omitted).toLocaleString(getLocale()) });
+    return m.tool_sequences_preview_shows({ ...countArgs(total), shownLabel: formatCount(total - omitted) });
   }
 
   // The row's link names the call so the transcript can refuse a message that no longer holds it.
@@ -183,7 +184,7 @@
         <h2 id="{uid}-title">{m.tool_sequences_title()}</h2>
         {#if data && !failed && data.total_tool_calls > 0}
           <span class="count" title={m.tool_sequences_sequence_count(countArgs(data.total_sequences))}>
-            <span aria-hidden="true">{data.total_sequences.toLocaleString(getLocale())}</span>
+            <span aria-hidden="true">{formatCount(data.total_sequences)}</span>
             <span class="kit-sr-only">{m.tool_sequences_sequence_count(countArgs(data.total_sequences))}</span>
           </span>
         {/if}
@@ -363,7 +364,7 @@
             {#if data.omitted_sequences > 0}
               {m.tool_sequences_showing_sequences({
                 ...countArgs(data.total_sequences),
-                shownLabel: data.sequences.length.toLocaleString(getLocale()),
+                shownLabel: formatCount(data.sequences.length),
               })}
             {/if}
             {#if data.omitted_calls > 0}

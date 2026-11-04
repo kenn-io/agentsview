@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chart, Circle, Layer, Spline } from "layerchart";
   import { seriesDashArray, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { scalePoint } from "d3-scale";
@@ -37,7 +38,7 @@
   }
 
   function formatMetric(value: number): string {
-    if (!normalized) return Math.round(value).toLocaleString(getLocale());
+    if (!normalized) return formatCount(Math.round(value));
     return value.toLocaleString(getLocale(), {
       maximumFractionDigits: value < 10 ? 2 : 1,
     });

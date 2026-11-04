@@ -401,7 +401,7 @@ test.describe("Usage input cards", () => {
       await expect(card(page, "Total Input").locator(".card-value")).toHaveText("7.9B");
       const uncached = card(page, "Uncached Input");
       await expect(uncached.locator(".card-value")).toHaveText("248.6M");
-      await expect(uncached.locator(".card-sub")).toHaveText("+7.6B cached");
+      await expect(uncached.locator(".card-sub")).toHaveText("+7.7B cached");
       await expect(page.locator(".card-label", { hasText: /^Input Tokens$/ })).toHaveCount(0);
       await expectStableCards(page);
     });
@@ -412,7 +412,8 @@ test.describe("Usage input cards", () => {
       await page.addInitScript(() => localStorage.setItem("agentsview-locale", "az"));
       await openUsage(page, width);
 
-      await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
+      // Azerbaijani compact notation writes billions as "G".
+      await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9G");
       await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
       await expectStableCards(page, false);
     });

@@ -462,7 +462,7 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250k");
+    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250K");
     unmount(component);
   });
 

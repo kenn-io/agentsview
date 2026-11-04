@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import type { DbProjectInventory, DbProjectInventoryRow } from "../../api/generated/index";
   import { Button, TableHeaderCell, TextInput } from "@kenn-io/kit-ui";
   import { displayProjectLabel } from "./project-label.js";
@@ -197,12 +197,12 @@
                   <span class="original-badge" title={m.data_recorded_original()}></span>
                 {/if}
               </td>
-              <td class="col-num">{formatNumber(row.sessions)}</td>
-              <td class="col-num">{formatNumber(row.machines)}</td>
-              <td class="col-num">{formatNumber(row.distinct_cwds)}</td>
+              <td class="col-num">{formatCount(row.sessions)}</td>
+              <td class="col-num">{formatCount(row.machines)}</td>
+              <td class="col-num">{formatCount(row.distinct_cwds)}</td>
               <td>{fmtDate(row.last_activity)}</td>
               <td class="col-num">
-                {row.enabled_rules_targeting > 0 ? formatNumber(row.enabled_rules_targeting) : "—"}
+                {row.enabled_rules_targeting > 0 ? formatCount(row.enabled_rules_targeting) : "—"}
               </td>
             </tr>
           {/each}

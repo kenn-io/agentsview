@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Table } from "@kenn-io/kit-ui";
   import { Chart, Circle, Layer, Line, Spline } from "layerchart";
   import { scalePoint } from "d3-scale";
@@ -6,7 +7,7 @@
   import { settings } from "../../stores/settings.svelte.js";
   import GranularityPicker from "../shared/GranularityPicker.svelte";
   import PanelStatus from "./PanelStatus.svelte";
-  import { formatDateTime, getLocale, m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import { parseLocalDate } from "../../utils/dates.js";
   import { chartSeriesColorMap } from "../../utils/chartPalette.js";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
@@ -305,7 +306,7 @@
           ></span>
           <span class="legend-name">{series.label}</span>
           <span class="legend-count">
-            {series.total.toLocaleString(getLocale())}
+            {formatCount(series.total)}
           </span>
         </button>
       {/each}
@@ -348,7 +349,7 @@
             {xTicks}
             yTicks={4}
             formatX={(value) => bucketLabel(String(value))}
-            formatY={(value) => Number(value).toLocaleString(getLocale())}
+            formatY={(value) => formatCount(Number(value))}
           >
             {#each chartSeries as series (series.key)}
               {#if trendEntries.length > 1}
@@ -410,7 +411,7 @@
               <tr>
                 <th scope="row">{bucketDateLabel(entry.date)}</th>
                 {#each allSeries as series (series.key)}
-                  <td>{(series.values[index] ?? 0).toLocaleString(getLocale())}</td>
+                  <td>{formatCount(series.values[index] ?? 0)}</td>
                 {/each}
               </tr>
             {/each}
@@ -436,7 +437,7 @@
               style="background: {seriesColor(row.key)}"
             ></span>
             <span class="tip-value">
-              {row.value.toLocaleString(getLocale())}
+              {formatCount(row.value)}
             </span>
             <span class="tip-name">{row.label}</span>
           </div>
