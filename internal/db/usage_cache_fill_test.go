@@ -1679,6 +1679,9 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 		setup     func(*testing.T, *DB, *usageCache)
 		afterFill func(*testing.T, *DB, *usageCache)
 	}{
+		{name: "model edit", setup: mutate(`UPDATE messages SET model='other-model' WHERE ordinal=0`)},
+		{name: "provider edit", setup: mutate(`UPDATE messages SET provider_id='other-provider' WHERE ordinal=0`)},
+		{name: "Claude message identity edit", setup: mutate(`UPDATE messages SET claude_message_id='other-message' WHERE ordinal=0`)},
 		{name: "reorder", setup: mutate(`UPDATE messages SET ordinal=-1 WHERE ordinal=0; UPDATE messages SET ordinal=0 WHERE ordinal=1; UPDATE messages SET ordinal=1 WHERE ordinal=-1`)},
 		{name: "gap insert", setup: func(t *testing.T, database *DB, cache *usageCache) {
 			t.Helper()
