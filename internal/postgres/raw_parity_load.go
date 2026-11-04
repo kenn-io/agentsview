@@ -36,7 +36,7 @@ func LoadRawParitySnapshots(ctx context.Context, tx *sql.Tx, ids []string) (map[
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("loading physical parity rows: %w", err)
+			return nil, fmt.Errorf("loading sessions: %w", err)
 		}
 		out[id] = s
 	}

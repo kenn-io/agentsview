@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 
 	"go.kenn.io/agentsview/internal/rawparity"
 )
@@ -24,7 +26,9 @@ func (r RawParityReader) Candidates(ctx context.Context) ([]rawparity.Candidate,
 	rows, err := r.Tx.QueryContext(ctx, `SELECT s.id,s.agent,s.machine,s.raw_group_id,
  CASE WHEN s.provenance_kind='legacy' THEN hosted_legacy_alias(s.id)
  ELSE g.base_alias||COALESCE('~'||b.branch,'') END,
- s.agent='piebald' OR s.source_session_id='',COALESCE(b.aliases,'{}'::text[]),COALESCE(b.devices,'{}'::text[])
+ s.agent='piebald' OR s.source_session_id='',
+ array_to_json(COALESCE(b.aliases,'{}'::text[]))::text,
+ array_to_json(COALESCE(b.devices,'{}'::text[]))::text
  FROM sessions s LEFT JOIN raw_session_groups g ON g.group_id=s.raw_group_id
  LEFT JOIN LATERAL (
   SELECT min(b.branch_id) AS branch,array_agg(DISTINCT b.member_id) AS aliases,array_agg(DISTINCT p.device_id) AS devices
@@ -40,8 +44,15 @@ func (r RawParityReader) Candidates(ctx context.Context) ([]rawparity.Candidate,
 	defer rows.Close()
 	for rows.Next() {
 		var c rawparity.Candidate
-		if err = rows.Scan(&c.ID, &c.Agent, &c.Machine, &c.Group, &c.PublicID, &c.SourceLocal, &c.Aliases, &c.Devices); err != nil {
+		var aliasesJSON, devicesJSON string
+		if err = rows.Scan(&c.ID, &c.Agent, &c.Machine, &c.Group, &c.PublicID, &c.SourceLocal, &aliasesJSON, &devicesJSON); err != nil {
 			return nil, err
+		}
+		if err = json.Unmarshal([]byte(aliasesJSON), &c.Aliases); err != nil {
+			return nil, fmt.Errorf("decoding raw parity candidate aliases: %w", err)
+		}
+		if err = json.Unmarshal([]byte(devicesJSON), &c.Devices); err != nil {
+			return nil, fmt.Errorf("decoding raw parity candidate devices: %w", err)
 		}
 		out = append(out, c)
 	}

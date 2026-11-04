@@ -15,7 +15,7 @@ import (
 
 func newPGRawParityCommand() *cobra.Command {
 	var scope rawparity.Scope
-	cmd := &cobra.Command{Use: "raw-parity [target]", Short: "Compare hosted raw projections with retained pushed sessions", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "raw-parity [target]", Short: "Compare hosted uploads with synced history", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadMinimalFor(config.ScopePG)
 		if err != nil {
 			return err

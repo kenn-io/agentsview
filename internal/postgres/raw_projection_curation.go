@@ -25,6 +25,12 @@ func (e *RawIdentityError) Error() string {
 }
 
 func (s *RawProjectionStore) lockRawCurationTarget(ctx context.Context, tx *sql.Tx, alias string) (RawIdentity, error) {
+	// Projection takes alias locks before group locks. Keep the same order so a
+	// curation write cannot resolve an alias copied by a promotion without
+	// serializing against a concurrent publication to the new group.
+	if err := lockHostedAliases(ctx, tx, []string{alias}); err != nil {
+		return RawIdentity{}, err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT g.group_id FROM raw_session_groups g JOIN raw_session_public_aliases a ON a.group_id=g.group_id WHERE a.alias_id=$1 ORDER BY g.group_id FOR UPDATE OF g`, alias)
 	if err != nil {
 		return RawIdentity{}, err
