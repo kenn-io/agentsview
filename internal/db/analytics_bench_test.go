@@ -110,6 +110,7 @@ func seedTrendsSessions(b *testing.B, d *DB, prefix string, n int, baseDay strin
 }
 
 // The selected window stays fixed while three kinds of old history grow.
+// The resumed axis with a model filter still grows because model mode reads old assistant rows with blank text to pair user turns by ordinal.
 func BenchmarkGetTrendsTermsOutOfRangeHistory(b *testing.B) {
 	body := strings.Repeat("the quick brown fox jumps over the lazy dog seam ", 20)
 	for _, axis := range []string{"sessions", "resumed", "untimestamped"} {

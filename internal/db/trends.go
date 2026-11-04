@@ -81,7 +81,7 @@ func (db *DB) GetTrendsTerms(
 	modelFiltering := len(flt.Models) > 0
 	content := "m.content"
 	var selectArgs []any
-	effectiveTime := "CASE WHEN strftime('%Y', m.timestamp) IS NOT NULL THEN m.timestamp WHEN strftime('%Y', s.started_at) IS NOT NULL THEN s.started_at ELSE s.created_at END"
+	effectiveTime := "COALESCE(NULLIF(m.timestamp, ''), NULLIF(s.started_at, ''), s.created_at)"
 	if inWindow, wargs := analyticsMessageWindowPred(effectiveTime, from, to); inWindow != "" {
 		rowWindow := inWindow
 		if modelFiltering {
