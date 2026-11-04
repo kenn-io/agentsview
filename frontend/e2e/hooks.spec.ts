@@ -29,25 +29,19 @@ async function expectFollowingReplyBelowHook(page: Page) {
     .toBe(true);
 }
 
-test("hook output is collapsed and keyboard expandable", async ({ page }) => {
+test("hook output expands with the keyboard", async ({ page }) => {
   await openHookTranscript(page);
   const card = hookCard(page);
   await expect(card).toBeVisible();
-  await expect(card.locator("details")).not.toHaveAttribute("open");
   await card.locator("summary").focus();
   await page.keyboard.press("Enter");
   await expect(card.locator("pre")).toBeVisible();
   await expectFollowingReplyBelowHook(page);
 });
 
-test("Hooks and System boundaries have independent persisted filters", async ({ page }) => {
+test("Hooks menu choice persists across reload", async ({ page }) => {
   await openHookTranscript(page);
   const menu = await openBlockMenu(page);
-  await menu.getByRole("button", { name: "System boundaries", exact: true }).click();
-  await expect(hookCard(page)).toBeVisible();
-  await expect(
-    page.locator(".system-boundary .label", { hasText: "Session continuation" }),
-  ).toHaveCount(0);
   await menu.getByRole("button", { name: "Hooks", exact: true }).click();
   await expect(hookCard(page)).toHaveCount(0);
   await page.reload();

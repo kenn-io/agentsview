@@ -33,22 +33,22 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
+it("keeps other system rows hidden", () => {
+  expect(isSystemMessage({ ...hook(), source_subtype: "hook_error" })).toBe(true);
+  expect(isSystemMessage(msg({ ordinal: 2, is_system: true, content: "Hook output" }))).toBe(true);
+  const boundary = msg({
+    ordinal: 4,
+    is_system: true,
+    source_type: "system",
+    source_subtype: "continuation",
+  });
+  expect(hasVisibleSegments(boundary, (t) => t === "system")).toBe(true);
+  expect(hasVisibleSegments(boundary, (t) => t === "hook")).toBe(false);
+});
+
 describe.each(hookSubtypes)("%s output", (subtype) => {
-  it("promotes hook output and keeps other system rows hidden", () => {
+  it("promotes hook output", () => {
     expect(isSystemMessage(hook(subtype))).toBe(false);
-    expect(isSystemMessage({ ...hook(subtype), source_subtype: "hook_error" })).toBe(true);
-    expect(isSystemMessage(msg({ ordinal: 2, is_system: true, content: "Hook output" }))).toBe(
-      true,
-    );
-    expect(
-      hasVisibleSegments(
-        {
-          ...hook(subtype),
-          source_type: subtype === "stop_hook_summary" ? "attachment" : "system",
-        },
-        (t) => t === "hook",
-      ),
-    ).toBe(false);
   });
 
   it("does not finish a turn or promote an intermediate reply in focused mode", () => {
@@ -92,14 +92,6 @@ describe.each(hookSubtypes)("%s filters", (subtype) => {
   it("belongs to the Hooks filter independently of the role and system filters", () => {
     expect(hasVisibleSegments(hook(subtype), (t) => t === "hook")).toBe(true);
     expect(hasVisibleSegments(hook(subtype), (t) => t !== "hook")).toBe(false);
-    const boundary = msg({
-      ordinal: 4,
-      is_system: true,
-      source_type: "system",
-      source_subtype: "continuation",
-    });
-    expect(hasVisibleSegments(boundary, (t) => t === "system")).toBe(true);
-    expect(hasVisibleSegments(boundary, (t) => t === "hook")).toBe(false);
   });
 
   it("uses the same filter for projected transcript rows", () => {

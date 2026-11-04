@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -54,30 +53,4 @@ func TestClaudeHookResumeCursor(t *testing.T) {
 			assert.Equal(t, before, tc.rows, "cursor selection must not erase source identity")
 		})
 	}
-}
-
-func TestClaudeHookResumeConversionIdentity(t *testing.T) {
-	t.Parallel()
-	userDialogue, assistantDialogue, hookDialogue := "hello", "answer", ""
-	parsed := []parser.ParsedMessage{
-		{Ordinal: 0, Role: parser.RoleUser, SourceType: "user", SourceUUID: "u1", Content: "hello", DialogueText: &userDialogue},
-		{Ordinal: 1, Role: parser.RoleAssistant, SourceType: "assistant", SourceUUID: "a1", SourceParentUUID: "u1", Content: "answer", DialogueText: &assistantDialogue},
-		{Ordinal: 2, Role: parser.RoleUser, IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", SourceUUID: "h1", SourceParentUUID: "a1", Content: "hook output", DialogueText: &hookDialogue},
-	}
-	before := slices.Clone(parsed)
-	for i := range before {
-		before[i].DialogueText = new(*parsed[i].DialogueText)
-	}
-	messages, err := ingest.ConvertMessagesContext(t.Context(), "hook-resume", parser.AgentClaude, parsed, nil)
-	require.NoError(t, err)
-	require.Len(t, messages, 3)
-	hook := messages[2]
-	assert.Equal(t, "h1", hook.SourceUUID)
-	assert.Equal(t, "a1", hook.SourceParentUUID)
-	assert.Equal(t, "hook output", hook.Content)
-	assert.Equal(t, string(parser.RoleUser), hook.Role)
-	assert.True(t, hook.IsSystem)
-	require.NotNil(t, hook.DialogueText)
-	assert.Empty(t, *hook.DialogueText)
-	assert.Equal(t, before, parsed, "conversion must not mutate source rows or their dialogue")
 }

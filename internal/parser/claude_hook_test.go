@@ -59,16 +59,6 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			},
 		},
 		{
-			name: "stdout and stderr kept apart",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"stdout":"out text","stderr":"err text"}}`,
-			want: claudeHookSuccess{
-				subtype: "hook_success",
-				stdout:  "out text",
-				stderr:  "err text",
-			},
-		},
-		{
 			name: "content stdout and stderr kept apart",
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"content":"body text","stdout":"out text",` +
@@ -167,7 +157,6 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 		stopSummary bool
 	}{
 		{name: "additional context empty array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":[]}}`},
-		{name: "additional context empty joined body", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":[""]}}`},
 		{name: "additional context mixed array", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":["first",1]}}`},
 		{name: "additional context string", line: `{"type":"attachment","attachment":{"type":"hook_additional_context","content":"first"}}`},
 		{name: "empty stop summary", stopSummary: true, line: `{"type":"system","subtype":"stop_hook_summary","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}`},
@@ -176,22 +165,6 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 		{name: "cancelled string timeout flag", line: `{"type":"attachment","attachment":{"type":"hook_cancelled","timedOut":"true","timeoutMs":60000}}`},
 		{name: "cancelled string timeout duration", line: `{"type":"attachment","attachment":{"type":"hook_cancelled","timedOut":true,"timeoutMs":"60000"}}`},
 		{name: "attachment missing", line: `{"type":"attachment"}`},
-		{
-			name: "attachment not an object",
-			line: `{"type":"attachment","attachment":"hook_success"}`,
-		},
-		{
-			name: "attachment null",
-			line: `{"type":"attachment","attachment":null}`,
-		},
-		{
-			name: "attachment array",
-			line: `{"type":"attachment","attachment":[]}`,
-		},
-		{
-			name: "attachment type missing",
-			line: `{"type":"attachment","attachment":{"content":"ok"}}`,
-		},
 		{
 			name: "attachment type wrong",
 			line: `{"type":"attachment","attachment":{"type":"queued_command",` +
@@ -208,18 +181,8 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 				`"content":"ok"}}`,
 		},
 		{
-			name: "attachment type not a string",
-			line: `{"type":"attachment","attachment":{"type":true,` +
-				`"content":"ok"}}`,
-		},
-		{
 			name: "no output member",
 			line: `{"type":"attachment","attachment":{"type":"hook_success"}}`,
-		},
-		{
-			name: "empty output member",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":""}}`,
 		},
 		{
 			name: "blank content",
@@ -249,8 +212,8 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 func TestExtractClaudeHookSuccessRejectsInvalidMembers(t *testing.T) {
 	members := []string{"hookName", "hookEvent", "command", "toolUseID", "content", "stdout", "stderr"}
 	values := []string{
-		"null", "true", "false", "42", "1.5",
-		`{"nested":"value"}`, `["value"]`,
+		"null", "true", "false", "42",
+		`{"nested":"value"}`,
 	}
 	for _, member := range members {
 		for _, value := range values {

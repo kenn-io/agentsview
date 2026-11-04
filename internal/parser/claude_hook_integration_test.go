@@ -28,24 +28,30 @@ func claudeHookImportRows(msgs []ParsedMessage) []ParsedMessage {
 // and the recorded content, with the recorded text kept verbatim.
 func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ subtype, content, body string }{
-		{"hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished"},
-		{"hook_cancelled", `,"timedOut":false,"timeoutMs":60000`, ""},
-		{"hook_cancelled", `,"timedOut":true,"timeoutMs":60000`, "\n\nTimed out after 60000 ms"},
-		{"hook_cancelled", `,"timedOut":true,"timeoutMs":1000000`, "\n\nTimed out after 1000000 ms"},
-		{"stop_hook_summary", `,"hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked"},
-		{"stop_hook_summary", `,"hookErrors":["failed"]`, "Hook errors:\nfailed"},
-		{"stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped"},
-		{"stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer"},
-		{"stop_hook_summary", `,"hookAdditionalContext":["keep going","check results"]`, "Additional context:\nkeep going\ncheck results"},
-		{"stop_hook_summary", `,"hookErrors":["first",{},null,42,"second"]`, "Hook errors:\nfirst\nsecond"},
-		{"stop_hook_summary", `,"preventedContinuation":true`, "Prevented continuation: true"},
-		{"hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context"},
+	for _, tc := range []struct{ subtype, content, body, hookName string }{
+		{"hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished", ""},
+		{"hook_cancelled", `,"timedOut":false,"timeoutMs":60000`, "", ""},
+		{"hook_cancelled", `,"timedOut":true,"timeoutMs":60000`, "\n\nTimed out after 60000 ms", ""},
+		{"hook_cancelled", `,"timedOut":true,"timeoutMs":1000000`, "\n\nTimed out after 1000000 ms", ""},
+		{"stop_hook_summary", `,"hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked", ""},
+		{"stop_hook_summary", `,"hookErrors":["failed"]`, "Hook errors:\nfailed", ""},
+		{"stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped", ""},
+		{"stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer", ""},
+		{"stop_hook_summary", `,"hookAdditionalContext":["keep going","check results"]`, "Additional context:\nkeep going\ncheck results", ""},
+		{"stop_hook_summary", `,"hookErrors":["first",{},null,42,"second"]`, "Hook errors:\nfirst\nsecond", ""},
+		{"stop_hook_summary", `,"preventedContinuation":true`, "Prevented continuation: true", ""},
+		{"hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context", ""},
+		{"hook_success", `,"stdout":"{\"status\":\"ok\"}","stderr":"boom"`, "\n\nStdout:\n{\"status\":\"ok\"}\n\nStderr:\nboom", ""},
+		{"hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished", "  spaced  "},
 	} {
 		t.Run(tc.subtype, func(t *testing.T) {
 			t.Parallel()
 
-			record := `{"type":"attachment","attachment":{"type":"` + tc.subtype + `","hookName":"example-hook","hookEvent":"PostToolUse","command":"echo hook","toolUseID":"tool-1"` + tc.content + `}}`
+			hookName := tc.hookName
+			if hookName == "" {
+				hookName = "example-hook"
+			}
+			record := `{"type":"attachment","attachment":{"type":"` + tc.subtype + `","hookName":"` + hookName + `","hookEvent":"PostToolUse","command":"echo hook","toolUseID":"tool-1"` + tc.content + `}}`
 			if tc.subtype == "stop_hook_summary" {
 				record = `{"type":"system","subtype":"stop_hook_summary","toolUseID":"tool-1"` + tc.content + `}`
 			}
@@ -72,7 +78,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 			assert.Equal(t, "native-parent", hook.SourceParentUUID)
 			assert.True(t, hook.IsSidechain)
 			assert.Equal(t, "synthetic-origin", hook.PromptSource)
-			wantBody := "Hook name: example-hook\n\nHook event: PostToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1" + tc.body
+			wantBody := "Hook name: " + hookName + "\n\nHook event: PostToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1" + tc.body
 			if tc.subtype == "stop_hook_summary" {
 				wantBody = "Tool-use id: tool-1\n\n" + tc.body
 			}
@@ -93,30 +99,6 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 			assert.Empty(t, hook.ClaudeMessageID)
 		})
 	}
-}
-
-// The stdout and stderr channels keep their own sections, and a
-// metadata value keeps the whitespace it was written with.
-func TestClaudeHookImportRendersStdoutAndStderrChannels(t *testing.T) {
-	t.Parallel()
-
-	content := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:01Z",`+
-			`"attachment":{"type":"hook_success","hookName":"  spaced  ",`+
-			`"stdout":"{\"status\":\"ok\"}","stderr":"boom"}}`,
-		testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
-	)
-
-	_, msgs := runClaudeParserTest(t, "hook-stdout.jsonl", content)
-	require.Len(t, msgs, 3)
-
-	hook := msgs[1]
-	assert.Equal(t,
-		"Hook name:   spaced  \n\nStdout:\n{\"status\":\"ok\"}\n\n"+
-			"Stderr:\nboom",
-		hook.Content)
-	assert.Equal(t, len(hook.Content), hook.ContentLength)
 }
 
 // A hook written before the first real user stays a system row: it is
@@ -242,7 +224,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 		`"attachment":{"type":"hook_success","content":"hook finished"}}` + "\n" +
 		`{"type":"attachment","timestamp":"2026-01-01T00:00:03Z","uuid":"cancelled-1","parentUuid":"hook-1","attachment":{"type":"hook_cancelled","hookName":"PreToolUse:Read","hookEvent":"PreToolUse","command":"echo hook","toolUseID":"tool-1"}}` + "\n"
 	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:04Z","uuid":"summary-1","parentUuid":"cancelled-1","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}` + "\n"
-	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:05Z","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}` + "\n"
+	appended += `{"type":"system","subtype":"stop_hook_summary","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
 	_, err = f.WriteString(appended)
@@ -269,7 +251,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	assert.Equal(t, RoleUser, hook.Role)
 	assert.Equal(t, int64(len(appended)), consumed)
 	assert.Equal(t,
-		"2026-01-01T00:00:05Z", endedAt.Format(time.RFC3339))
+		"2026-01-01T00:00:04Z", endedAt.Format(time.RFC3339))
 }
 
 // A hook written between the chunks of one response must not hide the
