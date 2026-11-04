@@ -1205,8 +1205,11 @@ func EnsureSchema(
 
 // createPartialIndexesPG creates partial indexes on the PG schema.
 // Idempotent via IF NOT EXISTS.
-func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
+func createPartialIndexesPG(ctx context.Context, pg pgSessionExecer) error {
 	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.
@@ -1251,11 +1254,11 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		 ON messages(session_id, role)`,
 	}
 	for _, ddl := range indexes {
-		if _, err := db.ExecContext(ctx, ddl); err != nil {
+		if _, err := pg.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating PG index: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx,
+	if _, err := pg.ExecContext(ctx,
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
 	); err != nil {
 		return fmt.Errorf("dropping legacy PG usage index: %w", err)
@@ -1371,17 +1374,19 @@ func backfillCodexThreadScopePG(ctx context.Context, pg pgSessionExecer) error {
 	return nil
 }
 
-// repairLegacySourceMissingDeletionPG restores mirror rows written while
-// source absence was represented as deletion. Source availability is local
-// SQLite sync state; PostgreSQL retains only user-owned deletion state.
-func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error {
-	_, err := pg.ExecContext(ctx, `
+const repairLegacySourceMissingDeletionSQL = `
 		UPDATE sessions
 		SET deleted_at = NULL,
 		    source_deleted_at = NULL,
 		    deletion_cause = NULL,
 		    updated_at = NOW()
-		WHERE deletion_cause = 'source_missing'`)
+		WHERE deletion_cause = 'source_missing'`
+
+// repairLegacySourceMissingDeletionPG restores mirror rows written while
+// source absence was represented as deletion. Source availability is local
+// SQLite sync state; PostgreSQL retains only user-owned deletion state.
+func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error {
+	_, err := pg.ExecContext(ctx, repairLegacySourceMissingDeletionSQL)
 	if err != nil {
 		return fmt.Errorf("repairing legacy PG source-missing deletions: %w", err)
 	}
@@ -2501,7 +2506,10 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// A push may provision the schema for a read-only serve role. Include
 	// the Activity index so that upgrading through push installs it too.
 	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
-		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
+		pgHasIndex(ctx, db, "idx_tool_result_events_terminal") &&
+		pgHasIndex(ctx, db, "idx_sessions_data_version") &&
+		pgHasIndex(ctx, db, "idx_sessions_parentless_workers") &&
+		pgHasIndex(ctx, db, "idx_sessions_source_missing")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a
@@ -2511,10 +2519,12 @@ func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
 	return checkDataVersionCompat(ctx, pg)
 }
 
+const maxDataVersionSQL = `SELECT COALESCE(MAX(data_version), 0) FROM sessions`
+
 func checkDataVersionCompat(ctx context.Context, pg hostedQuerier) error {
 	var version int
 	err := pg.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`,
+		maxDataVersionSQL,
 	).Scan(&version)
 	if err != nil {
 		if isUndefinedTable(err) || isUndefinedColumn(err) {

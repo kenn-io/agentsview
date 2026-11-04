@@ -605,6 +605,9 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_data_version":       true,
+		"idx_sessions_parentless_workers": true,
+		"idx_sessions_source_missing":     true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
@@ -649,6 +652,9 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_data_version":       true,
+		"idx_sessions_parentless_workers": true,
+		"idx_sessions_source_missing":     true,
 	}
 	state.syncMetadataKeys = map[string]bool{
 		sourceCurationBackfillMetadataKey: true,
@@ -951,6 +957,9 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_data_version":       true,
+		"idx_sessions_parentless_workers": true,
+		"idx_sessions_source_missing":     true,
 	}
 	// Read-compatible with tables and index present, but the push-only
 	// owner_marker column is absent, so the push fast path must fall back
@@ -1022,6 +1031,9 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_data_version":       true,
+		"idx_sessions_parentless_workers": true,
+		"idx_sessions_source_missing":     true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
