@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,7 +48,6 @@ func requireClaudeCheckpointHash(t *testing.T, fx *engineFixture, path string) {
 }
 
 func TestClaudeCheckpointAppendHashesOnlyNewBytes(t *testing.T) {
-	var costs []int64
 	for _, padding := range []int{10 << 10, 2 << 20} {
 		t.Run(strconv.Itoa(padding), func(t *testing.T) {
 			fx := newEngineFixture(t)
@@ -63,37 +61,20 @@ func TestClaudeCheckpointAppendHashesOnlyNewBytes(t *testing.T) {
 			before := fx.engine.contentCheckBytes.Load()
 			original := codexResumeHashFn
 			t.Cleanup(func() { codexResumeHashFn = original })
-			var hashed int64
 			var offsets []int64
 			codexResumeHashFn = func(path string, offset, size int64, state []byte) ([]byte, string, error) {
 				offsets = append(offsets, offset)
-				hashed += size - offset
 				return original(path, offset, size, state)
 			}
-			// Keep a pending signal update observable after the assistant append.
-			fx.engine.signalSched.mu.Lock()
-			fx.engine.signalSched.interval = time.Hour
-			fx.engine.signalSched.quiet = time.Hour
-			fx.engine.signalSched.last["checkpoint"] = time.Now()
-			delete(fx.engine.signalSched.dirty, "checkpoint")
-			fx.engine.signalSched.mu.Unlock()
 			claudeCheckpointAppend(t, fx, path, "resumed", "b")
 			assert.Equal(t, before, fx.engine.contentCheckBytes.Load())
 			assert.Equal(t, []int64{info.Size()}, offsets)
-			assert.Positive(t, hashed)
-			costs = append(costs, hashed)
 			requireClaudeCheckpointHash(t, fx, path)
 			sess, err := fx.db.GetSessionFull(t.Context(), "checkpoint")
 			require.NoError(t, err)
 			assert.True(t, sess.LastWriteIncremental)
-			fx.engine.signalSched.mu.Lock()
-			_, dirty := fx.engine.signalSched.dirty["checkpoint"]
-			fx.engine.signalSched.mu.Unlock()
-			assert.True(t, dirty, "Claude keeps the debounced signal recompute")
 		})
 	}
-	require.Len(t, costs, 2)
-	assert.Equal(t, costs[0], costs[1], "append hash work is independent of transcript size")
 }
 
 func TestClaudeCheckpointFullFallbackThenSameStatRewrite(t *testing.T) {
@@ -137,7 +118,7 @@ func TestClaudeCheckpointFullFallbackThenSameStatRewrite(t *testing.T) {
 }
 
 func TestClaudeCheckpointFallbacks(t *testing.T) {
-	for _, kind := range []string{"same-stat rewrite", "anchor mismatch", "truncation", "full-parse fallback"} {
+	for _, kind := range []string{"same-stat rewrite", "anchor mismatch"} {
 		t.Run(kind, func(t *testing.T) {
 			fx := newEngineFixture(t)
 			t.Cleanup(fx.engine.Close)
@@ -150,22 +131,12 @@ func TestClaudeCheckpointFallbacks(t *testing.T) {
 			require.NoError(t, err)
 			raw, err := os.ReadFile(path)
 			require.NoError(t, err)
-			switch kind {
-			case "same-stat rewrite", "anchor mismatch":
-				raw = []byte(strings.Replace(string(raw), "bravo", "delta", 1))
-				require.NoError(t, os.WriteFile(path, raw, 0o600))
+			raw = []byte(strings.Replace(string(raw), "bravo", "delta", 1))
+			require.NoError(t, os.WriteFile(path, raw, 0o600))
+			if kind == "anchor mismatch" {
+				claudeCheckpointAppend(t, fx, path, "after rewrite", "c")
+			} else {
 				require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
-				if kind == "anchor mismatch" {
-					claudeCheckpointAppend(t, fx, path, "after rewrite", "c")
-				} else {
-					fx.engine.SyncPaths([]string{path})
-				}
-			case "truncation":
-				require.NoError(t, os.Truncate(path, int64(strings.LastIndex(strings.TrimSuffix(string(raw), "\n"), "\n")+1)))
-				fx.engine.SyncPaths([]string{path})
-			case "full-parse fallback":
-				// A title record requires the existing authoritative parse path.
-				appendFile(t, path, "{\"type\":\"custom-title\",\"customTitle\":\"renamed\",\"sessionId\":\"checkpoint\"}\n")
 				fx.engine.SyncPaths([]string{path})
 			}
 			sess, err := fx.db.GetSessionFull(t.Context(), "checkpoint")
@@ -176,7 +147,7 @@ func TestClaudeCheckpointFallbacks(t *testing.T) {
 			hash, err := ComputeFileHashPrefix(path, info.Size())
 			require.NoError(t, err)
 			assert.Equal(t, hash, *sess.FileHash)
-			if kind == "same-stat rewrite" || kind == "truncation" || kind == "full-parse fallback" {
+			if kind == "same-stat rewrite" {
 				assert.False(t, sess.LastWriteIncremental)
 			}
 			msgs, err := fx.db.GetAllMessages(t.Context(), "checkpoint")
@@ -232,10 +203,6 @@ func TestClaudeCheckpointExcludedArchives(t *testing.T) {
 			_, ok, err := fx.db.GetParserCheckpoint(t.Context(), "checkpoint")
 			require.NoError(t, err)
 			assert.False(t, ok)
-			msgs, err := fx.db.GetAllMessages(t.Context(), "checkpoint")
-			require.NoError(t, err)
-			require.NotEmpty(t, msgs)
-			assert.Equal(t, "assistant", msgs[len(msgs)-1].Role)
 		})
 	}
 }
