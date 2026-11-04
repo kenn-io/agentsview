@@ -16350,8 +16350,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			var tailTimestamp string
 			terr := e.db.Reader().QueryRow(ctx, `
 				SELECT COALESCE(timestamp, '') FROM messages
-				WHERE session_id = ? AND ordinal = ?`,
-				inc.ID, inc.NextOrdinal-1,
+				WHERE session_id = ? AND ordinal < ?
+				ORDER BY ordinal DESC LIMIT 1`,
+				inc.ID, inc.NextOrdinal,
 			).Scan(&tailTimestamp)
 			if terr != nil && !errors.Is(terr, sql.ErrNoRows) {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,

@@ -3226,7 +3226,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 			   AND m.ordinal > COALESCE((
 			       SELECT MAX(u.ordinal)
 			       FROM messages u
-			       WHERE u.session_id = s.id AND u.role = 'user' AND `+ExcludeClaudeHooksSQL("u.source_subtype")+`
+			       WHERE u.session_id = s.id AND u.role = 'user'
 			   ), -1)
 			 ORDER BY m.ordinal DESC
 			 LIMIT 1)

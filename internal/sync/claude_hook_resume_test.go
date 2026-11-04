@@ -111,6 +111,13 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 				claudeHookResumeNative,
 				`{"type":"attachment","timestamp":"2024-01-01T00:00:01.500Z","attachment":{"type":"queued_command","prompt":"queued request"}}`,
 			}, split: 3},
+			{name: "queued prompt after dropped trailing carrier", lines: []string{
+				claudeHookResumeUser,
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"answer-1","role":"assistant","content":[{"type":"text","text":"answer"},{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"pwd"}}],"stop_reason":"tool_use"}}`,
+				claudeHookResumeNative,
+				`{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2024-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"/tmp"}]}}`,
+				`{"type":"attachment","timestamp":"2024-01-01T00:00:01.500Z","attachment":{"type":"queued_command","prompt":"queued request"}}`,
+			}, split: 4},
 			{name: "trailing native hook", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeNative, claudeHookResumeNextUser}, split: 3},
 			{name: "linear native parent chain", lines: []string{
 				`{"type":"user","uuid":"u1","parentUuid":"missing-ancestor","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`,
