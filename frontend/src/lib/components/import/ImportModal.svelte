@@ -7,11 +7,7 @@
   import {
     importClaudeAI,
     importChatGPT,
-<<<<<<< HEAD
     connectClaudeAI,
-=======
-    connectClaudeAI, syncClaudeAI, syncChatGPTChrome,
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
   } from "../../api/client.js";
   import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
   import { getBrowserHost } from "../../api/browserHost.js";
@@ -56,27 +52,16 @@
   let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
   let signInError = $state<string | null>(null);
   const chromeRead = new LatestRead();
-<<<<<<< HEAD
   // A file import blocks the dialog; a running Sync does not.
   const busy = $derived(importing || claudeAISync.running);
   const shownResult = $derived(result ?? claudeAISync.result);
   const shownProgress = $derived(claudeAISync.running ? claudeAISync.progress : progressStats);
   const chromeState = $derived(
     claudeAISync.running ? "connected" :
-    claudeAISync.flag === "claude_ai_chrome_host_update_required" ? "extension-update" :
+    claudeAISync.flag === (provider === "chatgpt" ? "chrome_host_update_required" : "claude_ai_chrome_host_update_required") ? "extension-update" :
     !host && !chromeStatus ? "checking" :
     !host && !chromeStatus?.connected ? "disconnected" :
-    claudeAISync.flag === "claude_ai_auth_required" ? "signed-out" : "connected",
-=======
-  const updateRequiredCode = $derived(provider === "chatgpt" ? "chrome_host_update_required" : "claude_ai_chrome_host_update_required");
-  const authRequiredCode = $derived(provider === "chatgpt" ? "chatgpt_auth_required" : "claude_ai_auth_required");
-  const chromeState = $derived(
-    syncController ? "connected" :
-    syncFlag === updateRequiredCode ? "extension-update" :
-    !host && !chromeStatus ? "checking" :
-    !host && !chromeStatus?.connected ? "disconnected" :
-    syncFlag === authRequiredCode ? "signed-out" : "connected",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
+    claudeAISync.flag === (provider === "chatgpt" ? "chatgpt_auth_required" : "claude_ai_auth_required") ? "signed-out" : "connected",
   );
   const syncDisabled = $derived(busy || ["checking", "disconnected"].includes(chromeState));
 
@@ -142,37 +127,7 @@
     error = null;
     signInError = null;
     result = null;
-<<<<<<< HEAD
-    void claudeAISync.start(host, onimported);
-=======
-    phase = "importing";
-    progressStats = null;
-    const controller = new AbortController();
-    syncController = controller;
-    try {
-      const onProgress = (stats: ImportStats) => { progressStats = stats; };
-      const stats = provider === "chatgpt"
-        ? await syncChatGPTChrome({ onProgress }, controller.signal)
-        : await syncClaudeAI(host, { onProgress }, controller.signal);
-      if (!controller.signal.aborted) result = stats;
-    } catch (e) {
-      if (controller.signal.aborted) return;
-      if (e instanceof ApiError && ["claude_ai_chrome_host_required", "chrome_host_required"].includes(e.code ?? "")) {
-        return;
-      } else if (e instanceof ApiError && [authRequiredCode, updateRequiredCode].includes(e.code ?? "")) {
-        syncFlag = e.code ?? null;
-      } else if (e instanceof ApiError && ["claude_ai_sync_running", "chrome_sync_running"].includes(e.code ?? "")) {
-        syncError = m.import_claude_sync_running();
-      } else {
-        syncError = e instanceof Error ? e.message : m.import_failed();
-      }
-    }
-    finally {
-      importing = false;
-      syncController = undefined;
-      onimported();
-    }
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
+    void claudeAISync.start(host, onimported, provider);
   }
 
   const fileSize = $derived(
@@ -456,11 +411,7 @@
               <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => claudeAISync.stop()} />
             {:else}
               {#if host || chromeState === "signed-out"}
-<<<<<<< HEAD
-                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
-=======
-                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={importing} onclick={connect} />
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
+                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
               {/if}
               <Button size="sm" label={m.import_claude_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
             {/if}

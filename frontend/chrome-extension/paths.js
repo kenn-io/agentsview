@@ -60,3 +60,4 @@ export async function allowedPath(platform, path) {
     return path.startsWith(detailPrefix) && path.endsWith(detailSuffix) && uuid.test(conversation);
   }
   return false;
+}

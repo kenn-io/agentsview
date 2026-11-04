@@ -173,7 +173,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				}
 				detail, unchanged, fetchErr, err := fetchConversationDetailIfChanged(
 					ctx, store, parser.AgentClaudeAI, id,
-					func(session *db.Session) uint64 { return claudeAIFreshness(marker.UpdatedAt, leaf, session) },
+					func(session *db.Session) uint64 { return claudeAIFreshness(store, marker.UpdatedAt, leaf, session) },
 					func(ctx context.Context) ([]byte, error) {
 						return fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIConversationRequest, org.UUID, marker.UUID, 0))
 					},
@@ -182,3 +182,227 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					return stats, err
 				}
 				if fetchErr != nil {
+					if ctx.Err() != nil {
+						return stats, ctx.Err()
+					}
+					if errors.Is(fetchErr, ErrClaudeAIAuthRequired) {
+						return stats, fetchErr
+					}
+					detailError, _ := errors.AsType[*claudeAIHTTPError](fetchErr)
+					if detailError != nil && detailError.status == 404 {
+						failedLast = false
+						stats.record(id, importSkipped, nil)
+					} else {
+						stats.record(id, importSkipped, fetchErr)
+						if !errors.Is(fetchErr, ErrClaudeAIResponseTooLarge) {
+							if failedLast {
+								cb.progress(stats)
+								return stats, fetchErr
+							}
+							failedLast = true
+						} else {
+							failedLast = false
+						}
+					}
+					cb.progress(stats)
+					continue
+				}
+				if unchanged {
+					failedLast = false
+					stats.Skipped++
+					cb.progress(stats)
+					continue
+				}
+				var detailErr error
+				write := func() error {
+					result, err := parser.ParseClaudeAIDetail(detail)
+					if err == nil && result.Session.ID != id {
+						err = fmt.Errorf("conversation uuid differs from requested %s", marker.UUID)
+					}
+					if err != nil {
+						stats.record(id, importSkipped, err)
+						detailErr = err
+						return nil
+					}
+					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
+					status, err := syncConversation(ctx, store, result)
+					if errors.Is(err, db.ErrSessionTrashed) {
+						stats.record(id, importSkipped, nil)
+						return nil
+					}
+					stats.record(id, status, err)
+					if err == nil {
+						stored, readErr := store.GetSessionFull(ctx, id)
+						err = readErr
+						var current struct {
+							UpdatedAt string `json:"updated_at"`
+							Leaf      string `json:"current_leaf_message_uuid"`
+						}
+						// The chat can change between list and detail; cache only what was imported.
+						if err == nil && stored != nil && json.Unmarshal(detail, &current) == nil && current.UpdatedAt == marker.UpdatedAt && current.Leaf == leaf {
+							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(store, marker.UpdatedAt, leaf, stored))
+						}
+						if err != nil {
+							stats.record(id, importSkipped, err)
+						}
+					}
+					detailErr = err
+					return nil
+				}
+				if cb != nil && cb.SerializeWrite != nil {
+					err = cb.SerializeWrite(write)
+				} else {
+					err = write()
+				}
+				cb.progress(stats)
+				if ctx.Err() != nil {
+					return stats, ctx.Err()
+				}
+				if err != nil {
+					return stats, err
+				}
+				if detailErr != nil && failedLast {
+					return stats, detailErr
+				}
+				failedLast = detailErr != nil
+			}
+			offset += len(items)
+			if page.HasMore != nil && !*page.HasMore {
+				break
+			}
+		}
+	}
+	return stats, nil
+}
+
+// fetchConversationDetailIfChanged shares the detail-fetch decision between
+// browser platforms. Platform adapters supply the provider-specific freshness
+// key and request function; persistence and parsing stay in their import paths.
+func fetchConversationDetailIfChanged(ctx context.Context, store interface {
+	db.Store
+	GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
+}, agent parser.AgentType, id string, freshness func(*db.Session) uint64, fetch func(context.Context) ([]byte, error)) ([]byte, bool, error, error) {
+	existing, err := store.GetSessionFull(ctx, id)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	storedHash, fresh, err := store.GetProviderStatHash(ctx, agent, id)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if existing != nil && fresh && storedHash == freshness(existing) {
+		return nil, true, nil, nil
+	}
+	detail, fetchErr := fetch(ctx)
+	return detail, false, fetchErr, nil
+}
+
+func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
+	id := result.Session.ID
+	existing, err := store.GetSessionFull(ctx, id)
+	if err != nil {
+		return importNew, err
+	}
+	if existing == nil {
+		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: chatGPTSession(result.Session), Messages: claudeAIMessages(id, result.Messages),
+			SkipSignalUpdates: true,
+		}})
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		return importNew, err
+	}
+	msgs := claudeAIMessages(id, result.Messages)
+	archived, err := store.GetAllMessages(ctx, id)
+	if err != nil {
+		return importUpdated, err
+	}
+	if sameMessages(archived, storedFormMessages(store, msgs)) {
+		status, err := upsertConversation(ctx, store, result, nil)
+		if refusalReason(err) == RefusalShorterExport {
+			// Stored messages already match; update the selected branch's counts
+			// without replacing rows that may have pins.
+			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session: chatGPTSession(result.Session), Messages: msgs,
+				SkipSignalUpdates: true,
+			}})
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			}
+			return importUpdated, err
+		}
+		if err == nil && status == importSkipped {
+			// Message equality can still hide a title repair. Compare stored
+			// names so titles discarded by archive policy remain unchanged.
+			stored, readErr := store.GetSessionFull(ctx, id)
+			if readErr != nil {
+				return status, readErr
+			}
+			if stored != nil && !ptrEqual(existing.SessionName, stored.SessionName) {
+				status = importUpdated
+			}
+		}
+		return status, err
+	}
+	replacer, ok := store.(sessionReplacer)
+	if !ok {
+		return importUpdated, errors.New("store cannot preserve replaced chats")
+	}
+	_, err = replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
+		Session: chatGPTSession(result.Session), Messages: msgs,
+		KeepTrashedCopyOnlyOnPinLoss: true,
+	})
+	return importUpdated, err
+}
+
+func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
+	attempt := 0
+	body, err := backoff.Retry(ctx, func() ([]byte, error) {
+		response, err := fetch(ctx, path)
+		if err != nil {
+			return nil, backoff.Permanent(err)
+		}
+		if len(response.Body) > ClaudeAIResponseLimit {
+			return nil, backoff.Permanent(ErrClaudeAIResponseTooLarge)
+		}
+		status := response.Status
+		if status >= 200 && status < 300 {
+			return response.Body, nil
+		}
+		var apiError struct {
+			Error struct {
+				Details struct {
+					Code string `json:"error_code"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(response.Body, &apiError)
+		if status == 401 || apiError.Error.Details.Code == "account_session_invalid" {
+			return nil, backoff.Permanent(ErrClaudeAIAuthRequired)
+		}
+		if status == 413 {
+			return nil, backoff.Permanent(ErrClaudeAIResponseTooLarge)
+		}
+		if status == 403 {
+			return nil, backoff.Permanent(&claudeAIHTTPError{status: status})
+		}
+		httpErr := &claudeAIHTTPError{status: status}
+		if status != 429 && status < 500 {
+			return nil, backoff.Permanent(httpErr)
+		}
+		delay := time.Duration(1<<attempt) * time.Second
+		attempt++
+		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
+			delay = min(retryAfter, 60*time.Second)
+		}
+		return nil, backoff.RetryAfter(delay, httpErr)
+	}, backoff.WithMaxTries(5), backoff.WithMaxElapsedTime(0))
+	if retryErr := backoff.AsRetryError(err); retryErr != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, retryErr.LastErr
+	}
+	return body, err
+}

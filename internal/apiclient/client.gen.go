@@ -682,24 +682,14 @@ func (o *GetAPIV1EmbeddingsStatusRequestOptions) GetHeader() (map[string]string,
 	return nil, nil
 }
 
-<<<<<<< HEAD
 // GetAPIV1FrictionDigestsRequestOptions is the options needed to make a request to GetAPIV1FrictionDigests.
 type GetAPIV1FrictionDigestsRequestOptions struct {
 	Query *GetAPIV1FrictionDigestsQuery
-=======
-// PostAPIV1ImportChatgptSyncRequestOptions is the options needed to make a request to PostAPIV1ImportChatgptSync.
-type PostAPIV1ImportChatgptSyncRequestOptions struct {
-	Query *PostAPIV1ImportChatgptSyncQuery
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 }
 
 // Validate validates all the fields in the options.
 // Use it if fields validation was not run.
-<<<<<<< HEAD
 func (o *GetAPIV1FrictionDigestsRequestOptions) Validate() error {
-=======
-func (o *PostAPIV1ImportChatgptSyncRequestOptions) Validate() error {
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	var errors runtime.ValidationErrors
 
 	if o.Query != nil {
@@ -717,34 +707,21 @@ func (o *PostAPIV1ImportChatgptSyncRequestOptions) Validate() error {
 }
 
 // GetPathParams returns the path params as a map.
-<<<<<<< HEAD
 func (o *GetAPIV1FrictionDigestsRequestOptions) GetPathParams() (map[string]any, error) {
-=======
-func (o *PostAPIV1ImportChatgptSyncRequestOptions) GetPathParams() (map[string]any, error) {
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	return nil, nil
 }
 
 // GetQuery returns the query params as a map.
-<<<<<<< HEAD
 func (o *GetAPIV1FrictionDigestsRequestOptions) GetQuery() (map[string]any, error) {
-=======
-func (o *PostAPIV1ImportChatgptSyncRequestOptions) GetQuery() (map[string]any, error) {
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	return runtime.AsMap[any](o.Query)
 }
 
 // GetBody returns the payload in any type that can be marshalled to JSON by the client.
-<<<<<<< HEAD
 func (o *GetAPIV1FrictionDigestsRequestOptions) GetBody() any {
-=======
-func (o *PostAPIV1ImportChatgptSyncRequestOptions) GetBody() any {
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	return nil
 }
 
 // GetHeader returns the headers as a map.
-<<<<<<< HEAD
 func (o *GetAPIV1FrictionDigestsRequestOptions) GetHeader() (map[string]string, error) {
 	return nil, nil
 }
@@ -1116,9 +1093,6 @@ func (o *PostAPIV1FrictionRunRequestOptions) GetBody() any {
 
 // GetHeader returns the headers as a map.
 func (o *PostAPIV1FrictionRunRequestOptions) GetHeader() (map[string]string, error) {
-=======
-func (o *PostAPIV1ImportChatgptSyncRequestOptions) GetHeader() (map[string]string, error) {
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	return nil, nil
 }
 
@@ -3473,232 +3447,6 @@ func (c *Client) GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, o
 	}
 }
 
-// PostAPIV1ImportChatgptSyncStreamWithResponse is the envelope form: it populates
-// Stream200 instead of the buffered body field.
-func (c *Client) PostAPIV1ImportChatgptSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportChatgptSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportChatgptSyncResp, error) {
-	var err error
-
-	queryEncoding := map[string]runtime.QueryEncoding{
-		"browser": {Style: "form", Explode: &[]bool{false}[0]},
-	}
-	reqParams := runtime.RequestOptionsParameters{
-		RequestURL:    c.apiClient.GetBaseURL() + "/api/v1/import/chatgpt/sync",
-		Method:        "POST",
-		Stream:        "text/event-stream",
-		Options:       options,
-		QueryEncoding: queryEncoding,
-	}
-
-	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/import/chatgpt/sync")
-	if err != nil {
-		return nil, fmt.Errorf("error executing request: %w", err)
-	}
-
-	out := &PostAPIV1ImportChatgptSyncResp{
-		HTTPResponse: resp.Raw,
-		Body:         resp.Content,
-		StatusCode:   resp.StatusCode,
-	}
-
-	switch resp.StatusCode {
-	case 200:
-		if !resp.Streaming {
-			return out, runtime.NewClientAPIError(
-				fmt.Errorf("expected a text/event-stream stream, got Content-Type %q", resp.Headers.Get("Content-Type")),
-				runtime.WithStatusCode(resp.StatusCode))
-		}
-		out.Stream200 = runtime.NewEventStream[[]byte](resp.Raw)
-		return out, nil
-	case 400:
-		out.JSON400 = new(PostAPIV1ImportChatgptSyncErrorResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 401:
-		out.JSON401 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 403:
-		out.JSON403 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON403)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON403",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 404:
-		out.JSON404 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON404)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON404",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 409:
-		out.JSON409 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON409)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON409",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 422:
-		out.JSON422 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON422)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON422",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 500:
-		out.JSON500 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON500)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON500",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 501:
-		out.JSON501 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON501)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON501",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 502:
-		out.JSON502 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON502)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON502",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 503:
-		out.JSON503 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON503)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON503",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 504:
-		out.JSON504 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON504)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON504",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	default:
-
-		if resp.Raw != nil && resp.Raw.Body != nil {
-			_ = resp.Raw.Body.Close()
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	}
-}
-
 // PostAPIV1ImportClaudeAiSyncStreamWithResponse is the envelope form: it populates
 // Stream200 instead of the buffered body field.
 func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error) {
@@ -5981,7 +5729,6 @@ type ClientInterface interface {
 	PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDRetireResp, error)
 	GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsStatusResp, error)
 	PostAPIV1ExportConversationsInitializeWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ExportConversationsInitializeResp, error)
-<<<<<<< HEAD
 	GetAPIV1FrictionDigestsWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsResp, error)
 	GetAPIV1FrictionDigestsDateWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsDateRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsDateResp, error)
 	GetAPIV1FrictionDigestsDateMdWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsDateMdRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsDateMdResp, error)
@@ -5991,10 +5738,6 @@ type ClientInterface interface {
 	PostAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionPatternsFingerprintIssueResp, error)
 	PutAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1FrictionPatternsFingerprintIssueResp, error)
 	PostAPIV1FrictionRunWithResponse(ctx context.Context, options *PostAPIV1FrictionRunRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionRunResp, error)
-=======
-	PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, options *PostAPIV1ImportChatgptSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportChatgptSyncResp, error)
-	PostAPIV1ImportChatgptSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportChatgptSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportChatgptSyncResp, error)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
 	PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
 	GetAPIV1KataStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1KataStatusResp, error)
@@ -9250,21 +8993,12 @@ func (c *Client) PostAPIV1ExportConversationsInitializeWithResponse(ctx context.
 	}
 }
 
-<<<<<<< HEAD
 // GetAPIV1FrictionDigests List friction digests
 func (c *Client) GetAPIV1FrictionDigestsWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsResp, error) {
 	var err error
 	reqParams := runtime.RequestOptionsParameters{
 		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/friction/digests",
 		Method:     "GET",
-=======
-// PostAPIV1ImportChatgptSync Sync ChatGPT conversations
-func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, options *PostAPIV1ImportChatgptSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportChatgptSyncResp, error) {
-	var err error
-	reqParams := runtime.RequestOptionsParameters{
-		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/import/chatgpt/sync",
-		Method:     "POST",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		Options:    options,
 	}
 
@@ -9273,20 +9007,12 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-<<<<<<< HEAD
 	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/friction/digests")
-=======
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/import/chatgpt/sync")
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	if err != nil {
 		return nil, fmt.Errorf("error executing request: %w", err)
 	}
 
-<<<<<<< HEAD
 	out := &GetAPIV1FrictionDigestsResp{
-=======
-	out := &PostAPIV1ImportChatgptSyncResp{
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		HTTPResponse: resp.Raw,
 		Body:         resp.Content,
 		StatusCode:   resp.StatusCode,
@@ -9294,7 +9020,6 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 
 	switch resp.StatusCode {
 	case 200:
-<<<<<<< HEAD
 		out.JSON200 = new(GetAPIV1FrictionDigestsResponse)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
@@ -9312,11 +9037,6 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		return out, nil
 	case 400:
 		out.JSON400 = new(GetAPIV1FrictionDigestsErrorResponse)
-=======
-		return out, nil
-	case 400:
-		out.JSON400 = new(PostAPIV1ImportChatgptSyncErrorResponse)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
@@ -9324,11 +9044,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponse",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponse",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9336,11 +9052,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 401:
-<<<<<<< HEAD
 		out.JSON401 = new(GetAPIV1FrictionDigestsErrorResponseJSON)
-=======
-		out.JSON401 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
@@ -9348,11 +9060,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9360,11 +9068,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 403:
-<<<<<<< HEAD
 		out.JSON403 = new(GetAPIV1FrictionDigestsErrorResponseJSON403)
-=======
-		out.JSON403 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON403)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
@@ -9372,11 +9076,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON403",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON403",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9384,11 +9084,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 404:
-<<<<<<< HEAD
 		out.JSON404 = new(GetAPIV1FrictionDigestsErrorResponseJSON404)
-=======
-		out.JSON404 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON404)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
@@ -9396,11 +9092,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON404",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON404",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9408,11 +9100,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 409:
-<<<<<<< HEAD
 		out.JSON409 = new(GetAPIV1FrictionDigestsErrorResponseJSON409)
-=======
-		out.JSON409 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON409)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
@@ -9420,11 +9108,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON409",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON409",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9432,11 +9116,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 422:
-<<<<<<< HEAD
 		out.JSON422 = new(GetAPIV1FrictionDigestsErrorResponseJSON422)
-=======
-		out.JSON422 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON422)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
@@ -9444,11 +9124,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON422",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON422",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9456,11 +9132,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 500:
-<<<<<<< HEAD
 		out.JSON500 = new(GetAPIV1FrictionDigestsErrorResponseJSON500)
-=======
-		out.JSON500 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON500)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
@@ -9468,11 +9140,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON500",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON500",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9480,11 +9148,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 501:
-<<<<<<< HEAD
 		out.JSON501 = new(GetAPIV1FrictionDigestsErrorResponseJSON501)
-=======
-		out.JSON501 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON501)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
@@ -9492,11 +9156,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON501",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON501",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9504,11 +9164,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 502:
-<<<<<<< HEAD
 		out.JSON502 = new(GetAPIV1FrictionDigestsErrorResponseJSON502)
-=======
-		out.JSON502 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON502)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
@@ -9516,11 +9172,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON502",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON502",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9528,11 +9180,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 503:
-<<<<<<< HEAD
 		out.JSON503 = new(GetAPIV1FrictionDigestsErrorResponseJSON503)
-=======
-		out.JSON503 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON503)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
@@ -9540,11 +9188,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON503",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON503",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -9552,11 +9196,7 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 504:
-<<<<<<< HEAD
 		out.JSON504 = new(GetAPIV1FrictionDigestsErrorResponseJSON504)
-=======
-		out.JSON504 = new(PostAPIV1ImportChatgptSyncErrorResponseJSON504)
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
@@ -9564,7 +9204,6 @@ func (c *Client) PostAPIV1ImportChatgptSyncWithResponse(ctx context.Context, opt
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-<<<<<<< HEAD
 					TargetType:    "GetAPIV1FrictionDigestsErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
@@ -11331,9 +10970,6 @@ func (c *Client) PostAPIV1FrictionRunWithResponse(ctx context.Context, options *
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1FrictionRunErrorResponseJSON504",
-=======
-					TargetType:    "PostAPIV1ImportChatgptSyncErrorResponseJSON504",
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -22198,7 +21834,6 @@ func (g GetAPIV1ActivityReportReportIDSessionsQueryDirection) Validate() error {
 	}
 }
 
-<<<<<<< HEAD
 // GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope Automation scope
 type GetAPIV1AnalyticsSignalSessionsQueryAutomatedScope string
 
@@ -22253,34 +21888,19 @@ func (g GetAPIV1AnalyticsToolsQueryAutomatedScope) Validate() error {
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1AnalyticsToolsQueryAutomatedScope value, got: %v", g))
-=======
-type PostAPIV1ImportChatgptSyncQueryBrowser string
-
-const (
-	Chrome PostAPIV1ImportChatgptSyncQueryBrowser = "chrome"
-)
-
-// Validate checks if the PostAPIV1ImportChatgptSyncQueryBrowser value is valid
-func (p PostAPIV1ImportChatgptSyncQueryBrowser) Validate() error {
-	switch p {
-	case Chrome:
-		return nil
-	default:
-		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid PostAPIV1ImportChatgptSyncQueryBrowser value, got: %v", p))
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 	}
 }
 
 type PostAPIV1ImportClaudeAiSyncQueryBrowser string
 
 const (
-	PostAPIV1ImportClaudeAiSyncQueryBrowserChrome PostAPIV1ImportClaudeAiSyncQueryBrowser = "chrome"
+	Chrome PostAPIV1ImportClaudeAiSyncQueryBrowser = "chrome"
 )
 
 // Validate checks if the PostAPIV1ImportClaudeAiSyncQueryBrowser value is valid
 func (p PostAPIV1ImportClaudeAiSyncQueryBrowser) Validate() error {
 	switch p {
-	case PostAPIV1ImportClaudeAiSyncQueryBrowserChrome:
+	case Chrome:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid PostAPIV1ImportClaudeAiSyncQueryBrowser value, got: %v", p))
@@ -23115,7 +22735,6 @@ type GetAPIV1EmbeddingsStatusQuery struct {
 	Store *string `json:"store,omitempty"`
 }
 
-<<<<<<< HEAD
 type GetAPIV1FrictionDigestsQuery struct {
 	// From First digest date (YYYY-MM-DD)
 	From *string `json:"from,omitempty"`
@@ -23156,23 +22775,6 @@ type GetAPIV1FrictionPatternsQuery struct {
 
 	// Cursor Cursor from next_cursor
 	Cursor *string `json:"cursor,omitempty"`
-=======
-type PostAPIV1ImportChatgptSyncQuery struct {
-	Browser PostAPIV1ImportChatgptSyncQueryBrowser `json:"browser" validate:"required"`
-}
-
-func (p PostAPIV1ImportChatgptSyncQuery) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(p.Browser).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Browser", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 }
 
 type PostAPIV1ImportClaudeAiSyncQuery struct {
@@ -24497,7 +24099,6 @@ type PostAPIV1ExportConversationsInitializeErrorResponseJSON503 = APIErrorRespon
 
 type PostAPIV1ExportConversationsInitializeErrorResponseJSON504 = APIErrorResponse
 
-<<<<<<< HEAD
 type GetAPIV1FrictionDigestsResponse = FrictionDigestsResponse
 
 type GetAPIV1FrictionDigestsErrorResponse = APIErrorResponse
@@ -24711,32 +24312,6 @@ type PostAPIV1FrictionRunErrorResponseJSON502 = APIErrorResponse
 type PostAPIV1FrictionRunErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1FrictionRunErrorResponseJSON504 = APIErrorResponse
-=======
-// PostAPIV1ImportChatgptSyncResponse Server-sent events: progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: chatgpt_auth_required, chrome_host_update_required.
-type PostAPIV1ImportChatgptSyncResponse = []byte
-
-type PostAPIV1ImportChatgptSyncErrorResponse = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON403 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON404 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON409 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON422 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON500 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON501 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON502 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON503 = APIErrorResponse
-
-type PostAPIV1ImportChatgptSyncErrorResponseJSON504 = APIErrorResponse
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 
 // PostAPIV1ImportClaudeAiSyncResponse Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required.
 type PostAPIV1ImportClaudeAiSyncResponse = []byte
@@ -26197,7 +25772,6 @@ type PostAPIV1ExportConversationsInitializeResp struct {
 	JSON504      *PostAPIV1ExportConversationsInitializeErrorResponseJSON504
 }
 
-<<<<<<< HEAD
 type GetAPIV1FrictionDigestsResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -26364,24 +25938,6 @@ type PostAPIV1FrictionRunResp struct {
 	JSON502      *PostAPIV1FrictionRunErrorResponseJSON502
 	JSON503      *PostAPIV1FrictionRunErrorResponseJSON503
 	JSON504      *PostAPIV1FrictionRunErrorResponseJSON504
-=======
-type PostAPIV1ImportChatgptSyncResp struct {
-	HTTPResponse *http.Response
-	Body         []byte
-	StatusCode   int
-	Stream200    *runtime.Stream[[]byte]
-	JSON400      *PostAPIV1ImportChatgptSyncErrorResponse
-	JSON401      *PostAPIV1ImportChatgptSyncErrorResponseJSON
-	JSON403      *PostAPIV1ImportChatgptSyncErrorResponseJSON403
-	JSON404      *PostAPIV1ImportChatgptSyncErrorResponseJSON404
-	JSON409      *PostAPIV1ImportChatgptSyncErrorResponseJSON409
-	JSON422      *PostAPIV1ImportChatgptSyncErrorResponseJSON422
-	JSON500      *PostAPIV1ImportChatgptSyncErrorResponseJSON500
-	JSON501      *PostAPIV1ImportChatgptSyncErrorResponseJSON501
-	JSON502      *PostAPIV1ImportChatgptSyncErrorResponseJSON502
-	JSON503      *PostAPIV1ImportChatgptSyncErrorResponseJSON503
-	JSON504      *PostAPIV1ImportChatgptSyncErrorResponseJSON504
->>>>>>> 2ab565888 (feat(import): sync ChatGPT conversations through Chrome)
 }
 
 type PostAPIV1ImportClaudeAiSyncResp struct {
