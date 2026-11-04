@@ -15,6 +15,7 @@ const (
 	claudeHookResumeUser     = `{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`
 	claudeHookResumeAnswer   = `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"answer-1","role":"assistant","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}}`
 	claudeHookResumeNative   = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","stdout":"first output"}}`
+	claudeHookResumeContext  = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_additional_context","content":["extra context"]}}`
 	claudeHookResumeNextUser = `{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"next request"}}`
 )
 
@@ -24,15 +25,21 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 		initialHook bool
 		hooks       []string
 		ids         []string
+		subtype     string
 	}{
 		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
+		{name: "full import ending in additional context", initialHook: true, hooks: []string{claudeHookResumeContext}, ids: []string{"h1"}, subtype: "hook_additional_context"},
+		{name: "additional context append", hooks: []string{claudeHookResumeContext}, ids: []string{"h1"}, subtype: "hook_additional_context"},
 		{name: "multiple out-of-band hooks", hooks: []string{claudeHookResumeNative,
 			`{"type":"attachment","uuid":"h2","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stderr":"second output"}}`}, ids: []string{"h1", "h2"}},
 		{name: "hook without native ID", hooks: []string{
 			`{"type":"attachment","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","content":"no native ID"}}`}, ids: []string{""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.subtype == "" {
+				tc.subtype = "hook_success"
+			}
 			counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
 			env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 			path := filepath.Join(dir, "proj", "hook-resume.jsonl")
@@ -65,7 +72,7 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 				row := rows[i+2]
 				assert.Equal(t, wantID, row.SourceUUID)
 				assert.Equal(t, "attachment", row.SourceType)
-				assert.Equal(t, "hook_success", row.SourceSubtype)
+				assert.Equal(t, tc.subtype, row.SourceSubtype)
 				assert.True(t, row.IsSystem)
 				require.NotNil(t, row.DialogueText)
 				assert.Empty(t, *row.DialogueText)
@@ -131,6 +138,7 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 			split int
 		}{
 			{name: "trailing native hook", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeNative, claudeHookResumeNextUser}, split: 3},
+			{name: "trailing additional context", lines: []string{claudeHookResumeUser, claudeHookResumeAnswer, claudeHookResumeContext, claudeHookResumeNextUser}, split: 3},
 			{name: "same response across hook", lines: []string{
 				`{"type":"user","uuid":"u1","parentUuid":"missing-ancestor","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}`,
 				`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"response","content":[{"type":"text","text":"Hel"}],"usage":{"input_tokens":10,"output_tokens":1},"stop_reason":"tool_use"}}`,

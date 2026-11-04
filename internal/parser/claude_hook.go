@@ -17,6 +17,11 @@ type claudeHookSuccess struct {
 	stderr    string
 }
 
+// IsClaudeHookSubtype reports whether the parser imports this hook subtype.
+func IsClaudeHookSubtype(subtype string) bool {
+	return subtype == "hook_success" || subtype == "hook_additional_context"
+}
+
 // extractClaudeHookSuccess decodes the hook output payload of one
 // transcript line. It decodes the payload only: it does not store, order,
 // or display the result.
@@ -24,7 +29,7 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 	attachment := gjson.Get(line, "attachment")
 	attachmentType := attachment.Get("type")
 	if attachmentType.Type != gjson.String ||
-		(attachmentType.Str != "hook_success" && attachmentType.Str != "hook_additional_context") {
+		!IsClaudeHookSubtype(attachmentType.Str) {
 		return claudeHookSuccess{}, false
 	}
 	payload := claudeHookSuccess{subtype: attachmentType.Str}

@@ -422,7 +422,6 @@
                 <button
                   class="block-filter-item"
                   class:active={visible}
-                  aria-pressed={visible}
                   onclick={() => ui.toggleBlock(bt)}
                 >
                   <span

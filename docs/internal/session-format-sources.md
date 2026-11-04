@@ -186,14 +186,16 @@ evidence; they do not establish whether a tool helped the task.
   sync reparses the open response suffix, including its attachments. Hooks use
   the same merge path; this change leaves undated-record ordering intact. Hooks
   follow their native parent into the main conversation or a fork, including
-  parents hidden by `isMeta` and attachment chains. Unresolved parents and
-  linear parsing use the original conversation timeline, alongside queued
-  prompts. Synthetic tests cover ordering with queued prompts, assistant
+  parents hidden by `isMeta` and attachment chains through skipped empty hooks,
+  cancelled hooks, and other attachment types. Unresolved parents and linear
+  parsing use the original conversation timeline, alongside queued prompts.
+  Synthetic tests cover ordering with queued prompts, assistant
   snapshot merging, counts, usage, and native identity. This parser stage uses
   existing message fields. Deferred hook identities stay on stored rows but do
-  not advance the ordinary entry-chain resume cursor. Synthetic ingest and sync
-  tests cover full/append equivalence, native and ID-less hooks, linear parent
-  chains, split responses, checkpoint offsets, counts, and retained pins. In
+  not advance the ordinary entry-chain resume cursor for either imported hook
+  subtype. Synthetic ingest and sync tests cover full/append equivalence, native
+  and ID-less hooks, linear parent chains, split responses, checkpoint offsets,
+  counts, and retained pins. In
   normal transcript mode, hook rows use a collapsed Hook output card and an
   independent Hooks filter. Focused mode hides these rows without treating them
   as new prompts. The card preserves escaped body text. Data version 164

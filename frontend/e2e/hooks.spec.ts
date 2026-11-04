@@ -56,9 +56,8 @@ test("Hooks and System boundaries have independent persisted filters", async ({ 
   await expect(page.getByText("Final reply", { exact: true })).toBeVisible();
   await expect(hookCard(page)).toHaveCount(0);
   const restored = await openBlockMenu(page);
-  await expect(restored.getByRole("button", { name: "Hooks", exact: true })).toHaveAttribute(
-    "aria-pressed",
-    "false",
+  await expect(restored.getByRole("button", { name: "Hooks", exact: true })).not.toHaveClass(
+    /\bactive\b/,
   );
   await restored.locator(".block-filter-reset").click();
   await expect(hookCard(page)).toBeVisible();

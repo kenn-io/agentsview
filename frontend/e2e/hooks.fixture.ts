@@ -1,6 +1,7 @@
 import { createMockSessions } from "./helpers/mock-sessions.js";
 import type { Page } from "@playwright/test";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
+import { msg } from "../src/lib/utils/test-messages.js";
 
 // Synthetic API data only. No local agent archive or server account is used.
 export const HOOK_SESSION_ID = "hook-visibility-fixture";
@@ -17,26 +18,17 @@ export async function installHooksFixture(page: Page, includeHook = true) {
     role: string,
     content: string,
     extras: Partial<Message> = {},
-  ): Message => ({
-    id: ordinal + 1,
-    session_id: HOOK_SESSION_ID,
-    ordinal,
-    role,
-    content,
-    timestamp,
-    has_thinking: false,
-    thinking_text: "",
-    has_tool_use: false,
-    content_length: content.length,
-    model: "",
-    token_usage: null,
-    context_tokens: 0,
-    output_tokens: 0,
-    has_context_tokens: false,
-    has_output_tokens: false,
-    is_system: false,
-    ...extras,
-  });
+  ): Message =>
+    msg({
+      id: ordinal + 1,
+      session_id: HOOK_SESSION_ID,
+      ordinal,
+      role,
+      content,
+      timestamp,
+      content_length: content.length,
+      ...extras,
+    });
   const messages = [
     row(0, "user", "Synthetic request"),
     row(1, "assistant", "Intermediate reply"),

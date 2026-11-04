@@ -136,6 +136,7 @@ func claudeParseFile(
 	defer f.Close()
 
 	// First pass: collect all valid lines with metadata.
+	attachmentParents := make(map[string]string)
 	var (
 		entries          = make([]dagEntry, 0)
 		attachments      []claudeAttachment
@@ -300,6 +301,9 @@ func claudeParseFile(
 		// wrote. Other attachment types (e.g. task_reminder) are
 		// intentionally dropped.
 		if entryType == "attachment" {
+			if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" {
+				attachmentParents[strings.Clone(uuid)] = strings.Clone(gjson.GetBytes(lineBytes, "parentUuid").Str)
+			}
 			if qc, ok := extractQueuedCommand(string(lineBytes)); ok {
 				qc.prompt = strings.Clone(qc.prompt)
 				attachments = append(attachments, qc)
@@ -509,24 +513,18 @@ func claudeParseFile(
 	// Hooks follow their native parent into a branch. Queued commands keep
 	// their original timeline routing, as do unresolved hook parents.
 	if len(attachments) > 0 && len(results) > 0 {
-		parents := make(map[string]string, len(attachments))
-		for _, a := range attachments {
-			if a.sourceUUID != "" {
-				parents[a.sourceUUID] = a.sourceParentUUID
-			}
-		}
 		byResult := make([][]claudeAttachment, len(results))
 		for _, a := range attachments {
 			owner := 0
 			if a.hook != nil {
 				parent := a.sourceParentUUID
-				for range len(attachments) + 1 {
+				for range len(attachmentParents) + 1 {
 					if i, ok := owners[parent]; ok {
 						owner = i
 						break
 					}
 					var ok bool
-					parent, ok = parents[parent]
+					parent, ok = attachmentParents[parent]
 					if !ok {
 						break
 					}

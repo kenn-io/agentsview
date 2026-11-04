@@ -17,6 +17,8 @@ func TestClaudeHookResumeCursor(t *testing.T) {
 	hook := parser.ParsedMessage{Role: parser.RoleUser, IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", SourceUUID: "h1"}
 	secondHook := hook
 	secondHook.SourceUUID = "h2"
+	contextHook := hook
+	contextHook.SourceSubtype = "hook_additional_context"
 	idlessHook := hook
 	idlessHook.SourceUUID = ""
 	nextUser := user
@@ -31,6 +33,8 @@ func TestClaudeHookResumeCursor(t *testing.T) {
 	}{
 		{name: "empty window", current: "a1", want: "a1"},
 		{name: "hook only", current: "a1", rows: []parser.ParsedMessage{hook}, want: "a1"},
+		{name: "additional context only", current: "a1", rows: []parser.ParsedMessage{contextHook}, want: "a1"},
+		{name: "ordinary tail before additional context", rows: []parser.ParsedMessage{user, assistant, contextHook}, want: "a1"},
 		{name: "no current cursor", rows: []parser.ParsedMessage{hook, secondHook}, want: ""},
 		{name: "ordinary tail before hook", current: "old", rows: []parser.ParsedMessage{user, assistant, hook}, want: "a1"},
 		{name: "multiple hooks", current: "old", rows: []parser.ParsedMessage{user, assistant, hook, secondHook}, want: "a1"},
