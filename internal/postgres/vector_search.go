@@ -98,9 +98,7 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 		if err != nil {
 			return nil, false, err
 		}
-		// A scan capped below limit proves exhaustion only when it returns
-		// fewer rows than its cap.
-		exhausted := len(chunks) < rowCap
+		exhausted := knnExhausted(len(chunks), limit, rowCap)
 		docs, err := kitvec.RollupByDocument(chunks)
 		if err != nil {
 			return nil, false, fmt.Errorf("rolling up vector hits: %w", err)
@@ -114,6 +112,15 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 		hits, err := v.hydrateHits(ctx, docs)
 		return hits, exhausted, err
 	}, 0, nil
+}
+
+// knnExhausted reports whether a KNN that asked for limit rows and returned
+// rows read every chunk. Only an HNSW index scan stops at rowCap below limit;
+// a sequential scan has no cap. A short result therefore proves exhaustion
+// unless it is exactly the cap, which a capped index scan also returns when
+// more rows remain.
+func knnExhausted(rows, limit, rowCap int) bool {
+	return rows < limit && (rowCap >= limit || rows != rowCap)
 }
 
 // chunkHit is one chunk-level KNN neighbor: the document it belongs to, which
