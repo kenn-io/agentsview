@@ -107,7 +107,7 @@
   --user-bg: color-mix(in srgb, var(--accent-blue) 5%, var(--bg-surface));
   --assistant-bg: var(--bg-surface);
   --thinking-bg: color-mix(in srgb, var(--accent-purple) 4%, var(--bg-surface));
-  --tool-bg: color-mix(in srgb, var(--text-primary) 2.5%, var(--bg-surface));
+  --tool-bg: color-mix(in srgb, var(--text-primary) 4.5%, var(--bg-surface));
   --code-bg: #1e1e2e; /* kit-ui-check-ignore: app token definition */
   --code-text: #cdd6f4; /* kit-ui-check-ignore: app token definition */
   --viewport-indicator: rgba(0, 0, 0, 0.08); /* kit-ui-check-ignore: app token definition */

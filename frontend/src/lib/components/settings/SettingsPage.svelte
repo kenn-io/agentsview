@@ -306,11 +306,9 @@
     padding-block: var(--space-3);
   }
 
-  /* Start the panel near the navigation instead of centering it in the
-     remaining width. */
-  .settings-page :global(.kit-settings__panel) {
-    margin: 0;
-    padding-left: var(--space-8);
+  /* Room below the panel so the sticky footer never clips the preview. */
+  .settings-page :global(.kit-settings .kit-settings__panel) {
+    padding-bottom: calc(var(--space-8) + var(--space-6));
   }
 
   .settings-page :global(.kit-settings__nav-item--active),

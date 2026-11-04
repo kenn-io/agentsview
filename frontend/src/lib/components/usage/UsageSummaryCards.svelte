@@ -370,8 +370,8 @@
 
   /* The featured total keeps a quiet accent edge instead of a heavy frame. */
   .summary-cards :global(.card.featured) {
-    border-color: color-mix(in srgb, var(--accent-blue) 45%, var(--border-default));
-    box-shadow: inset 0 2px 0 var(--accent-blue);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
   }
 
   .card-value {
@@ -392,10 +392,10 @@
     box-shadow: none;
   }
 
-  .summary-cards :global(.card.context .card-value) {
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
+  /* Context counts share the KPI numeral style; a wider gap before the
+     first one sets them apart as a group. */
+  .summary-cards :global(.card.context:not(.context + .context)) {
+    margin-left: 8px;
   }
 
   .card-value.error {

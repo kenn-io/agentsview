@@ -848,7 +848,7 @@
 
   .session-name {
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 450;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
