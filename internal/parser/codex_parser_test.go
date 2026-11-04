@@ -748,47 +748,64 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 }
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
-	t.Run("code-mode wait output becomes tool result", func(t *testing.T) {
-		const output = testjsonl.CodexCodeModeWaitOutput
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("fc-code-mode-wait", "/tmp", "user", tsEarly),
-			testjsonl.CodexMsgJSON("user", "wait for the script", tsEarlyS1),
-			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
-				"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000,
-			}, tsEarlyS5),
-			testjsonl.CodexFunctionCallOutputJSON("call_wait", jsontext.Value(output), tsLate),
-		)
-		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+	for _, tt := range []struct {
+		name       string
+		toolName   string
+		args       map[string]any
+		output     any
+		wantOutput string
+	}{
+		{
+			name:       "code-mode finished wait output becomes tool result",
+			toolName:   "wait",
+			args:       map[string]any{"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000},
+			output:     jsontext.Value(testjsonl.CodexCodeModeWaitOutput),
+			wantOutput: testjsonl.CodexCodeModeWaitOutput,
+		},
+		{
+			name:       "code-mode running wait output becomes tool result",
+			toolName:   "wait",
+			args:       map[string]any{"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000},
+			output:     "Script running with cell ID 6\nWall time: 30 seconds",
+			wantOutput: "Script running with cell ID 6\nWall time: 30 seconds",
+		},
+		{
+			name:     "legacy subagent wait cancellation adds no result",
+			toolName: "wait",
+			args:     map[string]any{"ids": []string{"dddddddd-dddd-4ddd-8ddd-dddddddddddd"}},
+			output:   "aborted by user after 2.0s",
+		},
+		{
+			name:     "subagent wait completion adds no result",
+			toolName: "wait_agent",
+			args:     map[string]any{"timeout_ms": 300000},
+			output:   `{"message":"Wait completed.","timed_out":false}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			content := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON("fc-wait", "/tmp", "user", tsEarly),
+				testjsonl.CodexMsgJSON("user", "wait for the task", tsEarlyS1),
+				testjsonl.CodexFunctionCallWithCallIDJSON(tt.toolName, "call_wait", tt.args, tsEarlyS5),
+				testjsonl.CodexFunctionCallOutputJSON("call_wait", tt.output, tsLate),
+			)
+			_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 
-		require.Len(t, msgs, 2)
-		require.Len(t, msgs[1].ToolCalls, 1)
-		assertToolResultEvents(t, msgs[1].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
-			ToolUseID: "call_wait",
-			Source:    "function_call_output",
-			Content:   output,
-		}})
-	})
-
-	t.Run("subagent wait completion adds no result", func(t *testing.T) {
-		const childID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("fc-wait-timeout", "/tmp", "user", tsEarly),
-			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
-			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
-				"message": "run the script",
-			}, tsEarlyS5),
-			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`"}`, tsLate),
-			testjsonl.CodexFunctionCallWithCallIDJSON("wait_agent", "call_wait", map[string]any{
-				"timeout_ms": 300000,
-			}, tsLateS5),
-			testjsonl.CodexFunctionCallOutputJSON("call_wait", `{"message":"Wait completed.","timed_out":false}`, "2024-01-01T10:01:06Z"),
-		)
-		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-
-		require.Len(t, msgs, 3)
-		require.Len(t, msgs[2].ToolCalls, 1)
-		assertToolResultEvents(t, msgs[2].ToolCalls[0].ResultEvents, nil)
-	})
+			require.Len(t, msgs, 2)
+			require.Len(t, msgs[1].ToolCalls, 1)
+			call := msgs[1].ToolCalls[0]
+			assert.Equal(t, tt.toolName, call.ToolName)
+			if tt.wantOutput == "" {
+				assertToolResultEvents(t, call.ResultEvents, nil)
+			} else {
+				assertToolResultEvents(t, call.ResultEvents, []ParsedToolResultEvent{{
+					ToolUseID: "call_wait",
+					Source:    "function_call_output",
+					Content:   tt.wantOutput,
+				}})
+			}
+		})
+	}
 
 	t.Run("function calls", func(t *testing.T) {
 		content := loadFixture(t, "codex/function_calls.jsonl")

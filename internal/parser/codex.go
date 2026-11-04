@@ -753,9 +753,6 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		return
 	}
 	callID := payload.Get("call_id").Str
-	if callID != "" {
-		b.callNames[callID] = name
-	}
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
@@ -764,6 +761,14 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	if isCodexWaitAgentCall(name) && callID != "" {
 		args, _ := parseCodexFunctionArgs(payload)
 		waitAgentIDs = codexWaitAgentIDs(args)
+	}
+	outputName := name
+	if name == "wait" && len(waitAgentIDs) == 0 {
+		// Keep the display name, but route code-mode polls as ordinary results.
+		outputName = "code_mode_wait"
+	}
+	if callID != "" {
+		b.callNames[callID] = outputName
 	}
 
 	call := ParsedToolCall{
@@ -805,7 +810,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 			MessageOrdinal: messageOrdinal,
 			CallIndex:      0,
 		}
-		if !b.rememberToolCall(callID, name, position) {
+		if !b.rememberToolCall(callID, outputName, position) {
 			b.checkpointUnsafe = true
 		}
 	}
@@ -890,7 +895,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 		}
 	}
 
-	switch name := b.toolCallNameForOutput(callID); name {
+	switch b.toolCallNameForOutput(callID) {
 	case "spawn_agent":
 		agentID := strings.TrimSpace(output.Get("agent_id").Str)
 		if agentID == "" {
@@ -904,9 +909,6 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	case "wait", "wait_agent":
 		status := output.Get("status")
 		if !status.Exists() || !status.IsObject() {
-			if name == "wait" {
-				b.appendFunctionCallOutput(ctx, callID, payload, raw, ts)
-			}
 			return
 		}
 		status.ForEach(func(key, entry gjson.Result) bool {

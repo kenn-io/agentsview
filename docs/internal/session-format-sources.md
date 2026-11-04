@@ -638,10 +638,11 @@ fixtures retain this field; missing identities remain source-local.
 - **Code-mode wait output (checked 2026-11-03):** A local rollout records
   `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing
-  completion timing and script output. Agentsview stores this as the call's
-  normal tool result. Subagent waits with a `status` object, including empty
-  timeout statuses, keep their existing handling. `wait_agent` responses
-  without a `status` object add no result event. Synthetic coverage in
+  completion timing and script output; running polls return plain text.
+  Agentsview treats `wait` calls without agent `ids` or `targets` as code-mode
+  polls and stores their output as normal tool results. Subagent waits keep
+  their existing `status` handling, including empty timeout statuses, and add
+  no result event when `status` is absent. Synthetic coverage in
   `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
