@@ -18,6 +18,8 @@ func TestRequireWildcardListen(t *testing.T) {
 		{"forced off", "0", "true", false},
 		{"unset on CI", "", "true", true},
 		{"unset off CI", "", "", runtime.GOOS != "windows"},
+		{"CI false", "", "false", runtime.GOOS != "windows"},
+		{"CI zero", "", "0", runtime.GOOS != "windows"},
 		{"word override ignored", "off", "true", true},
 		{"padded override ignored", " 0 ", "true", true},
 	} {

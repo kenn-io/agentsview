@@ -13,7 +13,7 @@ const WildcardListenEnv = "AGENTSVIEW_TEST_WILDCARD_LISTEN"
 // WildcardListenAllowed reports whether this run may bind wildcard addresses
 // (0.0.0.0 / [::]). It is enabled everywhere except local Windows runs, where
 // such a bind makes Windows Defender Firewall ask whether the test binary may
-// communicate on public and private networks. CI runners (CI is set) have no
+// communicate on public and private networks. CI runners (CI=true) have no
 // such prompt, so they always run these tests. Set WildcardListenEnv to 1 to
 // force it on, or to 0 to force it off.
 func WildcardListenAllowed() bool {
@@ -23,7 +23,7 @@ func WildcardListenAllowed() bool {
 	case "0":
 		return false
 	}
-	return runtime.GOOS != "windows" || os.Getenv("CI") != ""
+	return runtime.GOOS != "windows" || os.Getenv("CI") == "true"
 }
 
 // RequireWildcardListen skips tb unless this run may bind a wildcard address.

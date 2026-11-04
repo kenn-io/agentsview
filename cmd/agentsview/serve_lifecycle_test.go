@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -404,24 +405,28 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 func TestStopDaemonRuntimeForUpgradeChecksExplicitPortBeforeStop(t *testing.T) {
 	requirePOSIXSignals(t, "uses a child process to observe replacement signals")
 	for _, tt := range []struct {
-		name        string
-		explicit    bool
-		ownEndpoint bool
-		wildcard    bool
-		host        string
-		otherHost   string
-		ephemeral   bool
-		wantError   bool
+		name           string
+		explicit       bool
+		ownEndpoint    bool
+		wildcard       bool
+		wildcardListen bool
+		host           string
+		otherHost      string
+		ephemeral      bool
+		wantError      bool
 	}{
 		{name: "occupied explicit port preserves incumbent", explicit: true, wantError: true},
 		{name: "incumbent endpoint can be replaced", explicit: true, ownEndpoint: true},
 		{name: "incumbent wildcard can narrow to loopback", explicit: true, ownEndpoint: true, wildcard: true},
 		{name: "same endpoint through localhost", explicit: true, ownEndpoint: true, host: "localhost"},
-		{name: "widening preserves incumbent on shared port", explicit: true, ownEndpoint: true, host: "0.0.0.0", otherHost: "127.0.0.2", wantError: true},
+		{name: "widening preserves incumbent on shared port", explicit: true, ownEndpoint: true, wildcardListen: true, host: "0.0.0.0", otherHost: "127.0.0.2", wantError: true},
 		{name: "implicit port retains fallback"},
 		{name: "explicit zero retains automatic selection", explicit: true, ephemeral: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.wildcardListen {
+				testutil.RequireWildcardListen(t)
+			}
 			dir := runtimeTestDir(t)
 			pid, _ := startReapedSleepProcess(t)
 			endpoint := newPingDaemonWithPID(t, pid)
