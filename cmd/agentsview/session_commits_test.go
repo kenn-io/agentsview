@@ -37,8 +37,7 @@ func TestSessionCommits(t *testing.T) {
 				require.Len(t, got.Commits, 1)
 				assert.Equal(t, "abc1234", got.Commits[0].SHA)
 				assert.Equal(t, "s-commit", got.Commits[0].SessionID)
-				require.NotNil(t, got.Commits[0].Turn)
-				assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", got.Commits[0].Turn.Text)
+				assert.Equal(t, &db.CommitTurn{Ordinal: 0, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, got.Commits[0].Turn)
 				return
 			}
 			assert.Regexp(t, `s-commit\s+1\s+1\s+exact-call`, out)

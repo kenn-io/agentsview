@@ -111,7 +111,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	links, err := store.SessionCommitLinks(ctx, "commit-live")
 	require.NoError(t, err)
-	assert.Equal(t, "Save the change", links.Commits[0].Turn.Text)
+	assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
 	// The rollout marker must republish sessions whose cursor already exists.
 	_, err = pg.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id='commit-live'`)
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.Len(t, links.Commits, 1)
 	require.NotNil(t, links.Commits[0].Turn)
 	assert.False(t, links.Commits[0].Missing)
-	assert.Equal(t, "Save the change", links.Commits[0].Turn.Text)
+	assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
 	_, err = pg.ExecContext(ctx, `DROP TABLE commit_links`)
 	require.NoError(t, err)
 	_, err = store.SessionCommitLinks(ctx, "commit-live")

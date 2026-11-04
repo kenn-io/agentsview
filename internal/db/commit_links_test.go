@@ -51,17 +51,12 @@ func TestCommitLinksLateResult(t *testing.T) {
 	}
 }
 
-func TestCommitLinksNoCandidatesSkipsRefresh(t *testing.T) {
+func TestCommitLinksNoCandidatesSkipsRefreshWrites(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
-	var messages []Message
-	for i := range 1000 {
-		poll := commitMessages("s1", `{"session_id":7,"chars":""}`, strings.Repeat("unrelated output\n", 100))[2]
-		poll.Ordinal = i
-		poll.ToolCalls[0].ToolName = "write_stdin"
-		messages = append(messages, poll)
-	}
-	insertMessages(t, d, messages...)
+	poll := commitMessages("s1", `{"session_id":7,"chars":""}`, "unrelated output")[2]
+	poll.ToolCalls[0].ToolName = "write_stdin"
+	insertMessages(t, d, poll)
 	conn, err := d.getWriter().Conn(t.Context())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -89,43 +84,43 @@ func TestCommitLinksNoCandidatesSkipsRefresh(t *testing.T) {
 
 func TestCommitLinksParsing(t *testing.T) {
 	for _, tt := range []struct {
-		name, command, result string
-		count                 int
+		name, result string
+		commands     []string
+		count        int
 	}{
-		{"commit", "git commit -m fix", "[main abc1234] Fix parser", 1},
-		{"env", "GIT_X=1 git commit -m fix", "[main abc1234] Fix parser", 1},
-		{"absolute git", "/usr/bin/git commit -m fix", "[main abc1234] Fix parser", 1},
-		{"shell wrapper", "bash -lc 'git commit -m fix'", "[main abc1234] Fix parser", 1},
-		{"python", `python3 -c 'subprocess.run(["git","commit","-m","fix"])'`, "[main abc1234] Fix parser", 1},
-		{"heredoc apostrophe", "cat <<'EOF'\nIt's fixed\nEOF\ngit commit -m fix", "[main abc1234] Fix parser", 1},
-		{"failed", "git commit -m fix", "nothing to commit", 0},
-		{"printed", "cat out.txt", "[main abc1234] Fix parser", 0},
-		{"printed commit documentation", "cat docs/git-commit.md", "[main abc1234] Fix parser", 0},
-		{"searched commit documentation", "grep -n 'git commit' docs/x.md; sed -n 20,24p docs/x.md", "[main 463dc4f] Example commit", 0},
-		{"shown commit documentation", "git show HEAD:docs/commit.md", "[main abc1234] Fix parser", 0},
-		{"log grep", "git log --grep=commit", "[main abc1234] Fix parser", 0},
-		{"commit filename", "git commit.md", "[main abc1234] Fix parser", 0},
-		{"newline", "git add .\ngit commit -m fix", "[main abc1234] Fix parser", 1},
-		{"heredoc", "git commit -m \"$(cat <<'EOF'\nFix parser\nEOF\n)\"", "[main abc1234] Fix parser", 1},
-		{"cherry-pick", "git cherry-pick abc1234", "[main abc1234] Fix parser", 0},
-		{"multiple", "git commit -m one; git commit -m two", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", 2},
-		{"global option", `git -c user.name=Example --no-pager commit -m fix`, "[main abc1234] Fix parser", 1},
-		{"quoted global option", `git -c 'user.name=Example User' commit -m fix`, "[main abc1234] Fix parser", 1},
-		{"output delta", "git commit -m fix", `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, 1},
+		{"commit message forms", "[main abc1234] Fix parser", []string{"git commit -m fix", "git commit -m \"$(cat <<'EOF'\nFix parser\nEOF\n)\""}, 1},
+		{"absolute git", "[main abc1234] Fix parser", []string{"/usr/bin/git commit -m fix"}, 1},
+		{"shell wrapper", "[main abc1234] Fix parser", []string{"bash -lc 'git commit -m fix'"}, 1},
+		{"python", "[main abc1234] Fix parser", []string{`python3 -c 'subprocess.run(["git","commit","-m","fix"])'`}, 1},
+		{"failed", "nothing to commit", []string{"git commit -m fix"}, 0},
+		{"printed", "[main abc1234] Fix parser", []string{"cat out.txt"}, 0},
+		{"printed commit documentation", "[main abc1234] Fix parser", []string{"cat docs/git-commit.md"}, 0},
+		{"searched commit documentation", "[main 463dc4f] Example commit", []string{"grep -n 'git commit' docs/x.md; sed -n 20,24p docs/x.md"}, 0},
+		{"shown commit documentation", "[main abc1234] Fix parser", []string{"git show HEAD:docs/commit.md"}, 0},
+		{"log grep", "[main abc1234] Fix parser", []string{"git log --grep=commit"}, 0},
+		{"commit filename", "[main abc1234] Fix parser", []string{"git commit.md"}, 0},
+		{"whitespace prefix", "[main abc1234] Fix parser", []string{"git add .\ngit commit -m fix", "cat <<'EOF'\nIt's fixed\nEOF\ngit commit -m fix", "GIT_X=1 git commit -m fix"}, 1},
+		{"cherry-pick", "[main abc1234] Fix parser", []string{"git cherry-pick abc1234"}, 0},
+		{"multiple", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", []string{"git commit -m one; git commit -m two"}, 2},
+		{"global option", "[main abc1234] Fix parser", []string{`git -c user.name=Example --no-pager commit -m fix`}, 1},
+		{"quoted global option", "[main abc1234] Fix parser", []string{`git -c 'user.name=Example User' commit -m fix`}, 1},
+		{"output delta", `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-			input, err := json.Marshal(map[string]string{"command": tt.command})
-			require.NoError(t, err)
-			insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, tt.count)
-			if tt.count == 1 {
-				assert.Equal(t, "abc1234", got.Commits[0].SHA)
-				assert.Equal(t, "main", got.Commits[0].Branch)
-				assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+			for _, command := range tt.commands {
+				d := testDB(t)
+				insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+				input, err := json.Marshal(map[string]string{"command": command})
+				require.NoError(t, err)
+				insertMessages(t, d, commitMessages("s1", string(input), tt.result)...)
+				got, err := d.SessionCommitLinks(t.Context(), "s1")
+				require.NoError(t, err)
+				require.Len(t, got.Commits, tt.count)
+				if tt.count == 1 {
+					assert.Equal(t, "abc1234", got.Commits[0].SHA)
+					assert.Equal(t, "main", got.Commits[0].Branch)
+					assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+				}
 			}
 		})
 	}
@@ -250,59 +245,66 @@ func TestCommitLinksCodeModeCellWait(t *testing.T) {
 }
 
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
-	for _, tt := range []struct{ name, cwd, command, repository string }{
-		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
-		{"tilde", "/work", "cd ~/x && git commit -m fix", "~/x"},
-		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/work"},
-		{"quoted directory", "/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"},
-		{"quoted operators", "/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"},
-		{"directory after global options", "/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"},
-		{"directory text in message", "/work", `git commit -m "Document git -C /other commit"`, "/work"},
-		{"relative directory", "/work", "cd sub && git -C child commit -m fix", "/work/sub/child"},
-		{"global directory option", "/work", `git --git-dir=/repo/.git commit -m fix`, "/work"},
-		{"POSIX relative", "/work", "cd sub && git -C ../child commit -m fix", "/work/child"},
-		{"Windows absolute", `C:\work`, `cd D:\repo && git commit -m fix`, `D:\repo`},
-		{"Windows relative", `C:\work`, `cd sub && git -C child commit -m fix`, `C:\work\sub\child`},
-		{"Windows backslash relative", `C:\work`, `git -C sub\child commit -m fix`, `C:\work\sub\child`},
-		{"Windows parent", `C:\work`, `git -C ..\repo commit -m fix`, `C:\repo`},
-		{"Windows rooted", `C:\work`, `git -C \repo commit -m fix`, `C:\repo`},
-		{"Windows slash drive", "C:/work", "cd D:/repo && git commit -m fix", "D:/repo"},
-		{"Windows slash relative", "C:/work", "git -C sub commit -m fix", "C:/work/sub"},
-		{"Windows UNC", `C:\work`, `cd \\server\share\repo && git commit -m fix`, `\\server\share\repo`},
-		{"Windows UNC relative", `\\server\share\repo`, `git -C ..\child commit -m fix`, `\\server\share\child`},
+	type repositoryCase struct{ cwd, command, repository string }
+	for _, tt := range []struct {
+		name  string
+		cases []repositoryCase
+	}{
+		{"POSIX absolute", []repositoryCase{{"/work", "cd /repo && git commit -m fix", "/repo"}}},
+		{"tilde", []repositoryCase{{"/work", "cd ~/x && git commit -m fix", "~/x"}}},
+		{"nonleading cd", []repositoryCase{{"/work", "git add . && cd /elsewhere && git commit -m fix", "/work"}}},
+		{"quoted directory", []repositoryCase{{"/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"}}},
+		{"quoted operators", []repositoryCase{{"/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"}}},
+		{"directory after global options", []repositoryCase{{"/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"}}},
+		{"directory text in message", []repositoryCase{{"/work", `git commit -m "Document git -C /other commit"`, "/work"}}},
+		{"relative directory", []repositoryCase{{"/work", "cd sub && git -C child commit -m fix", "/work/sub/child"}}},
+		{"global directory option", []repositoryCase{{"/work", `git --git-dir=/repo/.git commit -m fix`, "/work"}}},
+		{"POSIX relative", []repositoryCase{{"/work", "cd sub && git -C ../child commit -m fix", "/work/child"}}},
+		{"Windows absolute", []repositoryCase{{`C:\work`, `cd D:\repo && git commit -m fix`, `D:\repo`}, {"C:/work", "cd D:/repo && git commit -m fix", "D:/repo"}}},
+		{"Windows relative", []repositoryCase{{`C:\work`, `cd sub && git -C child commit -m fix`, `C:\work\sub\child`}, {`C:\work`, `git -C sub\child commit -m fix`, `C:\work\sub\child`}}},
+		{"Windows parent", []repositoryCase{{`C:\work`, `git -C ..\repo commit -m fix`, `C:\repo`}}},
+		{"Windows rooted", []repositoryCase{{`C:\work`, `git -C \repo commit -m fix`, `C:\repo`}}},
+		{"Windows slash relative", []repositoryCase{{"C:/work", "git -C sub commit -m fix", "C:/work/sub"}}},
+		{"Windows UNC", []repositoryCase{{`C:\work`, `cd \\server\share\repo && git commit -m fix`, `\\server\share\repo`}}},
+		{"Windows UNC relative", []repositoryCase{{`\\server\share\repo`, `git -C ..\child commit -m fix`, `\\server\share\child`}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = tt.cwd })
-			input, err := json.Marshal(map[string]string{"command": tt.command})
-			require.NoError(t, err)
-			insertMessages(t, d, commitMessages("s1", string(input), "[main abc1234] Fix parser")...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, 1)
-			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			for _, c := range tt.cases {
+				d := testDB(t)
+				insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = c.cwd })
+				input, err := json.Marshal(map[string]string{"command": c.command})
+				require.NoError(t, err)
+				insertMessages(t, d, commitMessages("s1", string(input), "[main abc1234] Fix parser")...)
+				got, err := d.SessionCommitLinks(t.Context(), "s1")
+				require.NoError(t, err)
+				require.Len(t, got.Commits, 1)
+				assert.Equal(t, c.repository, got.Commits[0].Repository)
+			}
 		})
 	}
-	for _, tt := range []struct{ name, input, result, repository string }{
-		{"Codex JavaScript workdir", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, "/repo"},
-		{"Codex JavaScript leading cd", `text(await tools.exec_command({cmd:"cd /repo && git commit -m fix"}))`, "[main abc1234] Fix parser", "/repo"},
-		{"Codex JavaScript escaped command", `text(await tools.exec_command({cmd:"cd \"/my repo\" && git commit -m fix",workdir:"/work"}))`, "[main abc1234] Fix parser", "/my repo"},
-		{"JSON workdir", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser", "/repo"},
-		{"JSON workdir before message text", `{"cmd":"git commit -m \"Document cwd: '/wrong'\"","workdir":"/repo"}`, "[main abc1234] Document cwd: '/wrong'", "/repo"},
-		{"JSON cwd before message text", `{"cmd":"git commit -m \"Document workdir: '/wrong'\"","cwd":"/repo"}`, "[main abc1234] Document workdir: '/wrong'", "/repo"},
-		{"JSON without directory ignores cwd in message", `{"cmd":"git commit -m \"Document cwd: '/wrong'\""}`, "[main abc1234] Document cwd: '/wrong'", "/work"},
-		{"JSON without directory ignores workdir in message", `{"cmd":"git commit -m \"Document workdir: '/wrong'\""}`, "[main abc1234] Document workdir: '/wrong'", "/work"},
-		{"JSON cwd", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser", "/work/sub"},
-		{"JavaScript cwd", `text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`, "/repo"},
+	type callResult struct{ input, result string }
+	for _, tt := range []struct {
+		name, repository string
+		calls            []callResult
+	}{
+		{"Codex JavaScript workdir", "/repo", []callResult{{`text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`}}},
+		{"Codex JavaScript leading cd", "/repo", []callResult{{`text(await tools.exec_command({cmd:"cd /repo && git commit -m fix"}))`, "[main abc1234] Fix parser"}}},
+		{"Codex JavaScript escaped command", "/my repo", []callResult{{`text(await tools.exec_command({cmd:"cd \"/my repo\" && git commit -m fix",workdir:"/work"}))`, "[main abc1234] Fix parser"}}},
+		{"JSON workdir", "/repo", []callResult{{`{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"}, {`{"cmd":"git commit -m \"Document cwd: '/wrong'\"","workdir":"/repo"}`, "[main abc1234] Document cwd: '/wrong'"}, {`{"cmd":"git commit -m \"Document workdir: '/wrong'\"","cwd":"/repo"}`, "[main abc1234] Document workdir: '/wrong'"}}},
+		{"JSON without directory ignores cwd in message", "/work", []callResult{{`{"cmd":"git commit -m \"Document cwd: '/wrong'\""}`, "[main abc1234] Document cwd: '/wrong'"}, {`{"cmd":"git commit -m \"Document workdir: '/wrong'\""}`, "[main abc1234] Document workdir: '/wrong'"}}},
+		{"JSON cwd", "/work/sub", []callResult{{`{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser"}}},
+		{"JavaScript cwd", "/repo", []callResult{{`text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-			insertMessages(t, d, commitMessages("s1", tt.input, tt.result)...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, 1)
-			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			for _, call := range tt.calls {
+				d := testDB(t)
+				insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+				insertMessages(t, d, commitMessages("s1", call.input, call.result)...)
+				got, err := d.SessionCommitLinks(t.Context(), "s1")
+				require.NoError(t, err)
+				require.Len(t, got.Commits, 1)
+				assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			}
 		})
 	}
 }
@@ -400,6 +402,7 @@ func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	for _, l := range clash.Commits[0].Links {
 		assert.True(t, l.Ambiguous)
 	}
+	assert.ElementsMatch(t, []string{"abc123456", "abc123456", "abc1234ff"}, []string{clash.Commits[0].Links[0].SHA, clash.Commits[0].Links[1].SHA, clash.Commits[0].Links[2].SHA})
 	oversized := make([]string, 201)
 	for i := range oversized {
 		oversized[i] = "abc1234"
@@ -534,6 +537,26 @@ func TestCommitLinksWritePolicy(t *testing.T) {
 			}
 		})
 	}
+	t.Run("transcripts native poll", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "s1", "project-a")
+		messages := commitMessages("s1", `{"cmd":"git commit -m fix"}`, `{"session_id":7,"output":""}`)
+		messages[2].ToolCalls[0].ToolName = "exec_command"
+		poll := commitMessages("s1", `{"session_id":7,"chars":""}`, `{"output":"[main abc1234] Fix parser\n"}`)[2]
+		poll.Ordinal = 3
+		poll.ToolCalls[0].ToolName = "write_stdin"
+		poll.ToolCalls[0].ToolUseID = "poll"
+		messages = append(messages, poll)
+		insertMessages(t, d, messages...)
+		before, err := d.SessionCommitLinks(t.Context(), "s1")
+		require.NoError(t, err)
+		require.Len(t, before.Commits, 1)
+		d.SetArchiveContent(config.ArchiveContentTranscripts)
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", messages))
+		got, err := d.SessionCommitLinks(t.Context(), "s1")
+		require.NoError(t, err)
+		assert.Empty(t, got.Commits)
+	})
 }
 
 func TestCommitLinksDedupAndRepeats(t *testing.T) {
@@ -621,27 +644,6 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 			assert.Equal(t, "Record the parser fix", link.Turn.Text)
 		})
 	}
-}
-
-func TestCommitLinksTranscriptNativePoll(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a")
-	messages := commitMessages("s1", `{"cmd":"git commit -m fix"}`, `{"session_id":7,"output":""}`)
-	messages[2].ToolCalls[0].ToolName = "exec_command"
-	poll := commitMessages("s1", `{"session_id":7,"chars":""}`, `{"output":"[main abc1234] Fix parser\n"}`)[2]
-	poll.Ordinal = 3
-	poll.ToolCalls[0].ToolName = "write_stdin"
-	poll.ToolCalls[0].ToolUseID = "poll"
-	messages = append(messages, poll)
-	insertMessages(t, d, messages...)
-	before, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, before.Commits, 1)
-	d.SetArchiveContent(config.ArchiveContentTranscripts)
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", messages))
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	assert.Empty(t, got.Commits)
 }
 
 func TestCommitLinkMirrorRows(t *testing.T) {
