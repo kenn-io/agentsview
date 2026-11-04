@@ -116,7 +116,8 @@ The latest release is
   line. It reports how many of those paths were session files, how many
   sessions were updated or unchanged, how many sessions had their content read
   because their file details alone could not show whether they changed, how
-  many bytes those sessions hold, and how long the sync took.
+  many bytes were read, and how long the sync took. For a few less common
+  agents, the read figures can be lower than the real reads.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).

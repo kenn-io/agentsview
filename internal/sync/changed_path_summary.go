@@ -8,7 +8,9 @@ import (
 // changedPathPassSummary describes the work one changed-path pass did, so a
 // debug log shows whether watcher events name session sources at all and how
 // much source content the pass read because stats could not prove a source
-// unchanged.
+// unchanged. The content figures are a lower bound: a provider whose
+// fingerprint code does not report its reads to parser.ContentReadMeter is not
+// counted.
 type changedPathPassSummary struct {
 	paths             int
 	sources           int
