@@ -14,6 +14,7 @@ const MID_TURN_SYSTEM_SUBTYPES = new Set([
   "hook_success",
   "hook_additional_context",
   "hook_cancelled",
+  "stop_hook_summary",
 ]);
 
 function isMidTurnSystemMessage(m: Message): boolean {

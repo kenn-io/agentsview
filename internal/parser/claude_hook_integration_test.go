@@ -16,7 +16,7 @@ import (
 func claudeHookImportRows(msgs []ParsedMessage) []ParsedMessage {
 	var rows []ParsedMessage
 	for _, m := range msgs {
-		if m.SourceSubtype == "hook_success" || m.SourceSubtype == "hook_additional_context" || m.SourceSubtype == "hook_cancelled" {
+		if IsClaudeHookSubtype(m.SourceSubtype) {
 			rows = append(rows, m)
 		}
 	}
@@ -30,19 +30,24 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ subtype, content, body string }{
 		{"hook_success", `,"content":"hook finished"`, "\n\nContent:\nhook finished"},
-		{"hook_cancelled", "", ""},
+		{"hook_cancelled", `,"timedOut":false,"timeoutMs":60000`, ""},
+		{"hook_cancelled", `,"timedOut":true,"timeoutMs":60000`, "\n\nTimed out after 60000 ms"},
+		{"stop_hook_summary", `,"hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked"},
+		{"stop_hook_summary", `,"hookErrors":["failed"]`, "Hook errors:\nfailed"},
+		{"stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped"},
 		{"hook_additional_context", `,"content":["hook finished","more context"]`, "\n\nContent:\nhook finished\nmore context"},
 	} {
 		t.Run(tc.subtype, func(t *testing.T) {
 			t.Parallel()
 
+			record := `{"type":"attachment","attachment":{"type":"` + tc.subtype + `","hookName":"example-hook","hookEvent":"PostToolUse","command":"echo hook","toolUseID":"tool-1"` + tc.content + `}}`
+			if tc.subtype == "stop_hook_summary" {
+				record = `{"type":"system","subtype":"stop_hook_summary","toolUseID":"tool-1"` + tc.content + `}`
+			}
+			record = strings.TrimSuffix(record, "}") + `,"timestamp":"2026-01-01T00:00:01Z","uuid":"hook-row","parentUuid":"native-parent","isSidechain":true,"promptSource":"synthetic-origin"}`
 			content := testjsonl.JoinJSONL(
 				testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-				`{"type":"attachment","timestamp":"2026-01-01T00:00:01Z",`+
-					`"uuid":"hook-row","parentUuid":"native-parent",`+
-					`"isSidechain":true,"promptSource":"synthetic-origin",`+
-					`"attachment":{"type":"`+tc.subtype+`","hookName":"example-hook",`+
-					`"hookEvent":"PostToolUse","command":"echo hook","toolUseID":"tool-1"`+tc.content+`}}`,
+				record,
 				testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
 			)
 
@@ -52,16 +57,21 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 			hook := msgs[1]
 			assert.Equal(t, RoleUser, hook.Role)
 			assert.True(t, hook.IsSystem)
-			assert.Equal(t, "attachment", hook.SourceType)
+			sourceType := "attachment"
+			if tc.subtype == "stop_hook_summary" {
+				sourceType = "system"
+			}
+			assert.Equal(t, sourceType, hook.SourceType)
 			assert.Equal(t, tc.subtype, hook.SourceSubtype)
 			assert.Equal(t, "hook-row", hook.SourceUUID)
 			assert.Equal(t, "native-parent", hook.SourceParentUUID)
 			assert.True(t, hook.IsSidechain)
 			assert.Equal(t, "synthetic-origin", hook.PromptSource)
-			assert.Equal(t,
-				"Hook name: example-hook\n\nHook event: PostToolUse\n\n"+
-					"Command: echo hook\n\nTool-use id: tool-1"+tc.body,
-				hook.Content)
+			wantBody := "Hook name: example-hook\n\nHook event: PostToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1" + tc.body
+			if tc.subtype == "stop_hook_summary" {
+				wantBody = "Tool-use id: tool-1\n\n" + tc.body
+			}
+			assert.Equal(t, wantBody, hook.Content)
 			assert.Equal(t, len(hook.Content), hook.ContentLength)
 			require.NotNil(t, hook.DialogueText)
 			assert.Empty(t, *hook.DialogueText)
@@ -226,6 +236,8 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 		`"uuid":"hook-1","parentUuid":"unknown-parent",` +
 		`"attachment":{"type":"hook_success","content":"hook finished"}}` + "\n" +
 		`{"type":"attachment","timestamp":"2026-01-01T00:00:03Z","uuid":"cancelled-1","parentUuid":"hook-1","attachment":{"type":"hook_cancelled","hookName":"PreToolUse:Read","hookEvent":"PreToolUse","command":"echo hook","toolUseID":"tool-1"}}` + "\n"
+	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:04Z","uuid":"summary-1","parentUuid":"cancelled-1","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}` + "\n"
+	appended += `{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-01T00:00:05Z","hookCount":0,"hookInfos":[],"hookErrors":[],"preventedContinuation":false}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
 	_, err = f.WriteString(appended)
@@ -236,7 +248,10 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 		path, info.Size(), 2, "",
 	)
 	require.NoError(t, err)
-	require.Len(t, msgs, 2)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "stop_hook_summary", msgs[2].SourceSubtype)
+	assert.Equal(t, "system", msgs[2].SourceType)
+	assert.Equal(t, "Hook count: 1\n\nCommand: echo hook\n\nPrevented continuation: false", msgs[2].Content)
 	assert.Equal(t, "hook_cancelled", msgs[1].SourceSubtype)
 	assert.Equal(t, "Hook name: PreToolUse:Read\n\nHook event: PreToolUse\n\nCommand: echo hook\n\nTool-use id: tool-1", msgs[1].Content)
 
@@ -249,7 +264,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	assert.Equal(t, RoleUser, hook.Role)
 	assert.Equal(t, int64(len(appended)), consumed)
 	assert.Equal(t,
-		"2026-01-01T00:00:03Z", endedAt.Format(time.RFC3339))
+		"2026-01-01T00:00:05Z", endedAt.Format(time.RFC3339))
 }
 
 // A hook written between the chunks of one response must not hide the
@@ -388,6 +403,8 @@ func TestClaudeHookImportForkOwnership(t *testing.T) {
 		{name: "attachment chain", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":"bridge"}}`},
 		{name: "empty hook bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_success","content":""}}`},
 		{name: "cancelled hook bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"hook_cancelled"}}`},
+		{name: "stop summary bridge", parent: "bridge", meta: `{"type":"system","subtype":"stop_hook_summary","uuid":"bridge","parentUuid":"fork","hookInfos":[{"command":"echo hook"}]}`},
+		{name: "empty stop summary bridge", parent: "bridge", meta: `{"type":"system","subtype":"stop_hook_summary","uuid":"bridge","parentUuid":"fork","hookInfos":[]}`},
 		{name: "other attachment bridge", parent: "bridge", meta: `{"type":"attachment","uuid":"bridge","parentUuid":"fork","attachment":{"type":"task_reminder"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

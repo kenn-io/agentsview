@@ -28,6 +28,10 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 		{provider: parser.AgentQoder, subtype: "hook_success"},
 		{provider: parser.AgentIcodemate, subtype: "hook_success"},
 		{provider: parser.AgentClaude, subtype: "hook_success", archiveOnly: true},
+		{provider: parser.AgentClaude, subtype: "stop_hook_summary"},
+		{provider: parser.AgentCowork, subtype: "stop_hook_summary"},
+		{provider: parser.AgentQoder, subtype: "stop_hook_summary"},
+		{provider: parser.AgentIcodemate, subtype: "stop_hook_summary"},
 	} {
 		name := tc.subtype + "/" + string(tc.provider)
 		if tc.archiveOnly {
@@ -130,7 +134,11 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 			assert.Equal(t, answerIdentity, hookUpgradeChange(t, republished, readableID, 2).MessageID)
 			assert.Equal(t, []string{"u1", "h1", "a1"}, []string{after[0].SourceUUID, after[1].SourceUUID, after[2].SourceUUID})
 			assert.True(t, after[1].IsSystem)
-			assert.Equal(t, "attachment", after[1].SourceType)
+			sourceType := "attachment"
+			if tc.subtype == "stop_hook_summary" {
+				sourceType = "system"
+			}
+			assert.Equal(t, sourceType, after[1].SourceType)
 			assert.Equal(t, tc.subtype, after[1].SourceSubtype)
 			assert.Equal(t, "u1", after[1].SourceParentUUID)
 			assertHookUpgradeCuration(t, reopened, readableID, after[2].ID, 2)
@@ -200,10 +208,14 @@ func writeHookUpgradeSource(t *testing.T, root string, provider parser.AgentType
 	if subtype == "hook_additional_context" {
 		content = "[" + content + "]"
 	}
+	hook := fmt.Sprintf(`{"type":"attachment","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","attachment":{"type":%q,"content":%s}}`, subtype, content)
+	if subtype == "stop_hook_summary" {
+		hook = `{"type":"system","subtype":"stop_hook_summary","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`
+	}
 	body := fmt.Sprintf(`{"type":"user","uuid":"u1","sessionId":%q,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"request"}}
-{"type":"attachment","uuid":"h1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","attachment":{"type":%q,"content":%s}}
+%s
 {"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:02Z","message":{"id":"answer-1","role":"assistant","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}}
-`, id, subtype, content)
+`, id, hook)
 	dbtest.WriteTestFile(t, path, []byte(body))
 	return path, meta
 }
@@ -223,7 +235,7 @@ func seedLegacyHookOutput(t *testing.T, database *db.DB, id string) []db.Message
 	require.Len(t, parsed, 3)
 	var legacy []db.Message
 	for _, message := range parsed {
-		if message.SourceSubtype != "hook_success" && message.SourceSubtype != "hook_additional_context" {
+		if !parser.IsClaudeHookSubtype(message.SourceSubtype) {
 			message.Ordinal = len(legacy)
 			legacy = append(legacy, message)
 		}

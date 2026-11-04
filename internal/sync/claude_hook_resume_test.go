@@ -35,10 +35,13 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		initialHook bool
+		wantSubtype string
 		hooks       []string
 		ids         []string
 	}{
 		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
+		{name: "full import ending in stop summary", wantSubtype: "stop_hook_summary", initialHook: true, hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`}, ids: []string{"h1"}},
+		{name: "stop summary append", wantSubtype: "stop_hook_summary", hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":[],"preventedContinuation":false}`}, ids: []string{"h1"}},
 		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 		{name: "multiple out-of-band hooks", hooks: []string{
 			claudeHookResumeNative,
@@ -83,8 +86,16 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			for i, wantID := range tc.ids {
 				row := rows[i+2]
 				assert.Equal(t, wantID, row.SourceUUID)
-				assert.Equal(t, "attachment", row.SourceType)
-				assert.Equal(t, "hook_success", row.SourceSubtype)
+				sourceType := "attachment"
+				if tc.wantSubtype == "stop_hook_summary" {
+					sourceType = "system"
+				}
+				assert.Equal(t, sourceType, row.SourceType)
+				wantSubtype := tc.wantSubtype
+				if wantSubtype == "" {
+					wantSubtype = "hook_success"
+				}
+				assert.Equal(t, wantSubtype, row.SourceSubtype)
 				assert.True(t, row.IsSystem)
 				require.NotNil(t, row.DialogueText)
 				assert.Empty(t, *row.DialogueText)

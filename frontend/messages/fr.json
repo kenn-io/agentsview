@@ -2231,6 +2231,7 @@
   "system_boundary_task_notification": "Notification de tâche",
   "system_boundary_stop_hook": "Retour du hook d'arrêt",
   "system_boundary_hook_success": "Sortie du hook",
+  "system_boundary_stop_hook_summary": "Résumé des hooks d’arrêt",
   "system_boundary_hook_cancelled": "Hook annulé",
   "system_boundary_peer_message": "Message d'une autre session",
   "system_boundary_title": "Limite système\u202f: {subtype}",

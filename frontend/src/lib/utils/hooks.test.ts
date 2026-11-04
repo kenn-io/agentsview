@@ -10,13 +10,18 @@ import { buildDisplayItems } from "./display-items.js";
 import { isSystemMessage } from "./messages.js";
 import { filterDisplayItemsByTranscriptMode } from "./transcript-mode.js";
 
-const hookSubtypes = ["hook_success", "hook_additional_context", "hook_cancelled"];
+const hookSubtypes = [
+  "hook_success",
+  "hook_additional_context",
+  "hook_cancelled",
+  "stop_hook_summary",
+];
 
 const hook = (subtype = "hook_success") =>
   msg({
     ordinal: 2,
     is_system: true,
-    source_type: "attachment",
+    source_type: subtype === "stop_hook_summary" ? "system" : "attachment",
     source_subtype: subtype,
     content: "Hook name: Example\n\nStdout:\n  中文 e\u0301 <script>literal</script>\n",
   });
@@ -36,7 +41,13 @@ describe.each(hookSubtypes)("%s output", (subtype) => {
       true,
     );
     expect(
-      hasVisibleSegments({ ...hook(subtype), source_type: "system" }, (t) => t === "hook"),
+      hasVisibleSegments(
+        {
+          ...hook(subtype),
+          source_type: subtype === "stop_hook_summary" ? "attachment" : "system",
+        },
+        (t) => t === "hook",
+      ),
     ).toBe(false);
   });
 
@@ -63,7 +74,11 @@ describe.each(hookSubtypes)("%s output", (subtype) => {
       props: { subtype, content, timestamp: "" },
     });
     expect(document.querySelector(".label")?.textContent).toBe(
-      subtype === "hook_cancelled" ? "Hook cancelled" : "Hook output",
+      subtype === "stop_hook_summary"
+        ? "Stop hook summary"
+        : subtype === "hook_cancelled"
+          ? "Hook cancelled"
+          : "Hook output",
     );
     const details = document.querySelector("details");
     expect(details).not.toBeNull();

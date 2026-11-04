@@ -2147,6 +2147,7 @@
   "system_boundary_task_notification": "任务通知",
   "system_boundary_stop_hook": "停止钩子反馈",
   "system_boundary_hook_success": "钩子输出",
+  "system_boundary_stop_hook_summary": "停止钩子摘要",
   "system_boundary_hook_cancelled": "钩子已取消",
   "system_boundary_peer_message": "来自其他会话的消息",
   "system_boundary_title": "系统边界：{subtype}",

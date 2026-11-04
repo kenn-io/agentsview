@@ -1,13 +1,14 @@
 package parser
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
 
-// claudeHookSuccess holds the text a supported Claude Code hook attachment
-// carries. A missing member and an empty member are both an empty string.
+// claudeHookSuccess holds imported Claude Code hook output and metadata.
 type claudeHookSuccess struct {
 	subtype   string
 	hookName  string
@@ -17,20 +18,44 @@ type claudeHookSuccess struct {
 	content   string
 	stdout    string
 	stderr    string
+	timedOut  bool
+	timeoutMs *float64
+	summary   *claudeStopHookSummary
+}
+
+type claudeStopHookSummary struct {
+	HookCount *int `json:"hookCount"`
+	HookInfos []struct {
+		Command string `json:"command"`
+	} `json:"hookInfos"`
+	HookErrors            []string `json:"hookErrors"`
+	PreventedContinuation *bool    `json:"preventedContinuation"`
+	StopReason            string   `json:"stopReason"`
+	ToolUseID             string   `json:"toolUseID"`
 }
 
 // IsClaudeHookSubtype reports whether the parser imports this hook subtype.
 func IsClaudeHookSubtype(subtype string) bool {
-	return subtype == "hook_success" || subtype == "hook_additional_context" || subtype == "hook_cancelled"
+	return subtype == "hook_success" || subtype == "hook_additional_context" || subtype == "hook_cancelled" || subtype == "stop_hook_summary"
 }
 
 // extractClaudeHookSuccess decodes the hook output payload of one
 // transcript line. It decodes the payload only: it does not store, order,
 // or display the result.
 func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
+	if gjson.Get(line, "type").Str == "system" && gjson.Get(line, "subtype").Str == "stop_hook_summary" {
+		var summary claudeStopHookSummary
+		if err := json.Unmarshal([]byte(line), &summary); err != nil {
+			return claudeHookSuccess{}, false
+		}
+		if len(summary.HookInfos) == 0 && len(summary.HookErrors) == 0 && summary.StopReason == "" {
+			return claudeHookSuccess{}, false
+		}
+		return claudeHookSuccess{subtype: "stop_hook_summary", toolUseID: summary.ToolUseID, summary: &summary}, true
+	}
 	attachment := gjson.Get(line, "attachment")
 	attachmentType := attachment.Get("type")
-	if !IsClaudeHookSubtype(attachmentType.Str) {
+	if !IsClaudeHookSubtype(attachmentType.Str) || attachmentType.Str == "stop_hook_summary" {
 		return claudeHookSuccess{}, false
 	}
 	payload := claudeHookSuccess{subtype: attachmentType.Str}
@@ -77,6 +102,15 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 		return payload, true
 	}
 	if payload.subtype == "hook_cancelled" {
+		var cancellation struct {
+			TimedOut  bool     `json:"timedOut"`
+			TimeoutMs *float64 `json:"timeoutMs"`
+		}
+		if err := json.Unmarshal([]byte(attachment.Raw), &cancellation); err != nil {
+			return claudeHookSuccess{}, false
+		}
+		payload.timedOut = cancellation.TimedOut
+		payload.timeoutMs = cancellation.TimeoutMs
 		return payload, true
 	}
 	if strings.TrimSpace(payload.content) == "" &&
@@ -90,7 +124,7 @@ func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
 // extractClaudeHookAttachment decodes one transcript line into a
 // deferred hook attachment. It reuses the strict hook output decoder,
 // skipping unsupported types, malformed payloads, and empty output unless
-// the hook was cancelled. The record keeps its own top-level identity.
+// the hook was cancelled or has summary metadata. The record keeps its identity.
 func extractClaudeHookAttachment(line string) (claudeAttachment, bool) {
 	payload, ok := extractClaudeHookSuccess(line)
 	if !ok {
@@ -134,6 +168,30 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 	if payload.toolUseID != "" {
 		sections = append(sections, "Tool-use id: "+payload.toolUseID)
 	}
+	if payload.timedOut {
+		timeout := "Timed out"
+		if payload.timeoutMs != nil {
+			timeout = fmt.Sprintf("Timed out after %g ms", *payload.timeoutMs)
+		}
+		sections = append(sections, timeout)
+	}
+	if summary := payload.summary; summary != nil {
+		if summary.HookCount != nil {
+			sections = append(sections, fmt.Sprintf("Hook count: %d", *summary.HookCount))
+		}
+		for _, info := range summary.HookInfos {
+			sections = append(sections, "Command: "+info.Command)
+		}
+		if len(summary.HookErrors) > 0 {
+			sections = append(sections, "Hook errors:\n"+strings.Join(summary.HookErrors, "\n"))
+		}
+		if summary.PreventedContinuation != nil {
+			sections = append(sections, fmt.Sprintf("Prevented continuation: %t", *summary.PreventedContinuation))
+		}
+		if summary.StopReason != "" {
+			sections = append(sections, "Stop reason: "+summary.StopReason)
+		}
+	}
 	if payload.content != "" {
 		sections = append(sections, "Content:\n"+payload.content)
 	}
@@ -146,7 +204,7 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// claudeHookSuccessMessage builds the row a hook output attachment
+// claudeHookSuccessMessage builds the row a hook output record
 // becomes. The row keeps Role=user to match the project's system-row
 // convention, so role-keyed analytics do not read it as an assistant
 // reply, and it stays a system row so it never becomes a user prompt
@@ -154,6 +212,10 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 // usage, model, or billing identity.
 func claudeHookSuccessMessage(a claudeAttachment) ParsedMessage {
 	body := claudeHookSuccessBody(*a.hook)
+	sourceType := "attachment"
+	if a.hook.subtype == "stop_hook_summary" {
+		sourceType = "system"
+	}
 	dialogue := ""
 	return ParsedMessage{
 		Role:             RoleUser,
@@ -162,7 +224,7 @@ func claudeHookSuccessMessage(a claudeAttachment) ParsedMessage {
 		Timestamp:        a.timestamp,
 		IsSystem:         true,
 		ContentLength:    len(body),
-		SourceType:       "attachment",
+		SourceType:       sourceType,
 		SourceSubtype:    a.hook.subtype,
 		SourceUUID:       a.sourceUUID,
 		SourceParentUUID: a.sourceParentUUID,

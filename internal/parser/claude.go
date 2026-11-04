@@ -339,6 +339,14 @@ func claudeParseFile(
 		// Handle system records. /rename local commands update the
 		// display name; last rename wins (empty arg clears it).
 		if entryType == "system" {
+			if gjson.GetBytes(lineBytes, "subtype").Str == "stop_hook_summary" {
+				if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" {
+					attachmentParents[strings.Clone(uuid)] = strings.Clone(gjson.GetBytes(lineBytes, "parentUuid").Str)
+				}
+				if hook, ok := extractClaudeHookAttachment(string(lineBytes)); ok {
+					attachments = append(attachments, hook)
+				}
+			}
 			if name, ok := extractRenameName(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
@@ -931,6 +939,11 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "system" {
+				if gjson.Get(line, "subtype").Str == "stop_hook_summary" {
+					if hook, ok := extractClaudeHookAttachment(line); ok {
+						attachments = append(attachments, hook)
+					}
+				}
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-04
 ---
 
 # Session Format Source Inventory
@@ -155,7 +155,7 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Hook output attachments (checked 2026-11-03):** The parser reads the
+- **Hook output (checked 2026-11-04):** The parser reads the
   `hook_success` attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`, and
   in two first-hand reports with `stdout` and `stderr`:
@@ -167,10 +167,17 @@ evidence; they do not establish whether a tool helped the task.
   `toolUseID`, `content`, `stdout`, and `stderr` string members, and keeps each
   channel's text as written. For `hook_additional_context`, it joins the
   `content` string array with newlines and skips empty output. Cancelled hooks
-  keep their metadata even without output. Hook errors and the
-  `stop_hook_summary` system record are still not imported. These are reported
-  transcript shapes, not a public producer source or an authoritative
-  persistence schema. The
+  keep their metadata even without output. Typed `timedOut` and `timeoutMs`
+  fields distinguish timeouts from explicit cancellation. Hook error attachments
+  are still not imported. The parser also imports `system` records with subtype
+  `stop_hook_summary`, retaining `hookCount`, each `hookInfos` command,
+  `hookErrors`, `preventedContinuation`, `stopReason`, and `toolUseID` as labeled
+  body sections. Summaries without hook infos, errors, or a stop reason are
+  skipped. Claude Code 2.1.301's installed producer constructs this summary
+  with `Lhs`; its `wno` schema defines each hook info's `command` string.
+  Its HTTP, MCP, and command cancellation constructors supply boolean
+  `timedOut` and numeric `timeoutMs`. These are installed producer evidence,
+  rather than a public persistence schema. The
   [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
   protocol's stdout and stderr, not transcript persistence. Full and incremental
   parsing emit system rows with an explicitly empty dialogue field. The plain

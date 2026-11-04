@@ -426,8 +426,11 @@ emitted, separated from the flattened `content` which still contains inline
 
 Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
 `resume`, `interrupted`, `task_notification`, `stop_hook`, `peer_message`,
-`compact_boundary`, `hook_success`, `hook_additional_context`, `hook_cancelled`.
-The hook subtypes carry Claude hook output with `source_type: "attachment"`.
+`compact_boundary`, `hook_success`, `hook_additional_context`, `hook_cancelled`,
+`stop_hook_summary`.
+The three `hook_*` subtypes carry Claude hook output with
+`source_type: "attachment"`. `stop_hook_summary` carries stop hook results with
+`source_type: "system"`.
 `peer_message` is a message another Claude Code session sent; its `content`
 keeps the `<cross-session-message>` wrapper with the sender's name.
 

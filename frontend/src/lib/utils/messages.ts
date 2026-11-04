@@ -35,6 +35,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "hook_success",
   "hook_additional_context",
   "hook_cancelled",
+  "stop_hook_summary",
 ]);
 
 /**
@@ -49,20 +50,15 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
   return !!m.source_subtype && m.source_subtype !== "compact_boundary";
 }
 
-/**
- * Reports whether the message carries hook output that the parser kept
- * as a non-dialogue system row. Only this exact shape counts: the row
- * must be system-flagged, come from an attachment source and carry the
- * hook_success, hook_additional_context, or hook_cancelled subtype.
- * Neither the role nor the body text implies a hook.
- */
+/** Reports whether the message carries imported hook output. */
 export function isHookSuccessMessage(m: Message): boolean {
   return (
     m.is_system === true &&
-    m.source_type === "attachment" &&
-    (m.source_subtype === "hook_success" ||
-      m.source_subtype === "hook_additional_context" ||
-      m.source_subtype === "hook_cancelled")
+    ((m.source_type === "system" && m.source_subtype === "stop_hook_summary") ||
+      (m.source_type === "attachment" &&
+        (m.source_subtype === "hook_success" ||
+          m.source_subtype === "hook_additional_context" ||
+          m.source_subtype === "hook_cancelled")))
   );
 }
 

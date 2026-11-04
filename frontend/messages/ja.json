@@ -2219,6 +2219,7 @@
   "system_boundary_task_notification": "タスク通知",
   "system_boundary_stop_hook": "フックフィードバックを停止する",
   "system_boundary_hook_success": "フック出力",
+  "system_boundary_stop_hook_summary": "停止フックの概要",
   "system_boundary_hook_cancelled": "フックのキャンセル",
   "system_boundary_peer_message": "別のセッションからのメッセージ",
   "system_boundary_title": "システム境界: {subtype}",
