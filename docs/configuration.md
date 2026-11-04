@@ -2352,20 +2352,21 @@ detail for existing sessions.
 
 ### Large Watch Trees
 
-The recursive watcher has a hard budget of 8192 directories per process. If a
-session root is larger than the remaining budget, or if registering watches hits
-the operating system's inotify or file-descriptor limit (`ENOSPC` / `EMFILE`),
-as of 0.27.0 AgentsView **degrades** that root to polling instead of aborting
-startup. The HTTP listener is now bound before any watches are registered, so
-the server still comes up cleanly.
+On Linux, the recursive watcher watches every directory until the kernel's
+`fs.inotify.max_user_watches` limit runs out. Windows and other non-macOS
+platforms keep a budget of 8,192 directories per process. The macOS FSEvents
+watcher has no per-directory budget. If a session root exceeds the remaining
+budget, or registering watches hits the operating system's inotify or
+file-descriptor limit (`ENOSPC` / `EMFILE`), AgentsView polls that root. The
+HTTP listener binds before any watches are registered, so the server still
+starts.
 
 Providers can also cap how deep a recursive root is watched when they read only
 a fixed depth. Antigravity and Antigravity CLI `brain` folders are watched one
-level deep, so the generated trees inside each `brain/<id>` do not count
-against the budget. The Antigravity IDE watcher also watches
-`brain/<id>/.system_generated/logs`, which holds the plaintext transcript.
-This cap applies to the Linux and Windows watcher. The macOS FSEvents watcher
-has no per-directory budget.
+level deep, so the generated trees inside each `brain/<id>` do not count against
+the budget. The Antigravity IDE watcher also watches
+`brain/<id>/.system_generated/logs`, which holds the plaintext transcript. The
+depth cap applies wherever the fsnotify watcher runs.
 
 Runtime folder watch failures keep healthy folders on native watches. Claude
 polling covers the affected project folder. Other providers poll the root's
