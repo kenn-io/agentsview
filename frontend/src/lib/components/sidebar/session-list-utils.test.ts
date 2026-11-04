@@ -10,7 +10,7 @@ import {
   buildDisplayItems,
   computeTotalSize,
   findStart,
-  isSubagentDescendant,
+  subagentDescendantMatcher,
   selectPrimaryId,
 } from "./session-list-utils.js";
 import type { DisplayItem } from "./session-list-utils.js";
@@ -634,6 +634,64 @@ describe("starred-only session count", () => {
   });
 });
 
+describe("ancestry classification across a group", () => {
+  it("keeps continuations, subagent descendants, and teammate descendants in their sections", () => {
+    const chain = Array.from({ length: 100 }, (_, i) =>
+      makeSession({
+        id: `session-${i}`,
+        parent_session_id: i ? `session-${i - 1}` : undefined,
+        relationship_type: i === 50 ? "subagent" : i ? "continuation" : undefined,
+      }),
+    );
+    const teammate = makeSession({
+      id: "teammate",
+      parent_session_id: "session-0",
+      first_message: "<teammate-message>hello</teammate-message>",
+    });
+    const continuation = makeSession({
+      id: "team-continuation",
+      parent_session_id: "teammate",
+      relationship_type: "continuation",
+    });
+    const groups = buildSessionGroups([...chain, teammate, continuation]);
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set(["session-0"]));
+    expect(items.filter((item) => item.isChild).map((item) => item.session?.id)).toEqual(
+      chain.slice(1, 50).map((session) => session.id),
+    );
+    expect(items.filter((item) => item.isChild).every((item) => item.depth === 1)).toBe(true);
+    expect(items.find((item) => item.type === "subagent-group")?.memberSessionIds).toEqual(
+      chain.slice(50).map((session) => session.id),
+    );
+    expect(items.find((item) => item.type === "team-group")?.memberSessionIds).toEqual([
+      "teammate",
+      "team-continuation",
+    ]);
+  });
+
+  it("classifies a shared child using each group's own ancestry pool", () => {
+    const a = makeSession({ id: "a", relationship_type: "subagent" });
+    const b = makeSession({ id: "b" });
+    const child = makeSession({ id: "shared", parent_session_ids: ["a", "b"] });
+    const groups = [a, b].map((root) => ({
+      ...makeGroup("claude"),
+      key: root.id,
+      primarySessionId: root.id,
+      sessions: [root, child],
+    }));
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set(["a", "b"]));
+    expect(
+      items
+        .filter((item) => item.type === "subagent-group")
+        .map((item) => [item.group?.key, item.memberSessionIds]),
+    ).toEqual([["a", ["shared"]]]);
+    expect(
+      items
+        .filter((item) => item.isChild)
+        .map((item) => [item.group?.key, item.session?.id, item.depth]),
+    ).toEqual([["b", "shared", 1]]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Child classification: subagent precedence over teammate
 // ---------------------------------------------------------------------------
@@ -768,7 +826,7 @@ describe("child classification precedence", () => {
     expect(childItems[2]!.session!.id).toBe("sub-old");
   });
 
-  it("isSubagentDescendant returns true for child of subagent", () => {
+  it("subagentDescendantMatcher returns true for child of subagent", () => {
     const subagent = makeSession({
       id: "sub",
       relationship_type: "subagent",
@@ -777,7 +835,7 @@ describe("child classification precedence", () => {
       id: "child",
       parent_session_id: "sub",
     });
-    expect(isSubagentDescendant(child, [subagent, child])).toBe(true);
+    expect(subagentDescendantMatcher([subagent, child])(child)).toBe(true);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { SessionGroup, SessionGroupInput } from "../../stores/sessions.svelte.js";
-import { sessionAncestryMatches } from "../../utils/session-ancestry.js";
+import { sessionAncestryMatcher } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;
 const CHILD_ITEM_HEIGHT = 34;
@@ -114,16 +114,6 @@ function isTeammateByMessage(s: SessionGroupInput): boolean {
 }
 
 /**
- * Check if a session is a teammate, inheriting status from the
- * parent.  Continuation sessions of a teammate don't carry the
- * `<teammate-message>` tag themselves, but they belong to the
- * same teammate chain.
- */
-function isTeammate(s: SessionGroupInput, allSessions: SessionGroupInput[]): boolean {
-  return sessionAncestryMatches(s, allSessions, isTeammateByMessage);
-}
-
-/**
  * Check if a session is a subagent (has relationship_type === "subagent").
  * Continuation/fork sessions are NOT subagents.
  */
@@ -138,11 +128,10 @@ function isSubagent(s: SessionGroupInput): boolean {
  * subagent stay under the "Subagents" group header instead of
  * being miscategorised as plain continuations.
  */
-export function isSubagentDescendant(
-  s: SessionGroupInput,
+export function subagentDescendantMatcher(
   groupSessions: SessionGroupInput[],
-): boolean {
-  return sessionAncestryMatches(s, groupSessions, isSubagent);
+): (session: SessionGroupInput) => boolean {
+  return sessionAncestryMatcher(groupSessions, isSubagent);
 }
 
 /**
@@ -186,13 +175,15 @@ function emitGroupItems(
   // filtered-out ancestors don't break the parent-chain walk.
   const children = g.sessions.filter((s) => s.id !== g.primarySessionId);
   const ancestryPool = g.allSessions ?? g.sessions;
+  const isSubagentChild = subagentDescendantMatcher(ancestryPool);
+  const isTeammateChild = sessionAncestryMatcher(ancestryPool, isTeammateByMessage);
   const subagents: SessionGroupInput[] = [];
   const teammates: SessionGroupInput[] = [];
   const continuations: SessionGroupInput[] = [];
   for (const s of children) {
-    if (isSubagentDescendant(s, ancestryPool)) {
+    if (isSubagentChild(s)) {
       subagents.push(s);
-    } else if (isTeammate(s, ancestryPool)) {
+    } else if (isTeammateChild(s)) {
       teammates.push(s);
     } else {
       continuations.push(s);
