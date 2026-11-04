@@ -251,18 +251,18 @@ failed transfer leaves the thread and its pins intact.
 
 ### Codex incremental import state
 
-Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds
-resume metadata, `parser_checkpoint_blobs` holds cursor and hash state,
-`session_signal_state` holds the incremental signal reducer, and
-`tool_call_occurrence_agent_state` holds per-agent result coordinates. Claude
-also stores hash-only checkpoints. The last table is populated lazily when a
-call receives a late result. Other providers do not maintain Codex signal state.
-Full writes commit the signal seed with the content and bind it to the stored
-transcript revision inside SQLite. A failed seed rolls back the content; there
-is no post-commit revision read. During a full resync, the disposable
-replacement archive defers the tool-call ID and result metadata indexes until
-after the bulk load. Rebuilding them must succeed before the replacement can be
-installed.
+Four SQLite-only tables support local Codex and Claude imports:
+`parser_checkpoints` holds resume metadata, `parser_checkpoint_blobs` holds
+cursor and hash state, `session_signal_state` holds the incremental signal
+reducer, and `tool_call_occurrence_agent_state` holds per-agent result
+coordinates. Claude's hash-only checkpoints trust bytes before the 128 KiB tail
+anchor as append-only. The last table is populated lazily when a call receives a
+late result. Other providers do not maintain Codex signal state. Full writes
+commit the signal seed with the content and bind it to the stored transcript
+revision inside SQLite. A failed seed rolls back the content; there is no
+post-commit revision read. During a full resync, the disposable replacement
+archive defers the tool-call ID and result metadata indexes until after the bulk
+load. Rebuilding them must succeed before the replacement can be installed.
 
 Codex result events also retain a raw-content digest and whether the raw event
 participates in the summary. These local fields distinguish events that become
