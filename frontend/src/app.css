@@ -227,7 +227,7 @@
 }
 
 :root.dark {
-  --selected-edge: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 45%, var(--border-default));
+  --selected-edge: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 25%, var(--border-default));
   --selected-bg: var(--bg-surface-hover);
   --selected-list-bg: var(--bg-surface-hover);
 }

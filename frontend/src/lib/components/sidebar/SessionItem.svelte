@@ -659,7 +659,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 48px;
+    height: 45px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -772,14 +772,14 @@
 
   .session-item {
     /* Scales with the sidebar so wide rows show full agent names. */
-    --side-meta-width: min(max(118px, 38%), 40%);
+    --side-meta-width: 40%;
   }
 
   /* Clip the meta line to its box so nothing paints under the slot. */
   .session-item:has(.side-meta) .session-meta {
     overflow: hidden;
     /* A margin, not padding, so the clip edge stops before the slot. */
-    margin-right: calc(min(max(118px, 42%), 46%) + 12px);
+    margin-right: calc(44% + 10px);
   }
 
   /* Agent identity: a small colored mark plus the agent name. */
@@ -809,8 +809,9 @@
 
   .machine-tag {
     min-width: 0;
+    flex: 0 1 auto;
     flex-shrink: 20;
-    max-width: 72px;
+    max-width: none;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -852,7 +853,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    line-height: 16px;
+    line-height: 15px;
     letter-spacing: -0.005em;
   }
 
@@ -915,7 +916,7 @@
     gap: 8px;
     min-width: 0;
     font-size: 11px;
-    line-height: 13px;
+    line-height: 12px;
     color: var(--text-muted);
   }
 

@@ -187,7 +187,7 @@
   }
 
   :global(:root.dark) .treemap-container {
-    --tile-tint: 62%;
+    --tile-tint: 70%;
   }
 
   .treemap-container :global(.tile:not(.patterned):focus-visible rect),
@@ -223,7 +223,7 @@
 
   .treemap-container :global(.tile-label-sm) {
     fill: white;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 500;
     font-family: var(--font-sans);
     pointer-events: none;

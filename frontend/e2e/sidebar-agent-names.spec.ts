@@ -308,7 +308,7 @@ test.describe("sidebar agent names", () => {
       await prefixFitsBeforeEllipsis(page, "open-code-review-session", "Open Code".length),
     ).toBe(true);
     const longLabel = await measureRow(page, "long-label-session");
-    expect(longLabel.row.height).toBeCloseTo(48, 0);
+    expect(longLabel.row.height).toBeCloseTo(45, 0);
     expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.4 + 1);
     expect(longLabel.name.width).toBeGreaterThan(0);
     expect(longLabel.agent.scrollWidth).toBeGreaterThan(longLabel.agent.clientWidth);
@@ -327,7 +327,7 @@ test.describe("sidebar agent names", () => {
   }, testInfo) => {
     await openSessions(page, 1280, 260);
     const desktop = await measureRow(page, "open-code-review-session");
-    expect(desktop.row.height).toBeCloseTo(48, 0);
+    expect(desktop.row.height).toBeCloseTo(45, 0);
     expect(desktop.name.width).toBeGreaterThan(0);
     expect(desktop.meta.width).toBeLessThanOrEqual(desktop.row.width * 0.4 + 1);
     expect(desktop.controls.every((control) => control.right <= desktop.row.right + 1)).toBe(true);
@@ -372,7 +372,7 @@ test.describe("sidebar agent names", () => {
     const drawerBox = await drawer.boundingBox();
     expect(drawerBox?.width).toBeCloseTo(280, 0);
     const mobile = await measureRow(page, "open-code-review-session");
-    expect(mobile.row.height).toBeCloseTo(48, 0);
+    expect(mobile.row.height).toBeCloseTo(45, 0);
     expect(mobile.meta.width).toBeLessThanOrEqual(mobile.row.width * 0.4 + 1);
     const mobileLint = await collectRenderFindings(page);
     expect(mobileLint).toEqual([]);

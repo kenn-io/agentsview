@@ -971,6 +971,10 @@
     fill-opacity: 0.8;
   }
 
+  :global(:root.dark) .chart-container :global(.cost-area) {
+    fill-opacity: 0.92;
+  }
+
   .chart-container :global(.cost-seg.selected) {
     opacity: 1;
   }
