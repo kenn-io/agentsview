@@ -27,6 +27,7 @@ import (
 // Between a push and its refresh, reads use the raw rows rather than the
 // previous push's prepared usage.
 func TestPreparedUsagePublicationAndPricing(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -177,6 +178,7 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 // An archive with an existing push cursor must republish unchanged sessions
 // once when the new complete-snapshot tables are introduced.
 func TestPreparedUsageBackfillsExistingPushCursor(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, _ := newPushedStore(t)
 	_, err := store.DB().ExecContext(ctx, "TRUNCATE TABLE usage_session_snapshots")
@@ -204,6 +206,7 @@ func TestPreparedUsageBackfillsExistingPushCursor(t *testing.T) {
 // Range usage reads must return the same result from prepared usage as
 // from the raw messages and usage events they replace.
 func TestPreparedUsageServesRangeUsageReads(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -286,6 +289,7 @@ func TestPreparedUsageServesRangeUsageReads(t *testing.T) {
 // A rebuild that stopped after dropping the view but before the table must
 // complete on the next start instead of failing to stop the missing view.
 func TestEnsurePreparedUsageRecoversFromInterruptedRebuild(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()
@@ -312,6 +316,7 @@ func TestEnsurePreparedUsageRecoversFromInterruptedRebuild(t *testing.T) {
 // here one sorted by the nullable timestamp expression that ClickHouse
 // cannot prune through, must be rebuilt for the current query.
 func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()
@@ -362,6 +367,7 @@ func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
 // table must still find the schema in place: every refresh replaces the
 // table, so a schema step that alters it can meet the old table.
 func TestEnsureSchemaDuringPreparedUsageRefresh(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, _ := newPushedStore(t)
 	for range 20 {
@@ -374,6 +380,7 @@ func TestEnsureSchemaDuringPreparedUsageRefresh(t *testing.T) {
 // A projection step that fails after it stopped the refresh must start the
 // refresh again. Otherwise prepared usage stays stale, and a later start that
 // finds the projections present never restarts it.
+// No t.Parallel: changes chPreparedUsageProjections, which every EnsureSchema reads.
 func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T) {
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
@@ -394,6 +401,7 @@ func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T)
 // prepare the pushed sessions' rows themselves, so they match both the
 // refresh that follows and the raw rows.
 func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -497,6 +505,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 // counts a new session once: the refresh already holds the rows the
 // state's delta supplies.
 func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -552,6 +561,7 @@ func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
 // them or writes the snapshot and session rows, must not leave that
 // session's usage read from before the push.
 func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -584,6 +594,7 @@ func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
 // Session ids reach the changed-session query as an Array(String) query
 // parameter; ClickHouse must parse back exactly the ids that were sent.
 func TestChangedSessionParameterKeepsIDs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	ids := []string{"plain", `quote'd`, `back\slash`, `both\'`, "tab\tnewline\n"}
@@ -597,6 +608,7 @@ func TestChangedSessionParameterKeepsIDs(t *testing.T) {
 // A delta that reuses the kept rows of an earlier changed snapshot and
 // reads a newly changed one serves what a store that kept nothing does.
 func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -655,6 +667,7 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 // replace. A mirror an earlier version set up with such a view recovers on
 // the next push.
 func TestPreparedUsageWithoutTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
@@ -786,6 +799,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 // lock: a rebuild that paused through the switch discards its build, and a
 // push that paused before taking the lock skips its rebuild.
 func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -829,6 +843,7 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 // One that finds the newest lock retired but no view finishes the switch to
 // the view that a schema step left halfway.
 func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -851,6 +866,7 @@ func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
 // A lock comment that a manual edit left unreadable stops rebuilds with an
 // error that names the lock and the statement that repairs it.
 func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
@@ -876,6 +892,7 @@ func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
 // server restart can change the answer, so later schema steps and pushes on
 // the same server reuse it. An answer recorded before the server started, or
 // by another server and copied in by a restore, is probed again.
+// No t.Parallel: reads the server-wide UNSUPPORTED_METHOD count that other tests raise.
 func TestTableExchangeProbedOncePerServerStart(t *testing.T) {
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
@@ -928,6 +945,7 @@ func TestTableExchangeProbedOncePerServerStart(t *testing.T) {
 // A database that loses the ability to exchange tables again lets pushes
 // take the rebuild lock that an earlier switch to the view retired.
 func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
@@ -956,6 +974,7 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 // retired and no view. In a database that cannot swap tables, the push must
 // rebuild rather than create a view whose every refresh fails.
 func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
@@ -979,6 +998,7 @@ func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
 // renewing or releasing a lock a successor already dropped changes nothing,
 // and a push that paused before taking a lock cannot take a retired one.
 func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)

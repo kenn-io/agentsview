@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -16,8 +15,9 @@ import (
 )
 
 func TestProjectInventoryRulesAndCandidates(t *testing.T) {
+	t.Parallel()
 	store, syncer, _ := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true, nil)
 	require.NoError(t, err)
 	_, err = syncer.syncWorktreeMappings(ctx, 0, true)
@@ -52,6 +52,7 @@ func TestProjectInventoryRulesAndCandidates(t *testing.T) {
 // The project map depends on the set of labels, so callers that list the
 // same labels in another order share one kept map.
 func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
@@ -63,6 +64,7 @@ func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
 }
 
 func TestCHUsageGroups(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	conn, err := sql.Open("sqlite3", local.Path())
 	require.NoError(t, err)
@@ -74,6 +76,7 @@ func TestCHUsageGroups(t *testing.T) {
 }
 
 func TestProjectRuleMachinesSortCombinedUnion(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	for _, machine := range []string{"z-machine", "a-machine", "m-machine"} {
 		_, err := store.conn.ExecContext(t.Context(), `INSERT INTO source_worktree_project_mappings (source_archive_id, machine, path_prefix, layout, project, original_project, enabled, updated_at, push_version) VALUES ('archive-order', ?, '/repo', 'explicit', 'alpha', '', true, '', 1)`, machine)

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -69,16 +68,16 @@ func setupContentSearch(t *testing.T) *Store {
 	t.Helper()
 	pgURL := testPGURL(t)
 
-	pg, err := Open(pgURL, contentSearchSchema, true)
+	pg, err := Open(t.Context(), pgURL, contentSearchSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + contentSearchSchema + ` CASCADE`)
+	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+contentSearchSchema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, contentSearchSchema), "EnsureSchema")
 
-	store, err := NewStore(pgURL, contentSearchSchema, true)
+	store, err := NewStore(t.Context(), pgURL, contentSearchSchema, true)
 	require.NoError(t, err, "NewStore")
 	t.Cleanup(func() { store.Close() })
 	return store
@@ -92,7 +91,7 @@ func insertCSSession(
 	id, project, agent, startedAt, endedAt string,
 ) {
 	t.Helper()
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count, user_message_count)
@@ -106,7 +105,7 @@ func insertCSSession(
 
 func setCSSessionBranch(t *testing.T, store *Store, id, branch string) {
 	t.Helper()
-	_, err := store.DB().Exec(
+	_, err := store.DB().ExecContext(t.Context(),
 		`UPDATE sessions SET git_branch = $1 WHERE id = $2`,
 		branch, id,
 	)
@@ -119,7 +118,7 @@ func insertCSMessage(
 	sessionID string, ordinal int, role, content, ts string, isSystem bool,
 ) {
 	t.Helper()
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
 			 content_length, is_system)
@@ -137,7 +136,7 @@ func insertCSToolCall(
 	toolName, toolUseID, inputJSON, resultContent string,
 ) {
 	t.Helper()
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, message_ordinal, call_index, tool_name,
 			 category, tool_use_id, input_json, result_content)
@@ -156,7 +155,7 @@ func insertCSToolResultEvent(
 	toolUseID, content string,
 ) {
 	t.Helper()
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, source, status, content, event_index)
@@ -179,7 +178,7 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 	insertCSMessage(t, store, "cs-m1", 1, "assistant",
 		"no match here", "2026-05-01T10:00:01Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "database_url", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
@@ -215,7 +214,7 @@ func TestPGSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
 			"TIMEZONE_NEEDLE", row.started, false)
 	}
 
-	got, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "TIMEZONE_NEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Date: "2024-06-16",
 		Timezone: "America/New_York", Limit: 50,
@@ -238,7 +237,7 @@ func TestPGSearchContentRedactsStraddlingSecret(t *testing.T) {
 	insertCSMessage(t, store, "cs-sec", 0, "user",
 		"deploy with this attached key "+pem+" ok", "2026-05-01T10:00:00Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	base := db.ContentSearchFilter{
 		Pattern: "attached key", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50, IncludeOneShot: true,
@@ -266,7 +265,7 @@ func TestPGSearchContentSubstringToolInput(t *testing.T) {
 	insertCSToolCall(t, store, "cs-ti1", 0, 0,
 		"Bash", "tu1", `{"command":"printenv"}`, "output here")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "printenv", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
@@ -289,7 +288,7 @@ func TestPGSearchContentSubstringToolResult(t *testing.T) {
 	insertCSToolCall(t, store, "cs-tr1", 0, 0,
 		"Bash", "tu1", `{"command":"ls"}`, "AWS_SECRET=topsecretvalue123")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "topsecretvalue", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
@@ -313,7 +312,7 @@ func TestPGSearchContentToolResultEvents(t *testing.T) {
 	insertCSToolResultEvent(t, store, "cs-tre1", 0, 0, 0,
 		"tu1", "EVENTNEEDLE in event output")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "EVENTNEEDLE", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
@@ -339,7 +338,7 @@ func TestPGSearchContentToolResultDedup(t *testing.T) {
 	insertCSToolResultEvent(t, store, "cs-dup1", 0, 0, 0,
 		"tu1", "DUPNEEDLE in event")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "DUPNEEDLE", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
@@ -360,7 +359,7 @@ func TestPGSearchContentSourcesSelector(t *testing.T) {
 	insertCSToolCall(t, store, "cs-src1", 0, 0,
 		"Bash", "tu1", `{"command":"SRCNEEDLE"}`, "SRCNEEDLE in result")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Only messages — must not match tool_input or tool_result.
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SRCNEEDLE", Mode: "substring",
@@ -390,7 +389,7 @@ func TestPGSearchContentExcludeSystem(t *testing.T) {
 	insertCSMessage(t, store, "cs-sys1", 0, "user",
 		"SYSNEEDLE in a system message", "2026-05-01T10:00:00Z", true)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Default (ExcludeSystem=false) should find it.
 	with, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SYSNEEDLE", Mode: "substring",
@@ -426,7 +425,7 @@ func TestPGSearchContentExcludeSystemReminderFalseFlag(t *testing.T) {
 		"<system-reminder>PGREMINDER context</system-reminder>\n\nPGREMINDER prompt",
 		"2026-05-01T10:00:02Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, mode := range []string{"substring", "fts", "regex"} {
 		t.Run(mode, func(t *testing.T) {
 			f := db.ContentSearchFilter{
@@ -467,7 +466,7 @@ func TestPGSearchContentProjectFilter(t *testing.T) {
 	insertCSMessage(t, store, "cs-pf-b", 0, "user",
 		"PROJNEEDLE beta", "2026-05-01T11:00:00Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "PROJNEEDLE", Mode: "substring",
 		Sources: []string{"messages"},
@@ -499,7 +498,7 @@ func TestPGSearchContentGitBranchFilter(t *testing.T) {
 	insertCSMessage(t, store, "cs-branch-beta-main", 0, "user",
 		"BRANCHNEEDLE beta main", "2026-05-01T12:00:00Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern:        "BRANCHNEEDLE",
 		Mode:           "substring",
@@ -523,7 +522,7 @@ func TestPGSearchContentPagination(t *testing.T) {
 			"PAGENEEDLE msg", "2026-05-01T10:00:0"+string(rune('0'+i))+"Z", false)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "PAGENEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 2,
@@ -554,7 +553,7 @@ func TestPGSearchContentPaginationStableAcrossTies(t *testing.T) {
 	insertCSToolCall(t, store, "cs-tie", 0, 0,
 		"Bash", "tu1", `{"command":"FINDME"}`, "FINDME in result")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	base := db.ContentSearchFilter{
 		Pattern: "FINDME", Mode: "substring",
 		Sources: []string{"messages", "tool_input", "tool_result"},
@@ -605,7 +604,7 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 		"Bash", "", `{"command":"b"}`, "")
 	insertCSToolResultEvent(t, store, "cs-empti", 0, 1, 0, "", "FINDB event")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, mode := range []string{"substring", "regex"} {
 		got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 			Pattern: "FINDA", Mode: mode,
@@ -624,7 +623,7 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 // skipped on an instance where pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
 	store := setupContentSearch(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var hasExt bool
 	require.NoError(t, store.DB().QueryRowContext(ctx,
@@ -668,7 +667,7 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 // fastupdate=on gets fastupdate=off reapplied on the next EnsureSchema run.
 func TestPGContentSearchTrigramIndexUpgrade(t *testing.T) {
 	store := setupContentSearch(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	hasFastupdateOff := func() bool {
 		var off bool
@@ -720,7 +719,7 @@ func TestPGSearchContentRegex(t *testing.T) {
 	insertCSMessage(t, store, "cs-re1", 1, "user",
 		"no secrets in this line", "2026-05-01T10:00:01Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: `AKIA[0-9A-Z]{16}`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
@@ -734,7 +733,7 @@ func TestPGSearchContentRegex(t *testing.T) {
 // SearchInputError.
 func TestPGSearchContentRegexInvalid(t *testing.T) {
 	store := setupContentSearch(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: `(unclosed`, Mode: "regex",
 		Sources: []string{"messages"},
@@ -758,7 +757,7 @@ func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 	insertCSMessage(t, store, "cs-fts-one", 0, "user",
 		"the quick answer only", "2026-05-01T11:00:00Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "quick fox", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
@@ -895,7 +894,7 @@ func TestPGSearchContentTermsScopeExactFiltersAndPaging(t *testing.T) {
 		insertCSMessage(t, store, session.id, 0, "user", "alpha", session.ended, false)
 		insertCSMessage(t, store, session.id, 1, "assistant", "beta", session.ended, false)
 		if session.sidechain {
-			_, err := store.DB().Exec(
+			_, err := store.DB().ExecContext(t.Context(),
 				`UPDATE messages SET is_sidechain = TRUE WHERE session_id = $1`, session.id)
 			require.NoError(t, err)
 		}
@@ -938,7 +937,7 @@ func TestPGSearchContentTermsScopeExactFiltersAndPaging(t *testing.T) {
 // returns a SearchInputError.
 func TestPGSearchContentUnknownSource(t *testing.T) {
 	store := setupContentSearch(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "x", Mode: "substring",
 		Sources: []string{"messages", "bogus"},
@@ -958,7 +957,7 @@ func TestPGSearchContentSnippetPresent(t *testing.T) {
 	insertCSMessage(t, store, "cs-snip", 0, "user",
 		"the secret key is SNIPNEEDLE and nothing more", "2026-05-01T10:00:00Z", false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SNIPNEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
@@ -976,7 +975,7 @@ func insertCSChildSession(
 	id, project, agent, parentID, startedAt, endedAt string,
 ) {
 	t.Helper()
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 parent_session_id, relationship_type,
@@ -1023,7 +1022,7 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 	insertCSToolResultEvent(t, store, "ic-child2", 0, 0, 0,
 		"child2-tu1", "CHILDNEEDLE in event output")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// --- IncludeChildren=true: child tool_input match must be found ---
 	withChildren, err := store.SearchContent(ctx, db.ContentSearchFilter{
@@ -1078,7 +1077,7 @@ func TestPGSearchContentExactSessionIncludesChild(t *testing.T) {
 	insertCSMessage(t, store, "exact-child", 0, "user",
 		"EXACTCHILDNEEDLE", "2026-05-01T10:05:00Z", false)
 
-	got, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "EXACTCHILDNEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, SessionID: "exact-child",
 		GitBranchExact: "feature/memory", IncludeOneShot: true, Limit: 50,
@@ -1099,7 +1098,7 @@ func TestPGSearchContentExcludeSession(t *testing.T) {
 	insertCSMessage(t, store, "drop", 0, "user",
 		"needle in drop", "2026-05-01T11:00:00Z", false)
 
-	got, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "needle", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 1,
 		ExcludeSessionIDs: []string{"drop"},
@@ -1120,7 +1119,7 @@ func TestSearch_DateRange(t *testing.T) {
 	for _, f := range fixtures {
 		insertCSSession(t, store, f.id, "project-a", "codex", f.start, f.end)
 		insertCSMessage(t, store, f.id, 0, "user", "datefilter message", f.start, false)
-		_, err := store.DB().Exec("UPDATE sessions SET display_name = 'datefilter name' WHERE id = $1", f.id)
+		_, err := store.DB().ExecContext(t.Context(), "UPDATE sessions SET display_name = 'datefilter name' WHERE id = $1", f.id)
 		require.NoError(t, err)
 	}
 	for _, tc := range []struct {
@@ -1138,7 +1137,7 @@ func TestSearch_DateRange(t *testing.T) {
 				filter := db.SearchFilter{Query: query, Project: "project-a", DateFrom: tc.from, DateTo: tc.to, Limit: 1}
 				var ids []string
 				for range len(fixtures) + 1 {
-					out, err := store.Search(context.Background(), filter)
+					out, err := store.Search(t.Context(), filter)
 					require.NoError(t, err)
 					for _, hit := range out.Results {
 						ids = append(ids, hit.SessionID)

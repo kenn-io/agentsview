@@ -18,6 +18,7 @@ import (
 // never started, so a watch keeps the --full request. One that fails after it
 // recorded the run resumes that run instead.
 func TestFullPushReportsWhetherItRecordedItsRun(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	canceled, cancel := context.WithCancel(ctx)

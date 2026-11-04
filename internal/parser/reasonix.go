@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -170,7 +171,7 @@ func (b *reasonixSessionBuilder) processToolResult(
 // Returns (nil, nil, nil, nil) if the file doesn't exist or
 // contains no user/assistant messages.
 func parseReasonixSession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -186,7 +187,7 @@ func parseReasonixSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newReasonixSessionBuilder()
 
@@ -208,7 +209,7 @@ func parseReasonixSession(
 		sessionName = strings.TrimSpace(meta.TopicTitle)
 		cwd = strings.TrimSpace(meta.WorkspaceRoot)
 		if cwd != "" {
-			project = ExtractProjectFromCwd(cwd)
+			project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 		}
 		var gotStart, gotEnd bool
 		var metaStart, metaEnd time.Time

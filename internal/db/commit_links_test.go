@@ -320,11 +320,11 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 		t.Run(string(policy), func(t *testing.T) {
 			fresh := testDB(t)
 			fresh.SetArchiveContent(policy)
-			_, err := fresh.CopyTrashedDataFrom(old.Path())
+			_, err := fresh.CopyTrashedDataFrom(t.Context(), old.Path())
 			require.NoError(t, err)
-			_, err = fresh.CopyOrphanedDataFrom(old.Path())
+			_, err = fresh.CopyOrphanedDataFrom(t.Context(), old.Path())
 			require.NoError(t, err)
-			require.NoError(t, fresh.CopyExcludedSessionsFrom(old.Path()))
+			require.NoError(t, fresh.CopyExcludedSessionsFrom(t.Context(), old.Path()))
 			got, err := fresh.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {
@@ -511,7 +511,7 @@ func TestCommitLinkProjectSurvivesMoveDeletionAndResync(t *testing.T) {
 	require.NoError(t, old.DeleteSession(t.Context(), "s1"))
 
 	fresh := testDB(t)
-	require.NoError(t, fresh.CopyExcludedSessionsFrom(old.Path()))
+	require.NoError(t, fresh.CopyExcludedSessionsFrom(t.Context(), old.Path()))
 	retained, err := fresh.RetainedCommitLinkRows(t.Context())
 	require.NoError(t, err)
 	require.Len(t, retained, 1)

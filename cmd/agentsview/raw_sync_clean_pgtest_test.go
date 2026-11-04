@@ -112,7 +112,7 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 		"GRANT USAGE ON SCHEMA "+rawSyncCleanUploadsSchema+" TO "+role,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = pg.ExecContext(context.Background(), "DROP ROLE IF EXISTS "+role) })
+	t.Cleanup(func() { _, _ = pg.ExecContext(context.WithoutCancel(t.Context()), "DROP ROLE IF EXISTS "+role) })
 	parsedURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	parsedURL.User = url.UserPassword(role, password)
@@ -170,12 +170,12 @@ func newRawSyncCleanUploadsPG(t *testing.T) (*sql.DB, string, string) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = admin.ExecContext(
-			context.Background(),
+			context.WithoutCancel(t.Context()),
 			"DROP SCHEMA IF EXISTS "+rawSyncCleanUploadsSchema+" CASCADE",
 		)
 	})
 
-	pg, err := postgres.Open(pgURL, rawSyncCleanUploadsSchema, true)
+	pg, err := postgres.Open(t.Context(), pgURL, rawSyncCleanUploadsSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, postgres.EnsureSchema(

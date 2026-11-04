@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseWorkBuddySession(ctx context.Context, path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -44,7 +45,7 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 		malformed     int
 	)
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
@@ -59,7 +60,7 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 		root := gjson.Parse(line)
 		if c := root.Get("cwd").Str; cwd == "" && c != "" {
 			cwd = c
-			if extracted := ExtractProjectFromCwd(c); extracted != "" {
+			if extracted := ExtractProjectFromCwdWithBranchContext(ctx, c, ""); extracted != "" {
 				project = extracted
 			}
 			if !isSubagent {

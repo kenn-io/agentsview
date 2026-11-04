@@ -158,7 +158,7 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "sessions.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = d.Close() })
-		sched, err := setupRecallExtraction(config.Config{}, d, nil)
+		sched, err := setupRecallExtraction(t.Context(), config.Config{}, d, nil)
 		require.NoError(t, err)
 		assert.Nil(t, sched,
 			"a disabled daemon with no generation starts no scheduler")
@@ -184,7 +184,7 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, d.SoftDeleteSession(ctx, "sess-gone"))
 
-		sched, err := setupRecallExtraction(config.Config{}, d, nil)
+		sched, err := setupRecallExtraction(t.Context(), config.Config{}, d, nil)
 		require.NoError(t, err)
 		require.NotNil(t, sched,
 			"a disabled daemon with a generation runs reconciliation")
@@ -226,7 +226,7 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 
 		cfg := config.Config{}
 		cfg.Recall.Extract.CandidateFindings = config.RecallCandidateFindingsAllow
-		sched, err := setupRecallExtraction(cfg, d, nil)
+		sched, err := setupRecallExtraction(t.Context(), cfg, d, nil)
 		require.NoError(t, err)
 		require.NotNil(t, sched)
 		started, _, err := sched.mgr.TryPass(ctx, extract.PassOptions{})

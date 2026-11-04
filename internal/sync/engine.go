@@ -720,6 +720,9 @@ type Engine struct {
 	// changedPathListedHook is a test seam called after a changed-path
 	// listing and before its re-list check; nil in production.
 	changedPathListedHook func(path string)
+	// incrementalCommittedHook is a test seam called after an incremental
+	// session write commits; nil in production.
+	incrementalCommittedHook func(sessionID string)
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -807,6 +810,13 @@ type Engine struct {
 	verifiedSourceEpoch      uint64
 	verifiedSourcePass       uint64
 	verifiedSourceActivePass uint64
+
+	// contentChecks and contentCheckBytes count sources whose content a
+	// freshness check or provider fingerprint read because their stats alone
+	// could not prove them unchanged. Changed-path passes log the per-pass
+	// delta, so a user can see when watcher events force those reads.
+	contentChecks     atomic.Int64
+	contentCheckBytes atomic.Int64
 
 	reconciliationMu           gosync.RWMutex
 	lastReconciliation         ReconciliationResult
@@ -1085,14 +1095,14 @@ func NewEngine(ctx context.Context,
 	}
 	// A competing archive writer can invalidate a snapshot after it was
 	// loaded. Keep failed work queued even if no later source change arrives.
-	recompute := func(sessionID string) {
-		if _, err := e.recomputeSignalsFromDB(context.Background(), sessionID); err != nil {
+	recompute := func(ctx context.Context, sessionID string) {
+		if _, err := e.recomputeSignalsFromDB(ctx, sessionID); err != nil {
 			log.Printf("signals: recompute %s: %v", sessionID, err)
 			e.signalSched.deferRetry(sessionID)
 		}
 	}
 	if e.disableSignalRecompute {
-		recompute = func(string) {}
+		recompute = func(context.Context, string) {}
 	}
 	e.signalSched = newSignalScheduler(
 		signalRecomputeInterval, signalRecomputeQuiet,
@@ -1845,9 +1855,11 @@ func (e *Engine) syncChangedPathsLocked(
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
 	e.invalidateNativeTitleCache(paths)
-	stats, tombstoned, err = e.applyChangedPathSyncLocked(
-		ctx, e.prepareChangedPathSync(ctx, paths),
-	)
+	summary := e.beginChangedPathPass(paths)
+	prepared := e.prepareChangedPathSync(ctx, paths)
+	summary.sources = len(prepared.files)
+	defer func() { log.Print(summary.finish(e, stats)) }()
+	stats, tombstoned, err = e.applyChangedPathSyncLocked(ctx, prepared)
 	// Title store events carry no session files, so this also handles them.
 	if err == nil && !stats.Aborted {
 		var titleStats SyncStats
@@ -3310,7 +3322,7 @@ func (e *Engine) resyncBuildLocked(
 			)
 		}
 		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
-			context.Background(), e.machine, contributorPrefixes, excludedAgents,
+			ctx, e.machine, contributorPrefixes, excludedAgents,
 		)
 		if err != nil {
 			log.Printf("resync: get old local rebuild file count: %v", err)
@@ -3400,7 +3412,7 @@ func (e *Engine) resyncBuildLocked(
 	}
 	newDB.SetToolResultImages(e.toolResultImages)
 	newDB.SetAssetsDir(e.db.AssetsDir())
-	if err := newDB.CopyArchiveIdentityFrom(origPath); err != nil {
+	if err := newDB.CopyArchiveIdentityFrom(ctx, origPath); err != nil {
 		log.Printf("resync: preserve archive identity: %v", err)
 		newDB.Close()
 		removeTempDB(tempPath)
@@ -3431,13 +3443,13 @@ func (e *Engine) resyncBuildLocked(
 		"Copying deletion state into temporary database",
 		"",
 	)
-	if err := newDB.CopyExcludedSessionsFrom(origPath); err != nil {
+	if err := newDB.CopyExcludedSessionsFrom(ctx, origPath); err != nil {
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
 	trashedCopied := 0
 	var copiedSessionIDs []string
-	if ids, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
+	if ids, err := newDB.CopyTrashedDataFrom(ctx, origPath); err != nil {
 		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
 		// Non-fatal: worst case, trashed sessions are reparsed
 		// and then re-marked as trashed by metadata copy.
@@ -3752,13 +3764,13 @@ func (e *Engine) resyncBuildLocked(
 		"Copying sync metadata",
 		"",
 	)
-	if err := newDB.CopyExcludedSessionsFrom(origPath); err != nil {
+	if err := newDB.CopyExcludedSessionsFrom(ctx, origPath); err != nil {
 		log.Printf("resync: post-sync copy excluded sessions: %v", err)
 	}
 	if err := newDB.PurgeExcludedSessions(ctx); err != nil {
 		log.Printf("resync: purge excluded sessions: %v", err)
 	}
-	if err := newDB.CopySyncStateFrom(origPath); err != nil {
+	if err := newDB.CopySyncStateFrom(ctx, origPath); err != nil {
 		log.Printf("resync: copy sync state: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
@@ -3787,7 +3799,7 @@ func (e *Engine) resyncBuildLocked(
 		"",
 	)
 	if copyDerivedText {
-		if err := newDB.CopyInsightsFrom(origPath); err != nil {
+		if err := newDB.CopyInsightsFrom(ctx, origPath); err != nil {
 			log.Printf("resync: copy insights: %v", err)
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings,
@@ -3810,7 +3822,7 @@ func (e *Engine) resyncBuildLocked(
 	// Digest snapshots and Markdown may contain transcript text. Preserve
 	// them only when the rebuilt archive stores that content.
 	if copyDerivedText {
-		if err := newDB.CopyFrictionStateFrom(origPath); err != nil {
+		if err := newDB.CopyFrictionStateFrom(ctx, origPath); err != nil {
 			log.Printf("resync: copy friction state: %v", err)
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings,
@@ -3834,7 +3846,7 @@ func (e *Engine) resyncBuildLocked(
 	// Non-fatal: a failed copy degrades cost display but does
 	// not justify aborting the resync, and the next daemon
 	// startup re-seeds pricing.
-	if err := newDB.CopyModelPricingFrom(origPath); err != nil {
+	if err := newDB.CopyModelPricingFrom(ctx, origPath); err != nil {
 		log.Printf("resync: copy model pricing: %v", err)
 		stats.Warnings = append(stats.Warnings,
 			"model pricing copy failed; usage costs show as $0.00 "+
@@ -3852,7 +3864,7 @@ func (e *Engine) resyncBuildLocked(
 		"",
 	)
 	orphaned, err := newDB.CopyOrphanedDataFromExcluding(
-		origPath, stats.parserExcludedIDs,
+		ctx, origPath, stats.parserExcludedIDs,
 	)
 	if err != nil {
 		log.Printf("resync: copy orphaned sessions: %v", err)
@@ -3950,7 +3962,7 @@ func (e *Engine) resyncBuildLocked(
 	// resync. Runs after the orphan copy so referenced sessions exist.
 	// Failure aborts the swap to avoid destroying the recall archive.
 	if copyDerivedText {
-		if err := newDB.CopyRecallEntriesFrom(origPath); err != nil {
+		if err := newDB.CopyRecallEntriesFrom(ctx, origPath); err != nil {
 			log.Printf("resync: copy recall entries: %v", err)
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings,
@@ -3977,7 +3989,7 @@ func (e *Engine) resyncBuildLocked(
 		"Copying user-managed session metadata",
 		"",
 	)
-	if err := newDB.CopySessionMetadataFrom(origPath); err != nil {
+	if err := newDB.CopySessionMetadataFrom(ctx, origPath); err != nil {
 		log.Printf("resync: copy session metadata: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
@@ -3992,7 +4004,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
-		context.Background(),
+		ctx,
 	); err != nil {
 		log.Printf("resync: restore session project identity: %v", err)
 		stats.Aborted = true
@@ -4372,11 +4384,11 @@ func (e *Engine) ResyncBuild(
 // original, so pre-install failures can discard the build's tombstone counts
 // while post-install failures keep them.
 func (e *Engine) SwapResyncDatabase(
-	tempPath string,
+	ctx context.Context, tempPath string,
 ) (installed bool, err error) {
 	var stats SyncStats
 	return e.swapResyncDatabaseLocked(
-		context.Background(), nil, tempPath, productionRebuildOperations, &stats,
+		ctx, nil, tempPath, productionRebuildOperations, &stats,
 	)
 }
 
@@ -4688,7 +4700,7 @@ func (e *Engine) syncThenRunLocked(
 	// work typically scans and pushes SQLite rows, so flush any
 	// deferred signal recomputes first (inline: syncMu is held) or
 	// pushed sessions could carry stale signal/secret fields.
-	e.signalSched.flushAllInline()
+	e.signalSched.flushAllInline(ctx)
 	e.clearCurrentProgress()
 	if err := work(full || didResync); err != nil {
 		return stats, err
@@ -4821,7 +4833,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if !stats.ProcessingComplete() {
 		return stats, nil
 	}
-	e.signalSched.flushAllInline()
+	e.signalSched.flushAllInline(ctx)
 	e.clearCurrentProgress()
 	if err := work(full || didResync, didResync); err != nil {
 		return stats, err
@@ -4933,6 +4945,8 @@ func (e *Engine) RecordStartupReconciledExclusive(stats SyncStats, err error) {
 	}
 	e.lastSyncStats = stats
 	e.mu.Unlock()
+	// The worker's err already reports a canceled pass; record it regardless
+	// of the daemon's context.
 	e.recordStartupReconciled(context.Background(), stats, err)
 	e.ReleaseStartupMaintenance()
 }
@@ -5101,7 +5115,7 @@ func (e *Engine) TryRunExclusive(work func() error) error {
 // the worker-backed pass: work scans and pushes SQLite rows, so pending
 // recomputes must land first or pushed sessions could carry stale
 // signal/secret fields.
-func (e *Engine) RunExclusiveFlushed(work func() error) error {
+func (e *Engine) RunExclusiveFlushed(ctx context.Context, work func() error) error {
 	if e.refuseWriteInForceParse("RunExclusiveFlushed") {
 		return errors.New(
 			"RunExclusiveFlushed refused on report-only parse-diff engine",
@@ -5109,7 +5123,7 @@ func (e *Engine) RunExclusiveFlushed(work func() error) error {
 	}
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
-	e.signalSched.flushAllInline()
+	e.signalSched.flushAllInline(ctx)
 	return work()
 }
 
@@ -5134,7 +5148,7 @@ func (e *Engine) SettleForPush(ctx context.Context) error {
 		e.syncMu.Lock()
 		defer e.syncMu.Unlock()
 		if !abandoned.Load() {
-			e.signalSched.flushAllInline()
+			e.signalSched.flushAllInline(ctx)
 		}
 	}()
 	select {
@@ -8855,7 +8869,7 @@ func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
 		return out, forceParseSources
 	}
 	for _, watchRoot := range watchRoots {
-		hints, err := e.db.ListStoredSourcePathHints(
+		hints, err := e.db.ListStoredSourcePathHintsContext(ctx,
 			string(parser.AgentVSCopilot), []db.StoredSourcePathHintScope{{Path: watchRoot}},
 		)
 		if err != nil {
@@ -9180,7 +9194,7 @@ func (e *Engine) filterFilesByMtime(
 		var indexNeedsRefresh bool
 		if isS3SourcePath(f.Path) {
 			indexNeedsRefresh = e.s3CodexIndexNeedsRefreshSince(
-				f, cutoffNs,
+				ctx, f, cutoffNs,
 			)
 		} else {
 			indexNeedsRefresh = e.codexIndexNeedsRefreshSince(ctx,
@@ -10286,7 +10300,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 ) bool {
 	start := time.Now()
 	useWorktreeResolver := agent != parser.AgentPiebald
-	resolveWorktreeProject := e.loadWorktreeProjectResolver()
+	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	var pendingCount, indexedMessages, written int
 	var writeDuration time.Duration
 	flush := func(pending []pendingWrite) bool {
@@ -10309,7 +10323,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 				complete = failedWrites == 0 && cwdFiltered == 0 &&
 					batchWritten == len(pending)
 			} else {
-				outcome = e.writeBatchWithOutcome(pending, writeMode, true)
+				outcome = e.writeBatchWithOutcomeContext(ctx, pending, writeMode, true)
 				for _, wasWritten := range outcome.written {
 					if !wasWritten {
 						complete = false
@@ -11054,7 +11068,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			activeResultIDs, skipped := e.partitionIntentionalSourceSkips(ctx, resultIDs)
 			sourceCompletionSkipped = skipped
 			staleVersion := max(db.CurrentDataVersion()-1, 0)
-			if err := e.db.SetExistingSessionDataVersions(
+			if err := e.db.SetExistingSessionDataVersions(ctx,
 				activeResultIDs, staleVersion,
 			); err != nil {
 				e.clearProviderSourceFreshness(ctx, r.providerStatHash)
@@ -12635,7 +12649,13 @@ func (e *Engine) processProviderFile(
 			}
 		}
 		if !codexFingerprintFromParse {
-			fingerprint, err = e.providerFingerprint(ctx, provider, source)
+			var meter parser.ContentReadMeter
+			fingerprint, err = e.providerFingerprint(
+				parser.WithContentReadMeter(ctx, &meter), provider, source,
+			)
+			if meter.Reads() > 0 {
+				e.countContentCheck(meter.Bytes())
+			}
 		}
 		if err != nil {
 			if (file.ForceParse || file.ForceFullParse) &&
@@ -13545,7 +13565,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 			scopes[i].Path = e.pathRewriter(scopes[i].Path)
 		}
 	}
-	sourcePaths, err := e.db.ListStoredSourcePathHints(
+	sourcePaths, err := e.db.ListStoredSourcePathHintsContext(ctx,
 		string(agent), storedSourceDBHintScopes(scopes),
 	)
 	if err != nil {
@@ -14120,7 +14140,7 @@ func (e *Engine) claudeSourceFreshWithoutPrimary(
 	currentHash := sourceFingerprint
 	if currentHash == "" {
 		var err error
-		currentHash, err = computeFileHashPrefix(physicalPath, info.Size())
+		currentHash, err = e.contentCheckHash(physicalPath, info.Size())
 		if err != nil {
 			return false, false
 		}
@@ -15833,7 +15853,7 @@ func (e *Engine) providerIncrementalContentChanged(ctx context.Context,
 	if !ok || storedHash == "" {
 		return false, false
 	}
-	curHash, err := computeFileHashPrefix(hashPath, info.Size())
+	curHash, err := e.contentCheckHash(hashPath, info.Size())
 	if err != nil {
 		return false, false
 	}
@@ -16304,7 +16324,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 		(file.ForceParse ||
 			e.pathNeedsProjectReparse(ctx, providerAgent, path) ||
 			(providerAgent == parser.AgentCodex &&
-				e.codexIndexSessionNameChanged(path))) {
+				e.codexIndexSessionNameChanged(ctx, path))) {
 		return processResult{forceReplace: true}, false
 	}
 	info, err := os.Stat(path)
@@ -17105,7 +17125,7 @@ func (e *Engine) codexFingerprintFreshness(ctx context.Context,
 	if !statFresh {
 		return false, false
 	}
-	changed, verified := e.codexIndexSessionNameState(path)
+	changed, verified := e.codexIndexSessionNameState(ctx, path)
 	if !verified {
 		return true, false
 	}
@@ -17133,16 +17153,18 @@ func (e *Engine) codexIndexNeedsRefreshSince(ctx context.Context,
 	if _, _, ok := e.db.GetFileInfoByPath(ctx, lookupPath); !ok {
 		return false
 	}
-	return e.codexIndexSessionNameChanged(path)
+	return e.codexIndexSessionNameChanged(ctx, path)
 }
 
-func (e *Engine) codexIndexSessionNameChanged(path string) bool {
-	changed, _ := e.codexIndexSessionNameState(path)
+func (e *Engine) codexIndexSessionNameChanged(
+	ctx context.Context, path string,
+) bool {
+	changed, _ := e.codexIndexSessionNameState(ctx, path)
 	return changed
 }
 
 func (e *Engine) codexIndexSessionNameState(
-	path string,
+	ctx context.Context, path string,
 ) (changed, verified bool) {
 	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(path))
 	if uuid == "" {
@@ -17166,7 +17188,7 @@ func (e *Engine) codexIndexSessionNameState(
 		return false, true
 	}
 	storedName, found, err := e.db.GetSessionName(
-		context.Background(), e.idPrefix+"codex:"+uuid,
+		ctx, e.idPrefix+"codex:"+uuid,
 	)
 	if err != nil || !found {
 		return true, true
@@ -17188,7 +17210,7 @@ func (e *Engine) codexCachedIndexSessionNameState(ctx context.Context,
 	if _, _, ok := e.db.GetFileInfoByPath(ctx, lookupPath); !ok {
 		return false, true
 	}
-	return e.codexIndexSessionNameState(path)
+	return e.codexIndexSessionNameState(ctx, path)
 }
 
 // classifyCodexIndexPath maps a Codex session_index.jsonl change to the
@@ -17241,7 +17263,7 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 	uuid, title string,
 ) []string {
 	var rawIDs []string
-	if e.codexStoredNameDiffers(uuid, title) {
+	if e.codexStoredNameDiffers(ctx, uuid, title) {
 		rawIDs = append(rawIDs, uuid)
 	}
 	threadSessionID := e.idPrefix + "codex:" + uuid
@@ -17255,7 +17277,7 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 		if parser.CodexThreadIDFromSessionKey(raw) != uuid {
 			continue
 		}
-		if e.codexStoredNameDiffersBySessionID(id, title, false) {
+		if e.codexStoredNameDiffersBySessionID(ctx, id, title, false) {
 			rawIDs = append(rawIDs, raw)
 		}
 	}
@@ -17269,7 +17291,7 @@ func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
 ) (parser.DiscoveredFile, bool) {
 	var candidates []parser.DiscoveredFile
 	for _, root := range sessionRoots {
-		if src := e.codexSourceFileForUUID(root, rawID); src != "" {
+		if src := e.codexSourceFileForUUID(ctx, root, rawID); src != "" {
 			candidates = append(candidates, parser.DiscoveredFile{
 				Path:    src,
 				Agent:   parser.AgentCodex,
@@ -17326,7 +17348,9 @@ func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 // not collapse a per-root duplicate; classifyCodexIndexPath then applies its
 // own DB-aware preference across the per-root candidates. Returns "" when the
 // provider, source lookup, or path resolution fails.
-func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
+func (e *Engine) codexSourceFileForUUID(
+	ctx context.Context, root, uuid string,
+) string {
 	factory, ok := e.sources().providerFactories[parser.AgentCodex]
 	if !ok || factory == nil {
 		return ""
@@ -17336,7 +17360,7 @@ func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
 		Machine: e.machine,
 	})
 	source, found, err := provider.FindSource(
-		context.Background(),
+		ctx,
 		parser.FindSourceRequest{RawSessionID: uuid},
 	)
 	if err != nil || !found {
@@ -17380,22 +17404,23 @@ func (e *Engine) codexPinnedProviderSource(
 // session differs from the given index title. Unknown sessions return false:
 // a brand-new session is synced through its own transcript event, not the
 // index, so the index path only refreshes renames of already-synced sessions.
-func (e *Engine) codexStoredNameDiffers(uuid, indexTitle string) bool {
+func (e *Engine) codexStoredNameDiffers(
+	ctx context.Context, uuid, indexTitle string,
+) bool {
 	return e.codexStoredNameDiffersBySessionID(
-		e.idPrefix+"codex:"+uuid, indexTitle, false,
+		ctx, e.idPrefix+"codex:"+uuid, indexTitle, false,
 	)
 }
 
 func (e *Engine) codexStoredNameDiffersBySessionID(
+	ctx context.Context,
 	sessionID, indexTitle string,
 	missingDiffers bool,
 ) bool {
 	if e.db.ArchiveContent().UsageOnly() {
 		return false
 	}
-	storedName, found, err := e.db.GetSessionName(
-		context.Background(), sessionID,
-	)
+	storedName, found, err := e.db.GetSessionName(ctx, sessionID)
 	if err != nil || !found {
 		return missingDiffers
 	}
@@ -19000,7 +19025,7 @@ func (e *Engine) reconcileProviderHistoryContext(
 			}
 			store := e.historyStore()
 			messages, err := store.GetAllMessages(
-				context.Background(), candidate.Session.ID,
+				ctx, candidate.Session.ID,
 			)
 			if err == nil && len(messages) > 0 {
 				prior = &ingest.PriorSession{
@@ -19009,11 +19034,11 @@ func (e *Engine) reconcileProviderHistoryContext(
 			}
 		case parser.AgentVSCopilot:
 			stored, err := e.db.GetSessionFull(
-				context.Background(), candidate.Session.ID,
+				ctx, candidate.Session.ID,
 			)
 			if err == nil && stored != nil {
 				messages, messagesErr := e.db.GetAllMessages(
-					context.Background(), candidate.Session.ID,
+					ctx, candidate.Session.ID,
 				)
 				if messagesErr == nil && len(messages) > 0 {
 					prior = &ingest.PriorSession{
@@ -19025,11 +19050,11 @@ func (e *Engine) reconcileProviderHistoryContext(
 			if ingest.IsOpenCodeFormatStorageAgent(agent) {
 				store := e.historyStore()
 				stored, err := store.GetSessionFull(
-					context.Background(), candidate.Session.ID,
+					ctx, candidate.Session.ID,
 				)
 				if err == nil && stored != nil {
 					messages, messagesErr := store.GetAllMessages(
-						context.Background(), candidate.Session.ID,
+						ctx, candidate.Session.ID,
 					)
 					if messagesErr == nil && len(messages) > 0 {
 						prior = &ingest.PriorSession{
@@ -20014,13 +20039,17 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		return nil
 	}
 
-	dbMsgs := toDBMessages(
+	dbMsgs, err := toDBMessagesContext(
+		ctx,
 		pendingWrite{
 			sess: parser.ParsedSession{ID: inc.sessionID, Agent: inc.agent},
 			msgs: inc.msgs,
 		},
 		e.blockedResultCategories,
 	)
+	if err != nil {
+		return err
+	}
 	dbMsgs, _ = e.db.ProjectToolResultImagesWithPolicy(dbMsgs, e.toolResultImages)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
@@ -20042,10 +20071,17 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// prior behavior (no malformed-line count was surfaced anywhere before
 	// this feature). Full malformed-line coverage on the incremental path is a
 	// deferred follow-up.
-	e.anomalies.recordSanitize(validateAndSanitize(nil, dbMsgs, nil))
+	sanitizeStats, err := validateAndSanitizeContext(ctx, nil, dbMsgs, nil)
+	if err != nil {
+		return err
+	}
+	e.anomalies.recordSanitize(sanitizeStats)
 
 	// Adjust counts for blocked-category filtering.
-	newTotal, newUser := postFilterCounts(dbMsgs)
+	newTotal, newUser, err := postFilterCountsContext(ctx, dbMsgs)
+	if err != nil {
+		return err
+	}
 	filtered := len(inc.msgs) - newTotal
 	msgCount := inc.msgCount - filtered
 	userFiltered := countUserMsgs(inc.msgs) - newUser
@@ -20102,7 +20138,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	)
 	for i, update := range inc.toolCallUpdates {
 		resultEvents, err := convertToolResultEventsContext(
-			context.Background(), update.ResultEvents,
+			ctx, update.ResultEvents,
 		)
 		if err != nil {
 			return err
@@ -20165,7 +20201,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 			}
 		}
 	}
-	signalsMaintained, err := e.db.WriteSessionIncrementalWithToolResultImages(ctx,
+	signalsMaintained, err = e.db.WriteSessionIncrementalWithToolResultImages(ctx,
 		inc.sessionID,
 		dbMsgs,
 		db.IncrementalSessionUpdate{
@@ -20199,9 +20235,17 @@ func (e *Engine) writeIncremental(ctx context.Context,
 			inc.sessionID, err,
 		)
 	}
+	if e.incrementalCommittedHook != nil {
+		e.incrementalCommittedHook(inc.sessionID)
+	}
 
+	// The write has committed the new file size and offset, so a later sync
+	// sees no change and will not redo the project mapping or signal
+	// recompute below. Finish them even if the caller cancels now. The work
+	// covers this one session.
+	ctx = context.WithoutCancel(ctx)
 	finalProject, err := e.applyWorktreeMappingToSingleSession(
-		inc.sessionID,
+		ctx, inc.sessionID,
 	)
 	if err != nil {
 		return err
@@ -20213,7 +20257,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		Cwd:     inc.cwd,
 	}
 	if err := e.writeProjectIdentityObservationWithSnapshotProject(
-		context.Background(),
+		ctx,
 		identitySession,
 		inc.sourceProject,
 		inc.recordedGitRemote,
@@ -20233,11 +20277,11 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// logged inside recomputeSignalsFromDB and are non-fatal; a later
 	// write or flush retries.
 	if !signalsMaintained {
-		e.signalSched.markDirty(inc.sessionID)
+		e.signalSched.markDirty(ctx, inc.sessionID)
 	}
 	if inc.providerStatHash != nil {
 		e.recordProviderStatHash(
-			context.Background(), *inc.providerStatHash,
+			ctx, *inc.providerStatHash,
 		)
 	}
 
@@ -21192,7 +21236,7 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 	}
 	if def.Type == parser.AgentZed {
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, "threads.db"); ok {
-			mtime, err := parser.ZedSQLiteSourceMtime(path)
+			mtime, err := parser.ZedSQLiteSourceMtimeContext(ctx, path)
 			if err != nil {
 				return 0
 			}
@@ -21594,7 +21638,7 @@ func (e *Engine) processAndWriteSessionFile(
 				"reconcile fresh source baselines: %w", err,
 			)
 		}
-		repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+		repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
 		if err != nil {
 			return false, sessionsChanged, fmt.Errorf(
 				"repair queued subagent parents: %w", err,
@@ -21645,7 +21689,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// A prior sync may have removed an edge and then failed before repairing
 	// its child. Retry that durable work after this sync's read-only capture
 	// but before making any new mutations.
-	repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+	repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
 	if err != nil {
 		return false, sessionsChanged, fmt.Errorf(
 			"repair queued subagent parents: %w", err,
@@ -21665,7 +21709,7 @@ func (e *Engine) processAndWriteSessionFile(
 		activeResultIDs, skipped := e.partitionIntentionalSourceSkips(ctx, resultIDs)
 		sourceCompletionSkipped = skipped
 		staleVersion := max(db.CurrentDataVersion()-1, 0)
-		if err := e.db.SetExistingSessionDataVersions(
+		if err := e.db.SetExistingSessionDataVersions(ctx,
 			activeResultIDs, staleVersion,
 		); err != nil {
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
@@ -21682,7 +21726,11 @@ func (e *Engine) processAndWriteSessionFile(
 		if !repairQueued {
 			return
 		}
-		repaired, repairErr := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+		// Queued repairs must run even when a write failed because ctx was
+		// canceled, so detach from cancellation while keeping ctx values.
+		repaired, repairErr := e.db.RepairQueuedSubagentParentsContext(
+			context.WithoutCancel(ctx), nil,
+		)
 		if repairErr != nil {
 			err = errors.Join(err, fmt.Errorf(
 				"repair queued subagent parents: %w", repairErr,
@@ -21884,7 +21932,7 @@ func (e *Engine) processAndWriteSessionFile(
 	}
 	sessionsChanged = sessionsChanged || linked > 0
 	if sourceComplete && atomicDAG {
-		if err := e.db.SetSessionDataVersions(
+		if err := e.db.SetSessionDataVersionsContext(ctx,
 			writtenIDs, db.CurrentDataVersion(),
 		); err != nil {
 			markSourceIncomplete()
@@ -21910,9 +21958,8 @@ func sourceRequiresAtomicDAGCompletion(
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(
-	sessionID string,
+	ctx context.Context, sessionID string,
 ) (string, error) {
-	ctx := context.Background()
 	sess, err := e.db.GetSession(ctx, sessionID)
 	if err != nil {
 		return "", err

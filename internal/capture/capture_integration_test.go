@@ -1110,6 +1110,8 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 	firstResultPath := filepath.Join(t.TempDir(), "first.json")
 	limits := testLimits()
 	limits.MaxSourceBytes = 8 << 10
+	// The first run reports no session only after this wait expires.
+	limits.FinalizationWait = time.Second
 	producer := copyCaptureHelper(t, "claude")
 
 	_, err = Run(t.Context(), RunOptions{
@@ -1156,6 +1158,14 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 		claudeHelperLines(captured.ProviderSessionID, physicalWorkDir, false), "\n") + "\n")
 	require.Less(t, int64(len(validData)), limits.MaxSourceBytes)
 	require.NoError(t, os.WriteFile(sourcePath, validData, 0o600))
+	// Report reuses the recorded limits. Give the successful retry the full
+	// test budget so a slow runner cannot turn it into a timeout.
+	state, err := openState(captureDir)
+	require.NoError(t, err)
+	state.manifest.Limits.FinalizationWait = testLimits().FinalizationWait
+	saveErr := state.saveManifest()
+	state.close()
+	require.NoError(t, saveErr)
 	successPath := filepath.Join(t.TempDir(), "success.json")
 	reporting, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: successPath,
@@ -2572,7 +2582,11 @@ func claudeSubagentHelperLines(sessionID, cwd string) ([]string, []string) {
 
 func testLimits() Limits {
 	limits := DefaultLimits()
-	limits.FinalizationWait = 15 * time.Second
+	// Successful captures finish as soon as the source settles, so this wait
+	// only bounds a hung capture. Slow stretches on Windows CI runners have
+	// stretched finalization from under a second to 17 seconds. Tests that
+	// assert an expired wait set their own short budget.
+	limits.FinalizationWait = time.Minute
 	limits.Quiescence = 10 * time.Millisecond
 	return limits
 }

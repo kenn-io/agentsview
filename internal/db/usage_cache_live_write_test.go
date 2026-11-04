@@ -92,6 +92,10 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 			cache, err := database.usageCache.Generation(
 				t.Context(), snapshot.DatabaseID)
 			require.NoError(t, err)
+			// Keep the filled facts, but force the next request to build rollups.
+			_, err = cache.db.ExecContext(t.Context(),
+				`DELETE FROM usage_rollup_installs WHERE session_id = 'reported'`)
+			require.NoError(t, err)
 			var written atomic.Bool
 			cache.rollup.observer.beforeEnsure = func() {
 				if written.Swap(true) {

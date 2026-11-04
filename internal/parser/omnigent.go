@@ -714,7 +714,7 @@ func parseOmnigentConversationFromDB(
 		ID:               member.sessionID(),
 		Agent:            omnigentAgent,
 		Machine:          machine,
-		Project:          ExtractProjectFromCwd(workspace),
+		Project:          ExtractProjectFromCwdWithBranchContext(ctx, workspace, ""),
 		Cwd:              workspace,
 		GitBranch:        gitBranch,
 		SessionName:      omnigentSessionName(conv),

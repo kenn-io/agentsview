@@ -93,7 +93,7 @@ func (h *HostedStore) SoftDeleteSessions(ctx context.Context, ids []string) (int
 }
 
 func (h *HostedStore) ListStarredSessionIDs(ctx context.Context) ([]string, error) {
-	return hostedMapped(ctx, h, func() ([]string, error) { return h.physical.ListStarredSessionIDs(ctx) }, func(p *[]string, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) ([]string, error) { return h.physical.ListStarredSessionIDs(ctx) }, func(p *[]string, r *hostedRefs) {
 		*p = slices.Clone(*p)
 		for i := range *p {
 			r.add(&(*p)[i])
@@ -102,7 +102,7 @@ func (h *HostedStore) ListStarredSessionIDs(ctx context.Context) ([]string, erro
 }
 
 func (h *HostedStore) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
-	return hostedMapped(ctx, h, func() ([]db.Session, error) { return h.physical.ListTrashedSessions(ctx) }, func(p *[]db.Session, r *hostedRefs) {
+	return hostedMapped(ctx, h, func(h *HostedStore) ([]db.Session, error) { return h.physical.ListTrashedSessions(ctx) }, func(p *[]db.Session, r *hostedRefs) {
 		*p = slices.Clone(*p)
 		for i := range *p {
 			r.session(&(*p)[i])
@@ -183,7 +183,7 @@ func (h *HostedStore) RemovePinReference(ctx context.Context, id, key string) er
 }
 
 func (h *HostedStore) ListPinnedMessages(ctx context.Context, id, project string) ([]db.PinnedMessage, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) ([]db.PinnedMessage, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) ([]db.PinnedMessage, error) {
 		physical := ""
 		var target hostedIdentity
 		var err error
@@ -218,7 +218,7 @@ func (h *HostedStore) GetSessionVersion(ctx context.Context, id string) (int, in
 }
 
 func (h *HostedStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
-	return hostedRead(context.Background(), h, func(r hostedRevision) (db.SessionWatchState, error) {
+	return hostedRead(context.Background(), h, func(h *HostedStore, r hostedRevision) (db.SessionWatchState, error) {
 		target, err := h.resolve(context.Background(), id)
 		if conflict, ok := errors.AsType[*db.SessionIdentityError](err); ok {
 			return db.SessionWatchState{State: conflict.State, Variants: conflict.Variants, IdentityRevision: r.Identity}, nil

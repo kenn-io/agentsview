@@ -591,6 +591,9 @@ func TestUsageCacheRetirementWaitsForDetachedFill(t *testing.T) {
 
 func TestUsageCacheRetirementWaitsForDetachedRollup(t *testing.T) {
 	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "retired-rollup", "project-a",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	snapshot, fills, _ := prepareUsageRollupTest(t, database)
 	databaseID, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
 	cache, releaseGeneration, err := database.usageCache.acquireGeneration(
@@ -613,9 +616,9 @@ func TestUsageCacheRetirementWaitsForDetachedRollup(t *testing.T) {
 	go func() {
 		_, _, rollupErr := cache.rollup.Ensure(
 			ctx,
-			usageQuerySnapshot{DatabaseID: databaseID, location: time.UTC},
-			nil,
-			export.NewPricingResolver(nil),
+			snapshot,
+			fills,
+			export.NewPricingResolver(snapshot.PricingRows),
 		)
 		rollupDone <- rollupErr
 	}()

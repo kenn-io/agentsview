@@ -15,6 +15,7 @@ import (
 // A day's report re-reads pairing inputs only for sessions a push changed,
 // and matches a report built without the memo.
 func TestActivityPairingMemoRereadsOnlyChangedSessions(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC"},

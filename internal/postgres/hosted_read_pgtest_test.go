@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -48,23 +47,8 @@ func TestHostedPublicReadsDuringPendingSelection(t *testing.T) {
 			f := newProjectionFixture(t)
 			m, accepted := f.accept(t, "device-a", "published", "")
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("published needle")))
-			// Copy the verified OpenHosted startup boundary, changing only tracing.
-			conn, err := f.runtime.Conn(t.Context())
-			require.NoError(t, err)
-			var config *pgx.ConnConfig
-			err = conn.Raw(func(driver any) error {
-				config = driver.(*stdlib.Conn).Conn().Config()
-				return nil
-			})
-			require.NoError(t, conn.Close())
-			require.NoError(t, err)
-			tracer := &hostedPendingSelectionTracer{argument: tc.argument}
-			config.Tracer = tracer
-			traced := stdlib.OpenDB(*config)
-			traced.SetMaxOpenConns(1)
-			t.Cleanup(func() { require.NoError(t, traced.Close()) })
-			h, err := newHostedAdapter(traced, f.tenant)
-			require.NoError(t, err)
+			h, tracer := tracedHostedReader(t, f, tc.argument)
+			var err error
 			if tc.deny {
 				role, err := quoteIdentifier(f.role)
 				require.NoError(t, err)
@@ -101,6 +85,14 @@ func TestHostedPublicReadsDuringPendingSelection(t *testing.T) {
 					var denied *pgconn.PgError
 					require.ErrorAs(t, err, &denied)
 					assert.Equal(t, "42501", denied.Code)
+					tracer.after = nil
+					role, quoteErr := quoteIdentifier(f.role)
+					require.NoError(t, quoteErr)
+					_, grantErr := f.admin.ExecContext(t.Context(), `GRANT SELECT ON messages TO `+role)
+					require.NoError(t, grantErr)
+					recovered, readErr := h.Search(t.Context(), db.SearchFilter{Query: "needle", Limit: 20})
+					require.NoError(t, readErr)
+					require.Len(t, recovered.Results, 1)
 				} else {
 					require.NoError(t, err)
 					require.Len(t, page.Results, 1)

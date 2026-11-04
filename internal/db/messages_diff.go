@@ -139,11 +139,9 @@ type messageDiffPlan struct {
 // must use the full replace path; a load failure also degrades to
 // full replace rather than failing the write.
 func (db *DB) planStoredMessageDiff(
-	sessionID string, msgs []Message,
+	ctx context.Context, sessionID string, msgs []Message,
 ) (messageDiffPlan, []Message, bool, bool) {
-	stored, err := db.GetAllMessages(
-		context.Background(), sessionID,
-	)
+	stored, err := db.GetAllMessages(ctx, sessionID)
 	if err != nil {
 		return messageDiffPlan{}, nil, false, false
 	}

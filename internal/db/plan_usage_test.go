@@ -181,11 +181,11 @@ func TestFullResyncKeepsOrphanAndTrashPlanUsage(t *testing.T) {
 
 	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination")
 	defer destination.Close()
-	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
-	trashed, err := destination.CopyTrashedDataFrom(sourcePath)
+	require.NoError(t, destination.CopySyncStateFrom(t.Context(), sourcePath))
+	trashed, err := destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	require.Equal(t, []string{"codex-cloud:trashed"}, trashed)
-	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	copied, err := destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	require.Equal(t, 1, copied)
 

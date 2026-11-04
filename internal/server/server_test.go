@@ -595,6 +595,7 @@ func (te *testEnv) get(
 }
 
 func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -640,6 +641,7 @@ func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
 }
 
 func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -662,6 +664,7 @@ func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
 }
 
 func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -952,6 +955,7 @@ func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
 // TypeScript client's session_ids typed as Array<string> rather than
 // loosening to any[] | null.
 func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -1006,6 +1010,7 @@ func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
 }
 
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -1052,6 +1057,7 @@ func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 // it. It is a detail-only derive-on-read field with no persisted column, so it
 // must appear on ServiceSessionDetail but not on the plain DbSession schema.
 func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -1084,6 +1090,7 @@ func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
 }
 
 func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
@@ -2257,6 +2264,7 @@ func TestSearch_WithResults(t *testing.T) {
 }
 
 func TestSearch_Limits(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	te.requireFTS(t)
 	// Seed enough distinct sessions to prove clamping at the maximum.
@@ -2309,6 +2317,7 @@ func TestSearch_Limits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			path := "/api/v1/search?q=common"
 			if tt.queryVal != "" {
 				path += "&" + tt.queryVal
@@ -2711,6 +2720,7 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 }
 
 func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
 		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
 	}
@@ -2743,6 +2753,7 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 // event stream ending in a done event carrying the push result, instead of a
 // single JSON body after a silent wait.
 func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
 		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
 	}
@@ -3305,6 +3316,7 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 }
 
+// Serial: waits only one second for real synchronization.
 func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	dir := tempDirWithRetryCleanup(t)
 	cfg := config.Config{
@@ -3609,6 +3621,7 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 }
 
 func TestSettingsChartPaletteRoundTrip(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -3651,6 +3664,7 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 }
 
 func TestReadOnlySettingsAcceptDisplayPreferences(t *testing.T) {
+	t.Parallel()
 	putSettings := func(te *testEnv, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
@@ -3675,6 +3689,7 @@ func TestReadOnlySettingsAcceptDisplayPreferences(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			te := setupPGMode(t)
 			w := putSettings(te, tt.body)
 			assertStatus(t, w, tt.want)
@@ -3726,6 +3741,7 @@ func TestOpenAPISettingsZoomLevels(t *testing.T) {
 }
 
 func TestSettingsZoomLevelRoundTrip(t *testing.T) {
+	t.Parallel()
 	configured := config.ZoomLevel120
 	te := setup(t, func(cfg *config.Config) { cfg.ZoomLevel = &configured })
 	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"), []byte(
@@ -3775,6 +3791,7 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 }
 
 func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -3869,6 +3886,7 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 }
 
 func TestSettingsInsightDefaultAgent(t *testing.T) {
+	t.Parallel()
 	readDefaultAgent := func(t *testing.T, te *testEnv) string {
 		t.Helper()
 		w := te.get(t, "/api/v1/settings")
@@ -3920,6 +3938,7 @@ func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
 }
 
 func TestSettingsToolResultImagesRejectionPreservesSiblingKeys(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -4040,6 +4059,7 @@ func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
 }
 
 func TestSettingsRejectInvalidDisabledProviderWithoutMutation(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	put := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -5044,6 +5064,7 @@ func TestTriggerSync_SSEEvents(t *testing.T) {
 }
 
 func TestResyncEndpoint(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	te.writeSessionFile(t, "resync-proj", "resync.jsonl",
@@ -5074,6 +5095,7 @@ func TestResyncEndpoint(t *testing.T) {
 }
 
 func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	sessionPath := te.writeSessionFile(t, "resync-proj", "resync.jsonl",
@@ -5100,6 +5122,7 @@ func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
 // messages are accessible via the API. This exercises the
 // close-rename-reopen sequence that is critical on Windows.
 func TestResyncPreservesDataThroughSwap(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	// Write two session files in different projects.
@@ -5194,6 +5217,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 // is closed, no such file, no such table). These are expected
 // since resync is a rare manual operation.
 func TestResyncConcurrentReads(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	te.writeSessionFile(t, "conc-proj", "c.jsonl",
@@ -5291,6 +5315,7 @@ func parseSSEDoneStats(
 }
 
 func TestListSessions_Limits(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	totalSessions := db.MaxSessionLimit + 5
 	writes := make([]db.SessionBatchWrite, 0, totalSessions)
@@ -5327,6 +5352,7 @@ func TestListSessions_Limits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			path := "/api/v1/sessions"
 			if tt.limitVal != "" {
 				path += "?" + tt.limitVal
@@ -5790,6 +5816,7 @@ func TestHandleSyncSession_InvalidJSON(t *testing.T) {
 }
 
 func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"),
 		[]byte("[agents.pi]\ndirs = [\"/sessions/pi\"]\n"), 0o600))
@@ -5871,6 +5898,7 @@ func TestMarkdownSessionExportPreservesOffloadedImages(t *testing.T) {
 }
 
 func TestSettingsProviderChangesApplyThroughIngestionReloader(t *testing.T) {
+	t.Parallel()
 	reloadedDir := filepath.Join(t.TempDir(), "claude-work", "projects")
 	reloads := 0
 	reloadErr := error(nil)

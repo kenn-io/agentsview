@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/testutil"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -449,4 +451,40 @@ func trendPointCounts(points []TrendPoint) []int {
 		counts[i] = point.Count
 	}
 	return counts
+}
+
+func TestGetTrendsTermsSQLiteSessionWindowMatchesMessageDates(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	cases := testutil.TrendsSessionWindowCases()
+	for _, tc := range cases {
+		_, err := d.getWriter().ExecContext(ctx, `INSERT INTO sessions
+			(id, project, machine, agent, started_at, created_at, message_count) VALUES (?, ?, 'local', 'claude', NULLIF(?, ''), ?, 1)`,
+			tc.Project, tc.Project, tc.Started, tc.Created)
+		require.NoError(t, err)
+		for ordinal, m := range tc.Messages() {
+			_, err = d.getWriter().ExecContext(ctx, `INSERT INTO messages
+				(session_id, ordinal, role, content, timestamp, model) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?)`, tc.Project, ordinal, m.Role, m.Content, m.Timestamp, m.Model)
+			require.NoError(t, err)
+		}
+	}
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.Project, func(t *testing.T) {
+			for _, dayHour := range []bool{false, true} {
+				f := AnalyticsFilter{From: "2024-06-05", To: "2024-06-05", Project: tc.Project, Timezone: tc.Timezone}
+				f.Model = tc.Model
+				if dayHour {
+					f.DayOfWeek = new(2)
+					f.Hour = new(tc.Hour)
+				}
+				got, err := d.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				assert.Equal(t, tc.Want, got.MessageCount)
+				require.Len(t, got.Series, 1)
+				assert.Equal(t, tc.Want, got.Series[0].Total)
+			}
+		})
+	}
 }

@@ -853,7 +853,7 @@ func recallBackstop(cfg config.Config, configured time.Duration) time.Duration {
 // no-op cases above, and the degraded-on-error case); otherwise the
 // caller must call it when done with d to release the read-only index
 // handle.
-func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
+func installDirectVectorSearcher(ctx context.Context, cfg config.Config, d *db.DB) func() error {
 	if cfg.ArchiveContent.UsageOnly() || d.ArchiveContent().UsageOnly() || !cfg.Vector.Enabled {
 		return nil
 	}
@@ -863,11 +863,11 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	}
 
 	ix, messageErr := vector.OpenSpec(
-		context.Background(), path, vector.MessageIndexSpec(), true,
+		ctx, path, vector.MessageIndexSpec(), true,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
 	recallIX, recallErr := vector.OpenSpec(
-		context.Background(), path, vector.RecallIndexSpec(), true,
+		ctx, path, vector.RecallIndexSpec(), true,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
 	if messageErr != nil && recallErr != nil {

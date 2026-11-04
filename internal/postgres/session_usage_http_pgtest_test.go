@@ -22,7 +22,7 @@ import (
 
 func usageHTTP(t *testing.T, h http.Handler, id, query string, status int) map[string]any {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/usage?"+query, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/usage?"+query, nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -35,6 +35,7 @@ func usageHTTP(t *testing.T, h http.Handler, id, query string, status int) map[s
 func TestSessionUsageRawIDHTTPPostgres(t *testing.T) {
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
+	dbtest.SeedPricingMeta(t, local)
 	for _, id := range []string{"codex:native:thread", "codex:child", "archive~codex:hosted", "a~codex:shared", "b~codex:shared", "claude-id", "codex:claude-id", "codex:codex:missing", "codex:freebuff:missing"} {
 		s := db.Session{ID: id, Agent: "codex", Project: "project", Machine: "test", MessageCount: 1, TotalOutputTokens: 500, HasTotalOutputTokens: true}
 		if id == "codex:child" {
@@ -45,13 +46,13 @@ func TestSessionUsageRawIDHTTPPostgres(t *testing.T) {
 		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Model: "unknown-model", Timestamp: "2026-01-01T00:00:00Z", TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)}}))
 	}
 	pgURL := os.Getenv("TEST_PG_URL")
-	syncer, err := postgres.New(pgURL, pgE2ESchema, local, "test", true, storage.PusherOptions{})
+	syncer, err := postgres.New(t.Context(), pgURL, pgE2ESchema, local, "test", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	store, err := postgres.NewStore(pgURL, pgE2ESchema, true)
+	store, err := postgres.NewStore(t.Context(), pgURL, pgE2ESchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	store.SetCustomPricing(map[string]config.CustomModelRate{

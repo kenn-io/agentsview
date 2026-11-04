@@ -57,7 +57,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 	database, writeLock, err := openWriteDB(
-		context.Background(),
+		ctx,
 		appCfg,
 	)
 	if err != nil {
@@ -97,7 +97,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 
 	client := newCursorUsageClient(apiKey)
-	events, err := client.FetchAllUsageEvents(context.Background(), cursorusage.Query{
+	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,
 		PageSize:  pageSize,

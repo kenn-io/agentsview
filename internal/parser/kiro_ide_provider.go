@@ -36,9 +36,9 @@ func newKiroIDESourceSet(roots []string) JSONLSourceSet {
 }
 
 func kiroIDEParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseKiroIDESession(path, req.Machine)
+	sess, msgs, err := parseKiroIDESession(ctx, path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}

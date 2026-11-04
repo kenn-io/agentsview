@@ -54,7 +54,7 @@ func TestRawProjectionWorkerReportsCommittedPartialOutcomes(t *testing.T) {
 			f := newProjectionFixture(t)
 			m, _ := f.accept(t, "device-a", "partial-worker", "")
 			policy := rawderive.RetryPolicy{Base: 2 * time.Second, Maximum: time.Minute, MaxAttempts: maximum}
-			sink, err := NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant, RetryPolicy: policy})
+			sink, err := NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, RetryPolicy: policy})
 			require.NoError(t, err)
 			_, err = sink.SelectSourceGeneration(t.Context(), m, "parser-1")
 			require.NoError(t, err)

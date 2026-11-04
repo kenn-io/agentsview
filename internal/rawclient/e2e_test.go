@@ -1,4 +1,4 @@
-package rawclient
+package rawclient_test
 
 import (
 	"bytes"
@@ -11,6 +11,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -21,8 +24,11 @@ import (
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
+	"go.kenn.io/agentsview/internal/rawclient"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/agentsview/internal/rawupload"
 	"go.kenn.io/agentsview/internal/server"
 )
 
@@ -60,7 +66,7 @@ func TestRawClientEndToEnd(t *testing.T) {
 	assert.Equal(t, enrollment.Identity.DeviceID, storedDevice)
 
 	// A small ChunkBytes forces every object through multiple PATCHes.
-	client, err := NewClient(Config{
+	client, err := rawclient.NewClient(rawclient.Config{
 		BaseURL:     httpServer.URL,
 		DeviceID:    enrollment.Identity.DeviceID,
 		Credential:  enrollment.Credential,
@@ -184,10 +190,10 @@ func TestRawClientEndToEnd(t *testing.T) {
 		"capture-e2e-3", capturedAt.Add(2*time.Minute), firstCommit.Receipt,
 	))
 	require.Error(t, err)
-	var apiErr APIError
-	require.True(t, AsAPIError(err, &apiErr))
+	var apiErr rawclient.APIError
+	require.True(t, rawclient.AsAPIError(err, &apiErr))
 	assert.Equal(t, http.StatusConflict, apiErr.Status)
-	assert.Equal(t, CodeHeadConflict, apiErr.Code)
+	assert.Equal(t, rawclient.CodeHeadConflict, apiErr.Code)
 	assert.Equal(t, secondCommit.ManifestID, apiErr.CurrentManifestID)
 	assert.Equal(t, secondCommit.Receipt, apiErr.CurrentReceipt)
 	assert.Equal(t, int64(2), apiErr.CurrentGeneration)
@@ -200,6 +206,70 @@ func TestRawClientEndToEnd(t *testing.T) {
 	assert.Equal(t, secondCommit.Receipt, head.Receipt)
 	assert.Equal(t, secondCommit.ManifestID, head.ManifestID)
 	assert.Equal(t, int64(2), head.Generation)
+
+	// Capture and acknowledge empty files and exact 8-byte chunk multiples.
+	for _, tc := range []struct {
+		length  int
+		patches int
+	}{
+		{0, 1},
+		{8, 1},
+		{16, 2},
+	} {
+		length := tc.length
+		t.Run("capture/"+strconv.Itoa(length), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			uploads := newE2EUploadSessionStore()
+			httpServer, auth := newE2ERawSyncServer(t, uploads)
+			enrollment, err := auth.EnrollDevice(ctx, "tenant-e2e", "laptop-e2e")
+			require.NoError(t, err)
+			checkpoint, err := rawcheckpoint.Open(ctx, filepath.Join(t.TempDir(), "rawcheckpoint.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
+			require.NoError(t, checkpoint.SetDevice(ctx, enrollment.Identity.DeviceID))
+			client, err := rawclient.NewClient(rawclient.Config{
+				BaseURL:     httpServer.URL,
+				DeviceID:    enrollment.Identity.DeviceID,
+				Credential:  enrollment.Credential,
+				HTTPClient:  httpServer.Client(),
+				ChunkBytes:  8,
+				TokenMargin: time.Minute,
+			})
+			require.NoError(t, err)
+
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			body := bytes.Repeat([]byte("x"), length)
+			project := filepath.Join(root, "project")
+			require.NoError(t, os.Mkdir(project, 0o700))
+			path := filepath.Join(project, "session.jsonl")
+			require.NoError(t, os.WriteFile(path, body, 0o600))
+			provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			_, err = rawcapture.New(checkpoint).Capture(t.Context(), provider, sources[0])
+			require.NoError(t, err)
+
+			uploader := rawupload.New(checkpoint, client, enrollment.Identity.DeviceID)
+			_, found, err := uploader.UploadNext(t.Context())
+			require.NoError(t, err)
+			require.True(t, found)
+			_, found, err = uploader.UploadNext(t.Context())
+			require.NoError(t, err)
+			assert.False(t, found, "acknowledged capture must leave the queue")
+			missing, err := client.MissingObjects(t.Context(), parser.AgentClaude, []rawsync.ObjectRef{e2EObjectFor(t, body)})
+			require.NoError(t, err)
+			assert.Empty(t, missing, "acknowledgement requires verified physical custody")
+			counts := uploads.appendCounts()
+			require.Len(t, counts, 1)
+			for _, count := range counts {
+				assert.Equal(t, tc.patches, count)
+			}
+		})
+	}
 }
 
 // e2EObjectFor builds a validated ObjectRef carrying body's real digest.

@@ -157,7 +157,7 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 		t.Setenv("AGENTSVIEW_STALE_SERVE_SOURCES", childCfg.AgentDirs[parser.AgentClaude][0])
 		return startServeBackgroundProcess(ctx, childCfg, []string{"-test.run=^TestServeStaleArchiveHelperProcess$"})
 	}
-	result, err := startServeBackground(t.Context(), cfg, []string{"serve"}, serveReplacementOptions{}, backgroundLaunchPolicy{ConfigOnly: true, Context: t.Context()})
+	result, err := startServeBackground(t.Context(), cfg, []string{"serve"}, serveReplacementOptions{}, backgroundLaunchPolicy{ConfigOnly: true})
 	require.NoError(t, err)
 	require.NotNil(t, result.Runtime)
 	t.Cleanup(func() { _ = stopDaemonProcess(result.Runtime.Record, 5*time.Second) })
@@ -243,7 +243,7 @@ func TestArchiveOnlyRefusesOrdinaryImports(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(preserved, "assets", "existing.png"), []byte("existing"), 0o600))
 			beforeSessions, beforeAssets := archiveImportState(t, preserved)
 
-			err = importSessions(ImportConfig{Type: importType, Path: inputs[importType]})
+			err = importSessions(t.Context(), ImportConfig{Type: importType, Path: inputs[importType]})
 			require.ErrorIs(t, err, db.ErrArchiveOnly)
 			afterSessions, afterAssets := archiveImportState(t, preserved)
 			assert.Equal(t, beforeSessions, afterSessions, "a preserved archive does not gain or change sessions")

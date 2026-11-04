@@ -21,8 +21,8 @@ import (
 func TestVerifierBodyLimitDeadlineAndHeaderBudget(t *testing.T) {
 	key := signingKey(t)
 	path := filepath.Join(t.TempDir(), "replay.db")
-	require.NoError(t, InitReplay(path))
-	replay, err := OpenReplay(path)
+	require.NoError(t, InitReplay(t.Context(), path))
+	replay, err := OpenReplay(t.Context(), path)
 	require.NoError(t, err)
 	defer replay.Close()
 	var verifier *Verifier
@@ -102,8 +102,8 @@ func TestParserRejectsDuplicateParametersAndMalformedMAC(t *testing.T) {
 func TestVerifierAdmitsBodyThatOutlivesSignature(t *testing.T) {
 	key := signingKey(t)
 	path := filepath.Join(t.TempDir(), "replay.db")
-	require.NoError(t, InitReplay(path))
-	replay, err := OpenReplay(path)
+	require.NoError(t, InitReplay(t.Context(), path))
+	replay, err := OpenReplay(t.Context(), path)
 	require.NoError(t, err)
 	defer replay.Close()
 	var verifier *Verifier

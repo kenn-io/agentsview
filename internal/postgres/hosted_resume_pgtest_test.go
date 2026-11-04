@@ -52,7 +52,7 @@ func TestHostedResumeUsesCapturedProviderIdentity(t *testing.T) {
 			f := newProjectionFixture(t)
 			m, _ := f.accept(t, "device-a", "capture-a", "", tc.agent)
 			require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, rawderive.ParsedManifest{Outcome: outcome}))
-			h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+			h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, h.Close()) })
 			cfg, err := config.Default()

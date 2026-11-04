@@ -29,7 +29,7 @@ func TestPGServeKataHubConnection(t *testing.T) {
 	// The nonexistent schema keeps the raw-sync privilege probe read-only and
 	// avoids relying on the other PostgreSQL integration tests' shared schema.
 	const schema = "kata_hub_probe_missing"
-	store, err := postgres.NewStore(pgURL, schema, false)
+	store, err := postgres.NewStore(t.Context(), pgURL, schema, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 

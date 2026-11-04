@@ -359,6 +359,7 @@ func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
 	}
 	te := setup(t)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	dbtest.SeedMirrorPricing(t, te.db)
 	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	store, err := duckdb.NewStore(t.Context(), path)

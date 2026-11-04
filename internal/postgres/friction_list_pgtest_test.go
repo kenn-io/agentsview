@@ -130,7 +130,7 @@ func seedFrictionPG(t *testing.T, store *Store) {
 func TestFrictionListParity(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	seedFrictionPG(t, store)

@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const legacyCommandAnnotation = "agentsview.legacy-command"
+
 type commandMove struct {
 	legacy    string
 	canonical string
@@ -16,24 +18,26 @@ type commandMove struct {
 
 // Construct both trees independently: Cobra parsing state, flag values and
 // handler closures must never be shared between the two spellings.
-var commandMoves = []commandMove{
-	{"agents", "source list", newAgentsCommand, "agentsview source list codex --json"},
-	{"sync", "source sync", newSyncCommand, "agentsview source sync --full"},
-	{"import", "source import", newImportCommand, "agentsview source import --type chatgpt export.json\nagentsview source import --type claude-ai --sync"},
-	{"chrome", "source chrome", newChromeCommand, "agentsview source chrome setup"},
-	{"raw-sync", "source raw", newRawSyncCommand, "agentsview source raw status"},
-	{"projects", "project list", newProjectsCommand, "agentsview project list --json"},
-	{"health", "session health", newHealthCommand, "agentsview session health --limit 10 --json"},
-	{"prune", "session prune", newPruneCommand, "agentsview session prune --project scratch --dry-run"},
-	{"stats", "report stats", newStatsCommand, "agentsview report stats --json"},
-	{"activity", "report activity", newActivityReportCommand, "agentsview report activity --preset week"},
-	{"usage", "report usage", newReportUsageCommand, "agentsview report usage daily --no-sync"},
-	{"pg", "replica pg", newPGCommand, "agentsview replica pg status"},
-	{"duckdb", "replica duckdb", newDuckDBCommand, "agentsview replica duckdb status"},
-	{"clickhouse", "replica clickhouse", newClickHouseCommand, "agentsview replica clickhouse status"},
-	{"embeddings", "index embeddings", newEmbeddingsCommand, "agentsview index embeddings list"},
-	{"classifier", "index classifier", newClassifierCommand, "agentsview index classifier rebuild"},
-	{"parse-diff", "archive diff", newParseDiffCommand, "agentsview archive diff --agent claude --limit 10"},
+func commandMoves() []commandMove {
+	return []commandMove{
+		{"agents", "source list", newAgentsCommand, "agentsview source list codex --json"},
+		{"sync", "source sync", newSyncCommand, "agentsview source sync --full"},
+		{"import", "source import", newImportCommand, "agentsview source import --type chatgpt export.json\nagentsview source import --type claude-ai --sync"},
+		{"chrome", "source chrome", newChromeCommand, "agentsview source chrome setup"},
+		{"raw-sync", "source raw", newRawSyncCommand, "agentsview source raw status"},
+		{"projects", "project list", newProjectsCommand, "agentsview project list --json"},
+		{"health", "session health", newHealthCommand, "agentsview session health --limit 10 --json"},
+		{"prune", "session prune", newPruneCommand, "agentsview session prune --project scratch --dry-run"},
+		{"stats", "report stats", newStatsCommand, "agentsview report stats --json"},
+		{"activity", "report activity", newActivityReportCommand, "agentsview report activity --preset week"},
+		{"usage", "report usage", newReportUsageCommand, "agentsview report usage daily --no-sync"},
+		{"pg", "replica pg", newPGCommand, "agentsview replica pg status"},
+		{"duckdb", "replica duckdb", newDuckDBCommand, "agentsview replica duckdb status"},
+		{"clickhouse", "replica clickhouse", newClickHouseCommand, "agentsview replica clickhouse status"},
+		{"embeddings", "index embeddings", newEmbeddingsCommand, "agentsview index embeddings list"},
+		{"classifier", "index classifier", newClassifierCommand, "agentsview index classifier rebuild"},
+		{"parse-diff", "archive diff", newParseDiffCommand, "agentsview archive diff --agent claude --limit 10"},
+	}
 }
 
 func newCommandDomain(name, short, long, group, example string) *cobra.Command {
@@ -81,7 +85,7 @@ func groupCommands(root *cobra.Command) {
 	source.AddCommand(cursor)
 	addCanonicalCommand(root, "source cursor sync-usage", newUsageCursorCommand())
 
-	for _, move := range commandMoves {
+	for _, move := range commandMoves() {
 		legacy := directCLICommand(root, move.legacy)
 		if legacy == nil {
 			panic("missing legacy CLI command: " + move.legacy)
@@ -105,6 +109,7 @@ func groupCommands(root *cobra.Command) {
 		panic("missing legacy CLI command: token-use")
 	}
 	tokenUse.Hidden = true
+	tokenUse.Annotations = map[string]string{legacyCommandAnnotation: "session usage"}
 	tokenUse.Long = "Deprecated: use 'agentsview session usage ID --json'.\n" +
 		"This spelling retains its JSON-only output and existing exit codes."
 }
@@ -142,6 +147,12 @@ func addCanonicalCommand(root *cobra.Command, path string, cmd *cobra.Command) {
 }
 
 func markLegacyCommand(cmd *cobra.Command, legacy, replacement string) {
+	if !cmd.Hidden {
+		if cmd.Annotations == nil {
+			cmd.Annotations = make(map[string]string)
+		}
+		cmd.Annotations[legacyCommandAnnotation] = replacement
+	}
 	// These old subtrees change shape in the canonical grammar.
 	switch legacy {
 	case "activity report":
@@ -157,16 +168,20 @@ func markLegacyCommand(cmd *cobra.Command, legacy, replacement string) {
 	cmd.Long = long + "\n\nDeprecated: use 'agentsview " + replacement + "'."
 	// Cobra's Deprecated field prints through OutOrStderr, which inherits this
 	// CLI's stdout writer. Wrap handlers instead so JSON stdout stays intact.
+	// Warn after success so a failure's JSON diagnostic stays parseable on stderr.
 	if run := cmd.Run; run != nil {
 		cmd.Run = func(cmd *cobra.Command, args []string) {
-			fmt.Fprint(cmd.ErrOrStderr(), notice)
 			run(cmd, args)
+			fmt.Fprint(cmd.ErrOrStderr(), notice)
 		}
 	}
 	if run := cmd.RunE; run != nil {
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			fmt.Fprint(cmd.ErrOrStderr(), notice)
-			return run(cmd, args)
+			err := run(cmd, args)
+			if err == nil {
+				fmt.Fprint(cmd.ErrOrStderr(), notice)
+			}
+			return err
 		}
 	}
 	for _, child := range cmd.Commands() {

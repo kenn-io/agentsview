@@ -1775,7 +1775,7 @@ func TestInstallDirectVectorSearcherNoOpWhenVectorDisabled(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
 	cfg := config.Config{DataDir: dataDir}
-	closeFn := installDirectVectorSearcher(cfg, database)
+	closeFn := installDirectVectorSearcher(t.Context(), cfg, database)
 	assert.Nil(t, closeFn)
 	assert.False(t, database.HasSemantic())
 }
@@ -1785,7 +1785,7 @@ func TestInstallDirectVectorSearcherNoOpWhenVectorsDBMissing(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
 	cfg := vectorTestConfig(dataDir)
-	closeFn := installDirectVectorSearcher(cfg, database)
+	closeFn := installDirectVectorSearcher(t.Context(), cfg, database)
 	assert.Nil(t, closeFn)
 	assert.False(t, database.HasSemantic(),
 		"no searcher wired means callers see db.ErrSemanticUnavailable naturally")
@@ -1801,7 +1801,7 @@ func TestInstallDirectVectorSearcherWiresSearcherWhenVectorsDBExists(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, seed.Close())
 
-	closeFn := installDirectVectorSearcher(cfg, database)
+	closeFn := installDirectVectorSearcher(t.Context(), cfg, database)
 	require.NotNil(t, closeFn)
 	defer func() { assert.NoError(t, closeFn()) }()
 
@@ -1827,7 +1827,7 @@ func TestInstallDirectVectorSearcherDegradesOnCorruptVectorsDB(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(vectorsPath), 0o755))
 	require.NoError(t, os.WriteFile(vectorsPath, []byte("not a sqlite database"), 0o644))
 
-	closeFn := installDirectVectorSearcher(cfg, database)
+	closeFn := installDirectVectorSearcher(t.Context(), cfg, database)
 	assert.Nil(t, closeFn,
 		"a corrupt vectors.db must not return a handle to close")
 	assert.False(t, database.HasSemantic(),
@@ -1866,7 +1866,7 @@ func TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired(t *test
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	closeFn := installDirectVectorSearcher(cfg, database)
+	closeFn := installDirectVectorSearcher(t.Context(), cfg, database)
 	require.NotNil(t, closeFn,
 		"a version-mismatched vectors.db must wire a searcher, not silently unwire semantic search")
 	defer func() { assert.NoError(t, closeFn()) }()

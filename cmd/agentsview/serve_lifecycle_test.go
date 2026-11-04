@@ -84,7 +84,7 @@ func TestRunServeStatusReportsIncompatibleWritableDaemon(t *testing.T) {
 	))
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.Contains(t, out, "incompatible")
@@ -120,7 +120,7 @@ func TestRunServeStatusPrefersIncompatibleWritableOverReadOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.Contains(t, out, "incompatible")
@@ -140,7 +140,7 @@ func TestRunServeStatusPrefersStartingOverReadOnly(t *testing.T) {
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.Contains(t, out, "agentsview is starting up.")
@@ -166,7 +166,7 @@ func TestRunServeStatusReportsStartupProgress(t *testing.T) {
 		"write startup state")
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.Contains(t, out, "agentsview is starting up.")
@@ -189,7 +189,7 @@ func TestRunServeStatusStartingWithoutStateFallsBack(t *testing.T) {
 	), "plant corrupt state file")
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.Contains(t, out, "agentsview is starting up.")
@@ -204,7 +204,7 @@ func TestRunServeStatus_StartupStateFallbackWithoutRuntimeRecord(t *testing.T) {
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.Contains(t, out, "agentsview running at")
@@ -218,7 +218,7 @@ func TestRunServeStatus_StartupStateFallbackStaleStateDoesNotClaimRunning(t *tes
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), "1")
 
 	out := captureStdout(t, func() {
-		runServeStatus(config.Config{DataDir: dir})
+		runServeStatus(t.Context(), config.Config{DataDir: dir})
 	})
 
 	assert.NotContains(t, out, "agentsview running at")

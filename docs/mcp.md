@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-03
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -71,27 +71,28 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                     | Purpose                                                                  |
-| ------------------------ | ------------------------------------------------------------------------ |
-| `search_sessions`        | Full-text search across recorded sessions                                |
-| `list_sessions`          | List recent or filtered sessions                                         |
-| `get_session_overview`   | Fetch metadata and a compact message preview                             |
-| `get_messages`           | Read paginated message bodies from one session                           |
-| `get_memory_status`      | Report archive, lexical, semantic, and source readiness                  |
-| `search_content`         | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`      | Aggregate token and cost usage                                           |
-| `get_session_usage`      | Show one session's tokens and cost by model and by request               |
-| `query_recall`           | Search extracted Recall entries when the backend supports Recall queries |
-| `get_tool_calls`         | List the tool calls one session made, with inputs and result sizes       |
-| `get_recent_edits`       | Find which sessions edited a file, newest edit first                     |
-| `get_child_sessions`     | List the sub-agent and fork sessions started from one session            |
-| `compare_usage`          | Compare token usage and cost between two models or two projects          |
-| `get_activity_report`    | Report agent time, sessions, and cost for a day, week, month, or range   |
-| `get_tool_usage`         | Count tool calls by category, agent, and tool name                       |
-| `get_quality_signals`    | Show health grades, outcomes, failures, and example sessions             |
-| `search_docs`            | Search the AgentsView guides bundled with this version                   |
-| `get_friction_digest`    | Read a dated Friction Log digest as Markdown or the summary object       |
-| `list_friction_patterns` | List recurring friction patterns ranked by occurrences                   |
+| Tool                          | Purpose                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `search_sessions`             | Full-text search across recorded sessions                                |
+| `list_sessions`               | List recent or filtered sessions                                         |
+| `get_session_overview`        | Fetch metadata and a compact message preview                             |
+| `get_messages`                | Read paginated message bodies from one session                           |
+| `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
+| `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
+| `get_usage_summary`           | Aggregate token and cost usage                                           |
+| `get_session_usage`           | Show one session's tokens and cost by model and by request               |
+| `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
+| `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
+| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |
+| `get_recent_edits`            | Find which sessions edited a file, newest edit first                     |
+| `get_child_sessions`          | List the sub-agent and fork sessions started from one session            |
+| `compare_usage`               | Compare token usage and cost between two models or two projects          |
+| `get_activity_report`         | Report agent time, sessions, and cost for a day, week, month, or range   |
+| `get_tool_usage`              | Count tool calls by category, agent, and tool name                       |
+| `get_quality_signals`         | Show health grades, outcomes, failures, and example sessions             |
+| `search_docs`                 | Search the AgentsView guides bundled with this version                   |
+| `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
+| `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
 
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
@@ -218,6 +219,18 @@ without it they return a "not available" error. Exact `session_id`,
 `git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
 before the final limit. Limits default to 10 and go up to 50; a value outside
 that range falls back to the default.
+
+To find one past session that covered several ideas, pass `concepts` instead of
+`pattern`: two to five distinct natural-language strings. The mode defaults to
+`semantic`, and any other explicit mode is rejected. AgentsView searches each
+concept separately and keeps only sessions with evidence for all of them, even
+when different exchanges carry that evidence. Results rank by the mean of each
+concept's strongest score. Each match lists `concept_evidence` in request order:
+the concept, its snippet, score, ordinal, `ordinal_range`, and
+`transcript_revision`. Concept searches do not page, so `cursor` is rejected.
+`candidate_truncated` is true when a session may be missing: one concept's
+candidate search filled up or stopped at its fetch cap, or more sessions matched
+than the limit allowed.
 
 A `terms` snippet shows about 60 characters of context around the first
 occurrence of each term. Terms that sit far apart in a long exchange produce
@@ -487,6 +500,12 @@ configured bearer token and enforces `Authorization: Bearer <token>` on every
 request. If `require_auth` is enabled, loopback HTTP binds also require bearer
 auth so forwarded ports are not accidentally unauthenticated.
 
+## Server Identity (unreleased)
+
+On `main`, the MCP server declares the AgentsView website and icon. The icon is
+included as a PNG data URI, so stdio and HTTP clients can load it without an
+external request. Whether it appears depends on the client.
+
 ## Security Notes
 
 The MCP server can reveal prompts, assistant responses, tool output, file paths,
@@ -501,3 +520,17 @@ project names, and usage totals. Treat it like access to your session archive.
 
 For every flag, see [`agentsview mcp`](/docs/commands/#agentsview-mcp) in the
 CLI reference.
+
+## Find images in Docbank
+
+`get_session_file_references` takes `session_id` and returns the same result as
+`GET /api/v1/sessions/{id}/file-references`. It is available in the full
+profile. Each occurrence includes its message ordinal, optional tool and
+result-event coordinates, SHA-256 digest, and `found`, `not_found`,
+`unavailable`, `limit_exceeded`, or `bytes_not_kept` state. Images dropped by
+the image policy report `bytes_not_kept` with an empty digest. Matches identify
+current files, prior versions, or trash and include an exact version link when
+configured. A disabled integration returns an empty list. See
+[Docbank configuration](/docs/configuration/#find-transcript-images-in-docbank)
+for coverage and limits. Database reads and Docbank requests each have a
+separate five-second budget. Claude pasted images aren't covered yet.

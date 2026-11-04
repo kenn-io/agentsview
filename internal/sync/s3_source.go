@@ -224,6 +224,7 @@ func (e *Engine) s3CodexIndexSnapshot(
 }
 
 func (e *Engine) s3CodexIndexNeedsRefreshSince(
+	ctx context.Context,
 	file parser.DiscoveredFile,
 	cutoffNs int64,
 ) bool {
@@ -264,11 +265,11 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 	if !ok {
 		return false
 	}
-	return e.s3CodexStoredNameDiffers(file, uuid, title)
+	return e.s3CodexStoredNameDiffers(ctx, file, uuid, title)
 }
 
 func (e *Engine) s3CodexIndexSessionNameChanged(
-	file parser.DiscoveredFile, uuid string,
+	ctx context.Context, file parser.DiscoveredFile, uuid string,
 ) (bool, error) {
 	indexURI, ok := parser.CodexS3SessionIndexURI(file.Path)
 	if !ok {
@@ -288,17 +289,17 @@ func (e *Engine) s3CodexIndexSessionNameChanged(
 	if !ok {
 		return false, nil
 	}
-	return e.s3CodexStoredNameDiffers(file, uuid, title), nil
+	return e.s3CodexStoredNameDiffers(ctx, file, uuid, title), nil
 }
 
 func (e *Engine) s3CodexStoredNameDiffers(
-	file parser.DiscoveredFile, uuid, indexTitle string,
+	ctx context.Context, file parser.DiscoveredFile, uuid, indexTitle string,
 ) bool {
 	sessionID := applyIDPrefixToID(
 		s3SessionIDPrefix(file.Machine), "codex:"+uuid,
 	)
 	return e.codexStoredNameDiffersBySessionID(
-		sessionID, indexTitle, false,
+		ctx, sessionID, indexTitle, false,
 	)
 }
 

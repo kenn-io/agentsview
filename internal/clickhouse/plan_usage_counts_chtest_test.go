@@ -18,6 +18,7 @@ import (
 // the rows of sessions that have plan usage, not every message and usage
 // event in the mirror.
 func TestPlanUsageCountsReadOnlyPlanSessions(t *testing.T) {
+	t.Parallel()
 	const bigMessages = 50_000
 	local, target := seedFixture(t)
 	const bigID = "zz-big-session"

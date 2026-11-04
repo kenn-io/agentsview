@@ -272,7 +272,7 @@ func (e *Engine) processS3Session(
 					sess.Project != "" &&
 					!parser.NeedsProjectReparse(sess.Project) {
 					var indexErr error
-					indexNameChanged, indexErr = e.s3CodexIndexSessionNameChanged(file, uuid)
+					indexNameChanged, indexErr = e.s3CodexIndexSessionNameChanged(ctx, file, uuid)
 					if indexErr != nil {
 						return processResult{
 							err:         indexErr,

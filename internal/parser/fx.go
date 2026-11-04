@@ -313,7 +313,11 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	for i := range messages {
 		messages[i].Ordinal, messages[i].ContentLength = i, len(messages[i].Content)
 	}
-	session.FirstMessage, session.UserMessageCount = firstMessageAndUserCount(messages)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	session.FirstMessage, session.UserMessageCount = firstMessage, userCount
 	session.MessageCount = len(messages)
 	if session.SessionName == "" {
 		session.SessionName = session.FirstMessage

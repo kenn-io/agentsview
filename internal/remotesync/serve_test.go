@@ -75,7 +75,7 @@ func TestPlanArchiveRejectsDeltaOutsideAllowedFiles(t *testing.T) {
 	cfg, claudeDir := serveTestConfig(t)
 	writeServeTestSession(t, claudeDir)
 
-	_, err := PlanArchive(cfg, ArchiveRequest{
+	_, err := PlanArchive(t.Context(), cfg, ArchiveRequest{
 		Dirs:       map[parser.AgentType][]string{parser.AgentClaude: {claudeDir}},
 		DeltaFiles: []string{filepath.Join(t.TempDir(), "elsewhere.jsonl")},
 	})

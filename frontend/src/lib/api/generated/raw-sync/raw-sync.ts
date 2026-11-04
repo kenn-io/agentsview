@@ -246,7 +246,7 @@ export const getPatchApiV1RawSyncUploadsByUploadIdUrl = ({
  */
 export const patchApiV1RawSyncUploadsByUploadId = async (
   { uploadId }: PatchApiV1RawSyncUploadsByUploadIdPathParameters,
-  patchApiV1RawSyncUploadsByUploadIdBody: Blob,
+  patchApiV1RawSyncUploadsByUploadIdBody?: Blob,
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<RawSyncUploadResponse> => {
   const getHeaders = (

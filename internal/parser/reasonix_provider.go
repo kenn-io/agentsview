@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 // Reasonix stores each session as one .jsonl transcript with a sibling
@@ -32,7 +34,9 @@ func newReasonixProviderFactory(def AgentDef) ProviderFactory {
 					},
 				),
 				WithFileChangedPathClassifier(reasonixClassifyPath),
-				WithFileLookup(reasonixFindFile),
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
+					return reasonixFindFile(root, rawID)
+				}),
 				WithFileFingerprint(reasonixFingerprintSource),
 				WithFileParse(reasonixParseFile),
 			)
@@ -122,7 +126,7 @@ func reasonixFindFile(root, rawID string) (singleFileMatch, bool) {
 }
 
 func reasonixFingerprintSource(
-	src singleFileSource,
+	ctx context.Context, src singleFileSource,
 ) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
@@ -145,7 +149,7 @@ func reasonixFingerprintSource(
 			mtime = metaMTime
 		}
 	}
-	hash, err := hashReasonixSourceFile(src.Path)
+	hash, err := hashReasonixSourceFile(ctx, src.Path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -157,9 +161,9 @@ func reasonixFingerprintSource(
 }
 
 func reasonixParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, usageEvents, err := parseReasonixSession(src.Path, req.Machine)
+	sess, msgs, usageEvents, err := parseReasonixSession(ctx, src.Path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -190,7 +194,7 @@ func reasonixParseFile(
 	}}, nil, nil
 }
 
-func hashReasonixSourceFile(path string) (string, error) {
+func hashReasonixSourceFile(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
@@ -198,7 +202,7 @@ func hashReasonixSourceFile(path string) (string, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 
@@ -215,7 +219,7 @@ func hashReasonixSourceFile(path string) (string, error) {
 	if _, err := io.WriteString(h, "\x00reasonix-meta\x00"); err != nil {
 		return "", fmt.Errorf("hash %s: %w", metaPath, err)
 	}
-	if _, err := io.Copy(h, meta); err != nil {
+	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: meta}); err != nil {
 		return "", fmt.Errorf("hash %s: %w", metaPath, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
