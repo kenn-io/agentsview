@@ -30,7 +30,7 @@ func ScanCommitTrailers(ctx context.Context, repo string) ([]TrailerCommit, erro
 	runner := gitcmd.New()
 	runner.StdoutLimit = 32 << 20
 	// --all includes HEAD from every worktree, including detached worktrees.
-	args := []string{"log", "--all", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session[[:space:]]*:", "--format=%H%x1f%aI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
+	args := []string{"log", "--all", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session", "--format=%H%x1f%aI%x1f%s%x1f%S%x1f%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x1d"}
 	out, stderr, err := runner.Run(ctx, repo, nil, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git trailer log: %w: %s", err, stderr)

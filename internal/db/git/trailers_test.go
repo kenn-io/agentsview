@@ -95,3 +95,14 @@ func TestCommitTrailersWhitespaceBeforeColon(t *testing.T) {
 	require.Len(t, commits, 1)
 	assert.Equal(t, []string{"claude:editor"}, commits[0].Sessions)
 }
+
+func TestCommitTrailersConfiguredSeparator(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	gitRun(t, repo, nil, "config", "trailer.separators", "=:")
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session= claude:editor")
+	commits, err := ScanCommitTrailers(t.Context(), repo)
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	assert.Equal(t, []string{"claude:editor"}, commits[0].Sessions)
+}

@@ -643,6 +643,10 @@ func resolveTrailerOwners(ctx context.Context, tx *sql.Tx, where string, args ..
 }
 
 func trailerIdentityOwners(ctx context.Context, tx *sql.Tx, identities []string) (string, error) {
+	ids, err := findTrailerOwnerIDs(ctx, tx)
+	if err != nil {
+		return "", err
+	}
 	owners := make(map[string]string, len(identities))
 	for _, value := range identities {
 		agent, id, ok := strings.Cut(value, ":")
@@ -651,18 +655,13 @@ func trailerIdentityOwners(ctx context.Context, tx *sql.Tx, identities []string)
 			continue
 		}
 		sessionID := def.IDPrefix + id
-		matches, err := findTrailerOwnerIDs(ctx, tx, sessionID, agent)
-		if err != nil {
-			return "", err
-		}
-		switch {
-		case len(matches) > 0 && matches[0] == sessionID:
-			// An exact archive ID takes precedence over suffix matches.
-		case len(matches) == 1:
+		matches := ids[value]
+		// An exact archive ID takes precedence over suffix matches.
+		if !slices.Contains(matches, sessionID) && len(matches) > 0 {
+			if len(matches) > 1 {
+				continue
+			}
 			sessionID = matches[0]
-		case len(matches) > 1:
-			// Retain ambiguous evidence until the owner can be resolved.
-			continue
 		}
 		owners[value] = sessionID
 	}
@@ -670,25 +669,24 @@ func trailerIdentityOwners(ctx context.Context, tx *sql.Tx, identities []string)
 	return string(encoded), err
 }
 
-// Trailer evidence survives trash and permanent deletion. The CLI's suffix
-// resolver intentionally searches only active sessions.
-func findTrailerOwnerIDs(ctx context.Context, tx *sql.Tx, raw, agent string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM (
- SELECT id FROM sessions WHERE agent=?2
- UNION SELECT id FROM excluded_sessions
- ) WHERE id=?1 OR SUBSTR(id,-(LENGTH(?1)+1)) IN (':' || ?1,'~' || ?1)
- ORDER BY (id=?1) DESC,id LIMIT 2`, raw, agent)
+// Scan owners once per batch, including trashed and permanently deleted sessions.
+func findTrailerOwnerIDs(ctx context.Context, tx *sql.Tx) (map[string][]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,agent FROM sessions WHERE id NOT IN (SELECT id FROM excluded_sessions) UNION ALL SELECT id,'*' FROM excluded_sessions`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	ids := make(map[string][]string)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id, agent string
+		if err := rows.Scan(&id, &agent); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		for _, value := range sessionTrailerIdentities(id) {
+			if agent == "*" || strings.HasPrefix(value, agent+":") {
+				ids[value] = append(ids[value], id)
+			}
+		}
 	}
 	return ids, rows.Err()
 }

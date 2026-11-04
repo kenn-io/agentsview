@@ -216,6 +216,58 @@ func TestTrailerCommitLinksLookupWork(t *testing.T) {
 	}
 }
 
+func TestTrailerCommitLinksOwnerResolutionWork(t *testing.T) {
+	for _, operation := range []string{"store", "replica"} {
+		t.Run(operation, func(t *testing.T) {
+			d := testDB(t)
+			var commits []gitlog.TrailerCommit
+			for i := range 30 {
+				id := fmt.Sprintf("codex:session-%d", i)
+				insertSession(t, d, "host-a~"+id, "project-a", func(s *Session) { s.Agent = "codex" })
+				commits = append(commits, gitlog.TrailerCommit{SHA: fmt.Sprintf("%040x", i+1), Sessions: []string{id}, CommittedAt: tsZero})
+			}
+			pool := d.writer.Load()
+			if operation == "replica" {
+				pool = d.reader.Load()
+				d.reader.Load().SetMaxOpenConns(1)
+			}
+			conn, err := pool.Conn(t.Context())
+			require.NoError(t, err)
+			reads := 0
+			require.NoError(t, conn.Raw(func(raw any) error {
+				raw.(interface {
+					RegisterAuthorizer(func(int, string, string, string) int)
+				}).RegisterAuthorizer(func(op int, table, _, _ string) int {
+					if op == sqlite3.SQLITE_READ && table == "sessions" {
+						reads++
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			measure := func(batch []gitlog.TrailerCommit) int {
+				t.Helper()
+				reads = 0
+				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", batch))
+				if operation == "replica" {
+					reads = 0
+					_, err := d.RetainedCommitLinkRows(t.Context())
+					require.NoError(t, err)
+				}
+				return reads
+			}
+			baseline := measure(commits[:1])
+			assert.Positive(t, baseline)
+			assert.LessOrEqual(t, measure(commits[1:]), baseline, "session query work must stay bounded as trailer identities grow")
+			found, err := d.CommitSessionLinks(t.Context(), []string{commits[1].SHA})
+			require.NoError(t, err)
+			require.Len(t, found.Commits[0].Links, 1)
+			assert.Equal(t, "host-a~codex:session-1", found.Commits[0].Links[0].SessionID)
+		})
+	}
+}
+
 func TestTrailerCommitLinksPrecedence(t *testing.T) {
 	for _, tc := range []struct {
 		sha       string

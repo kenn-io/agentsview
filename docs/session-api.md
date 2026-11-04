@@ -1562,8 +1562,8 @@ links. Merge commits count.
 minutes. Each pass rereads every repository's history, including fetched older
 branches. Only checkouts a local session ran in are read. If a checkout has
 disappeared, another session must still resolve to its repository to read new
-commits. Stored rows survive checkout removal, rebases, and archive rebuilds
-under every archive policy.
+commits. Stored rows survive checkout removal and archive rebuilds under every
+archive policy; successful scans prune commits removed by rewritten history.
 
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other
