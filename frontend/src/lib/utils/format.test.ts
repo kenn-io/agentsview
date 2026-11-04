@@ -246,6 +246,14 @@ describe("highlightTerms", () => {
     ]);
   });
 
+  it("keeps non-ASCII whitespace inside a quote-led term, like the backend", () => {
+    // U+00A0 does not split terms in quote-led FTS syntax.
+    expect(highlightTerms("fix\u00a0bug, then fix the bug", '"fix"\u00a0"bug"')).toEqual([
+      { text: "fix\u00a0bug", match: true },
+      { text: ", then fix the bug", match: false },
+    ]);
+  });
+
   it("folds Unicode case and keeps distinct spellings of one word", () => {
     // U+212A KELVIN SIGN folds to K only under Unicode case folding.
     expect(highlightTerms("Kelvin scale", "kelvin")).toEqual([
