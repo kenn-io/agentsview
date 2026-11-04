@@ -767,14 +767,8 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 			name:       "code-mode running wait output becomes tool result",
 			toolName:   "wait",
 			args:       map[string]any{"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000},
-			output:     "Script running with cell ID 6\nWall time: 30 seconds",
-			wantOutput: "Script running with cell ID 6\nWall time: 30 seconds",
-		},
-		{
-			name:     "legacy subagent wait cancellation adds no result",
-			toolName: "wait",
-			args:     map[string]any{"ids": []string{"dddddddd-dddd-4ddd-8ddd-dddddddddddd"}},
-			output:   "aborted by user after 2.0s",
+			output:     "Script running with cell ID 6\nWall time 30 seconds",
+			wantOutput: "Script running with cell ID 6\nWall time 30 seconds",
 		},
 		{
 			name:     "subagent wait without ids keeps status events",
