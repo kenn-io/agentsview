@@ -21,6 +21,8 @@ const (
 )
 
 type usageSourceVersion struct {
+	UsageGeneration       string
+	MessageOrdinal        sql.NullInt64
 	SessionID             string
 	SyncMarker            string
 	TranscriptRevision    string
