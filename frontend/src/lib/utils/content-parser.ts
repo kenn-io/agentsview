@@ -1,4 +1,5 @@
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
+import type { BlockType } from "../stores/ui.svelte.js";
 import { LRUCache } from "./cache.js";
 import { isHookSuccessMessage, isSystemBoundaryMessage } from "./messages.js";
 
@@ -532,9 +533,7 @@ export function enrichSegments(
  */
 export function hasVisibleSegments(
   msg: Message,
-  isVisible: (
-    type: "user" | "assistant" | "thinking" | "tool" | "code" | "system" | "hook",
-  ) => boolean,
+  isVisible: (type: BlockType) => boolean,
 ): boolean {
   // Hook output is a card of its own, so the hook toggle owns its
   // visibility. The generic system toggle and the role toggles must not
