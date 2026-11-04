@@ -281,7 +281,8 @@ test.describe("Appearance accessibility", () => {
     // confirm action) rather than a synthetic element, so a kit-ui Button
     // styling regression fails this test. Computed color/background still
     // reflect the tone tokens while the button is disabled.
-    await page.locator(".import-btn").click();
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Import conversations" }).click();
     const solidButton = page.locator(".kit-button--solid.kit-button--info");
     await expect(solidButton).toBeVisible();
     expectReadableContrast(await elementColors(solidButton));

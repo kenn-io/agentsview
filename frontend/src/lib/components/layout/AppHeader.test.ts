@@ -65,6 +65,17 @@ function testSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+async function openMoreActions(): Promise<void> {
+  document.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')!.click();
+  await tick();
+}
+
+function menuItem(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+    (item) => item.textContent?.includes(text),
+  );
+}
+
 describe("AppHeader export actions", () => {
   let component: ReturnType<typeof mount> | undefined;
 
@@ -98,68 +109,54 @@ describe("AppHeader export actions", () => {
   });
 
   it.each([
-    { archive_only: false, read_only: false, importDisabled: false, syncLabel: "Sync sessions" },
-    { archive_only: false, read_only: true, importDisabled: true, syncLabel: "Refresh data" },
-    { archive_only: true, read_only: false, importDisabled: true, syncLabel: null },
+    { archive_only: false, read_only: false, importLabel: "Import conversations", importDisabled: false, syncLabel: "Sync sessions" },
+    { archive_only: false, read_only: true, importLabel: "Import unavailable in read-only mode", importDisabled: true, syncLabel: "Refresh data" },
+    { archive_only: true, read_only: false, importLabel: "Import unavailable in archive-only mode", importDisabled: true, syncLabel: null },
   ])(
     "offers the available actions for archive_only=$archive_only read_only=$read_only",
-    async ({ archive_only, read_only, importDisabled, syncLabel }) => {
+    async ({ archive_only, read_only, importLabel, importDisabled, syncLabel }) => {
       sync.serverVersion = { archive_only, read_only } as NonNullable<typeof sync.serverVersion>;
       component = mount(AppHeader, { target: document.body });
       await tick();
 
-      const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
-      expect(importButton.disabled).toBe(importDisabled);
-      if (archive_only) expect(importButton.title).toBe("Import unavailable in archive-only mode");
-      else if (read_only) expect(importButton.title).toBe("Import unavailable in read-only mode");
       const syncButton = document.querySelector<HTMLButtonElement>(".sync-btn");
       if (syncLabel) expect(syncButton?.getAttribute("aria-label")).toBe(syncLabel);
       else expect(syncButton).toBeNull();
-      expect(
-        document.querySelector<HTMLButtonElement>('button[aria-label="Export session"]')?.disabled,
-      ).toBe(false);
-      importButton.click();
+
+      await openMoreActions();
+      expect(menuItem("Download HTML export")).toBeDefined();
+      const importItem = menuItem(importLabel)!;
+      expect(importItem).toBeDefined();
+      expect(importItem.getAttribute("aria-disabled") === "true").toBe(importDisabled);
+      importItem.click();
       await tick();
       expect(document.querySelector('[role="dialog"]') !== null).toBe(!importDisabled);
     },
   );
 
-  it("marks the Import button while Claude.ai Sync runs with the dialog closed", async () => {
+  it("shows a visible Import button only while Claude.ai Sync runs", async () => {
     mocks.syncClaudeAI.mockReturnValue(new Promise(() => {}));
     component = mount(AppHeader, { target: document.body });
     await tick();
-    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
-    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
+    expect(document.querySelector(".import-btn")).toBeNull();
     void claudeAISync.start(undefined, () => {});
     await tick();
+    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
     expect(importButton.getAttribute("aria-label")).toBe(
       "Claude.ai Sync is running. Open Import to see progress or stop it.",
     );
     expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
     claudeAISync.stop();
     await tick();
-    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
-    expect(importButton.querySelector(".sync-spinner")).toBeNull();
+    expect(document.querySelector(".import-btn")).toBeNull();
   });
 
-  it("copies markdown export link from export menu", async () => {
+  it("copies markdown export link from the actions menu", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
-    const exportButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Export session"]',
-    );
-    expect(exportButton).not.toBeNull();
-
-    exportButton!.click();
-    await tick();
-
-    const copyButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("Copy markdown export link"),
-    );
-    expect(copyButton).not.toBeNull();
-
-    copyButton!.click();
+    await openMoreActions();
+    menuItem("Copy markdown export link")!.click();
     await tick();
 
     expect(mocks.getMarkdownExportUrl).toHaveBeenCalledWith("sess-123");
@@ -171,7 +168,7 @@ describe("AppHeader export actions", () => {
     );
   });
 
-  it("copies active session source path from export menu", async () => {
+  it("copies active session source path from the actions menu", async () => {
     sessions.sessions = [
       testSession({
         file_path: "/tmp/agentsview/sessions/session-123.jsonl",
@@ -181,20 +178,8 @@ describe("AppHeader export actions", () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
-    const exportButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Export session"]',
-    );
-    expect(exportButton).not.toBeNull();
-
-    exportButton!.click();
-    await tick();
-
-    const copyPathButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("Copy source file path"),
-    );
-    expect(copyPathButton).toBeDefined();
-
-    copyPathButton!.click();
+    await openMoreActions();
+    menuItem("Copy source file path")!.click();
     await tick();
 
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(
@@ -208,21 +193,18 @@ describe("AppHeader export actions", () => {
 
     const followButton = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Follow latest messages"]',
-    );
-    expect(followButton).not.toBeNull();
-    expect(followButton!.classList.contains("active")).toBe(false);
+    )!;
+    expect(followButton.getAttribute("aria-pressed")).toBe("false");
 
-    followButton!.click();
+    followButton.click();
     await tick();
-
     expect(ui.followLatest).toBe(true);
-    expect(followButton!.classList.contains("active")).toBe(true);
+    expect(followButton.getAttribute("aria-pressed")).toBe("true");
 
-    followButton!.click();
+    followButton.click();
     await tick();
-
     expect(ui.followLatest).toBe(false);
-    expect(followButton!.classList.contains("active")).toBe(false);
+    expect(followButton.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("keeps the sidebar toggle out of the desktop title bar", async () => {
