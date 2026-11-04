@@ -280,6 +280,41 @@ func TestHermesRawProfilesAliasKeepsContainerSemantics(t *testing.T) {
 	}
 }
 
+func TestHermesRawCaptureSessionsSymlinkDiscoveryAndEvents(t *testing.T) {
+	configuredHome := t.TempDir()
+	canonicalHome := t.TempDir()
+	transcript := writeHermesRawTranscript(t, canonicalHome, "one.jsonl")
+	configuredSessions := filepath.Join(configuredHome, "sessions")
+	if err := os.Symlink(filepath.Join(canonicalHome, "sessions"), configuredSessions); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	p := hermesRawFixtureProvider(t, configuredSessions)
+
+	discovered, err := DiscoverRawCaptureSources(t.Context(), p)
+	require.NoError(t, err)
+	require.True(t, discovered.Complete)
+	require.Len(t, discovered.Sources, 1)
+	source := discovered.Sources[0]
+
+	canonicalHome = canonicalRawCaptureTestPath(t, canonicalHome)
+	assert.Equal(t, filepath.Join(canonicalHome, "state.db"), source.Key)
+	plan, ok, err := ResolveRawCapturePlan(t.Context(), p, source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, canonicalHome, plan.CaptureRoot)
+	require.Len(t, plan.Entries, 1)
+	assert.Equal(t, "sessions/one.jsonl", plan.Entries[0].Path)
+	assert.Equal(t, canonicalRawCaptureTestPath(t, transcript), plan.Entries[0].LocalPath)
+
+	events, err := RawCaptureSourcesForChangedPath(
+		t.Context(), p,
+		ChangedPathRequest{Path: filepath.Join(configuredSessions, "one.jsonl"), WatchRoot: configuredSessions},
+	)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, source.Key, events[0].Key)
+}
+
 func TestHermesRawChangedPathWorkDoesNotGrowWithOtherProfiles(t *testing.T) {
 	var steps []int
 	for _, count := range []int{1, 256} {

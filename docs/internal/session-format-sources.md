@@ -3920,6 +3920,11 @@ schemas keep their existing ordering behavior.
   directory is a dynamic container, so a configured symlink to that container
   must retain its container role after raw backfill canonicalizes and resumes
   saved roots.
+- **Configured sessions symlink check (2026-11-04):** When the configured
+  `sessions` path is a symlink, AgentsView derives the Hermes home from the
+  resolved directory. Discovery, capture planning, and changed-path watcher
+  lookup continue to use the canonical `sessions` root
+  (`TestHermesRawCaptureSessionsSymlinkDiscoveryAndEvents`).
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.

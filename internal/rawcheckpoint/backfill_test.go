@@ -46,6 +46,31 @@ func TestBackfillSelectionAndSealRequireDurablePass(t *testing.T) {
 	require.True(t, progress.Complete)
 }
 
+func TestBackfillResumesPreHermesProfilesContainerSelection(t *testing.T) {
+	store, _ := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentHermes, t.TempDir())
+	require.NoError(t, err)
+	spec := BackfillRunSpec{
+		RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example",
+		Providers: []parser.AgentType{parser.AgentHermes},
+		Roots:     []BackfillSelection{{Provider: parser.AgentHermes, ConfiguredRootID: root.ID}},
+	}
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err)
+
+	var selection string
+	require.NoError(t, store.db.QueryRowContext(
+		t.Context(), `SELECT selection FROM backfill_runs WHERE run_id=?`, spec.RunID,
+	).Scan(&selection))
+	// Before Hermes profile-container metadata was added, false was omitted from
+	// persisted selections. Keep new false values in that existing format.
+	require.NotContains(t, selection, "hermes_profiles_container")
+
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err, "a saved backfill must resume with its previous selection encoding")
+}
+
 func TestBackfillPublicationReceiptAndLostGeneration(t *testing.T) {
 	for _, lost := range []bool{false, true} {
 		t.Run(strconv.FormatBool(lost), func(t *testing.T) {

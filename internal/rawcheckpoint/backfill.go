@@ -21,7 +21,7 @@ type BackfillSelection struct {
 	Provider                parser.AgentType
 	ConfiguredRootID        string
 	ProjectPath             string
-	HermesProfilesContainer bool `json:"hermes_profiles_container,omitempty"`
+	HermesProfilesContainer bool `json:"hermes_profiles_container,omitzero"`
 }
 
 // BackfillRoot retains provider metadata needed to reproduce raw manifest paths.

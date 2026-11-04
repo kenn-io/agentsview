@@ -105,7 +105,7 @@ func (p *hermesProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yiel
 			} else {
 				home := root
 				if sessions {
-					home = hermesRawEventPath(filepath.Dir(configured))
+					home = hermesRawEventPath(filepath.Dir(root))
 				}
 				err = visit(hermesRawSource{ConfiguredRoot: root, Home: home})
 			}
@@ -272,7 +272,7 @@ func (p *hermesProvider) RawCaptureSourcesForChangedPath(ctx context.Context, re
 		}
 		home := root
 		if filepath.Base(configured) == "sessions" {
-			home = hermesRawEventPath(filepath.Dir(configured))
+			home = hermesRawEventPath(filepath.Dir(root))
 		}
 		if hermesRawChangeAffectsHome(changed, home, root) {
 			if err := visit(hermesRawSource{ConfiguredRoot: root, Home: home}); err != nil {
