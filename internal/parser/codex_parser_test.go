@@ -754,6 +754,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		args       map[string]any
 		output     any
 		wantOutput string
+		wantEvents []ParsedToolResultEvent
 	}{
 		{
 			name:       "code-mode finished wait output becomes tool result",
@@ -776,6 +777,20 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 			output:   "aborted by user after 2.0s",
 		},
 		{
+			name:     "subagent wait without ids keeps status events",
+			toolName: "wait",
+			args:     map[string]any{"timeout_ms": 300000},
+			output:   `{"status":{"dddddddd-dddd-4ddd-8ddd-dddddddddddd":{"completed":"Task complete."}}}`,
+			wantEvents: []ParsedToolResultEvent{{
+				ToolUseID:         "call_wait",
+				AgentID:           "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+				SubagentSessionID: "codex:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+				Source:            "wait_output",
+				Status:            "completed",
+				Content:           "Task complete.",
+			}},
+		},
+		{
 			name:     "subagent wait completion adds no result",
 			toolName: "wait_agent",
 			args:     map[string]any{"timeout_ms": 300000},
@@ -796,7 +811,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 			call := msgs[1].ToolCalls[0]
 			assert.Equal(t, tt.toolName, call.ToolName)
 			if tt.wantOutput == "" {
-				assertToolResultEvents(t, call.ResultEvents, nil)
+				assertToolResultEvents(t, call.ResultEvents, tt.wantEvents)
 			} else {
 				assertToolResultEvents(t, call.ResultEvents, []ParsedToolResultEvent{{
 					ToolUseID: "call_wait",

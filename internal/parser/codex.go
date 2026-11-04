@@ -758,14 +758,15 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	inputJSON := extractCodexInputJSON(payload)
 	skillName := inferCodexSkillNameWithBase(ctx, name, inputJSON, b.cwd)
 	waitAgentIDs := []string(nil)
+	outputName := name
 	if isCodexWaitAgentCall(name) && callID != "" {
 		args, _ := parseCodexFunctionArgs(payload)
 		waitAgentIDs = codexWaitAgentIDs(args)
-	}
-	outputName := name
-	if name == "wait" && len(waitAgentIDs) == 0 {
-		// Keep the display name, but route code-mode polls as ordinary results.
-		outputName = "code_mode_wait"
+		if name == "wait" && strings.TrimSpace(args.Get("cell_id").Str) != "" &&
+			!args.Get("ids").Exists() && !args.Get("targets").Exists() {
+			// Keep the display name, but route code-mode polls as ordinary results.
+			outputName = "code_mode_wait"
+		}
 	}
 	if callID != "" {
 		b.callNames[callID] = outputName
