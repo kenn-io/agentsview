@@ -710,6 +710,15 @@ for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
 
+### PostgreSQL push preparation indexes
+
+`idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
+`idx_sessions_source_missing` bound the parser-version check and empty repair
+queries. Push detects missing indexes and builds them during schema setup.
+Each first build scans `sessions` and blocks writes until it finishes.
+For restricted publishers, first run `agentsview replica pg push [target]`
+with the schema-owner connection to install the indexes.
+
 ### Usage archive indexes
 
 The usage cache discovers bounded-window candidates through

@@ -87,6 +87,13 @@ agentsview replica pg push
 This one-shot command syncs all local sessions, messages, and tool calls to
 PostgreSQL. The schema is created automatically on first push.
 
+The next push installs `idx_sessions_data_version`,
+`idx_sessions_parentless_workers`, and `idx_sessions_source_missing` on existing
+archives. Each first build scans `sessions` and blocks writes until it finishes.
+If publishers use a restricted role, first run
+`agentsview replica pg push [target]` with the schema-owner connection to install
+the indexes, then resume restricted pushes.
+
 To keep PostgreSQL current automatically, run the foreground watcher:
 
 ```bash
