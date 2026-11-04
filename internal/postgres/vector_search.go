@@ -94,11 +94,13 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 		return nil, 0, err
 	}
 	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
-		chunks, err := v.knnChunks(ctx, vec, extSchema, limit)
+		chunks, rowCap, err := v.knnChunks(ctx, vec, extSchema, limit)
 		if err != nil {
 			return nil, false, err
 		}
-		exhausted := len(chunks) < limit
+		// A scan capped below limit proves exhaustion only when it returns
+		// fewer rows than its cap.
+		exhausted := len(chunks) < rowCap
 		docs, err := kitvec.RollupByDocument(chunks)
 		if err != nil {
 			return nil, false, fmt.Errorf("rolling up vector hits: %w", err)
@@ -120,7 +122,8 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 type chunkHit = kitvec.Hit[string]
 
 // knnChunks runs the chunk-level KNN, returning up to exactly limit neighbors
-// ordered best (nearest) first. Fetching exactly `limit` chunks matches the
+// ordered best (nearest) first, and the most rows the scan could return (see
+// tuneHNSWRecall). Fetching exactly `limit` chunks matches the
 // local sqlite-vec searcher's candidate pool (kit's queryGenerationSQL also
 // runs its KNN with LIMIT k before rollup), per the backend-parity rule: after
 // rollup the doc pool can be smaller than `limit` when a high-ranking run doc
@@ -140,11 +143,11 @@ type chunkHit = kitvec.Hit[string]
 // ceiling, and past that ceiling iterative scan keeps filling.
 func (v *vectorSearcher) knnChunks(
 	ctx context.Context, vec []float32, extSchema string, limit int,
-) ([]chunkHit, error) {
+) ([]chunkHit, int, error) {
 	k := max(limit, 0)
 	literal, err := halfvecLiteral(vec)
 	if err != nil {
-		return nil, fmt.Errorf("query embedding: %w", err)
+		return nil, 0, fmt.Errorf("query embedding: %w", err)
 	}
 	dist := fmt.Sprintf("embedding OPERATOR(%s.<=>) $1::%s.halfvec", extSchema, extSchema)
 	q := fmt.Sprintf(`
@@ -155,16 +158,17 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
 
 	tx, err := v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("begin chunk knn tx: %w", err)
+		return nil, 0, fmt.Errorf("begin chunk knn tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := tuneHNSWRecall(ctx, tx, k); err != nil {
-		return nil, err
+	rowCap, err := tuneHNSWRecall(ctx, tx, k)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	rows, err := tx.QueryContext(ctx, q, literal, k)
 	if err != nil {
-		return nil, fmt.Errorf("chunk knn query: %w", err)
+		return nil, 0, fmt.Errorf("chunk knn query: %w", err)
 	}
 	defer rows.Close()
 	defer func() { _ = rows.Close() }()
@@ -174,15 +178,15 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
 		var h chunkHit
 		var score float64
 		if err := rows.Scan(&h.Doc, &h.ChunkIndex, &score); err != nil {
-			return nil, fmt.Errorf("scanning chunk knn row: %w", err)
+			return nil, 0, fmt.Errorf("scanning chunk knn row: %w", err)
 		}
 		h.Score = float32(score)
 		hits = append(hits, h)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating chunk knn rows: %w", err)
+		return nil, 0, fmt.Errorf("iterating chunk knn rows: %w", err)
 	}
-	return hits, nil
+	return hits, rowCap, nil
 }
 
 // tuneHNSWRecall raises pgvector's per-scan HNSW candidate pool for the current
@@ -200,7 +204,8 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
 // going past ef_search. Older pgvector lacks that GUC and would abort the tx on
 // an unknown-GUC error, so it is probed first with current_setting(..., true)
 // (missing_ok), which yields NULL instead of erroring; a NULL result skips the
-// setting and leaves the 1000-row cap in place.
+// setting and leaves the 1000-row cap in place. tuneHNSWRecall returns the
+// most rows the scan can return: k, or 1000 when that cap stays in place.
 // hnswEfSearch clamps the KNN candidate-pool size k to pgvector's usable
 // hnsw.ef_search range [40, 1000]: never below the stock default 40 (so small-k
 // searches keep default recall) and never above pgvector's 1000 ceiling (past
@@ -210,29 +215,29 @@ func hnswEfSearch(k int) int {
 	return min(max(k, 40), 1000)
 }
 
-func tuneHNSWRecall(ctx context.Context, tx *sql.Tx, k int) error {
+func tuneHNSWRecall(ctx context.Context, tx *sql.Tx, k int) (int, error) {
 	efSearch := hnswEfSearch(k)
 	if _, err := tx.ExecContext(ctx,
 		fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", efSearch)); err != nil {
-		return fmt.Errorf("setting hnsw.ef_search: %w", err)
+		return 0, fmt.Errorf("setting hnsw.ef_search: %w", err)
 	}
-	if k <= 1000 {
-		return nil
+	if k <= efSearch {
+		return k, nil
 	}
 	var current sql.NullString
 	if err := tx.QueryRowContext(ctx,
 		`SELECT current_setting('hnsw.iterative_scan', true)`,
 	).Scan(&current); err != nil {
-		return fmt.Errorf("probing hnsw.iterative_scan: %w", err)
+		return 0, fmt.Errorf("probing hnsw.iterative_scan: %w", err)
 	}
 	if !current.Valid {
-		return nil
+		return efSearch, nil
 	}
 	if _, err := tx.ExecContext(ctx,
 		"SET LOCAL hnsw.iterative_scan = 'relaxed_order'"); err != nil {
-		return fmt.Errorf("setting hnsw.iterative_scan: %w", err)
+		return 0, fmt.Errorf("setting hnsw.iterative_scan: %w", err)
 	}
-	return nil
+	return k, nil
 }
 
 // vectorDoc is the subset of a vector_documents row needed to hydrate a chunk

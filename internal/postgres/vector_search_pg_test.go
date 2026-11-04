@@ -338,3 +338,46 @@ func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 	assert.Len(t, hits, docCount,
 		"ef_search raised to k returns all %d docs, not the ~40 default cap", docCount)
 }
+
+// TestPGVectorSearcherCappedScanIsNotExhausted pins the exhaustion signal past
+// hnsw.ef_search's 1000-row ceiling. Without iterative scan (pgvector < 0.8)
+// an HNSW index scan for k=1600 returns 1000 rows; with it, 1600. Either way
+// rows remain, so the page must not report the index exhausted. The table is
+// large enough that the planner scans the index instead of sorting rows.
+func TestPGVectorSearcherCappedScanIsNotExhausted(t *testing.T) {
+	pgURL := testPGURL(t)
+	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_capped_test")
+	ctx := t.Context()
+
+	genID, err := ensureVectorGeneration(ctx, pg, "fp-capped", "m", 4)
+	require.NoError(t, err, "ensureVectorGeneration")
+	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
+	extSchema, err := vectorExtensionSchema(ctx, pg)
+	require.NoError(t, err, "vectorExtensionSchema")
+	table := vectorChunkTable(genID)
+
+	const docCount, k = 20000, 1600
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO vector_documents (
+    doc_key, session_id, source_uuid, ordinal, ordinal_end,
+    subordinate, offsets, content, content_hash)
+SELECT 'd' || i, 'S', '', i, i, FALSE, '[]', 'doc ' || i, 'h'
+  FROM generate_series(0, $1 - 1) AS i`, docCount)
+	require.NoError(t, err, "insert docs")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO `+table+` (doc_key, chunk_index, embedding)
+SELECT 'd' || i, 0, ('[1,' || (i::float8 / $1) || ',' || ((i % 97)::float8 / 97) || ',0]')::`+extSchema+`.halfvec
+  FROM generate_series(0, $1 - 1) AS i`, docCount)
+	require.NoError(t, err, "insert chunks")
+	_, err = pg.ExecContext(ctx, `ANALYZE `+table)
+	require.NoError(t, err, "analyze chunks")
+
+	searcher := NewVectorSearcher(
+		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
+	page, _, err := searcher.PrepareSemanticSearch(ctx, "query")
+	require.NoError(t, err, "PrepareSemanticSearch")
+	hits, exhausted, err := page(ctx, k)
+	require.NoError(t, err, "page")
+	assert.GreaterOrEqual(t, len(hits), 1000)
+	assert.False(t, exhausted, "%d of %d docs returned", len(hits), docCount)
+}
