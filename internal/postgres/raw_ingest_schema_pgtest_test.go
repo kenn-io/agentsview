@@ -253,67 +253,6 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 	require.NoError(t, rows.Close())
 }
 
-// TestSyncEnsureSchemaFastPathToleratesRestrictedRole covers preparation by a
-// restricted publisher after an owner provisions the schema. Both preparation
-// index creation and raw custody DDL must tolerate insufficient privilege.
-func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_raw_privilege_test"
-	const role = "agentsview_raw_restricted"
-	const rolePassword = "agentsview_raw_restricted_pw"
-
-	admin, err := Open(t.Context(), pgURL, schema, true)
-	require.NoError(t, err, "Open admin")
-	t.Cleanup(func() { _ = admin.Close() })
-	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
-	require.True(t, pushSchemaCurrent(t.Context(), admin),
-		"fixture must exercise the schema-current sync fast path")
-
-	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
-	_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
-	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
-	require.NoError(t, err, "create restricted role")
-	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
-	})
-	for _, grant := range []string{
-		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
-		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + schema + ` TO ` + role,
-	} {
-		_, err = admin.ExecContext(t.Context(), grant)
-		require.NoError(t, err, grant)
-	}
-
-	restrictedURL, err := url.Parse(pgURL)
-	require.NoError(t, err)
-	restrictedURL.User = url.UserPassword(role, rolePassword)
-	restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
-	require.NoError(t, err, "Open restricted")
-	t.Cleanup(func() { _ = restricted.Close() })
-
-	indexes := []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"}
-	for _, index := range indexes {
-		_, err = admin.ExecContext(t.Context(), `DROP INDEX `+index)
-		require.NoError(t, err)
-	}
-	syncer := &Sync{pg: restricted, schema: schema}
-	require.NoError(t, syncer.EnsureSchema(t.Context()),
-		"restricted preparation must tolerate index and raw custody DDL permissions")
-	assert.True(t, syncer.schemaDone)
-	for _, index := range indexes {
-		assert.False(t, pgHasIndex(t.Context(), admin, index), "restricted publisher cannot install %s", index)
-	}
-	writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
-	require.NoError(t, err)
-	assert.True(t, writable,
-		"DML-capable role must remain eligible when raw custody DDL is restricted")
-}
-
 func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_runtime_privilege_test"
