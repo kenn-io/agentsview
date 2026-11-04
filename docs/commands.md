@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-04
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -74,6 +74,26 @@ and exit 1 when changes or parse failures are found. Remote sync failures keep
 their per-host summary and add recovery advice.
 
 ## Commands
+
+### Find a command by task
+
+On `main` (unreleased), describe a task to get up to five matching commands:
+
+```bash
+agentsview cli search "show token cost for a conversation"
+agentsview cli search list supported providers --limit 3 --json
+```
+
+Search reads the command tree locally. It needs no configuration, database,
+daemon, network connection, or credentials. Results use current command paths;
+hidden legacy commands, help-only groups, browser setup, and interactive
+service installation are omitted. Eligible actions inside groups remain
+searchable.
+
+`--limit` accepts 1–20 (default 5). `--json` and `--format json` return
+`{"query":"...","results":[{"command":"...","summary":"...","usage":"..."}]}`.
+An unmatched task succeeds with an empty `results` array. Text output includes
+a command help hint for flags and examples. Run `agentsview cli` for help.
 
 Root help lists command domains. Run `agentsview source --help`, for example,
 to find the actions in that domain, then `agentsview source sync --help` for
