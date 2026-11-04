@@ -196,8 +196,8 @@ test.describe("Mixed content rendering", () => {
     await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     // Open block filter dropdown and toggle thinking off
-    await page.locator('button[aria-label="Filter block types"]').click();
-    await page.locator(".block-filter-item").filter({ hasText: "Thinking blocks" }).click();
+    await page.locator(".view-trigger").click();
+    await page.getByRole("menuitem", { name: "Thinking blocks", exact: true }).click();
 
     // Thinking blocks should be hidden
     const thinkingBlocks = page.locator(".thinking-block");

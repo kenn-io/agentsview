@@ -3,12 +3,16 @@
   import {
     FitStages,
     KbdBadge,
+    Menu,
+    MenuContent,
+    MenuItem,
+    MenuSeparator,
+    MenuTrigger,
     Spinner,
     TopBar,
     type TopBarTab,
   } from "@kenn-io/kit-ui";
   import {
-    AlignJustifyIcon,
     ArrowDownToLineIcon,
     ArrowDownWideNarrowIcon,
     ArrowUpNarrowWideIcon,
@@ -17,25 +21,18 @@
     CopyIcon,
     DatabaseBackupIcon,
     DownloadIcon,
-    FunnelIcon,
     GlobeIcon,
     LinkIcon,
-    ListCollapseIcon,
     LockIcon,
-    LogsIcon,
-    LayoutListIcon,
     MenuIcon,
     MoonIcon,
     MoreHorizontalIcon,
     SearchIcon,
     SettingsIcon,
     SunIcon,
-    Share2Icon,
   } from "../../icons.js";
   import {
     ui,
-    ALL_BLOCK_TYPES,
-    type BlockType,
   } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -47,6 +44,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { reportTelemetry } from "../../utils/telemetry.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
+  import TranscriptViewMenu from "./TranscriptViewMenu.svelte";
   import ImportModal from "../import/ImportModal.svelte";
   import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
 
@@ -54,30 +52,10 @@
   const modKey = isMac ? "⌘" : "Ctrl";
 
   let showImportModal = $state(false);
-  let showBlockFilter = $state(false);
-  let showExportMenu = $state(false);
-  let showPublishMenu = $state(false);
-  let showOverflow = $state(false);
   let copiedMarkdownLink = $state(false);
   let copiedMarkdownLinkTimer:
     | ReturnType<typeof setTimeout>
     | undefined;
-  let filterBtnRef: HTMLButtonElement | undefined =
-    $state(undefined);
-  let filterDropRef: HTMLDivElement | undefined =
-    $state(undefined);
-  let exportBtnRef: HTMLButtonElement | undefined =
-    $state(undefined);
-  let exportDropRef: HTMLDivElement | undefined =
-    $state(undefined);
-  let publishBtnRef: HTMLButtonElement | undefined =
-    $state(undefined);
-  let publishDropRef: HTMLDivElement | undefined =
-    $state(undefined);
-  let overflowBtnRef: HTMLButtonElement | undefined =
-    $state(undefined);
-  let overflowDropRef: HTMLDivElement | undefined =
-    $state(undefined);
 
   /** True while TopBar has collapsed the nav tabs into its dropdown —
    * side-region snippets read it to drop their labels. */
@@ -119,24 +97,6 @@
       : "",
   );
 
-  const BLOCK_LABELS: Record<BlockType, () => string> = {
-    user: m.header_transcript_blocks_user,
-    assistant: m.header_transcript_blocks_assistant,
-    thinking: m.header_transcript_blocks_thinking,
-    tool: m.header_transcript_blocks_tool,
-    code: m.header_transcript_blocks_code,
-    system: m.header_transcript_blocks_system,
-  };
-
-  const BLOCK_COLORS: Record<BlockType, string> = {
-    user: "var(--accent-blue)",
-    assistant: "var(--accent-purple)",
-    thinking: "var(--accent-purple)",
-    tool: "var(--accent-amber)",
-    code: "var(--text-muted)",
-    system: "var(--text-muted)",
-  };
-
   async function handleExport() {
     if (sessions.activeSessionId) {
       try {
@@ -161,8 +121,6 @@
     copiedMarkdownLinkTimer = setTimeout(() => {
       copiedMarkdownLink = false;
     }, 1500);
-    showExportMenu = false;
-    showOverflow = false;
   }
 
   async function handleCopySourceFilePath() {
@@ -170,8 +128,6 @@
     if (!filePath) return;
     const ok = await copyToClipboard(filePath);
     if (!ok) return;
-    showExportMenu = false;
-    showOverflow = false;
   }
 
   function openPublish(secret: boolean) {
@@ -180,8 +136,6 @@
     ui.publishSecret = secret;
     ui.setPublishTarget({ kind: "session", id });
     ui.activeModal = "publish";
-    showPublishMenu = false;
-    showOverflow = false;
   }
 
   function openCommandPalette() {
@@ -194,103 +148,7 @@
   const activeSessionFilePath = $derived(
     sessions.activeSession?.file_path ?? "",
   );
-
-  // Close block filter dropdown on outside click
-  $effect(() => {
-    if (!showBlockFilter) return;
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (
-        filterBtnRef?.contains(target) ||
-        filterDropRef?.contains(target)
-      )
-        return;
-      showBlockFilter = false;
-    }
-    document.addEventListener("click", onClickOutside, true);
-    return () =>
-      document.removeEventListener(
-        "click",
-        onClickOutside,
-        true,
-      );
-  });
-
-  // Close export menu on outside click
-  $effect(() => {
-    if (!showExportMenu) return;
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (
-        exportBtnRef?.contains(target) ||
-        exportDropRef?.contains(target)
-      )
-        return;
-      showExportMenu = false;
-    }
-    document.addEventListener("click", onClickOutside, true);
-    return () =>
-      document.removeEventListener(
-        "click",
-        onClickOutside,
-        true,
-      );
-  });
-
-  // Close publish menu on outside click
-  $effect(() => {
-    if (!showPublishMenu) return;
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (
-        publishBtnRef?.contains(target) ||
-        publishDropRef?.contains(target)
-      )
-        return;
-      showPublishMenu = false;
-    }
-    document.addEventListener("click", onClickOutside, true);
-    return () =>
-      document.removeEventListener(
-        "click",
-        onClickOutside,
-        true,
-      );
-  });
-
-  // Close overflow dropdown on outside click
-  $effect(() => {
-    if (!showOverflow) return;
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (
-        overflowBtnRef?.contains(target) ||
-        overflowDropRef?.contains(target)
-      )
-        return;
-      showOverflow = false;
-    }
-    document.addEventListener("click", onClickOutside, true);
-    return () =>
-      document.removeEventListener(
-        "click",
-        onClickOutside,
-        true,
-      );
-  });
 </script>
-
-{#snippet messageLayoutIcon(size: string)}
-  {#if ui.messageLayout === "default"}
-    <LayoutListIcon {size} strokeWidth="1.75" aria-hidden="true" />
-  {:else if ui.messageLayout === "compact"}
-    <ListCollapseIcon {size} strokeWidth="1.75" aria-hidden="true" />
-  {:else if ui.messageLayout === "stream"}
-    <LogsIcon {size} strokeWidth="1.75" aria-hidden="true" />
-  {:else}
-    <AlignJustifyIcon {size} strokeWidth="1.75" aria-hidden="true" />
-  {/if}
-{/snippet}
 
 {#snippet searchField()}
   <button
@@ -374,79 +232,9 @@
 
   {#snippet right()}
     {#if hasActiveSession}
-      <!-- Transcript controls: mode pills + filter, grouped visually -->
-      <div class="transcript-strip">
-        <button
-          class="pill"
-          class:active={ui.transcriptMode === "normal"}
-          onclick={() => ui.setTranscriptMode("normal")}
-          title={m.header_transcript_normal_title()}
-          aria-label={m.header_transcript_normal_label()}
-        >
-          <span class="pill-label">{m.header_transcript_normal()}</span>
-        </button>
-        <button
-          class="pill"
-          class:active={ui.transcriptMode === "focused"}
-          onclick={() => ui.setTranscriptMode("focused")}
-          title={m.header_transcript_focused_title()}
-          aria-label={m.header_transcript_focused_label()}
-        >
-          <span class="pill-label">{m.header_transcript_focused()}</span>
-        </button>
-
-        <span class="strip-divider"></span>
-
-        <div class="filter-wrap">
-          <button
-            class="pill pill-icon"
-            class:filter-active={ui.hasBlockFilters}
-            bind:this={filterBtnRef}
-            onclick={() => (showBlockFilter = !showBlockFilter)}
-            title={m.header_transcript_filter_title()}
-            aria-label={m.header_transcript_filter_label()}
-          >
-            <FunnelIcon size="12" strokeWidth="2" aria-hidden="true" />
-            {#if ui.hasBlockFilters}
-              <span class="filter-badge">{ui.hiddenBlockCount}</span>
-            {/if}
-          </button>
-
-          {#if showBlockFilter}
-            <div class="block-filter-dropdown kit-popover-card" bind:this={filterDropRef}>
-              <div class="block-filter-title">{m.header_transcript_visibility()}</div>
-              {#each ALL_BLOCK_TYPES as bt}
-                {@const visible = ui.isBlockVisible(bt)}
-                <button
-                  class="block-filter-item"
-                  class:active={visible}
-                  onclick={() => ui.toggleBlock(bt)}
-                >
-                  <span
-                    class="block-filter-dot"
-                    style:background={visible ? BLOCK_COLORS[bt] : "var(--border-muted)"}
-                  ></span>
-                  <span class="block-filter-label">{BLOCK_LABELS[bt]()}</span>
-                  <span class="block-filter-check" class:on={visible}>
-                    {#if visible}
-                      <CheckIcon size="10" strokeWidth="2.4" aria-hidden="true" />
-                    {/if}
-                  </span>
-                </button>
-              {/each}
-              {#if ui.hasBlockFilters}
-                <button
-                  class="block-filter-reset"
-                  onclick={() => ui.showAllBlocks()}
-                >
-                  {m.header_transcript_show_all()}
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </div>
-
+      <TranscriptViewMenu />
+      <!-- Follow latest stays visible: it is live state, and its pressed
+           look is the only sign that the view is pinned to new messages. -->
       <button
         class="header-btn"
         class:active={ui.followLatest}
@@ -457,7 +245,6 @@
       >
         <ArrowDownToLineIcon size="16" strokeWidth="1.75" aria-hidden="true" />
       </button>
-
       <button
         class="header-btn"
         onclick={() => ui.toggleSort()}
@@ -470,188 +257,8 @@
           <ArrowUpNarrowWideIcon size="16" strokeWidth="1.75" aria-hidden="true" />
         {/if}
       </button>
-
-      <!-- Layout, export, publish: collapse into overflow at narrow widths -->
-      <button
-        class="header-btn collapsible"
-        onclick={() => ui.cycleLayout()}
-        title={m.header_actions_cycle_layout({ layout: ui.messageLayout })}
-        aria-label={m.header_actions_cycle_layout_label()}
-      >
-        {@render messageLayoutIcon("16")}
-      </button>
-
-      <span class="header-divider collapsible"></span>
-
-      <div class="export-wrap collapsible">
-        <button
-          class="header-btn"
-          bind:this={exportBtnRef}
-          onclick={() => {
-            showExportMenu = !showExportMenu;
-            showOverflow = false;
-          }}
-          disabled={!sessions.activeSessionId}
-          title={m.header_actions_export_options()}
-          aria-label={m.header_actions_export_session()}
-          aria-expanded={showExportMenu}
-        >
-          <FileDownIcon size="16" strokeWidth="1.75" aria-hidden="true" />
-        </button>
-
-        {#if showExportMenu}
-          <div class="export-dropdown kit-popover-card" bind:this={exportDropRef}>
-            <button
-              class="overflow-item"
-              onclick={() => {
-                handleExport();
-                showExportMenu = false;
-              }}
-            >
-              <FileDownIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>{m.header_actions_download_html()}</span>
-            </button>
-            <button
-              class="overflow-item"
-              onclick={handleCopyMarkdownExportLink}
-            >
-              {#if copiedMarkdownLink}
-                <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
-              {:else}
-                <LinkIcon size="13" strokeWidth="2" aria-hidden="true" />
-              {/if}
-              <span>
-                {#if copiedMarkdownLink}
-                  {m.header_actions_copied_markdown_link()}
-                {:else}
-                  {m.header_actions_copy_markdown_link()}
-                {/if}
-              </span>
-            </button>
-            {#if activeSessionFilePath}
-              <button
-                class="overflow-item"
-                onclick={handleCopySourceFilePath}
-              >
-                <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
-                <span>{m.header_actions_copy_source_path()}</span>
-              </button>
-            {/if}
-          </div>
-        {/if}
-      </div>
-
-      <div class="export-wrap collapsible">
-        <button
-          class="header-btn"
-          bind:this={publishBtnRef}
-          onclick={() => {
-            showPublishMenu = !showPublishMenu;
-            showExportMenu = false;
-            showOverflow = false;
-          }}
-          disabled={!sessions.activeSessionId}
-          title={m.header_actions_publish_title()}
-          aria-label={m.header_actions_publish_label()}
-          aria-expanded={showPublishMenu}
-        >
-          <Share2Icon size="16" strokeWidth="1.75" aria-hidden="true" />
-        </button>
-
-        {#if showPublishMenu}
-          <div class="export-dropdown kit-popover-card" bind:this={publishDropRef}>
-            <button
-              class="overflow-item"
-              onclick={() => openPublish(false)}
-            >
-              <GlobeIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>{m.header_actions_publish_public()}</span>
-            </button>
-            <button
-              class="overflow-item"
-              onclick={() => openPublish(true)}
-            >
-              <LockIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>{m.header_actions_publish_secret()}</span>
-            </button>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Overflow menu (visible only at narrow widths) -->
-      <div class="overflow-wrap">
-        <button
-          class="header-btn overflow-btn"
-          bind:this={overflowBtnRef}
-          onclick={() => (showOverflow = !showOverflow)}
-          title={m.header_actions_more_actions()}
-          aria-label={m.header_actions_more_actions()}
-        >
-          <MoreHorizontalIcon size="16" strokeWidth="2" aria-hidden="true" />
-        </button>
-
-        {#if showOverflow}
-          <div class="overflow-dropdown kit-popover-card" bind:this={overflowDropRef}>
-            <button
-              class="overflow-item"
-              onclick={() => { ui.cycleLayout(); showOverflow = false; }}
-            >
-              {@render messageLayoutIcon("13")}
-              <span>{m.header_actions_layout({ layout: ui.messageLayout })}</span>
-            </button>
-            <button
-              class="overflow-item"
-              onclick={() => { handleExport(); showOverflow = false; }}
-            >
-              <FileDownIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>{m.header_actions_download_html()}</span>
-            </button>
-            <button
-              class="overflow-item"
-              onclick={handleCopyMarkdownExportLink}
-            >
-              {#if copiedMarkdownLink}
-                <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
-              {:else}
-                <LinkIcon size="13" strokeWidth="2" aria-hidden="true" />
-              {/if}
-              <span>
-                {#if copiedMarkdownLink}
-                  {m.header_actions_copied_markdown_link()}
-                {:else}
-                  {m.header_actions_copy_markdown_link()}
-                {/if}
-              </span>
-            </button>
-            {#if activeSessionFilePath}
-              <button
-                class="overflow-item"
-                onclick={handleCopySourceFilePath}
-              >
-                <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
-                <span>{m.header_actions_copy_source_path()}</span>
-              </button>
-            {/if}
-            <button
-              class="overflow-item"
-              onclick={() => openPublish(false)}
-            >
-              <Share2Icon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>{m.header_actions_publish_public()}</span>
-            </button>
-            <button
-              class="overflow-item"
-              onclick={() => openPublish(true)}
-            >
-              <LockIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>{m.header_actions_publish_secret()}</span>
-            </button>
-          </div>
-        {/if}
-      </div>
+      <span class="header-divider"></span>
     {/if}
-
-    {#if hasActiveSession}<span class="header-divider"></span>{/if}
 
     {#if !sync.archiveOnly}
     <button
@@ -671,28 +278,85 @@
     </button>
     {/if}
 
+    <!-- Less frequent actions live in one labeled menu instead of a row of
+         look-alike icons. -->
+    <Menu align="end">
+      <MenuTrigger
+        class="header-btn overflow-btn"
+        title={m.header_actions_more_actions()}
+        ariaLabel={m.header_actions_more_actions()}
+      >
+        <MoreHorizontalIcon size="16" strokeWidth="2" aria-hidden="true" />
+      </MenuTrigger>
+      <MenuContent ariaLabel={m.header_actions_more_actions()}>
+        {#if hasActiveSession}
+          <MenuItem onselect={handleExport} keyshortcuts="E">
+            {#snippet icon()}<FileDownIcon size="13" strokeWidth="2" />{/snippet}
+            {#snippet trailing()}<span class="menu-key">E</span>{/snippet}
+            {m.header_actions_download_html()}
+          </MenuItem>
+          <MenuItem onselect={handleCopyMarkdownExportLink}>
+            {#snippet icon()}<LinkIcon size="13" strokeWidth="2" />{/snippet}
+            {m.header_actions_copy_markdown_link()}
+          </MenuItem>
+          {#if activeSessionFilePath}
+            <MenuItem onselect={handleCopySourceFilePath}>
+              {#snippet icon()}<CopyIcon size="13" strokeWidth="2" />{/snippet}
+              {m.header_actions_copy_source_path()}
+            </MenuItem>
+          {/if}
+          <MenuSeparator />
+          <MenuItem onselect={() => openPublish(false)} keyshortcuts="P">
+            {#snippet icon()}<GlobeIcon size="13" strokeWidth="2" />{/snippet}
+            {#snippet trailing()}<span class="menu-key">P</span>{/snippet}
+            {m.header_actions_publish_public()}
+          </MenuItem>
+          <MenuItem onselect={() => openPublish(true)}>
+            {#snippet icon()}<LockIcon size="13" strokeWidth="2" />{/snippet}
+            {m.header_actions_publish_secret()}
+          </MenuItem>
+          <MenuSeparator />
+        {/if}
+        <MenuItem
+          onselect={() => { showImportModal = true; }}
+          disabled={sync.readOnly || sync.archiveOnly}
+        >
+          {#snippet icon()}<DownloadIcon size="13" strokeWidth="2" />{/snippet}
+          {sync.archiveOnly
+            ? m.header_actions_import_archive_only()
+            : sync.readOnly
+            ? m.header_actions_import_unavailable()
+            : m.header_actions_import_conversations()}
+        </MenuItem>
+      </MenuContent>
+    </Menu>
+
+    <!-- A running Claude.ai sync keeps a visible Import button so its
+         progress is never hidden in the menu. -->
+    {#if claudeAISync.running}
     <button
-      class="import-btn"
-      onclick={() => {
-        if (!sync.readOnly && !sync.archiveOnly) showImportModal = true;
-      }}
-      disabled={sync.readOnly || sync.archiveOnly}
-      title={sync.archiveOnly
-        ? m.header_actions_import_archive_only()
-        : sync.readOnly
-        ? m.header_actions_import_unavailable()
-        : claudeAISync.running
-        ? m.header_actions_import_claude_syncing()
-        : m.header_actions_import_conversations()}
-      aria-label={claudeAISync.running ? m.header_actions_import_claude_syncing() : m.header_actions_import_conversations()}
-    >
-      {#if claudeAISync.running}
-        <span class="sync-spinner" aria-hidden="true"><Spinner size={12} /></span>
-      {:else}
-        <DownloadIcon size="12" strokeWidth="2" aria-hidden="true" />
-      {/if}
-      <span class="import-label" class:collapsed={navCollapsed}>{m.header_actions_import()}</span>
-    </button>
+        class="import-btn"
+        onclick={() => {
+          if (!sync.readOnly && !sync.archiveOnly) showImportModal = true;
+        }}
+        disabled={sync.readOnly || sync.archiveOnly}
+        title={sync.archiveOnly
+          ? m.header_actions_import_archive_only()
+          : sync.readOnly
+          ? m.header_actions_import_unavailable()
+          : claudeAISync.running
+          ? m.header_actions_import_claude_syncing()
+          : m.header_actions_import_conversations()}
+        aria-label={claudeAISync.running ? m.header_actions_import_claude_syncing() : m.header_actions_import_conversations()}
+      >
+        {#if claudeAISync.running}
+          <span class="sync-spinner" aria-hidden="true"><Spinner size={12} /></span>
+        {:else}
+          <DownloadIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {/if}
+        <span class="import-label" class:collapsed={navCollapsed}>{m.header_actions_import()}</span>
+      </button>
+    {/if}
 
     <span class="header-divider"></span>
 
@@ -814,187 +478,7 @@
     color: var(--text-muted);
   }
 
-  /* ── Transcript strip: mode pills + filter ── */
-  .transcript-strip {
-    display: flex;
-    align-items: stretch;
-    height: 26px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    margin-right: 4px;
-    flex-shrink: 0;
-  }
-
-  .filter-wrap {
-    position: relative;
-    display: flex;
-  }
-
-  .pill {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 9px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: transparent;
-    transition: background 0.1s, color 0.1s;
-    white-space: nowrap;
-    cursor: pointer;
-    border: none;
-    border-radius: 0;
-  }
-
-  .pill:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
-  }
-
-  .pill.active {
-    background: var(--selected-bg);
-    box-shadow: var(--selected-edge);
-    color: var(--text-primary);
-    font-weight: 600;
-  }
-
   /* Match parent's border-radius on outer edges */
-  .pill:first-child {
-    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  }
-
-  .pill-icon {
-    padding: 0 7px;
-    position: relative;
-  }
-
-  .filter-wrap:last-child .pill {
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  }
-
-  .pill.filter-active {
-    color: var(--accent-purple);
-  }
-
-  .strip-divider {
-    width: 1px;
-    height: 14px;
-    background: var(--border-default);
-    flex-shrink: 0;
-    align-self: center;
-  }
-
-  .filter-badge {
-    position: absolute;
-    top: 0px;
-    right: 0px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: var(--accent-amber);
-    color: var(--accent-amber-foreground);
-    font-size: 7px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    pointer-events: none;
-  }
-
-  /* ── Block filter dropdown ── */
-  .block-filter-dropdown {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    width: 190px;
-    /* card chrome comes from the shared kit-popover-card class */
-    padding: 6px 0;
-    z-index: var(--z-popover);
-    animation: dropdown-in 0.12s ease-out;
-    transform-origin: top right;
-  }
-
-  @keyframes dropdown-in {
-    from {
-      opacity: 0;
-      transform: scale(0.95) translateY(-2px);
-    }
-    to {
-      opacity: 1;
-      transform: scale(1) translateY(0);
-    }
-  }
-
-  .block-filter-title {
-    padding: 4px 12px 6px;
-    font-size: 9px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .block-filter-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 5px 12px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    text-align: left;
-    transition: background 0.08s;
-  }
-
-  .block-filter-item:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .block-filter-item:not(.active) {
-    opacity: 0.5;
-  }
-
-  .block-filter-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    transition: background 0.1s;
-  }
-
-  .block-filter-label {
-    flex: 1;
-  }
-
-  .block-filter-check {
-    width: 14px;
-    height: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--accent-green);
-    flex-shrink: 0;
-  }
-
-  .block-filter-reset {
-    display: block;
-    width: calc(100% - 16px);
-    margin: 6px 8px 2px;
-    padding: 4px 8px;
-    font-size: 10px;
-    color: var(--text-muted);
-    text-align: center;
-    border-top: 1px solid var(--border-muted);
-    padding-top: 8px;
-    transition: color 0.1s;
-  }
-
-  .block-filter-reset:hover {
-    color: var(--text-primary);
-  }
 
   /* ── Header icon buttons ── */
   .header-btn {
@@ -1018,6 +502,34 @@
 
   .header-btn + .header-btn {
     margin-left: 2px;
+  }
+
+  /* kit-ui MenuTrigger renders the overflow button, so scoped
+     .header-btn rules cannot reach it. */
+  :global(.overflow-btn) {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  :global(.overflow-btn:hover),
+  :global(.overflow-btn[aria-expanded="true"]) {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .menu-key {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-muted);
+    border: 1px solid var(--border-muted);
+    border-radius: 3px;
+    padding: 0 4px;
   }
 
   .header-btn:hover:not(:disabled) {
@@ -1094,24 +606,6 @@
     flex-shrink: 0;
   }
 
-  .export-wrap {
-    position: relative;
-    display: flex;
-  }
-
-  .export-dropdown {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    width: 220px;
-    /* card chrome comes from the shared kit-popover-card class */
-    padding: 4px 0;
-    z-index: var(--z-popover);
-    animation: dropdown-in 0.12s ease-out;
-    transform-origin: top right;
-  }
-
   .hamburger {
     display: flex;
     width: 28px;
@@ -1128,85 +622,15 @@
     color: var(--text-primary);
   }
 
-  /* ── Overflow menu (narrow viewports) ── */
-  .overflow-wrap {
-    position: relative;
-    display: none;
-  }
-
-  .overflow-dropdown {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    width: 180px;
-    /* card chrome comes from the shared kit-popover-card class */
-    padding: 4px 0;
-    z-index: var(--z-popover);
-    animation: dropdown-in 0.12s ease-out;
-    transform-origin: top right;
-  }
-
-  .overflow-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 12px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    text-align: left;
-    transition: background 0.08s;
-    white-space: nowrap;
-  }
-
-  .overflow-item:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  .overflow-item :global(svg) {
-    flex-shrink: 0;
-    color: var(--text-muted);
-  }
-
   /* ── Responsive ──
    * Nav tabs and the search field degrade by measurement (TopBar +
    * FitStages); only the app-owned side-region content still uses the
    * shared layout breakpoints. */
 
-  /* 760px: hide the project picker; collapse layout/export/publish into
-   * the overflow menu; shrink mode pills to single letters */
+  /* 760px: hide the project picker */
   @media (max-width: 760px) {
     .project-picker {
       display: none;
-    }
-
-    .collapsible {
-      display: none;
-    }
-
-    .overflow-wrap {
-      display: block;
-    }
-
-    .pill-label {
-      font-size: 0;
-    }
-
-    /* Show first letter only via data attrs */
-    .pill:nth-child(1) .pill-label::after {
-      content: "N";
-      font-size: 11px;
-    }
-
-    .pill:nth-child(2) .pill-label::after {
-      content: "F";
-      font-size: 11px;
-    }
-
-    .pill {
-      padding: 0 7px;
     }
   }
 
@@ -1225,16 +649,10 @@
   @media (pointer: coarse) {
     .header-btn,
     .hamburger,
-    .import-btn {
+    .import-btn,
+    :global(.overflow-btn),
+    :global(.view-trigger) {
       min-width: 44px;
-      min-height: 44px;
-    }
-
-    .transcript-strip {
-      min-height: 44px;
-    }
-
-    .pill {
       min-height: 44px;
     }
   }

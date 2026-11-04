@@ -136,22 +136,19 @@ async function openResults(page: Page) {
 }
 
 async function toggleBlockFilter(page: Page, label: string) {
-  const toggle = page.getByRole("button", { name: "Filter block types" });
-  await toggle.click();
-  await expect(page.locator(".block-filter-dropdown")).toHaveCount(1);
-  await page
-    .locator(".block-filter-item")
-    .filter({ has: page.locator(".block-filter-label", { hasText: label }) })
-    .click();
-  if (await page.locator(".block-filter-dropdown").count()) await toggle.click();
-  await expect(page.locator(".block-filter-dropdown")).toHaveCount(0);
+  const view = page.locator(".view-trigger");
+  await view.click();
+  const menu = page.getByRole("menu", { name: "Transcript view" });
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: label, exact: true }).click();
+  await view.click();
+  await expect(menu).toHaveCount(0);
 }
 
 async function setTranscriptMode(page: Page, mode: "normal" | "focused") {
+  await page.locator(".view-trigger").click();
   await page
-    .getByRole("button", {
-      name: mode === "normal" ? "Normal transcript mode" : "Focused transcript mode",
-    })
+    .getByRole("menuitemradio", { name: mode === "normal" ? "Everything" : "Prompts and final answers" })
     .click();
 }
 
