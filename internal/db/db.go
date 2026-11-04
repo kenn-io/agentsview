@@ -3926,7 +3926,7 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_rules_version
 		 ON sessions(friction_rules_version)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_automation_audit
-		 ON sessions(automation_audit)`,
+		 ON sessions(automation_audit) WHERE automation_audit = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers
 		 ON sessions(id) WHERE ` + ParentlessWorkerSQL,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
@@ -4121,6 +4121,8 @@ func tableHasRowsLocked(ctx context.Context, w *writerHandle, table string) (boo
 	return populated, nil
 }
 
+const clearAutomationAuditSQL = `UPDATE sessions SET automation_audit = 0 WHERE automation_audit = 1`
+
 // backfillIsAutomatedLocked audits stale sessions, or all sessions when the
 // classifier changes. The writer is exclusively owned during the audit, and
 // interrupted audits leave stale rows for retry.
@@ -4176,8 +4178,7 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 		return err
 	}
 	if _, err := w.Exec(ctx,
-		`UPDATE sessions SET automation_audit = ? WHERE automation_audit = ?`,
-		automationAuditFresh, automationAuditStale,
+		clearAutomationAuditSQL,
 	); err != nil {
 		return fmt.Errorf("marking automation audit rows fresh: %w", err)
 	}

@@ -29,6 +29,8 @@ func BenchmarkBackfillIsAutomatedUnchanged(b *testing.B) {
 				d := testDB(b)
 				seedAutomationAuditRows(b, d, sessions, promptBytes)
 				require.NoError(b, d.backfillIsAutomatedLocked(b.Context(), d.getWriter()))
+				_, err := d.getWriter().Exec(b.Context(), `ANALYZE`)
+				require.NoError(b, err)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {

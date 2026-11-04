@@ -280,6 +280,28 @@ func TestBackfillIsAutomatedSkipsFreshRowsOnReopen(t *testing.T) {
 	assert.Less(t, result.AllocedBytesPerOp(), int64(256<<10))
 }
 
+func TestBackfillIsAutomatedFreshArchiveQueryPlans(t *testing.T) {
+	d := testDB(t)
+	seedAutomationAuditRows(t, d, 2000, 64)
+	require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
+	var stale int
+	require.NoError(t, d.getWriter().QueryRow(t.Context(),
+		`SELECT count(*) FROM sessions WHERE automation_audit = 1`).Scan(&stale))
+	require.Zero(t, stale)
+	_, err := d.getWriter().Exec(t.Context(), `ANALYZE`)
+	require.NoError(t, err)
+
+	plan := queryPlanOf(t, d, auditAutomatedMatchingHashSQL,
+		automationAuditPrefixBytes, automationAuditPrefixBytes)
+	t.Logf("audit plan:\n%s", plan)
+	assert.Contains(t, plan, "idx_sessions_automation_audit")
+	assert.NotContains(t, plan, "SCAN s")
+	plan = queryPlanOf(t, d, clearAutomationAuditSQL)
+	t.Logf("clear plan:\n%s", plan)
+	assert.Contains(t, plan, "idx_sessions_automation_audit")
+	assert.NotContains(t, plan, "SCAN sessions")
+}
+
 func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 	const reviewPrompt = "You are a code reviewer. Review the code."
 	for _, tc := range []struct {

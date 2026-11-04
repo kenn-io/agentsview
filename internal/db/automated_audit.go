@@ -8,11 +8,6 @@ import (
 
 const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 
-const (
-	automationAuditFresh = iota
-	automationAuditStale
-)
-
 // ParentlessWorkerSQL is the stored-row equivalent of parser.PromoteParentlessWorker.
 const ParentlessWorkerSQL = `session_kind = 'non-interactive'
  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
@@ -82,12 +77,7 @@ func auditAutomatedFull(ctx context.Context,
 	return setIDs, clearIDs, err
 }
 
-func auditAutomatedMatchingHash(ctx context.Context,
-	w *writerHandle,
-	patterns automationPatternSnapshot,
-) (setIDs, clearIDs []string, err error) {
-	rows, err := w.Query(ctx,
-		`SELECT
+const auditAutomatedMatchingHashSQL = `SELECT
 			s.id,
 			s.session_kind,
 			s.user_message_count,
@@ -118,10 +108,16 @@ func auditAutomatedMatchingHash(ctx context.Context,
 				ORDER BY m.ordinal
 				LIMIT 1
 			) END
-		 WHERE s.automation_audit = ?`,
+		 WHERE s.automation_audit = 1`
+
+func auditAutomatedMatchingHash(ctx context.Context,
+	w *writerHandle,
+	patterns automationPatternSnapshot,
+) (setIDs, clearIDs []string, err error) {
+	rows, err := w.Query(ctx,
+		auditAutomatedMatchingHashSQL,
 		automationAuditPrefixBytes,
 		automationAuditPrefixBytes,
-		automationAuditStale,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
