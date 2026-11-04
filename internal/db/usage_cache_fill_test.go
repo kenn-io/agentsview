@@ -714,9 +714,10 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
 			// Simulate the dense layout from before fact kinds had separate ranges.
-			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_facts SET fact_index = CASE
+			const denseLayoutSQL = `UPDATE usage_facts SET fact_index = CASE
 				WHEN fact_index >= ? THEN fact_index - ? + ?
-				WHEN fact_index >= ? THEN fact_index - ? + ? ELSE fact_index END`,
+				WHEN fact_index >= ? THEN fact_index - ? + ? ELSE fact_index END`
+			_, err = cache.db.ExecContext(t.Context(), denseLayoutSQL,
 				usageEventFactBase, usageEventFactBase, count+3,
 				usageActivityFactBase, usageActivityFactBase, count)
 			require.NoError(t, err)
@@ -728,6 +729,11 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 			}{
 				{"upgrade dense layout", "", 6, count + 6},
 				{"unchanged", "", 0, count + 6},
+				{"upgrade with token append", fmt.Sprintf(`INSERT INTO messages(
+					session_id, ordinal, role, content, model, timestamp, token_usage, source_uuid)
+					VALUES ('session', %d, 'assistant', '', 'model', '2026-08-10T09:00:00Z',
+					'{"input_tokens":11}', 'upgrade-append')`, count+3), 7, count + 7},
+				{"remove upgrade append", `DELETE FROM messages WHERE source_uuid='upgrade-append'`, 0, count + 6},
 				{"append preserves activity and event", fmt.Sprintf(`INSERT INTO messages(
 					session_id, ordinal, role, content, model, timestamp, token_usage, source_uuid)
 					VALUES ('session', %d, 'assistant', '', 'model', '2026-08-10T09:00:00Z',
@@ -745,6 +751,12 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 					DELETE FROM usage_events`, 0, 2},
 				{"empty", `DELETE FROM messages`, 0, 0},
 			} {
+				if step.name == "upgrade with token append" {
+					_, err := cache.db.ExecContext(t.Context(), denseLayoutSQL,
+						usageEventFactBase, usageEventFactBase, count+3,
+						usageActivityFactBase, usageActivityFactBase, count)
+					require.NoError(t, err)
+				}
 				if step.mutation != "" {
 					_, err := database.getWriter().Exec(t.Context(), step.mutation)
 					require.NoError(t, err, step.name)
