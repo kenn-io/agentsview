@@ -377,6 +377,11 @@ func (s *Sync) pushWithOptions(
 		full = true
 		noteFull(pendingRun.Reason)
 	}
+	// A full push reconciles every session, but only a requested one, or
+	// the resumption of one, rewrites every transcript. Other full pushes
+	// keep the messages PostgreSQL already holds unchanged, because the
+	// suffix comparison covers every published message field.
+	rewriteTranscripts := opts.Full || (runPending && pendingRun.Reason == "requested")
 	if full {
 		lastPush = ""
 		// Caller requested a full push — the PG schema
@@ -718,7 +723,7 @@ func (s *Sync) pushWithOptions(
 		committedBefore := len(pushed)
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, legacyMarkerMachines,
+			ctx, batch, rewriteTranscripts, markerID, legacyMarkerMachines,
 			usageFingerprints, &pushed,
 		)
 		if err != nil {
@@ -734,7 +739,7 @@ func (s *Sync) pushWithOptions(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					full, markerID, legacyMarkerMachines,
+					rewriteTranscripts, markerID, legacyMarkerMachines,
 					usageFingerprints, &pushed,
 				)
 				if retryErr != nil {
@@ -1321,15 +1326,15 @@ var errPushComparisonPreload = errors.New(
 func (s *Sync) pushBatch(
 	ctx context.Context,
 	batch []db.Session,
-	full bool,
+	rewriteTranscripts bool,
 	markerID string,
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
 ) (batchResult, error) {
-	preloadComparisons := len(batch) > 0 && !full
+	preloadComparisons := len(batch) > 0 && !rewriteTranscripts
 	result, err := s.pushBatchAttempt(
-		ctx, batch, full, markerID, legacyMarkerMachines,
+		ctx, batch, rewriteTranscripts, markerID, legacyMarkerMachines,
 		sessionUsageFingerprints, pushed, preloadComparisons,
 	)
 	if err == nil || !errors.Is(err, errPushComparisonPreload) {
@@ -1341,7 +1346,7 @@ func (s *Sync) pushBatch(
 		err,
 	)
 	return s.pushBatchAttempt(
-		ctx, batch, full, markerID, legacyMarkerMachines,
+		ctx, batch, rewriteTranscripts, markerID, legacyMarkerMachines,
 		sessionUsageFingerprints, pushed, false,
 	)
 }
@@ -1349,7 +1354,7 @@ func (s *Sync) pushBatch(
 func (s *Sync) pushBatchAttempt(
 	ctx context.Context,
 	batch []db.Session,
-	full bool,
+	rewriteTranscripts bool,
 	markerID string,
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
@@ -1390,7 +1395,7 @@ func (s *Sync) pushBatchAttempt(
 
 	for _, sess := range batch {
 		frictionUnchanged := false
-		if !full {
+		if !rewriteTranscripts {
 			frictionUnchanged, err = sessionFrictionUnchanged(ctx, tx, sess, comparisons)
 			if err != nil {
 				log.Printf("pgsync: friction metadata %s: %v", sess.ID, err)
@@ -1419,7 +1424,7 @@ func (s *Sync) pushBatchAttempt(
 		}
 
 		msgCount, messagesChanged, err := s.pushMessages(
-			ctx, tx, sess.ID, full,
+			ctx, tx, sess.ID, rewriteTranscripts,
 			sessionUsageFingerprints, comparisons,
 		)
 		if err != nil {
@@ -3041,14 +3046,15 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 	return nil
 }
 
-// pushMessages replaces a session's changed transcript suffix in PG. It
-// returns the inserted count and whether transcript or usage changes need
-// a session version refresh.
+// pushMessages replaces a session's changed transcript suffix in PG, or the
+// whole transcript when rewriteTranscripts is set. It returns the inserted
+// count and whether transcript or usage changes need a session version
+// refresh.
 func (s *Sync) pushMessages(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID string,
-	full bool,
+	rewriteTranscripts bool,
 	sessionUsageFingerprints map[string]string,
 	comparisons *pushMessageComparison,
 ) (count int, changed bool, err error) {
@@ -3059,7 +3065,7 @@ func (s *Sync) pushMessages(
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
 	boundary := 0
 	usageChanged := true
-	if !full {
+	if !rewriteTranscripts {
 		if comparisons == nil {
 			comparisons, err = readPushSessionMessageComparisons(ctx, tx, []string{sessionID}, false)
 			if err != nil {
