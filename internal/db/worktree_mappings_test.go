@@ -47,7 +47,8 @@ func TestWorktreeMappingSessionScopeQueryIgnoresStats(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			query, args := buildWorktreeMappingSessionScopeQuery(defaultMachine, "target")
+			query := worktreeMappingSessionScopeQuery
+			args := []any{"target", defaultMachine, "target", defaultMachine}
 			rows, err := d.getWriter().Query(ctx, "EXPLAIN QUERY PLAN "+query, args...)
 			require.NoError(t, err)
 			defer rows.Close()
