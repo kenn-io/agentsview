@@ -37,7 +37,7 @@ func ensureAnalyticsIndexLocked(ctx context.Context, w *writerHandle) error {
 	// into a full-table scan. Use about SQLite's unanalyzed row estimate so
 	// segment deletes stay indexed while an archive grows from empty.
 	if _, err := w.Exec(ctx, `UPDATE sqlite_stat1 SET stat = '1000000'
-		WHERE tbl GLOB '*_fts_data' AND idx IS NULL AND CAST(stat AS INTEGER) < 1000000`); err != nil {
+		WHERE tbl GLOB '*_fts_data' AND CAST(stat AS INTEGER) < 1000000`); err != nil {
 		return fmt.Errorf("updating search statistics: %w", err)
 	}
 	if _, err := w.Exec(ctx, `ANALYZE sqlite_schema`); err != nil {
