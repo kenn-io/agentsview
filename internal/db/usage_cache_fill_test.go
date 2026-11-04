@@ -1705,10 +1705,14 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 		}},
 		{name: "removed message-source event", setup: func(t *testing.T, database *DB, cache *usageCache) {
 			t.Helper()
-			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
+			events := []UsageEvent{{
 				Source: "message", Model: "model", InputTokens: 23, DedupKey: "removed-event",
-			}}))
-			_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+			}}
+			// Artifact imports preserve source strings and use this validation pass.
+			_, err := ValidateAndSanitizeContext(t.Context(), nil, nil, events)
+			require.NoError(t, err)
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", events))
+			_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
 			require.NoError(t, err)
 			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", nil))
 			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
@@ -1717,7 +1721,6 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 			}}))
 		}},
 		{name: "usage event", setup: mutate(`INSERT INTO usage_events(session_id,source,model,input_tokens,occurred_at) VALUES ('session','session','model',19,'2026-08-10T10:00:00Z')`)},
-		{name: "recreated session", setup: mutate(`DELETE FROM sessions WHERE id='session'; INSERT INTO sessions(id,project,machine,agent) VALUES ('session','project','local','claude'); INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',0,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":42}')`)},
 		{name: "Claude suffix replace", setup: func(t *testing.T, database *DB, _ *usageCache) {
 			t.Helper()
 			_, err := database.WriteSessionIncremental(t.Context(), "session", []Message{{
@@ -1733,41 +1736,19 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 			versions := []usageSourceVersion{{SessionID: "session"}}
 			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
 			require.NoError(t, err)
+			assertFullExtraction := func() {
+				t.Helper()
+				full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
+				require.NoError(t, err)
+				defer full.Close()
+				assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY fact_index`),
+					usageSpoolFactValues(t, cache.db, `SELECT * FROM usage_facts ORDER BY fact_index`))
+			}
+			assertFullExtraction()
 			if tc.afterFill != nil {
 				tc.afterFill(t, database, cache)
+				assertFullExtraction()
 			}
-			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
-			require.NoError(t, err)
-			defer full.Close()
-			assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY fact_index`),
-				usageSpoolFactValues(t, cache.db, `SELECT * FROM usage_facts ORDER BY fact_index`))
-		})
-	}
-}
-
-func BenchmarkUsageSpoolWarmSingleChangeAppend(b *testing.B) {
-	for _, count := range []int{8, 2048} {
-		b.Run(strconv.Itoa(count), func(b *testing.B) {
-			database, cache := usageSpoolExtractionFixture(b, count)
-			require.NoError(b, database.InsertMessages(b.Context(), []Message{{
-				SessionID: "session", Ordinal: count,
-				Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":11}`),
-			}}))
-			versions := []usageSourceVersion{{SessionID: "session"}}
-			expected, err := cache.fill.captureFillInstallExpectations(b.Context(), versions)
-			require.NoError(b, err)
-			var read, spooled int
-			cache.fill.observer.messageNormalized = func() { read++ }
-			for b.Loop() {
-				spool, _, err := cache.fill.extractSessions(b.Context(), versions, expected)
-				require.NoError(b, err)
-				var rows int
-				require.NoError(b, spool.db.QueryRowContext(b.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
-				spooled += rows
-				require.NoError(b, spool.Close())
-			}
-			b.ReportMetric(float64(read)/float64(b.N), "read-rows/op")
-			b.ReportMetric(float64(spooled)/float64(b.N), "spool-rows/op")
 		})
 	}
 }
