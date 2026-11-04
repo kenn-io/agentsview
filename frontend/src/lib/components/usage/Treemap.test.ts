@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 import Treemap from "./Treemap.svelte";
+import { ui } from "../../stores/ui.svelte.js";
 
 describe("Treemap", () => {
   afterEach(() => {
@@ -73,6 +74,38 @@ describe("Treemap", () => {
     unmount(component);
     document.documentElement.style.removeProperty("--test-series-lime");
     document.documentElement.style.removeProperty("--test-series-navy");
+  });
+
+  it("repaints mounted tiles when the theme changes", async () => {
+    const root = document.documentElement.style;
+    const startTheme = ui.theme;
+    root.setProperty("--test-series-swap", "#a3e635");
+    const component = mount(Treemap, {
+      target: document.body,
+      props: {
+        items: [{ id: "swap", label: "Swap", value: 1, style: { color: "var(--test-series-swap)", fill: "solid" as const } }],
+      },
+    });
+    await tick();
+    const tile = () => document.querySelector<SVGGElement>(".tile")!;
+    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#111318");
+
+    // A theme switch changes what the variable resolves to; the same mounted
+    // items must pick up the new color without being replaced.
+    root.setProperty("--test-series-swap", "#1f3a8a");
+    ui.toggleTheme();
+    await tick();
+    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#ffffff");
+
+    root.setProperty("--test-series-swap", "#a3e635");
+    ui.highContrast = !ui.highContrast;
+    await tick();
+    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#111318");
+
+    unmount(component);
+    ui.highContrast = !ui.highContrast;
+    if (ui.theme !== startTheme) ui.toggleTheme();
+    root.removeProperty("--test-series-swap");
   });
 
   it("selects with Enter and opens on double click", async () => {

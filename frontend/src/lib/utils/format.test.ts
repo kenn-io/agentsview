@@ -207,6 +207,27 @@ describe("highlightTerms", () => {
     ]);
   });
 
+  it("keeps quotes inside ordinary words and treats quoted phrases as one term", () => {
+    expect(highlightTerms('a parser" b', 'parser"')).toEqual([
+      { text: "a ", match: false },
+      { text: 'parser"', match: true },
+      { text: " b", match: false },
+    ]);
+    expect(highlightTerms("the goldmark v2 api", '"goldmark v2"')).toEqual([
+      { text: "the ", match: false },
+      { text: "goldmark v2", match: true },
+      { text: " api", match: false },
+    ]);
+  });
+
+  it("keeps distinct spellings that differ only by case", () => {
+    expect(highlightTerms("Key and key", "Key key")).toEqual([
+      { text: "Key", match: true },
+      { text: " and ", match: false },
+      { text: "key", match: true },
+    ]);
+  });
+
   it("matches non-ASCII terms spelled as typed", () => {
     expect(highlightTerms("İstanbul office", "İstanbul")).toEqual([
       { text: "İstanbul", match: true },
