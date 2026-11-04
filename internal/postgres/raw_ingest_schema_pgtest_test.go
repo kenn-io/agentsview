@@ -253,11 +253,9 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 	require.NoError(t, rows.Close())
 }
 
-// TestSyncEnsureSchemaFastPathToleratesRestrictedRole pins the restricted-role
-// push path: a privileged role provisioned the schema, including the raw
-// custody tables, but the push role cannot CREATE. PostgreSQL still checks
-// CREATE for CREATE TABLE IF NOT EXISTS, so the fast path must skip raw
-// custody DDL on SQLSTATE 42501 rather than fail every push.
+// TestSyncEnsureSchemaFastPathToleratesRestrictedRole covers preparation by a
+// restricted publisher after an owner provisions the schema. Both preparation
+// index creation and raw custody DDL must tolerate insufficient privilege.
 func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_privilege_test"
@@ -305,7 +303,7 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	}
 	syncer := &Sync{pg: restricted, schema: schema}
 	require.NoError(t, syncer.EnsureSchema(t.Context()),
-		"restricted publisher must prepare before owner index installation")
+		"restricted preparation must tolerate index and raw custody DDL permissions")
 	assert.True(t, syncer.schemaDone)
 	for _, index := range indexes {
 		assert.False(t, pgHasIndex(t.Context(), admin, index), "restricted publisher cannot install %s", index)

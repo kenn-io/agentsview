@@ -1285,9 +1285,6 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
 		 ON messages(session_id, role)`,
 	}
-	for _, index := range preparationIndexesPG {
-		indexes = append(indexes, index.ddl)
-	}
 	for _, ddl := range indexes {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating PG index: %w", err)
