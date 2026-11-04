@@ -2363,10 +2363,10 @@ starts.
 
 Providers can also cap how deep a recursive root is watched when they read only
 a fixed depth. Antigravity and Antigravity CLI `brain` folders are watched one
-level deep, so the generated trees inside each `brain/<id>` do not count against
-the budget. The Antigravity IDE watcher also watches
-`brain/<id>/.system_generated/logs`, which holds the plaintext transcript. The
-depth cap applies wherever the fsnotify watcher runs.
+level deep, so the generated trees inside each `brain/<id>` do not count
+against the budget. The Antigravity IDE watcher also watches
+`brain/<id>/.system_generated/logs`, which holds the plaintext transcript.
+The depth cap applies wherever the fsnotify watcher runs.
 
 Runtime folder watch failures keep healthy folders on native watches. Claude
 polling covers the affected project folder. Other providers poll the root's

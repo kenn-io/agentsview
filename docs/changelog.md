@@ -138,8 +138,7 @@ The latest release is
   restores missing results in previously imported sessions. Subagent waits
   keep their existing behavior.
 - On Linux, large Claude archives keep Claude and Codex on live file watches
-  instead of two-minute rescans that delay session updates. Polling starts only
-  when the kernel's inotify watch limit runs out.
+  instead of two-minute rescans that delay session updates.
 - Hosted PostgreSQL searches and session reads stay available while raw captures
   arrive and transcripts are published. Each hosted read uses one database
   snapshot for its content, public identities and related data.
