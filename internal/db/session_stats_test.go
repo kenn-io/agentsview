@@ -2286,9 +2286,12 @@ func TestGetSessionStats_Temporal_HookRowsExcluded(t *testing.T) {
 	hookOtherHour.SourceType = "attachment"
 	hookOtherHour.SourceSubtype = "hook_additional_context"
 	hookOtherHour.IsSystem = true
+	notification := userMsgAt("s1", 3, "task finished", hoursAgoAt(5, 50, 0))
+	notification.SourceSubtype = "task_notification"
+	notification.IsSystem = true
 
 	insertMessages(t, d,
-		realPrompt, queued, hookOtherHour,
+		realPrompt, queued, hookOtherHour, notification,
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
@@ -2297,8 +2300,8 @@ func TestGetSessionStats_Temporal_HookRowsExcluded(t *testing.T) {
 		"hourly_utc want 1 entry: %+v", stats.Temporal.HourlyUTC)
 	got := stats.Temporal.HourlyUTC[0]
 	assert.Equal(t, utcHourBoundary(5), got.TS, "hourly_utc TS")
-	assert.Equal(t, 2, got.UserMessages,
-		"user_messages want 2 (real prompt + queued command)")
+	assert.Equal(t, 3, got.UserMessages,
+		"real prompt, queued command, and non-hook system row still count")
 	assert.Equal(t, 1, got.Sessions, "sessions want 1")
 }
 

@@ -15,6 +15,11 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 		stopSummary bool
 	}{
 		{
+			name: "null optional strings",
+			line: `{"type":"attachment","attachment":{"type":"hook_success","stderr":null,"toolUseID":null,"hookName":null,"hookEvent":null,"command":null,"content":null,"stdout":"hook finished"}}`,
+			want: claudeHookSuccess{subtype: "hook_success", stdout: "hook finished"},
+		},
+		{
 			name:        "stop summary filters non-string errors",
 			line:        `{"hookErrors":["first",{},null,42,"second"]}`,
 			want:        claudeHookSuccess{subtype: "stop_hook_summary", summary: &claudeStopHookSummary{HookErrors: []string{"first", "second"}}},
@@ -218,7 +223,7 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 func TestExtractClaudeHookSuccessRejectsInvalidMembers(t *testing.T) {
 	members := []string{"hookName", "hookEvent", "command", "toolUseID", "content", "stdout", "stderr"}
 	values := []string{
-		"null", "true", "false", "42",
+		"true", "false", "42", `[]`,
 		`{"nested":"value"}`,
 	}
 	for _, member := range members {

@@ -309,9 +309,9 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 				) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = s.id
-					AND m2.is_system = FALSE
+					AND %[2]s
 			) inner2
-		)`, db.ActiveGapCapMs)
+		)`, db.ActiveGapCapMs, db.ExcludeClaudeHooksSQL("m2.source_subtype"))
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {

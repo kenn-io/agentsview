@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -16346,14 +16347,17 @@ func (e *Engine) tryProviderIncrementalAppend(
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
-			tail, terr := e.db.GetMessageByOrdinal(ctx, inc.ID, inc.NextOrdinal-1)
-			if terr != nil {
+			var tailTimestamp string
+			terr := e.db.Reader().QueryRow(ctx, `
+				SELECT COALESCE(timestamp, '') FROM messages
+				WHERE session_id = ? AND ordinal = ?`,
+				inc.ID, inc.NextOrdinal-1,
+			).Scan(&tailTimestamp)
+			if terr != nil && !errors.Is(terr, sql.ErrNoRows) {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
 					parser.ErrIncrementalNeedsFullParse
 			}
-			if tail != nil {
-				storedTailTimestamp, _ = db.ParseStoredTimestamp(tail.Timestamp)
-			}
+			storedTailTimestamp, _ = db.ParseStoredTimestamp(tailTimestamp)
 			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
 			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,

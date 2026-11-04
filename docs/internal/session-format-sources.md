@@ -165,8 +165,9 @@ evidence; they do not establish whether a tool helped the task.
   `attachment.type` is `hook_success`, `hook_additional_context`, or
   `hook_cancelled`, reads the optional `hookName`, `hookEvent`, `command`,
   `toolUseID`, `content`, `stdout`, and `stderr` string members, and keeps each
-  channel's text as written. For `hook_additional_context`, it joins the
-  `content` string array with newlines and skips empty output. Cancelled hooks
+  channel's text as written. Null optional strings are treated as absent;
+  other non-string values reject the hook. For `hook_additional_context`, it
+  joins the `content` string array with newlines and skips empty output. Cancelled hooks
   keep their metadata even without output. Typed `timedOut` and `timeoutMs`
   fields distinguish timeouts from explicit cancellation. Hook error attachments
   are still not imported. The parser also imports `system` records with subtype

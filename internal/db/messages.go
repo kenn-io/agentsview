@@ -19,6 +19,14 @@ import (
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
+var claudeHookSubtypeSQL = "('" + strings.Join(parser.ClaudeHookSubtypes(), "', '") + "')"
+
+// ExcludeClaudeHooksSQL excludes imported hooks while retaining other system rows.
+// subtypeColumn is a trusted SQL column reference, optionally qualified.
+func ExcludeClaudeHooksSQL(subtypeColumn string) string {
+	return "COALESCE(" + subtypeColumn + ", '') NOT IN " + claudeHookSubtypeSQL
+}
+
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
 		thinking_text, dialogue_text, ` + selectMessageMetadataCols

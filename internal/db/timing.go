@@ -141,7 +141,7 @@ func (db *DB) queryTurnRows(
 		  FROM messages m
 		  LEFT JOIN sessions s ON s.id = m.session_id
 		  WHERE m.session_id = ?
-		    AND m.is_system = 0
+		    AND `+ExcludeClaudeHooksSQL("m.source_subtype")+`
 		) m2
 		ORDER BY m2.ordinal
 	`, sessionID)

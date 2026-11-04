@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,14 +34,16 @@ const (
 
 func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		initialHook bool
-		hooks       []string
-		ids         []string
+		name          string
+		initialHook   bool
+		timestampOnly bool
+		hooks         []string
+		ids           []string
 	}{
 		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 		{name: "full import ending in stop summary", initialHook: true, hooks: []string{`{"type":"system","subtype":"stop_hook_summary","uuid":"h1","timestamp":"2024-01-01T00:00:02Z","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":false}`}, ids: []string{"h1"}},
 		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
+		{name: "tail timestamp ignores unrelated columns", initialHook: true, timestampOnly: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
@@ -75,9 +78,23 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 				row := rows[i+2]
 				assert.Equal(t, wantID, row.SourceUUID)
 			}
+			if tc.timestampOnly {
+				// An unreadable boolean makes full-row decoding fail. The
+				// append needs only the tail timestamp to preserve ordering.
+				require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), `UPDATE messages SET has_thinking = 'unreadable' WHERE session_id = 'hook-resume' AND ordinal = 2`)
+					return err
+				}))
+			}
 			appendClaudeSplitLines(t, path, claudeHookResumeNextUser)
 			env.engine.SyncPaths([]string{path})
 			assert.Zero(t, counter.full.Load(), "deferred hooks must not cause whole-source reads on the next ordinary append")
+			if tc.timestampOnly {
+				require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), `UPDATE messages SET has_thinking = 0 WHERE session_id = 'hook-resume' AND ordinal = 2`)
+					return err
+				}))
+			}
 			rows = fetchMessages(t, env.db, "hook-resume")
 			require.Len(t, rows, 3+len(tc.hooks))
 			for i := range 2 {

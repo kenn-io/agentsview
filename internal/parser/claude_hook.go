@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -38,7 +39,12 @@ type claudeStopHookSummary struct {
 
 // IsClaudeHookSubtype reports whether the parser imports this hook subtype.
 func IsClaudeHookSubtype(subtype string) bool {
-	return subtype == "hook_success" || subtype == "hook_additional_context" || subtype == "hook_cancelled" || subtype == "stop_hook_summary"
+	return slices.Contains(ClaudeHookSubtypes(), subtype)
+}
+
+// ClaudeHookSubtypes returns the hook subtypes imported by the parser.
+func ClaudeHookSubtypes() []string {
+	return []string{"hook_success", "hook_additional_context", "hook_cancelled", "stop_hook_summary"}
 }
 
 // extractClaudeHookSuccess decodes the hook output payload of one
@@ -86,7 +92,7 @@ func extractClaudeHookSuccess(line string, stopSummary bool) (claudeHookSuccess,
 	}
 	for _, member := range members {
 		value := attachment.Get(member.key)
-		if !value.Exists() {
+		if !value.Exists() || value.Type == gjson.Null {
 			continue
 		}
 		if member.key == "content" && payload.subtype == "hook_additional_context" {
