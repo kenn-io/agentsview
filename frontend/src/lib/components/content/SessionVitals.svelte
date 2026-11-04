@@ -849,6 +849,10 @@
     text-transform: none;
     letter-spacing: 0;
     text-align: right;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .v-meta.live {
     color: var(--running-fg);

@@ -351,7 +351,12 @@ test.describe("Appearance accessibility", () => {
       }, mode);
       const label = JSON.stringify(mode);
       expect(await resolvedColor(user, "border-left-color"), label).toEqual([0, 114, 178]);
-      expect(await resolvedColor(assistant, "border-left-color"), label).toEqual([213, 94, 0]);
+      // The assistant rail is translucent; reading it back through a canvas
+      // can round a channel by one, so compare each channel within 1.
+      const assistantRail = await resolvedColor(assistant, "border-left-color");
+      [213, 94, 0].forEach((channel, index) => {
+        expect(Math.abs(assistantRail[index]! - channel), label).toBeLessThanOrEqual(1);
+      });
       await expect(user).toHaveCSS("border-left-style", "solid");
       await expect(assistant).toHaveCSS("border-left-style", "double");
       for (const message of [user, assistant]) {
