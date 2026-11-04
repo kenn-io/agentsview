@@ -226,14 +226,16 @@
     fill: var(--text-primary);
   }
 
+  /* Primary text at reduced opacity stays above 4.5:1 on every tinted
+     tile, including the darkest palette hues mixed into a light surface. */
   .treemap-container :global(.tile:not(.patterned) .tile-value) {
-    fill: var(--text-secondary);
-    fill-opacity: 1;
+    fill: var(--text-primary);
+    fill-opacity: 0.85;
     font-variant-numeric: tabular-nums;
   }
 
   .treemap-container :global(.tile:not(.patterned) .tile-meta) {
-    fill: var(--text-muted);
-    fill-opacity: 1;
+    fill: var(--text-primary);
+    fill-opacity: 0.8;
   }
 </style>
