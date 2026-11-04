@@ -120,6 +120,14 @@ The latest release is
 - Homebrew installs built with `make homebrew` no longer replace themselves.
   `agentsview update` stops and tells you to run `brew upgrade agentsview`;
   `agentsview update --check` still reports new releases with the same advice.
+- `debug.log` now shows what each watcher-triggered sync cost, so you can tell
+  why the daemon keeps reading the disk without root tools. Each
+  `watcher: N file(s) changed` line is now followed by a `sync: changed paths:`
+  line. It reports how many of those paths were session files, how many
+  sessions were updated or unchanged, how many sessions had their content read
+  because their file details alone could not show whether they changed, how
+  many bytes were read, and how long the sync took. For a few less common
+  agents, the read figures can be lower than the real reads.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
