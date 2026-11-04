@@ -182,7 +182,7 @@ func (s codebuffSourceSet) Parse(
 // The on-disk layout is <root>/<project>/chats/<timestamp>/. Recursive
 // watching ensures changes inside timestamp subdirectories are observed.
 // The PeriodicReconcile flag on the Codebuff agent def handles newly
-// created projects, and the recursiveWatchBudget mechanism handles
+// created projects, and the watcher's resource-exhaustion fallback handles
 // inotify exhaustion by degrading to polling.
 func codebuffWatchRoots(roots []string) []WatchRoot {
 	out := make([]WatchRoot, 0, len(roots))
