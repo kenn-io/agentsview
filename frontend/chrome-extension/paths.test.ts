@@ -3,7 +3,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const getURL = vi.fn((file: string) => `chrome-extension://test/${file}`);
 const fetchShapes = vi.fn(async (url: string) => {
-  const file = url.endsWith("chatgpt_requests.txt") ? "chatgpt_requests.txt" : "claude_ai_requests.txt";
+  const file = url.endsWith("chatgpt_requests.txt")
+    ? "chatgpt_requests.txt"
+    : "claude_ai_requests.txt";
   return new Response(readFileSync(`../internal/importer/${file}`, "utf8"));
 });
 vi.stubGlobal("chrome", { runtime: { getURL } });
@@ -62,8 +64,10 @@ describe("Claude request allowlist", () => {
     detail.replace("22222222-2222-4222-8222-222222222222", ".."),
     detail.replace("22222222-2222-4222-8222-222222222222", "%2e%2e"),
     detail.replace("22222222-2222-4222-8222-222222222222", "one/../../settings"),
-    detail.replace("tree=True", "tree=False"), `${detail}&extra=true`,
-    list.replace("offset=0", "offset="), list.replace("offset=0", "offset=1.5"),
+    detail.replace("tree=True", "tree=False"),
+    `${detail}&extra=true`,
+    list.replace("offset=0", "offset="),
+    list.replace("offset=0", "offset=1.5"),
   ])("refuses %s", async (path) => expect(await allowedPath("claude-ai", path)).toBe(false));
 });
 
@@ -81,7 +85,10 @@ describe("ChatGPT request allowlist", () => {
   ])("accepts %s", async (path) => expect(await allowedPath("chatgpt", path)).toBe(true));
 
   it.each([
-    "", "/api/auth/session", "/backend-api/auth/session", "/backend-api/accounts/check",
+    "",
+    "/api/auth/session",
+    "/backend-api/auth/session",
+    "/backend-api/accounts/check",
     "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated",
     listPath("0", "invalid"),
     listPath("-1"),

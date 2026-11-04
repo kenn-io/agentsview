@@ -502,4 +502,3 @@ func TestChromeHostCloseRemovesEndpointFiles(t *testing.T) {
 		})
 	}
 }
-

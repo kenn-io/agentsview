@@ -30,7 +30,8 @@ vi.mock("../../api/generated/index.js", async (original) => ({
 }));
 vi.mock("../../api/client.js", () => ({
   connectClaudeAI: (browser: typeof host) => browser.connect(),
-  syncClaudeAI, syncChatGPTChrome,
+  syncClaudeAI,
+  syncChatGPTChrome,
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),
 }));
@@ -99,7 +100,9 @@ it("shows setup instructions when disconnected", async () => {
 });
 
 it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure", async () => {
-  syncChatGPTChrome.mockRejectedValueOnce(new ApiError(0, "Sign in to ChatGPT, then Sync again", "chatgpt_auth_required"));
+  syncChatGPTChrome.mockRejectedValueOnce(
+    new ApiError(0, "Sign in to ChatGPT, then Sync again", "chatgpt_auth_required"),
+  );
   const open = vi.spyOn(window, "open").mockReturnValue(null);
   render(ImportModal, props());
   await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
@@ -107,9 +110,16 @@ it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure"
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
   expect(screen.getByText(m.import_chatgpt_signed_out())).toBeTruthy();
   expect(screen.queryByText(m.import_chatgpt_tab_note())).toBeNull();
-  expect(syncChatGPTChrome).toHaveBeenCalledWith(expect.objectContaining({ onProgress: expect.any(Function) }), expect.any(AbortSignal));
+  expect(syncChatGPTChrome).toHaveBeenCalledWith(
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
   await fireEvent.click(screen.getByRole("button", { name: m.import_chatgpt_signed_out() }));
-  expect(open).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/", "_blank", "noopener,noreferrer");
+  expect(open).toHaveBeenCalledExactlyOnceWith(
+    "https://chatgpt.com/",
+    "_blank",
+    "noopener,noreferrer",
+  );
   expect(syncClaudeAI).not.toHaveBeenCalled();
 });
 
@@ -537,7 +547,8 @@ it("polls every two seconds across browser tabs and pauses while hidden, syncing
   await vi.advanceTimersByTimeAsync(4000);
   expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Claude.ai" }));
-  await tick(); await vi.advanceTimersByTimeAsync(0);
+  await tick();
+  await vi.advanceTimersByTimeAsync(0);
   expect(chromeStatus).toHaveBeenCalledTimes(6);
   let reject!: (error: Error) => void;
   syncClaudeAI.mockImplementation(
@@ -551,7 +562,8 @@ it("polls every two seconds across browser tabs and pauses while hidden, syncing
   expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   reject(new Error("Stopped"));
-  await tick(); await vi.advanceTimersByTimeAsync(0);
+  await tick();
+  await vi.advanceTimersByTimeAsync(0);
   expect(chromeStatus).toHaveBeenCalledTimes(7);
   await rerender({ ...p, open: false });
   await vi.advanceTimersByTimeAsync(4000);

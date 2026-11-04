@@ -227,7 +227,7 @@ a local writable archive with Chrome connected.
 The CLI can sync without an AgentsView tab open:
 
 ```bash
-agentsview import --type chatgpt --sync
+agentsview source import --type chatgpt --sync
 ```
 
 The first Sync has no stored freshness, so it fetches the conversations returned

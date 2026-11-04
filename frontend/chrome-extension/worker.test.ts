@@ -37,10 +37,15 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   vi.stubGlobal("chrome", chrome);
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    const file = url.endsWith("chatgpt_requests.txt") ? "chatgpt_requests.txt" : "claude_ai_requests.txt";
-    return new Response(readFileSync(`../internal/importer/${file}`, "utf8"));
-  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const file = url.endsWith("chatgpt_requests.txt")
+        ? "chatgpt_requests.txt"
+        : "claude_ai_requests.txt";
+      return new Response(readFileSync(`../internal/importer/${file}`, "utf8"));
+    }),
+  );
   chrome.tabs.query.mockResolvedValue([{ id: 7 }]);
   chrome.tabs.get.mockResolvedValue({ id: 7, status: "complete" });
   chrome.tabs.create.mockResolvedValue({ id: 8 });
@@ -97,8 +102,16 @@ describe("Chrome native host worker", () => {
       body: "chats",
     });
     expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
-    expect(chrome.tabs.query).toHaveBeenCalledWith({ url: "https://claude.ai/*", discarded: false });
-    expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["claudeFetch", "https://claude.ai/api/organizations"] });
+    expect(chrome.tabs.query).toHaveBeenCalledWith({
+      url: "https://claude.ai/*",
+      discarded: false,
+    });
+    expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({
+      target: { tabId: 7 },
+      world: "ISOLATED",
+      func: expect.any(Function),
+      args: ["claudeFetch", "https://claude.ai/api/organizations"],
+    });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
   });
 
@@ -178,7 +191,7 @@ describe("Chrome native host worker", () => {
         vi.stubGlobal("chatgptFetch", chatgptFetch);
         return [];
       }
-      return [{ result: await options.func(...(options.args ?? [])) ?? null }];
+      return [{ result: (await options.func(...(options.args ?? []))) ?? null }];
     });
     expect(
       await request(
