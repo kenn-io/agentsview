@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"image/color"
@@ -747,6 +748,48 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 }
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
+	t.Run("code-mode wait output becomes tool result", func(t *testing.T) {
+		const output = `[{"type":"input_text","text":"Script completed\nWall time 9.6 seconds\nOutput:\n"},{"type":"input_text","text":"script stdout\n"}]`
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-code-mode-wait", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "wait for the script", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000,
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait", jsontext.Value(output), tsLate),
+		)
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.Len(t, msgs, 2)
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assertToolResultEvents(t, msgs[1].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
+			ToolUseID: "call_wait",
+			Source:    "function_call_output",
+			Content:   output,
+		}})
+	})
+
+	t.Run("subagent wait timeout adds no result", func(t *testing.T) {
+		const childID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-wait-timeout", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"message": "run the script",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`"}`, tsLate),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{childID},
+			}, tsLateS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait", `{"status":{},"timed_out":true}`, "2024-01-01T10:01:06Z"),
+		)
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.Len(t, msgs, 3)
+		require.Len(t, msgs[2].ToolCalls, 1)
+		assertToolResultEvents(t, msgs[2].ToolCalls[0].ResultEvents, nil)
+	})
+
 	t.Run("function calls", func(t *testing.T) {
 		content := loadFixture(t, "codex/function_calls.jsonl")
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)

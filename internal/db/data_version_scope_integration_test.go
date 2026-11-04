@@ -497,6 +497,81 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	assert.False(t, needsSync)
 }
 
+func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
+	version := db.CurrentDataVersion()
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+		db.ScopedDataVersionProviders(version-1, version))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	const output = `[{"type":"input_text","text":"Script completed\nWall time 9.6 seconds\nOutput:\n"},{"type":"input_text","text":"script stdout\n"}]`
+	sessionID := "codex:" + id
+	source := filepath.Join(root, "rollout-"+id+".jsonl")
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-10-08T12:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "wait for the script", "2026-10-08T12:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+			"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000,
+		}, "2026-10-08T12:00:02Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call_wait", jsontext.Value(output), "2026-10-08T12:00:03Z"),
+	)
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	_, found, err := database.GetProviderStatHash(ctx, parser.AgentCodex, source)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// Simulate the previous parser, which dropped code-mode wait results.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM tool_result_events; UPDATE tool_calls SET result_content='', result_content_length=0; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needsSync)
+	assert.False(t, fullRebuild)
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, sessionID))
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	after, err := database.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, sessionID, after.ID)
+	assert.Equal(t, version, after.DataVersion)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, sessionID))
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
+	messages, err := database.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	call := messages[1].ToolCalls[0]
+	assert.Equal(t, "call_wait", call.ToolUseID)
+	assert.Equal(t, output, call.ResultContent)
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "function_call_output", call.ResultEvents[0].Source)
+	assert.Equal(t, output, call.ResultEvents[0].Content)
+	needsSync, _, err = db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, needsSync)
+}
+
 func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
