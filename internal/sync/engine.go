@@ -12826,6 +12826,17 @@ func (e *Engine) processProviderFile(
 		}
 		return incRes, true
 	}
+	// A Claude checkpoint proves only the append path. A full parse needs
+	// an authoritative fingerprint, including bytes before the tail anchor.
+	if file.Agent == parser.AgentClaude && codexCheckpoint != nil {
+		var meter parser.ContentReadMeter
+		fingerprint, err = e.providerFingerprint(parser.WithContentReadMeter(ctx, &meter), provider, source)
+		if err != nil {
+			return processResult{err: err}, true
+		}
+		e.countContentCheck(meter.Bytes())
+		cacheKey = providerProcessCacheKey(file, source, fingerprint, providerSemantics)
+	}
 	// An explicit full pass must replace the stored message stream after
 	// bypassing incremental append. Otherwise a complete parse can still be
 	// written with append semantics and leave stale earlier rows untouched.

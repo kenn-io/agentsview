@@ -17,11 +17,7 @@ func claudeCheckpointAppend(t *testing.T, fx *engineFixture, path, text, message
 	t.Helper()
 	line := testjsonl.NewSessionBuilder().AddClaudeAssistantUsage("2024-01-01T00:00:05Z", text,
 		testjsonl.ClaudeAssistantUsage{MessageID: messageID, RequestID: messageID, Model: "claude-sonnet-4-20250514", InputTokens: 10, OutputTokens: 1}).String()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	_, err = f.WriteString(line)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	appendFile(t, path, line)
 	fx.engine.SyncPaths([]string{path})
 }
 
@@ -100,6 +96,46 @@ func TestClaudeCheckpointAppendHashesOnlyNewBytes(t *testing.T) {
 	assert.Equal(t, costs[0], costs[1], "append hash work is independent of transcript size")
 }
 
+func TestClaudeCheckpointFullFallbackThenSameStatRewrite(t *testing.T) {
+	fx := newEngineFixture(t)
+	t.Cleanup(fx.engine.Close)
+	path := fx.writeClaudeSession(t, "proj", "checkpoint.jsonl", "OLD-MARKER")
+	appendFile(t, path, testjsonl.NewSessionBuilder().AddClaudeAssistantUsage("2024-01-01T00:00:01Z", strings.Repeat("x", 200<<10),
+		testjsonl.ClaudeAssistantUsage{MessageID: "padding"}).String())
+	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
+	claudeCheckpointAppend(t, fx, path, "bootstrap", "a")
+	claudeCheckpointAppend(t, fx, path, "resumed", "b")
+	requireClaudeCheckpointHash(t, fx, path)
+
+	// Edit outside the checkpoint's trailing anchor, then force a full parse.
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(raw)-strings.Index(string(raw), "OLD-MARKER"), codexCheckpointAnchorSize)
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(raw), "OLD-MARKER", "NEW-MARKER", 1)), 0o600))
+	appendFile(t, path, "{\"type\":\"custom-title\",\"customTitle\":\"renamed\",\"sessionId\":\"checkpoint\"}\n")
+	fx.engine.SyncPaths([]string{path})
+	sess, err := fx.db.GetSessionFull(t.Context(), "checkpoint")
+	require.NoError(t, err)
+	assert.False(t, sess.LastWriteIncremental)
+	msgs, err := fx.db.GetAllMessages(t.Context(), "checkpoint")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	require.Equal(t, "NEW-MARKER", msgs[0].Content)
+
+	// Restore the earlier text while preserving the full parse's size and mtime.
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	raw, err = os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(raw), "NEW-MARKER", "OLD-MARKER", 1)), 0o600))
+	require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+	fx.engine.SyncPaths([]string{path})
+	msgs, err = fx.db.GetAllMessages(t.Context(), "checkpoint")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "OLD-MARKER", msgs[0].Content)
+}
+
 func TestClaudeCheckpointFallbacks(t *testing.T) {
 	for _, kind := range []string{"same-stat rewrite", "anchor mismatch", "truncation", "full-parse fallback"} {
 		t.Run(kind, func(t *testing.T) {
@@ -129,11 +165,7 @@ func TestClaudeCheckpointFallbacks(t *testing.T) {
 				fx.engine.SyncPaths([]string{path})
 			case "full-parse fallback":
 				// A title record requires the existing authoritative parse path.
-				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-				require.NoError(t, err)
-				_, err = f.WriteString("{\"type\":\"custom-title\",\"customTitle\":\"renamed\",\"sessionId\":\"checkpoint\"}\n")
-				require.NoError(t, err)
-				require.NoError(t, f.Close())
+				appendFile(t, path, "{\"type\":\"custom-title\",\"customTitle\":\"renamed\",\"sessionId\":\"checkpoint\"}\n")
 				fx.engine.SyncPaths([]string{path})
 			}
 			sess, err := fx.db.GetSessionFull(t.Context(), "checkpoint")
@@ -173,11 +205,7 @@ func TestClaudeCheckpointProgressAndSplitAdvance(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Hello world", msgs[1].Content)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	_, err = f.WriteString("{\"type\":\"progress\",\"timestamp\":\"2024-01-01T00:00:06Z\",\"data\":{}}\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	appendFile(t, path, "{\"type\":\"progress\",\"timestamp\":\"2024-01-01T00:00:06Z\",\"data\":{}}\n")
 	fx.engine.SyncPaths([]string{path})
 	requireClaudeCheckpointHash(t, fx, path)
 	claudeCheckpointAppend(t, fx, path, "next", "b")
