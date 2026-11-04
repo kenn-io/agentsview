@@ -149,19 +149,21 @@ func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 			ORDER BY session_id, ordinal`
 }
 
-func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), sessionWindow, systemPrefix string, sessionArgs []any, dialect db.QueryDialect) (string, []any) {
+func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), systemPrefix string, dialect db.QueryDialect) (string, []any) {
 	content := "m.content"
 	where := "s.deleted_at IS NULL"
 	var args []any
 	from, to := AnalyticsWindowBounds(f)
 	inWindow, windowArgs := windowPred("COALESCE(m.timestamp, s.started_at, s.created_at)", from, to)
-	if inWindow != "" {
+	if inWindow != "" && len(f.MessageScopeFilter().Models) > 0 {
 		content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
 		args = append(args, windowArgs...)
 	}
-	if sessionWindow != "" {
-		where += " AND " + sessionWindow
+	if sessionWindow, sessionArgs := windowPred("COALESCE(s.started_at, s.created_at)", from, to); sessionWindow != "" {
+		messageWindow, messageArgs := windowPred("wm.timestamp", from, to)
+		where += " AND (" + sessionWindow + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + messageWindow + "))"
 		args = append(args, sessionArgs...)
+		args = append(args, messageArgs...)
 	}
 	if inWindow != "" {
 		rowWindow := inWindow

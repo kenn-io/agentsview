@@ -16,7 +16,9 @@ func TrendsSessionWindowCases() []TrendsSessionWindowCase {
 		{Project: "pending", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-06-05T20:00:00Z", Timezone: "UTC", Model: "gpt-4o", Hour: 20, Want: 1},
 		{Project: "pending-cleared", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timestamp: "2024-06-05T20:00:00Z", Timezone: "UTC", Model: "gpt-4o", Hour: 20, Want: 0},
 		{Project: "null-message", Started: "2024-06-05T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 1},
+		{Project: "null-message-model", Started: "2024-06-05T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timezone: "UTC", Model: "gpt-4o", Hour: 9, Want: 1},
 		{Project: "null-old", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 0},
+		{Project: "null-old-model", Started: "2024-01-01T09:00:00Z", Created: "2024-01-01T09:00:00Z", Timezone: "UTC", Model: "gpt-4o", Hour: 9, Want: 0},
 		{Project: "null-old-created-recent", Started: "2024-01-01T09:00:00Z", Created: "2024-06-05T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 0},
 		{Project: "imported", Started: "2024-01-01T09:00:00Z", Created: "2024-06-05T09:00:00Z", Timestamp: "2024-01-01T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 0},
 		{Project: "empty-start", Created: "2024-06-05T09:00:00Z", Timezone: "UTC", Hour: 9, Want: 1},
@@ -39,7 +41,11 @@ func (c TrendsSessionWindowCase) Messages() []TrendsWindowMessage {
 		messages = append(messages, TrendsWindowMessage{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-06T15:00:00Z", Model: "other"})
 	}
 	if c.Model != "" {
-		messages = append(messages, TrendsWindowMessage{Role: "assistant", Content: "seam seam", Timestamp: "2024-06-07T15:00:00Z", Model: c.Model})
+		timestamp := "2024-06-07T15:00:00Z"
+		if c.Project == "null-old-model" {
+			timestamp = ""
+		}
+		messages = append(messages, TrendsWindowMessage{Role: "assistant", Content: "seam seam", Timestamp: timestamp, Model: c.Model})
 	}
 	return messages
 }

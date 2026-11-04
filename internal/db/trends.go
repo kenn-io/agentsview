@@ -69,27 +69,40 @@ func (db *DB) GetTrendsTerms(
 	sessionFilter.Hour = nil
 	sessionFilter.Model = ""
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
-	if pred, wargs := f.toolSessionWindowSQL("COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id"); pred != "" {
+	from, to := f.messageWindowBoundsUTC()
+	if sessionWindow, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
+		var messagePreds []string
+		var messageArgs []any
+		if from != "" {
+			messagePreds = append(messagePreds, "wm.timestamp >= ?")
+			messageArgs = append(messageArgs, from)
+		}
+		if to != "" {
+			messagePreds = append(messagePreds, "wm.timestamp < ?")
+			messageArgs = append(messageArgs, to)
+		}
 		// Filter sessions before walking their messages.
-		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE " + pred + ")"
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + strings.Join(messagePreds, " AND ") + ")))"
 		args = append(args, wargs...)
+		args = append(args, messageArgs...)
 	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	content := "m.content"
-	from, to := f.messageWindowBoundsUTC()
+	var selectArgs []any
 	effectiveTime := "CASE WHEN strftime('%Y', m.timestamp) IS NOT NULL THEN m.timestamp WHEN strftime('%Y', s.started_at) IS NOT NULL THEN s.started_at ELSE s.created_at END"
 	if inWindow, wargs := analyticsMessageWindowPred(effectiveTime, from, to); inWindow != "" {
-		content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
 		rowWindow := inWindow
 		if modelFiltering {
+			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
+			selectArgs = append(selectArgs, wargs...)
 			// Assistants outside the window still resolve pending user turns.
 			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
 		}
 		where += " AND " + rowWindow
 		args = append(args, wargs...)
-		args = append(append([]any{}, wargs...), args...)
 	}
+	args = append(selectArgs, args...)
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), ` + content + `, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
