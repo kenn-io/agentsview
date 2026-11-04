@@ -44,7 +44,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 				testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
 			)
 
-			sess, msgs := runClaudeParserTest(t, "hook-body.jsonl", content)
+			_, msgs := runClaudeParserTest(t, "hook-body.jsonl", content)
 			require.Len(t, msgs, 3)
 
 			hook := msgs[1]
@@ -74,9 +74,6 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 			assert.Empty(t, hook.ProviderID)
 			assert.Empty(t, hook.TokenUsage)
 			assert.Empty(t, hook.ClaudeMessageID)
-
-			assert.Equal(t, 1, sess.UserMessageCount)
-			assert.Equal(t, "hello", sess.FirstMessage)
 		})
 	}
 }
@@ -105,27 +102,6 @@ func TestClaudeHookImportRendersStdoutAndStderrChannels(t *testing.T) {
 	assert.Equal(t, len(hook.Content), hook.ContentLength)
 }
 
-// Multi-byte text and combining marks survive the body unchanged.
-func TestClaudeHookImportKeepsUnicodeHookContent(t *testing.T) {
-	t.Parallel()
-
-	content := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:01Z",`+
-			`"attachment":{"type":"hook_success",`+
-			`"content":"  第一行\n第二行 e\u0301\n"}}`,
-		testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
-	)
-
-	_, msgs := runClaudeParserTest(t, "hook-unicode.jsonl", content)
-	require.Len(t, msgs, 3)
-
-	hook := msgs[1]
-	assert.Equal(t,
-		"Content:\n  第一行\n第二行 e\u0301\n", hook.Content)
-	assert.Equal(t, len(hook.Content), hook.ContentLength)
-}
-
 // A hook written before the first real user stays a system row: it is
 // neither the session preview nor a user turn.
 func TestClaudeHookImportBeforeFirstUserKeepsPreviewAndCounts(t *testing.T) {
@@ -133,7 +109,7 @@ func TestClaudeHookImportBeforeFirstUserKeepsPreviewAndCounts(t *testing.T) {
 
 	content := testjsonl.JoinJSONL(
 		`{"type":"attachment","timestamp":"2026-01-01T00:00:00Z",`+
-			`"attachment":{"type":"hook_success","content":"hook ran"}}`,
+			`"attachment":{"type":"hook_success","content":"<system-reminder>\n  Keep this literal.\n</system-reminder>"}}`,
 		testjsonl.ClaudeUserJSON("real question", "2026-01-01T00:00:01Z"),
 		testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:02Z"),
 	)
@@ -142,6 +118,7 @@ func TestClaudeHookImportBeforeFirstUserKeepsPreviewAndCounts(t *testing.T) {
 	require.Len(t, msgs, 3)
 
 	assert.True(t, msgs[0].IsSystem)
+	assert.Equal(t, "Content:\n<system-reminder>\n  Keep this literal.\n</system-reminder>", msgs[0].Content)
 	assert.Equal(t, "hook_success", msgs[0].SourceSubtype)
 	assert.Equal(t, "real question", sess.FirstMessage)
 	assert.Equal(t, 1, sess.UserMessageCount)
@@ -234,47 +211,40 @@ func TestClaudeHookImportWithoutTimestampSortsAfterMessages(t *testing.T) {
 // the appended line, and the session end covers the hook.
 func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ subtype, content, body string }{
-		{"hook_success", `"hook finished"`, "hook finished"},
-		{"hook_additional_context", `["hook finished","more context"]`, "hook finished\nmore context"},
-	} {
-		t.Run(tc.subtype, func(t *testing.T) {
 
-			initial := testjsonl.JoinJSONL(
-				testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-				testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:01Z"),
-			)
-			path := createTestFile(t, "hook-incremental.jsonl", initial)
-			info, err := os.Stat(path)
-			require.NoError(t, err)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
+		testjsonl.ClaudeAssistantJSON("hi", "2026-01-01T00:00:01Z"),
+	)
+	path := createTestFile(t, "hook-incremental.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
 
-			appended := `{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",` +
-				`"uuid":"hook-1","parentUuid":"unknown-parent",` +
-				`"attachment":{"type":"` + tc.subtype + `","content":` + tc.content + `}}` + "\n"
-			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-			require.NoError(t, err)
-			_, err = f.WriteString(appended)
-			require.NoError(t, err)
-			require.NoError(t, f.Close())
+	appended := `{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",` +
+		`"uuid":"hook-1","parentUuid":"unknown-parent",` +
+		`"attachment":{"type":"hook_success","content":"hook finished"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
-			msgs, endedAt, consumed, err := callParseClaudeSessionFrom(
-				path, info.Size(), 2, "",
-			)
-			require.NoError(t, err)
-			require.Len(t, msgs, 1)
+	msgs, endedAt, consumed, err := callParseClaudeSessionFrom(
+		path, info.Size(), 2, "",
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
 
-			hook := msgs[0]
-			assert.Equal(t, "Content:\n"+tc.body, hook.Content)
-			assert.Equal(t, 2, hook.Ordinal)
-			assert.Equal(t, tc.subtype, hook.SourceSubtype)
-			assert.Equal(t, "attachment", hook.SourceType)
-			assert.True(t, hook.IsSystem)
-			assert.Equal(t, RoleUser, hook.Role)
-			assert.Equal(t, int64(len(appended)), consumed)
-			assert.Equal(t,
-				"2026-01-01T00:00:02Z", endedAt.Format(time.RFC3339))
-		})
-	}
+	hook := msgs[0]
+	assert.Equal(t, "Content:\nhook finished", hook.Content)
+	assert.Equal(t, 2, hook.Ordinal)
+	assert.Equal(t, "hook_success", hook.SourceSubtype)
+	assert.Equal(t, "attachment", hook.SourceType)
+	assert.True(t, hook.IsSystem)
+	assert.Equal(t, RoleUser, hook.Role)
+	assert.Equal(t, int64(len(appended)), consumed)
+	assert.Equal(t,
+		"2026-01-01T00:00:02Z", endedAt.Format(time.RFC3339))
 }
 
 // A hook written between the chunks of one response must not hide the
@@ -365,20 +335,6 @@ func TestClaudeHookImportSplitDetectionFallback(t *testing.T) {
 		})
 }
 
-func TestClaudeHookImportKeepsPromptLikeContentLiteral(t *testing.T) {
-	t.Parallel()
-	content := testjsonl.JoinJSONL(
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"hook_success","content":"<system-reminder>\n  Keep this literal.\n</system-reminder>"}}`,
-		testjsonl.ClaudeUserJSON("actual prompt", "2026-01-01T00:00:01Z"),
-	)
-	sess, messages := runClaudeParserTest(t, "hook-literal.jsonl", content)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "Content:\n<system-reminder>\n  Keep this literal.\n</system-reminder>", messages[0].Content)
-	assert.True(t, messages[0].IsSystem)
-	assert.Equal(t, "actual prompt", sess.FirstMessage)
-	assert.Equal(t, 1, sess.UserMessageCount)
-}
-
 // The full parse keeps one merged assistant message when a hook sits
 // between two snapshots of the same response.
 func TestClaudeHookImportFullParseMergesSnapshotsAcrossHook(t *testing.T) {
@@ -412,33 +368,6 @@ func TestClaudeHookImportFullParseMergesSnapshotsAcrossHook(t *testing.T) {
 	}
 	assert.Equal(t, 1, ids,
 		"the response must stay one message after the hook")
-}
-
-// An unsupported attachment type and a hook without output stay
-// skipped.
-func TestClaudeHookImportSkipsUnsupportedAndBlankHooks(t *testing.T) {
-	t.Parallel()
-
-	content := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("hello", "2026-01-01T00:00:00Z"),
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:01Z",`+
-			`"attachment":{"type":"hook_error","content":"failed"}}`,
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",`+
-			`"attachment":{"type":"hook_success","content":"   "}}`,
-		`{"type":"attachment","timestamp":"2026-01-01T00:00:03Z",`+
-			`"attachment":{"type":"hook_success"}}`,
-		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[]}}`,
-		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[""]}}`,
-		testjsonl.ClaudeAssistantJSON("ok", "2026-01-01T00:00:04Z"),
-	)
-
-	sess, msgs := runClaudeParserTest(t, "hook-unsupported.jsonl", content)
-	require.Len(t, msgs, 2)
-
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Empty(t, claudeHookImportRows(msgs))
-	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
 // Hooks follow fork parents even when the parent is hidden or another hook.

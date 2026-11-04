@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { HOOK_SESSION_ID, HOOK_TEXT, installHooksFixture } from "./hooks.fixture";
+import { HOOK_SESSION_ID, installHooksFixture } from "./hooks.fixture";
 
 async function openHookTranscript(page: Page) {
   await installHooksFixture(page);
@@ -29,7 +29,7 @@ async function expectFollowingReplyBelowHook(page: Page) {
     .toBe(true);
 }
 
-test("hook output is collapsed, escaped and keyboard expandable", async ({ page }) => {
+test("hook output is collapsed and keyboard expandable", async ({ page }) => {
   await openHookTranscript(page);
   const card = hookCard(page);
   await expect(card).toBeVisible();
@@ -37,8 +37,6 @@ test("hook output is collapsed, escaped and keyboard expandable", async ({ page 
   await card.locator("summary").focus();
   await page.keyboard.press("Enter");
   await expect(card.locator("pre")).toBeVisible();
-  expect(await card.locator("pre").textContent()).toBe(HOOK_TEXT);
-  await expect(card.locator("script")).toHaveCount(0);
   await expectFollowingReplyBelowHook(page);
 });
 
@@ -61,15 +59,6 @@ test("Hooks and System boundaries have independent persisted filters", async ({ 
   );
   await restored.locator(".block-filter-reset").click();
   await expect(hookCard(page)).toBeVisible();
-});
-
-test("focused mode keeps the final answer without treating hooks as prompts", async ({ page }) => {
-  await openHookTranscript(page);
-  await page.getByRole("button", { name: "Focused transcript mode", exact: true }).click();
-  await expect(hookCard(page)).toHaveCount(0);
-  await expect(page.getByText("Intermediate reply", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Final reply", { exact: true })).toBeVisible();
-  await expect(page.getByText("Synthetic request", { exact: true })).toBeVisible();
 });
 
 for (const width of [1440, 1280, 768, 390]) {

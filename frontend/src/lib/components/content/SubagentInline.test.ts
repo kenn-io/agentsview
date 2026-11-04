@@ -90,7 +90,7 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
-  it("renders child hooks as collapsed cards and follows the Hooks toggle", async () => {
+  it("routes child hooks to cards only when Hooks is visible", async () => {
     const original = new Set(ui.visibleBlocks);
     getMessages.mockResolvedValue({
       messages: [
@@ -104,27 +104,27 @@ describe("SubagentInline", () => {
       count: 1,
     });
     getSession.mockResolvedValue(makeSession());
-    ui.setBlockVisible("hook", true);
-    const component = mount(SubagentInline, {
-      target: document.body,
-      props: { sessionId: "subagent-session-id" },
-    });
     try {
-      await tick();
-      document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
-      await vi.waitFor(() => expect(document.querySelector("details")).not.toBeNull());
-      expect(document.querySelector(".label")?.textContent).toBe("Hook output");
-      expect(document.querySelector("details")?.open).toBe(false);
-      expect(document.querySelector("pre")?.textContent).toBe("Content:\nchild hook context");
-      ui.setBlockVisible("hook", false);
-      await tick();
-      expect(document.querySelector("details")).toBeNull();
-      expect(document.body.textContent).not.toContain("child hook context");
-      ui.setBlockVisible("hook", true);
-      await tick();
-      expect(document.querySelector("details")?.open).toBe(false);
+      for (const visible of [true, false]) {
+        ui.setBlockVisible("hook", visible);
+        const component = mount(SubagentInline, {
+          target: document.body,
+          props: { sessionId: "subagent-session-id" },
+        });
+        try {
+          await tick();
+          document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+          await vi.waitUntil(
+            () =>
+              document.querySelector(".subagent-messages") &&
+              !document.querySelector(".subagent-status"),
+          );
+          expect(!!document.querySelector(".system-boundary")).toBe(visible);
+        } finally {
+          await unmount(component);
+        }
+      }
     } finally {
-      await unmount(component);
       ui.visibleBlocks = original;
     }
   });

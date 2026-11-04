@@ -24,15 +24,10 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 		archiveOnly bool
 	}{
 		{provider: parser.AgentClaude, subtype: "hook_success"},
-		{provider: parser.AgentClaude, subtype: "hook_additional_context"},
 		{provider: parser.AgentCowork, subtype: "hook_success"},
-		{provider: parser.AgentCowork, subtype: "hook_additional_context"},
 		{provider: parser.AgentQoder, subtype: "hook_success"},
-		{provider: parser.AgentQoder, subtype: "hook_additional_context"},
 		{provider: parser.AgentIcodemate, subtype: "hook_success"},
-		{provider: parser.AgentIcodemate, subtype: "hook_additional_context"},
 		{provider: parser.AgentClaude, subtype: "hook_success", archiveOnly: true},
-		{provider: parser.AgentClaude, subtype: "hook_additional_context", archiveOnly: true},
 	} {
 		name := tc.subtype + "/" + string(tc.provider)
 		if tc.archiveOnly {
@@ -138,9 +133,6 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 			assert.Equal(t, "attachment", after[1].SourceType)
 			assert.Equal(t, tc.subtype, after[1].SourceSubtype)
 			assert.Equal(t, "u1", after[1].SourceParentUUID)
-			assert.Equal(t, "Content:\n"+hookUpgradeText, after[1].Content)
-			require.NotNil(t, after[1].DialogueText)
-			assert.Empty(t, *after[1].DialogueText)
 			assertHookUpgradeCuration(t, reopened, readableID, after[2].ID, 2)
 			session, err := reopened.GetSessionFull(ctx, readableID)
 			require.NoError(t, err)

@@ -587,6 +587,17 @@ describe("UIStore", () => {
       expect([...restored].sort()).toEqual(["assistant", "code", "hook", "thinking", "user"]);
     });
 
+    it("extends saved filters without linking Hooks to System boundaries", () => {
+      const old = parseBlockFilters(JSON.stringify({ hidden: ["system"] }));
+      expect(old.has("system")).toBe(false);
+      expect(old.has("hook")).toBe(true);
+      const visible = new Set(ALL_BLOCK_TYPES);
+      visible.delete("hook");
+      const restored = parseBlockFilters(serializeBlockFilters(visible));
+      expect(restored.has("hook")).toBe(false);
+      expect(restored.has("system")).toBe(true);
+    });
+
     it("shows every block when the stored payload is missing or unreadable", () => {
       expect(parseBlockFilters(null).size).toBe(ALL_BLOCK_TYPES.length);
       expect(parseBlockFilters("{not json").size).toBe(ALL_BLOCK_TYPES.length);
