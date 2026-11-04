@@ -698,7 +698,6 @@ func extractOpenClaudeQueuedCommand(ctx context.Context, line string) (claudeAtt
 	}
 
 	return claudeAttachment{
-		kind:      claudeAttachmentQueuedCommand,
 		prompt:    prompt,
 		timestamp: extractTimestamp(line),
 	}, true

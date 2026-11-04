@@ -25,8 +25,7 @@ import (
 // and labels. v20 adds codex-cloud plan usage and capture coverage
 // (session_plan_usage).
 // v21 adds messages.dialogue_text.
-// v22 rebuilds mirrors after importing Claude-format hook output.
-const SchemaVersion = 22
+const SchemaVersion = 21
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

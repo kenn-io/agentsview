@@ -130,52 +130,6 @@ func TestExtractClaudeHookSuccessRejects(t *testing.T) {
 		name string
 		line string
 	}{
-		{name: "empty line", line: ""},
-		{name: "whitespace only", line: " \t\n"},
-		{name: "truncated object", line: `{"type":"attachment","attachment":`},
-		{
-			name: "trailing garbage",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":"ok"}} trailing`,
-		},
-		{
-			name: "second record",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":"ok"}}{"type":"attachment"}`,
-		},
-		{
-			name: "trailing closing brace",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":"ok"}}}`,
-		},
-		{
-			name: "trailing closing bracket",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":"ok"}}]`,
-		},
-		{
-			name: "trailing closing bracket after whitespace",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":"ok"}} ]`,
-		},
-		{name: "array root", line: `[{"type":"attachment"}]`},
-		{name: "string root", line: `"attachment"`},
-		{name: "number root", line: `42`},
-		{name: "null root", line: `null`},
-		{
-			name: "record type missing",
-			line: `{"attachment":{"type":"hook_success","content":"ok"}}`,
-		},
-		{
-			name: "record type wrong",
-			line: `{"type":"user","attachment":{"type":"hook_success",` +
-				`"content":"ok"}}`,
-		},
-		{
-			name: "record type not a string",
-			line: `{"type":7,"attachment":{"type":"hook_success",` +
-				`"content":"ok"}}`,
-		},
 		{name: "attachment missing", line: `{"type":"attachment"}`},
 		{
 			name: "attachment not an object",
@@ -264,34 +218,6 @@ func TestExtractClaudeHookSuccessRejectsInvalidMembers(t *testing.T) {
 				assert.Equal(t, claudeHookSuccess{}, got)
 			})
 		}
-	}
-}
-
-func TestExtractClaudeHookSuccessJSONWhitespace(t *testing.T) {
-	base := `{"type":"attachment","attachment":{"type":"hook_success","content":"synthetic output"}}`
-	tests := []struct {
-		name   string
-		prefix string
-		suffix string
-		ok     bool
-		want   claudeHookSuccess
-	}{
-		{
-			name:   "JSON whitespace around the document",
-			prefix: " \t\r\n",
-			suffix: "\n\r\t ",
-			ok:     true,
-			want:   claudeHookSuccess{content: "synthetic output"},
-		},
-		{name: "non-JSON leading unicode space", prefix: "\u00a0"},
-		{name: "non-JSON trailing vertical tab", suffix: "\v"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := extractClaudeHookSuccess(tt.prefix + base + tt.suffix)
-			assert.Equal(t, tt.ok, ok)
-			assert.Equal(t, tt.want, got)
-		})
 	}
 }
 

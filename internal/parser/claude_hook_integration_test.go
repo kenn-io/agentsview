@@ -235,6 +235,7 @@ func TestClaudeHookImportIncrementalHookOnlyAppend(t *testing.T) {
 	require.NoError(t, err)
 
 	appended := `{"type":"attachment","timestamp":"2026-01-01T00:00:02Z",` +
+		`"uuid":"hook-1","parentUuid":"unknown-parent",` +
 		`"attachment":{"type":"hook_success","content":"hook ran"}}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
@@ -296,7 +297,7 @@ func TestClaudeHookImportSplitDetectionFallback(t *testing.T) {
 
 		linear := true
 		msgs, _, _, _, perr := claudeParseSessionFrom(
-			path, info.Size(), claudeIncrementalScan{
+			t.Context(), path, info.Size(), claudeIncrementalScan{
 				startOrdinal:              2,
 				lastEntryUUID:             "a1",
 				storedLinearParse:         &linear,
@@ -345,93 +346,6 @@ func TestClaudeHookImportSplitDetectionFallback(t *testing.T) {
 			assert.Equal(t, "hook_success", msgs[0].SourceSubtype)
 			assert.Equal(t, "msg_fresh", msgs[1].ClaudeMessageID)
 		})
-}
-
-// An unknown native parent cannot be assigned to a branch from the
-// appended window alone, so the incremental path falls back to a full
-// parse.
-func TestClaudeHookImportIncrementalParentedHookFallsBack(t *testing.T) {
-	t.Parallel()
-
-	initial := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("hello", "2026-01-01T10:00:00Z"),
-	)
-	path := createTestFile(t, "hook-parented.jsonl", initial)
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-
-	appended := `{"type":"attachment","timestamp":"2026-01-01T10:00:01Z",` +
-		`"uuid":"hook-1","parentUuid":"fork-u1",` +
-		`"attachment":{"type":"hook_success","content":"hook ran"}}` + "\n"
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	linear := true
-	_, _, _, _, err = claudeParseSessionFrom(
-		path, info.Size(), claudeIncrementalScan{
-			startOrdinal:      1,
-			lastEntryUUID:     "u1",
-			storedLinearParse: &linear,
-		},
-	)
-	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
-}
-
-// A known parent on a stored linear source does not require reparsing
-// the entire transcript, including when one hook parents another.
-func TestClaudeHookImportKnownLinearParentsStayIncremental(t *testing.T) {
-	t.Parallel()
-
-	const initial = `{"type":"user","uuid":"known-user","parentUuid":"missing-ancestor","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"request"}}` + "\n"
-	const hook = `{"type":"attachment","uuid":"hook-1","parentUuid":"known-user","timestamp":"2026-01-01T00:00:01Z","attachment":{"type":"hook_success","stdout":"first output"}}` + "\n"
-	for _, tc := range []struct {
-		name     string
-		appended string
-		rows     int
-	}{
-		{name: "stored tail", appended: hook, rows: 1},
-		{
-			name: "appended message",
-			appended: `{"type":"assistant","uuid":"new-answer","parentUuid":"known-user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","content":"answer"}}` + "\n" +
-				`{"type":"attachment","uuid":"hook-1","parentUuid":"new-answer","timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"hook_success","stdout":"output"}}` + "\n",
-			rows: 2,
-		},
-		{
-			name: "earlier hook",
-			appended: hook +
-				`{"type":"attachment","uuid":"hook-2","parentUuid":"hook-1","timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"hook_success","stdout":"second output"}}` + "\n",
-			rows: 2,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := createTestFile(t, "hook-known-parent.jsonl", initial)
-			info, err := os.Stat(path)
-			require.NoError(t, err)
-			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-			require.NoError(t, err)
-			_, err = f.WriteString(tc.appended)
-			require.NoError(t, err)
-			require.NoError(t, f.Close())
-
-			linear := true
-			messages, _, endedAt, consumed, err := claudeParseSessionFrom(
-				path, info.Size(), claudeIncrementalScan{
-					startOrdinal: 1, lastEntryUUID: "known-user",
-					storedLinearParse: &linear,
-				},
-			)
-			require.NoError(t, err)
-			require.Len(t, messages, tc.rows)
-			assert.Equal(t, int64(len(tc.appended)), consumed)
-			assert.Equal(t, "hook_success", messages[tc.rows-1].SourceSubtype)
-			assert.Equal(t, tc.rows, messages[tc.rows-1].Ordinal)
-			assert.Equal(t, messages[tc.rows-1].Timestamp, endedAt)
-		})
-	}
 }
 
 func TestClaudeHookImportKeepsPromptLikeContentLiteral(t *testing.T) {
@@ -510,78 +424,3 @@ func TestClaudeHookImportSkipsUnsupportedAndBlankHooks(t *testing.T) {
 
 // A hook without a native parent belongs to the original result only,
 // and a hook whose native parent sits on a fork belongs to that fork.
-func TestClaudeHookImportForkOwnership(t *testing.T) {
-	t.Parallel()
-
-	content := testjsonl.JoinJSONL(
-		`{"type":"user","timestamp":"2026-01-01T10:00:00Z","uuid":"a",`+
-			`"message":{"content":"start"}}`,
-		`{"type":"assistant","timestamp":"2026-01-01T10:00:01Z",`+
-			`"uuid":"b","parentUuid":"a","message":{"content":[`+
-			`{"type":"text","text":"ok"}]}}`,
-		`{"type":"user","timestamp":"2026-01-01T10:00:02Z","uuid":"c",`+
-			`"parentUuid":"b","message":{"content":"q1"}}`,
-		`{"type":"assistant","timestamp":"2026-01-01T10:00:03Z",`+
-			`"uuid":"d","parentUuid":"c","message":{"content":[`+
-			`{"type":"text","text":"a1"}]}}`,
-		`{"type":"user","timestamp":"2026-01-01T10:00:04Z","uuid":"e",`+
-			`"parentUuid":"d","message":{"content":"q2"}}`,
-		`{"type":"assistant","timestamp":"2026-01-01T10:00:05Z",`+
-			`"uuid":"f","parentUuid":"e","message":{"content":[`+
-			`{"type":"text","text":"a2"}]}}`,
-		`{"type":"user","timestamp":"2026-01-01T10:00:06Z","uuid":"g",`+
-			`"parentUuid":"f","message":{"content":"q3"}}`,
-		`{"type":"assistant","timestamp":"2026-01-01T10:00:07Z",`+
-			`"uuid":"h","parentUuid":"g","message":{"content":[`+
-			`{"type":"text","text":"a3"}]}}`,
-		`{"type":"user","timestamp":"2026-01-01T10:00:08Z","uuid":"k",`+
-			`"parentUuid":"h","message":{"content":"q4"}}`,
-		`{"type":"assistant","timestamp":"2026-01-01T10:00:09Z",`+
-			`"uuid":"l","parentUuid":"k","message":{"content":[`+
-			`{"type":"text","text":"a4"}]}}`,
-		// The fork branch hangs off the assistant at 10:00:01.
-		`{"type":"user","timestamp":"2026-01-01T10:01:00Z",`+
-			`"uuid":"fork-u1","parentUuid":"b",`+
-			`"message":{"content":"forked question"}}`,
-		`{"type":"assistant","timestamp":"2026-01-01T10:01:01Z",`+
-			`"uuid":"fork-a1","parentUuid":"fork-u1",`+
-			`"message":{"content":[{"type":"text","text":"forked answer"}]}}`,
-		// A hook without a native parent stays with the original
-		// result.
-		`{"type":"attachment","timestamp":"2026-01-01T10:00:10Z",`+
-			`"attachment":{"type":"hook_success",`+
-			`"content":"unparented hook"}}`,
-		// A hook whose native parent sits on the fork belongs to the
-		// fork result.
-		`{"type":"attachment","timestamp":"2026-01-01T10:01:02Z",`+
-			`"uuid":"hook-1","parentUuid":"fork-u1",`+
-			`"attachment":{"type":"hook_success","content":"fork hook"}}`,
-		`{"type":"attachment","timestamp":"2026-01-01T10:01:03Z",`+
-			`"uuid":"hook-2","parentUuid":"hook-1",`+
-			`"attachment":{"type":"hook_success","content":"chained fork hook"}}`,
-	)
-
-	path := createTestFile(t, "hook-fork.jsonl", content)
-	results, err := parseClaudeSession(path, "proj", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-
-	originalHooks := claudeHookImportRows(results[0].Messages)
-	forkHooks := claudeHookImportRows(results[1].Messages)
-	require.Len(t, originalHooks, 1,
-		"the unparented hook belongs to the original result only")
-	require.Len(t, forkHooks, 2,
-		"the parented hook and its child belong to the fork result")
-	assert.Contains(t, originalHooks[0].Content, "unparented hook")
-	assert.NotContains(t, originalHooks[0].Content, "fork hook")
-	assert.Contains(t, forkHooks[0].Content, "fork hook")
-	assert.NotContains(t, forkHooks[0].Content, "unparented hook")
-	assert.Equal(t, "fork-u1", forkHooks[0].SourceParentUUID)
-	assert.Equal(t, "hook-1", forkHooks[1].SourceParentUUID)
-	assert.Equal(t, "hook-2", forkHooks[1].SourceUUID)
-	assert.Contains(t, forkHooks[1].Content, "chained fork hook")
-
-	// The hooks are system rows: they add no user turn.
-	assert.Equal(t, 5, results[0].Session.UserMessageCount)
-	assert.Equal(t, 1, results[1].Session.UserMessageCount)
-}

@@ -47,9 +47,8 @@ afterEach(async () => {
 });
 
 describe("hook output", () => {
-  it("promotes only the supported system attachment shape", () => {
+  it("promotes hook output and keeps other system rows hidden", () => {
     expect(isSystemMessage(hook())).toBe(false);
-    expect(isSystemMessage(message(2, { ...hook(), source_type: "system" }))).toBe(true);
     expect(isSystemMessage(message(2, { ...hook(), source_subtype: "hook_error" }))).toBe(true);
     expect(isSystemMessage(message(2, { is_system: true, content: "Hook output" }))).toBe(true);
     expect(

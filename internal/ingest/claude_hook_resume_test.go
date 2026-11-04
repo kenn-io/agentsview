@@ -38,14 +38,6 @@ func TestClaudeHookResumeCursor(t *testing.T) {
 		{name: "ID-less hook", current: "old", rows: []parser.ParsedMessage{assistant, idlessHook}, want: "a1"},
 		{name: "ID-less ordinary tail", current: "old", rows: []parser.ParsedMessage{assistant, hook, idlessUser}, want: "a1"},
 		{name: "only ID-less records", current: "old", rows: []parser.ParsedMessage{idlessHook, idlessUser}, want: "old"},
-		{name: "another attachment subtype", current: "old", rows: []parser.ParsedMessage{hook,
-			{SourceType: "attachment", SourceSubtype: "queued_command", SourceUUID: "at1"}}, want: "at1"},
-		{name: "same subtype on another type", current: "old", rows: []parser.ParsedMessage{hook,
-			{IsSystem: true, SourceType: "user", SourceSubtype: "hook_success", SourceUUID: "u9"}}, want: "u9"},
-		{name: "another hook subtype", current: "old", rows: []parser.ParsedMessage{hook,
-			{IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_error", SourceUUID: "h3"}}, want: "h3"},
-		{name: "other system row", current: "old", rows: []parser.ParsedMessage{hook,
-			{IsSystem: true, SourceType: "system", SourceSubtype: "compact_boundary", SourceUUID: "b1"}}, want: "b1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -32,6 +32,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "task_notification",
   "stop_hook",
   "peer_message",
+  "hook_success",
 ]);
 
 /**
@@ -77,7 +78,6 @@ export function isSystemMessage(m: Message): boolean {
   if (m.source_subtype && VISIBLE_SYSTEM_SUBTYPES.has(m.source_subtype)) {
     return false;
   }
-  if (isHookSuccessMessage(m)) return false;
   if (m.is_system) return true;
   if (m.role !== "user") return false;
   const { remainder, stripped } = stripLeadingReminderBlocks(m.content);

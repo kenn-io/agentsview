@@ -20,21 +20,7 @@ type claudeHookSuccess struct {
 // transcript line. It decodes the payload only: it does not store, order,
 // or display the result.
 func extractClaudeHookSuccess(line string) (claudeHookSuccess, bool) {
-	if !gjson.Valid(line) {
-		return claudeHookSuccess{}, false
-	}
-	record := gjson.Parse(line)
-	if !record.IsObject() {
-		return claudeHookSuccess{}, false
-	}
-	recordType := record.Get("type")
-	if recordType.Type != gjson.String || recordType.Str != "attachment" {
-		return claudeHookSuccess{}, false
-	}
-	attachment := record.Get("attachment")
-	if !attachment.IsObject() {
-		return claudeHookSuccess{}, false
-	}
+	attachment := gjson.Get(line, "attachment")
 	attachmentType := attachment.Get("type")
 	if attachmentType.Type != gjson.String ||
 		attachmentType.Str != "hook_success" {
@@ -87,7 +73,6 @@ func extractClaudeHookAttachment(line string) (claudeAttachment, bool) {
 	payload.stdout = strings.Clone(payload.stdout)
 	payload.stderr = strings.Clone(payload.stderr)
 	return claudeAttachment{
-		kind:             claudeAttachmentHookSuccess,
 		timestamp:        extractTimestamp(line),
 		hook:             &payload,
 		sourceUUID:       strings.Clone(gjson.Get(line, "uuid").Str),

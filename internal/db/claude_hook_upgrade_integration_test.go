@@ -17,12 +17,6 @@ import (
 
 const hookUpgradeText = "  中文 e\u0301 <script>literal</script>\n  preserved whitespace  \n"
 
-func TestClaudeHookUpgradeScopes(t *testing.T) {
-	assert.ElementsMatch(t, []parser.AgentType{
-		parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate,
-	}, db.ScopedDataVersionProviders(db.CurrentDataVersion()-1, db.CurrentDataVersion()))
-}
-
 func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 	for _, tc := range []struct {
 		provider    parser.AgentType

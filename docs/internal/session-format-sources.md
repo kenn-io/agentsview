@@ -155,7 +155,7 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Hook success attachments (checked 2026-11-02):** The parser reads the
+- **Hook success attachments (checked 2026-11-03):** The parser reads the
   `hook_success` attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`, and
   in two first-hand reports with `stdout` and `stderr`:
@@ -171,10 +171,18 @@ evidence; they do not establish whether a tool helped the task.
   parsing emit system rows with an explicitly empty dialogue field. The plain
   body separates hook name, hook event, content, stdout, and stderr without
   trimming or interpreting their text. Native identity fields are retained only
-  when supplied. Unparented hooks stay on the original result; a known unique
-  parent routes a hook, including a chain of hooks, to its owning fork. A parent
-  that cannot be resolved safely during incremental parsing requires a full
-  parse. Synthetic tests cover ordering with queued prompts, assistant snapshot
+  when supplied. Claude Code 2.1.301's installed bundle routes all seven
+  `hook_success` constructors through `en`, whose attachment envelope stamps
+  hooks with `new Date().toISOString()`. Its other attachment constructors also
+  supply or preserve timestamps. The timestamp-free example in
+  the original report is explicitly synthetic. On `origin/main`, undated queued
+  prompts already block later dated attachments during merging. A
+  full-versus-incremental sync probe retained both an undated queued prompt on
+  main and an undated hook on this branch across a same-message-ID continuation:
+  sync reparses the open response suffix, including its attachments. Hooks use
+  the same merge path; this change leaves undated-record ordering intact. All
+  hooks stay on the original conversation timeline, alongside queued prompts.
+  Synthetic tests cover ordering with queued prompts, assistant snapshot
   merging, counts, usage, and native identity. This parser stage uses existing
   message fields. Deferred hook identities stay on stored rows but do not
   advance the ordinary entry-chain resume cursor. Synthetic ingest and sync
@@ -182,16 +190,18 @@ evidence; they do not establish whether a tool helped the task.
   chains, split responses, checkpoint offsets, counts, and retained pins. In
   normal transcript mode, hook rows use a collapsed Hook output card and an
   independent Hooks filter. Focused mode hides these rows without treating them
-  as new prompts. The card preserves escaped body text. Data version 164 reparses
-  readable Claude, Cowork, Qoder, and iCodeMate CLI sources in place. Synthetic
-  upgrade tests preserve session and public message identities, pins, notes,
-  names, stars, and retained rows whose sources are gone; archive-only archives
-  retain their pending state without source sync. DuckDB schema 22 requires a
-  fresh mirror. The messages API and DuckDB round-trip tests cover the existing
-  system/source fields and preserved body. A synthetic native server/browser
-  run covers full and appended imports, repeat-sync idempotence, escaped output,
-  independent filters, and focused mode at desktop and mobile widths.
-  PostgreSQL and ClickHouse runtime checks remain unverified.
+  as new prompts. The card preserves escaped body text. Data version 164
+  reparses readable Claude, Cowork, Qoder, and iCodeMate CLI sources in place.
+  Synthetic upgrade tests preserve session and public message identities, pins,
+  notes, names, stars, and retained rows whose sources are gone; archive-only
+  archives retain their pending state without source sync. DuckDB rebuilds the
+  mirror when its source data version changes. The messages API and DuckDB
+  round-trip tests cover the existing system/source fields and preserved body. A
+  synthetic native server/browser run covers full and appended imports,
+  repeat-sync idempotence, escaped output, independent filters, and focused mode
+  at desktop and mobile widths. A PostgreSQL push test preserves the hook body,
+  source identity, system flag, and empty dialogue projection. ClickHouse runtime
+  checks remain unverified.
 - **Protected skill paths (2026-10-28):** Reverified against a local Claude
   transcript containing a `tool_use` block named `Read` with `input.file_path`
   pointing to a `SKILL.md` in Downloads. Shared local skill inference applies

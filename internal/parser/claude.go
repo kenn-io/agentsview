@@ -60,21 +60,6 @@ type dagEntry struct {
 	timestamp  time.Time
 }
 
-// claudeAttachmentKind names the payload a deferred Claude attachment
-// carries.
-type claudeAttachmentKind int
-
-const (
-	// claudeAttachmentQueuedCommand is a user message Claude Code
-	// persisted as type=attachment with attachment.type=queued_command
-	// — i.e. a prompt the user typed while a tool call was still
-	// running.
-	claudeAttachmentQueuedCommand claudeAttachmentKind = iota
-	// claudeAttachmentHookSuccess is the output of a Claude Code hook
-	// that ran successfully.
-	claudeAttachmentHookSuccess
-)
-
 // claudeAttachment carries one Claude Code attachment that the parser
 // splices into the message stream by timestamp. Two payloads share the
 // carrier: a queued_command prompt, which the user typed while a tool
@@ -87,7 +72,6 @@ const (
 // collect them out of band and splice them into the message stream by
 // timestamp after DAG processing completes.
 type claudeAttachment struct {
-	kind         claudeAttachmentKind
 	prompt       string
 	promptSource string
 	timestamp    time.Time
@@ -101,10 +85,6 @@ type claudeAttachment struct {
 	sourceParentUUID string
 	isSidechain      bool
 }
-
-// claudeQueuedCommand keeps existing queued-command callers on the
-// shared attachment carrier.
-type claudeQueuedCommand = claudeAttachment
 
 // claudeParseWithExclusions parses a Claude Code JSONL session file
 // and also returns session IDs intentionally excluded from the
@@ -525,28 +505,12 @@ func claudeParseFile(
 		return nil, nil, parseErr
 	}
 
-	// Splice deferred attachments into the message stream by
-	// timestamp. A queued_command prompt has no uuid/parentUuid and
-	// so can't participate in DAG fork detection; it belongs to the
-	// original conversation timeline (results[0]). A hook_success
-	// payload that names a native parent uuid belongs to the result
-	// that owns that parent, so a fork keeps its own hook instead of
-	// seeing it on every branch.
+	// Deferred attachments belong to the original conversation timeline.
 	if len(attachments) > 0 && len(results) > 0 {
-		owners, err := claudeAttachmentOwners(ctx, attachments, results)
+		var err error
+		results[0], err = applyQueuedCommandsContext(ctx, results[0], attachments)
 		if err != nil {
 			return nil, nil, err
-		}
-		for i := range results {
-			if len(owners[i]) == 0 {
-				continue
-			}
-			results[i], err = applyQueuedCommandsContext(
-				ctx, results[i], owners[i],
-			)
-			if err != nil {
-				return nil, nil, err
-			}
 		}
 	}
 
@@ -1059,47 +1023,6 @@ func claudeParseSessionFrom(
 	if sawNewPRLink {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
-	// A parented hook needs ownership evidence. A stored linear source
-	// has only one result, so a known tail, appended entry, or earlier
-	// hook is enough. Otherwise the parent may belong to an unseen fork;
-	// let the full parser assign the hook to its owner.
-	linearBound := scan.storedLinearParse != nil && *scan.storedLinearParse
-	parentedHook := false
-	for _, a := range attachments {
-		if a.kind == claudeAttachmentHookSuccess &&
-			a.sourceParentUUID != "" {
-			parentedHook = true
-			break
-		}
-	}
-	if parentedHook {
-		if !linearBound {
-			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
-		}
-		known := make(map[string]struct{}, len(entries)+len(attachments)+1)
-		if scan.lastEntryUUID != "" {
-			known[scan.lastEntryUUID] = struct{}{}
-		}
-		for _, e := range entries {
-			if e.uuid != "" {
-				known[e.uuid] = struct{}{}
-			}
-		}
-		for _, a := range attachments {
-			if a.kind != claudeAttachmentHookSuccess {
-				continue
-			}
-			if a.sourceParentUUID != "" {
-				if _, ok := known[a.sourceParentUUID]; !ok {
-					return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
-				}
-			}
-			if a.sourceUUID != "" {
-				known[a.sourceUUID] = struct{}{}
-			}
-		}
-	}
-
 	// Queue/progress events can repair subagent linkage on an already-stored
 	// tool call. Carry those mappings through the existing atomic incremental
 	// link writer instead of re-parsing the whole transcript. Map-derived
@@ -1137,6 +1060,7 @@ func claudeParseSessionFrom(
 	// a DAG verdict flipping to linear — happens when an appended
 	// entry lacks a uuid, since the full parser only walks the DAG
 	// when every entry carries one; guard that in the DAG branch.
+	linearBound := scan.storedLinearParse != nil && *scan.storedLinearParse
 	dagBound := scan.storedLinearParse != nil && !*scan.storedLinearParse
 	if linearBound {
 		if appendAddsDAGRoot(entries) {
@@ -1976,18 +1900,17 @@ func extractToolResultAgentIDLink(line string) (ClaudeSubagentLink, bool) {
 // types (e.g. task_reminder) return ok=false. Whitespace-only or
 // empty prompts also return false to match the parser's general
 // "skip empty user content" behavior.
-func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
+func extractQueuedCommand(line string) (claudeAttachment, bool) {
 	if gjson.Get(line, "attachment.type").Str != "queued_command" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
 	prompt := gjson.Get(line, "attachment.prompt").Str
 	var skip bool
 	prompt, skip = preprocessClaudeUserText(prompt)
 	if skip || strings.TrimSpace(prompt) == "" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
-	return claudeQueuedCommand{
-		kind:         claudeAttachmentQueuedCommand,
+	return claudeAttachment{
 		prompt:       prompt,
 		promptSource: gjson.Get(line, "promptSource").Str,
 		timestamp:    extractTimestamp(line),
@@ -2029,65 +1952,6 @@ func applyQueuedCommandsContext(
 	}
 	r.Messages = merged
 	return r, ctx.Err()
-}
-
-// claudeAttachmentOwners routes deferred attachments to the parse
-// result that owns them. A queued_command prompt has no native parent
-// and stays on the original conversation timeline. A hook_success
-// payload that names a native parent uuid belongs to the result that
-// owns that parent, so a fork keeps its own hook; an unknown or
-// shared parent keeps the hook on the original result.
-func claudeAttachmentOwners(
-	ctx context.Context, attachments []claudeAttachment, results []ParseResult,
-) ([][]claudeAttachment, error) {
-	owners := make([][]claudeAttachment, len(results))
-	if len(results) == 0 {
-		return owners, ctx.Err()
-	}
-	if len(results) == 1 {
-		owners[0] = attachments
-		return owners, ctx.Err()
-	}
-	parentOwner := make(map[string]int)
-	ambiguous := make(map[string]struct{})
-	for i, r := range results {
-		for j, m := range r.Messages {
-			if err := contextErrEvery(ctx, j); err != nil {
-				return nil, err
-			}
-			if m.SourceUUID == "" {
-				continue
-			}
-			if owner, seen := parentOwner[m.SourceUUID]; seen && owner != i {
-				ambiguous[m.SourceUUID] = struct{}{}
-			}
-			parentOwner[m.SourceUUID] = i
-		}
-	}
-	for i, a := range attachments {
-		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
-		}
-		owner := 0
-		if a.kind == claudeAttachmentHookSuccess &&
-			a.sourceParentUUID != "" {
-			if _, shared := ambiguous[a.sourceParentUUID]; !shared {
-				if idx, ok := parentOwner[a.sourceParentUUID]; ok {
-					owner = idx
-				}
-			}
-		}
-		owners[owner] = append(owners[owner], a)
-		// A later hook can name this hook as its native parent.
-		// Register the assigned owner without inventing an identity.
-		if a.kind == claudeAttachmentHookSuccess && a.sourceUUID != "" {
-			if previous, seen := parentOwner[a.sourceUUID]; seen && previous != owner {
-				ambiguous[a.sourceUUID] = struct{}{}
-			}
-			parentOwner[a.sourceUUID] = owner
-		}
-	}
-	return owners, ctx.Err()
 }
 
 // mergeQueuedCommands merges deferred attachments into messages in
@@ -2233,7 +2097,7 @@ func queuedBefore(
 func claudeAttachmentMessage(
 	a claudeAttachment,
 ) ParsedMessage {
-	if a.kind == claudeAttachmentHookSuccess && a.hook != nil {
+	if a.hook != nil {
 		return claudeHookSuccessMessage(a)
 	}
 	return queuedCommandMessage(a)
@@ -2242,7 +2106,7 @@ func claudeAttachmentMessage(
 // queuedCommandMessage builds a ParsedMessage from a collected
 // queued_command attachment.
 func queuedCommandMessage(
-	q claudeQueuedCommand,
+	q claudeAttachment,
 ) ParsedMessage {
 	q.prompt = stripLeadingClaudeSystemReminderContent(q.prompt)
 	if subtype := classifyClaudeSystemMessage(q.prompt); subtype != "" {

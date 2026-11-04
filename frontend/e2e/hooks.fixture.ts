@@ -1,3 +1,4 @@
+import { createMockSessions } from "./helpers/mock-sessions.js";
 import type { Page } from "@playwright/test";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
@@ -57,33 +58,13 @@ export async function installHooksFixture(page: Page, includeHook = true) {
     }),
   ];
   const session = {
+    ...createMockSessions(1, "hooks", () => "synthetic-hooks")[0],
     id: HOOK_SESSION_ID,
-    project: "synthetic-hooks",
-    machine: "test-machine",
     agent: "claude",
     first_message: "Synthetic request",
     display_name: "Synthetic hook transcript",
-    started_at: timestamp,
-    ended_at: timestamp,
-    created_at: timestamp,
     message_count: messages.length,
     user_message_count: 1,
-    file_path: "/synthetic/hooks.jsonl",
-    is_automated: false,
-    is_teammate: false,
-    ended_with_role: "assistant",
-    compaction_count: 0,
-    consecutive_failure_max: 0,
-    edit_churn_count: 0,
-    final_failure_streak: 0,
-    mid_task_compaction_count: 0,
-    outcome: "",
-    outcome_confidence: "",
-    peak_context_tokens: 0,
-    secret_leak_count: 0,
-    tool_failure_signal_count: 0,
-    tool_retry_count: 0,
-    total_output_tokens: 0,
   };
   await page.addInitScript(() => {
     for (const [key, value] of Object.entries({
