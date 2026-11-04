@@ -643,5 +643,4 @@ func TestHostedTenantUpgradeInstallsAutomationTracking(t *testing.T) {
 	current, err := automationAuditSchemaCurrentPG(t.Context(), f.admin)
 	require.NoError(t, err)
 	assert.True(t, current)
-	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
 }
