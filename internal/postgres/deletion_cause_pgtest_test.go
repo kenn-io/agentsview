@@ -27,13 +27,13 @@ func TestEnsureSchemaRepairsLegacySourceMissingDeletion(t *testing.T) {
 			('source-batch', 'machine', 'project', 'claude', 1, 1,
 			 NOW(), NOW(), 'source_missing'),
 			('user-trash', 'machine', 'project', 'claude', 1, 1,
-			 NOW(), NOW(), 'user')`)
+			 NOW(), NOW(), NULL)`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(t.Context(), store.DB(), testSchema))
 
 	var trashed bool
 	require.NoError(t, store.DB().QueryRowContext(t.Context(),
-		`SELECT deleted_at IS NOT NULL AND deletion_cause='user' FROM sessions WHERE id='user-trash'`,
+		`SELECT deleted_at IS NOT NULL AND deletion_cause IS NULL FROM sessions WHERE id='user-trash'`,
 	).Scan(&trashed))
 	assert.True(t, trashed)
 
