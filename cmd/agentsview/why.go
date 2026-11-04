@@ -104,7 +104,7 @@ func newWhyCommand() *cobra.Command {
 			for _, c := range result.Commits {
 				header := commit
 				if c.Lines != nil {
-					header = fmt.Sprintf("%.12s  %s  (%d lines)", c.SHA, c.Subject, *c.Lines)
+					header = fmt.Sprintf("%.12s  %s  (%d line%s)", c.SHA, c.Subject, *c.Lines, pluralSuffix(*c.Lines))
 				}
 				fmt.Fprintln(w, sanitizeTerminal(header))
 				if len(c.Links) == 0 {
@@ -115,11 +115,11 @@ func newWhyCommand() *cobra.Command {
 					if link.Ambiguous {
 						line += "  (ambiguous: prefix matches several commits)  " + link.SHA
 					}
+					line += fmt.Sprintf("  %s  %s  message %d  call %d  %s", link.Branch, link.CommittedAt, link.MessageOrdinal, link.CallIndex, link.ToolUseID)
 					if link.Missing {
 						fmt.Fprintln(w, sanitizeTerminal(line+"  (deleted or in trash)"))
 						continue
 					}
-					line += fmt.Sprintf("  %s  %s  message %d", link.Branch, link.CommittedAt, link.MessageOrdinal)
 					fmt.Fprintln(w, sanitizeTerminal(line))
 					if link.Turn != nil {
 						for text := range strings.SplitSeq(sanitizeTerminal(link.Turn.Text), "\n") {

@@ -76,6 +76,43 @@ func TestWhyWriteFailure(t *testing.T) {
 	}
 }
 
+func TestWhyHumanCommitEvidence(t *testing.T) {
+	for _, state := range []string{"active", "trashed", "deleted"} {
+		t.Run(state, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			seedSession(t, dataDir, "s-commit", "project-a")
+			d, err := db.Open(t.Context(), sessionsDBPath(dataDir))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+				{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix the parser"},
+				{SessionID: "s-commit", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:05Z", ToolCalls: []db.ToolCall{
+					{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`},
+					{SessionID: "s-commit", CallIndex: 1, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call-two", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[feature/parser abc1234] Fix parser"},
+				}},
+			}))
+			switch state {
+			case "trashed":
+				require.NoError(t, d.SoftDeleteSession(t.Context(), "s-commit"))
+			case "deleted":
+				require.NoError(t, d.DeleteSession(t.Context(), "s-commit"))
+			}
+			require.NoError(t, d.Close())
+			out, err := executeCommand(newRootCommand(), "why", "--commit", "abc1234")
+			require.NoError(t, err)
+			assert.Contains(t, out, "feature/parser")
+			assert.Contains(t, out, "2026-01-02T03:04:05Z")
+			assert.Contains(t, out, "message 1  call 1  commit-call-two")
+			if state == "active" {
+				assert.Contains(t, out, "    Fix the parser")
+			} else {
+				assert.Contains(t, out, "(deleted or in trash)")
+				assert.NotContains(t, out, "Fix the parser")
+			}
+		})
+	}
+}
+
 func TestSplitWhyPath(t *testing.T) {
 	for _, tc := range []struct {
 		arg, path  string
@@ -146,6 +183,11 @@ func TestWhyRecordedPrompts(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), messages))
 	require.NoError(t, d.Close())
 	t.Chdir(repo)
+	t.Run("human line counts", func(t *testing.T) {
+		outText, err := executeCommand(newRootCommand(), "why", "file.go:2")
+		require.NoError(t, err)
+		assert.Contains(t, outText, "Change second line  (1 line)")
+	})
 	t.Run("JSON links match commits", func(t *testing.T) {
 		outText, err := executeCommand(newRootCommand(), "why", "file.go:2-3", "--format", "json")
 		require.NoError(t, err)
