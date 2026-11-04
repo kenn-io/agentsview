@@ -827,22 +827,28 @@
 
   .v-h {
     color: var(--text-muted);
-    font-size: 9px;
+    font-size: 10.5px;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.05em;
     margin-bottom: 9px;
-    font-weight: 500;
+    font-weight: 600;
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: baseline;
+    gap: 12px;
+  }
+  .v-h > span:first-child {
+    white-space: nowrap;
   }
 
   .v-meta {
     color: var(--text-muted);
-    font-size: 9px;
+    font-size: 10.5px;
+    font-weight: 400;
     font-family: var(--font-mono);
     text-transform: none;
     letter-spacing: 0;
+    text-align: right;
   }
   .v-meta.live {
     color: var(--running-fg);
@@ -855,7 +861,6 @@
     margin-bottom: 12px;
     padding-bottom: 11px;
     border-bottom: 1px solid var(--border-muted);
-    font-family: var(--font-mono);
   }
 
   .context-row {
@@ -875,18 +880,19 @@
     opacity: 1;
   }
 
+  /* Labels read as sans text; monospace is kept for paths, IDs, and
+     numbers. */
   .context-label {
     color: var(--text-muted);
-    font-size: 9px;
-    margin-bottom: 2px;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
+    font-size: 11px;
+    margin-bottom: 1px;
   }
 
   .context-value {
     overflow: hidden;
     color: var(--text-primary);
-    font-size: 10px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -957,17 +963,23 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-4);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12px;
   }
   .stat-grid .lbl {
     color: var(--text-muted);
-    font-size: 9px;
-    margin-bottom: 2px;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
+    font-size: 11px;
+    margin-bottom: 1px;
   }
-  .stat-grid .val { color: var(--text-primary); }
+  /* The label strings are lowercase; show them in sentence case. */
+  .stat-grid .lbl::first-letter,
+  .context-label::first-letter {
+    text-transform: uppercase;
+  }
+  .stat-grid .val {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
   .stat-grid .val.slow { color: var(--slow-fg); }
   .stat-grid .val-link {
     background: transparent;
@@ -995,10 +1007,10 @@
   /* Time spent — aggregate rows */
   .agg-row {
     display: grid;
-    grid-template-columns: 48px 1fr 56px;
+    grid-template-columns: 52px 1fr auto;
     align-items: center;
     gap: 8px;
-    font-size: 10px;
+    font-size: 11px;
     margin-bottom: 5px;
     cursor: pointer;
     padding: 2px 4px;
@@ -1025,7 +1037,10 @@
   .agg-name {
     font-family: var(--font-mono);
     color: var(--text-primary);
-    font-size: 9px;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .agg-bar {
     height: 7px;
@@ -1040,10 +1055,13 @@
     border-radius: 1px;
   }
   .agg-val {
+    min-width: 56px;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
 
   .activity-hint {
