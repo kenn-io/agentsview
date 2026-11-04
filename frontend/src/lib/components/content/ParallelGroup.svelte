@@ -65,7 +65,7 @@
     gap: var(--space-4);
     padding: 5px 12px 7px;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
   .pg-label { color: var(--text-secondary); font-weight: 500; }
@@ -73,7 +73,7 @@
     background: color-mix(in srgb, var(--text-primary) 6%, transparent);
     padding: 1px 7px;
     border-radius: 999px;
-    font-size: 9px;
+    font-size: 10px;
     color: var(--text-primary);
   }
   .pg-spacer { flex: 1; }

@@ -481,24 +481,26 @@
         href={sessionHref}
         onclick={handleSessionClick}
       >
-        <div
-          class="session-name"
-          class:shell={displayLabel.isShell}
-          title={displayLabel.text}
-          ondblclick={handleDblClick}
-        >
-          {#if displayLabel.isShell}
-            <code>{displayLabel.text}</code>
-          {:else}
-            {displayLabel.text}
-          {/if}
+        <div class="session-title-row">
+          <div
+            class="session-name"
+            class:shell={displayLabel.isShell}
+            title={displayLabel.text}
+            ondblclick={handleDblClick}
+          >
+            {#if displayLabel.isShell}
+              <code>{displayLabel.text}</code>
+            {:else}
+              {displayLabel.text}
+            {/if}
+          </div>
+          <span class="session-time">{timeStr}</span>
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
         <div class="session-meta">
           {#if !hideProject}
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
-          <span class="session-time">{timeStr}</span>
           {#if hasUnread}
             <span
               class="session-unread-indicator"
@@ -746,24 +748,37 @@
     flex-shrink: 0;
   }
 
+  /* Agent and machine share one fixed slot on the meta line, so the title
+     keeps the full row width. */
   .side-meta {
+    position: absolute;
+    right: 10px;
+    top: calc(50% + 1px);
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 2px;
-    min-width: 0;
-    flex-shrink: 0;
-    max-width: 34%;
-    margin-left: 6px;
-    font-size: 10px;
-    line-height: 13px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    width: var(--side-meta-width);
+    font-size: 10.5px;
+    line-height: 14px;
     color: var(--text-muted);
+    pointer-events: auto;
+  }
+
+  .session-item {
+    /* Scales with the sidebar so wide rows show full agent names. */
+    --side-meta-width: min(max(92px, 32%), 38%);
+  }
+
+  .session-item:has(.side-meta) .session-meta {
+    padding-right: calc(min(max(92px, 36%), 44%) + 6px);
   }
 
   /* Agent identity: a small colored mark plus the agent name. */
   .agent-tag {
     display: block;
+    min-width: 0;
+    flex-shrink: 1;
     font-weight: 500;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -784,18 +799,25 @@
   }
 
   .machine-tag {
-    max-width: 68px;
+    min-width: 0;
+    flex-shrink: 4;
+    max-width: 52px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   /* Project names win the space; the entrypoint truncates first. */
+  .agent-tag + .machine-tag::before {
+    content: "\00b7";
+    margin-right: 4px;
+  }
+
   .entrypoint-tag {
     min-width: 0;
     flex-shrink: 100;
     font-family: var(--font-mono);
-    font-size: 9.5px;
+    font-size: 10px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
@@ -815,8 +837,8 @@
   }
 
   .session-name {
-    font-size: 12px;
-    font-weight: 450;
+    font-size: 12.5px;
+    font-weight: 500;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -857,7 +879,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     line-height: 1.3;
     letter-spacing: 0.01em;
@@ -871,12 +893,27 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100px;
+    max-width: 110px;
+  }
+
+  .session-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .session-title-row .session-name {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .session-time {
     white-space: nowrap;
     flex-shrink: 0;
+    font-size: 10.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   :global(.group-hint-icon) {

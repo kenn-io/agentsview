@@ -39,6 +39,10 @@
      which would collide with --accent-cyan below. agentsview uses teal and
      cyan as distinct agent-identity hues, so keep the greener teal. */
   --accent-teal: #0d9488; /* kit-ui-check-ignore: app token definition */
+  /* Deliberate override: kit-ui's light --text-muted (#878ea0) is about
+     3.3:1 on white, too faint for the metadata agentsview leans on. This
+     value clears 4.5:1 on the surface and the page background. */
+  --text-muted: #656b7d; /* kit-ui-check-ignore: app token override, upstream later */
   /* Extra identity accents beyond kit-ui's core set */
   --accent-rose: #e11d48; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
@@ -209,6 +213,24 @@
   --role-tool-bar-width: 3px;
   --role-tool-group-rail: var(--role-tool-accent);
   --role-code-frame-style: dashed;
+}
+
+/* One selected-state vocabulary for segmented choices across the app:
+ * a neutral raised fill with primary ink. Accent blue is kept for focus,
+ * links, and live state. kit-ui's segmented active surface is nearly the
+ * track color in dark mode, so it gets the same edge here. */
+:root {
+  --selected-bg: var(--bg-surface);
+  --selected-edge: inset 0 0 0 1px var(--border-default);
+}
+
+:root.dark {
+  --selected-bg: var(--bg-surface-hover);
+}
+
+.kit-segmented__btn.active {
+  background: var(--selected-bg);
+  box-shadow: var(--selected-edge), var(--shadow-sm);
 }
 
 html,

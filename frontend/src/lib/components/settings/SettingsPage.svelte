@@ -290,6 +290,20 @@
     scrollbar-gutter: stable;
   }
 
+  /* Local overrides of kit-ui SettingsLayout: readable nav summaries and
+     the app-wide neutral selected state. */
+  .settings-page :global(.kit-settings__nav-summary) {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .settings-page :global(.kit-settings__nav-item--active),
+  .settings-page :global(.kit-settings__nav-item--active:hover) {
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
+    color: var(--text-primary);
+  }
+
   .settings-page.settings-no-results :global(.kit-settings__nav),
   .settings-page.settings-no-results :global(.kit-settings__panel) {
     display: none;

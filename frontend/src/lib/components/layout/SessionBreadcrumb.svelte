@@ -1633,7 +1633,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     padding: 1px 8px;
@@ -1722,7 +1722,7 @@
   }
 
   .session-id {
-    font-size: 10px;
+    font-size: 11px;
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     color: var(--text-muted);
     cursor: pointer;
@@ -1740,7 +1740,7 @@
   }
 
   .token-badge {
-    font-size: 10px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     padding: 1px 5px;
@@ -1756,7 +1756,7 @@
   }
 
   .cost-badge {
-    font-size: 10px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     padding: 1px 5px;
@@ -1844,7 +1844,7 @@
 
   .usage-breakdown-trigger {
     list-style: none;
-    font-size: 10px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     padding: 1px 5px;
@@ -1934,7 +1934,7 @@
     align-items: center;
     min-width: 0;
     max-width: min(280px, 28vw);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     padding: 1px 5px;
     border-radius: 4px;
