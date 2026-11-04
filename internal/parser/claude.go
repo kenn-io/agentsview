@@ -25,13 +25,17 @@ import (
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
+// xmlCmdArgsRe and the args branch of xmlCmdStripRe accept any text,
+// including "<" and newlines: Claude Code writes command arguments
+// unescaped (`/explain host.<zone>`). The match runs to the first
+// closing tag.
 var (
 	xmlTaskIDRe               = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
 	xmlToolUseRe              = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
 	xmlCmdNameRe              = regexp.MustCompile(`<command-name>([^<]+)</command-name>`)
 	xmlCmdMsgRe               = regexp.MustCompile(`<command-message>([^<]+)</command-message>`)
-	xmlCmdArgsRe              = regexp.MustCompile(`<command-args>([^<]*)</command-args>`)
-	xmlCmdStripRe             = regexp.MustCompile(`<command-(?:name|message|args)>[^<]*</command-(?:name|message|args)>`)
+	xmlCmdArgsRe              = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
+	xmlCmdStripRe             = regexp.MustCompile(`<command-(?:name|message)>[^<]*</command-(?:name|message)>|(?s:<command-args>.*?</command-args>)`)
 	persistedToolResultPathRe = regexp.MustCompile(`(?m)Full output saved to:\s*(.+)$`)
 )
 
