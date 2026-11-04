@@ -7,7 +7,7 @@ import { ALL_BLOCK_TYPES } from "../stores/ui.svelte.js";
 import { projectSessionScope } from "../search/session-scope.js";
 import { hasVisibleSegments } from "./content-parser.js";
 import { buildDisplayItems } from "./display-items.js";
-import { isSystemMessage } from "./messages.js";
+import { isHookSuccessMessage, isSystemMessage } from "./messages.js";
 import { filterDisplayItemsByTranscriptMode } from "./transcript-mode.js";
 
 const hookSubtypes = [
@@ -49,6 +49,7 @@ it("keeps other system rows hidden", () => {
 describe.each(hookSubtypes)("%s output", (subtype) => {
   it("promotes hook output", () => {
     expect(isSystemMessage(hook(subtype))).toBe(false);
+    expect(isHookSuccessMessage(hook(subtype))).toBe(true);
   });
 
   it("does not finish a turn or promote an intermediate reply in focused mode", () => {

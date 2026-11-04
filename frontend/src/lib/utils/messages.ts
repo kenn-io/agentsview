@@ -22,6 +22,13 @@ const LEGACY_GOAL_CONTEXT_PREFIX = "<goal_context>";
 const CODEX_INTERNAL_CONTEXT_TAG_PREFIX = "<codex_internal_context";
 const GOAL_CONTEXT_SOURCE_ATTR_RE = /(?:^|\s)source="goal"(?:\s|\/|$)/;
 
+export const HOOK_SUBTYPES = new Set([
+  "hook_success",
+  "hook_additional_context",
+  "hook_cancelled",
+  "stop_hook_summary",
+]);
+
 // Subtypes the Claude parser promotes into visible system messages
 // that the SPA renders via SystemBoundaryCard. These must pass
 // through the MessageList filter even though is_system=true.
@@ -32,10 +39,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "task_notification",
   "stop_hook",
   "peer_message",
-  "hook_success",
-  "hook_additional_context",
-  "hook_cancelled",
-  "stop_hook_summary",
+  ...HOOK_SUBTYPES,
 ]);
 
 /**
@@ -54,11 +58,9 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
 export function isHookSuccessMessage(m: Message): boolean {
   return (
     m.is_system === true &&
-    ((m.source_type === "system" && m.source_subtype === "stop_hook_summary") ||
-      (m.source_type === "attachment" &&
-        (m.source_subtype === "hook_success" ||
-          m.source_subtype === "hook_additional_context" ||
-          m.source_subtype === "hook_cancelled")))
+    !!m.source_subtype &&
+    HOOK_SUBTYPES.has(m.source_subtype) &&
+    m.source_type === (m.source_subtype === "stop_hook_summary" ? "system" : "attachment")
   );
 }
 

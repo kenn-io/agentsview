@@ -16349,7 +16349,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			tail, terr := e.db.GetMessageByOrdinal(ctx, inc.ID, inc.NextOrdinal-1)
 			if terr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
-					fmt.Errorf("read stored Claude tail: %w", terr)
+					parser.ErrIncrementalNeedsFullParse
 			}
 			if tail != nil {
 				storedTailTimestamp, _ = db.ParseStoredTimestamp(tail.Timestamp)
