@@ -765,8 +765,7 @@ func newPGCommand() *cobra.Command {
 func newClickHouseCommand() *cobra.Command {
 	cmd := newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
 	cmd.Long = "Mirror local archived data to ClickHouse and serve read-only queries against that mirror. " +
-		"Configure a ClickHouse target before push, status, or serving. " +
-		"The optional service keeps pushing local changes in the background."
+		"Configure a ClickHouse target before push, status, or serving."
 	return cmd
 }
 

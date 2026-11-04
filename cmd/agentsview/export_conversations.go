@@ -22,7 +22,7 @@ func newExportConversationsCommand() *cobra.Command {
 			"Use cursor to continue an unfinished walk, or checkpoint only after a walk completes. " +
 			"Then request message chunks using the returned session ID, message ID, revision, and database ID; keep the same text mode. " +
 			"These commands emit their own JSON documents without --json. " +
-			"Archive reconciliation and changed message revisions use their dedicated export exit codes.",
+			"Exit 4: archive reconciliation required. Exit 5: message revision changed.",
 		Example: "  agentsview export conversations changes --text-mode stored --limit 100\n" +
 			"  agentsview export conversations changes --text-mode stored --limit 100 --cursor <cursor>\n" +
 			"  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536",
