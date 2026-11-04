@@ -118,7 +118,8 @@ function searchTerms(raw: string): string[] {
       }
       inQuote = !inQuote;
       hasTerm = true;
-    } else if (!inQuote && /\s/.test(c)) {
+    } else if (!inQuote && (c === " " || c === "\t" || c === "\n" || c === "\r")) {
+      // FTSTerms splits only on ASCII space, tab, newline, and return here.
       if (hasTerm) terms.push(current);
       current = "";
       hasTerm = false;
