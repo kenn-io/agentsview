@@ -114,6 +114,26 @@ func TestChangedPathPassLogsSummary(t *testing.T) {
 				{name: "repeated event", reads: 1},
 			},
 		},
+		{
+			// Poolside fingerprints from stats alone, so an event on an
+			// unchanged trajectory reads no content.
+			name:  "poolside",
+			agent: parser.AgentPoolside,
+			write: func(t *testing.T, root string) string {
+				t.Helper()
+				path := filepath.Join(root, "trajectories",
+					"trajectory-standalone_019e658b-56c3-7cb2-a9d1-8af2ea649438.ndjson")
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(
+					`{"id":"event-1","timestamp":"2026-07-08T07:20:51-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/work/project"],"prompt":""}}`+"\n"+
+						`{"id":"event-2","timestamp":"2026-07-08T07:20:52-04:00","type":"session.input","session_input":{"id":"","prompt":"hello","estimated_prompt_token_usage":10,"mode":"build"}}`+"\n",
+				), 0o644))
+				return path
+			},
+			steps: []summaryStep{
+				{name: "unchanged event", reads: 0},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

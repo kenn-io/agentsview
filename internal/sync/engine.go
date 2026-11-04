@@ -812,9 +812,9 @@ type Engine struct {
 	verifiedSourceActivePass uint64
 
 	// contentChecks and contentCheckBytes count sources whose content a
-	// sync hashed or fingerprinted because their stats alone could not prove
-	// them unchanged. Changed-path passes log the per-pass delta, so a user
-	// can see when watcher events force those reads.
+	// freshness check or provider fingerprint read because their stats alone
+	// could not prove them unchanged. Changed-path passes log the per-pass
+	// delta, so a user can see when watcher events force those reads.
 	contentChecks     atomic.Int64
 	contentCheckBytes atomic.Int64
 
@@ -12649,9 +12649,12 @@ func (e *Engine) processProviderFile(
 			}
 		}
 		if !codexFingerprintFromParse {
-			fingerprint, err = e.providerFingerprint(ctx, provider, source)
-			if err == nil {
-				e.countContentCheck(fingerprint.Size)
+			var meter parser.ContentReadMeter
+			fingerprint, err = e.providerFingerprint(
+				parser.WithContentReadMeter(ctx, &meter), provider, source,
+			)
+			if meter.Reads() > 0 {
+				e.countContentCheck(meter.Bytes())
 			}
 		}
 		if err != nil {

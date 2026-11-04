@@ -53,8 +53,8 @@ func (e *Engine) contentCheckHash(path string, size int64) (string, error) {
 	return hash, err
 }
 
-// countContentCheck records one source whose content a sync hashed or
-// fingerprinted, sized by the source's byte length.
+// countContentCheck records one source whose content a sync read to check
+// it, and the bytes that read.
 func (e *Engine) countContentCheck(size int64) {
 	e.contentChecks.Add(1)
 	e.contentCheckBytes.Add(size)
