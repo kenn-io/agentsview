@@ -121,7 +121,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   // the user turn keeps the full-strength rail as the anchor.
   let railColor = $derived(isUser
     ? "var(--role-user-accent)"
-    : "color-mix(in srgb, var(--role-assistant-accent) 50%, transparent)");
+    : "color-mix(in srgb, var(--role-assistant-accent) 70%, transparent)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
   let pinFailed = $state(false);
@@ -363,8 +363,10 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   .turn-summary {
     font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums;
-    padding: 1px 7px; border-radius: var(--radius-sm); border: 1px solid transparent;
-    background: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
+    /* Plain text like the other metadata; only slow and running turns get
+       a fill. */
+    padding: 1px 0; border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: transparent;
     white-space: nowrap; flex-shrink: 0;
   }
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
@@ -432,6 +434,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .compact .message-header { gap: 6px; margin-bottom: 6px; }
   .compact .role-icon { width: 18px; height: 18px; font-size: 10px; }
   .compact .role-label { font-size: 11px; }
-  .compact .timestamp { font-size: 10px; }
+  .compact .timestamp,
+  .compact .message-tokens,
+  .compact .turn-summary { font-size: 10.5px; }
   .compact .text-content { font-size: 12px; line-height: 1.55; }
+  /* The smaller font gets more characters, so Compact's column is as wide
+     as Default's (96ch at 14px). */
+  .compact .text-content.markdown { max-width: 112ch; }
 </style>

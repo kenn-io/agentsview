@@ -306,6 +306,12 @@
     color: var(--text-muted);
   }
 
+  /* Room at the end of the nav so the last item scrolls clear of the
+     status bar. */
+  .settings-page :global(.kit-settings__nav) {
+    padding-bottom: var(--space-8);
+  }
+
   .settings-page :global(.kit-settings__nav-item) {
     font-weight: 500;
   }
