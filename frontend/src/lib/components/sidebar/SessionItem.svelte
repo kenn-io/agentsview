@@ -950,9 +950,13 @@
     flex-shrink: 0;
   }
 
+  /* The star sits on the title line so it never shares space with the
+     agent and machine slot on the meta line. */
   .star-btn {
+    align-self: flex-start;
+    margin-top: 3px;
     width: 20px;
-    height: 20px;
+    height: 18px;
     display: flex;
     align-items: center;
     justify-content: center;
