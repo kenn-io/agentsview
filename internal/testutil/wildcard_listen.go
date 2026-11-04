@@ -3,7 +3,6 @@ package testutil
 import (
 	"os"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -18,10 +17,10 @@ const WildcardListenEnv = "AGENTSVIEW_TEST_WILDCARD_LISTEN"
 // such prompt, so they always run these tests. Set WildcardListenEnv to 1 to
 // force it on, or to 0 to force it off.
 func WildcardListenAllowed() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(WildcardListenEnv))) {
-	case "1", "true", "yes", "on":
+	switch os.Getenv(WildcardListenEnv) {
+	case "1":
 		return true
-	case "0", "false", "no", "off":
+	case "0":
 		return false
 	}
 	return runtime.GOOS != "windows" || os.Getenv("CI") != ""

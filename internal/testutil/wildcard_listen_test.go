@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWildcardListenAllowed(t *testing.T) {
+func TestRequireWildcardListen(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		env  string
@@ -16,14 +16,20 @@ func TestWildcardListenAllowed(t *testing.T) {
 	}{
 		{"forced on", "1", "", true},
 		{"forced off", "0", "true", false},
-		{"forced off beats CI", "off", "true", false},
 		{"unset on CI", "", "true", true},
 		{"unset off CI", "", "", runtime.GOOS != "windows"},
+		{"word override ignored", "off", "true", true},
+		{"padded override ignored", " 0 ", "true", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(WildcardListenEnv, tc.env)
 			t.Setenv("CI", tc.ci)
-			require.Equal(t, tc.want, WildcardListenAllowed())
+			ran := false
+			t.Run("listener", func(t *testing.T) {
+				RequireWildcardListen(t)
+				ran = true
+			})
+			require.Equal(t, tc.want, ran, "whether code after RequireWildcardListen runs")
 		})
 	}
 }

@@ -159,7 +159,8 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   into a fresh temporary directory every run, the prompt returns every run.
   A test that genuinely needs wildcard bind semantics must call
   `internal/testutil.RequireWildcardListen(t)` first, which skips it on local
-  Windows runs unless `AGENTSVIEW_TEST_WILDCARD_LISTEN=1` is set.
+  Windows runs when `CI` is unset. `AGENTSVIEW_TEST_WILDCARD_LISTEN=1`
+  enables these tests; `0` skips them on every platform.
 - Format Markdown with `mdformat --wrap 80` when `mdformat` and
   `mdformat-tables` are available.
 
