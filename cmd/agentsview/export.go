@@ -100,7 +100,7 @@ func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 		Short: "Export local archive data",
 		Long: "Export normalized reports from the local archive, distinct from session export's provider-specific source content. " +
 			"Hourly exports use closed UTC hours. " +
-			"Preserve cursor/reset and conversation-revision errors when resuming an export.",
+			"Handle export reset and message revision errors before resuming.",
 		Example: "  agentsview export sessions --help\n" +
 			"  agentsview export conversations --help",
 		GroupID:      groupData,

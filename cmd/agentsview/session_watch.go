@@ -17,7 +17,7 @@ func newSessionWatchCommand() *cobra.Command {
 		Use:   "watch <id>",
 		Short: "Stream NDJSON events as the session updates",
 		Long: "Subscribe to one session and emit newline-delimited JSON events as it changes, until interrupted or the subscription ends. " +
-			"This is a stream, not a single JSON document; --json and --format are rejected. " +
+			"--json and --format are rejected. " +
 			"The session must already resolve before the subscription starts.",
 		Example:      "  agentsview session watch <id>",
 		Args:         cobra.ExactArgs(1),
