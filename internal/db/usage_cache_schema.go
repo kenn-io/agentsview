@@ -54,7 +54,8 @@ const (
 	// changed rows. Because the identity re-runs the resolver, it also catches
 	// resolver changes like those behind versions 6, 9, 12 and 14 whenever
 	// they change a used lookup's result.
-	usageCacheFormatVersion             = 15
+	// Version 16 retains proven message prefixes for incremental token fills.
+	usageCacheFormatVersion             = 16
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -82,7 +83,9 @@ CREATE TABLE usage_cached_sessions (
     source_sync_marker TEXT NOT NULL,
     source_transcript_rev TEXT NOT NULL,
     usage_event_fingerprint TEXT NOT NULL,
-    install_revision INTEGER NOT NULL
+    install_revision INTEGER NOT NULL,
+    source_usage_generation TEXT NOT NULL DEFAULT '',
+    source_message_ordinal INTEGER
 );
 CREATE TABLE usage_facts (
     cached_session_id INTEGER NOT NULL REFERENCES usage_cached_sessions(id)
@@ -777,6 +780,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 	queries := []string{
 		`SELECT key, value FROM usage_cache_metadata LIMIT 0`,
 		`SELECT id, session_id, source_sync_marker, source_transcript_rev,
+                source_usage_generation, source_message_ordinal,
 		        usage_event_fingerprint, install_revision
 		 FROM usage_cached_sessions LIMIT 0`,
 		`SELECT cached_session_id, fact_index, source, message_ordinal,

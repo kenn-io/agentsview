@@ -789,9 +789,15 @@ func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
 	var rows int
 	require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
 	assert.Equal(t, 8, rows, "a changed baseline requires the complete snapshot")
+	var before, after string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_usage_generation || ':' || source_message_ordinal
+		FROM usage_cached_sessions WHERE session_id='session'`).Scan(&before))
 	installed, lost, err := cache.fill.installSpool(t.Context(), spool,
 		[]usageSourceVersion{extracted["session"]}, nil, expected)
 	require.NoError(t, err)
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_usage_generation || ':' || source_message_ordinal
+		FROM usage_cached_sessions WHERE session_id='session'`).Scan(&after))
+	assert.Equal(t, before, after, "a stale fill preserves the retained prefix metadata")
 	assert.Empty(t, installed)
 	assert.Equal(t, []string{"session"}, lost)
 	assert.Equal(t, 8, usageCacheCount(t, cache, "usage_facts"))
@@ -1577,4 +1583,202 @@ func dumpCachedFacts(t *testing.T, cache *usageCache, sessionID string) [][]any 
 	}
 	require.NoError(t, rows.Err())
 	return result
+}
+
+func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
+	for _, count := range []int{8, 2048} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			database, cache := usageSpoolExtractionFixture(t, count)
+			read := 0
+			cache.fill.observer.messageNormalized = func() { read++ }
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID: "session", Ordinal: count, Role: "assistant", Model: "model",
+				Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
+			}}))
+			versions := []usageSourceVersion{{SessionID: "session"}}
+			expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
+			require.NoError(t, err)
+			spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
+			require.NoError(t, err)
+			defer spool.Close()
+			assert.Equal(t, 1, read)
+			var rows int
+			require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
+			assert.Equal(t, 1, rows)
+			_, err = cache.db.ExecContext(t.Context(), `CREATE TABLE fact_changes (id INTEGER);
+				CREATE TRIGGER count_fact_insert AFTER INSERT ON usage_facts BEGIN INSERT INTO fact_changes VALUES (1); END;
+				CREATE TRIGGER count_fact_update AFTER UPDATE ON usage_facts BEGIN INSERT INTO fact_changes VALUES (1); END;`)
+			require.NoError(t, err)
+			_, lost, err := cache.fill.installSpool(t.Context(), spool, []usageSourceVersion{extracted["session"]}, nil, expected)
+			require.NoError(t, err)
+			assert.Empty(t, lost)
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM fact_changes`).Scan(&rows))
+			assert.Equal(t, 1, rows)
+			var tokens int
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(input_tokens) FROM usage_facts`).Scan(&tokens))
+			assert.Equal(t, count*10+17, tokens)
+			read = 0
+			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
+			require.NoError(t, err)
+			defer full.Close()
+			assert.Equal(t, count+1, read, "full extraction reproduces the previous history-length cost")
+			assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY fact_index`),
+				usageSpoolFactValues(t, cache.db, `SELECT * FROM usage_facts ORDER BY fact_index`))
+		})
+	}
+}
+
+func TestUsageSpoolAppendFallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name, mutation string
+	}{
+		{"reorder", `UPDATE messages SET ordinal=-1 WHERE ordinal=0; UPDATE messages SET ordinal=0 WHERE ordinal=1; UPDATE messages SET ordinal=1 WHERE ordinal=-1`},
+		{"historical edit", `UPDATE messages SET token_usage='{"input_tokens":99}' WHERE ordinal=0`},
+		{"delete", `DELETE FROM messages WHERE ordinal=0`},
+		{"truncate", `DELETE FROM messages WHERE ordinal>=4`},
+		{"gap insert", `INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',2,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":11}')`},
+		{"backdated append", `INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-09T09:00:00Z','{"input_tokens":11}')`},
+		{"NULL timestamp", `INSERT INTO messages(session_id,ordinal,role,content,model,token_usage) VALUES ('session',8,'assistant','','model','{"input_tokens":11}')`},
+		{"activity append", `INSERT INTO messages(session_id,ordinal,role,content,model,timestamp) VALUES ('session',8,'assistant','','model','2026-08-10T10:00:00Z')`},
+		{"usage event", `INSERT INTO usage_events(session_id,source,model,input_tokens,occurred_at) VALUES ('session','session','model',19,'2026-08-10T10:00:00Z')`},
+		{"recreated session", `DELETE FROM sessions WHERE id='session'; INSERT INTO sessions(id,project,machine,agent) VALUES ('session','project','local','claude'); INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',0,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":42}')`},
+		{"move message", `INSERT INTO sessions(id,project,machine,agent) VALUES ('other','project','local','claude'); UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`},
+		{"Claude suffix replace", ""},
+		{"late Codex usage", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, cache := usageSpoolExtractionFixture(t, 8)
+			if tc.name == "gap insert" {
+				_, err := database.getWriter().Exec(t.Context(), `DELETE FROM messages WHERE ordinal=2`)
+				require.NoError(t, err)
+				_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+				require.NoError(t, err)
+			}
+			if tc.mutation != "" {
+				_, err := database.getWriter().Exec(t.Context(), tc.mutation)
+				require.NoError(t, err)
+			} else if tc.name == "late Codex usage" {
+				_, err := database.getWriter().Exec(t.Context(), `UPDATE messages SET token_usage='' WHERE ordinal=7`)
+				require.NoError(t, err)
+				_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+				require.NoError(t, err)
+				_, err = database.WriteSessionIncremental(t.Context(), "session", nil, IncrementalSessionUpdate{
+					MessageTokenUsageUpdates: []MessageTokenUsageUpdate{{Ordinal: 7, TokenUsage: json.RawMessage(`{"input_tokens":31}`)}},
+				})
+				require.NoError(t, err)
+			} else {
+				_, err := database.WriteSessionIncremental(t.Context(), "session", []Message{{
+					SessionID: "session", Ordinal: 7, Role: "assistant", Model: "model",
+					Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":23}`),
+				}}, IncrementalSessionUpdate{ReplaceFromOrdinal: new(7)})
+				require.NoError(t, err)
+			}
+			read := 0
+			cache.fill.observer.messageNormalized = func() { read++ }
+			versions := []usageSourceVersion{{SessionID: "session"}}
+			_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
+			require.NoError(t, err)
+			assert.Positive(t, read, "fallback must read retained messages")
+			full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
+			require.NoError(t, err)
+			defer full.Close()
+			assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY fact_index`),
+				usageSpoolFactValues(t, cache.db, `SELECT * FROM usage_facts ORDER BY fact_index`))
+			filter := UsageFilter{From: "2026-08-01", To: "2026-08-20", Timezone: "UTC"}
+			assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter), getDailyUsageRollupForTest(t, database, filter))
+		})
+	}
+}
+
+func TestUsageSpoolAppendWatermarks(t *testing.T) {
+	for _, count := range []int{0, 8} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			database, cache := usageSpoolExtractionFixture(t, count)
+			versions := []usageSourceVersion{{SessionID: "session"}}
+			for _, message := range []Message{
+				{SessionID: "session", Ordinal: count, Role: "user", Timestamp: "2026-08-10T09:00:00Z"},
+				{SessionID: "session", Ordinal: count + 1, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":13}`)},
+			} {
+				require.NoError(t, database.InsertMessages(t.Context(), []Message{message}))
+				read := 0
+				cache.fill.observer.messageNormalized = func() { read++ }
+				_, err := cache.fill.fillSessionsDetached(t.Context(), versions)
+				require.NoError(t, err)
+				assert.Equal(t, 1, read, "advance past user messages even when they produce no fact")
+				var ordinal int
+				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_message_ordinal FROM usage_cached_sessions WHERE session_id='session'`).Scan(&ordinal))
+				assert.Equal(t, message.Ordinal, ordinal)
+			}
+			assert.Equal(t, count+1, usageCacheCount(t, cache, "usage_facts"))
+		})
+	}
+}
+
+func TestUsageSpoolAppendInvalidatesIdentityPeer(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 8)
+	insertSession(t, database, "peer", "project")
+	insertMessages(t, database, Message{
+		SessionID: "peer", Role: "assistant", Model: "model",
+		Timestamp: "2026-08-10T09:00:00Z", SourceUUID: "shared", TokenUsage: json.RawMessage(`{"input_tokens":20}`),
+	})
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	getDailyUsageRollupForTest(t, database, filter)
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "session", Ordinal: 8,
+		Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", SourceUUID: "shared",
+		TokenUsage: json.RawMessage(`{"input_tokens":20}`),
+	}}))
+	_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+	require.NoError(t, err)
+	var installs int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id='peer'`).Scan(&installs))
+	assert.Zero(t, installs)
+	assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter), getDailyUsageRollupForTest(t, database, filter))
+}
+
+func BenchmarkUsageSpoolWarmSingleChangeAppend(b *testing.B) {
+	for _, count := range []int{8, 2048} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			database, cache := usageSpoolExtractionFixture(b, count)
+			require.NoError(b, database.InsertMessages(b.Context(), []Message{{
+				SessionID: "session", Ordinal: count,
+				Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":11}`),
+			}}))
+			versions := []usageSourceVersion{{SessionID: "session"}}
+			expected, err := cache.fill.captureFillInstallExpectations(b.Context(), versions)
+			require.NoError(b, err)
+			var read, spooled int
+			cache.fill.observer.messageNormalized = func() { read++ }
+			for b.Loop() {
+				spool, _, err := cache.fill.extractSessions(b.Context(), versions, expected)
+				require.NoError(b, err)
+				var rows int
+				require.NoError(b, spool.db.QueryRowContext(b.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
+				spooled += rows
+				require.NoError(b, spool.Close())
+			}
+			b.ReportMetric(float64(read)/float64(b.N), "read-rows/op")
+			b.ReportMetric(float64(spooled)/float64(b.N), "spool-rows/op")
+		})
+	}
+}
+
+func BenchmarkUsageFillWarmSingleChangeAppend(b *testing.B) {
+	for _, count := range []int{8, 2048} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			database, cache := usageSpoolExtractionFixture(b, count)
+			var read int
+			cache.fill.observer.messageNormalized = func() { read++ }
+			for b.Loop() {
+				require.NoError(b, database.InsertMessages(b.Context(), []Message{{
+					SessionID: "session", Ordinal: count,
+					Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":11}`),
+				}}))
+				_, err := cache.fill.fillSessionsDetached(b.Context(), []usageSourceVersion{{SessionID: "session"}})
+				require.NoError(b, err)
+				count++
+			}
+			b.ReportMetric(float64(read)/float64(b.N), "read-rows/op")
+		})
+	}
 }

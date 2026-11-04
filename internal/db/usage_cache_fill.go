@@ -56,6 +56,7 @@ type usageCursorFillCall struct {
 // usageFillObserver exposes lifecycle boundaries to deterministic tests. Its
 // callbacks must never be used for production work.
 type usageFillObserver struct {
+	messageNormalized      func()
 	beforeExtract          func([]usageSourceVersion)
 	afterExtract           func([]usageSourceVersion)
 	beforeInstall          func([]usageSourceVersion)
@@ -193,7 +194,7 @@ func readUsageCachedSessions(
 		placeholders, args := InPlaceholders(chunk)
 		rows, err := runner.QueryContext(ctx, `SELECT session_id,
 			source_sync_marker, source_transcript_rev,
-			usage_event_fingerprint, install_revision
+			usage_event_fingerprint, install_revision, source_usage_generation, source_message_ordinal
 			FROM usage_cached_sessions WHERE session_id IN `+placeholders, args...)
 		if err != nil {
 			return err
@@ -203,7 +204,8 @@ func readUsageCachedSessions(
 			var result usageFillResult
 			if err := rows.Scan(&result.source.SessionID,
 				&result.source.SyncMarker, &result.source.TranscriptRevision,
-				&result.source.UsageEventFingerprint, &result.InstallRevision); err != nil {
+				&result.source.UsageEventFingerprint, &result.InstallRevision,
+				&result.source.UsageGeneration, &result.source.MessageOrdinal); err != nil {
 				return err
 			}
 			results[result.source.SessionID] = result
@@ -558,7 +560,10 @@ func (c *usageFillCoordinator) extractSessions(
 	activityIndexes := make(map[string]int, len(versions))
 	eventIndexes := make(map[string]int, len(versions))
 	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, compare: true}
-	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes); err != nil {
+	if err := c.extractUsageAppends(ctx, tx, spoolTx, extracted, expected, messageIndexes); err != nil {
+		return nil, nil, err
+	}
+	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, messageIndexes, c.observer.messageNormalized); err != nil {
 		return nil, nil, err
 	}
 	if err := extractUsageActivityFacts(ctx, tx, &spoolWriter, activityIndexes); err != nil {
@@ -591,9 +596,96 @@ func (c *usageFillCoordinator) extractSessions(
 	return spool, extracted, nil
 }
 
+// extractUsageAppends retains a cached prefix only when the archive generation
+// proves it unchanged and the new token facts sort after its tail.
+func (c *usageFillCoordinator) extractUsageAppends(
+	ctx context.Context, archive, comparison *sql.Tx,
+	versions map[string]usageSourceVersion, expected map[string]usageFillInstallExpectation,
+	indexes map[string]int,
+) error {
+	for id, version := range versions {
+		if version.UsageGeneration == "" || version.UsageEventFingerprint != "" || !expected[id].Exists {
+			continue
+		}
+		var ordinal sql.NullInt64
+		var count int
+		var tail string
+		err := comparison.QueryRowContext(ctx, `SELECT cached.source_message_ordinal,
+			COALESCE(tail.fact_index+1, 0), COALESCE(tail.raw_timestamp, '')
+			FROM comparison.usage_cached_sessions cached
+			LEFT JOIN comparison.usage_facts tail ON tail.cached_session_id=cached.id
+			 AND tail.fact_index=(SELECT MAX(fact_index) FROM comparison.usage_facts WHERE cached_session_id=cached.id)
+			WHERE cached.session_id=? AND cached.install_revision=? AND cached.source_usage_generation=?
+			 AND (tail.fact_index IS NULL OR (tail.source='message' AND tail.token_eligible=1))`,
+			id, expected[id].InstallRevision, version.UsageGeneration).Scan(&ordinal, &count, &tail)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := archive.QueryContext(ctx, `SELECT ordinal, role, COALESCE(timestamp, ''),
+			model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid
+			FROM messages INDEXED BY idx_messages_session_ordinal
+			WHERE session_id=? AND ordinal>COALESCE(?, -1) ORDER BY timestamp, ordinal`, id, ordinal)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if _, err := comparison.ExecContext(ctx, `SAVEPOINT usage_append`); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison, compare: true}
+		eligible := true
+		for rows.Next() {
+			var input usagefacts.MessageInput
+			if err := rows.Scan(&input.Ordinal, &input.Role, &input.Timestamp, &input.Model,
+				&input.ProviderID, &input.TokenUsage, &input.ClaudeMessageID, &input.ClaudeRequestID, &input.SourceUUID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if c.observer.messageNormalized != nil {
+				c.observer.messageNormalized()
+			}
+			fact, ok := usagefacts.FromMessage(input)
+			if input.Timestamp == "" || input.Timestamp < tail || (ok && !fact.TokenEligible) {
+				eligible = false
+				break
+			}
+			if ok {
+				if err := delta.Add(id, count, fact); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				count++
+			}
+		}
+		err = errors.Join(rows.Err(), rows.Close())
+		if err != nil {
+			return err
+		}
+		if eligible {
+			if err := delta.Flush(); err != nil {
+				return err
+			}
+			indexes[id] = count
+			if _, err := archive.ExecContext(ctx, `DELETE FROM usage_fill_sessions WHERE session_id=?`, id); err != nil {
+				return err
+			}
+		} else if _, err := comparison.ExecContext(ctx, `ROLLBACK TO usage_append`); err != nil {
+			return err
+		}
+		if _, err := comparison.ExecContext(ctx, `RELEASE usage_append`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func extractUsageMessageFacts(
 	ctx context.Context, archive *sql.Tx, spool *usageFactSpoolWriter,
-	indexes map[string]int,
+	indexes map[string]int, normalized func(),
 ) error {
 	rows, err := archive.QueryContext(ctx, usageFillMessageFactsSQL)
 	if err != nil {
@@ -609,6 +701,9 @@ func extractUsageMessageFacts(
 			&input.ClaudeRequestID, &input.SourceUUID,
 		); err != nil {
 			return err
+		}
+		if normalized != nil {
+			normalized()
 		}
 		fact, ok := usagefacts.FromMessage(input)
 		if ok {
@@ -1090,7 +1185,8 @@ func loadUsageSourceVersions(
 		placeholders, args := InPlaceholders(chunk)
 		rows, queryErr := tx.QueryContext(ctx, `
 			SELECT id, COALESCE(sync_marker, ''),
-			       COALESCE(transcript_revision, '0')
+			       COALESCE(transcript_revision, '0'), COALESCE(usage_generation, ''),
+                   (SELECT MAX(ordinal) FROM messages WHERE session_id=sessions.id)
 			FROM sessions WHERE deleted_at IS NULL AND id IN `+placeholders,
 			args...)
 		if queryErr != nil {
@@ -1100,7 +1196,7 @@ func loadUsageSourceVersions(
 		for rows.Next() {
 			var version usageSourceVersion
 			if scanErr := rows.Scan(&version.SessionID, &version.SyncMarker,
-				&version.TranscriptRevision); scanErr != nil {
+				&version.TranscriptRevision, &version.UsageGeneration, &version.MessageOrdinal); scanErr != nil {
 				return scanErr
 			}
 			current[version.SessionID] = version
@@ -1148,6 +1244,7 @@ func installSpoolSessions(
 		CREATE TEMP TABLE IF NOT EXISTS usage_install_sessions(
 			session_id TEXT PRIMARY KEY, source_sync_marker TEXT NOT NULL,
 			source_transcript_rev TEXT NOT NULL,
+			source_usage_generation TEXT NOT NULL, source_message_ordinal INTEGER,
 			usage_event_fingerprint TEXT NOT NULL,
 			install_revision INTEGER NOT NULL
 		) WITHOUT ROWID;
@@ -1157,17 +1254,17 @@ func installSpoolSessions(
 	var statement strings.Builder
 	statement.WriteString(`INSERT INTO usage_install_sessions(
 		session_id, source_sync_marker, source_transcript_rev,
-		usage_event_fingerprint, install_revision) VALUES `)
-	args := make([]any, 0, len(versions)*5)
+		usage_event_fingerprint, install_revision, source_usage_generation, source_message_ordinal) VALUES `)
+	args := make([]any, 0, len(versions)*7)
 	for i, version := range versions {
 		if i > 0 {
 			statement.WriteByte(',')
 		}
-		statement.WriteString(`(?, ?, ?, ?, ?)`)
+		statement.WriteString(`(?, ?, ?, ?, ?, ?, ?)`)
 		installRevision := revision + int64(i)
 		args = append(args, version.SessionID, version.SyncMarker,
 			version.TranscriptRevision, version.UsageEventFingerprint,
-			installRevision)
+			installRevision, version.UsageGeneration, version.MessageOrdinal)
 		results[version.SessionID] = usageFillResult{
 			InstallRevision: installRevision, source: version,
 		}
@@ -1190,12 +1287,14 @@ func installSpoolSessions(
 	if _, err := cacheConn.ExecContext(ctx, `
 		INSERT INTO usage_cached_sessions(
 			session_id, source_sync_marker, source_transcript_rev,
-			usage_event_fingerprint, install_revision
+			usage_event_fingerprint, install_revision, source_usage_generation, source_message_ordinal
 		)
 		SELECT session_id, source_sync_marker, source_transcript_rev,
-		       usage_event_fingerprint, install_revision
+		       usage_event_fingerprint, install_revision, source_usage_generation, source_message_ordinal
 		FROM usage_install_sessions WHERE 1
 		ON CONFLICT(session_id) DO UPDATE SET
+			source_usage_generation=excluded.source_usage_generation,
+			source_message_ordinal=excluded.source_message_ordinal,
 			source_sync_marker=excluded.source_sync_marker,
 			source_transcript_rev=excluded.source_transcript_rev,
 			usage_event_fingerprint=excluded.usage_event_fingerprint,

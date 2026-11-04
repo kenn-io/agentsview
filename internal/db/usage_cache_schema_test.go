@@ -28,7 +28,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v15-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v16-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -710,4 +710,27 @@ func seedRecognizedUsageCacheWithRetirementProtocol(
 		`INSERT INTO usage_cache_metadata(key, value) VALUES (?, ?)`,
 		usageCacheMetadataRetirementProtocol, "1")
 	require.NoError(t, err)
+}
+
+func TestUsageGenerationMigrationPreservesArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	insertSession(t, database, "retained", "project")
+	require.NoError(t, database.Close())
+	legacy, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = legacy.ExecContext(t.Context(), `DROP TRIGGER sessions_usage_generation_insert;
+		DROP TRIGGER messages_usage_generation_insert; DROP TRIGGER messages_usage_generation_delete;
+		DROP TRIGGER messages_usage_generation_update; ALTER TABLE sessions DROP COLUMN usage_generation`)
+	require.NoError(t, err)
+	require.NoError(t, legacy.Close())
+	for range 2 {
+		database, err = Open(t.Context(), path)
+		require.NoError(t, err)
+		var generation string
+		require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation FROM sessions WHERE id='retained'`).Scan(&generation))
+		assert.NotEmpty(t, generation)
+		require.NoError(t, database.Close())
+	}
 }

@@ -2390,6 +2390,7 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
@@ -2925,6 +2926,38 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
+// A tail append preserves the generation. Every change to an existing usage
+// input invalidates the prefix retained by incremental usage-cache fills.
+const usageGenerationSchemaSQL = `
+CREATE TRIGGER IF NOT EXISTS sessions_usage_generation_insert AFTER INSERT ON sessions BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_delete AFTER DELETE ON messages BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=OLD.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_update
+AFTER UPDATE OF session_id, ordinal, role, timestamp, model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid ON messages
+WHEN NEW.session_id IS NOT OLD.session_id OR
+     NEW.ordinal IS NOT OLD.ordinal OR
+     NEW.role IS NOT OLD.role OR
+     NEW.timestamp IS NOT OLD.timestamp OR
+     NEW.model IS NOT OLD.model OR
+     NEW.provider_id IS NOT OLD.provider_id OR
+     NEW.token_usage IS NOT OLD.token_usage OR
+     NEW.claude_message_id IS NOT OLD.claude_message_id OR
+     NEW.claude_request_id IS NOT OLD.claude_request_id OR
+     NEW.source_uuid IS NOT OLD.source_uuid
+BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id IN (OLD.session_id, NEW.session_id);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_insert BEFORE INSERT ON messages
+WHEN EXISTS (SELECT 1 FROM messages WHERE session_id=NEW.session_id AND ordinal>=NEW.ordinal)
+BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=NEW.session_id;
+END;
+UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE usage_generation IS NULL;
+`
+
 func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress OpenProgressFunc) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
@@ -2946,6 +2979,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 		progress,
 	); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, usageGenerationSchemaSQL); err != nil {
+		return fmt.Errorf("installing usage generation triggers: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing classification journal trigger: %w", err)
