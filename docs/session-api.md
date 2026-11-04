@@ -1511,9 +1511,9 @@ session. `POST /api/v1/commits/sessions` accepts `{"shas": ["abc1234"]}` and
 returns `{"commits": [{"sha": "abc1234", "links": [...]}]}` in request order.
 Send 1 to 200 hexadecimal SHAs or prefixes of 7 to 64 characters. Queries ignore
 case. Unknown SHAs have empty `links`. Invalid SHAs or array lengths return
-HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer transcript-link
-lookups after a push with a version that stores commit links. Trailer links
-stay in the local archive. Hosted PostgreSQL returns HTTP 501.
+HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer transcript and
+trailer link lookups after a push with a version that stores commit links.
+Hosted PostgreSQL returns HTTP 501.
 
 Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 `repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
@@ -1546,7 +1546,7 @@ literal. A later `cd` is ignored. A call that commits in two repositories
 records the first directory for both commits.
 
 Archives using `archive_content = "transcripts"` or `"usage"` omit transcript
-links because they omit tool output. They retain trailer links.
+and trailer links under the same content policy.
 
 ### Git trailer links
 

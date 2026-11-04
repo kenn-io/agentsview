@@ -483,13 +483,21 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 			require.NoError(t, fresh.CopyExcludedSessionsFrom(t.Context(), old.Path()))
 			written, err := fresh.SessionCommitLinks(t.Context(), "written")
 			require.NoError(t, err)
-			require.Len(t, written.Commits, 1)
-			assert.Equal(t, "trailer", written.Commits[0].Source)
+			if policy == config.ArchiveContentFull {
+				require.Len(t, written.Commits, 1)
+				assert.Equal(t, "trailer", written.Commits[0].Source)
+			} else {
+				assert.Empty(t, written.Commits)
+			}
 			trailers, err := fresh.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
 			require.NoError(t, err)
-			require.Len(t, trailers.Commits[0].Links, 1)
-			assert.Equal(t, "orphan", trailers.Commits[0].Links[0].SessionID)
-			assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
+			if policy == config.ArchiveContentFull {
+				require.Len(t, trailers.Commits[0].Links, 1)
+				assert.Equal(t, "orphan", trailers.Commits[0].Links[0].SessionID)
+				assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
+			} else {
+				assert.Empty(t, trailers.Commits[0].Links)
+			}
 			got, err := fresh.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
 			if policy == config.ArchiveContentFull {
@@ -703,4 +711,63 @@ func TestCommitLinkProjectSurvivesMoveDeletionAndResync(t *testing.T) {
 	require.Len(t, retained, 1)
 	assert.Equal(t, "project-b", retained[0].Project)
 	assert.Equal(t, "abc1234", retained[0].SHA)
+}
+
+func TestTrailerCommitMirrorRows(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "editor", "project-a")
+	insertMessages(t, d, userMsg("editor", 0, "Save the edit"))
+	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
+	rows, err := d.SessionCommitLinkRows(t.Context(), "editor")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "trailer", rows[0].Source)
+	assert.Equal(t, "Save the edit", rows[0].TurnText)
+	snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "editor")
+	require.NoError(t, err)
+	assert.Equal(t, rows, snapshot.CommitLinks)
+	require.NoError(t, d.DeleteSession(t.Context(), "editor"))
+	rows, err = d.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].Missing)
+	assert.Equal(t, "trailer", rows[0].Source)
+}
+
+func TestTrailerCommitFirstBranch(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "editor", "project-a")
+	c := gitlog.TrailerCommit{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}
+	for _, branch := range []string{"", "feature", "main", ""} {
+		c.Branch = branch
+		require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{c}))
+	}
+	links, err := d.SessionCommitLinks(t.Context(), "editor")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 1)
+	assert.Equal(t, "feature", links.Commits[0].Branch)
+}
+
+func TestTrailerCommitCopiedPolicy(t *testing.T) {
+	old := testDB(t)
+	insertSession(t, old, "host-a~editor", "project-a")
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			fresh := testDB(t)
+			require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
+			fresh.SetArchiveContent(policy)
+			_, err := fresh.CopyOrphanedDataFrom(t.Context(), old.Path())
+			require.NoError(t, err)
+			links, err := fresh.SessionCommitLinks(t.Context(), "host-a~editor")
+			require.NoError(t, err)
+			if policy == config.ArchiveContentFull {
+				require.Len(t, links.Commits, 1)
+			} else {
+				assert.Empty(t, links.Commits)
+				var rows int
+				require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_trailers").Scan(&rows))
+				assert.Zero(t, rows)
+			}
+		})
+	}
 }

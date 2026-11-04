@@ -210,7 +210,7 @@ func TestTrailerCommitLinksLookupWork(t *testing.T) {
 			for i := range 30 {
 				unrelated = append(unrelated, gitlog.TrailerCommit{SHA: strings.Repeat("b", 40), Sessions: []string{fmt.Sprintf("codex:unrelated-%d", i)}, CommittedAt: tsZero})
 			}
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", unrelated))
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "other-repo", unrelated))
 			assert.LessOrEqual(t, read(), baseline, "unrelated trailer owners must not add session lookups")
 		})
 	}

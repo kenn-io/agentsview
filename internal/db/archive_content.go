@@ -503,6 +503,16 @@ func applyArchiveContentToCopiedSessionsTx(
 	policy config.ArchiveContent, sourceVersion int,
 ) error {
 	var err error
+	if policy.OmitsToolContent() {
+		owners, err := resolveTrailerOwners(ctx, tx, "1=1")
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_trailers WHERE session_id IN (
+   SELECT key FROM json_each(?) WHERE value IN (SELECT id FROM `+tempIDsTable+`))`, owners); err != nil {
+			return err
+		}
+	}
 	switch policy {
 	case config.ArchiveContentFull:
 		// Skip unchanged projections only when the source already carries

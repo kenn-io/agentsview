@@ -31,8 +31,12 @@ func readCommitLinks(ctx context.Context, q CommitLinkQuerier, where string, arg
 			return nil, err
 		}
 		l.Source = "transcript"
+		// Trailer links have no transcript tool call.
+		if l.CallIndex == -1 {
+			l.Source = "trailer"
+		}
 		if !l.Missing && ordinal.Valid {
-			l.Turn = &db.CommitTurn{Ordinal: int(ordinal.Int64), Text: text}
+			l.Turn = &db.CommitTurn{Heuristic: l.Source == "trailer", Ordinal: int(ordinal.Int64), Text: text}
 		}
 		links = append(links, l)
 	}

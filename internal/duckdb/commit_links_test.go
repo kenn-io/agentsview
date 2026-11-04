@@ -22,6 +22,12 @@ func TestDuckDBCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
 	dbtest.AssertCommitLinkParity(t, local, store)
+	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
+		require.NoError(t, store.Close())
+		_, err := Push(t.Context(), path, local, "m", opts, false, nil)
+		require.NoError(t, err)
+		store = openPushedStore(t, path)
+	})
 	require.NoError(t, store.Close())
 	require.NoError(t, local.DeleteSession(t.Context(), "commit-delete"))
 	// Incremental deletion must keep project evidence for the retained row.

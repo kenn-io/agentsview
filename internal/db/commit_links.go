@@ -480,10 +480,19 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
-// StoreTrailerCommitLinks retains Git evidence even when transcripts are rewritten.
+// StoreTrailerCommitLinks replaces one repository's evidence after a full scan.
+// Call it only after a successful scan, including an empty result.
 // The stored session_id is the trailer's agent:ID, independent of archive owners.
 func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) error {
 	return d.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE commit_trailer_scan (
+ session_id TEXT NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(session_id,sha)) WITHOUT ROWID`); err != nil {
+			return err
+		}
+		changed := map[string]bool{}
+		if d.ArchiveContent().OmitsToolContent() {
+			commits = nil
+		}
 		for _, c := range commits {
 			for _, value := range c.Sessions {
 				agent, _, ok := strings.Cut(value, ":")
@@ -491,13 +500,60 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 				if !ok || !known {
 					continue
 				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
- ON CONFLICT(session_id,sha) DO UPDATE SET branch=excluded.branch,subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at`, value, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt); err != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailer_scan(session_id,sha) VALUES (?,?)`, value, c.SHA); err != nil {
 					return err
+				}
+				result, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
+ ON CONFLICT(session_id,sha) DO UPDATE SET branch=COALESCE(NULLIF(commit_trailers.branch,''),excluded.branch),subject=excluded.subject,repository=excluded.repository,committed_at=excluded.committed_at
+ WHERE (commit_trailers.branch='' AND excluded.branch<>'') OR commit_trailers.subject<>excluded.subject OR commit_trailers.repository<>excluded.repository OR commit_trailers.committed_at<>excluded.committed_at`, value, c.SHA, c.Branch, c.Subject, repo, c.CommittedAt)
+				if err != nil {
+					return err
+				}
+				n, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if n > 0 {
+					changed[value] = true
 				}
 			}
 		}
-		return nil
+		rows, err := tx.QueryContext(ctx, `DELETE FROM commit_trailers WHERE repository=? AND NOT EXISTS (
+ SELECT 1 FROM commit_trailer_scan k WHERE k.session_id=commit_trailers.session_id AND k.sha=commit_trailers.sha) RETURNING session_id`, repo)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			changed[id] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DROP TABLE commit_trailer_scan`); err != nil {
+			return err
+		}
+		if len(changed) == 0 {
+			return nil
+		}
+		identities := make([]string, 0, len(changed))
+		for id := range changed {
+			identities = append(identities, id)
+		}
+		owners, err := trailerIdentityOwners(ctx, tx, identities)
+		if err != nil {
+			return err
+		}
+		// Trailer changes can arrive without a transcript write. Advance the same
+		// session cursor that makes transcript changes eligible for mirror pushes.
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (SELECT value FROM json_each(?))`, owners)
+		return err
 	})
 }
 
@@ -556,6 +612,10 @@ func resolveTrailerOwners(ctx context.Context, tx *sql.Tx, where string, args ..
 	if err != nil {
 		return "", err
 	}
+	return trailerIdentityOwners(ctx, tx, identities)
+}
+
+func trailerIdentityOwners(ctx context.Context, tx *sql.Tx, identities []string) (string, error) {
 	owners := make(map[string]string, len(identities))
 	for _, value := range identities {
 		agent, id, ok := strings.Cut(value, ":")
@@ -720,16 +780,61 @@ type CommitLinkRow struct {
 }
 
 func (d *DB) SessionCommitLinkRows(ctx context.Context, id string) ([]CommitLinkRow, error) {
-	return sessionCommitLinkRows(ctx, d.getReader(), noTrailerOwners, "l.session_id=?", id)
+	rows, err := d.SessionCommitLinkRowsBySession(ctx, []string{id})
+	return rows[id], err
+}
+
+// SessionCommitLinkRowsBySession reads mirror links in one archive snapshot.
+func (d *DB) SessionCommitLinkRowsBySession(ctx context.Context, ids []string) (map[string][]CommitLinkRow, error) {
+	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var identities []string
+	for _, id := range ids {
+		identities = append(identities, sessionTrailerIdentities(id)...)
+	}
+	encoded, err := json.Marshal(identities)
+	if err != nil {
+		return nil, err
+	}
+	owners, err := resolveTrailerOwners(ctx, tx, `session_id IN (SELECT value FROM json_each(?))`, string(encoded))
+	if err != nil {
+		return nil, err
+	}
+	selected, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := sessionCommitLinkRows(ctx, tx, owners, `l.session_id IN (SELECT value FROM json_each(?))`, string(selected))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]CommitLinkRow)
+	for _, row := range rows {
+		out[row.SessionID] = append(out[row.SessionID], row)
+	}
+	return out, tx.Commit()
 }
 
 // RetainedCommitLinkRows returns links whose sessions were permanently deleted.
 func (d *DB) RetainedCommitLinkRows(ctx context.Context) ([]CommitLinkRow, error) {
-	return sessionCommitLinkRows(ctx, d.getReader(), noTrailerOwners, "s.id IS NULL")
+	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	owners, err := resolveTrailerOwners(ctx, tx, "1=1")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := sessionCommitLinkRows(ctx, tx, owners, "s.id IS NULL")
+	if err != nil {
+		return nil, err
+	}
+	return rows, tx.Commit()
 }
-
-// Replica pushes copy transcript links only; trailer owners resolve locally.
-const noTrailerOwners = "{}"
 
 func sessionCommitLinkRows(ctx context.Context, q messageRowsQuerier, owners, where string, args ...any) ([]CommitLinkRow, error) {
 	args = append([]any{owners}, args...)

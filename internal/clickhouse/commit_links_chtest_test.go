@@ -43,6 +43,10 @@ func TestClickHouseCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
+	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+	})
 	_, err = store.DB().ExecContext(t.Context(), `DELETE FROM commit_links WHERE session_id='commit-live' SETTINGS mutations_sync=2`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key=? SETTINGS mutations_sync=2`, syncer.archiveKey(commitLinksReadyKeyBase))

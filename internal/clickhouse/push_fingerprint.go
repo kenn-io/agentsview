@@ -50,6 +50,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		ToolCalls      string
 		SecretFindings []db.SecretFinding
 		Pins           []db.PinnedMessage
+		CommitLinks    []db.CommitLinkRow
 		// Omitted when nil so sessions without plan usage keep the
 		// fingerprints they had before the table existed.
 		PlanUsage *db.SessionPlanUsage `json:",omitzero"`
@@ -61,6 +62,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		ToolCalls:      snapshot.ToolCallFingerprint,
 		SecretFindings: snapshot.Findings,
 		Pins:           snapshot.Pins,
+		CommitLinks:    snapshot.CommitLinks,
 		PlanUsage:      snapshot.PlanUsage,
 	}
 	data, err := json.Marshal(payload)
