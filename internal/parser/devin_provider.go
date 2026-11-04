@@ -468,7 +468,9 @@ func devinFingerprintHash(ctx context.Context,
 		return "", newDevinTranscriptError("open", err)
 	}
 	defer f.Close()
-	if _, err := io.Copy(h, f); err != nil {
+	n, err := io.Copy(h, f)
+	recordContentRead(ctx, n)
+	if err != nil {
 		return "", newDevinTranscriptError("hash", err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

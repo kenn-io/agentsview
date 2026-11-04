@@ -202,7 +202,9 @@ func hashReasonixSourceFile(ctx context.Context, path string) (string, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
+	n, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f})
+	recordContentRead(ctx, n)
+	if err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 
@@ -219,7 +221,9 @@ func hashReasonixSourceFile(ctx context.Context, path string) (string, error) {
 	if _, err := io.WriteString(h, "\x00reasonix-meta\x00"); err != nil {
 		return "", fmt.Errorf("hash %s: %w", metaPath, err)
 	}
-	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: meta}); err != nil {
+	n, err = io.Copy(h, ctxio.Reader{Context: ctx, Reader: meta})
+	recordContentRead(ctx, n)
+	if err != nil {
 		return "", fmt.Errorf("hash %s: %w", metaPath, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
