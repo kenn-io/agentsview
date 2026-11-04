@@ -218,7 +218,7 @@ evidence; they do not establish whether a tool helped the task.
   In normal transcript mode, hook rows use a collapsed Hook output card and an
   independent Hooks filter. Cancelled hooks have a Hook cancelled label. Focused
   mode hides these rows without treating them as new prompts. The card preserves
-  escaped body text. Data version 164 reparses readable Claude, Cowork, Qoder,
+  escaped body text. Data version 165 reparses readable Claude, Cowork, Qoder,
   and iCodeMate CLI sources in place. The upgrade preserves session and public
   message identities, pins, notes, names, stars, and retained rows whose sources
   are gone; archive-only archives retain their pending state without source

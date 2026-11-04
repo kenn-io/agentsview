@@ -41,7 +41,8 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 	require.Len(t, legacy, 2)
 	_, err = database.PinMessage(ctx, id, legacy[1].ID, nil)
 	require.NoError(t, err)
-	previous := db.CurrentDataVersion() - 1
+	// Main's version 164 has the Codex reparse but still lacks hook rows.
+	const previous = 164
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version = ?, message_count = 2, user_message_count = 1 WHERE id = ?", previous, id); err != nil {
 			return err
