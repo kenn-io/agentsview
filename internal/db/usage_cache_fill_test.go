@@ -1685,6 +1685,7 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 	}{
 		{name: "reorder", setup: mutate(`UPDATE messages SET ordinal=-1 WHERE ordinal=0; UPDATE messages SET ordinal=0 WHERE ordinal=1; UPDATE messages SET ordinal=1 WHERE ordinal=-1`)},
 		{name: "gap insert", setup: func(t *testing.T, database *DB, cache *usageCache) {
+			t.Helper()
 			mutate(`DELETE FROM messages WHERE ordinal=2; INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":11}')`)(t, database, cache)
 			_, err := cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{{SessionID: "session"}})
 			require.NoError(t, err)
@@ -1692,6 +1693,7 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 		}},
 		{name: "backdated append", setup: mutate(`INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',8,'assistant','','model','2026-08-09T09:00:00Z','{"input_tokens":11}')`)},
 		{name: "activity append", setup: mutate(`INSERT INTO messages(session_id,ordinal,role,content,model,timestamp) VALUES ('session',8,'assistant','','model','2026-08-10T10:00:00Z')`), afterFill: func(t *testing.T, database *DB, cache *usageCache) {
+			t.Helper()
 			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 				SessionID: "session", Ordinal: 9, Role: "assistant", Model: "model",
 				Timestamp: "2026-08-10T11:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":17}`),
@@ -1703,6 +1705,7 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 			assert.Equal(t, 9, read, "a cached activity fact requires complete extraction")
 		}},
 		{name: "removed message-source event", setup: func(t *testing.T, database *DB, cache *usageCache) {
+			t.Helper()
 			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
 				Source: "message", Model: "model", InputTokens: 23, DedupKey: "removed-event",
 			}}))
@@ -1717,6 +1720,7 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 		{name: "usage event", setup: mutate(`INSERT INTO usage_events(session_id,source,model,input_tokens,occurred_at) VALUES ('session','session','model',19,'2026-08-10T10:00:00Z')`)},
 		{name: "recreated session", setup: mutate(`DELETE FROM sessions WHERE id='session'; INSERT INTO sessions(id,project,machine,agent) VALUES ('session','project','local','claude'); INSERT INTO messages(session_id,ordinal,role,content,model,timestamp,token_usage) VALUES ('session',0,'assistant','','model','2026-08-10T09:00:00Z','{"input_tokens":42}')`)},
 		{name: "Claude suffix replace", setup: func(t *testing.T, database *DB, _ *usageCache) {
+			t.Helper()
 			_, err := database.WriteSessionIncremental(t.Context(), "session", []Message{{
 				SessionID: "session", Ordinal: 7, Role: "assistant", Model: "model",
 				Timestamp: "2026-08-10T09:00:00Z", TokenUsage: json.RawMessage(`{"input_tokens":23}`),
