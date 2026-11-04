@@ -62,7 +62,8 @@ async function request({ id, path, platform }, port) {
   let result;
   try {
     const config = Object.hasOwn(platforms, platform) ? platforms[platform] : undefined;
-    if (!config || !await allowedPath(platform, path)) throw new Error("Unsupported browser fetch path");
+    if (!config || !(await allowedPath(platform, path)))
+      throw new Error("Unsupported browser fetch path");
     let [tab] = await chrome.tabs.query({ url: config.tabURL, discarded: false });
     if (!tab) tab = await chrome.tabs.create({ url: config.newTabURL, active: false });
     await loadedTab(tab.id);

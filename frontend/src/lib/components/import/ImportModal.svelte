@@ -162,8 +162,7 @@
     error = null;
     untrack(() => {
       if (fileInput) fileInput.value = "";
-      syncFlag = null;
-      syncError = null;
+      claudeAISync.dismiss();
       signInError = null;
       chromeStatus = null;
       chromeRefused = false;

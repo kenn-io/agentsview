@@ -57,7 +57,7 @@ func claudeAICountsMarker(store db.Store) string {
 }
 
 func claudeAIFreshness(store db.Store, updatedAt, leaf string, session *db.Session) uint64 {
- return browserFreshness(claudeAICountsMarker(store)+updatedAt+"\x00"+leaf, session)
+	return browserFreshness(claudeAICountsMarker(store)+updatedAt+"\x00"+leaf, session)
 }
 
 func browserFreshness(marker string, session *db.Session) uint64 {
@@ -240,23 +240,19 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 			}
 		}
 		status, err := upsertConversation(ctx, store, result, nil)
-		rows := chatGPTModelRows(archived, stored)
 		if refusalReason(err) == RefusalShorterExport {
 			// Stored messages already match; update the selected branch's counts
 			// without replacing rows that may have pins.
 			_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: chatGPTSession(result.Session), Messages: chatGPTModelRows(archived, stored),
-				CompleteStoredRows: true, SkipSignalUpdates: true,
+				Session: chatGPTSession(result.Session), Messages: msgs,
+				SkipSignalUpdates: true,
 			}})
 			if errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
 			}
 			return importUpdated, err
-		} else if err != nil || len(rows) == 0 {
-			return status, err
 		}
-		// Browser snapshots are authoritative even when retained usage rows match.
-		return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+		return status, err
 	}
 	keepCopy := false
 	if keepsReplacedHistory(result.Session.Agent) {

@@ -227,7 +227,7 @@ a local writable archive with Chrome connected.
 The CLI can sync without an AgentsView tab open:
 
 ```bash
-agentsview import --type chatgpt --sync
+agentsview source import --type chatgpt --sync
 ```
 
 The first Sync has no stored freshness, so it fetches the conversations returned
@@ -273,7 +273,7 @@ Chrome extension using the steps above, then sign in to Gemini in the Chrome
 profile that has the extension enabled, and run:
 
 ```bash
-agentsview import --type gemini-apps --sync
+agentsview source import --type gemini-apps --sync
 ```
 
 The import dialog does not offer Gemini Sync yet; use the CLI. If no Gemini tab
@@ -314,7 +314,7 @@ AgentsView Chrome extension using the steps above, then sign in to Grok in the
 Chrome profile that has the extension enabled, and run:
 
 ```bash
-agentsview import --type grok-web --sync
+agentsview source import --type grok-web --sync
 ```
 
 The import dialog does not offer Grok Sync yet; use the CLI. If no Grok tab is

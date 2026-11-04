@@ -834,9 +834,9 @@ func completeStoredMessagesTx(
 			stored, contentLength = m.Content, m.ContentLength
 		}
 		if _, err := tx.Exec(
-			`UPDATE messages SET content = ?, content_length = ?, model = ?, source_uuid = ?, source_parent_uuid = ?, dialogue_text = ?
+			`UPDATE messages SET content = ?, content_length = ?, model = ?, source_uuid = ?, source_parent_uuid = ?, dialogue_text = CASE WHEN ? THEN ? ELSE dialogue_text END
 			 WHERE id = ?`,
-			stored, contentLength, cmp.Or(model, m.Model), filledUUID, filledParentUUID, m.DialogueText, id,
+			stored, contentLength, cmp.Or(model, m.Model), filledUUID, filledParentUUID, extended, m.DialogueText, id,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"completing message for %s ordinal %d: %w",
