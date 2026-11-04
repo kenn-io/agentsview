@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
@@ -251,8 +252,8 @@
             <span>
               {m.settings_embeddings_progress_chunks({
                 count: status.total,
-                doneLabel: numberFormat.format(status.done),
-                totalLabel: numberFormat.format(status.total),
+                doneLabel: formatCount(status.done),
+                totalLabel: formatCount(status.total),
               })}
             </span>
             {#if progressFraction !== null}
@@ -303,12 +304,12 @@
           >{m.settings_embeddings_last_build_documents()}</span
         >
         <span class="row-value"
-          >{numberFormat.format(status.last_result.Fill.Documents)}</span
+          >{formatCount(status.last_result.Fill.Documents)}</span
         >
         <span class="row-label">{m.settings_embeddings_last_build_chunks()}</span
         >
         <span class="row-value"
-          >{numberFormat.format(status.last_result.Fill.Chunks)}</span
+          >{formatCount(status.last_result.Fill.Chunks)}</span
         >
       </div>
     {/if}
@@ -329,7 +330,7 @@
               <span class="gen-model mono">{gen.model} · {numberFormat.format(gen.dimension)}d</span>
               <span class="gen-coverage">
                 {m.settings_embeddings_coverage({
-                  embeddedLabel: numberFormat.format(gen.embedded),
+                  embeddedLabel: formatCount(gen.embedded),
                   missingLabel: numberFormat.format(gen.missing),
                 })}
               </span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import type { DbDistributionBucket as DistributionBucket } from "../../api/generated/index.js";
@@ -108,7 +109,7 @@
               style="width: {barWidth(bucket)}"
             ></div>
           </div>
-          <span class="bar-count">{bucket.count}</span>
+          <span class="bar-count">{formatCount(bucket.count)}</span>
         </div>
       {/each}
     </div>
@@ -116,7 +117,7 @@
       <div class="shape-footer">
         {m.analytics_session_shape_session_count({
           count: analytics.sessionShape.count,
-          countLabel: analytics.sessionShape.count.toLocaleString(),
+          countLabel: formatCount(analytics.sessionShape.count),
         })}
       </div>
     {/if}

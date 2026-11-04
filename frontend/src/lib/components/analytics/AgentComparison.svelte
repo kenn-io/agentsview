@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -127,10 +128,10 @@
         >
           <span class="col-agent">{agent.name}</span>
           <span class="col-num">
-            {agent.sessions.toLocaleString()}
+            {formatCount(agent.sessions)}
           </span>
           <span class="col-num">
-            {agent.messages.toLocaleString()}
+            {formatCount(agent.messages)}
           </span>
           <span class="col-num">
             {formatDuration(agent.turnCycleP50)}
@@ -142,7 +143,7 @@
             {formatRate(agent.toolsPerMin)}
           </span>
           <span class="col-num">
-            {agent.totalToolCalls.toLocaleString()}
+            {formatCount(agent.totalToolCalls)}
           </span>
           <span class="col-cats">
             {agent.topCategories.join(", ") || "-"}

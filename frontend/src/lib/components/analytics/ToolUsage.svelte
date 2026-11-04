@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { onDestroy, untrack } from "svelte";
   import { Button, Tooltip } from "@kenn-io/kit-ui";
   import { AnalyticsService, type DbToolUsageAnalysis as ToolUsageAnalysis, type DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
@@ -116,10 +117,6 @@
     event.preventDefault();
     router.navigateToSession(example.session_id, evidenceParamsFor(example));
     if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id);
-  }
-
-  function formatCount(value: number): string {
-    return value.toLocaleString(getLocale());
   }
 
   // A nonzero rate below 0.05% keeps one significant digit so it never reads as zero.

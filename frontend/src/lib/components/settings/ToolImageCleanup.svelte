@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Button, Modal, TableHeaderCell, TableSort, TextInput } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
@@ -54,10 +55,6 @@
       unitDisplay: "short",
       maximumFractionDigits: 0,
     }).format(0);
-  }
-
-  function formatCount(value: number): string {
-    return new Intl.NumberFormat(getLocale()).format(value);
   }
 
   function onFilterInput() {

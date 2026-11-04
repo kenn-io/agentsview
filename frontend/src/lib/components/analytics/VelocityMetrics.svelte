@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { DbVelocityOverview as VelocityOverview, DbVelocityBreakdown as VelocityBreakdown } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
@@ -125,7 +126,7 @@
         {#each breakdowns as bd}
           <div class="breakdown-row">
             <span class="col-label">{bd.label}</span>
-            <span class="col-num">{bd.sessions}</span>
+            <span class="col-num">{formatCount(bd.sessions)}</span>
             <span class="col-num">
               {formatDuration(bd.overview.turn_cycle_sec.p50)}
             </span>

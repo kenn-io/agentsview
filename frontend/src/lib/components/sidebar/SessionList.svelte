@@ -15,7 +15,7 @@
     UsersRoundIcon,
   } from "../../icons.js";
   import { TrashIcon, CheckIcon } from "../../icons.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import { registerSessionList } from "../../utils/arrow-target.js";
   import {
@@ -487,7 +487,7 @@
   <span class="session-count">
     {m.sidebar_session_count({
       count: totalCount,
-      countLabel: formatNumber(totalCount),
+      countLabel: formatCount(totalCount),
     })}
   </span>
   <div class="header-actions">
@@ -564,7 +564,7 @@
     </button>
     <span class="batch-count">
       {m.sidebar_selected_count({
-        countLabel: formatNumber(visibleSelectedSessionIds.length),
+        countLabel: formatCount(visibleSelectedSessionIds.length),
       })}
     </span>
     <button

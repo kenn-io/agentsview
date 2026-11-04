@@ -1,12 +1,43 @@
-import { formatTokenCount } from "@kenn-io/kit-ui/utils/format";
-import { formatDateTime, m } from "../i18n/index.js";
+import { formatDateTime, getLocale, m } from "../i18n/index.js";
 export { formatMoney as formatCost } from "../money.js";
 
-// These four helpers are byte-identical to kit-ui's implementations; the
-// locale-aware / app-specific formatters below stay local. Note kit-ui keeps
-// `truncate` in its time module, not format.
-export { formatNumber, formatTokenCount } from "@kenn-io/kit-ui/utils/format";
+// Note kit-ui keeps `truncate` in its time module, not format. `formatNumber`
+// is for numbers that are not counts, such as turn ordinals; counts use
+// `formatCount`.
+export { formatNumber } from "@kenn-io/kit-ui/utils/format";
 export { truncate } from "@kenn-io/kit-ui/utils/time";
+
+const COMPACT_COUNT_THRESHOLD = 10_000;
+
+interface CountFormatters {
+  standard: Intl.NumberFormat;
+  compact: Intl.NumberFormat;
+}
+
+const countFormatters = new Map<string, CountFormatters>();
+
+/**
+ * The app's one format for counts and token totals, in the active locale.
+ * Below 10,000 the full grouped number ("3,672"); from 10,000 the compact
+ * form with at most one decimal ("145.6K", "13.1B").
+ */
+export function formatCount(value: number): string {
+  const locale = getLocale();
+  let formatters = countFormatters.get(locale);
+  if (!formatters) {
+    formatters = {
+      standard: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
+      compact: new Intl.NumberFormat(locale, {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }),
+    };
+    countFormatters.set(locale, formatters);
+  }
+  return Math.abs(value) < COMPACT_COUNT_THRESHOLD
+    ? formatters.standard.format(value)
+    : formatters.compact.format(value);
+}
 
 const MINUTE = 60;
 const HOUR = 3600;
@@ -70,8 +101,8 @@ export function formatTokenUsage(
 ): string | null {
   if (!hasContextTokens && !hasOutputTokens) return null;
 
-  const contextLabel = hasContextTokens ? `${formatTokenCount(contextTokens)} ctx` : "— ctx";
-  const outputLabel = hasOutputTokens ? `${formatTokenCount(outputTokens)} out` : "— out";
+  const contextLabel = hasContextTokens ? `${formatCount(contextTokens)} ctx` : "— ctx";
+  const outputLabel = hasOutputTokens ? `${formatCount(outputTokens)} out` : "— out";
 
   return `${contextLabel} / ${outputLabel}`;
 }

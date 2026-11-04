@@ -1,11 +1,8 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Card } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { m } from "../../i18n/index.js";
-
-  function formatNum(n: number): string {
-    return n.toLocaleString();
-  }
 
   function pct(n: number): string {
     return `${(n * 100).toFixed(1)}%`;
@@ -21,29 +18,29 @@
     {
       label: () => m.analytics_summary_sessions(),
       value: () =>
-        formatNum(analytics.summary?.total_sessions ?? 0),
+        formatCount(analytics.summary?.total_sessions ?? 0),
     },
     {
       label: () => m.analytics_summary_messages(),
       value: () =>
-        formatNum(analytics.summary?.total_messages ?? 0),
+        formatCount(analytics.summary?.total_messages ?? 0),
     },
     {
       label: () => m.analytics_summary_projects(),
       value: () =>
-        String(analytics.summary?.active_projects ?? 0),
+        formatCount(analytics.summary?.active_projects ?? 0),
     },
     {
       label: () => m.analytics_summary_active_days(),
       value: () =>
-        String(analytics.summary?.active_days ?? 0),
+        formatCount(analytics.summary?.active_days ?? 0),
     },
     {
       label: () => m.analytics_summary_messages_per_session(),
       value: () => {
         const s = analytics.summary;
         if (!s) return "-";
-        return `${s.avg_messages}`;
+        return formatCount(s.avg_messages);
       },
       sub: () => {
         const s = analytics.summary;

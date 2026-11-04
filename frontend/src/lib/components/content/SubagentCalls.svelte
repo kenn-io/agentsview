@@ -8,7 +8,7 @@
     DbTurnTiming as TurnTiming,
   } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { turnHasCategory } from "../../utils/timing.js";
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
@@ -52,7 +52,7 @@
     <span class="sa-eh-meta">
       {m.subagent_calls_summary({
         count: timing.tool_call_count,
-        countLabel: formatNumber(timing.tool_call_count),
+        countLabel: formatCount(timing.tool_call_count),
         duration: formatDuration(timing.total_duration_ms),
         running: timing.running ? "true" : "false",
       })}

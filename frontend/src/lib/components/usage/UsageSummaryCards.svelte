@@ -3,27 +3,12 @@
   import { Card } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
+  import { formatCount } from "../../utils/format.js";
   import { ZERO_MONEY, compareMoney, divideMoney, formatMoney } from "../../money.js";
   import {
     ALL_TOKEN_TYPES,
     sumSelectedTokens,
   } from "../../stores/usageTokenTypes.js";
-
-  function fmtTokens(v: number): string {
-    if (v >= 1_000_000_000) {
-      const g = Math.floor(v / 100_000_000) / 10;
-      return `${g}B`;
-    }
-    if (v >= 1_000_000) {
-      const m = Math.floor(v / 100_000) / 10;
-      return `${m}M`;
-    }
-    if (v >= 1_000) {
-      const k = Math.floor(v / 100) / 10;
-      return `${k}K`;
-    }
-    return String(v);
-  }
 
   function fmtPct(v: number): string {
     return `${(v * 100).toFixed(1)}%`;
@@ -182,35 +167,35 @@
       return [
         {
           label: selectedTokenLabel,
-          value: () => fmtTokens(totalTokens),
+          value: () => formatCount(totalTokens),
           featured: true,
         },
         {
           label: () => m.usage_summary_total_input(),
-          value: () => fmtTokens(totalInputTokens),
+          value: () => formatCount(totalInputTokens),
         },
         {
           label: () => m.usage_uncached_input(),
-          value: () => fmtTokens(inputTokens),
+          value: () => formatCount(inputTokens),
           sub: () =>
             cachedTokens > 0
               ? m.usage_summary_cached_tokens({
-                  value: `+${fmtTokens(cachedTokens)}`,
+                  value: `+${formatCount(cachedTokens)}`,
                 })
               : "",
         },
         {
           label: () => m.analytics_metric_output_tokens(),
-          value: () => fmtTokens(outputTokens),
+          value: () => formatCount(outputTokens),
         },
         {
           label: () => m.usage_summary_daily_burn_tokens(),
-          value: () => fmtTokens(dailyBurnTokens),
+          value: () => formatCount(dailyBurnTokens),
           sub: () => m.usage_summary_avg_day(),
         },
         {
           label: () => m.usage_summary_peak_day_tokens(),
-          value: () => fmtTokens(peakTokens.value),
+          value: () => formatCount(peakTokens.value),
           sub: () => peakTokens.date,
         },
         {
@@ -221,19 +206,17 @@
           label: () => m.analytics_summary_projects(),
           context: true,
           value: () =>
-            String(
-              usage.summary?.projectTotals.length ?? 0,
-            ),
+            formatCount(usage.summary?.projectTotals.length ?? 0),
         },
         {
           label: () => m.usage_models(),
           context: true,
-          value: () => String(usage.summary?.modelTotals.length ?? 0),
+          value: () => formatCount(usage.summary?.modelTotals.length ?? 0),
         },
         {
           label: () => m.analytics_summary_active_days(),
           context: true,
-          value: () => String(activeDays),
+          value: () => formatCount(activeDays),
         },
       ] satisfies Card[];
     }
@@ -255,21 +238,21 @@
         : []),
       {
         label: () => m.usage_summary_total_input(),
-        value: () => fmtTokens(totalInputTokens),
+        value: () => formatCount(totalInputTokens),
       },
       {
         label: () => m.usage_uncached_input(),
-        value: () => fmtTokens(inputTokens),
+        value: () => formatCount(inputTokens),
         sub: () =>
           cachedTokens > 0
             ? m.usage_summary_cached_tokens({
-                value: `+${fmtTokens(cachedTokens)}`,
+                value: `+${formatCount(cachedTokens)}`,
               })
             : "",
       },
       {
         label: () => m.analytics_metric_output_tokens(),
-        value: () => fmtTokens(outputTokens),
+        value: () => formatCount(outputTokens),
       },
       {
         label: () => m.usage_summary_daily_burn(),
@@ -290,20 +273,18 @@
         label: () => m.analytics_summary_projects(),
         context: true,
         value: () =>
-          String(
-            usage.summary?.projectTotals.length ?? 0,
-          ),
+          formatCount(usage.summary?.projectTotals.length ?? 0),
       },
       {
         label: () => m.usage_models(),
         context: true,
         value: () =>
-          String(usage.summary?.modelTotals.length ?? 0),
+          formatCount(usage.summary?.modelTotals.length ?? 0),
       },
       {
         label: () => m.analytics_summary_active_days(),
         context: true,
-        value: () => String(activeDays),
+        value: () => formatCount(activeDays),
       },
     ];
     return baseCards;

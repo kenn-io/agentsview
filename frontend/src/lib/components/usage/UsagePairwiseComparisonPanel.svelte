@@ -3,6 +3,7 @@
   import { Card, Table, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
+  import { formatCount } from "../../utils/format.js";
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
   import type { Money } from "../../money.js";
   import { formatMoney, formatSignedMoney } from "../../money.js";
@@ -15,30 +16,9 @@
         !usage.pairwiseSelection.right.value),
   );
 
-  function fmtCount(value: number): string {
-    return String(value);
-  }
-
   function fmtSignedCount(value: number): string {
-    return value >= 0 ? `+${value}` : String(value);
-  }
-
-  function fmtTokens(value: number): string {
-    if (value >= 1_000_000_000) {
-      return `${Math.floor(value / 100_000_000) / 10}B`;
-    }
-    if (value >= 1_000_000) {
-      return `${Math.floor(value / 100_000) / 10}M`;
-    }
-    if (value >= 1_000) {
-      return `${Math.floor(value / 100) / 10}K`;
-    }
-    return String(value);
-  }
-
-  function fmtSignedTokens(value: number): string {
     const prefix = value >= 0 ? "+" : "-";
-    return `${prefix}${fmtTokens(Math.abs(value))}`;
+    return `${prefix}${formatCount(Math.abs(value))}`;
   }
 
   function fmtRatio(value: number | null | undefined): string {
@@ -54,7 +34,7 @@
 
   function fmtMaybeTokens(value: number | null | undefined): string {
     if (value == null) return m.shared_none();
-    return fmtTokens(value);
+    return formatCount(value);
   }
 
   function fmtMaybeSignedCost(value: Money | null | undefined): string {
@@ -64,7 +44,7 @@
 
   function fmtMaybeSignedTokens(value: number | null | undefined): string {
     if (value == null) return m.shared_none();
-    return fmtSignedTokens(value);
+    return fmtSignedCount(value);
   }
 
   function optionsFor(dimension: UsagePairwiseDimension): string[] {
@@ -151,15 +131,15 @@
       return [
         {
           label: m.usage_pairwise_total_tokens(),
-          left: fmtTokens(leftTokens),
-          right: fmtTokens(rightTokens),
-          delta: fmtSignedTokens(tokenDelta),
+          left: formatCount(leftTokens),
+          right: formatCount(rightTokens),
+          delta: fmtSignedCount(tokenDelta),
           ratio: fmtRatio(tokenRatio),
         },
         {
           label: m.analytics_col_sessions(),
-          left: fmtCount(comparison.left.sessionCount),
-          right: fmtCount(comparison.right.sessionCount),
+          left: formatCount(comparison.left.sessionCount),
+          right: formatCount(comparison.right.sessionCount),
           delta: fmtSignedCount(comparison.deltas.sessionCountDelta),
           ratio: fmtRatio(comparison.deltas.sessionCountDeltaRatio),
         },
@@ -172,16 +152,16 @@
         },
         {
           label: m.usage_uncached_input(),
-          left: fmtTokens(comparison.left.inputTokens),
-          right: fmtTokens(comparison.right.inputTokens),
-          delta: fmtSignedTokens(comparison.deltas.inputTokensDelta),
+          left: formatCount(comparison.left.inputTokens),
+          right: formatCount(comparison.right.inputTokens),
+          delta: fmtSignedCount(comparison.deltas.inputTokensDelta),
           ratio: fmtRatio(comparison.deltas.inputTokensDeltaRatio),
         },
         {
           label: m.analytics_metric_output_tokens(),
-          left: fmtTokens(comparison.left.outputTokens),
-          right: fmtTokens(comparison.right.outputTokens),
-          delta: fmtSignedTokens(comparison.deltas.outputTokensDelta),
+          left: formatCount(comparison.left.outputTokens),
+          right: formatCount(comparison.right.outputTokens),
+          delta: fmtSignedCount(comparison.deltas.outputTokensDelta),
           ratio: fmtRatio(comparison.deltas.outputTokensDeltaRatio),
         },
       ];
@@ -197,8 +177,8 @@
       },
       {
         label: m.analytics_col_sessions(),
-        left: fmtCount(comparison.left.sessionCount),
-        right: fmtCount(comparison.right.sessionCount),
+        left: formatCount(comparison.left.sessionCount),
+        right: formatCount(comparison.right.sessionCount),
         delta: fmtSignedCount(comparison.deltas.sessionCountDelta),
         ratio: fmtRatio(comparison.deltas.sessionCountDeltaRatio),
       },
@@ -211,9 +191,9 @@
       },
       {
         label: m.usage_pairwise_total_tokens(),
-        left: fmtTokens(comparison.left.totalTokens),
-        right: fmtTokens(comparison.right.totalTokens),
-        delta: fmtSignedTokens(comparison.deltas.totalTokensDelta),
+        left: formatCount(comparison.left.totalTokens),
+        right: formatCount(comparison.right.totalTokens),
+        delta: fmtSignedCount(comparison.deltas.totalTokensDelta),
         ratio: fmtRatio(comparison.deltas.totalTokensDeltaRatio),
       },
       {
@@ -225,16 +205,16 @@
       },
       {
         label: m.usage_uncached_input(),
-        left: fmtTokens(comparison.left.inputTokens),
-        right: fmtTokens(comparison.right.inputTokens),
-        delta: fmtSignedTokens(comparison.deltas.inputTokensDelta),
+        left: formatCount(comparison.left.inputTokens),
+        right: formatCount(comparison.right.inputTokens),
+        delta: fmtSignedCount(comparison.deltas.inputTokensDelta),
         ratio: fmtRatio(comparison.deltas.inputTokensDeltaRatio),
       },
       {
         label: m.analytics_metric_output_tokens(),
-        left: fmtTokens(comparison.left.outputTokens),
-        right: fmtTokens(comparison.right.outputTokens),
-        delta: fmtSignedTokens(comparison.deltas.outputTokensDelta),
+        left: formatCount(comparison.left.outputTokens),
+        right: formatCount(comparison.right.outputTokens),
+        delta: fmtSignedCount(comparison.deltas.outputTokensDelta),
         ratio: fmtRatio(comparison.deltas.outputTokensDeltaRatio),
       },
     ];

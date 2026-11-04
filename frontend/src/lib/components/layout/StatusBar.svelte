@@ -11,7 +11,7 @@
   import { codexCloudStatusLine } from "../../utils/codexCloudStatus.js";
   import { ActivityIcon } from "../../icons.js";
   import {
-    formatNumber,
+    formatCount,
     formatRelativeTime,
     formatTimestamp,
   } from "../../utils/format.js";
@@ -103,17 +103,17 @@
       <span class="counts">
         <span>{m.status_bar_sessions({
           count: sync.stats.session_count,
-          countLabel: formatNumber(sync.stats.session_count),
+          countLabel: formatCount(sync.stats.session_count),
         })}</span>
         <span class="sep">&middot;</span>
         <span>{m.status_bar_messages({
           count: sync.stats.message_count,
-          countLabel: formatNumber(sync.stats.message_count),
+          countLabel: formatCount(sync.stats.message_count),
         })}</span>
         <span class="sep">&middot;</span>
         <span>{m.status_bar_projects({
           count: sync.stats.project_count,
-          countLabel: formatNumber(sync.stats.project_count),
+          countLabel: formatCount(sync.stats.project_count),
         })}</span>
       </span>
     {/if}

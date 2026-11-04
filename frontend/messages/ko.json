@@ -238,19 +238,19 @@
   "session_breadcrumb_summary_mode_tooltip": "이 transcript에는 도구 결과, 사고 내용, 변경 사항(diff)이 없습니다. 전체 충실도를 보려면 agy-reader 사이드카가 필요합니다 — 설치하거나, 이미 설치했다면 따라잡을 때까지 기다리세요. 방법을 알아보려면 클릭하세요.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "형식 오류가 있는 {count}줄"
+        "countPlural=other": "형식 오류가 있는 {countLabel}줄"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "소스 파일에서 {count}줄을 구문 분석할 수 없습니다"
+        "countPlural=other": "소스 파일에서 {countLabel}줄을 구문 분석할 수 없습니다"
       }
     }
   ],
@@ -1734,10 +1734,10 @@
   "insights_page_pct_affected": "{pct}% 영향받음",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": ["input affectedLabel", "input total", "input totalLabel", "local totalPlural = total: plural"],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=other": "{total}개 세션 중 {affected}개에서 이 결정론적 패턴이 발생했습니다."
+        "totalPlural=other": "{totalLabel}개 세션 중 {affectedLabel}개에서 이 결정론적 패턴이 발생했습니다."
       }
     }
   ],
@@ -1789,13 +1789,14 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "세션 {count}개, {completedRate}% 완료, 평균 실패 신호 {failureSignals}개"
+        "countPlural=other": "세션 {countLabel}개, {completedRate}% 완료, 평균 실패 신호 {failureSignals}개"
       }
     }
   ],

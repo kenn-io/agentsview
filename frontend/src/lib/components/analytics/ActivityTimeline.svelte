@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Bar, BarChart } from "layerchart";
   import { Button } from "@kenn-io/kit-ui";
   import { scaleUtc } from "d3-scale";
@@ -262,7 +263,7 @@
     const lines = [
       m.analytics_activity_timeline_tooltip_value({
         label,
-        value: bar.total.toLocaleString(getLocale()),
+        value: formatCount(bar.total),
         metric: metric === "messages"
           ? m.analytics_metric_messages()
           : m.analytics_metric_sessions(),
@@ -272,9 +273,9 @@
       const split = asPercent
         ? splitPercent(bar)
         : {
-            user: bar.userMessages.toLocaleString(getLocale()),
-            assistant: bar.assistantMessages.toLocaleString(getLocale()),
-            other: bar.otherMessages.toLocaleString(getLocale()),
+            user: formatCount(bar.userMessages),
+            assistant: formatCount(bar.assistantMessages),
+            other: formatCount(bar.otherMessages),
           };
       lines.push(
         m.analytics_activity_timeline_tooltip_messages({

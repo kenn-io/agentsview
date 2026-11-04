@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { DbProjectAnalytics as ProjectAnalytics } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
@@ -74,11 +75,11 @@
     const parts: string[] = [
       m.analytics_project_messages({
         count: project.messages,
-        countLabel: project.messages.toLocaleString(),
+        countLabel: formatCount(project.messages),
       }),
       m.analytics_project_sessions({
         count: project.sessions,
-        countLabel: project.sessions.toLocaleString(),
+        countLabel: formatCount(project.sessions),
       }),
     ];
     if (agents) parts.push(agents);
@@ -100,7 +101,7 @@
     {#if rows.length > 0}
       <span class="count">
         {m.analytics_total_count({
-          countLabel: (analytics.projects?.projects.length ?? 0).toLocaleString(),
+          countLabel: formatCount(analytics.projects?.projects.length ?? 0),
         })}
       </span>
     {/if}
@@ -140,7 +141,7 @@
             ></div>
           </div>
           <span class="bar-value">
-            {project.messages.toLocaleString()}
+            {formatCount(project.messages)}
           </span>
         </div>
       {/each}

@@ -1,6 +1,6 @@
 import type { DbCaptureCoverageView, DbPlanUsageView } from "../api/generated/index.js";
 import { getLocale, m } from "../i18n/index.js";
-import { formatTimestamp } from "./format.js";
+import { formatTimestamp, formatCount } from "./format.js";
 
 // The agent whose sessions always carry a plan usage state, even before
 // the first usage request finishes.
@@ -218,7 +218,7 @@ export function describeCaptureCoverage(
   const lines = [m.capture_tokens_live({ time: formatTimestamp(coverage.last_capture_at) })];
   const turns = coverage.uncaptured_turns;
   if (turns <= 0) return lines;
-  const params = { count: turns, countLabel: turns.toLocaleString(getLocale()) };
+  const params = { count: turns, countLabel: formatCount(turns) };
   // A complete row with no later outcome counts every turn that ran before
   // its data time. Whether a missed turn ran before then is not known, so
   // the line names the time instead of claiming it.

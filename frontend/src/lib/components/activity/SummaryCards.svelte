@@ -1,13 +1,14 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Card } from "@kenn-io/kit-ui";
-  import { formatDateTime, m } from "../../i18n/index.js";
+  import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { formatMoney } from "../../money.js";
 
   let { report }: { report: Report } = $props();
 
-  function fmtInt(v: number): string {
-    return v.toLocaleString();
+  function fmtMinutes(v: number): string {
+    return Math.round(v).toLocaleString(getLocale());
   }
 
   // Subagents are separate from interactive and automated conversation counts.
@@ -16,19 +17,19 @@
     if (t.subagent_sessions > 0) {
       parts.push(
         m.activity_session_kind_split({
-          interactive: fmtInt(t.interactive_sessions),
+          interactive: formatCount(t.interactive_sessions),
           subagents: t.subagent_sessions,
-          subagentsLabel: fmtInt(t.subagent_sessions),
-          automated: fmtInt(t.automated_sessions),
+          subagentsLabel: formatCount(t.subagent_sessions),
+          automated: formatCount(t.automated_sessions),
         }),
       );
     } else if (t.automated_sessions > 0) {
       parts.push(
-        m.activity_interactive_automated_split({ interactive: fmtInt(t.interactive_sessions), automated: fmtInt(t.automated_sessions) }),
+        m.activity_interactive_automated_split({ interactive: formatCount(t.interactive_sessions), automated: formatCount(t.automated_sessions) }),
       );
     }
     if (t.untimed_sessions > 0) {
-      parts.push(m.activity_untimed_count({ count: fmtInt(t.untimed_sessions) }));
+      parts.push(m.activity_untimed_count({ count: formatCount(t.untimed_sessions) }));
     }
     return parts.join(", ");
   }
@@ -70,7 +71,7 @@
     return [
       {
         label: m.activity_interactive_peak(),
-        value: fmtInt(report.interactive_peak.agents),
+        value: formatCount(report.interactive_peak.agents),
         sub: peakAt ? m.activity_at_time({ time: peakAt }) : "",
         featured: true,
       },
@@ -83,20 +84,20 @@
         label: m.activity_agent_minutes(),
         // Round to a whole minute so the card shows "134", not "134.226";
         // matches the Breakdowns rounding of the same metric.
-        value: fmtInt(Math.round(t.agent_minutes)),
+        value: fmtMinutes(t.agent_minutes),
       },
       {
         label: m.activity_sessions(),
-        value: fmtInt(t.sessions),
+        value: formatCount(t.sessions),
         sub: sessionsSub(t),
       },
       {
         label: m.activity_projects(),
-        value: fmtInt(t.distinct_projects),
+        value: formatCount(t.distinct_projects),
       },
       {
         label: m.activity_models(),
-        value: fmtInt(t.distinct_models),
+        value: formatCount(t.distinct_models),
       },
       {
         label: m.activity_total_cost(),

@@ -17,6 +17,7 @@
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import { addDays } from "../../utils/dates.js";
+  import { formatCount } from "../../utils/format.js";
   import { seriesPaint } from "../../utils/seriesPaint.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
   import type {
@@ -464,15 +465,8 @@
     return formatMoney(moneyFromMicrodollars(v));
   }
 
-  function fmtTokenYLabel(v: number): string {
-    if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-    return String(Math.round(v));
-  }
-
   function fmtYLabel(v: number): string {
-    return isTokenMode ? fmtTokenYLabel(v) : fmtCostYLabel(v);
+    return isTokenMode ? formatCount(v) : fmtCostYLabel(v);
   }
 
   function tooltipRows(point: Point) {
@@ -849,7 +843,7 @@
                 </dt>
                 <dd>
                   {isTokenMode
-                    ? fmtTokenYLabel(row.value)
+                    ? formatCount(row.value)
                     : formatMoney(moneyFromMicrodollars(row.value))}
                 </dd>
               </div>

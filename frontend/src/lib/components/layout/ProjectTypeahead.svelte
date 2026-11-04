@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Typeahead } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
@@ -44,7 +45,7 @@
       .filter((p) => p.name !== "")
       .map((p) => ({
         name: p.name,
-        label: `${p.name} (${p.session_count})`,
+        label: `${p.name} (${formatCount(p.session_count)})`,
         displayLabel: p.name,
         count: p.session_count,
       }));

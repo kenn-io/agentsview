@@ -244,21 +244,21 @@
   "session_breadcrumb_summary_mode_tooltip": "Bu yazışma mətnində alət nəticələri, düşünmə və diff-lər yoxdur. Tam məzmun üçün agy-reader köməkçi xidməti lazımdır, onu quraşdırın və ya artıq quraşdırılıbsa, sinxronlaşdırmanın tamamlanmasını gözləyin. Necə edildiyini öyrənmək üçün klikləyin.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} yanlış quruluşlu sətir",
-        "countPlural=other": "{count} yanlış quruluşlu sətir"
+        "countPlural=one": "{countLabel} yanlış quruluşlu sətir",
+        "countPlural=other": "{countLabel} yanlış quruluşlu sətir"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Mənbə faylındakı {count} sətri təhlil etmək mümkün olmadı",
-        "countPlural=other": "Mənbə faylındakı {count} sətri təhlil etmək mümkün olmadı"
+        "countPlural=one": "Mənbə faylındakı {countLabel} sətri təhlil etmək mümkün olmadı",
+        "countPlural=other": "Mənbə faylındakı {countLabel} sətri təhlil etmək mümkün olmadı"
       }
     }
   ],
@@ -1814,11 +1814,11 @@
   "insights_page_pct_affected": "{pct}% təsirlənib",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": ["input affectedLabel", "input total", "input totalLabel", "local totalPlural = total: plural"],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{total} sessiyadan {affected} sessiyada bu deterministik qanunauyğunluq var.",
-        "totalPlural=other": "{total} sessiyadan {affected} sessiyada bu deterministik qanunauyğunluq var."
+        "totalPlural=one": "{totalLabel} sessiyadan {affectedLabel} sessiyada bu deterministik qanunauyğunluq var.",
+        "totalPlural=other": "{totalLabel} sessiyadan {affectedLabel} sessiyada bu deterministik qanunauyğunluq var."
       }
     }
   ],
@@ -1870,14 +1870,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq",
-        "countPlural=other": "{count} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq"
+        "countPlural=one": "{countLabel} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq",
+        "countPlural=other": "{countLabel} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq"
       }
     }
   ],

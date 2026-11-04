@@ -242,21 +242,21 @@
   "session_breadcrumb_summary_mode_tooltip": "Les résultats d'outil, la réflexion et les diffs sont absents de cette transcription. La fidélité complète nécessite le sidecar agy-reader — installez-le, ou s'il est déjà installé, laissez-le rattraper son retard. Cliquez pour savoir comment.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} ligne mal formée",
-        "countPlural=other": "{count} lignes mal formées"
+        "countPlural=one": "{countLabel} ligne mal formée",
+        "countPlural=other": "{countLabel} lignes mal formées"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} ligne du fichier source n'a pas pu être analysée",
-        "countPlural=other": "{count} lignes du fichier source n'ont pas pu être analysées"
+        "countPlural=one": "{countLabel} ligne du fichier source n'a pas pu être analysée",
+        "countPlural=other": "{countLabel} lignes du fichier source n'ont pas pu être analysées"
       }
     }
   ],
@@ -1821,11 +1821,11 @@
   "insights_page_pct_affected": "{pct} % affectées",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": ["input affectedLabel", "input total", "input totalLabel", "local totalPlural = total: plural"],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{affected} session sur {total} présente ce motif déterministe.",
-        "totalPlural=other": "{affected} sessions sur {total} présentent ce motif déterministe."
+        "totalPlural=one": "{affectedLabel} session sur {totalLabel} présente ce motif déterministe.",
+        "totalPlural=other": "{affectedLabel} sessions sur {totalLabel} présentent ce motif déterministe."
       }
     }
   ],
@@ -1877,14 +1877,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} session, {completedRate} % terminées, {failureSignals} échecs en moyenne",
-        "countPlural=other": "{count} sessions, {completedRate} % terminées, {failureSignals} échecs en moyenne"
+        "countPlural=one": "{countLabel} session, {completedRate} % terminées, {failureSignals} échecs en moyenne",
+        "countPlural=other": "{countLabel} sessions, {completedRate} % terminées, {failureSignals} échecs en moyenne"
       }
     }
   ],

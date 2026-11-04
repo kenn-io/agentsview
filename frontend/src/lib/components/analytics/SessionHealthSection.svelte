@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
@@ -29,7 +30,7 @@
   function formatSessionCount(count: number): string {
     return m.analytics_session_shape_session_count({
       count,
-      countLabel: count.toLocaleString(),
+      countLabel: formatCount(count),
     });
   }
 </script>
@@ -40,11 +41,11 @@
       <h3 class="section-title">{m.analytics_session_health_title()}</h3>
       <span class="section-subtitle">
         {m.analytics_session_health_scored({
-          countLabel: signals.scored_sessions.toLocaleString(),
+          countLabel: formatCount(signals.scored_sessions),
         })}
         &middot;
         {m.analytics_session_health_unscored({
-          countLabel: signals.unscored_sessions.toLocaleString(),
+          countLabel: formatCount(signals.unscored_sessions),
         })}
       </span>
     </div>
@@ -121,11 +122,11 @@
             ? "var(--accent-red)"
             : "var(--accent-amber)"}
         >
-          {signals.context_health.sessions_with_compaction}
+          {formatCount(signals.context_health.sessions_with_compaction)}
         </span>
         <span class="card-sub">
           {#if signals.context_health.sessions_with_mid_task_compaction > 0}
-            {signals.context_health.sessions_with_mid_task_compaction}
+            {formatCount(signals.context_health.sessions_with_mid_task_compaction)}
             {m.analytics_session_health_mid_task()} &middot;
           {/if}
           {m.analytics_session_health_avg_per_session({
@@ -166,7 +167,7 @@
               {#each agentSort.sort([...signals.by_agent].sort((a, b) => b.session_count - a.session_count)) as row}
                 <tr>
                   <td>{row.agent}</td>
-                  <td class="num">{row.session_count}</td>
+                  <td class="num">{formatCount(row.session_count)}</td>
                   <td class="num">
                     {row.avg_health_score != null
                       ? Math.round(row.avg_health_score)
@@ -199,7 +200,7 @@
               {#each projectSort.sort([...signals.by_project].sort((a, b) => b.session_count - a.session_count)) as row}
                 <tr>
                   <td>{row.project}</td>
-                  <td class="num">{row.session_count}</td>
+                  <td class="num">{formatCount(row.session_count)}</td>
                   <td class="num">
                     {row.avg_health_score != null
                       ? Math.round(row.avg_health_score)

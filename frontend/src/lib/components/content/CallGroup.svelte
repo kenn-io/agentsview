@@ -3,7 +3,7 @@
   import { m } from "../../i18n/index.js";
   import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import CallRow from "./CallRow.svelte";
 
   interface Props {
@@ -44,7 +44,7 @@
       <span class="cg-h-label">
         {m.call_group_parallel_label()} · {m.call_group_parallel_call_count({
           count: calls.length,
-          countLabel: formatNumber(calls.length),
+          countLabel: formatCount(calls.length),
         })}
       </span>
     </div>

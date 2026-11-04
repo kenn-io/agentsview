@@ -242,21 +242,21 @@
   "session_breadcrumb_summary_mode_tooltip": "Tool results, thinking, and diffs are missing from this transcript. Full fidelity needs the agy-reader sidecar — install it, or if installed, let it catch up. Click to learn how.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} malformed line",
-        "countPlural=other": "{count} malformed lines"
+        "countPlural=one": "{countLabel} malformed line",
+        "countPlural=other": "{countLabel} malformed lines"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} line in the source file could not be parsed",
-        "countPlural=other": "{count} lines in the source file could not be parsed"
+        "countPlural=one": "{countLabel} line in the source file could not be parsed",
+        "countPlural=other": "{countLabel} lines in the source file could not be parsed"
       }
     }
   ],
@@ -1821,11 +1821,11 @@
   "insights_page_pct_affected": "{pct}% affected",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": ["input affectedLabel", "input total", "input totalLabel", "local totalPlural = total: plural"],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{affected} of {total} session has this deterministic pattern.",
-        "totalPlural=other": "{affected} of {total} sessions have this deterministic pattern."
+        "totalPlural=one": "{affectedLabel} of {totalLabel} session has this deterministic pattern.",
+        "totalPlural=other": "{affectedLabel} of {totalLabel} sessions have this deterministic pattern."
       }
     }
   ],
@@ -1877,14 +1877,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} session, {completedRate}% completed, {failureSignals} avg failures",
-        "countPlural=other": "{count} sessions, {completedRate}% completed, {failureSignals} avg failures"
+        "countPlural=one": "{countLabel} session, {completedRate}% completed, {failureSignals} avg failures",
+        "countPlural=other": "{countLabel} sessions, {completedRate}% completed, {failureSignals} avg failures"
       }
     }
   ],

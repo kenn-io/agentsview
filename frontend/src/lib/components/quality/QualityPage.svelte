@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount, onDestroy, untrack } from "svelte";
@@ -98,7 +99,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       .sort((a, b) => b.session_count - a.session_count)
       .map((agent) => ({
         name: agent.name,
-        label: `${agentLabel(agent.name)} (${agent.session_count})`,
+        label: `${agentLabel(agent.name)} (${formatCount(agent.session_count)})`,
         displayLabel: agentLabel(agent.name),
         count: agent.session_count,
       }));
@@ -442,7 +443,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   function affectedLabel(pattern: QualityPatternView): string {
     if (pattern.totalSessions === 0) return m.insights_page_no_computed_sessions();
-    return m.insights_page_affected_sessions({ affected: pattern.affectedSessions, total: pattern.totalSessions });
+    return m.insights_page_affected_sessions({ affected: formatCount(pattern.affectedSessions), total: formatCount(pattern.totalSessions) });
   }
 
   function pct(count: number, total: number): number {
@@ -761,21 +762,21 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           <Card level="default" padding="none" class="summary-card">
             <article class="summary-card-content">
               <span class="label">{m.insights_page_scored_sessions()}</span>
-              <strong>{summary.scoredSessions}</strong>
-              <span>{m.insights_page_unscored_count({ count: summary.unscoredSessions })}</span>
+              <strong>{formatCount(summary.scoredSessions)}</strong>
+              <span>{m.insights_page_unscored_count({ count: formatCount(summary.unscoredSessions) })}</span>
             </article>
           </Card>
           <Card level="default" padding="none" class="summary-card">
             <article class="summary-card-content">
               <span class="label">{m.insights_page_low_quality()}</span>
-              <strong>{summary.lowQualitySessions}</strong>
+              <strong>{formatCount(summary.lowQualitySessions)}</strong>
               <span>{m.insights_page_df_graded()}</span>
             </article>
           </Card>
           <Card level="default" padding="none" class="summary-card">
             <article class="summary-card-content">
               <span class="label">{m.insights_page_prompt_signals()}</span>
-              <strong>{summary.computedQualitySessions}</strong>
+              <strong>{formatCount(summary.computedQualitySessions)}</strong>
               <span>{m.insights_page_sessions_computed()}</span>
             </article>
           </Card>
@@ -796,7 +797,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                   style:width={`${(bucket.count / maxGradeCount) * 100}%`}
                 ></div>
               </div>
-              <strong>{bucket.count}</strong>
+              <strong>{formatCount(bucket.count)}</strong>
             </div>
           {/each}
         </Card>
@@ -841,11 +842,11 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                   >
                     <span>{driver.label}</span>
                     <strong>
-                      {driver.total}{driver.unit ?? ""}
+                      {formatCount(driver.total)}{driver.unit ?? ""}
                     </strong>
                     <em>{m.insights_page_driver_sessions({
                       count: driver.sessions,
-                      countLabel: driver.sessions.toLocaleString(),
+                      countLabel: formatCount(driver.sessions),
                     })}</em>
                     <small>{calibrationLabel(String(driver.id))}</small>
                   </button>
@@ -933,7 +934,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                         <span>{agentLabel(example.agent)}</span>
                         <span>{example.outcome || m.insights_page_unknown()}</span>
                         <span>{qualityBadge(example)}</span>
-                        {#if example.failure_signals != null}<span>{m.insights_page_failures({ count: example.failure_signals })}</span>{/if}
+                        {#if example.failure_signals != null}<span>{m.insights_page_failures({ count: formatCount(example.failure_signals) })}</span>{/if}
                       </span>
                     </Card>
                   {/each}

@@ -9,7 +9,7 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { formatRelativeTime, truncate } from "../../utils/format.js";
+  import { formatRelativeTime, truncate, formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { LatestRead } from "../../utils/latest-read.js";
   let trashedSessions: Session[] = $state([]);
@@ -118,7 +118,7 @@
               <span class="trash-project">{session.project}</span>
               <span class="trash-msgs">{m.trash_msgs({
                 count: session.user_message_count,
-                countLabel: session.user_message_count.toLocaleString(),
+                countLabel: formatCount(session.user_message_count),
               })}</span>
               {#if session.deleted_at}
                 <span class="trash-deleted">{m.trash_deleted_ago({ time: formatRelativeTime(session.deleted_at) })}</span>

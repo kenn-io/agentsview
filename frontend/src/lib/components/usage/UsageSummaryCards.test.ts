@@ -199,7 +199,7 @@ describe("UsageSummaryCards", () => {
     ]);
     expect(cardValue("Total Input")).toBe("7.9B");
     expect(cardValue("Uncached Input")).toBe("248.6M");
-    expect(cardSub("Uncached Input")).toBe("+7.6B cached");
+    expect(cardSub("Uncached Input")).toBe("+7.7B cached");
 
     unmount(component);
     component = undefined;
@@ -278,7 +278,7 @@ describe("UsageSummaryCards", () => {
       target: document.body,
     });
     await tick();
-    expect(cardValue("Total Input")).toBe("1.5K");
+    expect(cardValue("Total Input")).toBe("1,515");
 
     usage.setTimeRange("2026-07-02", "2026-07-03");
     usage.cancelInFlightReads();

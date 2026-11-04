@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Card } from "@kenn-io/kit-ui";
   import type { DbStatsOutcomeStats } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
@@ -29,10 +30,6 @@
   interface Metric {
     label: string;
     value: number;
-  }
-
-  function formatNum(value: number): string {
-    return value.toLocaleString();
   }
 
   const metrics = $derived.by((): Metric[] => {
@@ -97,7 +94,7 @@
     <div class="outcome-cards">
       {#each metrics as item (item.label)}
         <Card level="default" padding="none" class="outcome-card">
-          <span class="outcome-value">{formatNum(item.value)}</span>
+          <span class="outcome-value">{formatCount(item.value)}</span>
           <span class="outcome-label">{item.label}</span>
         </Card>
       {/each}

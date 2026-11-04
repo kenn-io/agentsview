@@ -2,7 +2,7 @@
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { usage } from "../../stores/usage.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { formatAgentName, truncate } from "../../utils/format.js";
   import { m } from "../../i18n/index.js";
   import { formatMoney } from "../../money.js";
@@ -80,7 +80,7 @@
             </span>
           </div>
           <span class="session-tokens">
-            {formatTokenCount(
+            {formatCount(
               isTokenMode
                 ? sumSelectedTokens(row, usage.selectedTokenTypes)
                 : row.totalTokens,

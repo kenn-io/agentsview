@@ -5,7 +5,7 @@
     getSessionStatus,
   } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { StatusDot } from "@kenn-io/kit-ui";
   import { sessionStatusLabel } from "../../utils/sessionStatus.js";
@@ -100,7 +100,7 @@
           title={m.analytics_top_sessions_filter_unclean()}
         >
           {m.analytics_top_sessions_unclean_count({
-            countLabel: uncleanCount.toLocaleString(),
+            countLabel: formatCount(uncleanCount),
           })}
         </button>
       {/if}
@@ -175,9 +175,9 @@
                 )}
               </span>
             {:else if analytics.topMetric === "output_tokens"}
-              {formatTokenCount(session.output_tokens)}
+              {formatCount(session.output_tokens)}
             {:else}
-              {session.message_count}
+              {formatCount(session.message_count)}
             {/if}
           </span>
         </div>

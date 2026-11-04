@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import {
     SessionsService,
@@ -15,7 +16,7 @@
     type ToolEffectivenessConclusion,
     type ToolEffectivenessOmission,
   } from "../../api/types/insights.js";
-  import { getLocale, m } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import {
     CheckIcon,
     ChevronRightIcon,
@@ -219,10 +220,6 @@
     }
     return null;
   });
-
-  function formatCount(value: number): string {
-    return value.toLocaleString(getLocale());
-  }
 
   function countArgs(count: number) {
     return { count, countLabel: formatCount(count) };

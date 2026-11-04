@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { getLocale, m } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
 
   const CELL_GAP = 2;
   const CELL_HEIGHT = 17;
@@ -128,7 +129,7 @@
         day,
         hour: h,
         count: value,
-        countLabel: value.toLocaleString(getLocale()),
+        countLabel: formatCount(value),
       }),
     };
   }
