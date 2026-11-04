@@ -1690,7 +1690,8 @@
     gap: var(--space-4);
     width: 100%;
     padding: 6px 10px;
-    font-size: 13px;
+    font-size: 12.5px;
+    text-align: left;
     color: var(--text-primary);
     text-decoration: none;
     border-radius: 5px;
@@ -1715,7 +1716,7 @@
 
   .open-menu-name {
     flex: 1;
-    font-weight: 500;
+    font-weight: 400;
   }
 
   .open-menu-divider {
