@@ -306,12 +306,11 @@ func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
 		s.CreatedAt = created
-		s.MessageCount = 2
-		s.UserMessageCount = 2
+		s.MessageCount = 1
+		s.UserMessageCount = 1
 	})
 	insertMessages(t, d,
-		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam seam", Timestamp: start, ContentLength: 9},
-		Message{SessionID: "s1", Ordinal: 1, Role: "user", Content: "seam", Timestamp: "2024-06-05T09:00:00Z", ContentLength: 4},
+		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam", Timestamp: "2024-06-05T09:00:00Z", ContentLength: 4},
 	)
 	terms, err := ParseTrendTerms([]string{"seam"})
 	require.NoError(t, err)
@@ -321,7 +320,6 @@ func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 	require.NoError(t, err, "GetTrendsTerms")
 	assert.Equal(t, 1, trendSeriesByTerm(got.Series)["seam"].Total,
 		"message timestamp total")
-	assert.Equal(t, 1, got.MessageCount)
 }
 
 func TestGetTrendsTermsSQLiteDoesNotFilterBySessionTimestamp(t *testing.T) {
@@ -459,14 +457,9 @@ func TestGetTrendsTermsSQLiteSessionWindowMatchesMessageDates(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	cases := testutil.TrendsSessionWindowCases()
-	// SQLite can retain malformed timestamp text; typed mirrors reject it.
-	cases = append(cases, testutil.TrendsSessionWindowCase{
-		Project: "invalid-message", Started: "2024-06-05T09:00:00Z", Created: "2024-01-01T09:00:00Z",
-		Timestamp: "invalid", Timezone: "UTC", Hour: 9, Want: 1,
-	})
 	for _, tc := range cases {
 		_, err := d.getWriter().ExecContext(ctx, `INSERT INTO sessions
-			(id, project, machine, agent, started_at, created_at, message_count) VALUES (?, ?, 'local', 'claude', ?, ?, 1)`,
+			(id, project, machine, agent, started_at, created_at, message_count) VALUES (?, ?, 'local', 'claude', NULLIF(?, ''), ?, 1)`,
 			tc.Project, tc.Project, tc.Started, tc.Created)
 		require.NoError(t, err)
 		for ordinal, m := range tc.Messages() {

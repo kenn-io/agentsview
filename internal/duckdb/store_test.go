@@ -4687,7 +4687,7 @@ func TestTrendsTermsSessionWindowParity(t *testing.T) {
 	local := newLocalDB(t)
 	cases := testutil.TrendsSessionWindowCases()
 	for _, tc := range cases {
-		sess := syncSession(tc.Project, tc.Project, "seam", tc.Started, 1)
+		sess := syncSession(tc.Project, tc.Project, "seam", tc.Started, len(tc.Messages()))
 		sess.CreatedAt = tc.Created
 		if tc.Started == "" {
 			sess.StartedAt = nil
@@ -4733,6 +4733,7 @@ func TestTrendsTermsSessionWindowParity(t *testing.T) {
 				want, err := local.GetTrendsTerms(ctx, f, terms, "day")
 				require.NoError(t, err)
 				assert.Equal(t, tc.Want, got.MessageCount)
+				require.Len(t, got.Series, 1)
 				assert.Equal(t, tc.Want, got.Series[0].Total)
 				assert.Equal(t, want, got)
 			}
