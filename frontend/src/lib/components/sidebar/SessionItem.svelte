@@ -770,7 +770,9 @@
     --side-meta-width: min(max(104px, 34%), 38%);
   }
 
+  /* Clip the meta line to its box so nothing paints under the slot. */
   .session-item:has(.side-meta) .session-meta {
+    overflow: hidden;
     padding-right: calc(min(max(104px, 38%), 44%) + 6px);
   }
 
@@ -894,7 +896,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 110px;
-    min-width: min(56px, 100%);
+    min-width: 0;
     flex-shrink: 1;
   }
 
