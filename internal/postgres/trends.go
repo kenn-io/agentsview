@@ -41,7 +41,13 @@ func (s *Store) GetTrendsTerms(
 		rowWindow := inWindow
 		if modelFiltering {
 			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
-			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+			assistantFilter := f
+			assistantFilter.To = ""
+			assistantWindow := pgAnalyticsMessageWindow(assistantFilter, "m.timestamp", pb)
+			if assistantWindow == "" {
+				assistantWindow = "TRUE"
+			}
+			rowWindow = "(" + inWindow + " OR (m.role = 'assistant' AND " + assistantWindow + "))"
 		}
 		preds = append(preds, rowWindow)
 	}

@@ -71,18 +71,9 @@ func (db *DB) GetTrendsTerms(
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
 	if sessionWindow, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
-		var messagePreds []string
-		var messageArgs []any
-		if from != "" {
-			messagePreds = append(messagePreds, "wm.timestamp >= ?")
-			messageArgs = append(messageArgs, from)
-		}
-		if to != "" {
-			messagePreds = append(messagePreds, "wm.timestamp < ?")
-			messageArgs = append(messageArgs, to)
-		}
+		messageWindow, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
 		// Filter sessions before walking their messages.
-		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + strings.Join(messagePreds, " AND ") + ")))"
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + ")))"
 		args = append(args, wargs...)
 		args = append(args, messageArgs...)
 	}
@@ -96,8 +87,13 @@ func (db *DB) GetTrendsTerms(
 		if modelFiltering {
 			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
 			selectArgs = append(selectArgs, wargs...)
-			// Assistants outside the window still resolve pending user turns.
-			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+			// Later and undated assistants still resolve pending user turns.
+			assistantWindow, assistantArgs := analyticsMessageWindowPred("m.timestamp", from, "")
+			if assistantWindow == "" {
+				assistantWindow = "1 = 1"
+			}
+			rowWindow = "(" + inWindow + " OR (m.role = 'assistant' AND " + assistantWindow + "))"
+			wargs = append(wargs, assistantArgs...)
 		}
 		where += " AND " + rowWindow
 		args = append(args, wargs...)
