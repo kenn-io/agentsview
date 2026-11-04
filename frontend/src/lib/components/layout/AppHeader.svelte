@@ -165,7 +165,7 @@
   active={activeTab}
   onchange={(id) => router.navigate(id as Route)}
   bind:collapsed={navCollapsed}
-  searchMinWidth={navCollapsed ? 48 : 220}
+  searchMinWidth={navCollapsed ? 48 : 300}
   ariaLabel={m.nav_primary()}
 >
   {#snippet left()}
