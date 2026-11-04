@@ -1223,7 +1223,7 @@ func createMissingPreparationIndexesPG(ctx context.Context, pg *sql.DB) error {
 
 // createPartialIndexesPG creates partial indexes on the PG schema.
 // Idempotent via IF NOT EXISTS.
-func createPartialIndexesPG(ctx context.Context, pg pgSessionExecer) error {
+func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
@@ -1272,11 +1272,11 @@ func createPartialIndexesPG(ctx context.Context, pg pgSessionExecer) error {
 		indexes = append(indexes, index.ddl)
 	}
 	for _, ddl := range indexes {
-		if _, err := pg.ExecContext(ctx, ddl); err != nil {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating PG index: %w", err)
 		}
 	}
-	if _, err := pg.ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
 	); err != nil {
 		return fmt.Errorf("dropping legacy PG usage index: %w", err)
