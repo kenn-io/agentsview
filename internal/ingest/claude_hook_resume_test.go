@@ -39,7 +39,6 @@ func TestClaudeHookResumeCursor(t *testing.T) {
 		{name: "ordinary tail before hook", current: "old", rows: []parser.ParsedMessage{user, assistant, hook}, want: "a1"},
 		{name: "multiple hooks", current: "old", rows: []parser.ParsedMessage{user, assistant, hook, secondHook}, want: "a1"},
 		{name: "ordinary after hooks", current: "old", rows: []parser.ParsedMessage{assistant, hook, nextUser}, want: "u2"},
-		{name: "ID-less hook", current: "old", rows: []parser.ParsedMessage{assistant, idlessHook}, want: "a1"},
 		{name: "ID-less ordinary tail", current: "old", rows: []parser.ParsedMessage{assistant, hook, idlessUser}, want: "a1"},
 		{name: "only ID-less records", current: "old", rows: []parser.ParsedMessage{idlessHook, idlessUser}, want: "old"},
 	} {

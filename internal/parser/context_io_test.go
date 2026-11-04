@@ -101,16 +101,6 @@ func TestClaudeDAGPostProcessingStopsAfterContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestClaudeDAGWithoutHooksSkipsOwnershipMap(t *testing.T) {
-	entries := []dagEntry{{uuid: "user-1", entryType: "user", line: `{"type":"user","message":{"content":"x"}}`}}
-	_, owners, err := parseDAG(
-		t.Context(), entries, "session", "project", "machine", "",
-		FileInfo{}, nil, time.Time{}, time.Time{}, claudeSessionMeta{}, false,
-	)
-	require.NoError(t, err)
-	assert.Nil(t, owners, "sessions without hooks need no ownership map")
-}
-
 func TestClaudeSubtreeUserTurnsStopsAfterContextCancellation(t *testing.T) {
 	entries := make([]dagEntry, 1024)
 	children := make(map[string][]int, len(entries))

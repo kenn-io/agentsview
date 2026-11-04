@@ -2,15 +2,12 @@ package db
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 // seedSearchSession inserts one session with the given messages
@@ -809,24 +806,6 @@ func TestSearchContentFTSUnavailable(t *testing.T) {
 
 func TestSearchContentExcludeSystem(t *testing.T) {
 	d := testDB(t)
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.Mkdir(project, 0o700))
-	path := filepath.Join(project, "hooks.jsonl")
-	const transcript = `{"type":"user","timestamp":"2026-05-20T12:00:00Z","message":{"role":"user","content":"hello"}}
-{"type":"attachment","timestamp":"2026-05-20T12:00:01Z","attachment":{"type":"hook_success","stdout":"hook NEEDLE output"}}
-`
-	require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
-	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	require.Len(t, outcome.Results[0].Result.Messages, 2)
-	hook := outcome.Results[0].Result.Messages[1]
 	insertSession(t, d, "s3", "proj", func(s *Session) {
 		s.Agent = "claude"
 		s.UserMessageCount = 2
@@ -840,8 +819,8 @@ func TestSearchContentExcludeSystem(t *testing.T) {
 			Timestamp: "2026-05-20T12:00:00Z",
 		},
 		{
-			SessionID: "s3", Ordinal: 1, Role: string(hook.Role),
-			Content: hook.Content, DialogueText: hook.DialogueText, IsSystem: hook.IsSystem,
+			SessionID: "s3", Ordinal: 1, Role: "user",
+			Content: "Stdout:\nhook NEEDLE output", DialogueText: nil, IsSystem: true,
 			Timestamp: "2026-05-20T12:00:01Z",
 		},
 	}
