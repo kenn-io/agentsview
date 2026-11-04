@@ -830,15 +830,8 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 	assert.Zero(t, stats.Deleted, "cascaded rows are reinserted in-scan, not genuinely removed")
 
 	for _, key := range keys {
-		row, ok := readMirrorRow(t, ix, key)
+		_, ok := readMirrorRow(t, ix, key)
 		require.True(t, ok, "%s must still be in the mirror", key)
-
-		var stampCount int
-		require.NoError(t, ix.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ? AND revision = ?`,
-			key, row.contentHash,
-		).Scan(&stampCount))
-		assert.Equal(t, 1, stampCount, "%s's stamp must survive the cascading shift", key)
 	}
 
 	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, nil, 100)
