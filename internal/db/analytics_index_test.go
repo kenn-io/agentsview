@@ -23,8 +23,8 @@ func TestStartupStatsKeepFTSSegmentDeletesIndexed(t *testing.T) {
 			rows, err := d.getWriter().Query(t.Context(),
 				`EXPLAIN QUERY PLAN DELETE FROM `+table+` WHERE id>=? AND id<=?`, 10, 20)
 			require.NoError(t, err)
-			defer rows.Close()
 			details := explainQueryPlanDetails(t, rows)
+			require.NoError(t, rows.Close())
 			assert.Contains(t, strings.Join(details, "\n"), "SEARCH "+table+" USING INTEGER PRIMARY KEY")
 		}
 	}
