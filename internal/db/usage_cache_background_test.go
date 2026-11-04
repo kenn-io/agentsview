@@ -188,11 +188,10 @@ func TestUsageCacheBackfillPublishesStableCoverageWhileNewestSessionChanges(
 	)
 }
 
-func TestUsageCacheBackfillBatchesNewestSessionsFirst(t *testing.T) {
-	database := testDB(t)
-	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	messages := make([]Message, 0, usageCacheBackfillBatchSize+1)
-	for i := range usageCacheBackfillBatchSize + 1 {
+func seedUsageBatchSessions(t *testing.T, database *DB, count int, base time.Time) {
+	t.Helper()
+	messages := make([]Message, 0, count)
+	for i := range count {
 		id := fmt.Sprintf("batch-%03d", i)
 		timestamp := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 		insertSession(t, database, id, "project", func(session *Session) {
@@ -206,6 +205,12 @@ func TestUsageCacheBackfillBatchesNewestSessionsFirst(t *testing.T) {
 		})
 	}
 	require.NoError(t, database.InsertMessages(t.Context(), messages))
+}
+
+func TestUsageCacheBackfillBatchesNewestSessionsFirst(t *testing.T) {
+	database := testDB(t)
+	seedUsageBatchSessions(t, database, usageCacheBackfillBatchSize+1,
+		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken)
@@ -588,6 +593,8 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
 
+	// Give the first re-warm stale prices so it reaches the build hook.
+	setPrice(2_000_000)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once

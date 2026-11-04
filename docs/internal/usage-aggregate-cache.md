@@ -105,7 +105,8 @@ An aggregate request:
 1. closes the archive snapshot before acquiring cache write locks;
 1. opens the generation named by cache format and archive database ID;
 1. fills missing or stale normalized facts for only the candidate sessions;
-1. builds missing or stale rollups for the requested timezone;
+1. builds missing or stale rollups for the requested timezone in batches of at
+   most 256 sessions, each with its own install transaction;
 1. rechecks source fingerprints and baked metadata before installing; and
 1. verifies all required installs inside one pinned cache read transaction
    before assembling the result.
@@ -123,7 +124,11 @@ archive-busy races retry at most three times, then fail instead of returning
 stale usage.
 
 Request cancellation detaches the waiter from shared fill work. The fill keeps
-running so retry storms converge. `cached_at` is diagnostic only.
+running so retry storms converge. Rollup requests stop dispatching batches when
+canceled; the batch in flight finishes for the next request to reuse. One batch
+per timezone builds at a time, and identical concurrent batches share their
+work. Cursor history stays in one install with the first batch. `cached_at` is
+diagnostic only.
 
 ## Files and generations
 
