@@ -257,8 +257,8 @@ func (c *usageRollupCoordinator) Ensure(
 		return nil, usageRollupMetrics{}, fmt.Errorf("hashing usage pricing: %w", err)
 	}
 	batch := snapshot
-	batch.Sessions = nil
-	batch.Versions = nil
+	batch.Sessions = make([]usageQuerySession, 0, len(stale))
+	batch.Versions = make([]usageSourceVersion, 0, len(stale))
 	for i, session := range snapshot.Sessions {
 		if stale[session.ID] {
 			batch.Sessions = append(batch.Sessions, session)
