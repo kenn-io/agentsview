@@ -1568,6 +1568,11 @@ func isCodexWaitAgentCall(name string) bool {
 	return name == "wait" || name == "wait_agent"
 }
 
+// Code-mode wait resumes an exec cell and binds no agents.
+func isCodexExecCellWait(name string, args gjson.Result) bool {
+	return name == "wait" && args.Get("cell_id").Str != ""
+}
+
 func parseCodexSubagentNotification(
 	content string,
 ) (agentID, statusName, text string) {
@@ -3084,7 +3089,9 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Result) bool {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
-		return isCodexWaitAgentCall(payload.Get("name").Str)
+		name := payload.Get("name").Str
+		args, _ := parseCodexFunctionArgs(payload)
+		return isCodexWaitAgentCall(name) && !isCodexExecCellWait(name, args)
 	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload, b.agent)
 		if isCodexSubagentFunctionOutput(output) {
@@ -3095,7 +3102,7 @@ func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Resu
 		}
 		name := b.toolCallNameForOutput(payload.Get("call_id").Str)
 		return name == "" || name == "spawn_agent" ||
-			isCodexWaitAgentCall(name)
+			(isCodexWaitAgentCall(name) && output.Get("status").IsObject())
 	default:
 		role := payload.Get("role").Str
 		if role != "user" {
