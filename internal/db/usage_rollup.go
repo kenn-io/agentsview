@@ -324,9 +324,7 @@ func (c *usageRollupCoordinator) ensureChunk(
 			c.mu.Lock()
 			if call.waiters == 0 {
 				call.err = context.Canceled
-				if c.calls[key] == call {
-					delete(c.calls, key)
-				}
+				delete(c.calls, key)
 				close(call.done)
 				c.mu.Unlock()
 				zone.Unlock()
