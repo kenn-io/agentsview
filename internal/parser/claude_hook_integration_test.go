@@ -83,8 +83,7 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 			}
 			assert.Equal(t, wantBody, hook.Content)
 			assert.Equal(t, len(hook.Content), hook.ContentLength)
-			require.NotNil(t, hook.DialogueText)
-			assert.Empty(t, *hook.DialogueText)
+			assert.Nil(t, hook.DialogueText)
 
 			// The row carries no tool, thinking, token, or billing identity.
 			assert.Empty(t, hook.ToolCalls)

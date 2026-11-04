@@ -2,12 +2,15 @@ package db
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // seedSearchSession inserts one session with the given messages
@@ -806,6 +809,24 @@ func TestSearchContentFTSUnavailable(t *testing.T) {
 
 func TestSearchContentExcludeSystem(t *testing.T) {
 	d := testDB(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.Mkdir(project, 0o700))
+	path := filepath.Join(project, "hooks.jsonl")
+	const transcript = `{"type":"user","timestamp":"2026-05-20T12:00:00Z","message":{"role":"user","content":"hello"}}
+{"type":"attachment","timestamp":"2026-05-20T12:00:01Z","attachment":{"type":"hook_success","stdout":"hook NEEDLE output"}}
+`
+	require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
+	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.Messages, 2)
+	hook := outcome.Results[0].Result.Messages[1]
 	insertSession(t, d, "s3", "proj", func(s *Session) {
 		s.Agent = "claude"
 		s.UserMessageCount = 2
@@ -818,21 +839,30 @@ func TestSearchContentExcludeSystem(t *testing.T) {
 			Content: "ordinary message holding NEEDLE", IsSystem: true,
 			Timestamp: "2026-05-20T12:00:00Z",
 		},
+		{
+			SessionID: "s3", Ordinal: 1, Role: string(hook.Role),
+			Content: hook.Content, DialogueText: hook.DialogueText, IsSystem: hook.IsSystem,
+			Timestamp: "2026-05-20T12:00:01Z",
+		},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s3", msgs),
 		"ReplaceSessionMessages")
-	withSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
-	})
-	require.NoError(t, err, "SearchContent with system")
-	assert.Len(t, withSys.Matches, 1, "default should include system messages")
-	noSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
-		ExcludeSystem: true, Limit: 50,
-	})
-	require.NoError(t, err, "SearchContent exclude system")
-	assert.Empty(t, noSys.Matches,
-		"ExcludeSystem should drop system messages")
+	for _, mode := range []string{"substring", "regex", "fts"} {
+		t.Run(mode, func(t *testing.T) {
+			withSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "NEEDLE", Mode: mode, Sources: []string{"messages"}, Limit: 50,
+			})
+			require.NoError(t, err, "SearchContent with system")
+			assert.Len(t, withSys.Matches, 2, "default should include ordinary system and hook messages")
+			noSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "NEEDLE", Mode: mode, Sources: []string{"messages"},
+				ExcludeSystem: true, Limit: 50,
+			})
+			require.NoError(t, err, "SearchContent exclude system")
+			assert.Empty(t, noSys.Matches,
+				"ExcludeSystem should drop ordinary system and hook messages")
+		})
+	}
 }
 
 func TestSearchContentExcludesAutomatedByDefault(t *testing.T) {

@@ -186,7 +186,10 @@ evidence; they do not establish whether a tool helped the task.
   rather than a public persistence schema. The
   [hooks documentation](https://code.claude.com/docs/en/hooks) defines the hook
   protocol's stdout and stderr, not transcript persistence. Full and incremental
-  parsing emit system rows with an explicitly empty dialogue field. The plain
+  parsing emit system rows with a null dialogue field, like queued system rows
+  and compact boundaries, so content search can find hook text when system
+  messages are included. Reverified 2026-11-04 with the system-row search test
+  for substring, regex, and FTS, including system-message exclusion. The plain
   body separates hook name, hook event, command, tool-use id, content, stdout,
   and stderr without trimming or interpreting their text. Native identity fields
   are retained only when supplied. Claude Code 2.1.301's installed bundle routes

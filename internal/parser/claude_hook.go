@@ -243,11 +243,9 @@ func claudeHookSuccessMessage(a claudeAttachment) ParsedMessage {
 	if a.hook.subtype == "stop_hook_summary" {
 		sourceType = "system"
 	}
-	dialogue := ""
 	return ParsedMessage{
 		Role:             RoleUser,
 		Content:          body,
-		DialogueText:     new(dialogue),
 		Timestamp:        a.timestamp,
 		IsSystem:         true,
 		ContentLength:    len(body),
