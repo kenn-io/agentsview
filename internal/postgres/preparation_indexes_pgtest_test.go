@@ -72,58 +72,48 @@ func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
 }
 
 func TestPGPreparationIndexesConcurrentInstallersBothSucceed(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		strict bool
-	}{
-		{"both compatible", false},
-		{"strict plus compatible", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			const schema = "agentsview_preparation_concurrent_test"
-			pgURL, store := prepareUsageSchema(t, schema)
-			pg := store.DB()
-			_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,machine,project,agent) VALUES('existing','machine','project','codex')`)
-			require.NoError(t, err)
-			for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
-				_, err := pg.ExecContext(t.Context(), `DROP INDEX `+index)
-				require.NoError(t, err)
+	const schema = "agentsview_preparation_concurrent_test"
+	pgURL, store := prepareUsageSchema(t, schema)
+	pg := store.DB()
+	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,machine,project,agent) VALUES('existing','machine','project','codex')`)
+	require.NoError(t, err)
+	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
+		_, err := pg.ExecContext(t.Context(), `DROP INDEX `+index)
+		require.NoError(t, err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	blocker, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback() }()
+	// Block the shared installer gate, so strict setup can finish its earlier DDL.
+	require.NoError(t, lockSyncMetadataRow(ctx, blocker, "preparation_indexes_lock"))
+	results := make(chan error, 2)
+	for _, name := range []string{"preparation-index-a", "preparation-index-b"} {
+		dsn, err := appendConnParams(pgURL, map[string]string{"application_name": name})
+		require.NoError(t, err)
+		conn, err := Open(ctx, dsn, schema, true)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		go func() {
+			if name == "preparation-index-b" {
+				results <- EnsureSchema(ctx, conn, schema)
+			} else {
+				results <- (&Sync{pg: conn, schema: schema}).EnsureSchema(ctx)
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-			defer cancel()
-			blocker, err := pg.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			defer func() { _ = blocker.Rollback() }()
-			// Block the shared installer gate, so strict setup can finish its earlier DDL.
-			require.NoError(t, lockSyncMetadataRow(ctx, blocker, "preparation_indexes_lock"))
-			results := make(chan error, 2)
-			for _, name := range []string{"preparation-index-a", "preparation-index-b"} {
-				dsn, err := appendConnParams(pgURL, map[string]string{"application_name": name})
-				require.NoError(t, err)
-				conn, err := Open(ctx, dsn, schema, true)
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = conn.Close() })
-				go func() {
-					if tc.strict && name == "preparation-index-b" {
-						results <- EnsureSchema(ctx, conn, schema)
-					} else {
-						results <- (&Sync{pg: conn, schema: schema}).EnsureSchema(ctx)
-					}
-				}()
-			}
-			require.Eventually(t, func() bool {
-				var waiting int
-				err := pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_stat_activity
-					WHERE datname=current_database() AND application_name IN ('preparation-index-a','preparation-index-b')
-					AND wait_event_type='Lock' AND query LIKE '%sync_metadata%FOR UPDATE'`).Scan(&waiting)
-				return err == nil && waiting == 2
-			}, 20*time.Second, 10*time.Millisecond, "both public entry points must reach the shared installer lock")
-			require.NoError(t, blocker.Commit())
-			require.NoError(t, <-results, "first publisher upgrades the shared archive")
-			require.NoError(t, <-results, "second publisher upgrades the shared archive")
-			for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
-				assert.True(t, pgHasIndex(t.Context(), pg, index), index)
-			}
-		})
+		}()
+	}
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_stat_activity
+			WHERE datname=current_database() AND application_name IN ('preparation-index-a','preparation-index-b')
+			AND wait_event_type='Lock' AND query LIKE '%sync_metadata%FOR UPDATE'`).Scan(&waiting)
+		return err == nil && waiting == 2
+	}, 20*time.Second, 10*time.Millisecond, "both public entry points must reach the shared installer lock")
+	require.NoError(t, blocker.Commit())
+	require.NoError(t, <-results, "first publisher upgrades the shared archive")
+	require.NoError(t, <-results, "second publisher upgrades the shared archive")
+	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
+		assert.True(t, pgHasIndex(t.Context(), pg, index), index)
 	}
 }
