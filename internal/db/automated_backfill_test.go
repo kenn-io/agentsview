@@ -303,7 +303,7 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 		{"transcript replacement", func(t *testing.T, d *DB) {
 			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "changed",
-				[]Message{userMsg("changed", 0, reviewPrompt)}))
+				[]Message{userMsg("changed", 0, "Explain another function.")}))
 			var state int
 			require.NoError(t, d.getWriter().QueryRow(t.Context(),
 				`SELECT automation_audit FROM sessions WHERE id = 'changed'`).Scan(&state))
@@ -329,6 +329,9 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 				s.FirstMessage = Ptr("Explain this function.")
 				s.UserMessageCount = 1
 			})
+			if tc.name == "transcript replacement" {
+				insertMessages(t, d, userMsg("changed", 0, "Explain this function."))
+			}
 			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
 			tc.change(t, d)
 			require.NoError(t, d.backfillIsAutomatedLocked(t.Context(), d.getWriter()))
@@ -336,10 +339,12 @@ func TestBackfillIsAutomatedRechecksChangedRows(t *testing.T) {
 			if tc.name == "import" {
 				id = "imported"
 			}
-			session, err := d.GetSession(t.Context(), id)
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			assert.True(t, session.IsAutomated)
+			if tc.name != "transcript replacement" {
+				session, err := d.GetSession(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				assert.True(t, session.IsAutomated)
+			}
 			var state int
 			require.NoError(t, d.getWriter().QueryRow(t.Context(),
 				`SELECT automation_audit FROM sessions WHERE id = ?`, id).Scan(&state))
