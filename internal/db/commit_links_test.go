@@ -102,8 +102,7 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"whitespace prefix", "[main abc1234] Fix parser", []string{"git add .\ngit commit -m fix", "cat <<'EOF'\nIt's fixed\nEOF\ngit commit -m fix", "GIT_X=1 git commit -m fix"}, 1},
 		{"cherry-pick", "[main abc1234] Fix parser", []string{"git cherry-pick abc1234"}, 0},
 		{"multiple", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", []string{"git commit -m one; git commit -m two"}, 2},
-		{"global option", "[main abc1234] Fix parser", []string{`git -c user.name=Example --no-pager commit -m fix`}, 1},
-		{"quoted global option", "[main abc1234] Fix parser", []string{`git -c 'user.name=Example User' commit -m fix`}, 1},
+		{"global option", "[main abc1234] Fix parser", []string{`git -c user.name=Example --no-pager commit -m fix`, `git -c 'user.name=Example User' commit -m fix`}, 1},
 		{"output delta", `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -422,8 +421,30 @@ func TestCommitLinksPurgeExcludedPages(t *testing.T) {
 	}
 }
 
-func TestCommitLinksMixedLengthAmbiguity(t *testing.T) {
+func TestCommitLinksAmbiguity(t *testing.T) {
 	d := testDB(t)
+	for _, id := range []string{"s1", "s2"} {
+		insertSession(t, d, id, "project-a")
+		insertMessages(t, d, commitMessages(id, `{"cmd":"git commit -m fix"}`, "[main abc123456] Fix parser")...)
+	}
+	shared, err := d.CommitSessionLinks(t.Context(), []string{"abc1234", "deadbee"})
+	require.NoError(t, err)
+	require.Len(t, shared.Commits, 2)
+	require.Len(t, shared.Commits[0].Links, 2)
+	assert.False(t, shared.Commits[0].Links[0].Ambiguous)
+	assert.Empty(t, shared.Commits[1].Links)
+	insertSession(t, d, "s3", "project-a")
+	insertMessages(t, d, commitMessages("s3", `{"command":"git commit -m other"}`, "[main abc1234ff] Other fix")...)
+	clash, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+	require.NoError(t, err)
+	require.Len(t, clash.Commits, 1)
+	require.Len(t, clash.Commits[0].Links, 3)
+	for _, l := range clash.Commits[0].Links {
+		assert.True(t, l.Ambiguous)
+	}
+	assert.ElementsMatch(t, []string{"abc123456", "abc123456", "abc1234ff"}, []string{clash.Commits[0].Links[0].SHA, clash.Commits[0].Links[1].SHA, clash.Commits[0].Links[2].SHA})
+
+	d = testDB(t)
 	insertSession(t, d, "s1", "project-a")
 	insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
 	insertSession(t, d, "s2", "project-b")
@@ -446,20 +467,8 @@ func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 		insertSession(t, d, id, "project-a")
 		insertMessages(t, d, commitMessages(id, `{"cmd":"git commit -m fix"}`, "[main abc123456] Fix parser")...)
 	}
-	shared, err := d.CommitSessionLinks(t.Context(), []string{"abc1234", "deadbee"})
-	require.NoError(t, err)
-	require.Len(t, shared.Commits[0].Links, 2)
-	assert.False(t, shared.Commits[0].Links[0].Ambiguous)
-	assert.Empty(t, shared.Commits[1].Links)
 	insertSession(t, d, "s3", "project-a")
 	insertMessages(t, d, commitMessages("s3", `{"command":"git commit -m other"}`, "[main abc1234ff] Other fix")...)
-	clash, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-	require.NoError(t, err)
-	require.Len(t, clash.Commits[0].Links, 3)
-	for _, l := range clash.Commits[0].Links {
-		assert.True(t, l.Ambiguous)
-	}
-	assert.ElementsMatch(t, []string{"abc123456", "abc123456", "abc1234ff"}, []string{clash.Commits[0].Links[0].SHA, clash.Commits[0].Links[1].SHA, clash.Commits[0].Links[2].SHA})
 	oversized := make([]string, 201)
 	for i := range oversized {
 		oversized[i] = "abc1234"
@@ -484,8 +493,13 @@ func TestCommitLinksLookupAndLifecycle(t *testing.T) {
 	deleted, err := d.CommitSessionLinks(t.Context(), []string{"abc123456"})
 	require.NoError(t, err)
 	require.Len(t, deleted.Commits[0].Links, 2)
+	assert.Equal(t, "s1", deleted.Commits[0].Links[0].SessionID)
+	assert.Equal(t, "abc123456", deleted.Commits[0].Links[0].SHA)
 	assert.True(t, deleted.Commits[0].Links[0].Missing)
 	assert.Nil(t, deleted.Commits[0].Links[0].Turn)
+	assert.Equal(t, "s2", deleted.Commits[0].Links[1].SessionID)
+	assert.False(t, deleted.Commits[0].Links[1].Missing)
+	assert.NotNil(t, deleted.Commits[0].Links[1].Turn)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s2", []Message{userMsg("s2", 0, "Rewritten prompt")}))
 	rewritten, err := d.SessionCommitLinks(t.Context(), "s2")
 	require.NoError(t, err)
