@@ -9,16 +9,11 @@ export function sessionAncestryMatcher<T extends SessionParents>(
   all: readonly T[],
   matches: (session: T) => boolean,
 ): (session: T) => boolean {
-  let byId: Map<string, T> | undefined;
-  return ancestryMatcher((id) => {
-    if (!byId) {
-      byId = new Map<string, T>();
-      for (const session of all) {
-        if (!byId.has(session.id)) byId.set(session.id, session);
-      }
-    }
-    return byId.get(id);
-  }, matches);
+  const byId = new Map<string, T>();
+  for (const session of all) {
+    if (!byId.has(session.id)) byId.set(session.id, session);
+  }
+  return ancestryMatcher((id) => byId.get(id), matches);
 }
 
 function ancestryMatcher<T extends SessionParents>(
