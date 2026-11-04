@@ -30,19 +30,13 @@ export async function installHooksFixture(page: Page) {
     });
   const messages = [
     row(0, "user", "Synthetic request"),
-    row(1, "assistant", "Intermediate reply"),
-    row(2, "user", HOOK_TEXT, {
+    row(1, "user", HOOK_TEXT, {
       is_system: true,
       source_type: "attachment",
       source_subtype: "hook_success",
       source_uuid: "synthetic-hook",
     }),
-    row(3, "assistant", "Final reply"),
-    row(4, "user", "Existing boundary content", {
-      is_system: true,
-      source_type: "system",
-      source_subtype: "continuation",
-    }),
+    row(2, "assistant", "Final reply"),
   ];
   const session = {
     ...createMockSessions(1, "hooks", () => "synthetic-hooks")[0],

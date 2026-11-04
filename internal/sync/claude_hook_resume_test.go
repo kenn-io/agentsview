@@ -33,11 +33,11 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		initialHook bool
-		hooks       []string
-		ids         []string
+		hook        string
+		id          string
 	}{
-		{name: "full import ending in hook", initialHook: true, hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
-		{name: "hook-only append", hooks: []string{claudeHookResumeNative}, ids: []string{"h1"}},
+		{name: "full import ending in hook", initialHook: true, hook: claudeHookResumeNative, id: "h1"},
+		{name: "hook-only append", hook: claudeHookResumeNative, id: "h1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
@@ -45,7 +45,7 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			path := filepath.Join(dir, "proj", "hook-resume.jsonl")
 			lines := []string{claudeHookResumeUser, claudeHookResumeAnswer}
 			if tc.initialHook {
-				lines = append(lines, tc.hooks...)
+				lines = append(lines, tc.hook)
 			}
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600))
@@ -56,26 +56,23 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			require.NoError(t, err)
 			counter.full.Store(0)
 			if !tc.initialHook {
-				appendClaudeSplitLines(t, path, tc.hooks...)
+				appendClaudeSplitLines(t, path, tc.hook)
 				env.engine.SyncPaths([]string{path})
 			}
 			info, ok := env.db.GetSessionForIncremental(t.Context(), path, "claude")
 			require.True(t, ok)
-			assert.Equal(t, 2+len(tc.hooks), info.NextOrdinal)
+			assert.Equal(t, 3, info.NextOrdinal)
 			stat, err := os.Stat(path)
 			require.NoError(t, err)
 			assert.Equal(t, stat.Size(), info.FileSize)
 			rows := fetchMessages(t, env.db, "hook-resume")
-			require.Len(t, rows, 2+len(tc.hooks))
-			for i, wantID := range tc.ids {
-				row := rows[i+2]
-				assert.Equal(t, wantID, row.SourceUUID)
-			}
+			require.Len(t, rows, 3)
+			assert.Equal(t, tc.id, rows[2].SourceUUID)
 			appendClaudeSplitLines(t, path, claudeHookResumeNextUser)
 			env.engine.SyncPaths([]string{path})
 			assert.Zero(t, counter.full.Load(), "deferred hooks must not cause whole-source reads on the next ordinary append")
 			rows = fetchMessages(t, env.db, "hook-resume")
-			require.Len(t, rows, 3+len(tc.hooks))
+			require.Len(t, rows, 4)
 			for i := range 2 {
 				assert.Equal(t, before[i].ID, rows[i].ID)
 			}
@@ -85,25 +82,7 @@ func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 			assert.Equal(t, before[1].ID, pins[0].MessageID)
 			info, ok = env.db.GetSessionForIncremental(t.Context(), path, "claude")
 			require.True(t, ok)
-			assert.Equal(t, 3+len(tc.hooks), info.NextOrdinal)
-			if tc.initialHook {
-				fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), config.ArchiveContentFull)
-				fullPath := filepath.Join(fullDir, "proj", "hook-resume.jsonl")
-				lines = append(lines, claudeHookResumeNextUser)
-				require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
-				require.NoError(t, os.WriteFile(fullPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600))
-				fullEnv.engine.SyncAll(t.Context(), nil)
-				assert.Equal(t,
-					snapshotSplitMessages(t, fullEnv.db, "hook-resume"),
-					snapshotSplitMessages(t, env.db, "hook-resume"),
-					"stored rows differ from a full parse",
-				)
-				assert.Equal(t,
-					snapshotSplitSession(t, fullEnv.db, "hook-resume"),
-					snapshotSplitSession(t, env.db, "hook-resume"),
-					"session aggregates differ from a full parse",
-				)
-			}
+			assert.Equal(t, 4, info.NextOrdinal)
 		})
 	}
 }

@@ -15,23 +15,24 @@ func TestClaudeHookResumeCursor(t *testing.T) {
 	hook := parser.ParsedMessage{Role: parser.RoleUser, IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", SourceUUID: "h1"}
 	secondHook := hook
 	secondHook.SourceUUID = "h2"
-	contextHook := hook
-	contextHook.SourceSubtype = "hook_additional_context"
-	cancelledHook := hook
-	cancelledHook.SourceSubtype = "hook_cancelled"
 	nextUser := user
 	nextUser.SourceUUID = "u2"
 	idlessUser := user
 	idlessUser.SourceUUID = ""
+	for _, subtype := range []string{"hook_success", "hook_cancelled", "hook_additional_context"} {
+		t.Run(subtype+" only", func(t *testing.T) {
+			t.Parallel()
+			row := hook
+			row.SourceSubtype = subtype
+			assert.Equal(t, "a1", ingest.LastParsedSourceUUID("a1", []parser.ParsedMessage{row}))
+		})
+	}
 	for _, tc := range []struct {
 		name    string
 		current string
 		rows    []parser.ParsedMessage
 		want    string
 	}{
-		{name: "hook only", current: "a1", rows: []parser.ParsedMessage{hook}, want: "a1"},
-		{name: "cancelled only", current: "a1", rows: []parser.ParsedMessage{cancelledHook}, want: "a1"},
-		{name: "additional context only", current: "a1", rows: []parser.ParsedMessage{contextHook}, want: "a1"},
 		{name: "no current cursor", rows: []parser.ParsedMessage{hook, secondHook}, want: ""},
 		{name: "ordinary tail before hook", current: "old", rows: []parser.ParsedMessage{user, assistant, hook, secondHook}, want: "a1"},
 		{name: "ordinary after hooks", current: "old", rows: []parser.ParsedMessage{assistant, hook, nextUser}, want: "u2"},

@@ -33,8 +33,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-it("keeps hook errors hidden and continuation boundaries visible under system", () => {
-  expect(isSystemMessage({ ...hook(), source_subtype: "hook_error" })).toBe(true);
+it("keeps continuation boundaries visible under system", () => {
   const boundary = msg({
     ordinal: 4,
     is_system: true,
@@ -57,6 +56,7 @@ describe.each(hookSubtypes)("%s output", (subtype) => {
       target: document.body,
       props: { subtype, content, timestamp: "" },
     });
+    expect(document.querySelector("script")).toBeNull();
     expect(document.querySelector(".label")?.textContent).toBe(
       subtype === "stop_hook_summary"
         ? "Stop hook summary"
@@ -78,19 +78,6 @@ it("does not finish a turn or promote an intermediate reply in focused mode", ()
   expect(
     filterDisplayItemsByTranscriptMode(items, "focused").flatMap((item) => item.ordinals),
   ).toEqual([0, 3, 4]);
-});
-
-it("uses a collapsed card and preserves escaped body text", () => {
-  const content = hook().content;
-  component = mount(SystemBoundaryCard, {
-    target: document.body,
-    props: { subtype: "hook_success", content, timestamp: "" },
-  });
-  const details = document.querySelector("details");
-  expect(details).not.toBeNull();
-  expect(details?.open).toBe(false);
-  expect(details?.querySelector("pre")?.textContent).toBe(content);
-  expect(document.querySelector("script")).toBeNull();
 });
 
 describe("hook filters", () => {

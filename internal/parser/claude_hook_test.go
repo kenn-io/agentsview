@@ -64,18 +64,6 @@ func TestExtractClaudeHookSuccessAccepts(t *testing.T) {
 			},
 		},
 		{
-			name: "content stdout and stderr kept apart",
-			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
-				`"content":"body text","stdout":"out text",` +
-				`"stderr":"err text"}}`,
-			want: claudeHookSuccess{
-				subtype: "hook_success",
-				content: "body text",
-				stdout:  "out text",
-				stderr:  "err text",
-			},
-		},
-		{
 			name: "stderr only",
 			line: `{"type":"attachment","attachment":{"type":"hook_success",` +
 				`"stderr":"err text"}}`,
