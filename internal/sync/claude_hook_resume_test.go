@@ -19,6 +19,18 @@ const (
 	claudeHookResumeNextUser = `{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"next request"}}`
 )
 
+// A hook record can sit before the assistant response in the file and
+// still sort after it, because an undated attachment has no timestamp of
+// its own and a dated one can carry a later stamp than the response. The
+// stored row then trails the response it precedes.
+const (
+	claudeHookRelocatedUndated = `{"type":"attachment","uuid":"h1","attachment":{"type":"hook_success","stdout":"first output"}}`
+	claudeHookRelocatedDated   = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","stdout":"first output"}}`
+	claudeHookRelocatedContext = `{"type":"attachment","uuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_additional_context","content":["extra context"]}}`
+	claudeHookRelocatedFirst   = `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hel"}]}}`
+	claudeHookRelocatedSecond  = `{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2024-01-01T00:00:04Z","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn"}}`
+)
+
 func TestClaudeHookResumeKeepsOrdinaryDAGCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -114,10 +126,125 @@ func TestClaudeHookResumeFullIncrementalAgreement(t *testing.T) {
 				`{"type":"attachment","uuid":"h2","parentUuid":"h1","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"hook_success","content":"second hook"}}`,
 				`{"type":"user","uuid":"u2","parentUuid":"h2","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"next request"}}`,
 			}, split: 2},
+			// The hook sits before the response in the file but sorts
+			// after it, so the stored hook row trails the assistant.
+			// Finishing the response replaces the rows from the
+			// assistant's ordinal onward, and the replaced byte range
+			// cannot reread the earlier hook.
+			{name: "relocated undated hook", lines: []string{
+				claudeHookResumeUser,
+				claudeHookRelocatedUndated,
+				claudeHookRelocatedFirst,
+				claudeHookRelocatedSecond,
+			}, split: 3},
+			{name: "relocated dated hook", lines: []string{
+				claudeHookResumeUser,
+				claudeHookRelocatedDated,
+				claudeHookRelocatedFirst,
+				claudeHookRelocatedSecond,
+			}, split: 3},
+			{name: "relocated additional context", lines: []string{
+				claudeHookResumeUser,
+				claudeHookRelocatedContext,
+				claudeHookRelocatedFirst,
+				claudeHookRelocatedSecond,
+			}, split: 3},
 		} {
 			t.Run(string(archive)+"/"+tc.name, func(t *testing.T) {
 				testClaudeSplitMatchesFullParse(t, archive, tc.lines, tc.split)
 			})
 		}
 	}
+}
+
+// TestClaudeHookRelocatedSurvivesSameIDAppend pins the hook row that
+// trails the assistant it precedes. An appended record that continues the
+// same response replaces the stored rows from the assistant's ordinal
+// onward, so the hook row has to survive that replacement, keep its
+// native identity and pin, and leave the stored checkpoint correct.
+func TestClaudeHookRelocatedSurvivesSameIDAppend(t *testing.T) {
+	env, dir := newClaudeSplitTestEnv(
+		t, claudeSplitFactory(t), config.ArchiveContentFull,
+	)
+	path := filepath.Join(dir, "proj", "relocated-hook.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join([]string{
+		claudeHookResumeUser,
+		claudeHookRelocatedDated,
+		claudeHookRelocatedFirst,
+	}, "\n")+"\n"), 0o600))
+	env.engine.SyncAll(t.Context(), nil)
+
+	before := fetchMessages(t, env.db, "relocated-hook")
+	require.Len(t, before, 3)
+	var hookID int64
+	hooks := 0
+	for _, row := range before {
+		if row.SourceUUID != "h1" {
+			continue
+		}
+		hooks++
+		hookID = row.ID
+		assert.Equal(t, "attachment", row.SourceType)
+		assert.Equal(t, "hook_success", row.SourceSubtype)
+		assert.True(t, row.IsSystem)
+		assert.Contains(t, row.Content, "first output")
+		require.NotNil(t, row.DialogueText)
+		assert.Empty(t, *row.DialogueText)
+	}
+	require.Equal(t, 1, hooks, "the hook keeps its own stored row")
+
+	_, err := env.db.PinMessage(t.Context(), "relocated-hook", hookID, nil)
+	require.NoError(t, err)
+
+	appendClaudeSplitLines(t, path, claudeHookRelocatedSecond)
+	env.engine.SyncPaths([]string{path})
+
+	after := fetchMessages(t, env.db, "relocated-hook")
+	require.Len(t, after, 3)
+	hooks = 0
+	var afterHookID int64
+	for _, row := range after {
+		if row.SourceUUID != "h1" {
+			continue
+		}
+		hooks++
+		afterHookID = row.ID
+		assert.Equal(t, "attachment", row.SourceType)
+		assert.Equal(t, "hook_success", row.SourceSubtype)
+		assert.True(t, row.IsSystem)
+		assert.Contains(t, row.Content, "first output")
+		require.NotNil(t, row.DialogueText)
+		assert.Empty(t, *row.DialogueText)
+	}
+	require.Equal(t, 1, hooks, "the hook row survives the same-id append")
+
+	pins, err := env.db.ListPinnedMessages(t.Context(), "relocated-hook", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, afterHookID, pins[0].MessageID)
+
+	info, ok := env.db.GetSessionForIncremental(t.Context(), path, "claude")
+	require.True(t, ok)
+	stat, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, stat.Size(), info.FileSize)
+	assert.Equal(t, 3, info.NextOrdinal)
+	assert.Equal(t, "a2", info.LastEntryUUID)
+
+	// A repeat sync must not change the stored rows, the pin, or the
+	// checkpoint.
+	env.engine.SyncPaths([]string{path})
+	repeat := fetchMessages(t, env.db, "relocated-hook")
+	require.Len(t, repeat, 3)
+	assert.Equal(t, after, repeat)
+	pins, err = env.db.ListPinnedMessages(t.Context(), "relocated-hook", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, afterHookID, pins[0].MessageID)
+	info, ok = env.db.GetSessionForIncremental(t.Context(), path, "claude")
+	require.True(t, ok)
+	assert.Equal(t, stat.Size(), info.FileSize)
+	assert.Equal(t, 3, info.NextOrdinal)
+	assert.Equal(t, "a2", info.LastEntryUUID)
 }

@@ -180,13 +180,14 @@ evidence; they do not establish whether a tool helped the task.
   hooks with `new Date().toISOString()`. Its other attachment constructors also
   supply or preserve timestamps. The timestamp-free example in the original
   report is explicitly synthetic. On `origin/main`, undated queued prompts
-  already block later dated attachments during merging. A
-  full-versus-incremental sync probe retained both an undated queued prompt on
-  main and an undated hook on this branch across a same-message-ID continuation:
-  sync reparses the open response suffix, including its attachments. Hooks use
-  the same merge path; this change leaves undated-record ordering intact. Hooks
-  follow their native parent into the main conversation or a fork, including
-  parents hidden by `isMeta` and attachment chains through skipped empty hooks,
+  already block later dated attachments during merging. Hooks keep that
+  conservative ordering policy. Timestamp ordering can place a hook after an
+  assistant even when its source bytes precede the response. A continuation of
+  the same message ID uses a full parse when stored rows trail the last
+  assistant, so suffix replacement cannot discard those earlier attachments.
+  Runs without trailing rows keep the bounded suffix reparse. Hooks follow
+  their native parent into the main conversation or a fork, including parents
+  hidden by `isMeta` and attachment chains through skipped empty hooks,
   cancelled hooks, and other attachment types. Unresolved parents and linear
   parsing use the original conversation timeline, alongside queued prompts.
   Synthetic tests cover ordering with queued prompts, assistant
@@ -195,7 +196,8 @@ evidence; they do not establish whether a tool helped the task.
   not advance the ordinary entry-chain resume cursor for either imported hook
   subtype. Synthetic ingest and sync tests cover full/append equivalence, native
   and ID-less hooks, linear parent chains, split responses, checkpoint offsets,
-  counts, and retained pins. In
+  counts, and retained pins. They include dated and undated hooks written
+  before an open response but sorted after it, in full and usage archives. In
   normal transcript mode, hook rows use a collapsed Hook output card and an
   independent Hooks filter. Focused mode hides these rows without treating them
   as new prompts. The card preserves escaped body text. Data version 164

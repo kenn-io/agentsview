@@ -1255,6 +1255,9 @@ func (db *DB) computeTemporal(
 // empty strings, and we ignore the resulting row rather than bucketing
 // it into the epoch.
 //
+// System rows, including hooks stored with the user role, do not count
+// as prompts or create hourly activity buckets.
+//
 // from/to bound the message timestamps so that long-running sessions
 // don't drag pre-window or post-window activity into hourly_utc. The
 // session window already restricted us to in-window sessions; this
@@ -1282,6 +1285,7 @@ func (db *DB) accumulateHourlyUTC(
 		FROM messages m
 		WHERE m.session_id IN ` + ph + `
 			AND m.role = 'user'
+			AND m.is_system = 0
 			AND COALESCE(m.source_subtype, '') <> 'tool_result'
 			AND m.timestamp IS NOT NULL
 			AND m.timestamp != ''

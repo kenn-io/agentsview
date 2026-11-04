@@ -16946,6 +16946,14 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	if !ok {
 		return nil, nil
 	}
+	// Timestamp ordering can place an attachment after this assistant even
+	// when its source bytes precede the run. Replacing the stored suffix
+	// would then delete a row the re-parse cannot reread. Use the full parse
+	// when rows trail the assistant, at the cost of a whole-transcript read
+	// for this continuation. Runs without trailing rows keep the bounded path.
+	if inc.NextOrdinal > runOrdinal+1 {
+		return nil, nil
+	}
 	scanInc := *inc
 	scanInc.FileSize = runStart
 	scanInc.NextOrdinal = runOrdinal
