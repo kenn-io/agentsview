@@ -45,6 +45,9 @@ type summaryStep struct {
 	chmod bool
 	// reads is the number of sources whose content the pass must read.
 	reads int
+	// updated reports that the pass reparses and writes the session
+	// instead of skipping it as unchanged.
+	updated bool
 }
 
 // TestChangedPathPassLogsSummary checks the per-pass log line that tells a
@@ -115,6 +118,49 @@ func TestChangedPathPassLogsSummary(t *testing.T) {
 			},
 		},
 		{
+			name:  "copilot",
+			agent: parser.AgentCopilot,
+			write: func(t *testing.T, root string) string {
+				t.Helper()
+				path := filepath.Join(root, "session-state", "copilot-a", "events.jsonl")
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(
+					`{"type":"session.start","timestamp":"2026-09-04T17:00:00Z","data":{"sessionId":"copilot-a"}}`+"\n"+
+						`{"type":"user.message","timestamp":"2026-09-04T17:00:01Z","data":{"content":"Question"}}`+"\n"+
+						`{"type":"assistant.message","timestamp":"2026-09-04T17:00:02Z","data":{"content":"Answer","outputTokens":3}}`+"\n",
+				), 0o644))
+				return path
+			},
+			// Copilot's stat digest covers the change time, so a
+			// metadata-only change reads and reparses the transcript.
+			steps: []summaryStep{
+				{name: "metadata-only change", chmod: true, reads: 1, updated: true},
+				{name: "repeated event", reads: 0},
+			},
+		},
+		{
+			// Junie has no stat-based freshness gate, so every event on an
+			// unchanged session fingerprints its content again.
+			name:  "junie",
+			agent: parser.AgentJunie,
+			write: func(t *testing.T, root string) string {
+				t.Helper()
+				path := filepath.Join(root, "session-one", "events.jsonl")
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(
+					`{"kind":"UserPromptEvent","requestId":"req-1","prompt":"Hello","timestampMs":1704067200500}`+"\n",
+				), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(root, "index.jsonl"), []byte(
+					`{"sessionId":"session-one","projectDir":"/work/project","taskName":"task","createdAt":1704067200000,"updatedAt":1704067201000}`+"\n",
+				), 0o644))
+				return path
+			},
+			steps: []summaryStep{
+				{name: "unchanged event", reads: 1},
+				{name: "repeated event", reads: 1},
+			},
+		},
+		{
 			// Poolside fingerprints from stats alone, so an event on an
 			// unchanged trajectory reads no content.
 			name:  "poolside",
@@ -172,10 +218,15 @@ func TestChangedPathPassLogsSummary(t *testing.T) {
 				require.NoError(t, engine.SyncPathsContext(
 					t.Context(), []string{sessionPath},
 				), step.name)
+				updated, unchanged := 0, 1
+				if step.updated {
+					updated, unchanged = 1, 0
+				}
 				assert.Contains(t, logs.take(), fmt.Sprintf(
 					"sync: changed paths: 1 path(s) matched 1 source(s): "+
-						"0 updated, 1 unchanged, 0 with errors; "+
+						"%d updated, %d unchanged, 0 with errors; "+
 						"%d source(s) read to check their content (%s)",
+					updated, unchanged,
 					step.reads, formatByteCount(int64(step.reads)*info.Size()),
 				), step.name)
 			}

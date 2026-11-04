@@ -110,6 +110,7 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 	defer file.Close()
 	c.transcriptBytes += info.Size()
 	copilotTranscriptBytesRead.Add(info.Size())
+	recordContentRead(ctx, info.Size())
 	h := sha256.New()
 	var started time.Time
 	sessionID := ""
