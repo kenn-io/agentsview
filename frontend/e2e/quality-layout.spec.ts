@@ -51,3 +51,41 @@ for (const width of [1280, 800]) {
     expect(Math.abs((await summaryHeight(page)) - loading)).toBeLessThanOrEqual(1);
   });
 }
+
+for (const width of [320, 375]) {
+  test(`Quality driver rows keep signal names and every column readable at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/quality");
+    const rows = page.locator(".driver-row");
+    await expect(rows.first()).toBeVisible();
+    const layout = await rows.evaluateAll((els) =>
+      els.map((row) => {
+        const list = row.closest(".driver-list")!.getBoundingClientRect();
+        const cells = [...row.children].map((cell) => {
+          const r = cell.getBoundingClientRect();
+          const el = cell as HTMLElement;
+          return { left: r.left, right: r.right, clipped: el.scrollWidth > el.clientWidth + 1 };
+        });
+        const name = row.firstElementChild as HTMLElement;
+        return {
+          nameWidth: name.getBoundingClientRect().width,
+          nameWhole: name.scrollWidth <= name.clientWidth + 1,
+          inside: cells.every((c) => c.left >= list.left - 0.5 && c.right <= list.right + 0.5),
+          valuesWhole: cells.slice(1).every((c) => !c.clipped),
+        };
+      }),
+    );
+    for (const row of layout) {
+      expect(row.nameWhole || row.nameWidth >= 120, JSON.stringify(row)).toBe(true);
+      expect(row.inside, JSON.stringify(row)).toBe(true);
+      expect(row.valuesWhole, JSON.stringify(row)).toBe(true);
+    }
+    const head = await page.locator(".driver-head").first().evaluate((head) => {
+      const spans = [...head.children].map((s) => s.getBoundingClientRect());
+      return spans.every((a, i) => spans.slice(i + 1).every((b) => a.right <= b.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5));
+    });
+    expect(head, "column headings do not overlap").toBe(true);
+  });
+}

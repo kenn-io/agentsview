@@ -830,6 +830,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                 </span>
               </div>
 
+              <div class="driver-frame">
               <div class="driver-list">
                 <div class="driver-head" aria-hidden="true">
                   <span>{m.insights_page_column_signal()}</span>
@@ -857,6 +858,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                     <small>{outcomeLabel}</small>
                   </button>
                 {/each}
+              </div>
               </div>
 
               <div
@@ -1395,6 +1397,30 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  /* Narrow cards: four columns would squeeze the signal names to nothing,
+     so the outcome moves to its own line under the name, and its column
+     heading goes with it. */
+  .driver-frame {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 400px) {
+    .driver-list {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+
+    .driver-head span:last-child {
+      display: none;
+    }
+
+    .driver-row > :last-child {
+      grid-column: 1 / -1;
+      padding-left: 0;
+      text-align: left;
+      white-space: normal;
+    }
   }
 
   .sparkline {
