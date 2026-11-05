@@ -134,7 +134,7 @@ import type { ServiceMessageList as MessagesResponse } from "../../api/generated
   <div class="subagent-header">
     <button class="subagent-toggle" onclick={toggleExpand}>
       <span class="toggle-chevron" class:open={expanded}>
-        <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
+        <ChevronRightIcon size="12" aria-hidden="true" />
       </span>
       <span class="toggle-label">{m.subagent_inline_label()}</span>
       {#if agentLabel}

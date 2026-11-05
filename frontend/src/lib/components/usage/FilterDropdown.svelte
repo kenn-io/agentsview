@@ -157,4 +157,11 @@
     display: contents;
     --kit-control-height: var(--filter-chip-height);
   }
+
+  /* Like the Typeahead chips, these carry no funnel: the "Project:" label
+     names the filter, and the page's single filter button keeps the
+     funnel. kit-ui FilterDropdown has no icon-less variant yet. */
+  .filter-chip-dropdown :global(.kit-filter-dropdown__btn > svg.lucide-funnel) {
+    display: none;
+  }
 </style>

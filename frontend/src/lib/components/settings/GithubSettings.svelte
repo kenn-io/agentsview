@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { CircleCheckIcon, InfoIcon } from "../../icons.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { ConfigService } from "../../api/generated/index";
 
@@ -33,7 +34,11 @@
   <div class="setting-row">
     <span class="setting-label">{m.settings_github_status()}</span>
     <span class="status-value" class:configured={settings.githubConfigured}>
-      <span class="status-mark" aria-hidden="true"></span>
+      {#if settings.githubConfigured}
+        <CircleCheckIcon size="14" aria-hidden="true" />
+      {:else}
+        <InfoIcon size="14" aria-hidden="true" />
+      {/if}
       {settings.githubConfigured ? m.settings_github_configured() : m.settings_github_not_configured()}
     </span>
   </div>
@@ -79,9 +84,9 @@
     color: var(--text-secondary);
   }
 
-  /* A status dot leads the word: a hollow ring when nothing is set up,
-     filled green once a token is saved, so the state registers at a
-     glance like the status dots elsewhere. */
+  /* A status glyph leads the word: the neutral info circle used for
+     unavailable states when nothing is set up, a green check circle once
+     a token is saved. */
   .status-value {
     display: inline-flex;
     align-items: center;
@@ -90,21 +95,13 @@
     color: var(--text-secondary);
   }
 
-  .status-mark {
-    width: 7px;
-    height: 7px;
-    box-sizing: border-box;
-    border-radius: 50%;
-    border: 1.5px solid var(--text-muted);
+  .status-value :global(svg) {
+    color: var(--text-muted);
   }
 
-  .status-value.configured {
+  .status-value.configured,
+  .status-value.configured :global(svg) {
     color: var(--accent-green);
-  }
-
-  .status-value.configured .status-mark {
-    border-color: var(--accent-green);
-    background: var(--accent-green);
   }
 
   .control-offset {

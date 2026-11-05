@@ -22,7 +22,9 @@
     LockIcon,
     MenuIcon,
     MoonIcon,
+    CircleQuestionMarkIcon,
     MoreHorizontalIcon,
+    RefreshCwIcon,
     SearchIcon,
     SettingsIcon,
     SunIcon,
@@ -234,10 +236,15 @@
       title={sync.readOnly ? m.header_actions_refresh_data_shortcut() : m.header_actions_sync_sessions_shortcut()}
       aria-label={sync.readOnly ? m.header_actions_refresh_data() : m.header_actions_sync_sessions()}
     >
+      <!-- Read-only Refresh means the same as each page's refresh control,
+           so it uses the same glyph and size; Sync rescans session sources
+           and keeps its own glyph at that size. -->
       {#if sync.syncing}
-        <span class="sync-spinner" aria-hidden="true"><Spinner size={13} /></span>
+        <span class="sync-spinner" aria-hidden="true"><Spinner size={14} /></span>
+      {:else if sync.readOnly}
+        <RefreshCwIcon size="14" aria-hidden="true" />
       {:else}
-        <DatabaseBackupIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+        <DatabaseBackupIcon size="14" aria-hidden="true" />
       {/if}
       <span class="sync-label" class:collapsed={navCollapsed}>{sync.readOnly ? m.header_actions_refresh() : m.header_actions_sync()}</span>
     </button>
@@ -251,33 +258,33 @@
         title={m.header_actions_more_actions()}
         ariaLabel={m.header_actions_more_actions()}
       >
-        <MoreHorizontalIcon size="16" strokeWidth="2" aria-hidden="true" />
+        <MoreHorizontalIcon size="16" aria-hidden="true" />
       </MenuTrigger>
       <MenuContent ariaLabel={m.header_actions_more_actions()}>
         {#if hasActiveSession}
           <MenuItem onselect={handleExport} keyshortcuts="E">
-            {#snippet icon()}<FileDownIcon size="13" strokeWidth="2" />{/snippet}
+            {#snippet icon()}<FileDownIcon size="14" />{/snippet}
             {#snippet trailing()}<span class="menu-key">E</span>{/snippet}
             {m.header_actions_download_html()}
           </MenuItem>
           <MenuItem onselect={handleCopyMarkdownExportLink}>
-            {#snippet icon()}<LinkIcon size="13" strokeWidth="2" />{/snippet}
+            {#snippet icon()}<LinkIcon size="14" />{/snippet}
             {m.header_actions_copy_markdown_link()}
           </MenuItem>
           {#if activeSessionFilePath}
             <MenuItem onselect={handleCopySourceFilePath}>
-              {#snippet icon()}<CopyIcon size="13" strokeWidth="2" />{/snippet}
+              {#snippet icon()}<CopyIcon size="14" />{/snippet}
               {m.header_actions_copy_source_path()}
             </MenuItem>
           {/if}
           <MenuSeparator />
           <MenuItem onselect={() => openPublish(false)} keyshortcuts="P">
-            {#snippet icon()}<GlobeIcon size="13" strokeWidth="2" />{/snippet}
+            {#snippet icon()}<GlobeIcon size="14" />{/snippet}
             {#snippet trailing()}<span class="menu-key">P</span>{/snippet}
             {m.header_actions_publish_public()}
           </MenuItem>
           <MenuItem onselect={() => openPublish(true)}>
-            {#snippet icon()}<LockIcon size="13" strokeWidth="2" />{/snippet}
+            {#snippet icon()}<LockIcon size="14" />{/snippet}
             {m.header_actions_publish_secret()}
           </MenuItem>
           <MenuSeparator />
@@ -286,7 +293,7 @@
           onselect={() => { showImportModal = true; }}
           disabled={sync.readOnly || sync.archiveOnly}
         >
-          {#snippet icon()}<DownloadIcon size="13" strokeWidth="2" />{/snippet}
+          {#snippet icon()}<DownloadIcon size="14" />{/snippet}
           {sync.archiveOnly
             ? m.header_actions_import_archive_only()
             : sync.readOnly
@@ -332,9 +339,9 @@
       aria-label={m.header_actions_toggle_theme()}
     >
       {#if ui.theme === "light"}
-        <MoonIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+        <MoonIcon size="16" aria-hidden="true" />
       {:else}
-        <SunIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+        <SunIcon size="16" aria-hidden="true" />
       {/if}
     </button>
 
@@ -345,7 +352,7 @@
       title={m.header_actions_settings()}
       aria-label={m.header_actions_settings()}
     >
-      <SettingsIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+      <SettingsIcon size="16" aria-hidden="true" />
     </button>
 
     <button
@@ -354,7 +361,7 @@
       title={m.header_actions_keyboard_shortcuts_shortcut()}
       aria-label={m.header_actions_keyboard_shortcuts()}
     >
-      ?
+      <CircleQuestionMarkIcon size="16" aria-hidden="true" />
     </button>
   {/snippet}
 </TopBar>
@@ -484,11 +491,6 @@
     font-weight: 600;
     transition: background 0.12s, color 0.12s;
     flex-shrink: 0;
-  }
-
-  .help-btn {
-    color: var(--text-muted);
-    font-weight: 500;
   }
 
   .header-btn + .header-btn {

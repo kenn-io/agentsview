@@ -1015,16 +1015,16 @@
         >
           {#if openFeedback}
             {#if openFeedbackKind === "error"}
-              <TriangleAlertIcon size="11" strokeWidth="2.2" aria-hidden="true" />
+              <TriangleAlertIcon size="12" aria-hidden="true" />
             {:else}
-              <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+              <CheckIcon size="12" aria-hidden="true" />
             {/if}
             {openFeedback}
           {:else}
             {canLaunch
               ? m.session_breadcrumb_resume()
               : m.session_breadcrumb_open()}
-            <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
+            <ChevronDownIcon size="10" aria-hidden="true" />
           {/if}
         </button>
         {#if showOpenMenu}
@@ -1041,7 +1041,7 @@
               {/each}
               <button class="open-menu-item" onclick={handleResumeDefault}>
                 <span class="open-menu-num">
-                  <SquareTerminalIcon size="13" strokeWidth="2" aria-hidden="true" />
+                  <SquareTerminalIcon size="14" aria-hidden="true" />
                 </span>
                 <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
               </button>
@@ -1054,7 +1054,7 @@
                   title={m.session_breadcrumb_open_in_codex_desktop()}
                 >
                   <span class="open-menu-num">
-                    <CirclePlayIcon size="13" strokeWidth="2" aria-hidden="true" />
+                    <CirclePlayIcon size="14" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
                 </a>
@@ -1068,7 +1068,7 @@
                   title={m.session_breadcrumb_open_in_claude_code()}
                 >
                   <span class="open-menu-num">
-                    <CirclePlayIcon size="13" strokeWidth="2" aria-hidden="true" />
+                    <CirclePlayIcon size="14" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
                 </a>
@@ -1078,7 +1078,7 @@
               {#if canLaunch}<div class="open-menu-divider"></div>{/if}
               <button class="open-menu-item" onclick={handleCopyResumeCommand}>
                 <span class="open-menu-num">
-                  <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
+                  <CopyIcon size="14" aria-hidden="true" />
                 </span>
                 <span class="open-menu-name">{m.session_breadcrumb_copy_command()}</span>
               </button>
@@ -1086,7 +1086,7 @@
             {#if isLocal}
             <button class="open-menu-item" onclick={handleCopyFilePath}>
               <span class="open-menu-num">
-                <FileTextIcon size="13" strokeWidth="2" aria-hidden="true" />
+                <FileTextIcon size="14" aria-hidden="true" />
               </span>
               <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
             </button>
@@ -1099,7 +1099,7 @@
                   onclick={() => handleOpenIn(opener)}
                 >
                   <span class="open-menu-num">
-                    <CodeIcon size="13" strokeWidth="2" aria-hidden="true" />
+                    <CodeIcon size="14" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{opener.name}</span>
                 </button>
@@ -1110,7 +1110,7 @@
                   onclick={() => handleOpenIn(opener)}
                 >
                   <span class="open-menu-num">
-                    <FolderIcon size="13" strokeWidth="2" aria-hidden="true" />
+                    <FolderIcon size="14" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{opener.name}</span>
                 </button>
@@ -1124,7 +1124,7 @@
                 onclick={() => handleResumeIn(claudeDesktopOpener)}
               >
                 <span class="open-menu-num">
-                  <CirclePlayIcon size="13" strokeWidth="2" aria-hidden="true" />
+                  <CirclePlayIcon size="14" aria-hidden="true" />
                 </span>
                 <span class="open-menu-name">Claude Desktop</span>
               </button>
@@ -1145,9 +1145,9 @@
         aria-label={m.session_breadcrumb_copy_link_to_session()}
       >
         {#if copiedLinkId === session?.id}
-          <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
+          <CheckIcon size="14" aria-hidden="true" />
         {:else}
-          <LinkIcon size="13" strokeWidth="2" aria-hidden="true" />
+          <LinkIcon size="14" aria-hidden="true" />
         {/if}
       </button>
       <button
@@ -1161,7 +1161,7 @@
           ? m.session_breadcrumb_hide_session_analysis()
           : m.session_breadcrumb_show_session_analysis()}
       >
-        <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
+        <ChartColumnIcon size="14" aria-hidden="true" />
       </button>
       <button
         class="insight-btn"
@@ -1169,7 +1169,7 @@
         aria-label={m.insights_page_agent_analysis()}
         onclick={handleAgentAnalysis}
       >
-        <LightbulbIcon size="13" strokeWidth="2" aria-hidden="true" />
+        <LightbulbIcon size="14" aria-hidden="true" />
       </button>
       <button
         class="find-btn"
@@ -1178,7 +1178,7 @@
         onclick={() => inSessionSearch.toggle()}
         aria-label={m.session_breadcrumb_find_in_session()}
       >
-        <SearchIcon size="13" strokeWidth="2" aria-hidden="true" />
+        <SearchIcon size="14" aria-hidden="true" />
       </button>
       <button
         class="actions-btn"
@@ -1187,7 +1187,7 @@
         bind:this={menuBtnEl}
         onclick={toggleMenu}
       >
-        <EllipsisVerticalIcon size="14" strokeWidth="2.4" aria-hidden="true" />
+        <EllipsisVerticalIcon size="14" aria-hidden="true" />
       </button>
       {#if menuOpen}
         <div class="actions-menu" bind:this={menuEl}>
@@ -2059,122 +2059,47 @@
     gap: 2px;
   }
 
-  .link-btn {
+  /* The session action buttons share one spec with the transcript
+     controls beside them (TranscriptControls .control-btn): a 28px ghost
+     square, a 14px icon in secondary ink, primary ink on hover, and the
+     shared neutral selected fill when their panel is open. */
+  .link-btn,
+  .minimap-btn,
+  .insight-btn,
+  .find-btn,
+  .actions-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
+    width: 28px;
+    height: 28px;
     border: none;
     border-radius: var(--radius-sm, 4px);
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.12s, color 0.12s;
     flex-shrink: 0;
   }
 
-  .link-btn:hover {
+  .link-btn:hover,
+  .minimap-btn:hover,
+  .insight-btn:hover,
+  .find-btn:hover,
+  .actions-btn:hover {
     background: var(--bg-surface-hover);
-    color: var(--accent-blue);
+    color: var(--text-primary);
   }
 
   .link-btn--copied {
     color: var(--accent-green, #2ea043);
   }
 
-  .minimap-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .minimap-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
-  .minimap-btn--active {
-    color: var(--accent-blue);
-    background: color-mix(
-      in srgb,
-      var(--accent-blue) 12%,
-      transparent
-    );
-  }
-
-  .find-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .find-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
-  .insight-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .insight-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
+  .minimap-btn--active,
   .find-btn--active {
-    color: var(--accent-blue);
-    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
-  }
-
-  .actions-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .actions-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
+    color: var(--text-primary);
   }
 
   .actions-menu {

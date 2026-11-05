@@ -40,7 +40,7 @@
     }}
   >
     <span class="skill-chevron" class:open={!collapsed}>
-      <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
+      <ChevronRightIcon size="12" aria-hidden="true" />
     </span>
     <span class="skill-label">
       {m.skill_block_label({ name: name ?? m.shared_unknown() })}

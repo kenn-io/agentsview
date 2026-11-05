@@ -10,6 +10,7 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { InfoIcon } from "../../icons.js";
 
   // Poll fast only while a build is actually running; when idle the section
   // only needs to notice an externally started build (CLI, scheduler)
@@ -201,7 +202,7 @@
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
     <p class="state">
-      <span class="status-mark" aria-hidden="true"></span>
+      <InfoIcon class="status-mark" size="14" aria-hidden="true" />
       {m.settings_embeddings_unavailable()}
     </p>
     <p class="muted detail">{unavailableReason}</p>
@@ -373,20 +374,18 @@
 
   /* The hollow status ring GitHub uses for "Not configured": the
      feature is off here, not failing. */
-  .status-mark {
-    flex-shrink: 0;
-    width: 7px;
-    height: 7px;
-    box-sizing: border-box;
-    border-radius: 50%;
-    border: 1.5px solid var(--text-muted);
+  /* Unavailable uses the same neutral info glyph as the other
+     unavailable notices (Recall, Friction). */
+  .state :global(.status-mark) {
+    color: var(--text-muted);
   }
 
-  /* The diagnostic hangs under the sentence, past the ring. */
+  /* The diagnostic hangs under the sentence, past the glyph (14px icon
+     plus the 8px gap). */
   .muted.detail {
     font-family: var(--font-mono, monospace);
     font-size: 11px;
-    padding-left: 15px;
+    padding-left: 22px;
   }
 
   .msg {

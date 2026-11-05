@@ -632,6 +632,18 @@
     align-items: center;
   }
 
+  /* In this chip row the filter button is the one funnel for the group,
+     so it gets the same framing as the Project/Agent/Model chips beside
+     it instead of floating as a bare glyph. */
+  .usage-filter-anchor :global(.filter-btn) {
+    width: var(--filter-chip-height);
+    height: var(--filter-chip-height);
+    background: var(--bg-raised, var(--bg-inset));
+    border: var(--border-width, 1px) solid var(--border-muted);
+    box-shadow: var(--shadow-raised, none);
+    border-radius: var(--kit-control-radius, var(--radius-sm));
+  }
+
   .usage-content {
     flex: 1;
     overflow-y: auto;
