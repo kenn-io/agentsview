@@ -515,13 +515,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		go runMemoryRefreshScheduler(
 			ctx, memoryRefresh.requests, memoryRefreshDebounce,
 			func() {
-				if ingestion.Active() {
-					idleTracker.Do(func() {
-						runScheduledSyncPass(
-							ctx, engine, scheduledReconcileTargets(ingestion.Config()),
-						)
-					})
-				}
+				idleTracker.Do(func() {
+					runScheduledSyncPass(
+						ctx, engine, scheduledReconcileTargets(ingestion.Config()),
+					)
+				})
 			},
 		)
 	} else if opts.ReloadConfig != nil {
