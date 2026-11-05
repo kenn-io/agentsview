@@ -274,7 +274,7 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 			assert.Equal(t, "2024-05-31", out.PriorFrom)
 			assert.Equal(t, "2024-05-31", out.PriorTo)
 			assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
-			assert.Equal(t, tc.wantDelta, out.DeltaPct)
+			assert.InDelta(t, tc.wantDelta, out.DeltaPct, 0)
 		})
 	}
 }

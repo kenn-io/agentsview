@@ -125,7 +125,6 @@ type requestInfo struct {
 	Forwarded  bool
 }
 
-//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
 type optionalParam[T int | int64 | bool] struct {
 	Value T
 	IsSet bool
