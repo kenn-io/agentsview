@@ -8,6 +8,7 @@
   } from "../../api/types/recall.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
+  import { InfoIcon, TriangleAlertIcon } from "../../icons.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
 
@@ -74,7 +75,16 @@
   {#if loading}
     <p class="recall-state">{m.session_recall_loading()}</p>
   {:else if failed}
-    <p class="recall-state" class:recall-error={!unavailable} class:recall-unavailable={unavailable} {@attach errorTelemetry("session")}>{m.session_recall_error()}</p>
+    <!-- Both failures stay in the panel's muted notice style; a real load
+         failure gets a warning glyph, an unavailable backend an info glyph. -->
+    <p class="recall-state recall-notice" class:recall-error={!unavailable} class:recall-unavailable={unavailable} {@attach errorTelemetry("session")}>
+      {#if unavailable}
+        <InfoIcon size="12" strokeWidth="2" aria-hidden="true" />
+      {:else}
+        <TriangleAlertIcon size="12" strokeWidth="2" aria-hidden="true" />
+      {/if}
+      <span>{m.session_recall_error()}</span>
+    </p>
   {:else if entries.length === 0}
     <p class="recall-state">{m.session_recall_empty()}</p>
   {:else}
@@ -164,14 +174,19 @@
     line-height: 1.45;
   }
 
-  .recall-error {
-    color: var(--slow-fg);
+  /* A failed or unavailable load is a notice, not content: a small muted
+     glyph leads the muted state text, as other panel notices do. The glyph
+     tells a real failure (warning) from a backend limit (info) without
+     error red. */
+  .recall-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
   }
 
-  /* Recall the backend does not offer is a limit, not a failure: it keeps
-     the muted state text every unavailable panel uses (Friction findings
-     included). Only a real failure takes the error color above. */
-  .recall-unavailable {
+  .recall-notice :global(svg) {
+    flex-shrink: 0;
+    margin-top: 2px;
     color: var(--text-muted);
   }
 
