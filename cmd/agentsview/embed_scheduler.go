@@ -72,6 +72,8 @@ func acquireVectorsWriteLockWithRetry(
 // waits, after the last sync-completion signal, before running a build.
 const embedDebounceInterval = 30 * time.Second
 
+const batteryRecheckInterval = time.Minute
+
 // embedBuildErrorRetryLimit bounds retries for one scheduled work item. A
 // fresh notification, backstop tick, or daemon restart gets a fresh attempt;
 // repeated errors release the idle lease so a permanent provider or
@@ -102,6 +104,7 @@ type embedScheduler struct {
 	// stay config-authoritative rather than drifting from a CLI-only
 	// override (see EmbeddingsBuildOptions.IncludeAutomatedSet).
 	includeAutomated bool
+	onBattery        func() bool
 
 	dirty chan func()
 	stop  chan struct{}
@@ -217,6 +220,21 @@ func (s *embedScheduler) run(
 			}
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
+			if s.onBattery != nil && s.onBattery() {
+				if pendingRelease != nil {
+					pendingRelease()
+					pendingRelease = nil
+				}
+				resetTimer(debounceTimer, batteryRecheckInterval)
+				continue
+			}
+			if pendingRelease == nil {
+				var ok bool
+				pendingRelease, ok = s.idle.BeginWork()
+				if !ok {
+					continue
+				}
+			}
 			req := vector.BuildRequest{Backstop: pendingBackstop, IncludeAutomated: s.includeAutomated}
 			started, err := s.mgr.TryBuild(ctx, req)
 			if err != nil {
@@ -259,6 +277,15 @@ func (s *embedScheduler) run(
 				// forever. Healthy pending work may still be satisfied by a
 				// backstop before its ordinary debounce expires.
 				pendingBackstop = true
+				continue
+			}
+			if s.onBattery != nil && s.onBattery() {
+				pendingBackstop = true
+				if pendingRelease != nil {
+					pendingRelease()
+					pendingRelease = nil
+				}
+				resetTimer(debounceTimer, batteryRecheckInterval)
 				continue
 			}
 			// With no error retry pending, a periodic reconciliation gets a

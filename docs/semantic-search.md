@@ -98,7 +98,8 @@ Automatic Recall embedding has a separate, default-off consent gate. Setting
 periodic backstops to send accepted Recall entry titles, bodies, and triggers to
 the configured embeddings endpoint. `run_after_sync` controls only session
 archive sync notifications; it does not suppress Recall startup or Recall
-corpus-mutation refreshes after that consent is enabled. A manual
+corpus-mutation refreshes after that consent is enabled. On battery, the daemon
+waits for AC power before building; a manual build still runs. A manual
 `agentsview index embeddings build --store recall` remains available without
 this setting because invoking that command is an explicit one-time request.
 Recall vector and hybrid queries fail closed as unavailable once the served

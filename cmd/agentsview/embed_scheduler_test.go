@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1893,4 +1894,78 @@ func TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired(t *test
 		"the error body must carry the rebuild-required remediation")
 	assert.Contains(t, string(body), "embeddings build",
 		"the error body must tell the user how to rebuild")
+}
+
+func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakeEmbedManager{}
+		var battery atomic.Bool
+		battery.Store(true)
+		s := newEmbedScheduler(mgr, time.Second, 0, false, nil)
+		s.onBattery = battery.Load
+		s.Notify()
+		go s.Run(t.Context())
+		defer s.Stop()
+		synctest.Sleep(time.Second + 3*batteryRecheckInterval)
+		synctest.Wait()
+		assert.Zero(t, mgr.callCount())
+		battery.Store(false)
+		synctest.Sleep(batteryRecheckInterval)
+		synctest.Wait()
+		assert.Equal(t, []vector.BuildRequest{{}}, mgr.callsSnapshot())
+	})
+}
+
+func TestEmbedSchedulerDefersBatteryBackstop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakeEmbedManager{}
+		var battery atomic.Bool
+		battery.Store(true)
+		s := newEmbedScheduler(mgr, time.Second, 0, false, nil)
+		s.onBattery = battery.Load
+		ticks := make(chan time.Time)
+		go s.run(t.Context(), ticks)
+		defer s.Stop()
+		ticks <- time.Now()
+		synctest.Sleep(2 * batteryRecheckInterval)
+		synctest.Wait()
+		assert.Zero(t, mgr.callCount())
+		battery.Store(false)
+		synctest.Sleep(batteryRecheckInterval)
+		synctest.Wait()
+		assert.Equal(t, []vector.BuildRequest{{Backstop: true}}, mgr.callsSnapshot())
+	})
+}
+
+func TestEmbedSchedulerReleasesIdleLeaseOnBattery(t *testing.T) {
+	for name, backstop := range map[string]bool{"notify": false, "backstop": true} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				idled := make(chan struct{})
+				tracker := server.NewIdleTracker(2*time.Second, func() { close(idled) })
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go tracker.Run(ctx)
+				mgr := &fakeEmbedManager{}
+				s := newEmbedScheduler(mgr, time.Second, 0, false, tracker)
+				s.onBattery = func() bool { return true }
+				ticks := make(chan time.Time)
+				go s.run(ctx, ticks)
+				defer s.Stop()
+				s.Notify()
+				synctest.Wait()
+				if backstop {
+					ticks <- time.Now()
+				}
+				synctest.Sleep(4 * time.Second)
+				synctest.Wait()
+				select {
+				case <-idled:
+				default:
+					assert.Fail(t, "battery-deferred work kept the daemon alive")
+				}
+				assert.Zero(t, mgr.callCount())
+			})
+		})
+	}
 }

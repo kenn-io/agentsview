@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -99,20 +100,20 @@ func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
 	var notified int
 	s.onPassFinished = func() { notified++ }
 
-	started, ok, err := s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	started, ok, err := s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
 	assert.False(t, started)
 	assert.True(t, ok)
 	require.NoError(t, err)
 	assert.Zero(t, notified)
 
-	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	started, ok, err = s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
 	assert.True(t, started)
 	assert.True(t, ok)
 	require.EqualError(t, err, "later extraction failed")
 	assert.Equal(t, 1, notified,
 		"partial commits must refresh downstream indexes despite a later error")
 
-	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	started, ok, err = s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
 	assert.True(t, started)
 	assert.True(t, ok)
 	require.NoError(t, err)
@@ -412,4 +413,30 @@ func TestExtractSchedulerRunsStartupPass(t *testing.T) {
 			"before the backstop interval, so a completed session whose "+
 			"transcript grew between daemon lifetimes is only revisited "+
 			"here")
+}
+
+func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		reconciler := &fakePassManager{}
+		var battery atomic.Bool
+		battery.Store(true)
+		s := newExtractScheduler(mgr, time.Second, 0, 0, nil)
+		s.onBattery = battery.Load
+		s.onBatteryMgr = reconciler
+		var notified atomic.Int32
+		s.onPassFinished = func() { notified.Add(1) }
+		go s.Run(t.Context())
+		defer s.Stop()
+		synctest.Sleep(time.Second + 2*batteryRecheckInterval)
+		synctest.Wait()
+		assert.Zero(t, mgr.callCount())
+		assert.Equal(t, []extract.PassOptions{{}, {}, {}}, reconciler.callsSnapshot())
+		assert.EqualValues(t, 3, notified.Load())
+		battery.Store(false)
+		synctest.Sleep(batteryRecheckInterval)
+		synctest.Wait()
+		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
+		assert.EqualValues(t, 4, notified.Load())
+	})
 }

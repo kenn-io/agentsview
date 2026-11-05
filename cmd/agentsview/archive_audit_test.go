@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -437,11 +438,14 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 		mode  string
 	}
 	for _, tc := range []struct {
-		name  string
-		stale bool
-		want  attempt
+		name    string
+		stale   bool
+		battery bool
+		want    attempt
 	}{
 		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
+		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
+		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 		{name: "stale", stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -456,6 +460,8 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				started := time.Now()
+				var battery atomic.Bool
+				battery.Store(tc.battery)
 				attempts := make(chan attempt, 1)
 				restore := stubLaunchSyncWorker(t, func(
 					_ context.Context, _ config.Config, request syncWorkerRequest, _ func(workerLine),
@@ -469,8 +475,14 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil)
+					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil, battery.Load)
 				}()
+				if tc.battery && !tc.stale {
+					synctest.Sleep(archiveAuditInterval + 2*batteryRecheckInterval)
+					synctest.Wait()
+					assert.Empty(t, attempts, "routine audit must wait on battery")
+					battery.Store(false)
+				}
 				assert.Equal(t, tc.want, <-attempts)
 				cancel()
 				<-done

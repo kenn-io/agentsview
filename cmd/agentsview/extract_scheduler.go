@@ -43,6 +43,8 @@ type extractScheduler struct {
 	// still leave downstream recall embeddings stale. Dropped passes do not
 	// call it because they cannot have changed the corpus.
 	onPassFinished func()
+	onBattery      func() bool
+	onBatteryMgr   extractPassManager
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -156,7 +158,18 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.dirty:
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			started, ok, err := s.tryPassWithLease(ctx,
+			if s.onBattery != nil && s.onBattery() {
+				started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
+				if err != nil {
+					log.Printf("extract scheduler: reconciliation failed: %v", err)
+				}
+				if started {
+					startupDone()
+				}
+				resetTimer(debounceTimer, batteryRecheckInterval)
+				continue
+			}
+			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
 				extract.PassOptions{Full: pendingFull})
 			if !ok {
 				// Draining: the daemon is shutting down, so no new pass
@@ -186,7 +199,12 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			started, ok, err := s.tryPassWithLease(ctx,
+			if s.onBattery != nil && s.onBattery() {
+				pendingFull = pendingFull || full
+				resetTimer(debounceTimer, batteryRecheckInterval)
+				continue
+			}
+			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
 				extract.PassOptions{Full: full})
 			if !ok {
 				continue
@@ -213,14 +231,14 @@ func (s *extractScheduler) Run(ctx context.Context) {
 // draining, in which case no pass was attempted: work started after the
 // idle decision would race the shutdown it triggered.
 func (s *extractScheduler) tryPassWithLease(
-	ctx context.Context, opts extract.PassOptions,
+	ctx context.Context, mgr extractPassManager, opts extract.PassOptions,
 ) (started, ok bool, err error) {
 	release, ok := s.idle.BeginWork()
 	if !ok {
 		return false, false, nil
 	}
 	defer release()
-	started, _, err = s.mgr.TryPass(ctx, opts)
+	started, _, err = mgr.TryPass(ctx, opts)
 	if started && s.onPassFinished != nil {
 		s.onPassFinished()
 	}
