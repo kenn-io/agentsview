@@ -146,9 +146,17 @@ func TestCodexForkNativeResultIdentity(t *testing.T) {
 			prefix := meta + testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime), testjsonl.CodexFunctionCallJSON("exec_command", "", forkReviewTime))
 			require.NoError(t, os.WriteFile(cp, []byte(prefix+testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON("call_test", "alpha", "2026-09-01T10:01:00Z"), testjsonl.CodexFunctionCallOutputJSON("call_test", "second longer", "2026-09-01T10:02:00Z"))), 0o600))
 			require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+			// Retained native identities must survive an orphan archive rebuild.
+			require.NoError(t, os.Remove(cp))
+			rebuilt := e.ResyncAll(t.Context(), nil)
+			require.True(t, rebuilt.ArchiveRebuilt)
+			require.Zero(t, rebuilt.Failed)
 			e.blockedResultCategories = map[string]bool{"Bash": true}
 			require.NoError(t, os.WriteFile(cp, []byte(prefix), 0o600))
 			for retry := range 3 {
+				if retry == 1 {
+					require.NoError(t, os.WriteFile(cp, []byte(prefix+testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON("call_test", "second longer", "2026-09-01T10:02:00Z"))), 0o600))
+				}
 				require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+forkReviewChild))
 				stored, err := d.GetAllMessages(t.Context(), "codex:"+forkReviewChild)
 				require.NoError(t, err)
@@ -157,10 +165,156 @@ func TestCodexForkNativeResultIdentity(t *testing.T) {
 				require.Len(t, call.ResultEvents, 2)
 				assert.NotEmpty(t, call.ResultEvents[0].RawContentDigest)
 				assert.NotEmpty(t, call.ResultEvents[1].RawContentDigest)
+				assert.Equal(t, new(true), call.ResultEvents[0].SummaryParticipates)
+				assert.Equal(t, new(true), call.ResultEvents[1].SummaryParticipates)
 				assert.NotEqual(t, call.ResultEvents[0].RawContentDigest, call.ResultEvents[1].RawContentDigest)
 				assert.Equal(t, 13, call.ResultContentLength)
 				t.Logf("native retry=%d events=%d summaryLength=%d", retry, len(call.ResultEvents), call.ResultContentLength)
 			}
 		})
+	}
+}
+
+func TestCodexForkImportedMultiAgentSummaryLength(t *testing.T) {
+	for _, stage := range []int64{1, 1 << 30} {
+		for _, replacement := range []string{"none", "reordered", "length-only"} {
+			t.Run(strconv.FormatInt(stage, 10)+"/"+replacement, func(t *testing.T) {
+				root := t.TempDir()
+				cp := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+forkReviewChild+".jsonl")
+				pp := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+forkReviewParent+".jsonl")
+				meta := testjsonl.JoinJSONL(testjsonl.CodexForkedSessionMetaJSON(forkReviewChild, forkReviewParent, "/work/project", "user", forkReviewTime))
+				prefix := meta + testjsonl.JoinJSONL(
+					testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime),
+					testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{"ids": []string{"agent-a", "agent-b", "agent-c"}}, forkReviewTime),
+				)
+				full := prefix + testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON("call_wait", `{"status":{"agent-a":{"completed":"alpha"},"agent-b":{"completed":"beta"}}}`, "2026-09-01T10:01:00Z"))
+				require.NoError(t, os.WriteFile(cp, []byte(full), 0o600))
+				provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}, Machine: "fixture"})
+				require.True(t, ok)
+				sources, err := provider.Discover(t.Context())
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0], Machine: "fixture", ForceParse: true})
+				require.NoError(t, err)
+				require.Len(t, parsed.Results, 1)
+				candidate, err := ingest.PrepareCandidate(t.Context(), parsed.Results[0].Result, ingest.ContentOptions{})
+				require.NoError(t, err)
+				rows, err := ingest.FinalizeRows(t.Context(), candidate, ingest.ContentOptions{})
+				require.NoError(t, err)
+				require.Len(t, rows.Messages, 1)
+				require.Len(t, rows.Messages[0].ToolCalls, 1)
+				require.Equal(t, "agent-a:\nalpha\n\nagent-b:\nbeta", rows.Messages[0].ToolCalls[0].ResultContent)
+				require.Len(t, rows.Messages[0].ToolCalls[0].ResultEvents, 2)
+				id := "fixture~codex:" + forkReviewChild
+				rows.Session.ID, rows.Session.Machine = id, "fixture"
+				rows.Session.ParentSessionID = new("fixture~codex:" + forkReviewParent)
+				rows.Messages[0].SessionID = id
+				call := &rows.Messages[0].ToolCalls[0]
+				call.SessionID = id
+				// Imported normalized events can contain whitespace that contributes
+				// no summary text. A positive length alone cannot prove participation.
+				call.ResultEvents = append(call.ResultEvents, db.ToolResultEvent{
+					ToolUseID: "call_wait", AgentID: "agent-c", Source: "wait_output", Status: "completed",
+					Content: "  ", ContentLength: 2, Timestamp: "2026-09-01T10:01:00Z", EventIndex: 2,
+				})
+				for i := range call.ResultEvents {
+					call.ResultEvents[i].RawContentDigest = nil
+					call.ResultEvents[i].SummaryParticipates = nil
+				}
+				d := openTestDB(t)
+				result, err := d.ApplyArtifactImportedSession(t.Context(), db.ArtifactImportedSession{Origin: "fixture", GID: id, ManifestHash: strings.Repeat("a", 64), ImportedSessionID: id}, db.SessionBatchWrite{Session: rows.Session, Messages: rows.Messages, ReplaceMessages: true, DataVersion: 17, SkipSignalUpdates: true})
+				require.NoError(t, err)
+				require.True(t, result.Written)
+				initial, err := d.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, initial, 1)
+				require.Len(t, initial[0].ToolCalls, 1)
+				require.Equal(t, "agent-a:\nalpha\n\nagent-b:\nbeta", initial[0].ToolCalls[0].ResultContent)
+				cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "fixture", IDPrefix: "fixture~", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: stage, ToolResultImages: config.ToolResultImagesDrop, BlockedResultCategories: []string{"Other"}}
+				e := NewEngine(t.Context(), d, cfg)
+				t.Cleanup(e.Close)
+				require.NoError(t, os.WriteFile(cp, []byte(prefix), 0o600))
+				for range 3 {
+					require.Zero(t, e.SyncAllForceParse(t.Context(), nil).Failed)
+					messages, err := d.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, messages, 1)
+					got := messages[0].ToolCalls[0]
+					assert.Empty(t, got.ResultContent)
+					assert.Equal(t, 29, got.ResultContentLength)
+					require.Len(t, got.ResultEvents, 3)
+					for _, event := range got.ResultEvents {
+						assert.Empty(t, event.Content)
+						assert.Nil(t, event.RawContentDigest)
+						assert.Nil(t, event.SummaryParticipates)
+					}
+					state, err := d.GetCodexForkState(t.Context(), id)
+					require.NoError(t, err)
+					require.NotNil(t, state)
+					assert.True(t, state.Messages[0].Provisional, "summary metadata must not assign unknown message ownership")
+				}
+				// Exercise the existing archive-only copy path with no readable source.
+				require.NoError(t, os.Remove(cp))
+				rebuilt := e.ResyncAll(t.Context(), nil)
+				require.True(t, rebuilt.ArchiveRebuilt)
+				require.Zero(t, rebuilt.Failed)
+				archivePath := d.Path()
+				e.Close()
+				require.NoError(t, d.Close())
+				d, err = db.Open(t.Context(), archivePath)
+				require.NoError(t, err)
+				t.Cleanup(func() { assert.NoError(t, d.Close()) })
+				e = NewEngine(t.Context(), d, cfg)
+				t.Cleanup(e.Close)
+				copied, err := d.GetCodexForkState(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, copied)
+				assert.True(t, copied.Messages[0].Provisional)
+				output := `{"status":{"agent-a":{"completed":"new alpha result"}}}`
+				wantLength := 40
+				if replacement != "none" {
+					if replacement == "reordered" {
+						events := rows.Messages[0].ToolCalls[0].ResultEvents
+						events[0], events[1], events[2] = events[2], events[0], events[1]
+						for i := range events {
+							events[i].EventIndex = i
+						}
+					} else {
+						rows.Messages, err = d.GetAllMessages(t.Context(), id)
+						require.NoError(t, err)
+						rows.Messages[0].ToolCalls[0].ResultEvents[0].ContentLength = 2
+						rows.Messages[0].ToolCalls[0].ResultContentLength = 4
+						output = `{"status":{"agent-b":{"completed":"new beta result"}}}`
+						wantLength = 15
+					}
+					result, err = d.ApplyArtifactImportedSession(t.Context(), db.ArtifactImportedSession{
+						Origin: "fixture", GID: id, ManifestHash: strings.Repeat("b", 64), ImportedSessionID: id,
+					}, db.SessionBatchWrite{Session: rows.Session, Messages: rows.Messages, ReplaceMessages: true, DataVersion: 17, SkipSignalUpdates: true})
+					require.NoError(t, err)
+					require.True(t, result.Written)
+				}
+				fresh := prefix + testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON("call_wait", output, "2026-09-01T10:02:00Z"))
+				require.NoError(t, os.WriteFile(cp, []byte(fresh), 0o600))
+				for retry := range 3 {
+					if retry == 2 {
+						require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))), 0o600))
+					}
+					require.Zero(t, e.SyncAllForceParse(t.Context(), nil).Failed)
+					messages, err := d.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, messages, 1)
+					got := messages[0].ToolCalls[0]
+					require.Len(t, got.ResultEvents, 4)
+					assert.Empty(t, got.ResultContent)
+					assert.Equal(t, wantLength, got.ResultContentLength, "retain only contributors whose observed evidence still matches")
+					for _, event := range got.ResultEvents[:3] {
+						assert.Nil(t, event.RawContentDigest)
+						assert.Nil(t, event.SummaryParticipates)
+					}
+					assert.NotNil(t, got.ResultEvents[3].RawContentDigest)
+					assert.Equal(t, new(true), got.ResultEvents[3].SummaryParticipates)
+				}
+			})
+		}
 	}
 }

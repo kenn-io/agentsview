@@ -3,6 +3,7 @@ package sync
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -80,6 +81,54 @@ func TestCodexForkMatchedMessageKeepsSourceBoundary(t *testing.T) {
 					require.NotNil(t, usage)
 					assert.Equal(t, []string{"retained idless child"}, got)
 					assert.Equal(t, 5, usage.TotalOutputTokens)
+				}
+			})
+		}
+	}
+}
+
+// This synthetic partial import loses a message-free child boundary but keeps
+// its matching child message. Recovered parent pages arrive in separate steps.
+func TestCodexForkMatchedContextSurvivesResolvedRefreshes(t *testing.T) {
+	for _, stage := range []int64{1, 1 << 30} {
+		for _, keepBoundary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stage=%d/keep_boundary=%v", stage, keepBoundary), func(t *testing.T) {
+				e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+				id := "codex:" + forkReviewChild
+				replay := testjsonl.JoinJSONL(
+					testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", forkReviewTime),
+					testjsonl.CodexMsgJSON("assistant", "parent replay", forkReviewTime),
+				)
+				boundary := testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "message-free-child", forkReviewTime))
+				child := testjsonl.JoinJSONL(
+					testjsonl.CodexTurnContextJSON("gpt-5", forkReviewTime),
+					testjsonl.CodexMsgJSON("assistant", "retained idless child", forkReviewTime),
+				)
+				require.NoError(t, os.WriteFile(cp, []byte(meta+replay+boundary+child), 0o600))
+				require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+				shortened := meta + replay
+				if keepBoundary {
+					shortened += boundary
+				}
+				shortened += child
+				require.NoError(t, os.WriteFile(cp, []byte(shortened), 0o600))
+				// The first parent snapshot has no idless turn yet.
+				parent := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime)) + replay
+				require.NoError(t, os.WriteFile(pp, []byte(parent), 0o600))
+				for range 2 {
+					require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+					require.Equal(t, []string{"retained idless child"}, messageContents(t, d, id))
+				}
+				// An idless parent page arrives after the intervening refreshes.
+				page := filepath.Join(filepath.Dir(pp), "rollout-2026-09-01T10-01-00-"+forkReviewParent+"_44444444-4444-4444-8444-444444444444.jsonl")
+				require.NoError(t, os.WriteFile(page, []byte(testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime),
+					testjsonl.CodexTurnContextJSON("gpt-5", forkReviewTime),
+					testjsonl.CodexMsgJSON("assistant", "different old idless parent answer", forkReviewTime),
+				)), 0o600))
+				for range 2 {
+					require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+					assert.Equal(t, []string{"retained idless child"}, messageContents(t, d, id))
 				}
 			})
 		}

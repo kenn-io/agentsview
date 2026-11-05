@@ -91,9 +91,17 @@ also survive when their output records disappear.
 Summary-only saved results keep their text and lengths when the source still
 contains the call but omits its output. Blocked results retain their permitted
 length metadata across repeated staged writes, including imported events whose
-raw summary participation is unknown. A current output supplies replacement
-length evidence. Archived calls without provider IDs use occurrence keys to
-publish their staged summaries, events, and finding coordinates.
+raw summary participation is unknown. Local provenance records imported events
+observed contributing readable text, so an update from one agent retains other
+agents' length contributions. Each hint includes its archived event position,
+agent, source, status, timestamp, and length, so later artifact replacements
+cannot reuse a hint for a different event. Raw nullable metadata stays unchanged.
+Blank unknown content establishes no participation. Archived calls without provider
+IDs use occurrence keys to publish their staged summaries, events, findings, and
+failure signals.
+Archive copies retain existing raw result digests and participation flags;
+absent fields remain unknown. Returning native output can therefore match its
+saved event after a preservation rebuild.
 
 Each saved message keeps its original ordered turn-context prefix, including
 turns that emitted no message. Prefixes share storage across snapshots and only
@@ -102,7 +110,11 @@ evidence rather than merged archive order. Pre-turn replay leaves the transcript
 and preview when the parent returns. Known source occurrences claim their
 matches before legacy rows. A matching shortened snapshot keeps the saved
 context when it contains every incoming turn in order; changed contexts use the
-current source.
+current source. Retained context evidence keeps history preservation enabled
+across resolved refreshes until the source supplies it again. One reconciliation
+shares context-containment results for common prefixes.
+Content matches also preserve whether a record appeared before or inside a turn.
+A missing turn ID alone cannot identify pre-turn replay as an idless child.
 When fewer identical legacy occurrences return, their ownership remains unknown:
 keep those rows and their uncounted usage separately instead of assigning parent
 usage to a child. Repeating the same source does not add more occurrences.

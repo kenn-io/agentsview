@@ -28,6 +28,20 @@ type CodexForkMessage struct {
 	Origin       parser.CodexMessageOrigin
 	Provisional  bool
 	TurnContext  int
+	// Observed summary contributors in each call's archived event order.
+	// This local evidence does not replace nullable raw event metadata.
+	ResultSummaryParticipants [][]CodexForkSummaryParticipant `json:",omitempty"`
+}
+
+// CodexForkSummaryParticipant binds observed participation to an archived event.
+// An index alone can refer to a different event after an artifact replacement.
+type CodexForkSummaryParticipant struct {
+	EventIndex    int
+	AgentID       string
+	Source        string
+	Status        string
+	Timestamp     string
+	ContentLength int
 }
 
 // CodexForkTurnContext shares source prefixes across retained snapshots.

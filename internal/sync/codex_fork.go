@@ -112,6 +112,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 
 	state.PreserveHistory = !info.Resolved
 	sourceContexts, classifyReplay := prepareCodexForkContexts(state, info.TurnContexts)
+	contextMatches := make(map[[2]int]bool)
 
 	// Capture original scratch occurrence identities before replay removal or
 	// insertion of archived-only messages changes the final ordinal stream.
@@ -227,7 +228,9 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			continue
 		}
 		for _, index := range byContent[priorKeys[i]] {
-			if !reserved[index] && old.Origin.TurnID == incoming[index].provenance.Origin.TurnID {
+			origin := incoming[index].provenance.Origin
+			// An empty turn ID can mean pre-turn replay or an idless child.
+			if !reserved[index] && old.Origin.TurnID == origin.TurnID && old.Origin.InTurn == origin.InTurn {
 				reserved[index], priorMatches[i] = true, index
 				break
 			}
@@ -276,12 +279,16 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			}
 			m.ToolCalls = loaded[0].ToolCalls
 		}
+		// Keep only participation observed while the imported body was readable.
+		// These indexes belong to the exact archived event order and remain local.
+		old.ResultSummaryParticipants = codexForkObservedSummaryParticipants(m.ToolCalls, old.ResultSummaryParticipants)
 		if match >= 0 {
 			current := &incoming[match]
 			if retainMessages {
 				// A matching shorter snapshot cannot erase observed turn boundaries.
-				if codexForkContextContains(state.TurnContexts, old.TurnContext, current.provenance.TurnContext) {
+				if old.TurnContext != current.provenance.TurnContext && codexForkContextContains(state.TurnContexts, old.TurnContext, current.provenance.TurnContext, contextMatches) {
 					current.provenance.TurnContext = old.TurnContext
+					state.PreserveHistory = true
 				}
 				previousUsage := m
 				if old.PendingUsage != nil {
@@ -337,8 +344,19 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 						}
 					}
 					hasCurrentResult := len(call.ResultEvents) > 0
+					var savedParticipants []db.CodexForkSummaryParticipant
+					if j < len(old.ResultSummaryParticipants) {
+						savedParticipants = old.ResultSummaryParticipants[j]
+					}
 					var retained bool
-					call.ResultEvents, retained = mergeCodexForkResultEvents(saved.ResultEvents, call.ResultEvents)
+					var participants []db.CodexForkSummaryParticipant
+					call.ResultEvents, retained, participants = mergeCodexForkResultEvents(saved.ResultEvents, call.ResultEvents, savedParticipants)
+					if len(participants) > 0 {
+						for len(current.provenance.ResultSummaryParticipants) <= j {
+							current.provenance.ResultSummaryParticipants = append(current.provenance.ResultSummaryParticipants, nil)
+						}
+						current.provenance.ResultSummaryParticipants[j] = participants
+					}
 					if retained {
 						state.PreserveHistory = true
 					}
@@ -351,7 +369,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 							call.ResultContentLength = len(call.ResultContent)
 						} else {
 							call.ResultContent = ""
-							call.ResultContentLength = codexForkResultSummaryLength(call.ResultEvents)
+							call.ResultContentLength = codexForkResultSummaryLength(call.ResultEvents, participants)
 						}
 						if !hasCurrentResult {
 							// Imported raw participation can be unknown after policy
@@ -534,7 +552,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 // Match the provider's result dedup identity, not slice length or event index.
 // Keep archive order and append newly observed updates once. A current copy of
 // an existing event supplies the current content policy and metadata.
-func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolResultEvent, bool) {
+func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent, savedParticipants []db.CodexForkSummaryParticipant) ([]db.ToolResultEvent, bool, []db.CodexForkSummaryParticipant) {
 	type identity struct{ agent, status, digest string }
 	key := func(event db.ToolResultEvent) identity {
 		return identity{event.AgentID, event.Status, string(event.RawContentDigest)}
@@ -548,53 +566,63 @@ func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolR
 	merged := make([]db.ToolResultEvent, 0, len(saved)+len(current))
 	seen := make(map[identity]bool)
 	retained := false
-	appendEvent := func(event db.ToolResultEvent) {
+	observed := make(map[db.CodexForkSummaryParticipant]bool, len(savedParticipants))
+	for _, participant := range savedParticipants {
+		observed[participant] = true
+	}
+	var participants []db.CodexForkSummaryParticipant
+	appendEvent := func(event db.ToolResultEvent, participates bool) {
 		// Archived display content cannot reconstruct raw provider identity.
 		// Keep each unknown occurrence without inventing a digest for it.
-		if event.RawContentDigest == nil {
-			event.EventIndex = len(merged)
-			merged = append(merged, event)
-			return
-		}
-		id := key(event)
-		if !seen[id] {
+		if event.RawContentDigest != nil {
+			id := key(event)
+			if seen[id] {
+				return
+			}
 			seen[id] = true
-			event.EventIndex = len(merged)
-			merged = append(merged, event)
 		}
+		if event.SummaryParticipates == nil && ((participates && event.Content == "") || strings.TrimSpace(event.Content) != "") {
+			participants = append(participants, codexForkSummaryParticipant(event, len(merged)))
+		}
+		event.EventIndex = len(merged)
+		merged = append(merged, event)
 	}
 	next := 0
-	for _, event := range saved {
+	for index, event := range saved {
 		if anchor, ok := currentByKey[key(event)]; event.RawContentDigest != nil && ok {
 			// Restored source events before a shared event precede that anchor.
 			// Current order and metadata resolve conflicting old observations.
 			for next <= anchor {
-				appendEvent(current[next])
+				appendEvent(current[next], false)
 				next++
 			}
 		} else {
 			retained = true
-			appendEvent(event)
+			appendEvent(event, observed[codexForkSummaryParticipant(event, index)])
 		}
 	}
 	for ; next < len(current); next++ {
-		appendEvent(current[next])
+		appendEvent(current[next], false)
 	}
-	return merged, retained
+	return merged, retained, participants
 }
 
 // Reproduce the canonical latest-per-agent summary's length without restoring
 // blocked text. Participation was recorded before the content was blanked.
-func codexForkResultSummaryLength(events []db.ToolResultEvent) int {
+func codexForkResultSummaryLength(events []db.ToolResultEvent, participants []db.CodexForkSummaryParticipant) int {
 	latest := make(map[string]int)
 	anonymous := 0
 	hasAnonymous := false
-	for _, event := range events {
+	observed := make(map[db.CodexForkSummaryParticipant]bool, len(participants))
+	for _, participant := range participants {
+		observed[participant] = true
+	}
+	for index, event := range events {
 		if event.SummaryParticipates != nil {
 			if !*event.SummaryParticipates {
 				continue
 			}
-		} else if strings.TrimSpace(event.Content) == "" {
+		} else if !observed[codexForkSummaryParticipant(event, index)] && strings.TrimSpace(event.Content) == "" {
 			continue
 		}
 		agent := strings.TrimSpace(event.AgentID)
@@ -619,4 +647,42 @@ func codexForkResultSummaryLength(events []db.ToolResultEvent) int {
 		total += 2 + anonymous
 	}
 	return total
+}
+
+// codexForkObservedSummaryParticipants preserves evidence for imported events
+// without changing their raw nullable metadata. Blank bodies alone prove nothing.
+func codexForkObservedSummaryParticipants(calls []db.ToolCall, previous [][]db.CodexForkSummaryParticipant) [][]db.CodexForkSummaryParticipant {
+	var result [][]db.CodexForkSummaryParticipant
+	for callIndex, call := range calls {
+		observed := make(map[db.CodexForkSummaryParticipant]bool)
+		if callIndex < len(previous) {
+			for _, participant := range previous[callIndex] {
+				observed[participant] = true
+			}
+		}
+		for eventIndex, event := range call.ResultEvents {
+			if event.SummaryParticipates != nil {
+				continue
+			}
+			participates := strings.TrimSpace(event.Content) != ""
+			if event.Content == "" {
+				participates = observed[codexForkSummaryParticipant(event, eventIndex)]
+			}
+			if !participates {
+				continue
+			}
+			for len(result) <= callIndex {
+				result = append(result, nil)
+			}
+			result[callIndex] = append(result[callIndex], codexForkSummaryParticipant(event, eventIndex))
+		}
+	}
+	return result
+}
+
+func codexForkSummaryParticipant(event db.ToolResultEvent, index int) db.CodexForkSummaryParticipant {
+	return db.CodexForkSummaryParticipant{
+		EventIndex: index, AgentID: event.AgentID, Source: event.Source,
+		Status: event.Status, Timestamp: event.Timestamp, ContentLength: event.ContentLength,
+	}
 }

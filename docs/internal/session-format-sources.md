@@ -823,6 +823,19 @@ fixtures retain this field; missing identities remain source-local.
   digests remain a separate control in `TestCodexForkNativeResultIdentity`.
   `TestCodexForkMatchedMessageKeepsSourceBoundary` covers a matching child whose
   earlier message-free boundary disappears, followed by parent recovery.
+  `TestCodexForkMatchedContextSurvivesResolvedRefreshes` retains context-only
+  evidence through resolved refreshes before a delayed idless parent page.
+  `TestCodexForkReplayCannotClaimIdlessChild` distinguishes identical pre-turn
+  replay and idless child messages through unresolved shortened-source retries;
+  their separate 40- and 5-token fixtures recover only the child's five tokens.
+  `TestCodexForkImportedMultiAgentSummaryLength` preserves imported participant
+  evidence through blocked retries, an orphan archive copy, database reopen, a
+  partial agent update, and parent recovery, without changing raw NULL metadata.
+  Reordered and length-only artifact replacements invalidate mismatched hints.
+  `TestCodexForkNativeResultIdentity` also verifies that archive copies retain
+  known raw metadata and deduplicate returning source events after a rebuild.
+  `TestCodexForkIdlessResultSignalsKeepOccurrences` preserves distinct result
+  outcomes for calls without provider IDs.
   `TestCodexForkImportedOrdinalUsageSurvivesResolvedShortening` retains a message
   referenced by imported usage after resolved refreshes and source shortening.
   These synthetic archive cases were rechecked on 2026-11-05 in both publication

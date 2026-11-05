@@ -73,12 +73,24 @@ func retainCodexForkContexts(state *db.CodexForkState) {
 
 // codexForkContextContains reports whether full retains every turn in part,
 // in source order. Only an observed prefix can replace a shorter snapshot.
-func codexForkContextContains(turns []db.CodexForkTurnContext, full, part int) bool {
+func codexForkContextContains(turns []db.CodexForkTurnContext, full, part int, memo map[[2]int]bool) bool {
+	var path [][2]int
+	var contains bool
 	for full > 0 && part > 0 && full != part {
+		pair := [2]int{full, part}
+		if found, known := memo[pair]; known {
+			contains = found
+			break
+		}
+		path = append(path, pair)
 		if turns[full-1].TurnID == turns[part-1].TurnID {
 			part = turns[part-1].Parent
 		}
 		full = turns[full-1].Parent
 	}
-	return part == 0 || full == part
+	contains = contains || part == 0 || full == part
+	for _, pair := range path {
+		memo[pair] = contains
+	}
+	return contains
 }

@@ -25,7 +25,7 @@ func TestCodexForkRetainsSummaryWithoutOutput(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, messages, 1)
 					require.Len(t, messages[0].ToolCalls, 1)
-					const output = "saved summary-only result"
+					const output = "command not found"
 					if callState == "idless" {
 						messages[0].ToolCalls[0].ToolUseID = ""
 					}
@@ -52,6 +52,10 @@ func TestCodexForkRetainsSummaryWithoutOutput(t *testing.T) {
 							assert.Empty(t, call.ResultContent)
 						} else {
 							assert.Equal(t, output, call.ResultContent)
+							session, err := d.GetSessionFull(t.Context(), id)
+							require.NoError(t, err)
+							assert.Equal(t, 1, session.ToolFailureSignalCount, "retry %d", retry)
+							assert.Equal(t, new("errored"), call.ObservedOutcome, "retry %d", retry)
 						}
 						assert.Equal(t, len(output), call.ResultContentLength, "retry %d", retry)
 						assert.Empty(t, call.ResultEvents)
@@ -95,6 +99,58 @@ func TestCodexForkIdlessResultFindingKeepsCoordinates(t *testing.T) {
 				assert.Equal(t, 1, findings[0].MessageOrdinal)
 				assert.Equal(t, new(0), findings[0].CallIndex)
 				assert.Equal(t, new(0), findings[0].EventIndex)
+			}
+		})
+	}
+}
+
+func TestCodexForkIdlessResultSignalsKeepOccurrences(t *testing.T) {
+	for _, stage := range []int64{1, 1 << 30} {
+		t.Run(strconv.FormatInt(stage, 10), func(t *testing.T) {
+			e, d, cp, _, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+			source := meta + testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "failure", nil, forkReviewTime),
+				testjsonl.CodexFunctionCallOutputJSON("failure", "command not found", forkReviewTime),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "success", nil, forkReviewTime),
+				testjsonl.CodexFunctionCallOutputJSON("success", "command completed successfully", forkReviewTime),
+			)
+			require.NoError(t, os.WriteFile(cp, []byte(source), 0o600))
+			require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+			id := "codex:" + forkReviewChild
+			messages, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			for i := range messages {
+				for j := range messages[i].ToolCalls {
+					call := &messages[i].ToolCalls[j]
+					require.Len(t, call.ResultEvents, 1)
+					call.ToolUseID = ""
+					for k := range call.ResultEvents {
+						call.ResultEvents[k].ToolUseID = ""
+						require.Empty(t, call.ResultEvents[k].Status)
+					}
+				}
+			}
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, messages))
+			require.NoError(t, os.WriteFile(cp, []byte(meta), 0o600))
+			for retry := range 2 {
+				require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+				stored, err := d.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				var outputs, outcomes []string
+				for _, message := range stored {
+					for _, call := range message.ToolCalls {
+						require.Len(t, call.ResultEvents, 1)
+						outputs = append(outputs, call.ResultContent)
+						require.NotNil(t, call.ObservedOutcome)
+						outcomes = append(outcomes, *call.ObservedOutcome)
+					}
+				}
+				assert.Equal(t, []string{"command not found", "command completed successfully"}, outputs)
+				assert.Equal(t, []string{"errored", "content"}, outcomes)
+				session, err := d.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, 1, session.ToolFailureSignalCount, "retry %d", retry)
 			}
 		})
 	}

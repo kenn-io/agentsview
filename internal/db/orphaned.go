@@ -2568,19 +2568,29 @@ func copySessionDataForIDs(
 	}
 
 	if oldDBHasTable(ctx, tx, "tool_result_events") {
+		var metadataColumns []string
+		for _, column := range []string{"raw_content_digest", "summary_participates"} {
+			if oldDBHasColumn(ctx, tx, "tool_result_events", column) {
+				metadataColumns = append(metadataColumns, column)
+			}
+		}
+		metadata := ""
+		if len(metadataColumns) > 0 {
+			metadata = ", " + strings.Join(metadataColumns, ", ")
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal,
 				 call_index, tool_use_id, agent_id,
 				 subagent_session_id, source, status,
 				 content, content_length, timestamp,
-				 event_index)
+				 event_index`+metadata+`)
 			SELECT
 				`+sessionID+`, tool_call_message_ordinal,
 				call_index, tool_use_id, agent_id,
 				subagent_session_id, source, status,
 				content, content_length, timestamp,
-				event_index
+				event_index`+metadata+`
 			FROM old_db.tool_result_events
 			WHERE session_id IN (
 				SELECT source_id FROM `+tempIDsTable+`
