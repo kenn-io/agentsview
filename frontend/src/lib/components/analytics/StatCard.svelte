@@ -71,7 +71,7 @@
     gap: 1px;
   }
 
-  /* Room for a second sublabel line (14px). */
+  /* Room for a second sublabel line (12px). */
   :global(.kit-card.stat-card.sub-two-lines) {
     min-height: 78px;
   }
@@ -147,9 +147,15 @@
     color: var(--text-secondary);
   }
 
-  /* Sublabels sit one step below labels on every tier; context cards are
-     quieter through their smaller value, not a muted label. */
+  /* Sublabels sit one size step below labels, in muted ink, with a small
+     gap so the detail reads as a note under the label rather than a
+     second label. Context cards are quieter through their smaller value,
+     not a muted label. 22 + 1 + 14 + 1 + 2 + 12, padding, and borders
+     keep 64px. */
   .card-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    line-height: 12px;
     color: var(--text-muted);
   }
 </style>

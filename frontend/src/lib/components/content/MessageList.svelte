@@ -1186,12 +1186,10 @@
     border-left-style: solid;
   }
 
+  /* Light takes the Default user card tint, so the prompt reads the same
+     across layouts instead of a stronger gray-blue over the page. */
   .layout-stream :global(.message.is-user) {
-    background: color-mix(
-      in srgb,
-      var(--role-user-accent) 9%,
-      transparent
-    ) !important;
+    background: var(--user-bg) !important;
   }
 
   :global(:root.dark) .layout-stream :global(.message.is-user) {
