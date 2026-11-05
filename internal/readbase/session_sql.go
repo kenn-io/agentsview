@@ -27,12 +27,19 @@ func (SessionQueries) PinnedMessagesSQL(sessionID, project string) (string, []an
 			FROM pinned_messages WHERE session_id = ?
 			ORDER BY created_at DESC, id DESC`, []any{sessionID}
 	}
+	// ClickHouse builds the right side of a join in memory before probing
+	// it. Limiting messages to pinned sessions keeps that build in
+	// proportion to the pins instead of the whole messages table. The join
+	// matches on session_id, so the dropped rows could never match.
 	query := `SELECT p.id, p.session_id, p.message_id, p.ordinal,
 		p.note, p.created_at, m.content, m.role,
 		s.project, s.agent, COALESCE(s.display_name, s.session_name), s.first_message
 		FROM pinned_messages p
 		JOIN sessions s ON p.session_id = s.id AND s.deleted_at IS NULL
-		LEFT JOIN messages m ON p.session_id = m.session_id AND p.message_id = m.id`
+		LEFT JOIN (
+			SELECT session_id, id, content, role FROM messages
+			WHERE session_id IN (SELECT session_id FROM pinned_messages)
+		) m ON p.session_id = m.session_id AND p.message_id = m.id`
 	args := []any{}
 	if project != "" {
 		query += " WHERE s.project = ?"
