@@ -34,7 +34,7 @@ describe("RecallPanel load failures", () => {
 
   function stateLine(): HTMLElement {
     const state = document.querySelector<HTMLElement>(".recall-state");
-    expect(state?.textContent).toBe("Could not load distilled recall.");
+    expect(state?.textContent?.trim()).toBe("Could not load distilled recall.");
     return state!;
   }
 
@@ -45,7 +45,9 @@ describe("RecallPanel load failures", () => {
     component = mount(RecallPanel, { target: document.body, props: { sessionId: "s1" } });
     await flush();
 
-    expect(stateLine().classList.contains("recall-error")).toBe(false);
+    const state = stateLine();
+    expect(state.classList.contains("recall-error")).toBe(false);
+    expect(state.querySelector(".lucide-info")).not.toBeNull();
   });
 
   it("keeps the error treatment for a genuine server failure", async () => {
@@ -53,6 +55,9 @@ describe("RecallPanel load failures", () => {
     component = mount(RecallPanel, { target: document.body, props: { sessionId: "s1" } });
     await flush();
 
-    expect(stateLine().classList.contains("recall-error")).toBe(true);
+    const state = stateLine();
+    expect(state.classList.contains("recall-error")).toBe(true);
+    // A real failure leads with a warning glyph rather than reading as content.
+    expect(state.querySelector(".lucide-triangle-alert")).not.toBeNull();
   });
 });
