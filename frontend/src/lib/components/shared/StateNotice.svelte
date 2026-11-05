@@ -70,14 +70,16 @@
     color: var(--text-muted);
   }
 
-  /* Balanced wrapping keeps a lone phrase from dangling on the last line;
-     pretty wrapping only rescues single-word orphans. */
+  /* A framed notice fills its box: text runs on one line when it fits,
+     and pretty wrapping only rescues a single-word orphan, instead of
+     balancing two half-width lines that leave the right of the frame
+     empty. */
   .state-notice__body {
     margin: 0;
     min-width: 0;
     font-size: 13px;
     line-height: 1.45;
-    text-wrap: balance;
+    text-wrap: pretty;
   }
 
   .state-notice__title {
@@ -111,11 +113,13 @@
     height: 24px;
   }
 
+  /* Centered text keeps balanced lines so a lone phrase does not dangle. */
   .state-notice--empty .state-notice__body {
     display: flex;
     flex-direction: column;
     gap: 2px;
     max-width: 44ch;
+    text-wrap: balance;
   }
 
   .state-notice--empty .state-notice__title {

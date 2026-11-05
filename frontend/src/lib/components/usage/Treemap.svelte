@@ -58,10 +58,10 @@
   let measuredWidth = $state(0);
   const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
 
-  // Tiles use the same series color as the chart and legend. Every label in
-  // a theme uses one ink (white in light, near-black in dark), so labels do
-  // not alternate between tiles; a tile whose hue is too close to the ink
-  // moves its fill only as far as it needs to keep the label above 4.5:1.
+  // Tiles use the same series color as the chart and legend. Every label is
+  // white in both themes, so labels never alternate between tiles; a tile
+  // too light for white text darkens only as far as it needs to keep the
+  // label above 4.5:1.
   // Palette colors can be CSS variables such as var(--chart-series-1).
   // Resolve them against the root so the contrast math sees the real hex;
   // reading the theme here re-runs the resolution when the theme changes.
@@ -71,19 +71,18 @@
     return resolveRootColor(color);
   }
 
+  const TILE_INK = "#ffffff";
+
   function tilePaint(color: string): { fill: string; ink: string } | null {
     const hex = parseHexColor(resolveColor(color));
     if (!hex) return null;
-    const dark = ui.theme === "dark";
-    const ink = dark ? "#111318" : "#ffffff";
-    const away = dark ? "#ffffff" : "#000000";
     let weight = 1;
     let fill = hex;
-    while (weight > 0.4 && contrastRatio(fill, ink) < WCAG_AA_TEXT) {
+    while (weight > 0.3 && contrastRatio(fill, TILE_INK) < WCAG_AA_TEXT) {
       weight -= 0.02;
-      fill = mixHexColors(hex, away, weight);
+      fill = mixHexColors(hex, "#000000", weight);
     }
-    return { fill, ink };
+    return { fill, ink: TILE_INK };
   }
 
   function handleKey(e: KeyboardEvent, id: string) {

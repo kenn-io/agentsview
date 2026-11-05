@@ -29,5 +29,12 @@
 
 <style>
   .find-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .has-find :global(.message-list-scroll) { padding-inline-end: 12px; }
+  /* The overview rail needs 12px plus a 10px gap past the reading column.
+     Wide panes already have that in the side gutter, so the column stays
+     centered on the same edges as the session header; only a pane within
+     44px of the column reserves up to 12px and shifts it. */
+  .has-find {
+    --find-rail: clamp(0px, calc(var(--reading-column) + 44px - 100%), 12px);
+  }
+  .has-find :global(.message-list-scroll) { padding-inline-end: var(--find-rail); }
 </style>

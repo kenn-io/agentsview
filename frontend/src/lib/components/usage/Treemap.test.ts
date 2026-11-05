@@ -100,18 +100,21 @@ describe("Treemap", () => {
     expect(tile().style.getPropertyValue("--tile-ink")).toBe("#ffffff");
 
     // A theme switch changes what the variable resolves to; the same mounted
-    // items must pick up the new color and the dark theme's ink without
-    // being replaced.
+    // items must pick up the new color without being replaced. Dark labels
+    // stay white, so navy keeps its exact series color.
     root.setProperty("--test-series-swap", "#1f3a8a");
     ui.toggleTheme();
     await tick();
-    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#111318");
-    expect(contrastRatio(tile().style.getPropertyValue("--tile-fill"), "#111318")).toBeGreaterThanOrEqual(4.5);
+    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#ffffff");
+    expect(tile().style.getPropertyValue("--tile-fill")).toBe("#1f3a8a");
 
     root.setProperty("--test-series-swap", "#a3e635");
     ui.highContrast = !ui.highContrast;
     await tick();
-    expect(tile().style.getPropertyValue("--tile-fill")).toBe("#a3e635");
+    const lime = tile().style.getPropertyValue("--tile-fill");
+    expect(lime).not.toBe("#1f3a8a");
+    expect(lime).not.toBe("#a3e635");
+    expect(contrastRatio(lime, "#ffffff")).toBeGreaterThanOrEqual(4.5);
 
     unmount(component);
     ui.highContrast = !ui.highContrast;

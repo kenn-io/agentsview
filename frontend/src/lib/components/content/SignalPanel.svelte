@@ -159,9 +159,13 @@
 <style>
   /* The panel sits on the transcript's shared reading column (see
      MessageList .virtual-row): its fill and bottom rule span the column,
-     not the pane. ToolSequencesPanel continues the same block below. */
+     not the pane. ToolSequencesPanel continues the same block below. The
+     top gap matches the space Default leaves above the first message
+     (list 4px + row 5px), so the band does not butt against the header
+     rule. */
   .signal-panel {
     margin-inline: max(12px, calc((100% - var(--reading-column)) / 2));
+    margin-top: 9px;
     padding: 10px 12px;
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-muted);

@@ -255,8 +255,12 @@
 
   /* Wrap only between segments (after a separator); each segment,
      including names with spaces, stays on one line. */
+  /* A path that wraps indents its continuation lines, so a wrapped tail
+     never reads as the start of another path. */
   .provider-path {
     min-width: 0;
+    padding-inline-start: 2ch;
+    text-indent: -2ch;
   }
 
   .provider-path-seg {

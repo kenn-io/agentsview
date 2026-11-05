@@ -462,6 +462,14 @@
     color: var(--disabled-ink);
   }
 
+  /* Dark unselected segments already use muted ink (one step below the
+     secondary ink of other enabled controls), so the shared disabled ink
+     sat too close to them. Disabled segments take one more step down, the
+     same muted share light's disabled ink uses. */
+  :global(:root.dark) .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled:not(.active)) {
+    color: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
+  }
+
   /* The selected segment of a disabled control keeps app.css's selected
      fill, edge, and weight, and clearly stronger ink than its disabled
      neighbours, so the current choice reads on a read-only server. The
