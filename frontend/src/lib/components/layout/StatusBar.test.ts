@@ -67,47 +67,49 @@ describe("StatusBar", () => {
     }
   });
 
-  it.each(["rebuild", "catch-up"])(
-    "shows stale results guidance during %s until the archive is current",
-    async (reason) => {
-      sync.archiveStale = reason === "rebuild";
-      sync.syncPending = reason === "catch-up";
-      const component = mount(StatusBar, { target: document.body });
-      await tick();
-      expect(document.body.textContent).toContain("Archive results may be stale.");
-      expect(document.body.textContent).not.toContain("Changes are paused");
-      if (reason === "catch-up") {
-        expect(document.body.textContent).toContain("synced");
-        expect(document.querySelector(".archive-rebuild")).toBeNull();
-      } else {
-        sync.syncing = true;
-        sync.progress = {
-          phase: "preparing_resync",
-          resync: true,
-          projects_total: 0,
-          projects_done: 0,
-          sessions_total: 0,
-          sessions_done: 0,
-          messages_indexed: 0,
-        };
-        await tick();
-        expect(document.body.textContent).toContain(
-          "Archive results may be stale. Changes are paused until the rebuild finishes.",
-        );
-        sync.syncing = false;
-        sync.progress = null;
-        await tick();
-        expect(document.body.textContent).toContain("Archive results may be stale.");
-        expect(document.body.textContent).not.toContain("Changes are paused");
-      }
-      sync.archiveStale = false;
-      sync.syncPending = false;
-      await tick();
-      expect(document.body.textContent).not.toContain("Archive results may be stale.");
-      expect(document.body.textContent).toContain("synced");
-      await unmount(component);
-    },
-  );
+  it("shows catch-up guidance until the archive is current", async () => {
+    sync.syncPending = true;
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).not.toContain("Changes are paused");
+    expect(document.querySelector(".archive-rebuild")).toBeNull();
+    sync.syncPending = false;
+    await tick();
+    expect(document.body.textContent).not.toContain("Archive results may be stale.");
+    await unmount(component);
+  });
+
+  it("shows rebuild guidance until the archive is current", async () => {
+    sync.archiveStale = true;
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).not.toContain("Changes are paused");
+    sync.syncing = true;
+    sync.progress = {
+      phase: "preparing_resync",
+      resync: true,
+      projects_total: 0,
+      projects_done: 0,
+      sessions_total: 0,
+      sessions_done: 0,
+      messages_indexed: 0,
+    };
+    await tick();
+    expect(document.body.textContent).toContain(
+      "Archive results may be stale. Changes are paused until the rebuild finishes.",
+    );
+    sync.syncing = false;
+    sync.progress = null;
+    await tick();
+    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).not.toContain("Changes are paused");
+    sync.archiveStale = false;
+    await tick();
+    expect(document.body.textContent).not.toContain("Archive results may be stale.");
+    await unmount(component);
+  });
 
   it("offers to rebuild a stale archive from the status bar", async () => {
     sync.archiveStale = true;

@@ -475,6 +475,9 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 				defer engine.Close()
 				ingestion := &daemonIngestion{pending: tc.idle, resumed: make(chan struct{})}
+				if tc.idle {
+					ingestion.catchup = make(chan struct{})
+				}
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
@@ -493,7 +496,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for catch-up")
-					ingestion.finishCatchup(make(chan struct{}), true)
+					ingestion.finishCatchup(ingestion.catchup, true)
 					synctest.Wait()
 				}
 				if tc.battery && !tc.stale {

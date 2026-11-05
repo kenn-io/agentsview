@@ -106,17 +106,26 @@ describe("orvalFetch", () => {
     window.addEventListener(ARCHIVE_STALE_EVENT, listener);
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response('{"results":[]}', {
-          headers: {
-            "Content-Type": "application/json",
-            "X-Agentsview-Archive-Stale": "true",
-            "X-Agentsview-Sync-Pending": "true",
-          },
-        }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response('{"results":[]}', {
+            headers: {
+              "Content-Type": "application/json",
+              "X-Agentsview-Archive-Stale": "true",
+              "X-Agentsview-Sync-Pending": "true",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response('{"results":[]}', {
+            headers: { "Content-Type": "application/json", "X-Agentsview-Archive-Stale": "true" },
+          }),
+        ),
     );
     try {
+      await orvalFetch("/api/v1/search?q=overnight", {});
+      expect(listener).toHaveBeenCalledOnce();
       await orvalFetch("/api/v1/search?q=overnight", {});
       expect(listener).toHaveBeenCalledOnce();
     } finally {

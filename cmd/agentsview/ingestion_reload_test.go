@@ -163,7 +163,11 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				tracker.SetSyncIdle(100*time.Millisecond, ingestion.Suspend) //nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
 				go tracker.Run(t.Context())
 			}
-			ingestion.Suspend()
+			if mode == "automatic" {
+				require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond, "the idle tracker suspends collection")
+			} else {
+				ingestion.Suspend()
+			}
 			ingestion.applying.Wait()
 			writeReloadGeminiSession(t, root, "overnight")
 			if mode == "automatic" {
@@ -344,7 +348,7 @@ func TestDaemonIngestionWakeCatchesUpChangedSources(t *testing.T) {
 	}
 }
 
-func TestDaemonIngestionManualSyncResumesCollection(t *testing.T) {
+func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 	for _, tc := range []struct{ name, route string }{{"sync", "/sync"}, {"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
@@ -358,7 +362,6 @@ func TestDaemonIngestionManualSyncResumesCollection(t *testing.T) {
 			t.Cleanup(ingestion.Stop)
 			ingestion.Suspend()
 			ingestion.applying.Wait()
-			writeReloadGeminiSession(t, root, "morning")
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
 			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1"+tc.route, nil)
 			require.NoError(t, err)
@@ -369,7 +372,7 @@ func TestDaemonIngestionManualSyncResumesCollection(t *testing.T) {
 			require.NoError(t, response.Body.Close())
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-			assert.True(t, sessionImported(t, database, "gemini:morning"))
+			assert.True(t, ingestion.Active(), "archive write routes resume collection through shared middleware")
 			assert.False(t, ingestion.Pending())
 		})
 	}

@@ -1,6 +1,7 @@
 import { reportSyncFailed } from "../utils/telemetry.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
+import { ARCHIVE_STALE_EVENT } from "../api/runtime.js";
 import { searchStore } from "./search.svelte.js";
 import type {
   SyncSyncStats as SyncStats,
@@ -712,33 +713,11 @@ describe("SyncStore.remoteUnreachable", () => {
   });
 
   it("clears the flag when a remote load succeeds", async () => {
-    sync.syncPending = false;
-    const refresh = vi.spyOn(searchStore, "refresh").mockImplementation(() => {});
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
-    const s = sync as unknown as Record<string, unknown>;
-    s.remoteUnreachable = true;
-    vi.mocked(api.getSyncStatus).mockResolvedValue({
-      last_sync: "",
-      sync_pending: true,
-      stats: MOCK_STATS,
-    });
-
+    sync.remoteUnreachable = true;
+    vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", stats: MOCK_STATS });
     await sync.loadStatus();
-
     expect(sync.remoteUnreachable).toBe(false);
-    expect(sync.syncPending).toBe(true);
-    expect(refresh).not.toHaveBeenCalled();
-    vi.mocked(api.getSyncStatus).mockResolvedValue({
-      last_sync: "",
-      stats: MOCK_STATS,
-      sync_pending: false,
-    });
-    await sync.loadStatus();
-    expect(sync.syncPending).toBe(false);
-    expect(refresh).toHaveBeenCalledOnce();
-    await sync.loadStatus();
-    expect(refresh).toHaveBeenCalledOnce();
-    refresh.mockRestore();
   });
 
   it("adopts in-flight progress from sync status polling", async () => {
@@ -1052,5 +1031,29 @@ describe("SyncStore.remoteUnreachable", () => {
     expect(sync.backendDegraded).toBe(false);
     expect(sync.backendDegradedMessage).toBeNull();
     expect(sync.remoteUnreachable).toBe(true);
+  });
+});
+
+// Response-reported catch-up can finish entirely between two status polls.
+describe("idle catch-up completion", () => {
+  it("refreshes the current search once after response-reported catch-up completes", async () => {
+    sync.syncPending = false;
+    sync.serverVersion = { build_date: "", commit: "abc123", version: "dev", read_only: false };
+    const refresh = vi.spyOn(searchStore, "refresh").mockImplementation(() => {});
+    vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", sync_pending: false });
+    try {
+      await sync.loadStatus();
+      expect(refresh).not.toHaveBeenCalled();
+      window.dispatchEvent(new Event(ARCHIVE_STALE_EVENT));
+      expect(sync.syncPending).toBe(true);
+      await sync.loadStatus();
+      expect(sync.syncPending).toBe(false);
+      expect(refresh).toHaveBeenCalledOnce();
+      await sync.loadStatus();
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      refresh.mockRestore();
+      sync.syncPending = false;
+    }
   });
 });
