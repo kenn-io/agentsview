@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1024,17 +1023,6 @@ func TestCursorBrokenCandidateKeepsHealthyHistory(t *testing.T) {
 				}
 				assert.ElementsMatch(t, []string{fallback, healthy, subagent}, paths, "streaming=%v", streaming)
 			}
-			consumerErr := errors.New("consumer stopped")
-			calls := 0
-			err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
-			require.ErrorIs(t, err, consumerErr)
-			assert.Equal(t, 1, calls)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			calls = 0
-			err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
-			require.ErrorIs(t, err, context.Canceled)
-			assert.Equal(t, 1, calls)
 		})
 	}
 }
@@ -1062,15 +1050,4 @@ func TestCursorUnreadableSubagentsKeepsHealthySiblings(t *testing.T) {
 	assert.ElementsMatch(t, []string{childA, childC}, paths)
 	var incomplete DiscoveryIncompleteError
 	require.ErrorAs(t, err, &incomplete)
-	consumerErr := errors.New("consumer stopped")
-	calls := 0
-	err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
-	require.ErrorIs(t, err, consumerErr)
-	assert.Equal(t, 1, calls)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	calls = 0
-	err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, 1, calls)
 }

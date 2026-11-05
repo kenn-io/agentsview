@@ -28,13 +28,25 @@ func TestS3DiscoveryReportsListingFailure(t *testing.T) {
 				remoteRel = "2026/06/24/rollout-2026-06-24T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
 			}
 			if agent == AgentCursor {
-				localRel = "project/agent-transcripts/22222222-2222-4222-8222-222222222222.jsonl"
+				localRel = "project/agent-transcripts/parent/subagents/22222222-2222-4222-8222-222222222222.jsonl"
 			}
 			localPath := filepath.Join(root, filepath.FromSlash(localRel))
 			require.NoError(t, os.MkdirAll(filepath.Dir(localPath), 0o755))
 			require.NoError(t, os.WriteFile(localPath, []byte("{}\n"), 0o600))
 			good := "s3://bucket/healthy/raw/" + string(agent)
 			bad := "s3://bucket/denied/raw/" + string(agent)
+			localRoots := []string{root}
+			expectedPaths := []string{localPath, good + "/" + remoteRel}
+			if agent == AgentIcodemate {
+				opencodeRoot := t.TempDir()
+				sessionPath := filepath.Join(opencodeRoot, "storage", "session_diff", "global", "ses_vscode.json")
+				writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+					"id": "ses_vscode", "directory": "/demo/project", "title": "Available history",
+					"time": map[string]any{"created": 1700000000000, "updated": 1700000060000},
+				})
+				localRoots = append(localRoots, opencodeRoot)
+				expectedPaths = append(expectedPaths, sessionPath)
+			}
 			listS3Objects = func(prefix string) ([]S3Object, error) {
 				if prefix == bad {
 					return nil, denied
@@ -45,9 +57,9 @@ func TestS3DiscoveryReportsListingFailure(t *testing.T) {
 
 			for _, deniedFirst := range []bool{true, false} {
 				t.Run(fmt.Sprintf("denied_first=%v", deniedFirst), func(t *testing.T) {
-					roots := []string{bad, root, good}
+					roots := append([]string{bad, good}, localRoots...)
 					if !deniedFirst {
-						roots = []string{root, good, bad}
+						roots = append(append([]string(nil), localRoots...), good, bad)
 					}
 					factory, ok := ProviderFactoryByType(agent)
 					require.True(t, ok)
@@ -60,11 +72,11 @@ func TestS3DiscoveryReportsListingFailure(t *testing.T) {
 					for _, source := range sources {
 						paths = append(paths, source.DisplayPath)
 					}
-					assert.ElementsMatch(t, []string{localPath, good + "/" + remoteRel}, paths)
+					assert.ElementsMatch(t, expectedPaths, paths)
 					paths = nil
 					err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error { paths = append(paths, source.DisplayPath); return nil })
 					require.ErrorIs(t, err, denied)
-					assert.ElementsMatch(t, []string{localPath, good + "/" + remoteRel}, paths)
+					assert.ElementsMatch(t, expectedPaths, paths)
 				})
 			}
 			factory, ok := ProviderFactoryByType(agent)

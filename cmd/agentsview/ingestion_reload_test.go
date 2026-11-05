@@ -143,36 +143,6 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	assert.True(t, sessionImported(t, database, "gemini:alternate"))
 }
 
-func TestDaemonIngestionIdleSearch(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}, InstallationID: "test-machine"}
-	writeReloadGeminiSession(t, root, "before")
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	tracker := server.NewIdleTracker(0, func() {})
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
-	tracker.SetSyncIdle(time.Second, ingestion.Suspend)
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	go tracker.Run(ctx)
-	t.Cleanup(ingestion.Stop)
-	ingestion.OpenWatcherDispatch()
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
-	id := "morning"
-	require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, id)
-	path := filepath.Join(root, "tmp", "project", "chats", "session-"+id+".json")
-	older := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(path, older, older))
-	assert.Never(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
-	_, body := searchIngestionArchive(t, ts.URL, id)
-	assert.Contains(t, body, "hello from "+id)
-	assert.False(t, ingestion.Pending())
-}
-
 func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	for _, mode := range []string{"automatic", "reload", "requested", "canceled", "ensure-fresh-stop", "requested-stop"} {
 		t.Run(mode, func(t *testing.T) {
@@ -196,6 +166,12 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			ingestion.Suspend()
 			ingestion.applying.Wait()
 			writeReloadGeminiSession(t, root, "overnight")
+			if mode == "automatic" {
+				path := filepath.Join(root, "tmp", "project", "chats", "session-overnight.json")
+				older := time.Now().Add(-time.Hour)
+				require.NoError(t, os.Chtimes(path, older, older))
+				assert.Never(t, func() bool { return sessionImported(t, database, "gemini:overnight") }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
+			}
 			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			releaseOnce := sync.OnceFunc(func() { close(release) })
 			t.Cleanup(releaseOnce)

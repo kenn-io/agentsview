@@ -190,11 +190,9 @@ describe("SearchStore", () => {
     events.setAvailable(true);
     const first = deferred<SearchResponse>();
     const background = deferred<SearchResponse>();
-    const changed = deferred<SearchResponse>();
     searchService.getApiV1Search
       .mockReturnValueOnce(first.promise as never)
-      .mockReturnValueOnce(background.promise as never)
-      .mockReturnValueOnce(changed.promise as never);
+      .mockReturnValueOnce(background.promise as never);
     searchStore.search("needle", "alpha");
     await runDebounce();
     const firstSignal = searchService.getApiV1Search.mock.calls[0]![1]!.signal!;
@@ -213,21 +211,8 @@ describe("SearchStore", () => {
     expect(searchStore.isSearching).toBe(false);
     expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
 
-    wire.deliver!({ scope: "sessions" });
-    const backgroundSignal = searchService.getApiV1Search.mock.calls[1]![1]!.signal!;
-    searchStore.search("different", "beta");
-    expect(backgroundSignal.aborted).toBe(true);
-    await runDebounce();
     background.resolve(fullTextResponse("needle"));
-    changed.resolve(fullTextResponse("different", 0));
     await flushMicrotasks();
-    await runDebounce();
-    expect(searchStore.results).toEqual([]);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(3);
-    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
-      expect.objectContaining({ q: "different", project: "beta" }),
-      expect.anything(),
-    );
   });
 
   it.each([

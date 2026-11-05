@@ -165,11 +165,13 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newIdleTrackerFixture(t, 20*time.Millisecond)
+
 		done := requireBeginWork(t, f.tracker)
 		f.run(t)
 
 		f.requireNotFiredWithin(t, 35*time.Millisecond,
 			"idle fired while internal work was active")
+
 		done()
 		f.requireFiredWithin(t, 80*time.Millisecond,
 			"idle did not fire after internal work ended")

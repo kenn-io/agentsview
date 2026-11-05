@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,22 +292,6 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 			assert.Equal(t, "hello cli", parsed.FirstMessage)
 		}
 	}
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-	denied := errors.New("source unavailable")
-	listS3Objects = func(string) ([]S3Object, error) { return nil, denied }
-	partial, ok := NewProvider(AgentIcodemate, ProviderConfig{Roots: []string{opencodeRoot, "s3://bucket/denied", cliRoot}})
-	require.True(t, ok)
-	discovered, err = partial.Discover(t.Context())
-	require.ErrorIs(t, err, denied)
-	require.Len(t, discovered, 2)
-	var streamed []SourceRef
-	err = partial.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error {
-		streamed = append(streamed, source)
-		return nil
-	})
-	require.ErrorIs(t, err, denied)
-	assert.ElementsMatch(t, discovered, streamed)
 }
 
 // TestIcodemateCLIProviderDiscoversS3Sessions verifies the CLI source set

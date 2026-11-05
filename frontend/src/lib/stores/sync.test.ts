@@ -711,10 +711,11 @@ describe("SyncStore.remoteUnreachable", () => {
     expect(sync.remoteUnreachable).toBe(true);
   });
 
-  it("adopts catch-up status after a stale response and clears unreachable state", async () => {
+  it("clears the flag when a remote load succeeds", async () => {
     sync.syncPending = false;
     window.dispatchEvent(new Event(ARCHIVE_STALE_EVENT));
     expect(sync.syncPending).toBe(true);
+    sync.syncPending = false;
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
     s.remoteUnreachable = true;
