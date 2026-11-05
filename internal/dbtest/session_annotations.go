@@ -155,6 +155,29 @@ func AssertSessionAnnotationParity(t *testing.T, archive, mirror db.Store) {
 					"sidebar limit %d", limit)
 				assert.Equal(t, want.Total, got.Total, "sidebar total limit %d", limit)
 			}
+			archiveFilter, mirrorFilter := tt.filter, tt.filter
+			archiveFilter.Limit, mirrorFilter.Limit = 1, 1
+			for page := 0; ; page++ {
+				require.Less(t, page, 10, "sidebar pagination must terminate")
+				want, err := archive.GetSidebarSessionIndex(ctx, archiveFilter)
+				require.NoError(t, err)
+				got, err := mirror.GetSidebarSessionIndex(ctx, mirrorFilter)
+				require.NoError(t, err)
+				wantIDs, gotIDs := []string{}, []string{}
+				for _, row := range want.Sessions {
+					wantIDs = append(wantIDs, row.ID)
+				}
+				for _, row := range got.Sessions {
+					gotIDs = append(gotIDs, row.ID)
+				}
+				assert.Equal(t, wantIDs, gotIDs, "sidebar page %d", page)
+				assert.Equal(t, want.Total, got.Total, "sidebar page %d total", page)
+				require.Equal(t, want.NextCursor != "", got.NextCursor != "", "sidebar page %d cursor", page)
+				if want.NextCursor == "" {
+					break
+				}
+				archiveFilter.Cursor, mirrorFilter.Cursor = want.NextCursor, got.NextCursor
+			}
 		})
 	}
 }

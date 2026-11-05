@@ -1,10 +1,12 @@
 package readbase
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -110,8 +112,9 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 func (s Sessions) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
-	f.Cursor = ""
-	f.Limit = 0
+	if f.Limit > 0 || f.Cursor != "" || f.Starred {
+		return s.getSidebarSessionIndexPage(ctx, f)
+	}
 
 	dialect := s.backend.Dialect()
 	rootFilter := f
@@ -133,25 +136,10 @@ func (s Sessions) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter
 
 	index := db.SidebarSessionIndex{Sessions: []db.SidebarSessionIndexRow{}, Total: total}
 	for rows.Next() {
-		var row db.SidebarSessionIndexRow
-		var startedAt, endedAt, createdAt any
-		if err := rows.Scan(
-			&row.ID, &row.ParentSessionID, &row.RelationshipType,
-			&row.Project, &row.ProjectAssigned, &row.Machine, &row.Agent,
-			&row.AgentLabel, &row.Entrypoint, &row.SessionKind, &row.DisplayName,
-			&startedAt, &endedAt, &createdAt,
-			&row.TerminationStatus, &row.MessageCount, &row.UserMessageCount,
-			&row.TranscriptRevision, &row.IsAutomated, &row.IsTeammate,
-		); err != nil {
-			return db.SidebarSessionIndex{}, fmt.Errorf("scanning %s sidebar session index: %w", s.backend.MemoryBackendName(), err)
+		row, err := s.scanSidebarRow(rows, nil)
+		if err != nil {
+			return db.SidebarSessionIndex{}, err
 		}
-		if v := s.backend.FormatTime(startedAt); v != "" {
-			row.StartedAt = &v
-		}
-		if v := s.backend.FormatTime(endedAt); v != "" {
-			row.EndedAt = &v
-		}
-		row.CreatedAt = s.backend.FormatTime(createdAt)
 		index.Sessions = append(index.Sessions, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -221,4 +209,130 @@ func (s Sessions) GetSessionVersion(ctx context.Context, id string) (int, int64,
 		fileHashPart = fileHash.String
 	}
 	return count, db.SessionVersionMarker(fileMtimePart, fileHashPart, s.backend.FormatTime(updated), fingerprint), true
+}
+
+func (s Sessions) scanSidebarRow(rows *sql.Rows, prefix []any) (db.SidebarSessionIndexRow, error) {
+	var row db.SidebarSessionIndexRow
+	var startedAt, endedAt, createdAt any
+	dest := append(prefix,
+		&row.ID, &row.ParentSessionID, &row.RelationshipType,
+		&row.Project, &row.ProjectAssigned, &row.Machine, &row.Agent,
+		&row.AgentLabel, &row.Entrypoint, &row.SessionKind, &row.DisplayName,
+		&startedAt, &endedAt, &createdAt,
+		&row.TerminationStatus, &row.MessageCount, &row.UserMessageCount,
+		&row.TranscriptRevision, &row.IsAutomated, &row.IsTeammate,
+	)
+	if err := rows.Scan(dest...); err != nil {
+		return db.SidebarSessionIndexRow{}, fmt.Errorf("scanning %s sidebar session index: %w", s.backend.MemoryBackendName(), err)
+	}
+	if v := s.backend.FormatTime(startedAt); v != "" {
+		row.StartedAt = &v
+	}
+	if v := s.backend.FormatTime(endedAt); v != "" {
+		row.EndedAt = &v
+	}
+	row.CreatedAt = s.backend.FormatTime(createdAt)
+	return row, nil
+}
+
+func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
+	f.Limit = db.NormalizeSessionLimit(f.Limit)
+	dialect := s.backend.Dialect()
+	var cur db.SessionCursor
+	if f.Cursor != "" {
+		var err error
+		cur, err = s.backend.DecodeCursor(f.Cursor)
+		if err != nil {
+			return db.SidebarSessionIndex{}, err
+		}
+	}
+	index := db.SidebarSessionIndex{Sessions: []db.SidebarSessionIndexRow{}, Total: cur.Total}
+	queries := SessionQueries{}
+	if index.Total <= 0 {
+		query, args := queries.SidebarRootPageSQL(f, dialect, cur, true)
+		if err := s.backend.QueryRowContext(ctx, query, args...).Scan(&index.Total); err != nil {
+			return db.SidebarSessionIndex{}, fmt.Errorf("counting %s sidebar roots: %w", s.backend.MemoryBackendName(), err)
+		}
+	}
+	query, args := queries.SidebarRootPageSQL(f, dialect, cur, false)
+	rows, err := s.backend.QueryContext(ctx, query, args...)
+	if err != nil {
+		return db.SidebarSessionIndex{}, fmt.Errorf("querying %s sidebar root page: %w", s.backend.MemoryBackendName(), err)
+	}
+	defer rows.Close()
+	ids := []string{}
+	activities := []string{}
+	for rows.Next() {
+		var id string
+		var activity any
+		if err := rows.Scan(&id, &activity); err != nil {
+			return db.SidebarSessionIndex{}, fmt.Errorf("scanning %s sidebar root page: %w", s.backend.MemoryBackendName(), err)
+		}
+		ids = append(ids, id)
+		activities = append(activities, s.backend.FormatTime(activity))
+	}
+	if err := rows.Err(); err != nil {
+		return db.SidebarSessionIndex{}, fmt.Errorf("iterating %s sidebar root page: %w", s.backend.MemoryBackendName(), err)
+	}
+	if err := rows.Close(); err != nil {
+		return db.SidebarSessionIndex{}, err
+	}
+	if len(ids) == 0 {
+		return index, nil
+	}
+	if len(ids) > f.Limit {
+		ids = ids[:f.Limit]
+		index.NextCursor = s.backend.EncodeCursor(db.SessionCursor{
+			EndedAt: activities[f.Limit-1], ID: ids[f.Limit-1], Total: index.Total,
+		})
+	}
+	positions := make(map[string]int, len(ids))
+	for i, id := range ids {
+		positions[id] = i
+	}
+	query, args = queries.SidebarTreePageSQL(f, dialect, ids)
+	treeRows, err := s.backend.QueryContext(ctx, query, args...)
+	if err != nil {
+		return db.SidebarSessionIndex{}, fmt.Errorf("querying %s sidebar tree page: %w", s.backend.MemoryBackendName(), err)
+	}
+	defer treeRows.Close()
+	// A session reachable from several roots belongs to the earliest root.
+	rowPositions := map[string]int{}
+	for treeRows.Next() {
+		var rootID string
+		row, err := s.scanSidebarRow(treeRows, []any{&rootID})
+		if err != nil {
+			return db.SidebarSessionIndex{}, err
+		}
+		pos := positions[rootID]
+		if previous, exists := rowPositions[row.ID]; exists {
+			rowPositions[row.ID] = min(previous, pos)
+			continue
+		}
+		rowPositions[row.ID] = pos
+		index.Sessions = append(index.Sessions, row)
+	}
+	if err := treeRows.Err(); err != nil {
+		return db.SidebarSessionIndex{}, fmt.Errorf("iterating %s sidebar tree page: %w", s.backend.MemoryBackendName(), err)
+	}
+	activity := func(row db.SidebarSessionIndexRow) time.Time {
+		value := row.CreatedAt
+		if row.EndedAt != nil {
+			value = *row.EndedAt
+		} else if row.StartedAt != nil {
+			value = *row.StartedAt
+		}
+		timestamp, _ := s.backend.ParseTime(value)
+		return timestamp
+	}
+	slices.SortStableFunc(index.Sessions, func(a, b db.SidebarSessionIndexRow) int {
+		if order := cmp.Compare(rowPositions[a.ID], rowPositions[b.ID]); order != 0 {
+			return order
+		}
+		if order := activity(b).Compare(activity(a)); order != 0 {
+			return order
+		}
+		return cmp.Compare(b.ID, a.ID)
+	})
+	return index, nil
 }
