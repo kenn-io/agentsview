@@ -1,12 +1,44 @@
 package db
 
 import (
+	"strings"
 	"testing"
 	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Every branch must start with plan usage so an empty plan table avoids
+// scanning the archive's sessions, messages, and usage events.
+func TestPlanUsageCountQueryStartsFromPlanUsage(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		name     string
+		filter   UsageFilter
+		branches int
+	}{
+		{name: "unfiltered", branches: 3},
+		{name: "date window", filter: UsageFilter{From: "2026-09-10", To: "2026-09-12", Timezone: "UTC"}, branches: 3},
+		{name: "model", filter: UsageFilter{Model: "gpt-5-codex"}, branches: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query, args := planUsageCountSQL(tc.filter)
+			plan := explainQueryPlan(t, d, query, args...)
+			var starts []string
+			for i, detail := range plan {
+				if detail == "LEFT-MOST SUBQUERY" || detail == "UNION ALL" {
+					require.Less(t, i+1, len(plan))
+					starts = append(starts, plan[i+1])
+				}
+			}
+			require.Len(t, starts, tc.branches, strings.Join(plan, "\n"))
+			for _, start := range starts {
+				assert.Regexp(t, `^(SCAN|SEARCH) p\b`, start, strings.Join(plan, "\n"))
+			}
+		})
+	}
+}
 
 // seedPlanUsageCountSessions writes sessions that cover each plan usage
 // count rule:

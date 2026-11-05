@@ -842,41 +842,48 @@ func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 }
 
 func TestWatcherSchedulerSustainedEventsProgress(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		const (
-			batchDelay  = 50 * time.Millisecond
-			minInterval = 300 * time.Millisecond
-			eventEvery  = 10 * time.Millisecond
-		)
-		backend := newFakeWatchBackend()
-		var calls []watcherCall
-		w, err := newWatcherWithBackend(
-			batchDelay, minInterval,
-			func(_ context.Context, batch WatchBatch) error {
-				calls = append(calls, watcherCall{paths: batch.Paths, at: time.Now()})
-				return nil
-			},
-			backend, 8, 1_000,
-		)
-		require.NoError(t, err)
-		w.Start()
-		t.Cleanup(w.Stop)
+	for _, tt := range []struct {
+		name                                       string
+		batchDelay, interval, eventEvery, duration time.Duration
+		want                                       int
+	}{
+		{"continuous burst", 50 * time.Millisecond, 300 * time.Millisecond, 10 * time.Millisecond, 900 * time.Millisecond, 3},
+		{"one minute", 500 * time.Millisecond, time.Minute, time.Second, 3 * time.Minute, 3},
+		{"five seconds", 500 * time.Millisecond, 5 * time.Second, time.Second, 3 * time.Minute, 36},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backend := newFakeWatchBackend()
+				var calls []watcherCall
+				w, err := newWatcherWithBackend(
+					tt.batchDelay, tt.interval,
+					func(_ context.Context, batch WatchBatch) error {
+						calls = append(calls, watcherCall{paths: batch.Paths, at: time.Now()})
+						return nil
+					},
+					backend, 8, 1_000,
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
 
-		start := time.Now()
-		for time.Since(start) < 3*minInterval {
-			backend.sendEvent(t, "/sessions/active.jsonl")
-			synctest.Wait()
-			time.Sleep(eventEvery)
-		}
-		synctest.Wait()
+				start := time.Now()
+				for time.Since(start) < tt.duration {
+					backend.sendEvent(t, "/sessions/active.jsonl")
+					synctest.Wait()
+					time.Sleep(tt.eventEvery)
+				}
+				synctest.Wait()
 
-		require.Len(t, calls, 3, "sustained events must make bounded progress")
-		for i, call := range calls {
-			assert.Equal(t, []string{"/sessions/active.jsonl"}, call.paths)
-			assert.Equal(t, batchDelay+time.Duration(i)*minInterval, call.at.Sub(start),
-				"new events must not postpone dispatch or bypass the minimum interval")
-		}
-	})
+				require.Len(t, calls, tt.want, "sustained events must make bounded progress")
+				for i, call := range calls {
+					assert.Equal(t, []string{"/sessions/active.jsonl"}, call.paths)
+					assert.Equal(t, tt.batchDelay+time.Duration(i)*tt.interval, call.at.Sub(start),
+						"new events must not postpone dispatch or bypass the minimum interval")
+				}
+			})
+		})
+	}
 }
 
 func TestWatcherSustainedWritesProgress(t *testing.T) {

@@ -146,7 +146,8 @@ machine = "fedcba9876543210fedcba9876543210" # Laptop installation ID
 
 Shared mounts remove the copy step, but freshness and watcher behavior depend on
 the filesystem. Some network filesystems do not deliver local filesystem events
-reliably; the daily archive audit remains the backstop.
+reliably; the daily archive audit remains the backstop. On battery, the routine
+audit waits for AC power; required archive rebuilds still run.
 
 ## Identity, Filtering, and Freshness
 
