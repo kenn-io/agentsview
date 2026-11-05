@@ -1011,10 +1011,15 @@ func (c *usageFillCoordinator) installSpoolBatch(
 	}
 	eligibleStable := make([]usageSourceVersion, 0, len(stable))
 	eligibleDeleted := make([]string, 0, len(deleted))
+	results := make(map[string]usageFillResult, len(stable)+len(deleted))
 	var lost []string
 	for _, version := range stable {
 		cached, exists := cachedSessions[version.SessionID]
-		if fillInstallExpectationMatches(cached, exists, expected[version.SessionID]) {
+		// A concurrent fill may already have installed this exact source.
+		// Keep its revision so its newer rollups remain current.
+		if exists && cached.source.Equal(version) {
+			results[version.SessionID] = cached
+		} else if fillInstallExpectationMatches(cached, exists, expected[version.SessionID]) {
 			eligibleStable = append(eligibleStable, version)
 		} else {
 			lost = append(lost, version.SessionID)
@@ -1028,8 +1033,6 @@ func (c *usageFillCoordinator) installSpoolBatch(
 			lost = append(lost, sessionID)
 		}
 	}
-	results := make(map[string]usageFillResult,
-		len(eligibleStable)+len(eligibleDeleted))
 	for _, sessionID := range eligibleDeleted {
 		results[sessionID] = usageFillResult{Deleted: true}
 	}

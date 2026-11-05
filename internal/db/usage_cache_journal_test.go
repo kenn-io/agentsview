@@ -343,6 +343,66 @@ func TestUsageJournaledOlderRollupCannotReplaceNewer(t *testing.T) {
 	assert.Zero(t, rebuilt.Load())
 }
 
+func TestUsageJournaledDelayedFillPreservesCurrentRevision(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	old, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "session", Ordinal: 1, Role: "assistant", Model: "journal-model",
+		Timestamp: "2026-08-11T00:30:00Z", TokenUsage: []byte(`{"input_tokens":7}`),
+	}}))
+	current, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	fills, err := cache.fill.Ensure(t.Context(), current.Versions, 0)
+	require.NoError(t, err)
+	require.NotEqual(t, old.Versions[0].TranscriptRevision, current.Versions[0].TranscriptRevision)
+	delayed, err := cache.fill.FillBackground(t.Context(), old.Versions, 0)
+	require.NoError(t, err)
+	assert.Equal(t, fills["session"], delayed["session"], "extracting the current source again must preserve its installed revision")
+}
+
+func TestUsageJournaledSupersededBackgroundBuild(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	seedJournaledUsage(t, database, "peer")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	old, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	fills, err := cache.fill.Ensure(t.Context(), old.Versions, 0)
+	require.NoError(t, err)
+	session, err := database.GetSession(t.Context(), "session")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	session.Agent = "claude"
+	require.NoError(t, database.UpsertSession(t.Context(), *session))
+	_, err = database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	var newerRevision int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision FROM usage_rollup_installs WHERE session_id='session'`).Scan(&newerRevision))
+	require.Greater(t, newerRevision, old.ChangeRevision)
+	// The same batch must still install a peer that needs work.
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id='peer'`)
+	require.NoError(t, err)
+	_, err = ensureUsageRollupsAcross(t.Context(), cache, old, fills,
+		export.NewPricingResolver(old.PricingRows), []*time.Location{time.UTC})
+	require.NoError(t, err)
+	var installedRevision int64
+	var agent string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&installedRevision, &agent))
+	assert.Equal(t, newerRevision, installedRevision)
+	assert.Equal(t, "claude", agent)
+	var peerTokens int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(d.input_tokens)
+		FROM usage_daily_rollups d JOIN usage_rollup_installs i ON i.id=d.rollup_install_id
+		JOIN usage_rollup_timezones z ON z.id=i.timezone_id
+		WHERE i.session_id='peer' AND z.timezone_key=?`, usageTimezoneIdentityFor(time.UTC, nil).Key).Scan(&peerTokens))
+	assert.EqualValues(t, 100, peerTokens)
+}
+
 func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 	for _, revert := range []bool{false, true} {
 		t.Run(strconv.FormatBool(revert), func(t *testing.T) {

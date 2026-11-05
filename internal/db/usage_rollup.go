@@ -699,6 +699,7 @@ func installUsageRollupBuilds(
 		return err
 	}
 	dates := make(map[string]bool)
+	superseded := false
 	for _, build := range builds {
 		var installID int64
 		var installedFactRevision, installedChangeRevision int64
@@ -710,7 +711,8 @@ func installUsageRollupBuilds(
 			return err
 		}
 		if err == nil && installedChangeRevision > build.ChangeRevision {
-			return errUsageRollupSuperseded
+			superseded = true
+			continue
 		}
 		// A dedup invalidation can remove a newer install before this delayed
 		// build arrives. Replay journal changes from its snapshot on the next
@@ -782,6 +784,9 @@ func installUsageRollupBuilds(
 		return fmt.Errorf("committing usage rollup install: %w", err)
 	}
 	committed = true
+	if superseded {
+		return errUsageRollupSuperseded
+	}
 	return nil
 }
 

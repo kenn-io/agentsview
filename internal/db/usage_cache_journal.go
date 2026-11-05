@@ -102,7 +102,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return usagePreparedWindow{}, false, err
 	}
 	var refresh usageQuerySnapshot
-	var refreshIDs []string
+	refreshIDs := make([]string, 0)
 	var catalog string
 	trusted := false
 	snapshot, err := db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
