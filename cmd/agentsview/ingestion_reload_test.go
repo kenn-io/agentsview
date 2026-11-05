@@ -63,7 +63,10 @@ func serveIngestionArchive(t *testing.T, cfg config.Config, database *db.DB, eng
 	t.Helper()
 	ts := httptest.NewUnstartedServer(nil)
 	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-	options = append(options, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion))
+	options = append(options, server.WithBaseContext(t.Context()))
+	if ingestion != nil {
+		options = append(options, server.WithIngestionFreshness(ingestion))
+	}
 	ts.Config.Handler = server.New(cfg, database, engine, options...).Handler()
 	ts.Start()
 	t.Cleanup(ts.Close)
@@ -157,6 +160,17 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, func() (config.Config, error) { return saved, nil })
 			t.Cleanup(ingestion.Stop)
 			if mode == "automatic" {
+				lastSync := time.Now().Add(-time.Minute)
+				require.NoError(t, database.SetSyncState(t.Context(), "last_sync_started_at", lastSync.Format(time.RFC3339Nano)))
+				// Dispatch is still closed, so this change waits in the watcher queue.
+				writeReloadGeminiSession(t, root, "queued")
+				path := filepath.Join(root, "tmp", "project", "chats", "session-queued.json")
+				queuedAt := time.Now().Add(-30 * time.Second)
+				require.NoError(t, os.Chtimes(path, queuedAt, queuedAt))
+				ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{path}})
+				require.False(t, sessionImported(t, database, "gemini:queued"))
+			}
+			if mode == "automatic" {
 				tracker.SetSyncIdle(100*time.Millisecond, ingestion.Suspend) //nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
 				trackerCtx, cancel := context.WithCancel(t.Context())
 				trackerDone := make(chan struct{})
@@ -240,7 +254,8 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
 			assert.Contains(t, freshBody, "hello from overnight")
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			assert.False(t, sessionImported(t, database, "gemini:old"), "wake skips files older than suspension and its margin")
+			assert.True(t, sessionImported(t, database, "gemini:queued"), "wake imports changes queued before suspension")
+			assert.False(t, sessionImported(t, database, "gemini:old"), "wake skips files older than the last sync and its margin")
 		})
 	}
 }
@@ -265,7 +280,7 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 }
 
 func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
-	for _, tc := range []struct{ name, route string }{{"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}} {
+	for _, tc := range []struct{ name, route string }{{"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}, {"no-sync", "/sync"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
@@ -279,15 +294,19 @@ func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 			ingestion.Suspend()
 			ingestion.applying.Wait()
 			writeReloadGeminiSession(t, root, "overnight")
+			if tc.name == "no-sync" {
+				ingestion.Stop()
+				ingestion = nil
+			}
 			var syncCalls, resyncCalls atomic.Int64
 			syncRunner := newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)
 			resyncRunner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion,
-				server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+				server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(nil, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 					syncCalls.Add(1)
 					return syncRunner(ctx, progress)
 				}))),
-				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(nil, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 					resyncCalls.Add(1)
 					return resyncRunner(ctx, progress)
 				})))),
@@ -301,8 +320,12 @@ func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 			require.NoError(t, response.Body.Close())
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-			assert.True(t, ingestion.Active(), "archive requests resume collection")
 			assert.True(t, sessionImported(t, database, "gemini:overnight"))
+			if tc.name == "no-sync" {
+				assert.Equal(t, int64(1), syncCalls.Load())
+				return
+			}
+			assert.True(t, ingestion.Active(), "archive requests resume collection")
 			assert.Zero(t, syncCalls.Load(), "startup-only reads use middleware catch-up")
 			if tc.name == "resync" {
 				assert.Equal(t, int64(1), resyncCalls.Load())

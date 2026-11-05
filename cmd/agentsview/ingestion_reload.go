@@ -48,7 +48,6 @@ type daemonIngestion struct {
 	stopped         bool
 	applying        sync.WaitGroup
 	pending         bool
-	suspendedAt     time.Time
 	catchup         chan struct{}
 	catchupDeadline time.Time
 	liveEnabled     bool
@@ -167,7 +166,6 @@ func (d *daemonIngestion) Suspend() {
 		return
 	}
 	d.pending = true
-	d.suspendedAt = time.Now()
 	watchers, stopLive := d.watchers, d.stopLive
 	d.watchers, d.stopLive = nil, nil
 	d.applying.Go(func() {
@@ -191,12 +189,9 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 		finish()
 		return fresh
 	}
-	done := d.catchup
-	started := done == nil
+	done, started := d.catchup, d.catchup == nil
 	if started {
-		done = make(chan struct{})
-		d.catchup = done
-		d.catchupDeadline = time.Now().Add(ingestionWaitBudget)
+		done = d.registerCatchupLocked()
 		d.applying.Go(func() { d.resume(done, finish) })
 	}
 	deadline := d.catchupDeadline
@@ -239,13 +234,19 @@ func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	close(done)
 }
 
+func (d *daemonIngestion) registerCatchupLocked() chan struct{} {
+	d.catchup, d.catchupDeadline = make(chan struct{}), time.Now().Add(ingestionWaitBudget)
+	return d.catchup
+}
+
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
+	if d == nil {
+		return runner
+	}
 	return func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 		d.mu.Lock()
 		if d.pending && d.catchup == nil && !d.stopped {
-			done := make(chan struct{})
-			d.catchup = done
-			d.catchupDeadline = time.Now().Add(ingestionWaitBudget)
+			done := d.registerCatchupLocked()
 			defer d.finishCatchup(done)
 		}
 		d.mu.Unlock()
@@ -264,9 +265,10 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
-	d.mu.Lock()
-	since := d.suspendedAt.Add(-quickSyncMargin)
-	d.mu.Unlock()
+	since := d.engine.LastSyncStartedAt(d.ctx)
+	if !since.IsZero() {
+		since = since.Add(-quickSyncMargin)
+	}
 	err := d.restoreCollection()
 	if err == nil {
 		stats := d.engine.SyncAllSince(d.ctx, since, nil)
