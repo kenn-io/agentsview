@@ -3924,6 +3924,11 @@ func (e *Engine) resyncBuildLocked(
 	stats.RecordCwdUpdated(deferredCwdUpdated)
 	e.deferredSourceCwd = nil
 
+	// Scan once every session and its cwd have been restored.
+	e.db = newDB
+	e.reconcileCommitTrailersLocked(ctx)
+	e.db = origDB
+
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
 	var repaired int
@@ -8663,7 +8668,7 @@ func (e *Engine) syncAllLocked(
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
 	}
-	if since.IsZero() && scope == nil {
+	if since.IsZero() && scope == nil && e.archiveRebuildIndex == nil {
 		e.reconcileCommitTrailersLocked(ctx)
 	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is

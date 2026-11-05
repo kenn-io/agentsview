@@ -69,6 +69,34 @@ func TestResyncAbortsOnCommitTrailerCopyFailure(t *testing.T) {
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
+func TestResyncDiscoversCommitTrailersForOrphanedSession(t *testing.T) {
+	database, engine, repo, first, runGit := commitTrailerFixture(t)
+	session, err := database.GetSessionFull(t.Context(), "editor-session")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.FilePath)
+	require.NoError(t, os.Remove(*session.FilePath))
+	// Keep discovery nonempty so the rebuild can install the replacement.
+	// This session has no cwd, leaving the checkout known only to the orphan.
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(*session.FilePath), "live-session.jsonl"), []byte(
+		`{"type":"user","sessionId":"live-session","timestamp":"2026-10-30T10:00:00Z","message":{"role":"user","content":"Other work"}}`+"\n",
+	), 0o600))
+	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
+	second := runGit(repo, "rev-parse", "HEAD")
+
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
+	require.Equal(t, 1, stats.OrphanedCopied)
+
+	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 2)
+	assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
+	for _, commit := range list.Commits {
+		assert.Equal(t, "trailer", commit.Source)
+	}
+}
+
 func TestReconcileCommitTrailersUsageOnly(t *testing.T) {
 	database, engine, _, _, _ := commitTrailerFixture(t)
 	database.SetArchiveContent(config.ArchiveContentUsage)
