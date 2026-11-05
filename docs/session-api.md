@@ -1560,11 +1560,9 @@ Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 and `source: "transcript"`. `committed_at` is the tool call's message time. The
 SHA is exactly as Git printed it, usually a short prefix. Full SHAs match stored
 prefixes. `turn` contains the `ordinal` and `text` of the last nonempty,
-non-system user prompt before the first Edit or Write tool call after the
-session's previous commit link and at or before this commit. Codex patch calls
-count as Edit calls. If there is no such edit, it uses the last user prompt at
-or before the commit call. Tool-result messages are excluded. Text is limited
-to 2,000 UTF-8 bytes. The turn is omitted when no eligible prompt exists.
+non-system user prompt before the commit call. Tool-result messages are
+excluded. Text is limited to 2,000 UTF-8 bytes. The turn is omitted when no
+eligible prompt exists.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link
@@ -1575,16 +1573,14 @@ remains unambiguous.
 Sessions permanently deleted before this release have no links because their
 stored tool calls are already gone.
 
-Links require a `git commit` invocation, allowing Git global options, or a
-helper's `["git", "commit", ...]` argument list, and Git's commit summary in
-the call's stored output. A quiet commit also links when it is followed by
-`&& git rev-parse HEAD` or `&& git log --oneline -1` (also accepting the
-reversed log options), and the call's output has exactly one SHA line. Its
-branch is empty. This readback excludes dry runs and Git global options.
-Codex output received through a later `write_stdin`
-poll links to the original commit call when its process ID matches. Polls with
-no originating commit call produce no links. Each session records a SHA once,
-at its first matching call.
+Links require a `git commit` invocation, allowing Git global options, and Git's
+commit summary with a SHA of 7 to 64 characters in the call's stored output.
+Quiet commits and summaries with shorter SHAs have no link. Older Codex commands
+stored as argument arrays are unsupported. Codex output received through a later
+`write_stdin` poll links to the original commit call when its process ID
+matches. Polls with no originating commit call produce no links. Mixed
+commit-and-poll calls require an output process ID tied to a commit call. Each
+session records a SHA once, at its first matching call.
 
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
 directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative

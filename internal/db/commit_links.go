@@ -29,12 +29,8 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
-	commitProducedSHARE       = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
-	commitCommandTokenRE      = regexp.MustCompile(commitCommandToken)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{4,64})\] ([^\r\n]*)\r?$`)
-	commitQuietReadbackRE     = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)git\s+commit((?:\s+` + commitCommandToken + `)*?\s+(?:-q|--quiet)(?:\s+` + commitCommandToken + `)*?)\s*&&\s*git\s+(?:rev-parse\s+HEAD|log\s+(?:-1\s+--oneline|--oneline\s+-1))\s*(?:$|&&)`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
-	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
@@ -151,21 +147,6 @@ func commitRepository(input, cwd string) string {
 }
 
 func commitCommandText(input string) string {
-	var payload struct {
-		Command []string `json:"command"`
-	}
-	if json.Unmarshal([]byte(input), &payload) == nil && len(payload.Command) > 0 {
-		args := payload.Command
-		if len(args) == 3 && slices.Contains([]string{"sh", "bash", "zsh"}, args[0]) && slices.Contains([]string{"-c", "-lc"}, args[1]) {
-			return args[2]
-		}
-		for i, arg := range args {
-			if arg == "" || strings.ContainsAny(arg, " \t\n\r\f\v;&|\"'") {
-				args[i] = strconv.Quote(arg)
-			}
-		}
-		return strings.Join(args, " ")
-	}
 	command := signals.CommandText(input)
 	if !jsontext.Value(input).IsValid() {
 		var commands []string
@@ -285,7 +266,7 @@ func commitPollIDs(input, tool string) []string {
 
 // invokesGitCommit reports whether command runs git commit rather than quoting it as text.
 func invokesGitCommit(command string) bool {
-	return commitInvocationRE.MatchString(command) || commitArgumentListRE.MatchString(command)
+	return commitInvocationRE.MatchString(command)
 }
 
 func commitLinks(calls []commitCall, cwd string) []CommitLink {
@@ -317,14 +298,14 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				pending[process] = singleOwner
 			}
 		}
-		summaryMatched := false
 		for _, output := range outputs {
-			owner := cmp.Or(pending[output.process], call)
+			owner := call
 			if singlePoll {
 				owner = singleOwner
-			} else if !isCommit {
+			} else if len(pollIDs) > 0 {
+				// Mixed calls need a process ID to distinguish polled and new output.
 				pollID := output.process
-				if !slices.Contains(pollIDs, pollID) {
+				if !isCommit && !slices.Contains(pollIDs, pollID) {
 					continue
 				}
 				original, ok := pending[pollID]
@@ -334,7 +315,6 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				owner = original
 			}
 			for _, match := range commitSummaryRE.FindAllStringSubmatch(output.text, -1) {
-				summaryMatched = true
 				if seen[match[2]] {
 					continue
 				}
@@ -344,43 +324,6 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				link.Repository = commitRepository(owner.input, cwd)
 				links = append(links, link)
 			}
-		}
-		if (!isCommit || len(pollIDs) != 0) && !singlePoll || summaryMatched {
-			continue
-		}
-		quiet := commitQuietReadbackRE.FindStringSubmatch(commitCommandText(cmp.Or(singleOwner, call).input))
-		if quiet == nil {
-			continue
-		}
-		for _, arg := range commitCommandTokenRE.FindAllString(quiet[1], -1) {
-			arg = strings.Trim(arg, "\"'")
-			//nolint:gocritic // Git accepts unambiguous prefixes of these option names.
-			if arg == "-z" || arg == "--l" || len(arg) >= 4 && (strings.HasPrefix("--dry-run", arg) || strings.HasPrefix("--short", arg) || strings.HasPrefix("--porcelain", arg) || strings.HasPrefix("--long", arg) || strings.HasPrefix("--null", arg)) {
-				quiet = nil
-			}
-		}
-		if quiet == nil {
-			continue
-		}
-		var quietSHA, quietSubject string
-		var quietOwner commitCall
-		quietCount := 0
-		for _, output := range outputs {
-			for line := range strings.SplitSeq(output.text, "\n") {
-				sha, subject, _ := strings.Cut(strings.TrimSpace(line), " ")
-				if commitProducedSHARE.MatchString(sha) {
-					quietSHA, quietSubject = sha, subject
-					quietOwner = cmp.Or(pending[output.process], singleOwner, call)
-					quietCount++
-				}
-			}
-		}
-		if quietCount == 1 && !seen[quietSHA] {
-			seen[quietSHA] = true
-			link := quietOwner.CommitLink
-			link.SHA, link.Branch, link.Subject = quietSHA, "", quietSubject
-			link.Repository = commitRepository(quietOwner.input, cwd)
-			links = append(links, link)
 		}
 	}
 	return links
@@ -559,12 +502,7 @@ const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.reposit
  turn.ordinal, turn.content
  FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
- SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=COALESCE((
- SELECT MIN(edited.ordinal) FROM tool_calls t JOIN messages edited ON edited.id=t.message_id
- WHERE t.session_id=l.session_id AND t.category IN ('Edit','Write')
- AND edited.ordinal>COALESCE((SELECT MAX(previous.message_ordinal) FROM commit_links previous
- WHERE previous.session_id=l.session_id AND previous.message_ordinal<l.message_ordinal),-1)
- AND edited.ordinal<=l.message_ordinal),l.message_ordinal)
+ SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
  AND m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
