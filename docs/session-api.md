@@ -1594,12 +1594,12 @@ transcript links; `"usage"` archives keep neither.
 
 ### Git trailer links
 
-Commits ending in `Agent-Session: <agent>:<session-id>` trailers appear with
+Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
 `source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their
-registered prefix. Unknown agents and invalid trailer values are ignored. Git
-parses the final trailer block, so inline mentions and body prose don't create
-links. Merge commits count.
+registered prefix. Unknown agents and invalid trailer values are ignored.
+Every matching line in the commit message counts, including lines in squash
+commit bodies. Inline mentions don't create links. Merge commits count.
 
 `agentsview sync` scans repositories used by local sessions. Under
 `agentsview serve`, editor commits appear at the next scheduled pass, within 15
