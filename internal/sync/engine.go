@@ -5281,24 +5281,11 @@ func runSessionAnnotationWrite[T any](
 	if e.refuseWriteInForceParse("runSessionAnnotationWrite") {
 		return result, errors.New("runSessionAnnotationWrite refused on report-only parse-diff engine")
 	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		if err := e.db.WaitForWriter(ctx); err != nil {
-			return result, err
-		}
-		result, err := write()
-		// A handoff can close the writer after the wait. ErrWriterClosed
-		// means the transaction never began, so the write can be retried.
-		if errors.Is(err, db.ErrWriterClosed) {
-			continue
-		}
-		if err == nil && changed(result) {
-			e.emit("sessions")
-		}
-		return result, err
+	result, err := db.RetryAcrossHandoff(ctx, e.db, write)
+	if err == nil && changed(result) {
+		e.emit("sessions")
 	}
+	return result, err
 }
 
 // SyncAll discovers and syncs all session files from all agents.
