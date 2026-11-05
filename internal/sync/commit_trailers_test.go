@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"database/sql"
 	"encoding/json/v2"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -57,6 +59,37 @@ func TestReconcileCommitTrailersEditor(t *testing.T) {
 	assert.Equal(t, "trailer", l.Source)
 }
 
+func TestResyncAbortsOnCommitTrailerCopyFailure(t *testing.T) {
+	database, engine, repo, first, _ := commitTrailerFixture(t)
+	require.NoError(t, os.RemoveAll(repo))
+	// A newer archive schema cannot be copied into this build's trailer table.
+	conn, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	_, err = conn.ExecContext(t.Context(), "ALTER TABLE commit_trailers ADD COLUMN extra TEXT")
+	require.NoError(t, err)
+
+	_, stats, err := engine.ResyncBuild(t.Context(), nil)
+	require.Error(t, err)
+	assert.True(t, stats.Aborted)
+	assert.NoFileExists(t, engine.ResyncTempPath())
+	found, err := database.CommitSessionLinks(t.Context(), []string{first})
+	require.NoError(t, err)
+	require.Len(t, found.Commits[0].Links, 1)
+	assert.Equal(t, first, found.Commits[0].Links[0].SHA)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+}
+
+func TestReconcileCommitTrailersUsageOnly(t *testing.T) {
+	database, engine, _, _, _ := commitTrailerFixture(t)
+	database.SetArchiveContent(config.ArchiveContentUsage)
+	clear(engine.trailerScanAttempts)
+
+	engine.ReconcileCommitTrailers(t.Context())
+
+	assert.Empty(t, engine.trailerScanAttempts, "usage-only archives must skip repository scans")
+}
+
 func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the probe classifier walks POSIX paths and symlinks")
@@ -64,12 +97,15 @@ func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		linked, allow bool
+		commondir     bool
 		wantLink      bool
 	}{
 		{name: "protected config"},
 		{name: "protected common config in linked worktree", linked: true},
+		{name: "protected commondir in linked worktree", linked: true, commondir: true},
 		{name: "protected config with opt-in", allow: true, wantLink: true},
 		{name: "protected common config with opt-in", linked: true, allow: true, wantLink: true},
+		{name: "protected commondir with opt-in", linked: true, commondir: true, allow: true, wantLink: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			testutil.IsolateGit(t)
@@ -94,6 +130,9 @@ func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 				runGit("worktree", "add", "-q", "-b", "linked", cwd)
 			}
 			config := filepath.Join(repo, ".git", "config")
+			if tt.commondir {
+				config = filepath.Join(repo, ".git", "worktrees", "worktree", "commondir")
+			}
 			target := filepath.Join(home, "Documents", "config")
 			require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
 			require.NoError(t, os.Rename(config, target))

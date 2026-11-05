@@ -25,7 +25,7 @@ func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) {
 
 // A nonpositive budget permits one repository attempt before yielding.
 func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget time.Duration) {
-	if e.ephemeral || e.forceParse {
+	if e.ephemeral || e.forceParse || e.db.ArchiveContent().UsageOnly() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -91,8 +91,10 @@ func (e *Engine) survivingTrailerCwd(machine, cwd string) string {
 }
 
 func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path string) error {
-	_, commonDir, _ := gitDirectoryContext(path, e.mayProbeLocalPath)
-	if commonDir != "" && !e.mayProbeLocalPath(filepath.Join(commonDir, "config")) {
+	gitDir, commonDir, _ := gitDirectoryContext(path, e.mayProbeLocalPath)
+	if !e.mayProbeLocalPath(filepath.Join(gitDir, "HEAD")) ||
+		!e.mayProbeLocalPath(filepath.Join(gitDir, "commondir")) ||
+		!e.mayProbeLocalPath(filepath.Join(commonDir, "config")) {
 		return nil
 	}
 	commits, err := gitlog.ScanCommitTrailers(ctx, path)
