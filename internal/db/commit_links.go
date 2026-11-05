@@ -150,6 +150,16 @@ func commitRepository(input, cwd string) string {
 }
 
 func commitCommandText(input string) string {
+	var payload struct {
+		Command []string `json:"command"`
+	}
+	if json.Unmarshal([]byte(input), &payload) == nil && len(payload.Command) > 0 {
+		args := payload.Command
+		if len(args) == 3 && slices.Contains([]string{"sh", "bash", "zsh"}, args[0]) && slices.Contains([]string{"-c", "-lc"}, args[1]) {
+			return args[2]
+		}
+		return strings.Join(args, " ")
+	}
 	command := signals.CommandText(input)
 	if !jsontext.Value(input).IsValid() {
 		if match := commitCommandRE.FindStringSubmatch(input); match != nil {
@@ -274,7 +284,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	seen := map[string]bool{}
 	for _, call := range calls {
 		outputs, running := callOutput(call.result)
-		command := signals.CommandText(call.input)
+		command := commitCommandText(call.input)
 		isCommit := invokesGitCommit(command)
 		pollIDs := commitPollIDs(call.input, call.toolName)
 		if isCommit {
@@ -401,7 +411,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		if err := rows.Scan(&id, &input); err != nil {
 			return err
 		}
-		if invokesGitCommit(signals.CommandText(input)) {
+		if invokesGitCommit(commitCommandText(input)) {
 			ids = append(ids, id)
 		}
 	}
@@ -427,7 +437,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	}
 	running := map[string]bool{}
 	for _, call := range calls {
-		command := signals.CommandText(call.input)
+		command := commitCommandText(call.input)
 		if invokesGitCommit(command) {
 			_, processes := callOutput(call.result)
 			for _, process := range processes {
@@ -451,7 +461,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			if err := rows.Scan(&id, &input, &tool); err != nil {
 				return err
 			}
-			if invokesGitCommit(signals.CommandText(input)) {
+			if invokesGitCommit(commitCommandText(input)) {
 				continue
 			}
 			for _, process := range commitPollIDs(input, tool) {

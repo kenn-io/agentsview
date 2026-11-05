@@ -80,6 +80,24 @@ func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 }
 
 func TestCommitLinksParsing(t *testing.T) {
+	for _, input := range []string{
+		`{"command":["bash","-lc","git commit -m fix"]}`,
+		`{"command":["git","commit","-m","fix"]}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "codex:commit", "project-a")
+			messages := commitMessages("codex:commit", input, "[main abc1234] Fix parser")
+			messages[2].ToolCalls[0].ToolName = "shell"
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "codex:commit")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "main", got.Commits[0].Branch)
+			assert.Equal(t, "Fix parser", got.Commits[0].Subject)
+		})
+	}
 	for _, tt := range []struct {
 		name              string
 		results, commands []string
