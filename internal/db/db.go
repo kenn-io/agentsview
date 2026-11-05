@@ -2966,6 +2966,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerDropsSQL); err != nil {
+		return fmt.Errorf("dropping usage change journal triggers: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, provider_freshnessDDL); err != nil {
 		return fmt.Errorf(
 			"creating provider_freshness side-table: %w", err)
@@ -2986,6 +2989,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing classification journal trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
+		return fmt.Errorf("installing usage change journal triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)
@@ -3237,9 +3243,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	progress.report("Migrating database columns")
-	if _, err := w.ExecContext(ctx, usageChangeJournalTriggerDropsSQL); err != nil {
-		return fmt.Errorf("dropping usage change journal triggers: %w", err)
-	}
 	if err := migrateMoneyColumnsLocked(ctx, w); err != nil {
 		return err
 	}
@@ -3260,9 +3263,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)
-	}
-	if _, err := w.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
-		return fmt.Errorf("installing usage change journal triggers: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

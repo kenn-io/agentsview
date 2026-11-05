@@ -8,7 +8,7 @@ import (
 
 const archiveMetadataUsageChangeRevisionKey = "usage_change_revision"
 
-// Drop before column migrations and install after older archives gain the referenced columns.
+// Replace triggers atomically with column migrations.
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
 
 func usageChangeJournalSQL() (string, string) {
@@ -45,9 +45,37 @@ func usageChangeJournalSQL() (string, string) {
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id")
 	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id")
 	add("trg_usage_events_usage_change_delete", "DELETE", "usage_events", "", "OLD.session_id")
-	for _, table := range []string{"model_pricing", "model_pricing_bands", "genai_pricing"} {
+	for _, table := range []struct {
+		name    string
+		columns []string
+	}{
+		{"model_pricing", []string{"model_pattern", "input_microdollars_per_mtok", "output_microdollars_per_mtok", "cache_creation_microdollars_per_mtok", "cache_creation_1h_microdollars_per_mtok", "cache_read_microdollars_per_mtok", "updated_at"}},
+		{"model_pricing_bands", []string{"model_pattern", "above_input_tokens", "input_microdollars_per_mtok", "output_microdollars_per_mtok", "cache_creation_microdollars_per_mtok", "cache_creation_1h_microdollars_per_mtok", "cache_read_microdollars_per_mtok", "updated_at"}},
+		{"genai_pricing", []string{"singleton", "version", "source_ref", "source", "data_json", "updated_at"}},
+	} {
+		changes := make([]string, len(table.columns))
+		for i, column := range table.columns {
+			changes[i] = "OLD." + column + " IS NOT NEW." + column
+		}
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
-			add("trg_"+table+"_usage_change_"+strings.ToLower(event), event, table, "", "")
+			condition := ""
+			if table.name != "genai_pricing" {
+				// Match isPricingMetaPattern and the pricing queries' literal underscore prefix.
+				const oldModel = `OLD.model_pattern NOT LIKE '\_%' ESCAPE '\'`
+				const newModel = `NEW.model_pattern NOT LIKE '\_%' ESCAPE '\'`
+				switch event {
+				case "INSERT":
+					condition = newModel
+				case "DELETE":
+					condition = oldModel
+				case "UPDATE":
+					condition = "(" + oldModel + " OR " + newModel + ") AND "
+				}
+			}
+			if event == "UPDATE" {
+				condition += "(" + strings.Join(changes, " OR ") + ")"
+			}
+			add("trg_"+table.name+"_usage_change_"+strings.ToLower(event), event, table.name, condition, "")
 		}
 	}
 	return drops.String(), creates.String()

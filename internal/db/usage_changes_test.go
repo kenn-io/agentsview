@@ -3,6 +3,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -324,14 +325,101 @@ func TestUsageChangeJournalUpgradeStartsWithoutHistory(t *testing.T) {
 	before, err := upgraded.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, before)
-	var triggerCount int
-	require.NoError(t, upgraded.getReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%_usage_change_%'`).Scan(&triggerCount))
-	assert.Equal(t, 14, triggerCount)
-	require.NoError(t, upgraded.InsertMessages(ctx, []Message{{SessionID: "existing", Role: "assistant", Content: "Hello", TokenUsage: []byte(`{"output_tokens":3}`)}}))
-	after, err := upgraded.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Greater(t, after, before)
-	ids, err := upgraded.LoadUsageChanges(ctx, before, after)
+	for _, query := range []string{
+		`UPDATE sessions SET machine = 'machine-b' WHERE id = 'existing'`,
+		`INSERT INTO usage_events (session_id, source, model, output_tokens) VALUES ('existing', 'session', 'model-x', 7)`,
+		`INSERT INTO model_pricing (model_pattern) VALUES ('model-x')`,
+	} {
+		_, err := upgraded.getWriter().ExecContext(ctx, query)
+		require.NoError(t, err)
+		after, err := upgraded.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, after, before, query)
+		before = after
+	}
+	ids, err := upgraded.LoadUsageChanges(ctx, 0, before)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"existing"}, ids)
+}
+
+func TestUsageChangeJournalSurvivesCanceledMigration(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "external", "project-a")
+	other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	// Recreate an older schema so cancellation occurs during a column migration.
+	_, err = other.ExecContext(ctx, `ALTER TABLE excluded_sessions DROP COLUMN include_codex_pages`)
+	require.NoError(t, err)
+	before, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	migrationCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	err = d.migrateColumns(migrationCtx, func(progress OpenProgress) {
+		if progress.Detail == "Adding column excluded_sessions.include_codex_pages" {
+			cancel()
+		}
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, migrationCtx.Err(), context.Canceled)
+	_, err = other.ExecContext(ctx, `UPDATE sessions SET machine = 'machine-b' WHERE id = 'external'`)
+	require.NoError(t, err)
+	after, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, after, before)
+	ids, err := d.LoadUsageChanges(ctx, before, after)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"external"}, ids)
+}
+
+func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	before, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-01T10:00:00Z"))
+	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-02T10:00:00Z"))
+	after, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM model_pricing WHERE model_pattern = '_last_fetch'`)
+	require.NoError(t, err)
+	after, err = d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+
+	for _, tc := range []struct {
+		table  string
+		insert string
+		column string
+		value  any
+	}{
+		{"model_pricing", `INSERT INTO model_pricing (model_pattern) VALUES ('model-x')`, "input_microdollars_per_mtok", 100},
+		{"model_pricing_bands", `INSERT INTO model_pricing_bands (model_pattern, above_input_tokens, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok) VALUES ('model-x', 1000, 0, 0, 0, 0)`, "input_microdollars_per_mtok", 200},
+		{"genai_pricing", `INSERT INTO genai_pricing (singleton, version, source, data_json) VALUES (1, 'v1', 'test', '{}')`, "data_json", `{"price":3}`},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			before, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			_, err = d.getWriter().ExecContext(ctx, tc.insert)
+			require.NoError(t, err)
+			inserted, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			assert.Greater(t, inserted, before)
+			_, err = d.getWriter().ExecContext(ctx, "UPDATE "+tc.table+" SET "+tc.column+" = "+tc.column)
+			require.NoError(t, err)
+			unchanged, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, inserted, unchanged)
+			_, err = d.getWriter().ExecContext(ctx, "UPDATE "+tc.table+" SET "+tc.column+" = ?", tc.value)
+			require.NoError(t, err)
+			changed, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			assert.Greater(t, changed, unchanged)
+			ids, err := d.LoadUsageChanges(ctx, before, changed)
+			require.NoError(t, err)
+			assert.Empty(t, ids)
+		})
+	}
 }
