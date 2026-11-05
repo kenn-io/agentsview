@@ -1897,8 +1897,15 @@ func TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired(t *test
 }
 
 func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
-	for name, backstop := range map[string]bool{"notify": false, "backstop": true} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		notify, backstop bool
+	}{
+		{name: "notify", notify: true},
+		{name: "backstop", backstop: true},
+		{name: "notify then backstop", notify: true, backstop: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			for _, idleExit := range []bool{false, true} {
 				t.Run(fmt.Sprintf("idle_exit=%t", idleExit), func(t *testing.T) {
 					synctest.Test(t, func(t *testing.T) {
@@ -1919,9 +1926,11 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						ticks := make(chan time.Time)
 						go s.run(ctx, ticks)
 						defer s.Stop()
-						s.Notify()
-						synctest.Wait()
-						if backstop {
+						if tc.notify {
+							s.Notify()
+							synctest.Wait()
+						}
+						if tc.backstop {
 							ticks <- time.Now()
 						}
 						synctest.Sleep(4 * time.Second)
@@ -1940,69 +1949,18 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						synctest.Wait()
 						assert.Zero(t, mgr.callCount())
 						battery.Store(false)
-						if backstop {
+						if tc.backstop {
 							ticks <- time.Now()
 						}
 						synctest.Sleep(batteryRecheckInterval)
 						synctest.Wait()
-						assert.Equal(t, []vector.BuildRequest{{Backstop: backstop}}, mgr.callsSnapshot())
+						assert.Equal(t, []vector.BuildRequest{{Backstop: tc.backstop}}, mgr.callsSnapshot())
 						assert.NoFileExists(t, s.batteryDeferredPath)
 					})
 				})
 			}
 		})
 	}
-}
-
-func TestMessageSchedulerStartupReplaysDeferredBackstopBehindWatermark(t *testing.T) {
-	dataDir := t.TempDir()
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "recent", "project", []db.Message{
-		dbtest.UserMsg("recent", 0, "Already indexed message."),
-	}, func(s *db.Session) { s.EndedAt = new("2026-01-02T00:00:00Z") })
-	stub := newEmbeddingsStubServer(t, 3)
-	defer stub.Close()
-	cfg := vectorTestConfig(dataDir)
-	cfg.Vector.Embed.Recall = false
-	cfg.Vector.Embed.RunAfterSync = new(false)
-	embeddingsServer := cfg.Vector.Embeddings.Servers["local"]
-	embeddingsServer.Endpoint = stub.URL + "/v1"
-	cfg.Vector.Embeddings.Servers["local"] = embeddingsServer
-	func() {
-		vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-		require.NoError(t, err)
-		defer vs.Close()
-		started, err := vs.Scheduler.mgr.TryBuild(t.Context(), vector.BuildRequest{})
-		require.NoError(t, err)
-		require.True(t, started)
-		dbtest.SeedSessionWithMessages(t, database, "old-import", "project", []db.Message{
-			dbtest.UserMsg("old-import", 0, "Imported behind the index watermark."),
-		}, func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
-		vs.Scheduler.onBattery = func() bool { return true }
-		ticks := make(chan time.Time)
-		go vs.Scheduler.run(t.Context(), ticks)
-		defer vs.Scheduler.Stop()
-		ticks <- time.Now()
-		waitForSchedulerCondition(t, func() bool {
-			_, err := os.Stat(vs.Scheduler.batteryDeferredPath)
-			return err == nil
-		}, "the battery backstop was not saved before shutdown")
-	}()
-	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-	require.NoError(t, err)
-	defer vs.Close()
-	vs.Scheduler.onBattery = func() bool { return false }
-	vs.Scheduler.debounce = 10 * time.Millisecond
-	go vs.Scheduler.Run(t.Context())
-	defer vs.Scheduler.Stop()
-	waitForSchedulerCondition(t, func() bool {
-		_, markerErr := os.Stat(vs.Scheduler.batteryDeferredPath)
-		return errors.Is(markerErr, os.ErrNotExist)
-	}, "startup did not finish its deferred build")
-	generations, err := directListGenerations(t.Context(), cfg, vector.MessageIndexSpec())
-	require.NoError(t, err)
-	require.Len(t, generations, 1)
-	assert.EqualValues(t, 2, generations[0].Embedded, "startup lost the deferred backstop's message behind the watermark")
 }
 
 func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {

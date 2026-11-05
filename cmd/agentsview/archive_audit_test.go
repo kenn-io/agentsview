@@ -429,9 +429,8 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 		"a live-run failure must log the backoff line")
 }
 
-// TestStartArchiveAuditSelectsFirstDelay checks that a stale archive schedules
-// its first rebuild worker after an hour, while a current archive waits a day
-// for the routine audit worker.
+// TestStartArchiveAuditSelectsFirstDelay checks that stale archives rebuild
+// after an hour and routine audits wait a day, then defer while on battery.
 func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 	type attempt struct {
 		delay time.Duration
