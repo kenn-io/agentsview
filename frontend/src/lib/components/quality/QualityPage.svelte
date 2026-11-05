@@ -1068,12 +1068,12 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   /* Same size and weight as the analytics section titles on the other
-     analytics pages (Session health), one clear step above the 14px
-     pattern titles and 13px body. */
+     analytics pages (Session health): a clear step above the 14px
+     semibold pattern card titles and 13px body. */
   .section-heading h2 {
     margin-top: 2px;
-    font-size: 15px;
-    font-weight: var(--font-weight-semibold, 600);
+    font-size: 16px;
+    font-weight: 700;
     line-height: 1.3;
     color: var(--text-primary);
   }
@@ -1132,6 +1132,17 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: var(--space-5);
+  }
+
+  /* Quality has only four headline figures, so they lead the section at
+     24px instead of the denser analytics rows' 18-20px. */
+  .summary-grid :global(.kit-card.stat-card .card-value) {
+    font-size: 24px;
+    line-height: 30px;
+  }
+
+  .summary-grid :global(.kit-card.stat-card) {
+    padding-block: 8px;
   }
 
   .content :global(.distribution-row) {

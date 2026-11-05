@@ -83,10 +83,10 @@
       data={flatPoints}
       x="date"
       y="value"
-      xScale={scalePoint().padding(0.1)}
+      xScale={scalePoint().padding(0.5)}
       yDomain={[0, null]}
       yNice
-      padding={{ top: 28, right: 12, bottom: 34, left: 52 }}
+      padding={{ top: 28, right: 28, bottom: 38, left: 56 }}
       class="chart"
       role="img"
       aria-label={normalized
@@ -97,6 +97,7 @@
         <LargeChartFrame
           xTicks={xTicks}
           yTicks={5}
+          labelGap={12}
           formatX={(value) => labelFor(String(value))}
           formatY={(value) => formatMetric(Number(value))}
         >
@@ -172,7 +173,7 @@
   .y-title {
     position: absolute;
     top: 8px;
-    left: 52px;
+    left: 56px;
     z-index: 1;
     color: var(--text-muted);
     font-size: 11px;

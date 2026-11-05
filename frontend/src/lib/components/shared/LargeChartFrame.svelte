@@ -11,6 +11,9 @@
     yTicks?: Ticks;
     formatX?: Formatter;
     formatY?: Formatter;
+    /** Distance in px from the plot edge to the tick labels. Roomy charts
+        raise it so the y "0" and the first x label do not meet. */
+    labelGap?: number;
   }
 
   let {
@@ -19,6 +22,7 @@
     yTicks,
     formatX,
     formatY,
+    labelGap = 4,
   }: Props = $props();
 </script>
 
@@ -29,6 +33,7 @@
     ticks={yTicks}
     format={formatY}
     tickMarks={false}
+    tickLength={labelGap}
     rule={false}
     classes={{ tickLabel: "y-label" }}
   />
@@ -37,6 +42,7 @@
     ticks={xTicks}
     format={formatX}
     tickMarks={false}
+    tickLength={labelGap}
     rule={false}
     classes={{ tickLabel: "x-label" }}
   />
@@ -45,8 +51,12 @@
 
 <style>
   /* Faint solid gridlines at each y tick, so values can be read off the
-     lines without hovering; they stay below the series in weight. */
-  .large-chart-frame :global(.grid-line) {
+     lines without hovering; they stay below the series in weight. The
+     lines themselves take the stroke: layerchart colors each line through
+     layered rules whose winner depends on style load order, and one order
+     painted them in full text ink. */
+  .large-chart-frame :global(.grid-line),
+  .large-chart-frame :global(.grid-line line) {
     stroke: var(--border-muted);
     stroke-width: 1;
     shape-rendering: crispEdges;

@@ -37,7 +37,7 @@
   {/if}
   <p class="state-notice__body">
     {#if title}<strong class="state-notice__title">{title}</strong>{/if}
-    {#if description}<span>{description}</span>{/if}
+    {#if description}<span class="state-notice__description">{description}</span>{/if}
     {#if children}{@render children()}{/if}
   </p>
 </div>
@@ -104,8 +104,8 @@
   }
 
   .state-notice--empty .state-notice__icon :global(svg) {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
   }
 
   .state-notice--empty .state-notice__body {
@@ -117,5 +117,10 @@
 
   .state-notice--empty .state-notice__title {
     margin-right: 0;
+  }
+
+  /* The explanation sits a clear step below the title. */
+  .state-notice--empty .state-notice__description {
+    color: var(--text-muted);
   }
 </style>

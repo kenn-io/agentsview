@@ -252,15 +252,27 @@
   --selected-list-bg: var(--bg-surface-hover);
 }
 
-/* The date picker's preset pills ("30d") each sit on an inset fill, so the
- * selected one needs a fill that is clearly darker (light) or lighter (dark)
- * than its neighbours, not the surface color, which reads as empty. It stays
- * neutral; accent blue is reserved for focus and live state. */
+/* The chosen option of a choice group (segmented controls, date presets,
+ * the search palette's sort, the Activity view toggle) sits beside
+ * neighbours that already carry an inset or surface fill. A surface-colored
+ * pill reads as empty there, so the chosen option takes a clearly stronger
+ * neutral fill and a visible edge: darker than its neighbours in light,
+ * lighter in dark. Accent blue stays reserved for focus and live state. */
+:root {
+  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 13%, var(--bg-surface));
+  --selected-strong-edge: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 30%, transparent);
+}
+
+:root.dark {
+  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 19%, var(--bg-surface));
+  --selected-strong-edge: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 34%, transparent);
+}
+
 :root .kit-date-range-picker__pills .kit-date-range-picker__pill.active {
-  background: color-mix(in srgb, var(--text-primary) 15%, var(--bg-surface));
+  background: var(--selected-strong-bg);
   color: var(--text-primary);
   font-weight: var(--font-weight-semibold, 600);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 28%, transparent);
+  box-shadow: var(--selected-strong-edge);
 }
 
 /* Card edges. In light the surface sits close to the page color, so
@@ -330,9 +342,12 @@ html:root.dark .kit-popover-card {
   color: var(--text-primary);
 }
 
+/* The chosen segment stays distinguishable even when the whole control is
+   disabled (read-only settings): the fill, edge, and weight do not fade. */
 :root .kit-segmented .kit-segmented__btn.active {
-  background: var(--selected-bg);
-  box-shadow: var(--selected-edge), var(--shadow-sm);
+  background: var(--selected-strong-bg);
+  box-shadow: var(--selected-strong-edge);
+  font-weight: var(--font-weight-semibold, 600);
 }
 
 :root .kit-top-bar .kit-top-bar__tab {
@@ -430,21 +445,37 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* One disabled look for actions: faded muted ink, a faint edge, and no
-   fill, so a disabled control never reads as a clickable outline button.
-   An enabled primary keeps kit-ui's solid accent fill. */
+/* One disabled look for secondary actions: faded muted ink, a faint edge,
+   and no fill, so a disabled control never reads as a clickable outline
+   button. */
 :root {
   --disabled-ink: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
   --disabled-edge: var(--border-muted);
 }
 
+/* A disabled primary (Save token, Connect on a read-only server) keeps a
+   muted accent fill so it still reads as the panel's main action, distinct
+   from the empty outline of a disabled secondary. The ink mixes accent with
+   primary text so it stays readable on the tint in both themes. */
 :root .kit-button--solid.kit-button--info:disabled {
   opacity: 1;
-  background: transparent;
-  border-color: var(--disabled-edge);
-  color: var(--disabled-ink);
+  background: color-mix(in srgb, var(--accent-blue) 30%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-blue) 30%, var(--bg-surface));
+  color: color-mix(in srgb, var(--accent-blue) 40%, var(--text-primary));
   box-shadow: none;
   cursor: not-allowed;
+}
+
+/* Light secondary buttons: kit-ui falls back to the gray inset fill, which
+   reads as disabled, and a plain surface fill vanishes on a white card. A
+   faint neutral tint, a firmer edge, and a small shadow make an enabled
+   secondary read as a raised button on any light surface. Dark keeps
+   kit-ui's raised fill. */
+:root:not(.dark)
+  .kit-button--outline.kit-button--neutral:not(:disabled, [aria-disabled="true"], :active, [aria-expanded="true"]) {
+  --kit-button-fill: color-mix(in srgb, var(--text-primary) 3%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--text-muted) 32%, var(--border-default));
+  box-shadow: var(--shadow-sm);
 }
 
 /* A disabled menu item often carries its reason ("Import unavailable in
