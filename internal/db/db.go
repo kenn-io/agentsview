@@ -23,7 +23,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/flightgroup"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -877,9 +876,6 @@ type DB struct {
 	reader               atomic.Pointer[sql.DB]
 	reads                readRegistry
 	usageCache           *usageCacheManager
-	usageWindows         flightgroup.Group[usagePreparedWindow]
-	usageVersion         usageArchiveVersion
-	usageWindowObserver  usageWindowObserver
 	activityMemo         activityCandidateMemo
 	frustrationMemo      frustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
@@ -5314,7 +5310,6 @@ func (db *DB) CloseContext(ctx context.Context) error {
 	}
 	db.stopWALCheckpointLoop()
 	db.mu.Lock()
-	db.usageVersion.reset(true)
 	db.connMu.Lock()
 	w := db.rawWriter()
 	r := db.rawReader()
@@ -5402,7 +5397,6 @@ func (db *DB) CloseConnections(ctx context.Context) error {
 // Keeping that lock held is important for staged database replacement: no
 // writer can reopen a fresh pool between the close and the file swap.
 func (db *DB) closeConnectionsLocked(ctx context.Context) error {
-	db.usageVersion.reset(true)
 	db.connMu.Lock()
 
 	// Close the writer last: SQLite checkpoints and removes the WAL when
@@ -5585,7 +5579,6 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 
 	reader := db.openReader(db.path)
 
-	db.usageVersion.reset(true)
 	db.connMu.Lock()
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
@@ -5593,7 +5586,6 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
 	})
-	db.usageVersion.reset(false)
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the
@@ -5726,7 +5718,6 @@ func (db *DB) ReopenWriter() error {
 			log.Printf("warning: closing stale writer pool: %v", err)
 		}
 	}
-	db.usageVersion.reset(false)
 	db.startWALCheckpointLoop()
 	return nil
 }

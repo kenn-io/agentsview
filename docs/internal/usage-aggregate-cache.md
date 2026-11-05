@@ -111,16 +111,11 @@ An aggregate request:
 1. verifies all required installs inside one pinned cache read transaction
    before assembling the result.
 
-Concurrent aggregate requests with the same window, session predicate, and
-Cursor need share one capture, fill check, and rollup check. Callers with a
-`Progress` callback prepare alone so each progress stream reports its own work.
-A request joins only a preparation started at the same archive `data_version`,
-read on a pinned connection. Any commit visible before the request, from any
-process, starts a new preparation. Each request reads rollups with its own
-filter. Cache retirement or a changed install triggers a fresh capture that
-bypasses the shared result.
-
-Pairwise reuses its ranking preparation for sides with the same session filter.
+Within one Pairwise request, reads with the same window, session predicate, and
+Cursor need share one capture, fill check, and rollup check, including sides
+read concurrently. Each read applies its own filter to the rollups. Cache
+retirement or a changed install triggers a fresh capture that bypasses the
+shared result. Separate requests never share a preparation.
 
 The pricing generation uses the canonical, order-independent effective-pricing
 digest. Daily rows also retain the resolved per-model rate hash. Pricing changes

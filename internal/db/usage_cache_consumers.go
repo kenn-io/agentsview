@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -55,24 +54,21 @@ type usageWindowMemoKey struct{}
 
 type usageWindowMemo struct {
 	mu      sync.Mutex
-	windows map[string]usagePreparedWindow
+	windows map[string]*usageWindowSlot
 }
 
 // WithUsageWindowMemo reuses prepared windows across reads in one request.
 func WithUsageWindowMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, usageWindowMemoKey{}, &usageWindowMemo{
-		windows: make(map[string]usagePreparedWindow),
+		windows: make(map[string]*usageWindowSlot),
 	})
 }
 
-func (memo *usageWindowMemo) get(key string) (usagePreparedWindow, bool) {
-	if memo == nil {
-		return usagePreparedWindow{}, false
-	}
-	memo.mu.Lock()
-	defer memo.mu.Unlock()
-	value, ok := memo.windows[key]
-	return value, ok
+type usageWindowSlot struct {
+	done     chan struct{}
+	prepared usagePreparedWindow
+	err      error
+	waiters  int
 }
 
 func (memo *usageWindowMemo) put(key string, value usagePreparedWindow) {
@@ -81,7 +77,9 @@ func (memo *usageWindowMemo) put(key string, value usagePreparedWindow) {
 	}
 	memo.mu.Lock()
 	defer memo.mu.Unlock()
-	memo.windows[key] = value
+	slot := &usageWindowSlot{done: make(chan struct{}), prepared: value}
+	close(slot.done)
+	memo.windows[key] = slot
 }
 
 func (memo *usageWindowMemo) drop(key string) {
@@ -98,79 +96,47 @@ func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string
 	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%#v", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
 }
 
-// usageArchiveVersion pins one reader because data_version values are local
-// to a connection. The epoch separates connections after an archive swap.
-type usageArchiveVersion struct {
-	mu     sync.Mutex
-	conn   *sql.Conn
-	epoch  uint64
-	closed bool
-}
-
-func (db *DB) usageWindowVersion(ctx context.Context) (string, error) {
-	version := &db.usageVersion
-	version.mu.Lock()
-	defer version.mu.Unlock()
-	if version.closed {
-		return "", sql.ErrConnDone
-	}
-	if version.conn == nil {
-		pool, err := sql.Open(sqliteArchiveDriverName, makeDSN(db.path, true))
-		if err != nil {
-			return "", err
-		}
-		version.conn, err = pool.Conn(ctx)
-		// The pinned connection stays open until reset returns it to the closed pool.
-		_ = pool.Close()
-		if err != nil {
-			return "", err
-		}
-	}
-	var value uint64
-	if err := version.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&value); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d|%d", version.epoch, value), nil
-}
-
-func (version *usageArchiveVersion) reset(closed bool) {
-	version.mu.Lock()
-	defer version.mu.Unlock()
-	if version.conn != nil {
-		_ = version.conn.Close()
-		version.conn = nil
-	}
-	version.epoch++
-	// Keep probes from reopening the archive between shutdown and replacement.
-	version.closed = closed
-}
-
 func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
-	key := usageWindowKey(filter, kind, cursor)
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-	if prepared, ok := memo.get(key); ok {
-		return prepared, nil
+	if memo == nil {
+		return db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
 	}
-	prepare := func(ctx context.Context) (usagePreparedWindow, error) {
-		return db.prepareUsageWindow(ctx, filter, kind, cursor, nil)
+	key := usageWindowKey(filter, kind, cursor)
+	memo.mu.Lock()
+	if slot, ok := memo.windows[key]; ok {
+		slot.waiters++
+		memo.mu.Unlock()
+		defer func() {
+			memo.mu.Lock()
+			slot.waiters--
+			memo.mu.Unlock()
+		}()
+		select {
+		case <-slot.done:
+			return slot.prepared, slot.err
+		case <-ctx.Done():
+			return usagePreparedWindow{}, ctx.Err()
+		}
 	}
-	var prepared usagePreparedWindow
-	var err error
-	version, probeErr := db.usageWindowVersion(ctx)
-	if probeErr != nil {
-		prepared, err = prepare(ctx)
-	} else {
-		prepared, err = db.usageWindows.Do(ctx, key+"|"+version, prepare)
+	slot := &usageWindowSlot{done: make(chan struct{}), waiters: 1}
+	memo.windows[key] = slot
+	memo.mu.Unlock()
+
+	prepared, err := db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+	memo.mu.Lock()
+	slot.prepared, slot.err = prepared, err
+	slot.waiters--
+	if err != nil {
+		delete(memo.windows, key)
 	}
-	if err == nil {
-		memo.put(key, prepared)
-	}
+	close(slot.done)
+	memo.mu.Unlock()
 	return prepared, err
 }
 
 func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, report func(string)) (usagePreparedWindow, error) {
-	if db.usageWindowObserver.beforePrepare != nil {
-		db.usageWindowObserver.beforePrepare(ctx)
+	if db.usageCache.usageWindowObserver.beforePrepare != nil {
+		db.usageCache.usageWindowObserver.beforePrepare(ctx)
 	}
 	if report == nil {
 		report = func(string) {}
@@ -232,7 +198,7 @@ func (db *DB) queryUsageRollups(
 		started := time.Now()
 		var prepared usagePreparedWindow
 		var err error
-		if attempt == 1 && filter.Progress == nil {
+		if attempt == 1 {
 			prepared, err = db.sharedUsageWindow(ctx, filter, kind, cursor)
 		} else {
 			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
