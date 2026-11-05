@@ -722,6 +722,9 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
 	args = append(args, f.Limit+1, f.Cursor)
+	// name_matches checks for an embeddable message only in name_candidates.
+	// A correlated EXISTS makes DuckDB evaluate the system-prefix predicate
+	// over every message before the semi join narrows it.
 	rows, err := s.queryContext(ctx, `
 		WITH msg_ranked AS (
 			SELECT m.session_id, s.project, s.agent, s.machine,
@@ -749,7 +752,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			FROM msg_ranked
 			WHERE rn = 1
 		),
-		name_matches AS (
+		name_candidates AS (
 			SELECT s.id AS session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
@@ -766,14 +769,17 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 				OR s.first_message ILIKE ? ESCAPE '\')
 				AND s.deleted_at IS NULL
-				AND EXISTS (
-					SELECT 1 FROM messages mx
-					WHERE mx.session_id = s.id
-						AND mx.is_system = FALSE
-						AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
-				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				`+nameProject+`
+		),
+		name_matches AS (
+			SELECT * FROM name_candidates
+			WHERE session_id IN (
+				SELECT mx.session_id FROM messages mx
+				WHERE mx.session_id IN (SELECT session_id FROM name_candidates)
+					AND mx.is_system = FALSE
+					AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
+			)
 		)
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal, snippet, rank
