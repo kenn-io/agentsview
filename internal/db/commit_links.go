@@ -525,7 +525,8 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
  AND (l.source='transcript' OR julianday(m.timestamp)<=julianday(l.committed_at)) AND ` + commitUserPrompt + `
  ORDER BY m.ordinal DESC LIMIT 1)
- WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
+ WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id))
+ AND (s.id IS NOT NULL OR l.source<>'trailer' OR l.project<>'') AND `
 
 // StoreTrailerCommitLinks adds or updates one repository's trailer evidence.
 // Existing evidence is retained; an empty result leaves it unchanged.
@@ -832,7 +833,7 @@ func (d *DB) RetainedCommitLinkRows(ctx context.Context) ([]CommitLinkRow, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := sessionCommitLinkRows(ctx, tx, owners, "s.id IS NULL AND (l.source<>'trailer' OR l.project<>'')")
+	rows, err := sessionCommitLinkRows(ctx, tx, owners, "s.id IS NULL")
 	if err != nil {
 		return nil, err
 	}
