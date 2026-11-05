@@ -101,34 +101,66 @@ func TestSessionAnnotationWritesDuringSync(t *testing.T) {
 }
 
 func TestSessionAnnotationWaitsForWriter(t *testing.T) {
-	for _, cancelWrite := range []bool{false, true} {
-		name := "reopen"
-		if cancelWrite {
-			name = "cancel"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		cancelWrite    bool
+		closeAfterWait bool
+	}{
+		{name: "reopen"},
+		{name: "cancel", cancelWrite: true},
+		{name: "close after wait/reopen", closeAfterWait: true},
+		{name: "close after wait/cancel", closeAfterWait: true, cancelWrite: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			fx := newEngineFixture(t)
-			require.NoError(t, fx.db.CloseWriter())
+			if !tc.closeAfterWait {
+				require.NoError(t, fx.db.CloseWriter())
+			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			closed := make(chan error, 1)
 			done := make(chan error, 1)
 			go func() {
-				_, err := fx.engine.UpdateSessionLabels(ctx, "worker", []string{"queued"}, nil)
+				closeAfterWait := tc.closeAfterWait
+				write := func() (db.SessionLabels, error) {
+					// Close the real writer once, after WaitForWriter returned,
+					// to force a handoff before the transaction begins.
+					if closeAfterWait {
+						closeAfterWait = false
+						err := fx.db.CloseWriter()
+						closed <- err
+						if err != nil {
+							return db.SessionLabels{}, err
+						}
+					}
+					return fx.db.UpdateSessionLabels(ctx, "worker", []string{"queued"}, nil)
+				}
+				_, err := runSessionAnnotationWrite(ctx, fx.engine, write, sessionLabelsChanged)
 				done <- err
 			}()
+			if tc.closeAfterWait {
+				select {
+				case err := <-closed:
+					require.NoError(t, err)
+				case <-time.After(5 * time.Second):
+					cancel()
+					<-done
+					require.FailNow(t, "annotation did not reach the writer handoff")
+				}
+			}
 			select {
 			case err := <-done:
 				require.FailNow(t, "annotation returned before the writer reopened", "error: %v", err)
 			case <-time.After(200 * time.Millisecond): //nolint:kennlint // deadlinetest: assert no return while the writer is closed.
 			}
-			if cancelWrite {
+			if tc.cancelWrite {
 				cancel()
 			} else {
 				require.NoError(t, fx.db.ReopenWriter())
 			}
 			select {
 			case err := <-done:
-				if cancelWrite {
+				if tc.cancelWrite {
 					require.ErrorIs(t, err, context.Canceled)
 				} else {
 					require.NoError(t, err)
@@ -138,7 +170,7 @@ func TestSessionAnnotationWaitsForWriter(t *testing.T) {
 				<-done
 				require.FailNow(t, "annotation kept waiting after reopen or cancellation")
 			}
-			if cancelWrite {
+			if tc.cancelWrite {
 				require.NoError(t, fx.db.ReopenWriter())
 			}
 			require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
@@ -148,7 +180,7 @@ func TestSessionAnnotationWaitsForWriter(t *testing.T) {
 			session, err := fx.db.GetSession(t.Context(), "worker")
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			if cancelWrite {
+			if tc.cancelWrite {
 				assert.Empty(t, session.Labels, "canceled edits must stay unwritten after reopen")
 			} else {
 				assert.Equal(t, []string{"queued"}, session.Labels)
