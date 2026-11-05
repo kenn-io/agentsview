@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -10,8 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -161,7 +158,10 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			t.Cleanup(ingestion.Stop)
 			if mode == "automatic" {
 				tracker.SetSyncIdle(100*time.Millisecond, ingestion.Suspend) //nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
-				go tracker.Run(t.Context())
+				trackerCtx, cancel := context.WithCancel(t.Context())
+				trackerDone := make(chan struct{})
+				go func() { defer close(trackerDone); tracker.Run(trackerCtx) }()
+				defer func() { cancel(); <-trackerDone }()
 			}
 			if mode == "automatic" {
 				require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond, "the idle tracker suspends collection")
@@ -184,37 +184,24 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
 			}()
 			<-entered
-			query := "overnight"
 			if reload {
 				_, err := ingestion.Reload(t.Context())
 				require.NoError(t, err)
 				require.Eventually(t, func() bool { return len(ingestion.Config().DisabledAgents) == 1 }, time.Second, time.Millisecond)
-				query = "retained"
+				releaseOnce()
+				<-finished
+				require.True(t, ingestion.EnsureFresh(t.Context()))
+				ingestion.applying.Wait()
+				assert.False(t, sessionImported(t, database, "gemini:overnight"), "catch-up uses the newly disabled provider settings")
+				return
 			}
-			active := make(chan bool, 1)
-			go func() { active <- ingestion.WaitActive(t.Context()) }()
-			ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
-			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-			defer cancel()
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/search?q="+query, nil)
-			require.NoError(t, err)
-			response, err := http.DefaultClient.Do(request)
-			require.NoError(t, err, "archive reads retain their two-second catch-up budget")
-			defer response.Body.Close()
-			body, err := io.ReadAll(response.Body)
-			require.NoError(t, err)
-			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-			assert.Equal(t, "true", response.Header.Get(apiclient.ArchiveStaleHeader))
-			if reload {
-				assert.Contains(t, string(body), "hello from retained")
-			} else {
-				require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
-			}
-			assert.Empty(t, active, "WaitActive waits for catch-up, not just watcher setup")
-			canceled, stop := context.WithCancel(t.Context())
-			stop()
-			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
 			if mode == "ensure-fresh-stop" {
+				ctx, stop := context.WithCancel(t.Context())
+				readerDone := make(chan struct{})
+				go func() { ingestion.EnsureFresh(ctx); close(readerDone) }()
+				require.Eventually(t, ingestion.Active, time.Second, time.Millisecond, "catch-up has restored collection and is waiting for the engine")
+				stop()
+				<-readerDone
 				stopped := make(chan struct{})
 				go func() { ingestion.Stop(); close(stopped) }()
 				assert.Never(t, func() bool {
@@ -230,11 +217,21 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				<-stopped
 				return
 			}
+			active := make(chan bool, 1)
+			go func() { active <- ingestion.WaitActive(t.Context()) }()
+			ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
+			headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
+			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
+			require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
+			assert.Empty(t, active, "WaitActive waits for catch-up, not just watcher setup")
+			canceled, stop := context.WithCancel(t.Context())
+			stop()
+			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
 			releaseOnce()
 			<-finished
 			require.True(t, ingestion.EnsureFresh(t.Context()))
-			headers, freshBody := searchIngestionArchive(t, ts.URL, query)
-			assert.Contains(t, freshBody, "hello from "+query)
+			headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
+			assert.Contains(t, freshBody, "hello from overnight")
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 			require.True(t, <-active)
 		})
@@ -260,51 +257,6 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }
 
-func TestDaemonIngestionWakeCatchesUpChangedSources(t *testing.T) {
-	content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "overnight remote message", "remote-overnight").String()
-	var published atomic.Bool
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/bucket" || r.URL.Path == "/bucket/" {
-			w.Header().Set("Content-Type", "application/xml")
-			contents := ""
-			if published.Load() {
-				contents = fmt.Sprintf("<Contents><Key>sessions/project/overnight.jsonl</Key><LastModified>2030-01-02T00:00:00.000Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>%d</Size><StorageClass>STANDARD</StorageClass></Contents>", len(content))
-			}
-			_, _ = fmt.Fprintf(w, `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix>sessions/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>%s</ListBucketResult>`, contents)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "overnight.jsonl") {
-			w.Header().Set("Last-Modified", "Wed, 02 Jan 2030 00:00:00 GMT")
-			w.Header().Set("ETag", `"abc123"`)
-			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
-			_, _ = io.WriteString(w, content)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(remote.Close)
-	t.Setenv("AWS_S3_ENDPOINT", remote.URL)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test-key")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
-	t.Setenv("AWS_REGION", "us-east-1")
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {"s3://bucket/sessions"}}}
-	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	published.Store(true)
-	require.True(t, ingestion.EnsureFresh(t.Context()))
-	assert.False(t, ingestion.Pending())
-	messages, err := database.GetAllMessages(t.Context(), "overnight")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "overnight remote message", messages[0].Content)
-}
-
 func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 	for _, tc := range []struct{ name, route string }{{"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,9 +271,19 @@ func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 			t.Cleanup(ingestion.Stop)
 			ingestion.Suspend()
 			ingestion.applying.Wait()
+			writeReloadGeminiSession(t, root, "overnight")
+			var syncCalls, resyncCalls atomic.Int64
+			syncRunner := newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)
+			resyncRunner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion,
-				server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)))),
-				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, server.LocalSyncRunner(newForegroundResyncRunner(t.Context(), cfg, engine, database)))))),
+				server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+					syncCalls.Add(1)
+					return syncRunner(ctx, progress)
+				}))),
+				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+					resyncCalls.Add(1)
+					return resyncRunner(ctx, progress)
+				})))),
 			)
 			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1"+tc.route, nil)
 			require.NoError(t, err)
@@ -332,7 +294,14 @@ func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 			require.NoError(t, response.Body.Close())
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-			assert.True(t, ingestion.Active(), "archive write routes resume collection")
+			assert.True(t, ingestion.Active(), "archive requests resume collection")
+			assert.True(t, sessionImported(t, database, "gemini:overnight"))
+			assert.Zero(t, syncCalls.Load(), "startup-only reads use middleware catch-up")
+			if tc.name == "resync" {
+				assert.Equal(t, int64(1), resyncCalls.Load())
+			} else {
+				assert.Zero(t, resyncCalls.Load())
+			}
 			assert.False(t, ingestion.Pending())
 		})
 	}

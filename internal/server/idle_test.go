@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -219,26 +218,25 @@ func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {
 }
 
 func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testing.T) {
-	for _, outsideWork := range []bool{false, true} {
-		t.Run(fmt.Sprintf("outside_work=%v", outsideWork), func(t *testing.T) {
+	for _, name := range []string{"external request", "outside work"} {
+		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				tracker := NewIdleTracker(0, func() {})
 				suspended := make(chan struct{}, 4)
 				tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
-				if outsideWork {
+				switch name {
+				case "outside work":
 					finish := requireBeginWork(t, tracker)
 					defer finish()
 					go tracker.Run(ctx)
 					time.Sleep(2 * time.Minute)
 					synctest.Wait()
 					assert.Len(t, suspended, 1, "outside work permits local suspension")
-					return
-				}
-				go tracker.Run(ctx)
-				<-suspended
-				for range 2 {
+				case "external request":
+					go tracker.Run(ctx)
+					<-suspended
 					entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 					go func() {
 						defer close(done)
@@ -249,7 +247,10 @@ func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testin
 					assert.Empty(t, suspended, "an in-flight request keeps local sync active")
 					close(release)
 					<-done
-					time.Sleep(time.Minute)
+					time.Sleep(59 * time.Second)
+					synctest.Wait()
+					assert.Empty(t, suspended, "request completion starts a full quiet minute")
+					time.Sleep(time.Second)
 					<-suspended
 				}
 			})

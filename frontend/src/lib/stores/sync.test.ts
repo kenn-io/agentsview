@@ -712,9 +712,15 @@ describe("SyncStore.remoteUnreachable", () => {
 
   it("clears the flag when a remote load succeeds", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
-    sync.remoteUnreachable = true;
-    vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", stats: MOCK_STATS });
+    const s = sync as unknown as Record<string, unknown>;
+    s.remoteUnreachable = true;
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+    });
+
     await sync.loadStatus();
+
     expect(sync.remoteUnreachable).toBe(false);
   });
 

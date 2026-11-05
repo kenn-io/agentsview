@@ -455,7 +455,6 @@ function mockFetchWithStream(chunks: string[]): void {
     "fetch",
     vi.fn().mockResolvedValue({
       ok: true,
-      headers: new Headers(),
       body: stream,
     }),
   );
@@ -601,7 +600,6 @@ describe("generateInsight SSE parsing", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        headers: new Headers(),
         body: stream,
       }),
     );
@@ -752,7 +750,6 @@ describe("generateInsight SSE parsing", () => {
       vi.fn().mockResolvedValue({
         ok: false,
         status: 501,
-        headers: new Headers(),
         text: () =>
           Promise.resolve(
             JSON.stringify({

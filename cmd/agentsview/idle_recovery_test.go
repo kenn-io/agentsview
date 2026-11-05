@@ -51,7 +51,7 @@ func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
 	assert.NotContains(t, body, "hello from overnight")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 	assert.False(t, ingestion.Pending(), "a finished wake pass clears pending even when a source fails")
-	assert.Contains(t, logs.String(), "permission denied")
+	assert.Contains(t, logs.String(), "idle catch-up incomplete: 1 failed, aborted=false")
 }
 
 func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
@@ -91,6 +91,8 @@ func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
 	require.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
 	<-attempted
+	require.True(t, ingestion.Active(), "an idle deadline during catch-up keeps collection alive")
+	require.True(t, ingestion.Pending())
 	unblock()
 	<-finished
 	ingestion.applying.Wait()
@@ -147,5 +149,6 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 	assert.NotContains(t, string(body), "event: error")
 	assert.False(t, ingestion.Pending())
 	assert.True(t, ingestion.Active(), "manual wake restores collection")
+	ingestion.applying.Wait()
 	assert.Equal(t, int64(1), lists.Load(), "a manual sync can satisfy the pending catch-up in one pass")
 }

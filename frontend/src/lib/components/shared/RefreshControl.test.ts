@@ -20,11 +20,9 @@ describe("RefreshControl", () => {
     try {
       await tick();
       visibility.mockReturnValue(true);
-      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(15 * 60_000);
       expect(onRefresh).not.toHaveBeenCalled();
       visibility.mockReturnValue(false);
-      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(onRefresh).toHaveBeenCalledOnce();
     } finally {
