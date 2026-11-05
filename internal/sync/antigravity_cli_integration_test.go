@@ -976,3 +976,33 @@ func antigravityCLIStringPayload(s string) []byte {
 	content := []byte(s)
 	return append([]byte{0x8a, 0x01, byte(len(content))}, content...)
 }
+
+// A rebuild whose only work is a preserved low-fidelity fallback must still
+// install, or a required data-version rebuild could never finish.
+func TestAntigravityCLIRebuildInstallsWhenOnlyFallbackIsPreserved(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
+	const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	const sessionID = "antigravity-cli:" + uuid
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	history := `{"conversationId":"` + uuid + `","workspace":"/work/project","timestamp":1716244800000,"display":"History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(history), 0o600))
+	path := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, path, "Initial database prompt text")
+	conn := openAntigravityCLITestDB(t, path)
+	insertAntigravityCLIStep(t, conn, 1, 17, "Initial assistant response text")
+	require.NoError(t, conn.Close())
+	require.Zero(t, env.engine.SyncAll(t.Context(), nil).Failed)
+	archived := antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID))
+	require.Contains(t, archived, "Initial assistant response text")
+
+	conn = openAntigravityCLITestDB(t, path)
+	_, err := conn.ExecContext(t.Context(), "DELETE FROM steps")
+	require.NoError(t, err)
+	insertAntigravityCLIStep(t, conn, 0, 14, "MODEL_PLACEHOLDER_0")
+	require.NoError(t, conn.Close())
+	stats := env.engine.ResyncAll(t.Context(), nil)
+	assert.False(t, stats.Aborted)
+	assert.True(t, stats.ArchiveRebuilt)
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+}

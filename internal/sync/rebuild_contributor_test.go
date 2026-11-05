@@ -795,6 +795,9 @@ func TestResyncAllPreservesDeferredLocalReplacement(t *testing.T) {
 		Machine: "local", Agent: string(parser.AgentCodex),
 		FilePath: &missingPath, MessageCount: 1,
 	}))
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "deferred", []db.Message{
+		{SessionID: "deferred", Ordinal: 0, Role: "assistant", Content: "saved history"},
+	}))
 	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		Machine:   "local",

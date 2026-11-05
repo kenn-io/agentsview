@@ -2971,9 +2971,11 @@ func shouldAbortResyncSwap(
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
 		(oldFileSessions == 0 || trashedCopied > 0)
-	// Deferred Codex files can be mixed with files intentionally filtered or
-	// excluded. Every successful file must still be accounted for.
-	deferredOnly := stats.Synced == 0 && stats.Failed == 0 &&
+	// Deferred Codex files and preserved Antigravity CLI fallbacks can be mixed
+	// with files intentionally filtered or excluded. Every successful file must
+	// still be accounted for, and the only failures allowed are the preserved
+	// fallbacks, whose saved rows the orphan copy restores.
+	deferredOnly := stats.Synced == 0 && stats.Failed == stats.preservedRetryFailures &&
 		stats.filesOK > 0 && stats.TotalSessions == stats.filesOK &&
 		len(stats.deferredPreservedIDs) > 0 &&
 		len(stats.deferredPreservedIDs)+stats.cwdFilteredFiles+stats.parserExcludedFiles == stats.filesOK
@@ -3592,7 +3594,7 @@ func (e *Engine) resyncBuildLocked(
 	}
 	localStats := stats
 	if stats.Deferred > 0 {
-		warning := fmt.Sprintf("resync: %d sessions need retry; unresolved forks can include replayed parent history and usage", stats.Deferred)
+		warning := fmt.Sprintf("resync: %d sessions need retry; newly imported forks without their parent may include copied parent history and usage", stats.Deferred)
 		log.Print(warning)
 		stats.Warnings = append(stats.Warnings, warning)
 	}
@@ -3907,6 +3909,17 @@ func (e *Engine) resyncBuildLocked(
 	}
 	stats.OrphanedCopied = len(orphaned)
 	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
+	abortPreserved := func(err error) (SyncStats, error) {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, fmt.Sprintf("resync aborted: %v", err))
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
 	var demoteIDs []string
 	for _, id := range stats.deferredPreservedIDs {
 		stored, readErr := newDB.GetSessionFull(ctx, id)
@@ -3914,22 +3927,14 @@ func (e *Engine) resyncBuildLocked(
 			if readErr == nil {
 				readErr = errors.New("preserved session missing")
 			}
-			stats.Aborted = true
-			newDB.Close()
-			removeTempDB(tempPath)
-			restoreSkipCache()
-			return stats, fmt.Errorf("recover deferred session %s: %w", id, readErr)
+			return abortPreserved(fmt.Errorf("recover deferred session %s: %w", id, readErr))
 		}
 		if stored.DataVersion >= db.CurrentDataVersion() {
 			demoteIDs = append(demoteIDs, id)
 		}
 	}
 	if err := newDB.SetSessionDataVersionsContext(ctx, demoteIDs, max(db.CurrentDataVersion()-1, 0)); err != nil {
-		stats.Aborted = true
-		newDB.Close()
-		removeTempDB(tempPath)
-		restoreSkipCache()
-		return stats, fmt.Errorf("mark preserved deferred sessions for retry: %w", err)
+		return abortPreserved(fmt.Errorf("mark preserved deferred sessions for retry: %w", err))
 	}
 	for id, name := range deferredTitles {
 		if err := newDB.RefreshNativeSessionName(ctx, id, name); err != nil {
@@ -5049,12 +5054,14 @@ func (stats *SyncStats) ProcessingComplete() bool {
 		stats.providerFailures == 0 && stats.Deferred == 0
 }
 
-// RebuildOrProcessingComplete reports whether a request can continue after an
-// installed rebuild. Deferred sources still require retries and must not be
-// acknowledged through ProcessingComplete.
-func (stats *SyncStats) RebuildOrProcessingComplete() bool {
+// ProcessingCompleteOrRetrying reports whether a caller can continue after a
+// pass whose only unfinished work is deferred sources already queued for
+// retry: an installed rebuild or a startup pass that scheduled its retries.
+// Deferred sources must still not be acknowledged through ProcessingComplete.
+func (stats *SyncStats) ProcessingCompleteOrRetrying() bool {
 	return stats.ProcessingComplete() ||
-		(stats.ArchiveRebuilt && stats.Deferred > 0 && stats.Failed == 0 && stats.AuthoritativeDiscoveryComplete())
+		((stats.ArchiveRebuilt || stats.deferredRetryScheduled) &&
+			stats.Deferred > 0 && stats.Failed == 0 && stats.AuthoritativeDiscoveryComplete())
 }
 
 // RunStartupMaintenance waits for the daemon-launching foreground sync, then
@@ -11328,7 +11335,7 @@ func (e *Engine) collectAndBatchWithOptions(
 						continue
 					}
 					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
-					stored, err := store.GetSessionFull(ctx, id)
+					stored, err := savedHistory(ctx, store, id)
 					if err != nil {
 						log.Printf("resync: read deferred session %s: %v", id, err)
 						stats.RecordFailed()
@@ -11339,6 +11346,9 @@ func (e *Engine) collectAndBatchWithOptions(
 						kept = append(kept, pr)
 					} else if e.archiveStore != nil {
 						stats.deferredPreservedIDs = append(stats.deferredPreservedIDs, id)
+						if r.agent == parser.AgentAntigravityCLI {
+							stats.preservedRetryFailures++
+						}
 					} else if stored.DataVersion >= db.CurrentDataVersion() {
 						if err := e.db.SetSessionDataVersion(ctx, id, max(db.CurrentDataVersion()-1, 0)); err != nil {
 							log.Printf("sync: mark deferred session %s for retry: %v", id, err)
@@ -11993,6 +12003,21 @@ func (r *processResult) releaseStaged() {
 		r.stagedGCRelease()
 		r.stagedGCRelease = nil
 	}
+}
+
+// savedHistory returns the stored row for id only when it holds messages.
+// Placeholder rows, such as a Recall import or a session header written before
+// its content, have no history for a fallback parse to overwrite.
+func savedHistory(ctx context.Context, store db.Store, id string) (*db.Session, error) {
+	stored, err := store.GetSessionFull(ctx, id)
+	if err != nil || stored == nil {
+		return nil, err
+	}
+	msgs, err := store.GetMessages(ctx, id, 0, 1, true)
+	if err != nil || len(msgs) == 0 {
+		return nil, err
+	}
+	return stored, nil
 }
 
 func (r *processResult) needsRetryForSession(sessionID string) bool {
@@ -21992,7 +22017,7 @@ func (e *Engine) processAndWriteSessionFile(
 		// Match the batch path: these fallback parses cannot replace saved
 		// history until the higher-fidelity source is available.
 		if (isCodexFormatAgent(file.Agent) || file.Agent == parser.AgentAntigravityCLI) && res.needsRetryForSession(pr.Session.ID) {
-			stored, readErr := e.db.GetSessionFull(ctx, resultIDs[i])
+			stored, readErr := savedHistory(ctx, e.db, resultIDs[i])
 			if readErr != nil {
 				return false, sessionsChanged, fmt.Errorf("read deferred session %s: %w", resultIDs[i], readErr)
 			}

@@ -123,6 +123,9 @@ type SyncStats struct {
 	deferredRetryPaths     []string
 	deferredRetryOverflow  bool
 	deferredPreservedIDs   []string
+	// preservedRetryFailures counts the Failed entries that are preserved
+	// Antigravity CLI fallbacks, whose saved rows a rebuild restores.
+	preservedRetryFailures int
 	deferredRetryScheduled bool
 	// ArchiveRebuilt records a completed full-resync database swap. A rebuild
 	// can preserve/copy durable corpus rows while syncing zero session files,

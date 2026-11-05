@@ -915,7 +915,7 @@ func coordinateLocalSync(
 		}
 		return didResync, stats, errUnifiedRebuildAborted
 	}
-	if !stats.RebuildOrProcessingComplete() {
+	if !stats.ProcessingCompleteOrRetrying() {
 		return didResync, stats, errors.New("local sync processing incomplete")
 	}
 	archiveStats, err := attached.Drain(ctx, progress)

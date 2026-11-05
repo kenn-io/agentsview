@@ -475,7 +475,7 @@ func (s *Server) runResyncWithFallback(
 			}
 			return stats, err
 		}
-		if !stats.RebuildOrProcessingComplete() {
+		if !stats.ProcessingCompleteOrRetrying() {
 			return stats, requireProcessingComplete(stats)
 		}
 		return stats, nil
@@ -496,7 +496,7 @@ func (s *Server) finishLocalSync(
 	ctx context.Context, engine *syncpkg.Engine, stats syncpkg.SyncStats,
 	progress func(syncpkg.Progress), scheduled bool,
 ) (syncpkg.SyncStats, error) {
-	if !stats.RebuildOrProcessingComplete() {
+	if !stats.ProcessingCompleteOrRetrying() {
 		return stats, requireProcessingComplete(stats)
 	}
 	manager := s.archiveSources
@@ -724,7 +724,7 @@ func (s *Server) runRemoteSyncRequest(
 				},
 			)
 			localStats = &stats
-			if err == nil && !stats.Aborted && !stats.RebuildOrProcessingComplete() {
+			if err == nil && !stats.Aborted && !stats.ProcessingCompleteOrRetrying() {
 				err = requireProcessingComplete(stats)
 			}
 			return remotesync.SyncStats{}, err

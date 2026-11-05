@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -222,4 +223,103 @@ func TestRebuildDeferredFilteredAndExcludedSources(t *testing.T) {
 	assert.False(t, stats.Aborted)
 	assert.Equal(t, 1, stats.Deferred)
 	assert.Equal(t, []string{"retained child"}, messageContents(t, database, "codex:"+child))
+}
+
+func writeOrphanCodexFork(t *testing.T, root, child, parent string) string {
+	t.Helper()
+	const timestamp = "2026-09-01T10:00:00Z"
+	path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "available child history", timestamp),
+	)), 0o600))
+	return path
+}
+
+// A row without messages has no history to protect. A fork with a missing
+// parent must still import its fallback transcript over such a placeholder.
+func TestMissingParentForkImportsOverPlaceholderRows(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const id = "codex:" + child
+	for _, seed := range []string{"recall-import", "pending-content"} {
+		for _, route := range []string{"sync", "rebuild", "single"} {
+			t.Run(seed+"/"+route, func(t *testing.T) {
+				root := t.TempDir()
+				path := writeOrphanCodexFork(t, root, child, parent)
+				database := openTestDB(t)
+				if seed == "recall-import" {
+					entry := fmt.Sprintf(`{"candidate_id":"c1","type":"fact","scope":"project","title":"Imported fact","body":"An imported memory.","project":"project","agent":"codex","session_id":%q,"label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}`, id)
+					imported, err := database.ImportAcceptedRecallEntriesJSONL(t.Context(), strings.NewReader(entry+"\n"))
+					require.NoError(t, err)
+					require.Equal(t, 1, imported.Imported)
+				} else {
+					_, err := database.UpsertSessionPendingContent(t.Context(), db.Session{
+						ID: id, Agent: "codex", Machine: "local", Project: "project",
+						FilePath: &path, Cwd: "/work/project", MessageCount: 1,
+					})
+					require.NoError(t, err)
+				}
+				require.Empty(t, messageContents(t, database, id))
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+					Machine:   "local", DisableFilesystemProjectDiscovery: true,
+				})
+				t.Cleanup(engine.Close)
+				switch route {
+				case "sync":
+					stats := engine.SyncAll(t.Context(), nil)
+					assert.Equal(t, 1, stats.Deferred)
+				case "rebuild":
+					stats := engine.ResyncAll(t.Context(), nil)
+					require.True(t, stats.ArchiveRebuilt)
+					assert.Equal(t, 1, stats.Deferred)
+				case "single":
+					require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), id))
+				}
+				assert.Equal(t, []string{"available child history"}, messageContents(t, database, id))
+				assert.Less(t, database.GetSessionDataVersion(t.Context(), id), db.CurrentDataVersion(),
+					"the fallback import must stay marked for retry")
+			})
+		}
+	}
+}
+
+// A startup pass whose only unfinished work is a queued fork retry lets the
+// daemon continue startup work such as draining attached archive sources.
+func TestStartupWithMissingParentReportsRetryingCompletion(t *testing.T) {
+	for _, queued := range []bool{true, false} {
+		t.Run(fmt.Sprintf("retry queued=%v", queued), func(t *testing.T) {
+			root := t.TempDir()
+			path := writeOrphanCodexFork(t, root,
+				"cccccccc-cccc-4ccc-8ccc-cccccccccccc", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+			var reconciled SyncStats
+			var retry WatchBatch
+			cfg := EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+				Machine:   "local", DisableFilesystemProjectDiscovery: true,
+				OnStartupReconciled: func(stats SyncStats, err error) {
+					if queued {
+						assert.NoError(t, err)
+					} else {
+						assert.Error(t, err)
+					}
+					reconciled = stats
+				},
+			}
+			if queued {
+				cfg.OnRebuildDeferred = func(batch WatchBatch) { retry = batch }
+			}
+			engine := NewEngine(t.Context(), openTestDB(t), cfg)
+			t.Cleanup(engine.Close)
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Equal(t, 1, stats.Deferred)
+			assert.False(t, reconciled.ProcessingComplete())
+			assert.Equal(t, queued, reconciled.ProcessingCompleteOrRetrying())
+			if queued {
+				assert.Equal(t, []string{path}, retry.Paths)
+			}
+		})
+	}
 }

@@ -426,7 +426,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		)
 		onStartupReconciled = func(stats sync.SyncStats, err error) {
 			acknowledgeStartup(stats, err)
-			if err == nil && stats.ProcessingComplete() && !database.NeedsResync() {
+			if err == nil && stats.ProcessingCompleteOrRetrying() && !database.NeedsResync() {
 				go idleTracker.Do(func() {
 					if _, err := attachedSources.Drain(ctx, nil); err != nil && ctx.Err() == nil {
 						log.Printf("archive sources: %v", err)
