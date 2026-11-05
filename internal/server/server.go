@@ -96,7 +96,7 @@ const (
 		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader +
 		", " + rawSyncUploadOffsetHeader
 	corsExposedResponseHeaders = rawSyncUploadOffsetHeader + ", " +
-		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location, " + apiclient.ArchiveStaleHeader
+		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location, " + apiclient.ArchiveStaleHeader + ", " + apiclient.SyncPendingHeader
 )
 
 // Server is the HTTP server that serves the SPA and REST API.
@@ -1005,6 +1005,9 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 			}
 			if !probe && (s.archiveStale() || pending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
+				if pending {
+					w.Header().Set(apiclient.SyncPendingHeader, "true")
+				}
 				// Session sync returns its stale-archive conflict through the route.
 				if s.archiveStale() && archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {
 					if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {

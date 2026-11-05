@@ -446,6 +446,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
 		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
+		{name: "required while idle", idle: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 		{name: "idle", idle: true, want: attempt{archiveAuditInterval + batteryRecheckInterval, "audit"}},
 		{name: "idle on battery", idle: true, battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 	} {
@@ -479,7 +480,16 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					defer close(done)
 					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil, ingestion, battery.Load)
 				}()
-				if tc.idle {
+				if tc.idle && tc.stale {
+					synctest.Sleep(archiveAuditRetryInitial)
+					synctest.Wait()
+					if !assert.Len(t, attempts, 1, "required rebuild must retry while idle") {
+						cancel()
+						<-done
+						return
+					}
+				}
+				if tc.idle && !tc.stale {
 					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for catch-up")

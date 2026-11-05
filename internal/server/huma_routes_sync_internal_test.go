@@ -2578,6 +2578,7 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(tc.body), &body))
 			}
 			w := serveJSON(t, f.handler, tc.method, tc.path, body)
+			assert.Empty(t, w.Header().Get("X-Agentsview-Sync-Pending"), "a parser rebuild is separate from idle catch-up")
 			if strings.HasPrefix(tc.path, "/api/v1/sync?startup_only") {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				assert.Zero(t, syncCalls)

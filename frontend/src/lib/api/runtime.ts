@@ -100,12 +100,12 @@ function generatedErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
-/** Dispatched on window when a response says its archive results may be stale. */
+/** Dispatched when a response says idle catch-up is still incomplete. */
 export const ARCHIVE_STALE_EVENT = "agentsview:archive-stale";
 
 async function fetchNotingStale(input: string, init: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
-  if (response.headers.get("X-Agentsview-Archive-Stale") === "true") {
+  if (response.headers.get("X-Agentsview-Sync-Pending") === "true") {
     window.dispatchEvent(new Event(ARCHIVE_STALE_EVENT));
   }
   return response;

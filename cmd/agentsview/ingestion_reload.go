@@ -197,6 +197,10 @@ func (d *daemonIngestion) WaitActive(ctx context.Context) bool {
 
 // EnsureFresh shares one catch-up; each reader owns only its bounded wait.
 func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
+	return d.ensureFresh(ctx, false)
+}
+
+func (d *daemonIngestion) ensureFresh(ctx context.Context, retry bool) bool {
 	waitCtx, cancel := context.WithTimeout(ctx, ingestionWaitBudget)
 	defer cancel()
 	finish, ok := d.idleTracker.BeginWork()
@@ -211,7 +215,7 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 		return fresh
 	}
 	done := d.catchup
-	if done == nil && d.watchers != nil {
+	if done == nil && d.watchers != nil && !retry {
 		d.mu.Unlock()
 		finish()
 		return false
@@ -302,6 +306,12 @@ func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
 
 // syncScheduled runs the existing periodic passes while collection is active.
 func (d *daemonIngestion) syncScheduled(ctx context.Context) error {
+	if d.Pending() {
+		if !d.ensureFresh(ctx, true) {
+			return errors.New("scheduled catch-up remains incomplete")
+		}
+		return nil
+	}
 	cfg := d.Config()
 	runScheduledSyncPass(ctx, d.engine, scheduledReconcileTargets(cfg))
 	return d.catchUpScheduledSources(cfg)

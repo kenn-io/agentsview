@@ -41,7 +41,12 @@ it("refreshes a search whose catch-up completed between status polls", async () 
           await new Promise((resolve) => setTimeout(resolve, 2000));
           return Response.json(
             { results: [], count: 0 },
-            { headers: { "X-Agentsview-Archive-Stale": "true" } },
+            {
+              headers: {
+                "X-Agentsview-Archive-Stale": "true",
+                "X-Agentsview-Sync-Pending": "true",
+              },
+            },
           );
         }
         return Response.json({
@@ -71,4 +76,34 @@ it("refreshes a search whose catch-up completed between status polls", async () 
   await vi.advanceTimersByTimeAsync(8700);
   expect(complete).toBe(true);
   expect(searchStore.results.map((result) => result.session_id)).toEqual(["gemini:overnight"]);
+});
+
+it("leaves a search alone while only a parser rebuild is pending", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  const fetch = vi.fn(async (url: string) => {
+    if (url.endsWith("/api/v1/sync/status"))
+      return Response.json({
+        last_sync: "2026-11-04T12:00:00Z",
+        sync_pending: false,
+        archive_stale: true,
+      });
+    if (url.endsWith("/api/v1/version")) return Response.json({ version: "dev", read_only: false });
+    if (url.includes("/api/v1/stats")) return Response.json({ session_count: 0, message_count: 0 });
+    if (url.includes("/api/v1/search?"))
+      return Response.json(
+        { results: [], count: 0 },
+        { headers: { "X-Agentsview-Archive-Stale": "true" } },
+      );
+    throw new Error(`unexpected URL ${url}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  sync.syncPending = false;
+  await sync.loadStatus();
+  sync.startPolling();
+  searchStore.search("overnight");
+  await vi.advanceTimersByTimeAsync(300);
+  expect(fetch.mock.calls.filter(([url]) => url.includes("/api/v1/search?"))).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(fetch.mock.calls.filter(([url]) => url.includes("/api/v1/search?"))).toHaveLength(1);
 });

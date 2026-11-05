@@ -101,14 +101,18 @@ describe("orvalFetch", () => {
       "Bearer candidate-token",
     );
   });
-  it("dispatches a stale event when a search response carries the stale header", async () => {
+  it("dispatches a stale event when a search response reports incomplete catch-up", async () => {
     const listener = vi.fn();
     window.addEventListener(ARCHIVE_STALE_EVENT, listener);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
         new Response('{"results":[]}', {
-          headers: { "Content-Type": "application/json", "X-Agentsview-Archive-Stale": "true" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Agentsview-Archive-Stale": "true",
+            "X-Agentsview-Sync-Pending": "true",
+          },
         }),
       ),
     );

@@ -355,7 +355,7 @@ type S3SessionScanner struct {
 func s3PrefixScan(root string, scan S3SessionScanner) ([]DiscoveredFile, error) {
 	objects, err := listS3Objects(root)
 	if err != nil {
-		return nil, err
+		return nil, incompleteDiscoveryError(scan.Agent, "list "+root, err)
 	}
 	machine := s3MachineFromRoot(root, string(scan.Agent))
 	var out []DiscoveredFile

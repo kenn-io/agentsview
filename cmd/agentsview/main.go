@@ -3286,7 +3286,7 @@ func startArchiveAudit(
 				case <-ctx.Done():
 					return false
 				case <-timer.C:
-					if ingestion != nil && !ingestion.WaitActive(ctx) {
+					if ingestion != nil && !database.NeedsResync() && !ingestion.WaitActive(ctx) {
 						return false
 					}
 					if startupReady != nil || database.NeedsResync() || onBattery == nil || !onBattery() {

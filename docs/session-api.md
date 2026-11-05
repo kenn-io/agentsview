@@ -1261,6 +1261,10 @@ all three are clear, it returns exit 2. Scheduled ingestion owns retries.
 
 `sync_pending` stays true while ingestion catches up after an idle period.
 It clears when the pass succeeds; source failures are logged and keep it true.
+Failed catch-up retries through the next scheduled sync while collection is active.
+Archive responses also carry `X-Agentsview-Sync-Pending: true` while catch-up is
+incomplete, alongside `X-Agentsview-Archive-Stale: true`. A required parser rebuild
+uses the stale header independently.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP

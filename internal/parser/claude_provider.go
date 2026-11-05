@@ -555,6 +555,7 @@ func newClaudeLayoutSourceSet(
 
 func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
+	var incomplete error
 	seen := make(map[string]struct{})
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -562,7 +563,8 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		}
 		files, err := s.discoverFiles(root)
 		if err != nil {
-			return nil, err
+			incomplete = errors.Join(incomplete, err)
+			continue
 		}
 		for _, file := range files {
 			source, ok := s.discoveredSourceRef(root, file)
@@ -573,21 +575,33 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		}
 	}
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, incomplete
 }
 
 func (s claudeSourceSet) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
+	var incomplete error
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
-			return err
+		var yieldErr error
+		err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			yieldErr = yield(source)
+			return yieldErr
+		})
+		if yieldErr != nil {
+			return yieldErr
+		}
+		if err != nil {
+			if _, partial := errors.AsType[DiscoveryIncompleteError](err); !partial || ctx.Err() != nil {
+				return err
+			}
+			incomplete = errors.Join(incomplete, err)
 		}
 	}
-	return nil
+	return incomplete
 }
 
 func (s claudeSourceSet) discoverEachRoot(
@@ -1047,6 +1061,7 @@ func claudeProviderCapabilities() Capabilities {
 			StopReason:           CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
+			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
