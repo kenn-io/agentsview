@@ -235,6 +235,14 @@ func (f AnalyticsFilter) messageWindowBoundsUTC() (string, string) {
 }
 
 func analyticsMessageWindowPred(col, from, to string) (string, []any) {
+	rangePred, args := analyticsMessageRangePred(col, from, to)
+	if rangePred == "" {
+		return "", nil
+	}
+	return "(" + col + " IS NULL OR " + col + " = '' OR strftime('%Y', " + col + ") IS NULL OR " + rangePred + ")", args
+}
+
+func analyticsMessageRangePred(col, from, to string) (string, []any) {
 	var preds []string
 	var args []any
 	if from != "" {
@@ -248,7 +256,7 @@ func analyticsMessageWindowPred(col, from, to string) (string, []any) {
 	if len(preds) == 0 {
 		return "", nil
 	}
-	return "(" + col + " IS NULL OR " + col + " = '' OR strftime('%Y', " + col + ") IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
+	return "(" + strings.Join(preds, " AND ") + ")", args
 }
 
 var analyticsQueryObserver func(string)
@@ -265,9 +273,22 @@ func (f AnalyticsFilter) toolSessionWindowSQL(dateCol, sessionID string) (string
 	if sessionPred == "" {
 		return "", nil
 	}
-	messagePred, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
-	return "(" + sessionPred + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + messagePred + "))", append(args, messageArgs...)
+	// A message matches when its timestamp is in the window or cannot be
+	// read. Two EXISTS probes keep each case on its own index: the in-window
+	// probe stops at the first match, and idx_messages_unparsed_timestamp
+	// holds only the unreadable rows, so sessions outside the window no
+	// longer parse every message timestamp.
+	rangePred, rangeArgs := analyticsMessageRangePred("wm.timestamp", from, to)
+	return "(" + sessionPred +
+			" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + rangePred + ")" +
+			" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + unparsedMessageTimestampSQL + "))",
+		append(args, rangeArgs...)
 }
+
+// unparsedMessageTimestampSQL matches the WHERE clause of
+// idx_messages_unparsed_timestamp, which SQLite requires before it uses the
+// partial index.
+const unparsedMessageTimestampSQL = "(wm.timestamp IS NULL OR wm.timestamp = '' OR strftime('%Y', wm.timestamp) IS NULL)"
 
 func sqliteAnalyticsMinuteKey() string {
 	return "COALESCE(strftime('%Y-%m-%dT%H:%M', m.timestamp), m.timestamp, '')"

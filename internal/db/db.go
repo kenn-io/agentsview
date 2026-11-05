@@ -3971,6 +3971,13 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		// through every earlier message when a transcript records no model.
 		`CREATE INDEX IF NOT EXISTS idx_messages_assistant_model
 		 ON messages(session_id, ordinal) WHERE role = 'assistant' AND model != ''`,
+		// Holds only messages whose timestamp is missing or unreadable, so
+		// analytics can find them without parsing every message timestamp.
+		// Covering the timestamp keeps SQLite on this index even before
+		// ANALYZE has counted its rows.
+		`CREATE INDEX IF NOT EXISTS idx_messages_unparsed_timestamp
+		 ON messages(session_id, timestamp)
+		 WHERE timestamp IS NULL OR timestamp = '' OR strftime('%Y', timestamp) IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
