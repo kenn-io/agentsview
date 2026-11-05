@@ -45,6 +45,15 @@
     return () => controller.abort();
   });
   let inputRef: HTMLInputElement | undefined = $state(undefined);
+  // Title and snippet widths (percent) of the placeholder rows shown while
+  // a search runs; varied so they read as text, not as a striped block.
+  const SKELETON_ROWS = [
+    { title: 62, snippet: 88 },
+    { title: 48, snippet: 80 },
+    { title: 70, snippet: 92 },
+    { title: 54, snippet: 76 },
+    { title: 66, snippet: 84 },
+  ];
   let project = $state(sessions.filters.project);
   let selectedIndex: number = $state(0);
   let inputValue: string = $state(searchStore.query ?? "");
@@ -345,7 +354,21 @@
     <div class="palette-results">
       {#if showSearchResults}
         {#if searchStore.isSearching}
-          <div class="palette-empty">{m.command_palette_searching()}</div>
+          <!-- Placeholder rows shaped like results keep the palette at a
+               result-list size instead of a large empty box. -->
+          <div class="palette-loading" role="status" aria-busy="true">
+            <span class="palette-loading-label">{m.command_palette_searching()}</span>
+            {#each SKELETON_ROWS as row, i (i)}
+              <div class="skeleton-row" aria-hidden="true">
+                <span class="skeleton-body">
+                  <span class="skeleton-bar" style:width="{row.title}%"></span>
+                  <span class="skeleton-bar skeleton-snippet" style:width="{row.snippet}%"></span>
+                </span>
+                <span class="skeleton-bar skeleton-meta"></span>
+                <span class="skeleton-bar skeleton-id"></span>
+              </div>
+            {/each}
+          </div>
         {:else if searchStore.error?.kind === "semantic-unavailable"}
           <SemanticSetupHelp
             onResolved={() => searchStore.retry()}
@@ -449,6 +472,9 @@
     inset: 0;
     background: var(--overlay-bg);
     display: flex;
+    /* The palette sizes to its content (up to its max height) instead of
+       stretching, so short states stay short. */
+    align-items: flex-start;
     justify-content: center;
     padding-top: 14vh;
     z-index: var(--z-overlay);
@@ -634,6 +660,74 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Same padding and gaps as .palette-item, so rows land where results
+     will. The label stays for screen readers only; the rows carry the
+     state visually. */
+  .palette-loading-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .skeleton-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 14px;
+  }
+
+  .skeleton-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .skeleton-bar {
+    display: block;
+    height: 10px;
+    border-radius: 4px;
+    background: var(--bg-inset);
+    animation: palette-skeleton-pulse 1.6s ease-in-out infinite alternate;
+  }
+
+  :global(:root.dark) .skeleton-bar {
+    background: color-mix(in srgb, var(--text-primary) 8%, var(--bg-surface));
+  }
+
+  .skeleton-snippet {
+    height: 8px;
+  }
+
+  .skeleton-meta {
+    flex-shrink: 0;
+    width: 108px;
+  }
+
+  .skeleton-id {
+    flex-shrink: 0;
+    width: 56px;
+  }
+
+  @keyframes palette-skeleton-pulse {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0.45;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-bar {
+      animation: none;
+    }
+  }
+
   .palette-empty {
     padding: 16px;
     text-align: center;
@@ -734,6 +828,14 @@
   }
 
   @container (max-width: 520px) {
+    .skeleton-meta {
+      width: 64px;
+    }
+
+    .skeleton-id {
+      display: none;
+    }
+
     .palette-item {
       flex-wrap: wrap;
       row-gap: 2px;

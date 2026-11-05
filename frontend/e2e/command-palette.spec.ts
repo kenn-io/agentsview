@@ -35,3 +35,31 @@ for (const theme of ["light", "dark"] as const) {
     expect(project).toEqual(dates);
   });
 }
+
+test("search shows placeholder rows at a result-list size while it runs", async ({ page }) => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/v1/search**", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto("/usage");
+  await openSearch(page, "synchronous DB read");
+
+  const loading = page.locator(".palette-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toHaveAttribute("role", "status");
+  await expect(loading.locator(".skeleton-row").first()).toBeVisible();
+  const sizes = await page.evaluate(() => {
+    const palette = document.querySelector(".palette")!.getBoundingClientRect();
+    const rows = document.querySelector(".palette-loading")!.getBoundingClientRect();
+    return { palette: palette.height, rows: rows.height };
+  });
+  // The palette hugs the placeholder rows instead of stretching to its
+  // maximum height around them.
+  expect(sizes.palette - sizes.rows).toBeLessThan(140);
+
+  release();
+  await expect(page.locator(".palette-item").first()).toBeVisible();
+  await expect(loading).toHaveCount(0);
+});
