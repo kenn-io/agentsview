@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SearchService } from "../api/generated/index.js";
+import { MetadataService, SearchService, SyncService } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
-import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
+import {
+  SEARCH_MODE_STORAGE_KEY,
+  createSearchStore,
+  searchStore,
+  type SearchMode,
+} from "./search.svelte.js";
+import { sync } from "./sync.svelte.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
@@ -109,7 +115,63 @@ describe("SearchStore", () => {
   });
 
   afterEach(() => {
+    searchStore.clear();
+    vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("refreshes the open search after background catch-up completes", async () => {
+    vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      api_version: 0,
+      data_version: 0,
+      friction_available: false,
+      friction_build_allowed: false,
+      insight_generation_available: false,
+      kata_available: false,
+      session_stats_available: false,
+    });
+    vi.spyOn(MetadataService, "getApiV1Stats").mockResolvedValue({
+      session_count: 1,
+      message_count: 1,
+      project_count: 1,
+      machine_count: 1,
+      earliest_session: null,
+    });
+    const status = vi.spyOn(SyncService, "getApiV1SyncStatus");
+    const pendingStatus = {
+      last_sync: "2026-07-01T00:00:00Z",
+      sync_pending: true,
+      archive_stale: false,
+      startup_pending: false,
+      stats: { total_sessions: 0, synced: 0, skipped: 0, failed: 0 },
+    };
+    status.mockResolvedValueOnce(pendingStatus);
+    await sync.loadStatus();
+    searchService.getApiV1Search
+      .mockResolvedValueOnce(fullTextResponse("needle", 0))
+      .mockResolvedValueOnce(fullTextResponse("needle"));
+    searchStore.search("needle", "alpha");
+    await runDebounce();
+    expect(searchStore.results).toEqual([]);
+    expect(sync.syncPending).toBe(true);
+
+    status.mockResolvedValueOnce({
+      ...pendingStatus,
+      last_sync: "2026-07-02T00:00:00Z",
+      sync_pending: false,
+    });
+    await sync.loadStatus();
+    await runDebounce();
+
+    expect(sync.syncPending).toBe(false);
+    expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
+    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
+      { q: "needle", project: "alpha", limit: 30, sort: "relevance" },
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it.each([

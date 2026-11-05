@@ -172,6 +172,7 @@ func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
 
 		f.requireNotFiredWithin(t, 35*time.Millisecond,
 			"idle fired while internal work was active")
+		synctest.Wait()
 		assert.Equal(t, 1, suspensions, "outside work permits local suspension while its exit lease remains held")
 
 		done()

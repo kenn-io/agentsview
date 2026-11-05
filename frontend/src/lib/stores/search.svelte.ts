@@ -4,6 +4,7 @@ import { ApiError, isAbortError } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
+import { sync } from "./sync.svelte.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
 export type SearchSort = "relevance" | "recency";
@@ -321,3 +322,5 @@ export function createSearchStore(
 }
 
 export const searchStore = createSearchStore();
+
+sync.onSyncComplete(() => searchStore.search(searchStore.query, searchStore.project));
