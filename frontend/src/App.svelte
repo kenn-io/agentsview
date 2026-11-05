@@ -180,10 +180,7 @@
         if (ui.isMobileViewport) {
           ui.closeSidebar();
         }
-        messages.loadSession(id);
-        sessions.loadChildSessions(id);
-        sessionTiming.load(id);
-        sync.watchSession(
+        const ready = sync.watchSession(
           id,
           () => {
             messages.reload();
@@ -199,6 +196,9 @@
             sessionTiming.applyEvent(t);
           },
         );
+        messages.loadSession(id, ready);
+        sessions.loadChildSessions(id);
+        sessionTiming.load(id);
         pins.loadForSession(id);
       } else {
         sessionActivity.clear();

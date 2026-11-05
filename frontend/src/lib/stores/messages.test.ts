@@ -50,7 +50,7 @@ vi.mock("./sessions.svelte.js", () => ({
 
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
-    getApiV1SessionsById: vi.fn(({ id }) => api.getSession(id)),
+    getApiV1SessionsById: vi.fn(({ id }, options) => api.getSession(id, options)),
     getApiV1SessionsByIdMessages: vi.fn((path, params, options) =>
       api.getMessages(
         path.id,
@@ -157,6 +157,63 @@ describe("MessagesStore", () => {
     readProgress.reset();
     vi.clearAllMocks();
     runtimeMocks.signals.length = 0;
+  });
+
+  it("waits for the watch baseline and folds ready reloads into the first read", async () => {
+    const ready = createDeferred<void>();
+    api.getSession.mockResolvedValue(makeSession("s1", 1));
+    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+    const load = messages.loadSession("s1", ready.promise);
+    const reload = messages.reload();
+    expect(api.getSession).not.toHaveBeenCalled();
+    expect(api.getMessages).not.toHaveBeenCalled();
+    ready.resolve();
+    await Promise.all([load, reload]);
+    expect(api.getMessages).toHaveBeenCalledTimes(1);
+    expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+
+    await messages.reload();
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps catch-up reloads once the initial read starts", async () => {
+    const metadata = createDeferred<Session>();
+    const started = createDeferred<void>();
+    api.getSession
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return metadata.promise;
+      })
+      .mockResolvedValue(makeSession("s1", 1));
+    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+    const load = messages.loadSession("s1", Promise.resolve());
+    await started.promise;
+    const reload = messages.reload();
+    metadata.resolve(makeSession("s1", 1));
+    await Promise.all([load, reload]);
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps reloads for a newer selection while an old watch is pending", async () => {
+    const ready = createDeferred<void>();
+    const oldLoad = messages.loadSession("s1", ready.promise);
+    api.getSession.mockResolvedValue(makeSession("s2", 1));
+    api.getMessages.mockResolvedValue(
+      makeMessagesResponse([{ ...makeMessage(0), session_id: "s2" }]),
+    );
+    const newLoad = messages.loadSession("s2");
+    const reload = messages.reload();
+    await Promise.all([newLoad, reload]);
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
+    expect(api.getMessages.mock.calls.every(([id]) => id === "s2")).toBe(true);
+    api.getSession.mockImplementationOnce((_id, options) => {
+      expect(options.signal.aborted).toBe(true);
+      throw generatedCancelError();
+    });
+    ready.resolve();
+    await oldLoad;
+    expect(messages.sessionId).toBe("s2");
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
   });
 
   it.each(["recover", "exhaust", "switch", "permanent", "bug"])(

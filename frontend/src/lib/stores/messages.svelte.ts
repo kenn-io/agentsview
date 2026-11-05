@@ -71,6 +71,7 @@ export class MessagesStore {
   // from the current load for the same session, so failures check
   // this before reporting a missing session.
   private loadGeneration: number = 0;
+  private watchGate: number | null = null;
   private loadSessionPromise: Promise<void> | null = null;
   private reloadPromise: Promise<void> | null = null;
   private reloadSessionId: string | null = null;
@@ -97,7 +98,7 @@ export class MessagesStore {
       : "";
   }
 
-  async loadSession(id: string) {
+  async loadSession(id: string, ready?: Promise<void>) {
     const resumesCancelledLoad = this.sessionId === id && this.cancelledSessionId === id;
     if (
       this.sessionId === id &&
@@ -106,14 +107,14 @@ export class MessagesStore {
     ) {
       return;
     }
-    const promise = this.doLoadSession(id, resumesCancelledLoad).finally(() => {
+    const promise = this.doLoadSession(id, resumesCancelledLoad, ready).finally(() => {
       if (this.loadSessionPromise === promise) this.loadSessionPromise = null;
     });
     this.loadSessionPromise = promise;
     return promise;
   }
 
-  private async doLoadSession(id: string, resumesCancelledLoad: boolean) {
+  private async doLoadSession(id: string, resumesCancelledLoad: boolean, ready?: Promise<void>) {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();
@@ -128,6 +129,11 @@ export class MessagesStore {
     const generation = ++this.loadGeneration;
     const ac = new AbortController();
     this.abortController = ac;
+    if (ready) {
+      this.watchGate = generation;
+      await ready;
+      if (this.watchGate === generation) this.watchGate = null;
+    }
 
     // Taken before the metadata read, so a reload that starts while it is in flight outranks this load.
     const ticket = ++this.loadTicket;
@@ -178,6 +184,7 @@ export class MessagesStore {
   }
 
   reload(): Promise<void> {
+    if (this.watchGate === this.loadGeneration) return this.loadSessionPromise ?? Promise.resolve();
     if (!this.sessionId) return Promise.resolve();
     this.reloadFailures = 0;
     if (this.loadSessionPromise) {

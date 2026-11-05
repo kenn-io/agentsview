@@ -107,8 +107,50 @@ describe("session watch visibility", () => {
 
   afterEach(() => {
     sync.unwatchSession();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  it.each(["session_ready", "error", "hidden", "unwatch", "timeout", "no document"])(
+    "releases the initial read on %s and keeps ready updates",
+    async (reason) => {
+      vi.useFakeTimers();
+      if (reason === "hidden") vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      if (reason === "no document") vi.stubGlobal("document", undefined);
+      try {
+        const onUpdate = vi.fn();
+        const settled = vi.fn();
+        const ready = sync.watchSession("session-a", onUpdate);
+        void ready.then(settled);
+        const stream = api.watchSession.mock.results[0]?.value;
+        if (reason === "session_ready" || reason === "error") {
+          await Promise.resolve();
+          expect(settled).not.toHaveBeenCalled();
+          stream.dispatchEvent(new Event(reason));
+        } else if (reason === "unwatch") {
+          sync.unwatchSession();
+        } else if (reason === "timeout") {
+          await vi.advanceTimersByTimeAsync(999);
+          expect(settled).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+        } else {
+          expect(api.watchSession).not.toHaveBeenCalled();
+        }
+        await ready;
+        expect(settled).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+        if (stream && reason !== "unwatch") {
+          const initialUpdates = reason === "session_ready" ? 1 : 0;
+          expect(onUpdate).toHaveBeenCalledTimes(initialUpdates);
+          stream.dispatchEvent(new Event("session_ready"));
+          stream.dispatchEvent(new Event("session_ready"));
+          expect(onUpdate).toHaveBeenCalledTimes(initialUpdates + 2);
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("closes a hidden session stream and refreshes on return and every reconnect", () => {
     const onUpdate = vi.fn();
