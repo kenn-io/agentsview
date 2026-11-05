@@ -154,6 +154,12 @@ The latest release is
 
 **Bug fixes**
 
+- Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
+  non-PR review summaries are now hidden as automated sessions, like other
+  roborev runs. The session list and analytics stopped counting them as your
+  conversations. Existing sessions are reclassified the next time AgentsView
+  opens the archive. Custom roborev review types still need an
+  [`[automated]` pattern](/docs/configuration/#automated-session-detection).
 - Large Usage and Activity pages no longer stall in garbage collection on big
   archives; peak memory during large requests can be higher, and a lower
   `GOMEMLIMIT` can reduce it by overriding the 4 GiB default.
