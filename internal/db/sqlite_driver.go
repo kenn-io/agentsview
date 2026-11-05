@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/mattn/go-sqlite3"
 )
@@ -34,32 +33,6 @@ func init() {
 	}
 	sql.Register(sqliteArchiveDriverName, drv)
 	archiveSQLiteDriver = drv
-}
-
-type archiveWriterConnector struct {
-	dsn     string
-	commits *atomic.Uint64
-}
-
-func openArchiveWriter(path string, commits *atomic.Uint64) *sql.DB {
-	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(path, false), commits: commits})
-	writer.SetMaxOpenConns(1)
-	return writer
-}
-
-func (c *archiveWriterConnector) Driver() driver.Driver { return archiveSQLiteDriver }
-
-func (c *archiveWriterConnector) Connect(context.Context) (driver.Conn, error) {
-	conn, err := archiveSQLiteDriver.Open(c.dsn)
-	if err != nil {
-		return nil, err
-	}
-	conn.(*sqlite3.SQLiteConn).RegisterCommitHook(func() int {
-		// The count can precede commit visibility, bounding a stale read to one flight.
-		c.commits.Add(1)
-		return 0
-	})
-	return conn, nil
 }
 
 // Each pool uses the configured archive driver and the DB's shared registry,

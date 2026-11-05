@@ -878,7 +878,7 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	usageWindows         flightgroup.Group[usagePreparedWindow]
-	archiveCommits       *atomic.Uint64
+	usageVersion         usageArchiveVersion
 	usageWindowObserver  usageWindowObserver
 	activityMemo         activityCandidateMemo
 	frustrationMemo      frustrationMarkerMemo
@@ -1974,7 +1974,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	}
 	db := &DB{
 		path: path, readOnly: true,
-		usageCache: newUsageCacheManager(path), archiveCommits: new(atomic.Uint64),
+		usageCache: newUsageCacheManager(path),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -4779,14 +4779,17 @@ func openAndInit(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	commits := new(atomic.Uint64)
-	writer := openArchiveWriter(path, commits)
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
+	if err != nil {
+		return nil, fmt.Errorf("opening writer: %w", err)
+	}
+	writer.SetMaxOpenConns(1)
 	if err := configureWALContext(ctx, writer); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path), archiveCommits: commits}
+	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
@@ -4807,7 +4810,7 @@ func openAndInit(
 			return nil, err
 		}
 		db.mu.Lock()
-		err := repairLegacySchemaBeforeInit(ctx, db.getWriter(), progress)
+		err = repairLegacySchemaBeforeInit(ctx, db.getWriter(), progress)
 		db.mu.Unlock()
 		if err != nil {
 			_ = db.CloseContext(ctx)
@@ -4822,7 +4825,7 @@ func openAndInit(
 		return nil, err
 	}
 	db.mu.Lock()
-	err := migrateRecallReviewStateConstraintLocked(ctx, db.getWriter())
+	err = migrateRecallReviewStateConstraintLocked(ctx, db.getWriter())
 	db.mu.Unlock()
 	if err != nil {
 		_ = db.CloseContext(ctx)
@@ -5301,6 +5304,7 @@ func (db *DB) CloseContext(ctx context.Context) error {
 		cacheErr = db.usageCache.Close()
 	}
 	db.stopWALCheckpointLoop()
+	db.usageVersion.reset()
 	db.mu.Lock()
 	db.connMu.Lock()
 	w := db.rawWriter()
@@ -5553,7 +5557,11 @@ func (db *DB) reopenLocked() error {
 // barrier kept up so no write can land before the replacement commits; every
 // other caller clears the barrier.
 func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
-	writer := openArchiveWriter(db.path, db.archiveCommits)
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(db.path, false))
+	if err != nil {
+		return fmt.Errorf("reopening writer: %w", err)
+	}
+	writer.SetMaxOpenConns(1)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
@@ -5568,11 +5576,11 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	db.connMu.Lock()
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
-	db.archiveCommits.Add(1)
 	var oldReader *sql.DB
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
 	})
+	db.usageVersion.reset()
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the
@@ -5633,7 +5641,6 @@ func (db *DB) CloseWriter() error {
 	defer db.mu.Unlock()
 	db.connMu.Lock()
 	old := db.writer.Swap(nil)
-	db.archiveCommits.Add(1)
 	db.writerClosed.Store(true)
 	pending := db.undrainedPools
 	db.undrainedPools = nil
@@ -5682,7 +5689,11 @@ func (db *DB) ReopenWriter() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	writer := openArchiveWriter(db.path, db.archiveCommits)
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(db.path, false))
+	if err != nil {
+		return fmt.Errorf("reopening writer: %w", err)
+	}
+	writer.SetMaxOpenConns(1)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
@@ -5694,7 +5705,6 @@ func (db *DB) ReopenWriter() error {
 
 	db.connMu.Lock()
 	old := db.writer.Swap(writer)
-	db.archiveCommits.Add(1)
 	db.writerClosed.Store(false)
 	db.connMu.Unlock()
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -48,13 +49,6 @@ type usagePreparedWindow struct {
 // usageWindowObserver provides deterministic synchronization for tests.
 type usageWindowObserver struct {
 	beforePrepare func(context.Context)
-}
-
-// SetUsageWindowObserverForTest observes preparations in tests outside this package.
-func (db *DB) SetUsageWindowObserverForTest(beforePrepare func(context.Context)) (restore func()) {
-	previous := db.usageWindowObserver
-	db.usageWindowObserver.beforePrepare = beforePrepare
-	return func() { db.usageWindowObserver = previous }
 }
 
 type usageWindowMemoKey struct{}
@@ -104,8 +98,45 @@ func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string
 	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%#v", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
 }
 
-func (db *DB) usageFlightKey(key string) string {
-	return fmt.Sprintf("%s|%d", key, db.archiveCommits.Load())
+// usageArchiveVersion pins one reader because data_version values are local
+// to a connection. The epoch separates connections after an archive swap.
+type usageArchiveVersion struct {
+	mu    sync.Mutex
+	conn  *sql.Conn
+	epoch uint64
+}
+
+func (db *DB) usageWindowVersion(ctx context.Context) (string, error) {
+	version := &db.usageVersion
+	version.mu.Lock()
+	defer version.mu.Unlock()
+	if version.conn == nil {
+		pool, err := sql.Open("sqlite3", makeDSN(db.path, true))
+		if err != nil {
+			return "", err
+		}
+		version.conn, err = pool.Conn(ctx)
+		// The pinned connection stays open until reset returns it to the closed pool.
+		_ = pool.Close()
+		if err != nil {
+			return "", err
+		}
+	}
+	var value uint64
+	if err := version.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&value); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d|%d", version.epoch, value), nil
+}
+
+func (version *usageArchiveVersion) reset() {
+	version.mu.Lock()
+	defer version.mu.Unlock()
+	if version.conn != nil {
+		_ = version.conn.Close()
+		version.conn = nil
+	}
+	version.epoch++
 }
 
 func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
@@ -119,12 +150,11 @@ func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind us
 	}
 	var prepared usagePreparedWindow
 	var err error
-	// Without a writer hook, other processes can commit unseen by this handle.
-	// Keep request memoization, but capture independently across requests.
-	if db.writer.Load() == nil {
+	version, probeErr := db.usageWindowVersion(ctx)
+	if probeErr != nil {
 		prepared, err = prepare(ctx)
 	} else {
-		prepared, err = db.usageWindows.Do(ctx, db.usageFlightKey(key), prepare)
+		prepared, err = db.usageWindows.Do(ctx, key+"|"+version, prepare)
 	}
 	if err == nil {
 		memo.put(key, prepared)

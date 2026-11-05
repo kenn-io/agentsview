@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -425,21 +424,6 @@ func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *tes
 	require.ErrorIs(t, err, readErr)
 	assert.Nil(t, res)
 	assert.ErrorIs(t, <-store.canceled, context.Canceled)
-}
-
-func TestDirectBackend_UsagePairwiseComparison_DefaultModelsPrepareOnce(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	seedPairwiseUsageFixture(t, d)
-	var prepares atomic.Int32
-	t.Cleanup(d.SetUsageWindowObserverForTest(func(context.Context) { prepares.Add(1) }))
-	result, err := service.NewDirectBackend(d, nil).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, 285, result.Left.TotalTokens)
-	assert.Equal(t, 50, result.Right.TotalTokens)
-	assert.Equal(t, int32(1), prepares.Load())
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {

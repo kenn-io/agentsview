@@ -114,13 +114,13 @@ An aggregate request:
 Concurrent aggregate requests with the same window, session predicate, and
 Cursor need share one capture, fill check, and rollup check. Callers with a
 `Progress` callback prepare alone so each progress stream reports its own work.
-Any archive commit ends sharing with that preparation for later requests. Each
-request reads rollups with its own filter. Cache retirement or a changed install
-triggers a fresh capture that bypasses the shared result.
+A request joins only a preparation started at the same archive `data_version`,
+read on a pinned connection. Any commit visible before the request, from any
+process, starts a new preparation. Each request reads rollups with its own
+filter. Cache retirement or a changed install triggers a fresh capture that
+bypasses the shared result.
 
-Handles without an open archive writer prepare independently across requests,
-since they cannot track another writer's commits. Pairwise still reuses prepared
-windows within its request.
+Pairwise reuses its ranking preparation for sides with the same session filter.
 
 The pricing generation uses the canonical, order-independent effective-pricing
 digest. Daily rows also retain the resolved per-model rate hash. Pricing changes
