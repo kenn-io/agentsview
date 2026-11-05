@@ -16,8 +16,7 @@
   import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { chartSeriesStyleMap } from "../../utils/chartPalette.js";
   import type { TrendsGranularity } from "../../api/types.js";
-  import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
-  import { Button, Spinner, Toggle } from "@kenn-io/kit-ui";
+  import { Button, SegmentedControl, Spinner, Toggle } from "@kenn-io/kit-ui";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -51,24 +50,21 @@
   let trendsDateIntentEstablished = false;
   const trendsPanelDate = $derived(currentTrendsPanelDate());
 
-  const GRANULARITIES: TrendsGranularity[] = ["day", "week", "month"];
-  let groupByOpen = $state(false);
-  let groupByEl: HTMLDivElement | undefined = $state();
+  const granularityOptions = $derived([
+    { value: "day", label: m.analytics_granularity_day() },
+    { value: "week", label: m.analytics_granularity_week() },
+    { value: "month", label: m.analytics_granularity_month() },
+  ]);
 
-  function pickGranularity(g: TrendsGranularity) {
-    groupByOpen = false;
-    if (g !== trends.granularity) void setGranularity(g);
-  }
-
-  function onGroupByDocClick(e: MouseEvent) {
-    if (groupByEl && !groupByEl.contains(e.target as Node)) {
-      groupByOpen = false;
+  function pickGranularity(value: string) {
+    if (isGranularity(value) && value !== trends.granularity) {
+      void setGranularity(value);
     }
   }
 
-  function onGroupByKey(e: KeyboardEvent) {
-    if (e.key === "Escape") groupByOpen = false;
-  }
+  const metricLabel = $derived(
+    trends.normalized ? m.trends_occurrences_per1k() : m.trends_occurrences(),
+  );
 
   const termStyleMap = $derived(chartSeriesStyleMap(
     (trends.response?.series ?? []).map((item) => item.term),
@@ -255,12 +251,8 @@
     materializeRollingWindow();
     writeUrl();
     trends.fetchTerms();
-    document.addEventListener("click", onGroupByDocClick);
-    document.addEventListener("keydown", onGroupByKey);
     return () => {
       trends.cancelInFlightReads();
-      document.removeEventListener("click", onGroupByDocClick);
-      document.removeEventListener("keydown", onGroupByKey);
     };
   });
 </script>
@@ -287,97 +279,85 @@
   </div>
 
   <div class="trends-content">
-    <div class="section-head">
+    <header class="section-head">
       <h1>{m.trends_title()}</h1>
       <p>{m.trends_date_range({ from: trends.response?.from ?? trends.from, to: trends.response?.to ?? trends.to })}</p>
-    </div>
+    </header>
 
     <div class="content-grid">
-      <div class="query-panel">
-        <label class="terms-label" for="trend-terms">
-          <span>{m.trends_terms()}</span>
+      <!-- Terms in, counts out: the input and its table share one panel,
+           which never grows taller than the chart beside it; the table
+           scrolls on its own. -->
+      <section class="panel terms-panel" aria-labelledby="trend-terms-label">
+        <label class="panel-head terms-label" for="trend-terms" id="trend-terms-label">
+          <span class="panel-title">{m.trends_terms()}</span>
           <span class="terms-hint">{m.trends_one_per_line()}</span>
         </label>
-        <textarea
-          id="trend-terms"
-          bind:value={trends.termText}
-          rows="9"
-          spellcheck="false"
-        ></textarea>
-        {#if trends.errors.terms}
-          <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
-        {/if}
-      </div>
-
-      <div class="chart-panel" aria-busy={trends.loading.terms}>
-        <div class="chart-options">
-          <div class="group-by" bind:this={groupByEl}>
-            <button
-              class="group-trigger"
-              onclick={() => (groupByOpen = !groupByOpen)}
-              aria-haspopup="menu"
-              aria-expanded={groupByOpen}
-            >
-              <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
-              {m.trends_group_by()} <span class="gval">{trends.granularity}</span>
-              <ChevronDownIcon
-                class={groupByOpen ? "g-chev open" : "g-chev"}
-                size="11"
-                strokeWidth="2.2"
-                aria-hidden="true"
-              />
-            </button>
-            {#if groupByOpen}
-              <div class="group-menu" role="menu">
-                {#each GRANULARITIES as g (g)}
-                  <button
-                    class="group-item"
-                    class:active={trends.granularity === g}
-                    role="menuitemradio"
-                    aria-checked={trends.granularity === g}
-                    onclick={() => pickGranularity(g)}
-                  >
-                    {g}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          <Toggle
-            checked={trends.normalized}
-            onchange={(checked) => {
-              trends.normalized = checked;
-              writeUrl();
-            }}
-            label={m.trends_normalize()}
-          />
+        <div class="terms-input">
+          <textarea
+            id="trend-terms"
+            bind:value={trends.termText}
+            rows="6"
+            spellcheck="false"
+          ></textarea>
+          {#if trends.errors.terms}
+            <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
+          {/if}
         </div>
-        <TrendsLineChart
-          buckets={trends.response?.buckets ?? []}
-          series={trends.response?.series ?? []}
-          {styleFor}
-          {activeTerm}
-          normalized={trends.normalized}
-          onHover={(term) => (activeTerm = term)}
-        />
-        {#if trends.loading.terms}
-          <div class="loading-overlay" role="status" aria-live="polite">
-            <span aria-hidden="true"><Spinner size={18} /></span>
-            <span>{m.trends_computing()}</span>
+        {#if (trends.response?.series.length ?? 0) > 0}
+          <div class="table-panel">
+            <TermTable
+              series={trends.response?.series ?? []}
+              {styleFor}
+              {activeTerm}
+              normalized={trends.normalized}
+              messageCount={trends.response?.message_count ?? 0}
+              onHover={(term) => (activeTerm = term)}
+            />
           </div>
         {/if}
-      </div>
+      </section>
 
-      <div class="table-panel">
-        <TermTable
-          series={trends.response?.series ?? []}
-          {styleFor}
-          {activeTerm}
-          normalized={trends.normalized}
-          messageCount={trends.response?.message_count ?? 0}
-          onHover={(term) => (activeTerm = term)}
-        />
-      </div>
+      <section class="panel chart-panel" aria-busy={trends.loading.terms} aria-labelledby="trend-chart-title">
+        <div class="panel-head chart-head">
+          <h2 class="panel-title" id="trend-chart-title">{metricLabel}</h2>
+          <div class="chart-options">
+            <div class="group-by">
+              <span class="option-label" aria-hidden="true">{m.trends_group_by()}</span>
+              <SegmentedControl
+                options={granularityOptions}
+                value={trends.granularity}
+                ariaLabel={m.trends_group_by()}
+                onchange={pickGranularity}
+              />
+            </div>
+            <Toggle
+              checked={trends.normalized}
+              onchange={(checked) => {
+                trends.normalized = checked;
+                writeUrl();
+              }}
+              label={m.trends_normalize()}
+            />
+          </div>
+        </div>
+        <div class="chart-body">
+          <TrendsLineChart
+            buckets={trends.response?.buckets ?? []}
+            series={trends.response?.series ?? []}
+            {styleFor}
+            {activeTerm}
+            normalized={trends.normalized}
+            onHover={(term) => (activeTerm = term)}
+          />
+          {#if trends.loading.terms}
+            <div class="loading-overlay" role="status" aria-live="polite">
+              <span aria-hidden="true"><Spinner size={18} /></span>
+              <span>{m.trends_computing()}</span>
+            </div>
+          {/if}
+        </div>
+      </section>
     </div>
   </div>
 </section>
@@ -398,8 +378,8 @@
     --trend-indigo: var(--accent-indigo);
     --trend-black: var(--text-primary);
     color: var(--text-primary);
-    /* The page fills the scroll host; the chart keeps a content height
-       (see .chart-panel). */
+    /* The page fills the scroll host; the chart keeps a fixed height
+       (see .content-grid). */
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -432,10 +412,10 @@
   .trends-content {
     flex: 1 1 auto;
     min-height: 0;
-    padding: 16px;
+    padding: 20px 16px 24px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 16px;
   }
 
   /* A real page title, the same size and weight as the library and
@@ -459,176 +439,81 @@
     font-size: 12px;
   }
 
-  button,
-  textarea {
-    font: inherit;
-  }
-
-  .group-trigger,
-  .group-item {
-    cursor: pointer;
-  }
-
-  .group-trigger:disabled,
-  .group-item:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: default;
-  }
-
-  label {
+  /* Two panels on one row: terms (input and counts) beside the chart.
+     The chart panel sets the row's height; the terms panel fills that
+     height and never pushes it taller (zero height, full minimum), so a
+     long term list scrolls inside its table instead of stretching the
+     chart. */
+  .content-grid {
+    --trends-chart-height: clamp(320px, calc(100vh - 330px), 420px);
     display: grid;
-    gap: var(--space-2);
-    color: var(--text-muted);
-    font-size: 11px;
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: stretch;
+  }
+
+  .panel {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg, 8px);
+    background: var(--bg-surface);
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 44px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-muted);
+  }
+
+  .panel-title {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
     font-weight: 600;
   }
 
-  textarea {
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-surface);
-    color: var(--text-primary);
-  }
-
-  .chart-options {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: var(--space-5);
-    padding: 2px 2px 10px;
-  }
-
-  .group-by {
-    position: relative;
-  }
-
-  .group-trigger {
-    height: 26px;
-    padding: 0 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .group-trigger:hover:not(:disabled) {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
-  }
-
-  .group-trigger .gval {
-    color: var(--text-secondary);
-    font-weight: 500;
-    text-transform: capitalize;
-  }
-
-  :global(.g-chev) {
-    color: var(--text-muted);
-    transition: transform 0.15s;
-  }
-
-  :global(.g-chev.open) {
-    transform: rotate(180deg);
-  }
-
-  .group-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 20;
-    min-width: 124px;
-    padding: 4px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: 7px;
-    box-shadow: var(--shadow-md);
-  }
-
-  .group-item {
-    width: 100%;
-    height: 28px;
-    padding: 0 9px;
-    display: flex;
-    align-items: center;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 12px;
-    text-align: left;
-    text-transform: capitalize;
-  }
-
-  .group-item:hover:not(:disabled) {
-    background: var(--bg-surface-hover);
-  }
-
-  .group-item.active {
-    color: var(--accent-blue);
-    font-weight: 500;
-  }
-
-  .content-grid {
-    display: grid;
-    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-    grid-template-areas:
-      "query chart"
-      "table chart";
-    grid-template-rows: auto 1fr;
-    flex: none;
-    gap: var(--space-6);
-    align-items: start;
-  }
-
-  .query-panel {
-    grid-area: query;
-  }
-
-  /* The chart fills the window down to a bottom margin of about 60px
-     above the status bar (the 300px offset covers the header, toolbar,
-     title and chart options), between 320px and a 420px cap so a tall
-     window does not leave a mostly empty plot. It still grows with a long
-     term table. */
-  .chart-panel {
-    --trends-chart-height: clamp(320px, calc(100vh - 300px), 420px);
-    grid-area: chart;
-    align-self: stretch;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    position: relative;
-  }
-
-  .table-panel {
-    grid-area: table;
-  }
-
-  .terms-label {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 6px;
+  .terms-panel {
+    height: 0;
+    min-height: 100%;
+    overflow: hidden;
   }
 
   .terms-hint {
     color: var(--text-muted);
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 400;
+  }
+
+  .terms-input {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-muted);
   }
 
   textarea {
+    display: block;
+    box-sizing: border-box;
     width: 100%;
-    min-height: 188px;
-    padding: 10px;
+    min-height: 116px;
+    padding: 8px 10px;
     resize: vertical;
-    line-height: 1.45;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    line-height: 1.5;
+    font-family: var(--font-mono);
     font-size: 12px;
+    outline: none;
+  }
+
+  textarea:focus {
+    border-color: var(--accent-blue);
   }
 
   .error {
@@ -638,37 +523,71 @@
     line-height: 1.35;
   }
 
+  /* Takes only the rows it needs, and scrolls once they outgrow the
+     panel. */
+  .table-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .chart-head {
+    flex-wrap: wrap;
+  }
+
+  .chart-options {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .group-by {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .option-label {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .chart-body {
+    position: relative;
+    height: var(--trends-chart-height);
+  }
+
   .loading-overlay {
     position: absolute;
-    inset: 1px;
+    inset: 0;
     display: grid;
-    place-items: center;
+    place-content: center;
+    justify-items: center;
     gap: 8px;
-    border-radius: 8px;
-    background: color-mix(
-      in srgb,
-      var(--bg-surface) 78%,
-      transparent
-    );
+    border-radius: 0 0 var(--radius-lg, 8px) var(--radius-lg, 8px);
+    background: color-mix(in srgb, var(--bg-surface) 78%, transparent);
     color: var(--text-primary);
     font-size: 13px;
     font-weight: 600;
     pointer-events: none;
   }
 
+  /* One column: the panels stack, the chart keeps a fixed height and the
+     term table a bounded one. */
   @media (max-width: 900px) {
     .content-grid {
+      --trends-chart-height: 300px;
       grid-template-columns: 1fr;
-      grid-template-areas:
-        "query"
-        "chart"
-        "table";
-      grid-template-rows: none;
-      flex: none;
     }
 
-    .chart-panel {
-      --trends-chart-height: 300px;
+    .terms-panel {
+      height: auto;
+      min-height: 0;
+    }
+
+    .table-panel {
+      max-height: 320px;
     }
   }
 </style>
