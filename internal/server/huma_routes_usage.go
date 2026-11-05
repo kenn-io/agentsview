@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -90,25 +89,7 @@ type usageTopSessionsInput struct {
 
 type usageComparisonInput struct {
 	UsageFilterInput
-	CurrentMicrodollars optionalInt64Param `query:"current_microdollars" minimum:"0" doc:"Current period total cost in microdollars; when provided, computes deltaPct"`
-}
-
-//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
-type optionalInt64Param struct {
-	Value int64
-	IsSet bool
-}
-
-func (p optionalInt64Param) Schema(r huma.Registry) *huma.Schema {
-	return huma.SchemaFromType(r, reflect.TypeFor[int64]())
-}
-
-func (p *optionalInt64Param) Receiver() reflect.Value {
-	return reflect.ValueOf(p).Elem().FieldByName("Value")
-}
-
-func (p *optionalInt64Param) OnParamSet(isSet bool, _ any) {
-	p.IsSet = isSet
+	CurrentMicrodollars optionalParam[int64] `query:"current_microdollars" minimum:"0" doc:"Current period total cost in microdollars; when provided, computes deltaPct"`
 }
 
 type usagePairwiseComparisonInput struct {

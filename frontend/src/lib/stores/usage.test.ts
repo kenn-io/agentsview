@@ -1426,6 +1426,44 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("excludes waiting for the window summary from comparison apply time", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const { usage } = await loadStore();
+      usage.applyDateRange("2026-06-04", "2026-06-18");
+      usage.summary = usageSummary(15);
+      usage.selectedTimeRange = { from: "2026-06-07", to: "2026-06-10" };
+      const windowResponse = Promise.withResolvers<UsageSummaryResponse>();
+      usageServiceMocks.getApiV1UsageSummary
+        .mockImplementationOnce(async () => {
+          const data = usageSummary(3);
+          attachResponseTiming(data, { sentAt: 0, headersAt: 10, bodyAt: 20 });
+          return data;
+        })
+        .mockReturnValueOnce(windowResponse.promise);
+      usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(async () => {
+        const data = usageComparison();
+        attachResponseTiming(data, { sentAt: 0, headersAt: 10, bodyAt: 30 });
+        return data;
+      });
+
+      const refresh = usage.fetchAll({ preserveTimeRange: true });
+      vi.advanceTimersByTime(100);
+      windowResponse.resolve(usageSummary(15));
+      await refresh;
+
+      expect(usage.summary?.comparison).toEqual(usageComparison());
+      const comparison = usage.lastQuerySteps.find((step) => step.name === "comparison")!;
+      expect(comparison.segments!.find((segment) => segment.phase === "apply")).toEqual({
+        phase: "apply",
+        startMs: 100,
+        durationMs: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records the window summary as its own step and delays apply until both arrive", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {
@@ -2017,6 +2055,21 @@ describe("UsageStore time-series range selection", () => {
   beforeEach(() => {
     installStorage();
     vi.clearAllMocks();
+  });
+
+  it("drops the full-window comparison until the brushed comparison arrives", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = { ...usageSummary(15), comparison: usageComparison() };
+    const rangeResponse = Promise.withResolvers<UsageSummaryResponse>();
+    usageServiceMocks.getApiV1UsageSummary.mockReturnValueOnce(rangeResponse.promise);
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    expect(usage.summary?.comparison).toBeUndefined();
+    rangeResponse.resolve(usageSummary(3));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.summary?.comparison).toEqual(usageComparison());
   });
 
   it("filters Usage requests without replacing the parent chart window", async () => {

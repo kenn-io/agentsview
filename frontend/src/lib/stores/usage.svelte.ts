@@ -1365,11 +1365,8 @@ class UsageStore {
         summary,
       ]);
       if (loaded?.version === summaryVersion && this.versions.summary === summaryVersion) {
+        const applyStartedAt = performance.now();
         this.summary = { ...loaded.summary, comparison };
-        const bodies = [comparison, loaded.summary]
-          .map((body) => responseTimingOf(body)?.bodyAt)
-          .filter((at): at is number => at !== undefined);
-        const applyStartedAt = bodies.length > 0 ? Math.max(...bodies) : undefined;
         this.noteStep("comparison", liveStep, started, comparison, applyStartedAt);
         return "ok";
       }
