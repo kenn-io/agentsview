@@ -67,21 +67,25 @@ Codex data-loss bug or a merge blocker.
 - Detached fills and rollup builds hold their own cache-generation lease.
   Retirement cancels their coordinator context and waits for those leases
   before closing SQLite handles.
-- A writable daemon runs one newest-usage-first coverage pass after HTTP
-  readiness. It installs at most 256 sessions per cache transaction and yields
-  between batches. The pass fills normalized facts and daily rollups for the
+- A writable daemon starts a newest-usage-first coverage pass after HTTP
+  readiness. A usage read also starts a pass when its timezone has no trusted
+  claim or its catalog digest differs, unless a pass is already active. Each
+  pass installs at most 256 sessions per cache transaction and yields between
+  batches. The pass fills normalized facts and daily rollups for the
   process-local timezone plus up to eight retained recently requested explicit
-  timezones. Installed source and aggregate fingerprints, not a progress
-  cursor, are the authoritative coverage records.
+  timezones. On completion, it claims each timezone through its captured archive
+  revision, capped by older installs written during the pass. Installs from
+  another catalog prevent the claim. A changed claim revision or install
+  boundary prevents replacement.
 - Served usage requests own timezone recency in
   `usage_rollup_timezones.last_requested_at`, rewriting it at most once a
   minute per zone. Rollup installs stamp only a zone's first row, so
   background rebuilds never reorder which eight explicit zones stay warm.
-- A pass runs once and is never restarted because the archive was written while
-  it ran. Each session's facts and source version come from one archive read
-  transaction, so they are always paired correctly, and a session written
-  during the pass is refilled by its own mutation notification. Do not
-  reintroduce a restart loop over a moving source fingerprint.
+- Archive writes during a pass do not restart it. Each session's facts and
+  source version come from one archive read transaction, so they are always
+  paired correctly, and a session written during the pass is refilled by its own
+  mutation notification. Do not reintroduce a restart loop over a moving source
+  fingerprint.
 - After each notification batch, the daemon rebuilds filled sessions' daily
   rollups and requeues invalidated dedup peers for the same timezones, in
   chunks of 256. A failed rebuild is retried by the next write or usage

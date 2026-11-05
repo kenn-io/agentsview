@@ -232,6 +232,8 @@ CREATE TABLE usage_activity_rollups (
     user_message_count INTEGER NOT NULL,
     PRIMARY KEY (rollup_install_id, local_date, model)
 ) WITHOUT ROWID;
+CREATE INDEX usage_activity_rollups_window
+    ON usage_activity_rollups (local_date, rollup_install_id);
 CREATE TABLE usage_rollup_exceptions (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,

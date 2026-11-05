@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -34,6 +35,11 @@ func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key stri
 // A request only advances an existing claim. A completed archive pass can
 // establish one. The compare-and-set makes concurrent claim losers harmless.
 func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimezoneIdentity, zone usageZoneCoverage, revision int64, catalog string) error {
+	// Cap coverage at the oldest source revision installed since capture, so
+	// a delayed build cannot make the claim newer than its stored facts.
+	// WHERE NOT EXISTS refuses a claim if those installs used another catalog.
+	// ON CONFLICT advances only the claim we captured; a concurrent winner's
+	// revision or install boundary makes this compare-and-set a no-op.
 	_, err := cache.db.ExecContext(ctx, `INSERT INTO usage_rollup_timezones
  (timezone_key, timezone_name, interval_fingerprint, last_requested_at, change_revision, change_install_revision, change_pricing)
  SELECT ?, ?, ?, '', MIN(?, COALESCE((SELECT MIN(source_change_revision) FROM usage_rollup_installs WHERE timezone_id=(SELECT id FROM usage_rollup_timezones WHERE timezone_key=?) AND install_revision>=?), ?)), ?, ?
@@ -166,7 +172,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	var resolver *export.PricingResolver
 	if len(refreshIDs) > 0 || snapshot.CursorHighWater > 0 {
-		resolver = export.NewPricingResolver(snapshot.PricingRows)
+		resolver = export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
 	}
 	installs := make(map[string]usageRollupInstall)
 	for start := 0; start < len(refreshIDs) || start == 0 && snapshot.CursorHighWater > 0; start += usageFillInstallBatchSize {
@@ -233,17 +239,26 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 		if kind == usageQueryKindActivity {
 			tables = []string{"usage_activity_rollups"}
 		}
-		query = `SELECT i.session_id FROM usage_rollup_installs i WHERE i.timezone_id=? AND (`
-		for i, table := range tables {
-			if i > 0 {
-				query += " OR "
+		var branches []string
+		args = nil
+		for _, table := range tables {
+			branch := `SELECT rollup_install_id FROM ` + table + ` WHERE 1=1`
+			if from != "" {
+				branch += ` AND local_date>=?`
+				args = append(args, from)
 			}
-			// Seek one matching day per install, avoiding a fan-out and sort
-			// over every daily row when sessions span several days.
-			query += `EXISTS(SELECT 1 FROM ` + table + ` r WHERE r.rollup_install_id=i.id AND (?='' OR r.local_date>=?) AND (?='' OR r.local_date<=?))`
-			args = append(args, from, from, to, to)
+			if to != "" {
+				branch += ` AND local_date<=?`
+				args = append(args, to)
+			}
+			branches = append(branches, branch)
 		}
-		query += ")"
+		// CROSS JOIN keeps date seeks outermost even for a single activity
+		// branch, so discovery never enumerates unrelated installs in the zone.
+		// NOT INDEXED selects install row IDs instead of scanning a zone index.
+		query = `SELECT DISTINCT i.session_id FROM (` + strings.Join(branches, ` UNION ALL `) + `) r
+ CROSS JOIN usage_rollup_installs i NOT INDEXED ON i.id=r.rollup_install_id WHERE i.timezone_id=?`
+		args = append(args, timezoneID)
 	}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {

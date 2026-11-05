@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,70 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
+
+func TestUsageJournaledWindowDiscoverySeeksDates(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
+	require.NoError(t, err)
+	for _, kind := range []usageQueryKind{usageQueryKindToken, usageQueryKindActivity} {
+		capture := &sessionExportQueryCapture{inner: cache.db}
+		_, err := usageRollupWindowSessions(t.Context(), capture, zone.id, filter, kind)
+		require.NoError(t, err)
+		for _, query := range capture.queries {
+			rows, err := cache.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query.query, query.args...)
+			require.NoError(t, err)
+			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+			require.NoError(t, rows.Close())
+			// A zone-index search still visits every unrelated install. Bounded
+			// discovery must seek dates first, then look up matching install IDs.
+			assert.NotContains(t, plan, "timezone_id=?", plan)
+			assert.NotContains(t, plan, "SCAN i", plan)
+			assert.Contains(t, plan, "local_date>? AND local_date<?", plan)
+		}
+	}
+}
+
+func TestUsageJournaledWindowDiscoveryBoundaries(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "inside")
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "inside", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T00:30:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
+	seedUsageSnapshotSession(t, database, "earlier", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	seedUsageSnapshotSession(t, database, "later", "project-b", "2026-08-10T10:00:00Z", 0, 20, "model-a")
+	insertSession(t, database, "undated", "project")
+	insertSession(t, database, "activity-only", "project")
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
+		{SessionID: "undated", Ordinal: 0, Role: "assistant"},
+		{SessionID: "activity-only", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-12T10:00:00Z"},
+	}))
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, from, to string
+		kind           usageQueryKind
+		want           []string
+	}{
+		{"daily and exceptions", "2026-08-10", "2026-08-10", usageQueryKindToken, []string{"inside", "earlier", "later"}},
+		{"second day", "2026-08-11", "2026-08-11", usageQueryKindToken, []string{"inside"}},
+		{"lower bound", "2026-08-11", "", usageQueryKindToken, []string{"inside"}},
+		{"upper bound", "", "2026-08-10", usageQueryKindToken, []string{"inside", "earlier", "later"}},
+		{"activity", "2026-08-12", "2026-08-12", usageQueryKindActivity, []string{"activity-only"}},
+		{"activity upper bound", "", "2026-08-10", usageQueryKindActivity, []string{"inside", "earlier", "later", "undated"}},
+		{"empty", "2026-08-13", "2026-08-13", usageQueryKindActivity, nil},
+		{"unbounded", "", "", usageQueryKindActivity, []string{"inside", "earlier", "later", "activity-only", "undated"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter.From, filter.To = tc.from, tc.to
+			got, err := usageRollupWindowSessions(t.Context(), cache.db, zone.id, filter, tc.kind)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
 
 func seedJournaledUsage(t *testing.T, database *DB, id string) {
 	t.Helper()

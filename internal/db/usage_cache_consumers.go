@@ -156,7 +156,7 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	}
 	timings.fill = time.Since(fillStarted)
 	snapshot.dropDeleted(fills)
-	resolver := export.NewPricingResolver(snapshot.PricingRows)
+	resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
 	report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
 	installs, metrics, err := cache.rollup.Ensure(ctx, snapshot, fills, resolver)
 	if err != nil {
@@ -198,7 +198,7 @@ func (db *DB) queryUsageRollups(
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
 		}
 		snapshot := prepared.snapshot
-		resolver := export.NewPricingResolver(snapshot.PricingRows)
+		resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
 		cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {

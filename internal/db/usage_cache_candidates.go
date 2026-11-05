@@ -76,6 +76,7 @@ type usageQuerySnapshot struct {
 	Intervals       []usageQueryInterval
 	CursorHighWater int64
 	PricingRows     []export.EffectivePricingRow
+	PricingDigest   string
 	PricingIdentity string
 	location        *time.Location
 }
@@ -189,10 +190,11 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 		return usageQuerySnapshot{}, err
 	}
 
-	snapshot.PricingIdentity, err = usagePricingIdentity(snapshot.PricingRows)
+	snapshot.PricingDigest, err = export.EffectivePricingDigest(snapshot.PricingRows)
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
+	snapshot.PricingIdentity = usagePricingIdentityWithDigest(snapshot.PricingDigest)
 
 	if err := capture(ctx, tx, &snapshot); err != nil {
 		return usageQuerySnapshot{}, err
@@ -326,6 +328,46 @@ func loadUsageQuerySessionRecords(
 	const batchSize = 900
 	records := make([]usageQuerySessionRecord, 0, len(candidateIDs))
 	filterWhere, filterArgs := filter.appendUsageSessionFilterClauses("1=1", nil)
+	var record usageQuerySessionRecord
+	var passes, automated, hasTotalOutput, hasPeakContext int
+	// Keep each expression beside its scan target. Window reads select only
+	// the shared metadata needed for attribution and archive-side filters.
+	columns := []struct {
+		expression string
+		target     any
+		window     bool
+	}{
+		{"s.id", &record.session.ID, true},
+		{"s.project", &record.session.Project, true},
+		{"s.group_key", &record.session.GroupKey, true},
+		{"COALESCE(s.session_name, '')", &record.session.SessionName, true},
+		{"s.machine", &record.session.Machine, true},
+		{"s.agent", &record.session.Agent, true},
+		{"COALESCE(s.git_branch, '')", &record.session.GitBranch, false},
+		{"COALESCE(s.created_at, '')", &record.session.CreatedAt, false},
+		{"COALESCE(s.started_at, '')", &record.session.StartedAt, true},
+		{"COALESCE(s.ended_at, '')", &record.session.EndedAt, false},
+		{"COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id)", &record.session.DisplayName, true},
+		{"s.user_message_count", &record.session.UserMessageCount, false},
+		{"s.total_output_tokens", &record.session.TotalOutputTokens, false},
+		{"s.peak_context_tokens", &record.session.PeakContextTokens, false},
+		{"COALESCE(s.has_total_output_tokens, 0)", &hasTotalOutput, false},
+		{"COALESCE(s.has_peak_context_tokens, 0)", &hasPeakContext, false},
+		{"COALESCE(s.is_automated, 0)", &automated, false},
+		{"COALESCE(s.termination_status, '')", &record.session.TerminationStatus, false},
+		{"CASE WHEN (" + filterWhere + ") THEN 1 ELSE 0 END", &passes, true},
+		{"COALESCE(s.sync_marker, '')", &record.version.SyncMarker, false},
+		{"COALESCE(s.transcript_revision, '0')", &record.version.TranscriptRevision, false},
+	}
+	var expressions []string
+	var targets []any
+	for _, column := range columns {
+		if !narrow || column.window {
+			expressions = append(expressions, column.expression)
+			targets = append(targets, column.target)
+		}
+	}
+	projection := strings.Join(expressions, ", ")
 	for start := 0; start < len(candidateIDs); start += batchSize {
 		if err := func() error {
 			end := min(start+batchSize, len(candidateIDs))
@@ -335,25 +377,6 @@ func loadUsageQuerySessionRecords(
 			for i, id := range ids {
 				placeholders[i] = "?"
 				idArgs[i] = id
-			}
-			projection := `
-			s.id, s.project, s.group_key, COALESCE(s.session_name, ''), s.machine, s.agent, COALESCE(s.git_branch, ''),
-			COALESCE(s.created_at, ''), COALESCE(s.started_at, ''),
-			COALESCE(s.ended_at, ''),
-			COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''),
-			         NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id),
-			s.user_message_count, s.total_output_tokens, s.peak_context_tokens,
-			COALESCE(s.has_total_output_tokens, 0),
-			COALESCE(s.has_peak_context_tokens, 0),
-			COALESCE(s.is_automated, 0),
-			COALESCE(s.termination_status, ''),
-			CASE WHEN (` + filterWhere + `) THEN 1 ELSE 0 END,
-			COALESCE(s.sync_marker, ''), COALESCE(s.transcript_revision, '0')`
-			if narrow {
-				projection = `s.id, s.project, s.group_key, COALESCE(s.session_name, ''), s.machine, s.agent,
-				COALESCE(s.started_at, ''),
-				COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id),
-				CASE WHEN (` + filterWhere + `) THEN 1 ELSE 0 END`
 			}
 			query := `SELECT ` + projection + `
 		FROM sessions s
@@ -365,22 +388,7 @@ func loadUsageQuerySessionRecords(
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var record usageQuerySessionRecord
-				var passes, automated, hasTotalOutput, hasPeakContext int
-				targets := []any{&record.session.ID, &record.session.Project, &record.session.GroupKey, &record.session.SessionName,
-					&record.session.Machine, &record.session.Agent,
-					&record.session.GitBranch, &record.session.CreatedAt,
-					&record.session.StartedAt, &record.session.EndedAt,
-					&record.session.DisplayName, &record.session.UserMessageCount,
-					&record.session.TotalOutputTokens,
-					&record.session.PeakContextTokens,
-					&hasTotalOutput, &hasPeakContext,
-					&automated, &record.session.TerminationStatus, &passes,
-					&record.version.SyncMarker, &record.version.TranscriptRevision,
-				}
-				if narrow {
-					targets = []any{&record.session.ID, &record.session.Project, &record.session.GroupKey, &record.session.SessionName, &record.session.Machine, &record.session.Agent, &record.session.StartedAt, &record.session.DisplayName, &passes}
-				}
+				record = usageQuerySessionRecord{}
 				if err := rows.Scan(targets...); err != nil {
 					return fmt.Errorf("scanning usage candidate metadata: %w", err)
 				}
