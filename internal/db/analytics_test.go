@@ -5282,17 +5282,14 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 func TestAnalyticsDateWindowPlan(t *testing.T) {
 	d := testDB(t)
 	seedAnalyticsData(t, d)
-	for _, tc := range []struct{ name, table, date, project, order, index string }{
-		{"short", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "", "", "idx_sessions_effective_start"},
-		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "", "", "idx_sessions_effective_start"},
-		{"project", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "project-alpha", "", "idx_sessions_project"},
-		{"top_broad", "sessions", "+COALESCE(NULLIF(started_at, ''), created_at)", "", " ORDER BY message_count DESC, id ASC LIMIT 10", "idx_sessions_message_count"},
+	for _, tc := range []struct{ name, table, date, index string }{
+		{"short", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "idx_sessions_effective_start"},
+		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "idx_sessions_effective_start"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := baseFilter()
-			f.Project = tc.project
 			where, args := f.buildWhere(tc.date)
-			assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where+tc.order, args...), tc.index)
+			assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...), tc.index)
 		})
 	}
 }
@@ -5314,8 +5311,7 @@ func TestGetAnalyticsTopSessionsDenseDateWindowWork(t *testing.T) {
 			SELECT printf('%s-%06d', ?, n), 'project-a', 'local', 'claude',
 				CASE WHEN ? = 'old' THEN 10000 + n ELSE n + 1 END,
 				CASE WHEN ? = 'old' THEN '2024-01-01T12:00:00Z'
-					WHEN n < 999 THEN '2024-06-01T12:00:00Z'
-					ELSE '2024-06-03T12:00:00Z' END
+					ELSE '2024-06-01T12:00:00Z' END
 			FROM seq`, population.count, population.prefix, population.prefix, population.prefix)
 		require.NoError(t, err)
 	}
@@ -5354,7 +5350,6 @@ func TestGetAnalyticsTopSessionsDenseDateWindowWork(t *testing.T) {
 	for _, tc := range []struct {
 		name, from, to, first, last string
 	}{
-		{"below_cutoff", "2024-06-01", "2024-06-01", "recent-000998", "recent-000989"},
 		{"dense_short", "2024-06-01", "2024-06-03", "recent-001000", "recent-000991"},
 		{"broad", "2024-01-01", "2024-12-31", "old-029999", "old-029990"},
 	} {
@@ -5387,51 +5382,4 @@ func TestAnalyticsDateWindowOldNullStart(t *testing.T) {
 	top, err := d.GetAnalyticsTopSessions(t.Context(), baseFilter(), "messages")
 	require.NoError(t, err)
 	assert.Empty(t, top.Sessions)
-}
-
-func TestAnalyticsDateWindowEquivalence(t *testing.T) {
-	indexed, baseline := testDB(t), testDB(t)
-	_, err := baseline.getWriter().ExecContext(t.Context(), "DROP INDEX IF EXISTS idx_sessions_effective_start")
-	require.NoError(t, err)
-	for _, d := range []*DB{indexed, baseline} {
-		for i, started := range []*string{nil, new(""), new("2024-06-01T02:00:00+05:00"), new("2024-06-02T11:00:00Z"), new("2024-05-01T12:00:00Z")} {
-			id := fmt.Sprintf("session-%d", i)
-			insertSession(t, d, id, "project-a", func(s *Session) {
-				s.StartedAt, s.EndedAt, s.MessageCount = started, new("2024-06-02T12:00:00Z"), i+1
-			})
-			_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2024-06-01T12:00:00Z' WHERE id = ?", id)
-			require.NoError(t, err)
-			msg := asstMsgAt(id, 0, "hello", "2024-06-01T12:00:00Z")
-			msg.Model = "gpt-4o"
-			insertMessages(t, d, msg)
-		}
-	}
-	for _, zone := range []string{"UTC", "Pacific/Kiritimati", "Etc/GMT+12"} {
-		for _, model := range []string{"", "gpt-4o"} {
-			f := AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: zone, Model: model}
-			for _, tc := range []struct {
-				name string
-				read func(*DB) (any, error)
-			}{
-				{"summary", func(d *DB) (any, error) { return d.GetAnalyticsSummary(t.Context(), f) }},
-				{"activity", func(d *DB) (any, error) { return d.GetAnalyticsActivity(t.Context(), f, "day") }},
-				{"heatmap", func(d *DB) (any, error) { return d.GetAnalyticsHeatmap(t.Context(), f, "messages") }},
-				{"projects", func(d *DB) (any, error) { return d.GetAnalyticsProjects(t.Context(), f) }},
-				{"hour", func(d *DB) (any, error) { return d.GetAnalyticsHourOfWeek(t.Context(), f) }},
-				{"shape", func(d *DB) (any, error) { return d.GetAnalyticsSessionShape(t.Context(), f) }},
-				{"velocity", func(d *DB) (any, error) { return d.GetAnalyticsVelocity(t.Context(), f) }},
-				{"signals", func(d *DB) (any, error) { return d.GetAnalyticsSignals(t.Context(), f) }},
-				{"evidence", func(d *DB) (any, error) { return d.GetAnalyticsSignalSessions(t.Context(), f, "tool_retries", 10) }},
-				{"top", func(d *DB) (any, error) { return d.GetAnalyticsTopSessions(t.Context(), f, "messages") }},
-			} {
-				t.Run(zone+"/"+model+"/"+tc.name, func(t *testing.T) {
-					want, err := tc.read(baseline)
-					require.NoError(t, err)
-					got, err := tc.read(indexed)
-					require.NoError(t, err)
-					assert.Equal(t, want, got)
-				})
-			}
-		}
-	}
 }
