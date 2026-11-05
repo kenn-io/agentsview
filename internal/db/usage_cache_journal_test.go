@@ -26,21 +26,19 @@ func TestUsageJournaledWindowDiscoverySeeksDates(t *testing.T) {
 	cache := warmJournaledUsage(t, database, filter)
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
 	require.NoError(t, err)
-	for _, kind := range []usageQueryKind{usageQueryKindToken, usageQueryKindActivity} {
-		capture := &sessionExportQueryCapture{inner: cache.db}
-		_, err := usageRollupWindowSessions(t.Context(), capture, zone.id, filter, kind)
+	capture := &sessionExportQueryCapture{inner: cache.db}
+	_, err = usageRollupWindowSessions(t.Context(), capture, zone.id, filter)
+	require.NoError(t, err)
+	for _, query := range capture.queries {
+		rows, err := cache.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query.query, query.args...)
 		require.NoError(t, err)
-		for _, query := range capture.queries {
-			rows, err := cache.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query.query, query.args...)
-			require.NoError(t, err)
-			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
-			require.NoError(t, rows.Close())
-			// A zone-index search still visits every unrelated install. Bounded
-			// discovery must seek dates first, then look up matching install IDs.
-			assert.NotContains(t, plan, "timezone_id=?", plan)
-			assert.NotContains(t, plan, "SCAN i", plan)
-			assert.Contains(t, plan, "local_date>? AND local_date<?", plan)
-		}
+		plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+		require.NoError(t, rows.Close())
+		// A zone-index search still visits every unrelated install. Bounded
+		// discovery must seek dates first, then look up matching install IDs.
+		assert.NotContains(t, plan, "timezone_id=?", plan)
+		assert.NotContains(t, plan, "SCAN i", plan)
+		assert.Contains(t, plan, "local_date>? AND local_date<?", plan)
 	}
 }
 
@@ -62,21 +60,18 @@ func TestUsageJournaledWindowDiscoveryBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name, from, to string
-		kind           usageQueryKind
 		want           []string
 	}{
-		{"daily and exceptions", "2026-08-10", "2026-08-10", usageQueryKindToken, []string{"inside", "earlier", "later"}},
-		{"second day", "2026-08-11", "2026-08-11", usageQueryKindToken, []string{"inside"}},
-		{"lower bound", "2026-08-11", "", usageQueryKindToken, []string{"inside"}},
-		{"upper bound", "", "2026-08-10", usageQueryKindToken, []string{"inside", "earlier", "later"}},
-		{"activity", "2026-08-12", "2026-08-12", usageQueryKindActivity, []string{"activity-only"}},
-		{"activity upper bound", "", "2026-08-10", usageQueryKindActivity, []string{"inside", "earlier", "later", "undated"}},
-		{"empty", "2026-08-13", "2026-08-13", usageQueryKindActivity, nil},
-		{"unbounded", "", "", usageQueryKindActivity, []string{"inside", "earlier", "later", "activity-only", "undated"}},
+		{"daily and exceptions", "2026-08-10", "2026-08-10", []string{"inside", "earlier", "later"}},
+		{"second day", "2026-08-11", "2026-08-11", []string{"inside"}},
+		{"lower bound", "2026-08-11", "", []string{"inside"}},
+		{"upper bound", "", "2026-08-10", []string{"inside", "earlier", "later"}},
+		{"activity only", "2026-08-12", "2026-08-12", nil},
+		{"unbounded", "", "", []string{"inside", "earlier", "later", "activity-only", "undated"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			filter.From, filter.To = tc.from, tc.to
-			got, err := usageRollupWindowSessions(t.Context(), cache.db, zone.id, filter, tc.kind)
+			got, err := usageRollupWindowSessions(t.Context(), cache.db, zone.id, filter)
 			require.NoError(t, err)
 			assert.ElementsMatch(t, tc.want, got)
 		})
@@ -272,9 +267,6 @@ func TestUsageJournaledForeignInstall(t *testing.T) {
 				require.NoError(t, err)
 			}
 			_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
-			require.Error(t, err)
-			assert.True(t, usageCacheReadShouldRecapture(err))
-			_, err = cache.usageRollupActivityQuery(t.Context(), prepared, filter)
 			require.Error(t, err)
 			assert.True(t, usageCacheReadShouldRecapture(err))
 			assertJournaledUsageLegacy(t, database, filter)
@@ -650,46 +642,4 @@ func TestUsageJournaledUntrustedReadsSharePass(t *testing.T) {
 		assert.True(t, prepared.journaled)
 	}
 	assert.EqualValues(t, 1, starts.Load())
-}
-
-func TestUsageJournaledRetryExhaustionReadsArchive(t *testing.T) {
-	for _, consumer := range []string{"daily", "ranking", "counts"} {
-		t.Run(consumer, func(t *testing.T) {
-			database := testDB(t)
-			seedJournaledUsage(t, database, "session")
-			filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC", SkipSessionCounts: true}
-			warmJournaledUsage(t, database, filter)
-			other, err := OpenIsolatedContext(t.Context(), database.Path())
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, other.Close()) })
-			reads := 0
-			filter.Progress = func(phase string) {
-				if phase != "Reading cached daily totals" {
-					return
-				}
-				reads++
-				// Another reader installs a newer snapshot after each preparation.
-				require.NoError(t, other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: reads, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
-				_, err := other.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
-				require.NoError(t, err)
-			}
-			switch consumer {
-			case "daily":
-				got, err := database.GetDailyUsage(t.Context(), filter)
-				require.NoError(t, err)
-				assert.Equal(t, 250, got.Totals.InputTokens)
-			case "ranking":
-				got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-				require.NoError(t, err)
-				want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
-				require.NoError(t, err)
-				assert.Equal(t, want, got)
-			case "counts":
-				got, err := database.GetUsageSessionCounts(t.Context(), filter)
-				require.NoError(t, err)
-				assert.Equal(t, UsageSessionCounts{Total: 1, ByProject: map[string]int{"project": 1}, ByAgent: map[string]int{"codex": 1}}, got)
-			}
-			assert.Equal(t, 3, reads, "each cache read must lose before falling back to the archive")
-		})
-	}
 }

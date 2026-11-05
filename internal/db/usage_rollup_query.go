@@ -359,10 +359,10 @@ func readUsageRollupExceptions(
 }
 
 func (cache *usageCache) usageRollupActivityQuery(
-	ctx context.Context, prepared usagePreparedWindow, filter UsageFilter,
+	ctx context.Context, snapshot usageQuerySnapshot, filter UsageFilter,
+	installs map[string]usageRollupInstall,
 ) (map[string]UsageSessionInfo, error) {
-	snapshot := prepared.snapshot
-	if !prepared.journaled && len(snapshot.Sessions) == 0 {
+	if len(snapshot.Sessions) == 0 {
 		return make(map[string]UsageSessionInfo), nil
 	}
 	conn, err := cache.db.Conn(ctx)
@@ -381,7 +381,7 @@ func (cache *usageCache) usageRollupActivityQuery(
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
-	timezoneID, err := verifyPreparedUsageRollup(ctx, conn, identity.Key, prepared)
+	timezoneID, err := verifyUsageRollupQuery(ctx, conn, identity.Key, snapshot, installs)
 	if err != nil {
 		return nil, err
 	}

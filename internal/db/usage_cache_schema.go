@@ -232,8 +232,6 @@ CREATE TABLE usage_activity_rollups (
     user_message_count INTEGER NOT NULL,
     PRIMARY KEY (rollup_install_id, local_date, model)
 ) WITHOUT ROWID;
-CREATE INDEX usage_activity_rollups_window
-    ON usage_activity_rollups (local_date, rollup_install_id);
 CREATE TABLE usage_rollup_exceptions (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
@@ -309,6 +307,9 @@ type usageCacheManager struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 
+	// reads admits report attempts; see admitUsageRead.
+	reads sync.RWMutex
+
 	mu          sync.Mutex
 	generations map[string]*usageCache
 	currentID   string
@@ -323,6 +324,18 @@ func newUsageCacheManager(archivePath string) *usageCacheManager {
 		ctx:         ctx,
 		cancel:      cancel,
 	}
+}
+
+// admitUsageRead shares the cache among report attempts. An exclusive attempt
+// waits for in-flight reports and holds off new ones, so their installs cannot
+// replace its prepared rollups before it reads them.
+func (m *usageCacheManager) admitUsageRead(exclusive bool) func() {
+	if exclusive {
+		m.reads.Lock()
+		return m.reads.Unlock
+	}
+	m.reads.RLock()
+	return m.reads.RUnlock
 }
 
 func (m *usageCacheManager) attachArchive(archive *DB) {

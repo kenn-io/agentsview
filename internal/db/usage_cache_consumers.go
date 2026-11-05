@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -183,63 +182,63 @@ func (db *DB) queryUsageRollups(
 	if memo != nil {
 		key = usageWindowKey(filter, kind, cursor)
 	}
-	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
+	// Reports can keep replacing each other's installs during sync writes. The
+	// final attempt holds off other reports here so it can finish.
+	for attempt := 1; attempt <= usageFillMaxAttempts+1; attempt++ {
 		if attempt > 1 {
 			memo.drop(key)
 		}
-		started := time.Now()
-		var prepared usagePreparedWindow
-		var err error
-		if attempt == 1 {
-			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
-		} else {
-			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+		snapshot, facts, resolver, err := db.queryUsageRollupsOnce(ctx, filter, kind, cursor, attempt, key)
+		if !usageCacheReadShouldRecapture(err) {
+			return snapshot, facts, resolver, err
 		}
-		if err != nil {
-			if errors.Is(err, errUsageCacheSourceChanged) {
-				lastErr = err
-				continue
-			}
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
-		}
-		snapshot := prepared.snapshot
-		resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
-		cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
-		if err != nil {
-			if errors.Is(err, errUsageCacheSourceChanged) {
-				lastErr = err
-				continue
-			}
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
-		}
-		readStarted := time.Now()
-		if filter.Progress != nil {
-			filter.Progress("Reading cached daily totals")
-		}
-		var facts usageFactsResult
-		var queryErr error
-		if kind == usageQueryKindActivity {
-			var matching map[string]UsageSessionInfo
-			matching, queryErr = cache.usageRollupActivityQuery(ctx, prepared, filter)
-			facts.MatchingSessions = matching
-		} else {
-			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver)
-		}
-		timings := prepared.timings
-		timings.read = time.Since(readStarted)
-		if queryErr == nil {
-			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
-			release()
-			timings.logIfSlow(started)
-			return snapshot, facts, resolver, nil
-		}
-		release()
-		if !usageCacheReadShouldRecapture(queryErr) {
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, queryErr
-		}
-		lastErr = queryErr
+		lastErr = err
 	}
 	return usageQuerySnapshot{}, usageFactsResult{}, nil, lastErr
+}
+
+// queryUsageRollupsOnce prepares one window and reads its cached totals.
+func (db *DB) queryUsageRollupsOnce(
+	ctx context.Context, filter UsageFilter, kind usageQueryKind,
+	cursor bool, attempt int, key string,
+) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
+	defer db.usageCache.admitUsageRead(attempt > usageFillMaxAttempts)()
+	started := time.Now()
+	var prepared usagePreparedWindow
+	var err error
+	if attempt == 1 {
+		prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
+	} else {
+		prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+	}
+	if err != nil {
+		return usageQuerySnapshot{}, usageFactsResult{}, nil, err
+	}
+	snapshot := prepared.snapshot
+	resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
+	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
+	if err != nil {
+		return usageQuerySnapshot{}, usageFactsResult{}, nil, err
+	}
+	defer release()
+	readStarted := time.Now()
+	if filter.Progress != nil {
+		filter.Progress("Reading cached daily totals")
+	}
+	var facts usageFactsResult
+	if kind == usageQueryKindActivity {
+		facts.MatchingSessions, err = cache.usageRollupActivityQuery(ctx, snapshot, filter, prepared.installs)
+	} else {
+		facts, err = cache.usageRollupQuery(ctx, prepared, filter, resolver)
+	}
+	if err != nil {
+		return usageQuerySnapshot{}, usageFactsResult{}, nil, err
+	}
+	timings := prepared.timings
+	timings.read = time.Since(readStarted)
+	cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
+	timings.logIfSlow(started)
+	return snapshot, facts, resolver, nil
 }
 
 // GetTopSessionsByCost returns filtered sessions ranked by cost or tokens.
@@ -248,9 +247,6 @@ func (db *DB) GetTopSessionsByCost(
 ) ([]TopSessionEntry, error) {
 	snapshot, facts, _, err := db.queryUsageRollups(
 		ctx, filter, usageQueryKindToken, false)
-	if usageCacheReadShouldRecapture(err) {
-		return db.getTopSessionsByCostLegacy(ctx, filter, limit)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -327,9 +323,6 @@ func (db *DB) GetUsageSessionCounts(
 ) (UsageSessionCounts, error) {
 	_, facts, _, err := db.queryUsageRollups(
 		ctx, filter, usageQueryKindToken, false)
-	if usageCacheReadShouldRecapture(err) {
-		return db.getUsageSessionCountsLegacy(ctx, filter)
-	}
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}

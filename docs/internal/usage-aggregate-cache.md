@@ -128,11 +128,12 @@ whether a pass can vouch for the current rates.
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty
 windows run the same checks. A conflicting install or invalidated dedup peer
-uses the existing bounded recapture loop. When cache attempts run out, daily
-usage, ranking, and billed-session counts read the archive directly. Activity
-matching counts keep using the full cache verification path. Warm window reads
-load filter and attribution metadata, including the display fields shared with
-Top sessions.
+recaptures the request. Three attempts share the cache with other reports in the
+process. The final attempt waits for those in flight and holds off new ones
+until it reads, so concurrent installs cannot keep replacing its rollups during
+sync writes. Activity matching counts always take the full cache verification
+path. Warm window reads load filter and attribution metadata, including the
+display fields shared with Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor
@@ -150,8 +151,8 @@ timestamp.
 mutable timestamp fields and the value can decrease. Installation compares the
 complete source fingerprint after extraction rather than ordering marker values.
 A hard-deleted session is dropped as newer state. Other moving-source or
-archive-busy races retry at most three times. Exhausted cache freshness retries
-take the archive path described above; other failures return an error.
+archive-busy races retry at most three times, then fail instead of returning
+stale usage.
 
 Request cancellation detaches the waiter from shared fill work. The fill keeps
 running so retry storms converge. Rollup requests stop dispatching batches when

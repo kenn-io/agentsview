@@ -752,10 +752,13 @@ exact baked metadata, per-session pricing identity, resolved rate hashes, and
 Cursor high-water mark. With a trusted claim, refresh journaled sessions and
 invalidated installs, discover window sessions through date indexes, and verify
 coverage and concurrent installs in the pinned cache transaction. A timezone
-without a claim starts a coverage pass when backfill is enabled. A result is no
-older than the archive snapshot captured when the read began, and may be newer
-for a session whose facts were refilled meanwhile. A session confirmed deleted
-during fill is dropped from the request. `cached_at` is diagnostic only.
+without a claim starts a coverage pass when backfill is enabled. A conflicting
+install recaptures the request; the final attempt holds off the process's other
+usage reads so it can finish. Do not answer from the wide-row archive scans,
+which are test oracles. A result is no older than the archive snapshot captured
+when the read began, and may be newer for a session whose facts were refilled
+meanwhile. A session confirmed deleted during fill is dropped from the request.
+`cached_at` is diagnostic only.
 
 The layers are kept apart so a live archive cannot veto a read. A fill reads one
 session's facts and that session's source version inside a single archive read

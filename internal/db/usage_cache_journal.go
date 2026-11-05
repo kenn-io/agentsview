@@ -94,7 +94,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
-	window, err := usageRollupWindowSessions(ctx, tx, zone.id, filter, kind)
+	window, err := usageRollupWindowSessions(ctx, tx, zone.id, filter)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
@@ -230,18 +230,14 @@ func usageSessionsWithoutRollup(ctx context.Context, q sessionExportQuerier, tim
 	return ids, rows.Err()
 }
 
-func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, timezoneID int64, filter UsageFilter, kind usageQueryKind) ([]string, error) {
+func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, timezoneID int64, filter UsageFilter) ([]string, error) {
 	from, to := usageRollupDateBounds(usageQuerySnapshot{Intervals: usageQueryIntervals(filter)})
 	query := `SELECT session_id FROM usage_rollup_installs WHERE timezone_id=?`
 	args := []any{timezoneID}
 	if from != "" || to != "" {
-		tables := []string{"usage_daily_rollups", "usage_rollup_exceptions"}
-		if kind == usageQueryKindActivity {
-			tables = []string{"usage_activity_rollups"}
-		}
 		var branches []string
 		args = nil
-		for _, table := range tables {
+		for _, table := range []string{"usage_daily_rollups", "usage_rollup_exceptions"} {
 			branch := `SELECT rollup_install_id FROM ` + table + ` WHERE 1=1`
 			if from != "" {
 				branch += ` AND local_date>=?`
@@ -253,8 +249,8 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 			}
 			branches = append(branches, branch)
 		}
-		// CROSS JOIN keeps date seeks outermost even for a single activity
-		// branch, so discovery never enumerates unrelated installs in the zone.
+		// CROSS JOIN keeps date seeks outermost, so discovery never enumerates
+		// unrelated installs in the zone.
 		// NOT INDEXED selects install row IDs instead of scanning a zone index.
 		query = `SELECT DISTINCT i.session_id FROM (` + strings.Join(branches, ` UNION ALL `) + `) r
  CROSS JOIN usage_rollup_installs i NOT INDEXED ON i.id=r.rollup_install_id WHERE i.timezone_id=?`
