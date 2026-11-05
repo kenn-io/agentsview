@@ -262,6 +262,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_file_path
 -- Analytics indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_started
     ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_effective_start
+    ON sessions(COALESCE(NULLIF(started_at, ''), created_at));
 CREATE INDEX IF NOT EXISTS idx_sessions_message_count
     ON sessions(message_count);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_message_count
