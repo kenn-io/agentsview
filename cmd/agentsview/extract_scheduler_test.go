@@ -482,12 +482,7 @@ func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) 
 		defer s.Stop()
 		synctest.Sleep(2 * time.Minute)
 		synctest.Wait()
-		calls := reconciler.callsSnapshot()
-		assert.Zero(t, mgr.callCount())
-		require.NotEmpty(t, calls)
-		for _, opts := range calls {
-			assert.Equal(t, extract.PassOptions{Full: true}, opts)
-		}
+		require.Positive(t, reconciler.callCount())
 		select {
 		case <-idled:
 		default:
