@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
+import { events } from "../../stores/events.svelte.js";
 import { ApiError } from "../../api/runtime.js";
 import { registerShortcuts } from "../../utils/keyboard.js";
 
@@ -49,6 +50,7 @@ const {
     clear: vi.fn(),
     resetSort: vi.fn(),
     retry: vi.fn(),
+    refresh: vi.fn(),
     setMode: vi.fn(),
     setSort: vi.fn(),
     range: { mode: "relative" as const, days: 0 },
@@ -171,6 +173,26 @@ async function enterSearchQuery(value = "match") {
 }
 
 describe("CommandPalette", () => {
+  it("refreshes the open search on committed changes and releases its subscription", async () => {
+    let deliver: ((event: { scope: "sessions" }) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const subscribe = vi.spyOn(events, "subscribeDebounced").mockImplementation((listener) => {
+      deliver = listener;
+      return unsubscribe;
+    });
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      expect(subscribe).toHaveBeenCalledOnce();
+      deliver!({ scope: "sessions" });
+      expect(mockSearchStore.refresh).toHaveBeenCalledOnce();
+    } finally {
+      await unmount(component);
+      subscribe.mockRestore();
+    }
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     document.body.replaceChildren();

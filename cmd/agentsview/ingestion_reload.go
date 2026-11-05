@@ -256,15 +256,33 @@ func (d *daemonIngestion) restoreCollection() error {
 	return nil
 }
 
-func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
+func (d *daemonIngestion) acknowledgeSync() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if complete && !d.stopped && d.pending {
+	if !d.stopped && d.pending {
 		d.pending = false
 		close(d.resumed)
 	}
+}
+
+func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
+	if complete {
+		d.acknowledgeSync()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.catchup = nil
 	close(done)
+}
+
+func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
+	return func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		stats, err := runner(ctx, progress)
+		if err == nil && ctx.Err() == nil && stats.ProcessingComplete() {
+			d.acknowledgeSync()
+		}
+		return stats, err
+	}
 }
 
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {

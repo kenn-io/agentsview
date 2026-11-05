@@ -638,10 +638,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if engine != nil {
 		srvOpts = append(srvOpts, server.WithArchiveSources(attachedSources))
 		srvOpts = append(srvOpts, server.WithLocalSyncRunner(
-			withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock)),
+			ingestion.foregroundSync(withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock))),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			server.LocalResyncRunner(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database)))),
+			server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database))))),
 		))
 	}
 	if memoryRefresh != nil {

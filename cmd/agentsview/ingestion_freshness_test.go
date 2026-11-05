@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,4 +100,61 @@ func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
 			assert.Contains(t, body, "hello from overnight")
 		})
 	}
+}
+
+func TestForegroundSyncSettlesFailedIdleRecovery(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	var denied atomic.Bool
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if denied.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("<Error><Code>AccessDenied</Code></Error>"))
+			return
+		}
+		_, _ = w.Write([]byte("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"))
+	}))
+	t.Cleanup(remote.Close)
+	t.Setenv("AWS_S3_ENDPOINT", remote.URL)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+	t.Setenv("AWS_REGION", "us-east-1")
+	cfg.AgentDirs[parser.AgentClaude] = append(cfg.AgentDirs[parser.AgentClaude], "s3://bucket/sessions")
+	database, lock := openTestWriteDB(t, cfg)
+	engine := agentsync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	denied.Store(true)
+	require.False(t, ingestion.EnsureFresh(t.Context()))
+	ingestion.applying.Wait()
+	require.True(t, ingestion.Pending())
+	denied.Store(false)
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, c config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		var wire bytes.Buffer
+		workerErr := runSyncWorkerContext(ctx, c, request, &wire)
+		result, err := readWorkerResult(&wire, nil)
+		require.NoError(t, err)
+		return result, workerErr
+	})
+	defer restore()
+	runner := server.LocalSyncRunner(func(ctx context.Context, _ func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		stats, _, err := runForegroundWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, nil)
+		return stats, err
+	})
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, runner))))
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
+	require.NoError(t, err)
+	request.Header.Set("Origin", ts.URL)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Contains(t, string(body), "event: done", "the real worker must finish successfully")
+	t.Logf("pending after successful worker=%v body=%s", ingestion.Pending(), body)
+	assert.False(t, ingestion.Pending(), "a complete manual pass should settle the idle obligation")
 }

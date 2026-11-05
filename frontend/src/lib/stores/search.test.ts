@@ -119,6 +119,29 @@ describe("SearchStore", () => {
     );
   });
 
+  it("finishes a slow search before refreshing committed changes", async () => {
+    const store = createSearchStore(memoryStorage());
+    const first = deferred<SearchResponse>();
+    searchService.getApiV1Search.mockReturnValue(first.promise as never);
+    store.search("overnight", "alpha");
+    await runDebounce();
+    const signal = searchService.getApiV1Search.mock.calls[0]![1]!.signal!;
+    for (let index = 0; index < 3; index++) {
+      store.refresh();
+      await runDebounce();
+    }
+    expect(signal.aborted).toBe(false);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+    first.resolve(fullTextResponse("overnight"));
+    await flushMicrotasks();
+    expect(store.results.map((result) => result.session_id)).toEqual(["full-0"]);
+    searchService.getApiV1Search.mockResolvedValue(fullTextResponse("overnight", 0));
+    await runDebounce();
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
+    expect(store.results).toEqual([]);
+    store.clear();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.resetAllMocks();

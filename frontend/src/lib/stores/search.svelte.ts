@@ -142,8 +142,11 @@ export class SearchStore {
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
   private requestVersion = 0;
+  private searchScheduled = false;
+  private refreshPending = false;
 
   private debouncedSearch = debounce((query: string, project: string) => {
+    this.searchScheduled = false;
     void this.executeSearch(query, project);
   }, SEARCH_DEBOUNCE_MS);
 
@@ -165,11 +168,18 @@ export class SearchStore {
       return;
     }
 
+    this.searchScheduled = true;
     this.debouncedSearch(query, this.project);
   }
 
   refresh() {
-    if (this.query.trim()) this.search(this.query, this.project);
+    if (!this.query.trim() || this.searchScheduled) return;
+    if (this.abortController !== null) {
+      this.refreshPending = true;
+      return;
+    }
+    this.searchScheduled = true;
+    this.debouncedSearch(this.query, this.project);
   }
 
   setMode(mode: SearchMode) {
@@ -238,6 +248,8 @@ export class SearchStore {
   }
 
   private cancelInFlight() {
+    this.searchScheduled = false;
+    this.refreshPending = false;
     this.endedEmpty = false;
     this.requestVersion += 1;
     this.abortController?.abort();
@@ -313,6 +325,7 @@ export class SearchStore {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;
         this.abortController = null;
+        if (this.refreshPending) this.refresh();
       }
     }
   }
