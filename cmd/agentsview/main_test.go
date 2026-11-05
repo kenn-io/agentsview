@@ -1008,17 +1008,12 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 	assert.Equal(t, roots, fake.callRoots[1])
 }
 
-func TestStartFileWatcherUsesLoadedSyncInterval(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("sync_interval = '1500ms'\n"), 0o600))
-	cfg, err := config.LoadMinimalFor(config.ScopeServer)
-	require.NoError(t, err)
-	projects := filepath.Join(dir, "projects")
-	require.NoError(t, os.Mkdir(projects, 0o700))
-	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {projects}}
+func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
+	projects := t.TempDir()
+	cfg := config.Config{
+		SyncInterval: 1500 * time.Millisecond,
+		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
+	}
 	calls := make(chan time.Time, 8)
 	stop, open, unwatched, _, _ := startFileWatcher(cfg, nil,
 		func(context.Context, agentsync.WatchBatch) error {

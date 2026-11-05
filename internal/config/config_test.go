@@ -1866,7 +1866,7 @@ func TestLoadFile_SyncInterval(t *testing.T) {
 	}{
 		{name: "absent uses default", data: map[string]any{}, want: 5 * time.Second},
 		{name: "configured", data: map[string]any{"sync_interval": "60s"}, want: time.Minute},
-		{name: "explicit zero disables floor", data: map[string]any{"sync_interval": "0s"}, want: 0},
+		{name: "explicit zero is kept", data: map[string]any{"sync_interval": "0s"}, want: 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadMinimalWithConfig(t, tt.data)
