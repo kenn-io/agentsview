@@ -67,7 +67,8 @@
           ),
       };
     }
-    const s = sessions.sessions.find((s) => s.id === pin.session_id);
+    const row = sessions.byId.get(pin.session_id);
+    const s = row ? sessions.view(row) : undefined;
     return s
       ? {
           project: s.project,

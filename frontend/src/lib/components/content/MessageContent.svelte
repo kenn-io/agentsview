@@ -62,7 +62,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let hasOutputTokens = $derived(message.has_output_tokens ?? message.output_tokens > 0);
   let tokenSummary = $derived(formatTokenUsage(message.context_tokens, hasContextTokens, message.output_tokens, hasOutputTokens));
   let owningSession = $derived(session !== undefined ? session
-    : sessions.sessions.find((s) => s.id === message.session_id) ?? sessions.activeSession);
+    : sessions.byId.get(message.session_id) ?? sessions.activeSession);
 
   const INLINE_TEAMMATE_MESSAGE_RE =
     /<teammate-message\b[^>]*\bteammate_id\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)[^>]*>[\s\S]*?<\/teammate-message\s*>/;
@@ -74,7 +74,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (!s) return "user";
     const all = sessions.sessions;
     if (sessionAncestryMatches(s, all, (ancestor) => ancestor.relationship_type === "subagent")) return "subagent";
-    if (sessionAncestryMatches(s, all, (ancestor) => (ancestor.first_message ?? "").includes("<teammate-message"))) return "teammate";
+    if (sessionAncestryMatches(s, all, (ancestor) => (sessions.view(ancestor).first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
   let roleLabel = $derived.by(() => {

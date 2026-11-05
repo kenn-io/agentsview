@@ -18,6 +18,8 @@ const forkMock = vi.hoisted(() => vi.fn());
 const pinMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const state = vi.hoisted(() => ({
   sessions: [] as Session[],
+  get byId() { return new Map(this.sessions.map((row) => [row.id, row])); },
+  view: (row: Session) => row,
   activeSession: null as Session | null,
   readOnly: false,
   remote: false,

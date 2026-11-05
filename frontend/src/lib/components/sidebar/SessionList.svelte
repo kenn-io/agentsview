@@ -677,7 +677,7 @@
           ) ?? item.group.sessions[0]}
           {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
           {@const groupHasSubagents = children.some(subagentDescendantMatcher(item.group!.sessions))}
-          {@const groupHasTeammates = children.some((s) => s.is_teammate ?? s.first_message?.includes("<teammate-message") ?? false)}
+          {@const groupHasTeammates = children.some((s) => s.is_teammate ?? sessions.view(s).first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem
               session={primary}
