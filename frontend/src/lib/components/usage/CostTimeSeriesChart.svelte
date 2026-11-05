@@ -192,6 +192,7 @@
     // Keep visible shares up to the series limit, then group the remainder.
     const ranked = [...totals.entries()]
       .sort((a, b) => b[1] - a[1]);
+    // Shares use the visible total in this summary.
     const windowTotal = ranked.reduce((sum, [, value]) => sum + value, 0);
     const retained = ranked
       .filter(([, value]) => value > 0 && value >= windowTotal * MIN_SERIES_SHARE)
@@ -260,7 +261,7 @@
   const legendData = $derived(
     usage.colorSummary === usage.timeSeriesSummary ? seriesData : buildSeries(usage.colorSummary),
   );
-  // Plotted series outside the unselected top ten follow it, then Other once.
+  // Series qualifying within the selected summary follow the reference names, then Other once.
   const legendKeys = $derived.by(() => {
     const named = [...new Set([...legendData.keys, ...seriesData.keys])].filter((key) => key !== "__other__");
     return legendData.keys.includes("__other__") || seriesData.keys.includes("__other__") ? [...named, "__other__"] : named;

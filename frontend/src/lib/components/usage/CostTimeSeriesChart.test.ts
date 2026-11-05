@@ -690,6 +690,11 @@ describe("CostTimeSeriesChart", () => {
           mode === "cost" ? `$${value}.00` : String(value),
         );
       }
+      usage.excludedModels = "large";
+      await tick();
+      expect(
+        Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim()),
+      ).toEqual(["boundary", "tiny", "smallest"]);
       unmount(component);
     },
   );
