@@ -26,8 +26,6 @@ var (
 
 // ScanCommitTrailers reads trailers from all reachable commits.
 func ScanCommitTrailers(ctx context.Context, repo string) ([]TrailerCommit, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
 	runner := gitcmd.New()
 	runner.StdoutLimit = 32 << 20
 	// --all includes HEAD from every worktree, including detached worktrees.
