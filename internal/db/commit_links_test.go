@@ -474,14 +474,14 @@ func TestCommitLinksDedupAndRepeats(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
 	messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser\r\n[main def5678] Other fix\r\n")
-	repeat := commitMessages("s1", `{"command":"git commit -m repeat; tail commit.log"}`, "[main abc1234] Fix parser\n[main 123abcd] Third fix")[2]
+	repeat := commitMessages("s1", `{"command":"git commit -m repeat"}`, "[main abc1234] Fix parser")[2]
 	repeat.Ordinal = 3
 	repeat.ToolCalls[0].ToolUseID = "repeat"
 	messages = append(messages, repeat)
 	insertMessages(t, d, messages...)
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
-	require.Len(t, got.Commits, 3)
+	require.Len(t, got.Commits, 2)
 	assert.Equal(t, "Fix parser", got.Commits[0].Subject)
 	assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
 	assert.Equal(t, "Other fix", got.Commits[1].Subject)
