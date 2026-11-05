@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -164,17 +165,11 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newIdleTrackerFixture(t, 20*time.Millisecond)
-		suspensions := 0
-		f.tracker.SetSyncIdle(10*time.Millisecond, func() { suspensions++ })
-
 		done := requireBeginWork(t, f.tracker)
 		f.run(t)
 
 		f.requireNotFiredWithin(t, 35*time.Millisecond,
 			"idle fired while internal work was active")
-		synctest.Wait()
-		assert.Equal(t, 1, suspensions, "outside work permits local suspension while its exit lease remains held")
-
 		done()
 		f.requireFiredWithin(t, 80*time.Millisecond,
 			"idle did not fire after internal work ended")
@@ -223,30 +218,43 @@ func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 }
 
-func TestIdleTrackerSyncSuspensionRepeatsAfterExternalRequests(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		tracker := NewIdleTracker(0, func() { assert.Fail(t, "foreground serve must remain running") })
-		suspended := make(chan struct{}, 4)
-		tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
-		go tracker.Run(ctx)
-		<-suspended
-		for range 2 {
-			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			go func() {
-				defer close(done)
-				tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release }), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
-			}()
-			<-entered
-			time.Sleep(2 * time.Minute)
-			assert.Empty(t, suspended, "an in-flight request keeps local sync active")
-			close(release)
-			<-done
-			time.Sleep(time.Minute)
-			<-suspended
-		}
-	})
+func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testing.T) {
+	for _, outsideWork := range []bool{false, true} {
+		t.Run(fmt.Sprintf("outside_work=%v", outsideWork), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				tracker := NewIdleTracker(0, func() { assert.Fail(t, "foreground serve must remain running") })
+				suspended := make(chan struct{}, 4)
+				tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
+				if outsideWork {
+					finish := requireBeginWork(t, tracker)
+					defer finish()
+					go tracker.Run(ctx)
+					time.Sleep(2 * time.Minute)
+					synctest.Wait()
+					assert.Len(t, suspended, 1, "outside work permits local suspension while its exit lease remains held")
+					return
+				}
+				go tracker.Run(ctx)
+				<-suspended
+				for range 2 {
+					entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+					go func() {
+						defer close(done)
+						tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release }), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
+					}()
+					<-entered
+					time.Sleep(2 * time.Minute)
+					assert.Empty(t, suspended, "an in-flight request keeps local sync active")
+					close(release)
+					<-done
+					time.Sleep(time.Minute)
+					<-suspended
+				}
+			})
+		})
+	}
 }
 
 func TestIdleSyncIgnoresBasePathPing(t *testing.T) {

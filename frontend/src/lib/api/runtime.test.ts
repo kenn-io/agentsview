@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { sync } from "../stores/sync.svelte.js";
-import { getApiV1Search } from "./generated/search/search.js";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
+  ARCHIVE_STALE_EVENT,
   orvalFetch,
   getServerUrl,
   responseTimingOf,
@@ -16,7 +15,6 @@ import { requestUrl } from "../test-support/request-url.js";
 describe("orvalFetch", () => {
   afterEach(() => {
     localStorage.clear();
-    sync.syncPending = false;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -103,8 +101,9 @@ describe("orvalFetch", () => {
       "Bearer candidate-token",
     );
   });
-  it("marks catch-up pending when a search response carries the stale header", async () => {
-    sync.syncPending = false;
+  it("dispatches a stale event when a search response carries the stale header", async () => {
+    const listener = vi.fn();
+    window.addEventListener(ARCHIVE_STALE_EVENT, listener);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -113,8 +112,12 @@ describe("orvalFetch", () => {
         }),
       ),
     );
-    await getApiV1Search({ q: "overnight" });
-    expect(sync.syncPending).toBe(true);
+    try {
+      await orvalFetch("/api/v1/search?q=overnight", {});
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(ARCHIVE_STALE_EVENT, listener);
+    }
   });
 });
 

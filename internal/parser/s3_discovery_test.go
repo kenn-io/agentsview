@@ -19,63 +19,69 @@ func TestS3DiscoveryReportsListingFailure(t *testing.T) {
 	t.Cleanup(func() { listS3Objects = oldList })
 	denied := errors.New("listing denied")
 	for _, agent := range []AgentType{AgentClaude, AgentCodex, AgentCursor, AgentIcodemate} {
-		for _, deniedFirst := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/denied_first=%v", agent, deniedFirst), func(t *testing.T) {
-				root := t.TempDir()
-				localRel := "project/22222222-2222-4222-8222-222222222222.jsonl"
-				remoteRel := "project/11111111-1111-4111-8111-111111111111.jsonl"
-				if agent == AgentCodex {
-					localRel = "2026/06/24/rollout-2026-06-24T00-00-00-22222222-2222-4222-8222-222222222222.jsonl"
-					remoteRel = "2026/06/24/rollout-2026-06-24T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			localRel := "project/22222222-2222-4222-8222-222222222222.jsonl"
+			remoteRel := "project/11111111-1111-4111-8111-111111111111.jsonl"
+			if agent == AgentCodex {
+				localRel = "2026/06/24/rollout-2026-06-24T00-00-00-22222222-2222-4222-8222-222222222222.jsonl"
+				remoteRel = "2026/06/24/rollout-2026-06-24T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
+			}
+			if agent == AgentCursor {
+				localRel = "project/agent-transcripts/22222222-2222-4222-8222-222222222222.jsonl"
+			}
+			localPath := filepath.Join(root, filepath.FromSlash(localRel))
+			require.NoError(t, os.MkdirAll(filepath.Dir(localPath), 0o755))
+			require.NoError(t, os.WriteFile(localPath, []byte("{}\n"), 0o600))
+			good := "s3://bucket/healthy/raw/" + string(agent)
+			bad := "s3://bucket/denied/raw/" + string(agent)
+			listS3Objects = func(prefix string) ([]S3Object, error) {
+				if prefix == bad {
+					return nil, denied
 				}
-				if agent == AgentCursor {
-					localRel = "project/agent-transcripts/22222222-2222-4222-8222-222222222222.jsonl"
-				}
-				localPath := filepath.Join(root, filepath.FromSlash(localRel))
-				require.NoError(t, os.MkdirAll(filepath.Dir(localPath), 0o755))
-				require.NoError(t, os.WriteFile(localPath, []byte("{}\n"), 0o600))
-				good := "s3://bucket/healthy/raw/" + string(agent)
-				bad := "s3://bucket/denied/raw/" + string(agent)
-				listS3Objects = func(prefix string) ([]S3Object, error) {
-					if prefix == bad {
-						return nil, denied
+				require.Equal(t, good, prefix)
+				return []S3Object{{URI: good + "/" + remoteRel, Size: 3, LastModified: time.Unix(100, 0)}}, nil
+			}
+
+			for _, deniedFirst := range []bool{true, false} {
+				t.Run(fmt.Sprintf("denied_first=%v", deniedFirst), func(t *testing.T) {
+					roots := []string{bad, root, good}
+					if !deniedFirst {
+						roots = []string{root, good, bad}
 					}
-					require.Equal(t, good, prefix)
-					return []S3Object{{URI: good + "/" + remoteRel, Size: 3, LastModified: time.Unix(100, 0)}}, nil
-				}
-				roots := []string{bad, root, good}
-				if !deniedFirst {
-					roots = []string{root, good, bad}
-				}
-				factory, ok := ProviderFactoryByType(agent)
-				require.True(t, ok)
-				provider := factory.NewProvider(ProviderConfig{Roots: roots})
-				sources, err := provider.Discover(t.Context())
-				require.ErrorIs(t, err, denied)
-				var incomplete DiscoveryIncompleteError
-				require.ErrorAs(t, err, &incomplete)
-				var paths []string
-				for _, source := range sources {
-					paths = append(paths, source.DisplayPath)
-				}
-				assert.ElementsMatch(t, []string{localPath, good + "/" + remoteRel}, paths)
-				paths = nil
-				err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error { paths = append(paths, source.DisplayPath); return nil })
-				require.ErrorIs(t, err, denied)
-				assert.ElementsMatch(t, []string{localPath, good + "/" + remoteRel}, paths)
-				consumerErr := errors.New("consumer stopped")
-				calls := 0
-				err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
-				require.ErrorIs(t, err, consumerErr)
-				assert.Equal(t, 1, calls)
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				calls = 0
-				err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
-				require.ErrorIs(t, err, context.Canceled)
-				assert.Equal(t, 1, calls)
-			})
-		}
+					factory, ok := ProviderFactoryByType(agent)
+					require.True(t, ok)
+					provider := factory.NewProvider(ProviderConfig{Roots: roots})
+					sources, err := provider.Discover(t.Context())
+					require.ErrorIs(t, err, denied)
+					var incomplete DiscoveryIncompleteError
+					require.ErrorAs(t, err, &incomplete)
+					var paths []string
+					for _, source := range sources {
+						paths = append(paths, source.DisplayPath)
+					}
+					assert.ElementsMatch(t, []string{localPath, good + "/" + remoteRel}, paths)
+					paths = nil
+					err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error { paths = append(paths, source.DisplayPath); return nil })
+					require.ErrorIs(t, err, denied)
+					assert.ElementsMatch(t, []string{localPath, good + "/" + remoteRel}, paths)
+				})
+			}
+			factory, ok := ProviderFactoryByType(agent)
+			require.True(t, ok)
+			provider := factory.NewProvider(ProviderConfig{Roots: []string{bad, root, good}})
+			consumerErr := errors.New("consumer stopped")
+			calls := 0
+			err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
+			require.ErrorIs(t, err, consumerErr)
+			assert.Equal(t, 1, calls)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			calls = 0
+			err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, 1, calls)
+		})
 	}
 }
 
