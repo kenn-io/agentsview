@@ -70,13 +70,14 @@
     color: var(--text-muted);
   }
 
-  /* Pretty wrapping keeps a lone phrase from dangling on the last line. */
+  /* Balanced wrapping keeps a lone phrase from dangling on the last line;
+     pretty wrapping only rescues single-word orphans. */
   .state-notice__body {
     margin: 0;
     min-width: 0;
     font-size: 13px;
     line-height: 1.45;
-    text-wrap: pretty;
+    text-wrap: balance;
   }
 
   .state-notice__title {
