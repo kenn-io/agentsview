@@ -3,7 +3,6 @@ import { m } from "../../i18n/index.js";
 import {
   ArchiveIcon,
   CalendarRangeIcon,
-  GitBranchIcon,
   GlobeIcon,
   ImageIcon,
   LanguagesIcon,
@@ -21,7 +20,6 @@ export type SettingsPanelId =
   | "terminal"
   | "agent-directories"
   | "tool-result-images"
-  | "worktree-mappings"
   | "embeddings"
   | "archive-content"
   | "github"
@@ -97,15 +95,6 @@ export function settingsPanels(): SettingsPanelMeta[] {
       description: m.settings_tool_images_description(),
       group: data,
       keywords: m.settings_search_keywords_tool_images(),
-    },
-    {
-      id: "worktree-mappings",
-      icon: GitBranchIcon,
-      label: m.worktree_title(),
-      title: m.worktree_title(),
-      description: m.settings_worktree_moved(),
-      group: data,
-      keywords: m.settings_search_keywords_worktree_mappings(),
     },
     {
       id: "embeddings",

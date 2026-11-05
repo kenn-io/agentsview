@@ -11,7 +11,6 @@
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
-  import { router } from "../../stores/router.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -210,11 +209,6 @@
                 <AgentDirSettings />
               {:else if meta.id === "tool-result-images"}
                 <ToolImageCleanup />
-              {:else if meta.id === "worktree-mappings"}
-                <Button
-                  label={m.settings_worktree_moved_link()}
-                  onclick={() => router.navigate("data", { view: "rules" })}
-                />
               {:else if meta.id === "embeddings"}
                 <EmbeddingsSettings />
               {:else if meta.id === "archive-content"}
