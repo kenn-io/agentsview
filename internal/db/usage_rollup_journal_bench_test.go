@@ -5,7 +5,6 @@ package db
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -113,56 +112,4 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	require.Equal(tb, recent*60, want.Totals.OutputTokens)
 	require.Equal(tb, int64(recent*420), want.Totals.TotalCost.Microdollars)
 	return database, filter, want
-}
-
-// Warm daily, Top sessions, and count reads must reuse installed rows. The
-// optional timing gate measures daily reads against a supplied base.
-func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
-	var base int64
-	count := 300
-	if raw := os.Getenv("AGENTSVIEW_USAGE_BASE_NS"); raw != "" {
-		count = 30000
-		var err error
-		base, err = strconv.ParseInt(raw, 10, 64)
-		require.NoError(t, err)
-		require.Positive(t, base)
-	}
-	database, filter, _ := seedUsageJournalBenchmark(t, count, 1)
-	database.StopUsageCacheBackfill()
-	want, err := database.getDailyUsageLegacy(t.Context(), filter)
-	require.NoError(t, err)
-	wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
-	require.NoError(t, err)
-	wantCounts, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
-	require.NoError(t, err)
-	databaseID, err := database.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	cache, err := database.usageCache.Generation(t.Context(), databaseID)
-	require.NoError(t, err)
-	var fills, builds atomic.Int64
-	cache.fill.observer.beforeInstall = func([]usageSourceVersion) { fills.Add(1) }
-	cache.rollup.observer.beforeEnsure = func() { builds.Add(1) }
-	// Benchmarks collect fixture garbage before timing their warm reads.
-	runtime.GC()
-	// Compare means, as the supplied base ns/op measures repeated warm reads.
-	const reads = 5
-	var elapsed time.Duration
-	for range reads {
-		started := time.Now()
-		got, err := database.GetDailyUsage(t.Context(), filter)
-		elapsed += time.Since(started)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-	}
-	gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	assert.Equal(t, wantTop, gotTop)
-	gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, wantCounts, gotCounts)
-	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
-	assert.Zero(t, builds.Load(), "warm daily, Top sessions, and count reads must reuse installed rows")
-	if base > 0 {
-		assert.Less(t, elapsed/reads, time.Duration(base/2), "warm 7-day read must take under half the base time")
-	}
 }

@@ -70,7 +70,7 @@ func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
 		})
 	}
 	assertUsageDayTotals(t, cache)
-	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindDayTotals, true, nil)
+	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindDayTotals, true, true, nil)
 	require.NoError(t, err)
 	require.True(t, prepared.journaled)
 	assert.Empty(t, prepared.snapshot.Sessions, "a warm totals read must skip archive window metadata")
@@ -82,7 +82,7 @@ func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
 		{UsageFilter{From: "2026-08-05", To: "2026-08-05", Timezone: "UTC"}, nil},
 		{UsageFilter{From: "2026-08-03", To: "2026-08-03", Timezone: "UTC", Agent: "codex"}, []string{"duplicate-a", "duplicate-b"}},
 	} {
-		prepared, err := database.prepareUsageWindow(t.Context(), tc.filter, usageQueryKindDayTotals, true, nil)
+		prepared, err := database.prepareUsageWindow(t.Context(), tc.filter, usageQueryKindDayTotals, true, true, nil)
 		require.NoError(t, err)
 		conn, err := cache.db.Conn(t.Context())
 		require.NoError(t, err)
