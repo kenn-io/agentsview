@@ -243,12 +243,15 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
 	complete := false
 	if !stopped {
-		// Stopping collection also discards older queued retries. Reconcile all
-		// sources through the incremental cache before reporting freshness.
-		stats := d.engine.SyncAll(d.ctx, func(agentsync.Progress) {})
-		complete = stats.ProcessingComplete()
+		// Include older queued local retries; remote imports keep their schedule.
+		var stats agentsync.SyncStats
+		var err error
+		if roots := reconcileRootPaths(d.Config()); len(roots) > 0 {
+			stats, _, err = d.engine.ReconcileWatchRootsWithStats(d.ctx, roots, false, nil)
+		}
+		complete = err == nil && d.ctx.Err() == nil && stats.ProcessingComplete()
 		if !complete {
-			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
+			log.Printf("idle catch-up incomplete: %d failed, aborted=%v, error=%v", stats.Failed, stats.Aborted, err)
 		}
 	}
 	d.mu.Lock()

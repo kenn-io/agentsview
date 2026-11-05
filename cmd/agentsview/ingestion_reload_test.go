@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -356,4 +357,52 @@ func TestDaemonIngestionWakeReconcilesOlderQueuedRetry(t *testing.T) {
 	require.False(t, sessionImported(t, database, "gemini:older-retry"))
 	require.True(t, ingestion.EnsureFresh(t.Context()))
 	require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up must include the retry queued before the quiet cutoff")
+}
+
+func TestDaemonIngestionWakeLeavesRemoteImportsScheduled(t *testing.T) {
+	for _, local := range []bool{true, false} {
+		t.Run(fmt.Sprintf("local=%v", local), func(t *testing.T) {
+			var requests atomic.Int32
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, "<Error><Code>AccessDenied</Code></Error>")
+			}))
+			t.Cleanup(remote.Close)
+			t.Setenv("AWS_S3_ENDPOINT", remote.URL)
+			t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+			t.Setenv("AWS_REGION", "us-east-1")
+			roots := []string{"s3://bucket/sessions"}
+			root := t.TempDir()
+			if local {
+				roots = append(roots, root)
+				dbtest.WriteTestFile(t, filepath.Join(root, "project", "before.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "hello from before", "before").String()))
+			}
+			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: roots}}
+			database := dbtest.OpenTestDB(t)
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+			t.Cleanup(engine.Close)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			t.Cleanup(ingestion.Stop)
+			ingestion.Suspend()
+			ingestion.applying.Wait()
+			if local {
+				dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
+			}
+			ts := httptest.NewUnstartedServer(nil)
+			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+			srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion))
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			t.Cleanup(ts.Close)
+			headers, body := searchIngestionArchive(t, ts.URL, "morning")
+			if local {
+				assert.Contains(t, body, "hello from morning")
+			}
+			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+			assert.Zero(t, requests.Load(), "idle wake leaves S3 imports on their scheduled pass")
+			assert.False(t, ingestion.Pending())
+		})
+	}
 }

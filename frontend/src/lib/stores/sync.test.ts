@@ -103,9 +103,15 @@ describe("hidden status polling", () => {
     const load = vi.spyOn(sync, "loadStatus").mockResolvedValue();
     try {
       sync.startPolling();
+      sync.startPolling();
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
       expect(load).not.toHaveBeenCalled();
       visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(load).toHaveBeenCalledOnce();
+      sync.stopPolling();
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(10_000);
       expect(load).toHaveBeenCalledOnce();
     } finally {
@@ -138,7 +144,6 @@ describe("idle catch-up", () => {
         await sync.loadStatus();
         expect(sync.syncPending).toBe(pending);
         expect(sync.archiveStale).toBe(archiveStale);
-        if (archiveStale) window.dispatchEvent(new Event("agentsview:archive-stale"));
         api.getSyncStatus.mockResolvedValue({
           sync_pending: false,
           archive_stale: archiveStale,

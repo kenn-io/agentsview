@@ -33,29 +33,6 @@ describe("orvalFetch", () => {
     }
   });
 
-  it.each([200, 404])("reports stale archive results on HTTP %s", async (status) => {
-    const listener = vi.fn();
-    window.addEventListener("agentsview:archive-stale", listener);
-    try {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response("{}", {
-              status,
-              headers: { "Content-Type": "application/json", "X-Agentsview-Archive-Stale": "true" },
-            }),
-        ),
-      );
-      if (status === 404)
-        await expect(orvalFetch("/api/v1/sessions/missing", {})).rejects.toBeInstanceOf(ApiError);
-      else await orvalFetch("/api/v1/search?q=hello", {});
-      expect(listener).toHaveBeenCalledOnce();
-    } finally {
-      window.removeEventListener("agentsview:archive-stale", listener);
-    }
-  });
-
   it("records when a JSON response was sent, answered, and read", async () => {
     vi.useFakeTimers({ toFake: ["performance"] });
     vi.stubGlobal(

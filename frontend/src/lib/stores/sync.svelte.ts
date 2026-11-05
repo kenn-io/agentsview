@@ -51,13 +51,6 @@ class SyncStore {
   archiveStale: boolean = $state(false);
   syncPending: boolean = $state(false);
 
-  constructor() {
-    if (typeof window !== "undefined") {
-      window.addEventListener("agentsview:archive-stale", () => {
-        this.syncPending = true;
-      });
-    }
-  }
   syncing: boolean = $state(false);
   // Message from the last sync or resync that failed, cleared when one
   // succeeds. The header Sync button has no other place to report it.
@@ -93,6 +86,7 @@ class SyncStore {
 
   private watchEventSource: EventSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
+  private pollVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
     include_one_shot?: boolean;
@@ -203,6 +197,10 @@ class SyncStore {
 
   startPolling() {
     this.stopPolling();
+    this.pollVisibilityHandler = () => {
+      if (!document.hidden) void this.loadStatus();
+    };
+    document.addEventListener("visibilitychange", this.pollVisibilityHandler);
     this.pollTimer = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
       void this.loadStatus();
@@ -210,6 +208,10 @@ class SyncStore {
   }
 
   stopPolling() {
+    if (this.pollVisibilityHandler) {
+      document.removeEventListener("visibilitychange", this.pollVisibilityHandler);
+      this.pollVisibilityHandler = null;
+    }
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
