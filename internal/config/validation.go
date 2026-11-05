@@ -46,7 +46,6 @@ func (c *Config) validateSections() error {
 		// The public URL joins the allowed origins, so one bad value is one warning.
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
 		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
-		{ScopeServer, "sync_interval", c.ValidateSyncInterval},
 		{ScopeVector, "[vector]", c.Vector.Validate},
 		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
 		{ScopeInsights, "[insights]", c.Insights.Validate},
@@ -66,14 +65,6 @@ func (c *Config) validateSections() error {
 func (c *Config) validateDaemonIdleTimeout() error {
 	if c.DaemonIdleTimeout < 0 {
 		return fmt.Errorf("invalid daemon_idle_timeout: %s", c.DaemonIdleTimeout)
-	}
-	return nil
-}
-
-// ValidateSyncInterval rejects a negative watcher sync interval.
-func (c *Config) ValidateSyncInterval() error {
-	if c.SyncInterval < 0 {
-		return fmt.Errorf("invalid sync_interval: %s", c.SyncInterval)
 	}
 	return nil
 }

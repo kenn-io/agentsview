@@ -1873,12 +1873,6 @@ func TestLoadFile_SyncInterval(t *testing.T) {
 			assert.Equal(t, tt.want, cfg.SyncInterval)
 		})
 	}
-	t.Run("negative rejected for server", func(t *testing.T) {
-		f := newConfigFixture(t)
-		f.WriteTOML(t, map[string]any{"sync_interval": "-1s"})
-		_, err := LoadMinimalFor(ScopeServer)
-		require.ErrorContains(t, err, "invalid sync_interval: -1s")
-	})
 }
 
 func TestLoadFile_PGConfig(t *testing.T) {

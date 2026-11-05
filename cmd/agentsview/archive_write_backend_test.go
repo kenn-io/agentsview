@@ -480,24 +480,6 @@ func localPostgreSQLCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
 	}
 }
 
-func TestArchivePushWatchRejectsNegativeSyncInterval(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	h := newPushWatchOwnerHarness()
-	watch := archivePushWatch{
-		appCfg:   config.Config{SyncInterval: -time.Second},
-		hooks:    h.hooks(),
-		interval: time.Hour,
-		push: func(context.Context, pushReason, bool, *syncpkg.WatchBatch) error {
-			cancel()
-			return nil
-		},
-	}
-	require.ErrorContains(t, watch.run(ctx), "invalid sync_interval: -1s")
-	events, _, _ := h.snapshot()
-	assert.Empty(t, events, "invalid configuration must be rejected before starting watchers")
-}
-
 func TestDaemonPGPushWatchSendsClaimedBatchAndProbesRecovery(t *testing.T) {
 	root := t.TempDir()
 	h := newPushWatchOwnerHarness()

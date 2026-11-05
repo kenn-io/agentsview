@@ -89,7 +89,6 @@ func TestScopedConfigExportIgnoresUnusedSections(t *testing.T) {
 		{"public_origins", "public_origins = ['not-an-origin']\n"},
 		{"recall.extract", "[recall.extract]\nenabled = true\nmodel = 'local'\n"},
 		{"daemon_idle_timeout", "daemon_idle_timeout = '-1s'\n"},
-		{"sync_interval", "sync_interval = '-1s'\n"},
 		{"chart_palette", "chart_palette = 'invalid'\n"},
 		{"zoom_level", "zoom_level = 12\n"},
 		{"pg", "[pg.all]\nurl = 'postgres://db.example/archive'\n"},
