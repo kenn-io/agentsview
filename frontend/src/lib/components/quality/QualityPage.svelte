@@ -1348,6 +1348,12 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     text-align: right;
   }
 
+  /* Outcome reads as its own column, not a suffix of the session count. */
+  .driver-head span:last-child,
+  .driver-row > :last-child {
+    padding-left: var(--space-6);
+  }
+
   .driver-row {
     width: 100%;
     min-height: 24px;
@@ -1603,11 +1609,13 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   .recommendation-list :global(.recommendation strong) {
     color: var(--text-primary);
     font-size: 13px;
+    font-weight: var(--font-weight-medium, 500);
   }
 
   .recommendation-list :global(.recommendation p) {
-    color: var(--text-secondary);
+    color: var(--text-muted);
     font-size: 12px;
+    font-weight: 400;
     line-height: 1.45;
   }
 
