@@ -250,33 +250,22 @@ func TestUsageSummaryCanSkipSessionCounts(t *testing.T) {
 }
 
 func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		query     string
-		wantDelta float64
-	}{
-		{name: "positive current cost", query: "&current_microdollars=3000000", wantDelta: 2.0},
-		{name: "zero current cost", query: "&current_microdollars=0", wantDelta: -1.0},
-		{name: "omitted current cost", wantDelta: 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spy := &usageSummaryCountsSpy{}
-			s := newRoutedTestServerWithStore(t, spy)
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
 
-			w := serveGet(t, s,
-				"/api/v1/usage/comparison?"+oneDayUsageRange+tc.query)
-			assertRecorderStatus(t, w, http.StatusOK)
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=3000000")
+	assertRecorderStatus(t, w, http.StatusOK)
 
-			assertUsageQueryCalls(t, spy, 1, 0, 0)
+	assertUsageQueryCalls(t, spy, 1, 0, 0)
 
-			var out Comparison
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
-			assert.Equal(t, "2024-05-31", out.PriorFrom)
-			assert.Equal(t, "2024-05-31", out.PriorTo)
-			assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
-			assert.InDelta(t, tc.wantDelta, out.DeltaPct, 0)
-		})
-	}
+	var out Comparison
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, "2024-05-31", out.PriorFrom)
+	assert.Equal(t, "2024-05-31", out.PriorTo)
+	assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
+	assert.InDelta(t, 2.0, out.DeltaPct, 0)
 }
 
 func TestUsageComparisonCopiesGitBranchFilterToPriorPeriod(t *testing.T) {
@@ -320,6 +309,16 @@ func TestUsageComparisonCopiesResolvedProjectExclusionToPriorPeriod(
 		spy.filters[0].ExcludeProjectLabels)
 }
 
+func TestUsageComparisonRequiresCurrentCost(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s, "/api/v1/usage/comparison?"+oneDayUsageRange)
+	assertRecorderStatus(t, w, http.StatusBadRequest)
+
+	assertUsageQueryCalls(t, spy, 0, 0, 0)
+}
+
 func TestUsageComparisonNoDefaultRangeRequiresConcreteRange(t *testing.T) {
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)
@@ -330,6 +329,18 @@ func TestUsageComparisonNoDefaultRangeRequiresConcreteRange(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "requires from and to")
 
 	assertUsageQueryCalls(t, spy, 0, 0, 0)
+}
+
+func TestUsageComparisonAllowsZeroCurrentCost(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=0")
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	assertUsageQueryCalls(t, spy, 1, 0, 0)
 }
 
 func TestUsageComparisonRejectsNegativeCurrentCost(t *testing.T) {

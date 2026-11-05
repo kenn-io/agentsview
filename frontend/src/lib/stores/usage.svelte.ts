@@ -1361,10 +1361,11 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const [comparison, loaded] = await Promise.all([
-        UsageService.getApiV1UsageComparison(params, { signal }),
+        // The card uses the summary total and priorTotalCost for its percentage, so this request needn't wait for Summary.
+        UsageService.getApiV1UsageComparison({ ...params, current_microdollars: 0 }, { signal }),
         summary,
       ]);
-      if (loaded?.version === summaryVersion && this.versions.summary === summaryVersion) {
+      if (loaded && this.versions.summary === summaryVersion) {
         const applyStartedAt = performance.now();
         this.summary = { ...loaded.summary, comparison };
         this.noteStep("comparison", liveStep, started, comparison, applyStartedAt);

@@ -16,7 +16,7 @@ import type {
 import { orvalFetch } from "../../runtime.ts";
 import { orvalRequest } from "../../runtime.ts";
 
-export const getGetApiV1UsageComparisonUrl = (params?: GetApiV1UsageComparisonParams) => {
+export const getGetApiV1UsageComparisonUrl = (params: GetApiV1UsageComparisonParams) => {
   const normalizedParams = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -36,7 +36,7 @@ export const getGetApiV1UsageComparisonUrl = (params?: GetApiV1UsageComparisonPa
  * @summary Get usage comparison
  */
 export const getApiV1UsageComparison = async (
-  params?: GetApiV1UsageComparisonParams,
+  params: GetApiV1UsageComparisonParams,
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<Comparison> => {
   return orvalFetch<Comparison>(getGetApiV1UsageComparisonUrl(params), {

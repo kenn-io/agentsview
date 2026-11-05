@@ -89,7 +89,7 @@ type usageTopSessionsInput struct {
 
 type usageComparisonInput struct {
 	UsageFilterInput
-	CurrentMicrodollars optionalParam[int64] `query:"current_microdollars" minimum:"0" doc:"Current period total cost in microdollars; when provided, computes deltaPct"`
+	CurrentMicrodollars int64 `query:"current_microdollars" required:"true" minimum:"0" doc:"Current period total cost in microdollars"`
 }
 
 type usagePairwiseComparisonInput struct {
@@ -266,11 +266,9 @@ func (s *Server) humaUsageComparison(
 			"usage comparison requires from and to when no_default_range is true",
 		)
 	}
-	var currentMicrodollars *int64
-	if in.CurrentMicrodollars.IsSet {
-		currentMicrodollars = &in.CurrentMicrodollars.Value
-	}
-	comparison, err := s.computeUsageComparison(ctx, f, currentMicrodollars)
+	comparison, err := s.computeUsageComparison(ctx, f, money.Money{
+		Microdollars: in.CurrentMicrodollars,
+	})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
@@ -322,7 +320,7 @@ func usageInputAPIError(err *service.UsageInputError) error {
 func (s *Server) computeUsageComparison(
 	ctx context.Context,
 	f db.UsageFilter,
-	currentMicrodollars *int64,
+	currentCost money.Money,
 ) (*Comparison, error) {
 	fromT, err := time.Parse("2006-01-02", f.From)
 	if err != nil {
@@ -350,8 +348,8 @@ func (s *Server) computeUsageComparison(
 		PriorTo:        priorFilter.To,
 		PriorTotalCost: priorResult.Totals.TotalCost,
 	}
-	if currentMicrodollars != nil && c.PriorTotalCost.Microdollars > 0 {
-		delta, err := money.Sub(money.Money{Microdollars: *currentMicrodollars}, c.PriorTotalCost)
+	if c.PriorTotalCost.Microdollars > 0 {
+		delta, err := money.Sub(currentCost, c.PriorTotalCost)
 		if err != nil {
 			return nil, fmt.Errorf("computing usage comparison delta: %w", err)
 		}

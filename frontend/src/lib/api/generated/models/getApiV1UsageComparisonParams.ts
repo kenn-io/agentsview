@@ -89,8 +89,8 @@ export type GetApiV1UsageComparisonParams = {
    */
   session_counts?: boolean;
   /**
-   * Current period total cost in microdollars; when provided, computes deltaPct
+   * Current period total cost in microdollars
    * @minimum 0
    */
-  current_microdollars?: number;
+  current_microdollars: number;
 };

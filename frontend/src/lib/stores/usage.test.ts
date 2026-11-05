@@ -1602,8 +1602,9 @@ describe("UsageStore session filter params", () => {
       expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();
       expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(1);
       expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalled();
-      expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).not.toHaveProperty(
+      expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).toHaveProperty(
         "current_microdollars",
+        0,
       );
       expect(usage.summary).toBeNull();
 

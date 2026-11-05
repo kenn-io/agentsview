@@ -274,10 +274,6 @@ card shows the same spend converted at 100 credits per dollar.
 
 ![Usage summary cards](/docs/assets/generated/screenshots/usage-summary-cards.png)
 
-API callers can fetch the prior-period cost from `/api/v1/usage/comparison`.
-The optional `current_microdollars` parameter supplies the current-period cost
-for `deltaPct`; omitting it leaves `deltaPct` at zero.
-
 ### Cost Over Time
 
 A stacked chart shows cost per day across the range, grouped by project, model,

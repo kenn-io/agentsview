@@ -125,24 +125,23 @@ type requestInfo struct {
 	Forwarded  bool
 }
 
-type optionalParam[T int | int64 | bool] struct {
-	Value T
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
+type optionalIntParam struct {
+	Value int
 	IsSet bool
 }
 
-func (p optionalParam[T]) Schema(r huma.Registry) *huma.Schema {
-	return huma.SchemaFromType(r, reflect.TypeFor[T]())
+func (p optionalIntParam) Schema(r huma.Registry) *huma.Schema {
+	return huma.SchemaFromType(r, reflect.TypeFor[int]())
 }
 
-func (p *optionalParam[T]) Receiver() reflect.Value {
+func (p *optionalIntParam) Receiver() reflect.Value {
 	return reflect.ValueOf(p).Elem().FieldByName("Value")
 }
 
-func (p *optionalParam[T]) OnParamSet(isSet bool, _ any) {
+func (p *optionalIntParam) OnParamSet(isSet bool, _ any) {
 	p.IsSet = isSet
 }
-
-type optionalIntParam = optionalParam[int]
 
 func optionalIntValue(p optionalIntParam) *int {
 	if !p.IsSet {
@@ -153,7 +152,24 @@ func optionalIntValue(p optionalIntParam) *int {
 
 // optionalBoolParam distinguishes an omitted query param from an explicit
 // false, so a sort key's canonical direction is used unless ?descending is set.
-type optionalBoolParam = optionalParam[bool]
+//
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
+type optionalBoolParam struct {
+	Value bool
+	IsSet bool
+}
+
+func (p optionalBoolParam) Schema(r huma.Registry) *huma.Schema {
+	return huma.SchemaFromType(r, reflect.TypeFor[bool]())
+}
+
+func (p *optionalBoolParam) Receiver() reflect.Value {
+	return reflect.ValueOf(p).Elem().FieldByName("Value")
+}
+
+func (p *optionalBoolParam) OnParamSet(isSet bool, _ any) {
+	p.IsSet = isSet
+}
 
 func optionalBoolValue(p optionalBoolParam) *bool {
 	if !p.IsSet {
