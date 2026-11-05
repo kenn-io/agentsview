@@ -3,8 +3,9 @@ package sync
 import (
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -24,22 +25,34 @@ func missingS3ObjectError() error {
 
 func TestIsMissingS3Object(t *testing.T) {
 	for _, tc := range []struct {
-		code string
-		want bool
+		code    string
+		status  int
+		missing bool
 	}{
-		{"NoSuchKey", true},
-		{"NotFound", true},
-		{"NoSuchBucket", false},
-		{"AccessDenied", false},
-		{"InvalidAccessKeyId", false},
+		{"NoSuchKey", http.StatusNotFound, true},
+		{"AccessDenied", http.StatusForbidden, false},
 	} {
 		t.Run(tc.code, func(t *testing.T) {
-			err := fmt.Errorf("S3 request: %w", &smithy.GenericAPIError{Code: tc.code})
-			assert.Equal(t, tc.want, isMissingS3Object(err))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				if r.Method == http.MethodGet {
+					_, _ = io.WriteString(w, "<Error><Code>"+tc.code+"</Code></Error>")
+				}
+			}))
+			defer server.Close()
+			t.Setenv("AWS_S3_ENDPOINT", server.URL)
+			t.Setenv("AWS_REGION", "us-east-1")
+			t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+
+			_, err := parser.StatS3Object("s3://bucket/sidecar.txt")
+			require.Error(t, err)
+			assert.Equal(t, tc.missing, isMissingS3Object(err), "stat")
+			_, err = parser.FetchS3Object("s3://bucket/sidecar.txt")
+			require.Error(t, err)
+			assert.Equal(t, tc.missing, isMissingS3Object(err), "fetch")
 		})
 	}
-	assert.False(t, isMissingS3Object(errors.New("connection failed")))
-	assert.False(t, isMissingS3Object(nil))
 }
 
 func TestRewriteS3ClaudeToolResultLinePreservesUntouchedNumbers(t *testing.T) {

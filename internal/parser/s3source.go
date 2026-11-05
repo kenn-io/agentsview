@@ -73,6 +73,7 @@ func s3Client(ctx context.Context, bucket string) (*s3.Client, error) {
 	if region == "" {
 		region = "us-east-1"
 	}
+	// Keep credentials explicit and leave checksum-mode defaults unset.
 	cl := s3.NewFromConfig(aws.Config{
 		Region: region, Credentials: s3Credentials(),
 	}, func(opts *s3.Options) {
