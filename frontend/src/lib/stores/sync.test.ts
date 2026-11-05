@@ -118,47 +118,39 @@ describe("hidden status polling", () => {
 });
 
 describe("idle catch-up", () => {
-  it("doesn't report catch-up completion for parser-stale responses", async () => {
+  it.each([
+    { name: "parser-stale response", archiveStale: true, pending: false, completions: 0 },
+    { name: "catch-up finished", archiveStale: false, pending: true, completions: 1 },
+  ])("handles $name without advancing last_sync", async ({ archiveStale, pending, completions }) => {
     const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
     const notify = vi.spyOn(sync, "notifySyncComplete");
-    (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
-    api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
-    api.getSyncStatus.mockResolvedValue({ archive_stale: true, sync_pending: false, last_sync: "" });
-    await sync.loadStatus();
-    window.dispatchEvent(new Event("agentsview:archive-stale"));
-    await sync.loadStatus();
-    expect(refresh).not.toHaveBeenCalled();
-    expect(notify).not.toHaveBeenCalled();
-    refresh.mockRestore();
-    notify.mockRestore();
-  });
-
-  it("refreshes results when catch-up finishes without advancing last_sync", async () => {
-    const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
-    const notify = vi.spyOn(sync, "notifySyncComplete");
-    (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
-    api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
-    api.getSyncStatus.mockResolvedValue({
-      sync_pending: true,
-      archive_stale: false,
-      last_sync: "",
-      stats: null,
-    });
-    await sync.loadStatus();
-    expect(sync.syncPending).toBe(true);
-    expect(sync.archiveStale).toBe(false);
-    api.getSyncStatus.mockResolvedValue({
-      sync_pending: false,
-      archive_stale: false,
-      last_sync: "",
-      stats: null,
-    });
-    await sync.loadStatus();
-    expect(sync.syncPending).toBe(false);
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledOnce();
-    refresh.mockRestore();
-    notify.mockRestore();
+    try {
+      (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
+      api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
+      api.getSyncStatus.mockResolvedValue({
+        sync_pending: pending,
+        archive_stale: archiveStale,
+        last_sync: "",
+        stats: null,
+      });
+      await sync.loadStatus();
+      expect(sync.syncPending).toBe(pending);
+      expect(sync.archiveStale).toBe(archiveStale);
+      if (archiveStale) window.dispatchEvent(new Event("agentsview:archive-stale"));
+      api.getSyncStatus.mockResolvedValue({
+        sync_pending: false,
+        archive_stale: archiveStale,
+        last_sync: "",
+        stats: null,
+      });
+      await sync.loadStatus();
+      expect(sync.syncPending).toBe(false);
+      expect(refresh).toHaveBeenCalledTimes(completions);
+      expect(notify).toHaveBeenCalledTimes(completions);
+    } finally {
+      refresh.mockRestore();
+      notify.mockRestore();
+    }
   });
 });
 

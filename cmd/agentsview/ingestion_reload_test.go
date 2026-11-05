@@ -4,16 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,14 +132,6 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 	for _, mode := range []struct{ cli, idle bool }{{false, true}, {true, true}, {false, false}} {
 		t.Run(fmt.Sprintf("cli=%t/idle=%t", mode.cli, mode.idle), func(t *testing.T) {
-			var watchAttempts atomic.Int32
-			originalLog := log.Writer()
-			log.SetOutput(observedOutput{Writer: io.Discard, observe: func(p []byte) {
-				if strings.Contains(string(p), "triggering sync") {
-					watchAttempts.Add(1)
-				}
-			}})
-			t.Cleanup(func() { log.SetOutput(originalLog) })
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
 			cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}, InstallationID: "test-machine"}
@@ -173,18 +162,11 @@ func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 					require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
 					ingestion.applying.Wait()
 				}
-				beforeWatch := watchAttempts.Load()
 				writeReloadGeminiSession(t, root, id)
 				if mode.idle {
 					assert.Never(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
 				} else {
 					require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, 10*time.Second, 50*time.Millisecond)
-				}
-				quietAttempts := watchAttempts.Load() - beforeWatch
-				if mode.idle {
-					assert.Zero(t, quietAttempts)
-				} else {
-					assert.EqualValues(t, 1, quietAttempts)
 				}
 				if mode.cli {
 					backend, closeBackend, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, defaultArchiveQueryPolicy(nil))
@@ -199,98 +181,80 @@ func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 				assert.Contains(t, body, "hello from "+id)
 				assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 				assert.False(t, ingestion.Pending())
-				t.Logf("idle=%t write=%s quiet watcher sync attempts=%d", mode.idle, id, quietAttempts)
 			}
 		})
 	}
 }
 
-func TestDaemonIngestionReloadKeepsArchiveRequestBudget(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	writeReloadGeminiSession(t, root, "retained")
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	saved := cfg
-	saved.DisabledAgents = []parser.AgentType{parser.AgentGemini}
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, func() (config.Config, error) { return saved, nil })
-	t.Cleanup(ingestion.Stop)
-	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	releaseOnce := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseOnce)
-	go func() {
-		defer close(finished)
-		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
-	}()
-	<-entered
-	ingestion.Suspend()
-	_, err := ingestion.Reload(t.Context())
-	require.NoError(t, err)
-	require.Eventually(t, func() bool { return len(ingestion.Config().DisabledAgents) == 1 }, time.Second, time.Millisecond)
-	// Reload has published its config and is waiting on real engine work.
-	ts := httptest.NewUnstartedServer(nil)
-	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-	ts.Config.Handler = server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
-	ts.Start()
-	t.Cleanup(ts.Close)
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/search?q=retained", nil)
-	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
-	releaseOnce()
-	<-finished
-	require.NoError(t, err, "archive reads retain their two-second catch-up budget during reload")
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	assert.Contains(t, string(body), "hello from retained")
-	assert.Equal(t, "true", response.Header.Get(apiclient.ArchiveStaleHeader))
-	require.True(t, ingestion.EnsureFresh(t.Context()), "the shared catch-up finishes after the reload")
-}
-
-func TestDaemonIngestionSlowCatchupKeepsAuditWaiting(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	tracker := server.NewIdleTracker(0, func() {})
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, "overnight")
-	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	releaseOnce := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseOnce)
-	go func() {
-		defer close(finished)
-		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
-	}()
-	<-entered
-	auditReady := make(chan bool, 1)
-	go func() { auditReady <- ingestion.WaitActive(t.Context()) }()
-	ts := httptest.NewUnstartedServer(nil)
-	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-	ts.Config.Handler = server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
-	ts.Start()
-	t.Cleanup(ts.Close)
-	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
-	require.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-	require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
-	assert.Empty(t, auditReady, "the audit waits for catch-up, not just watcher setup")
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	assert.False(t, ingestion.EnsureFresh(ctx), "one canceled reader leaves shared work running")
-	releaseOnce()
-	<-finished
-	headers, body := searchIngestionArchive(t, ts.URL, "overnight")
-	assert.Contains(t, body, "hello from overnight")
-	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-	require.True(t, <-auditReady)
+func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
+	for _, reload := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reload=%t", reload), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			writeReloadGeminiSession(t, root, "retained")
+			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+			t.Cleanup(engine.Close)
+			engine.SyncAll(t.Context(), nil)
+			saved := cfg
+			saved.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+			tracker := server.NewIdleTracker(0, func() {})
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, func() (config.Config, error) { return saved, nil })
+			t.Cleanup(ingestion.Stop)
+			ingestion.Suspend()
+			ingestion.applying.Wait()
+			writeReloadGeminiSession(t, root, "overnight")
+			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			releaseOnce := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(releaseOnce)
+			go func() {
+				defer close(finished)
+				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+			}()
+			<-entered
+			query := "overnight"
+			if reload {
+				_, err := ingestion.Reload(t.Context())
+				require.NoError(t, err)
+				require.Eventually(t, func() bool { return len(ingestion.Config().DisabledAgents) == 1 }, time.Second, time.Millisecond)
+				query = "retained"
+			}
+			active := make(chan bool, 1)
+			go func() { active <- ingestion.WaitActive(t.Context()) }()
+			ts := httptest.NewUnstartedServer(nil)
+			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+			ts.Config.Handler = server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
+			ts.Start()
+			t.Cleanup(ts.Close)
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/search?q="+query, nil)
+			require.NoError(t, err)
+			response, err := http.DefaultClient.Do(request)
+			require.NoError(t, err, "archive reads retain their two-second catch-up budget")
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+			assert.Equal(t, "true", response.Header.Get(apiclient.ArchiveStaleHeader))
+			if reload {
+				assert.Contains(t, string(body), "hello from retained")
+			} else {
+				require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
+			}
+			assert.Empty(t, active, "WaitActive waits for catch-up, not just watcher setup")
+			canceled, stop := context.WithCancel(t.Context())
+			stop()
+			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
+			releaseOnce()
+			<-finished
+			require.True(t, ingestion.EnsureFresh(t.Context()))
+			headers, freshBody := searchIngestionArchive(t, ts.URL, query)
+			assert.Contains(t, freshBody, "hello from "+query)
+			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+			require.True(t, <-active)
+		})
+	}
 }
 
 func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {

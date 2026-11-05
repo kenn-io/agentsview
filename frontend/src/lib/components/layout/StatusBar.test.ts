@@ -54,14 +54,17 @@ describe("StatusBar", () => {
   it("pauses Codex Cloud polling while hidden and resumes when visible", async () => {
     const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     const component = mount(StatusBar, { target: document.body });
-    await tick();
-    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
-    expect(getCodexCloudStatus).not.toHaveBeenCalled();
-    visibility.mockReturnValue(false);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(getCodexCloudStatus).toHaveBeenCalledOnce();
-    await unmount(component);
-    visibility.mockRestore();
+    try {
+      await tick();
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(getCodexCloudStatus).not.toHaveBeenCalled();
+      visibility.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getCodexCloudStatus).toHaveBeenCalledOnce();
+    } finally {
+      visibility.mockRestore();
+      await unmount(component);
+    }
   });
 
   it("shows pending results until catch-up completes without offering a rebuild", async () => {

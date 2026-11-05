@@ -219,11 +219,11 @@ func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 }
 
-func TestIdleTrackerSyncSuspensionRepeatsAndKeepsSSEActive(t *testing.T) {
+func TestIdleTrackerSyncSuspensionRepeatsAfterExternalRequests(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		tracker := NewIdleTracker(0, func() { require.FailNow(t, "foreground serve must remain running") })
+		tracker := NewIdleTracker(0, func() { assert.Fail(t, "foreground serve must remain running") })
 		suspended := make(chan struct{}, 4)
 		tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
 		finish := requireBeginWork(t, tracker)
@@ -242,7 +242,7 @@ func TestIdleTrackerSyncSuspensionRepeatsAndKeepsSSEActive(t *testing.T) {
 			}()
 			<-entered
 			time.Sleep(2 * time.Minute)
-			assert.Empty(t, suspended, "an open event stream keeps local sync active")
+			assert.Empty(t, suspended, "an in-flight request keeps local sync active")
 			close(release)
 			<-done
 			time.Sleep(time.Minute)
