@@ -248,7 +248,6 @@ describe("CostTimeSeriesChart", () => {
     await tick();
     const tooltip = document.querySelector(".tooltip")!;
     expect(tooltip.querySelector(".tooltip-date")?.textContent).toContain("Jun 5, 2026");
-    expect(tooltip.querySelector(".tooltip-row")?.textContent).toContain("$0.00");
 
     unmount(component);
   });
@@ -675,6 +674,33 @@ describe("CostTimeSeriesChart", () => {
     expect(rows[1]!.textContent).toContain("medium");
     expect(rows[2]!.textContent).toContain("small");
 
+    unmount(component);
+  });
+
+  it("hides series with no usage on the hovered day", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    const models = Array.from({ length: 11 }, (_, index) => ({
+      modelName: `model-${index}`,
+      cost: testMoney(11 - index),
+    }));
+    const first = modelDailyEntry(0, models);
+    const second = modelDailyEntry(1, models.slice(0, 10));
+    usage.summary = usageSummary([first, second]);
+
+    const component = mountChart();
+    await tick();
+    const hits = document.querySelectorAll(".slot-hit");
+    hits[0]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".tooltip-name"), (row) => row.textContent),
+    ).toContain("Other");
+
+    hits[1]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".tooltip-name"), (row) => row.textContent),
+    ).toEqual(names("model", 0, 10));
     unmount(component);
   });
 
