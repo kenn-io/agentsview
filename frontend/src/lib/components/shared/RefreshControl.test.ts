@@ -9,6 +9,32 @@ import { LiveQuery } from "../../utils/liveQuery.svelte.js";
 // The wrapper's whole job is injecting the app's localized age formatter
 // into kit-ui's RefreshControl (whose built-in default is English).
 describe("RefreshControl", () => {
+  it("keeps automatic refresh quiet while hidden and resumes when visible", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const onRefresh = vi.fn();
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: { lastUpdatedAt: null, onRefresh },
+    });
+    try {
+      await tick();
+      visibility.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(onRefresh).not.toHaveBeenCalled();
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(onRefresh).toHaveBeenCalledOnce();
+    } finally {
+      unmount(component);
+      document.body.innerHTML = "";
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("localizes the never-updated label through the app formatter", async () => {
     setLocale("zh-CN");
     const component = mount(RefreshControl, {
