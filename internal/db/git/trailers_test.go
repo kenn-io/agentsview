@@ -58,27 +58,33 @@ func TestCommitTrailersSHA256(t *testing.T) {
 
 func TestCommitTrailersControlCharacterSubject(t *testing.T) {
 	skipIfNoGit(t)
-	repo := initRepo(t)
-	subject := "Editor\x1f field\x1d record\x1e trailer"
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", subject+"\n\nAgent-Session: claude:editor")
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: codex:thread")
-	commits, err := ScanCommitTrailers(t.Context(), repo)
-	require.NoError(t, err)
-	require.Len(t, commits, 2)
-	assert.Equal(t, "Later", commits[0].Subject)
-	assert.Equal(t, []string{"codex:thread"}, commits[0].Sessions)
-	assert.Equal(t, subject, commits[1].Subject)
-	assert.Equal(t, []string{"claude:editor"}, commits[1].Sessions)
-}
-
-func TestCommitTrailersRecordSeparatorValue(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initRepo(t)
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:first\x1ecodex:second\nAgent-Session: claude:valid")
-	commits, err := ScanCommitTrailers(t.Context(), repo)
-	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	assert.Equal(t, []string{"claude:valid"}, commits[0].Sessions)
+	for _, tt := range []struct {
+		name, subject, trailers string
+		sessions                []string
+		later                   bool
+	}{
+		{name: "subject", subject: "Editor\x1f field\x1d record\x1e trailer", trailers: "Agent-Session: claude:editor", sessions: []string{"claude:editor"}, later: true},
+		{name: "trailer value", subject: "Editor", trailers: "Agent-Session: claude:first\x1ecodex:second\nAgent-Session: claude:valid", sessions: []string{"claude:valid"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initRepo(t)
+			gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", tt.subject+"\n\n"+tt.trailers)
+			if tt.later {
+				gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: codex:thread")
+			}
+			commits, err := ScanCommitTrailers(t.Context(), repo)
+			require.NoError(t, err)
+			if tt.later {
+				require.Len(t, commits, 2)
+				assert.Equal(t, "Later", commits[0].Subject)
+				assert.Equal(t, []string{"codex:thread"}, commits[0].Sessions)
+				commits = commits[1:]
+			}
+			require.Len(t, commits, 1)
+			assert.Equal(t, tt.subject, commits[0].Subject)
+			assert.Equal(t, tt.sessions, commits[0].Sessions)
+		})
+	}
 }
 
 func TestCommitTrailersParsing(t *testing.T) {

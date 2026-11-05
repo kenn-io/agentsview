@@ -790,14 +790,6 @@ func TestTrailerCommitMirrorRows(t *testing.T) {
 	snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "editor")
 	require.NoError(t, err)
 	assert.Equal(t, rows, snapshot.CommitLinks)
-	require.NoError(t, d.DeleteSession(t.Context(), "editor"))
-	rows, err = d.RetainedCommitLinkRows(t.Context())
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.True(t, rows[0].Missing)
-	assert.Equal(t, "trailer", rows[0].Source)
-	assert.Nil(t, rows[0].TurnOrdinal)
-	assert.Empty(t, rows[0].TurnText)
 }
 
 func TestTrailerCommitUpsert(t *testing.T) {
@@ -830,6 +822,13 @@ func TestTrailerCommitUpsert(t *testing.T) {
 					assert.Equal(t, tsZero, modified)
 				}
 			}
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), tt.wantRepository, nil))
+			links, err := d.SessionCommitLinks(t.Context(), "editor")
+			require.NoError(t, err)
+			require.Len(t, links.Commits, 1)
+			assert.Equal(t, c.SHA, links.Commits[0].SHA)
+			assert.Equal(t, tt.wantBranch, links.Commits[0].Branch)
+			assert.Equal(t, tt.wantRepository, links.Commits[0].Repository)
 		})
 	}
 }
@@ -838,6 +837,7 @@ func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
 	const id = "editor"
 	d := testDB(t)
 	insertSession(t, d, id, "project-a")
+	insertMessages(t, d, userMsg(id, 0, "Save the edit"))
 	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
 	session, err := d.GetSession(t.Context(), id)
 	require.NoError(t, err)
@@ -855,5 +855,7 @@ func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
 		assert.Equal(t, "project-b", rows[0].Project)
 		assert.Equal(t, "trailer", rows[0].Source)
 		assert.True(t, rows[0].Missing)
+		assert.Nil(t, rows[0].TurnOrdinal)
+		assert.Empty(t, rows[0].TurnText)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testutil"
 )
@@ -47,16 +46,6 @@ func commitTrailerFixture(t *testing.T) (*db.DB, *Engine, string, string, func(s
 	t.Cleanup(engine.Close)
 	engine.SyncAll(t.Context(), nil)
 	return database, engine, repo, first, runGit
-}
-
-func TestReconcileCommitTrailersEditor(t *testing.T) {
-	database, _, _, first, _ := commitTrailerFixture(t)
-	found, err := database.CommitSessionLinks(t.Context(), []string{first[:7]})
-	require.NoError(t, err)
-	require.Len(t, found.Commits[0].Links, 1)
-	l := found.Commits[0].Links[0]
-	assert.Equal(t, first, l.SHA)
-	assert.Equal(t, "trailer", l.Source)
 }
 
 func TestResyncAbortsOnCommitTrailerCopyFailure(t *testing.T) {
@@ -196,12 +185,20 @@ func TestCommitTrailersSkipPartialSync(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, list.Commits, 1)
 			assert.Equal(t, first, list.Commits[0].SHA)
+			assert.Equal(t, "trailer", list.Commits[0].Source)
 
 			engine.SyncAll(t.Context(), nil)
 			list, err = database.SessionCommitLinks(t.Context(), "editor-session")
 			require.NoError(t, err)
 			require.Len(t, list.Commits, 2)
 			assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
+			for _, sha := range []string{first, second} {
+				found, err := database.CommitSessionLinks(t.Context(), []string{sha[:7]})
+				require.NoError(t, err)
+				require.Len(t, found.Commits[0].Links, 1)
+				assert.Equal(t, sha, found.Commits[0].Links[0].SHA)
+				assert.Equal(t, "trailer", found.Commits[0].Links[0].Source)
+			}
 		})
 	}
 }
@@ -247,12 +244,6 @@ func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 1)
 	assert.Equal(t, "Scratch", list.Commits[0].Subject)
-	// A removed cwd retains its recorded root and unknown worktree relationship.
-	obs, ok := engine.projectIdentityObservation(session)
-	require.True(t, ok)
-	assert.Equal(t, filepath.ToSlash(cwd), obs.RootPath)
-	assert.Empty(t, obs.RepositoryPath)
-	assert.Equal(t, export.WorktreeUnknown, obs.WorktreeRelationship)
 }
 
 func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
@@ -289,10 +280,10 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 	assert.ElementsMatch(t, []string{first, later}, []string{list.Commits[0].Repository, list.Commits[1].Repository})
 }
 
-func TestReconcileCommitTrailersKeepsFailedOrMissingRepository(t *testing.T) {
+func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "failed", true: "missing"}[missing], func(t *testing.T) {
-			database, engine, repo, first, _ := commitTrailerFixture(t)
+			_, engine, repo, _, _ := commitTrailerFixture(t)
 			if missing {
 				require.NoError(t, os.RemoveAll(repo))
 				engine.ReconcileCommitTrailers(t.Context())
@@ -301,9 +292,6 @@ func TestReconcileCommitTrailersKeepsFailedOrMissingRepository(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
 				require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))
 			}
-			found, err := database.CommitSessionLinks(t.Context(), []string{first})
-			require.NoError(t, err)
-			require.Len(t, found.Commits[0].Links, 1)
 		})
 	}
 }

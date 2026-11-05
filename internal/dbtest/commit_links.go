@@ -115,16 +115,13 @@ func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.
 // AssertTrailerIncrementalPush checks changes without rewriting the transcript.
 func AssertTrailerIncrementalPush(t *testing.T, local *db.DB, reader func() db.CommitLinkReader, push func()) {
 	t.Helper()
-	for _, commits := range [][]gitlog.TrailerCommit{
-		{{SHA: strings.Repeat("c", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Amended editor change", CommittedAt: "2026-01-01T00:01:00Z"}},
-		nil,
-	} {
-		require.NoError(t, local.StoreTrailerCommitLinks(t.Context(), "trailer-repo", commits))
-		links, err := local.SessionCommitLinks(t.Context(), "commit-trailer")
-		require.NoError(t, err)
-		require.Len(t, links.Commits, 2)
-		assert.ElementsMatch(t, []string{strings.Repeat("b", 40), strings.Repeat("c", 40)}, []string{links.Commits[0].SHA, links.Commits[1].SHA})
-		push()
-		AssertCommitLinkParity(t, local, reader())
-	}
+	require.NoError(t, local.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{
+		{SHA: strings.Repeat("c", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Amended editor change", CommittedAt: "2026-01-01T00:01:00Z"},
+	}))
+	links, err := local.SessionCommitLinks(t.Context(), "commit-trailer")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 2)
+	assert.ElementsMatch(t, []string{strings.Repeat("b", 40), strings.Repeat("c", 40)}, []string{links.Commits[0].SHA, links.Commits[1].SHA})
+	push()
+	AssertCommitLinkParity(t, local, reader())
 }
