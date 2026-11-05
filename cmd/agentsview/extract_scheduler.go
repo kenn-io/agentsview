@@ -19,6 +19,8 @@ import (
 // eligibility.
 const extractDebounceInterval = 30 * time.Second
 
+const batteryRecheckInterval = time.Minute
+
 // extractPassManager is the subset of *extract.Manager the scheduler needs,
 // letting tests substitute a fake that records TryPass calls.
 type extractPassManager interface {

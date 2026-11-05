@@ -1915,7 +1915,6 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						battery.Store(true)
 						s := newEmbedScheduler(mgr, time.Second, 0, false, tracker)
 						s.onBattery = battery.Load
-						s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
 						ticks := make(chan time.Time)
 						go s.run(ctx, ticks)
 						defer s.Stop()
@@ -1927,14 +1926,12 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						synctest.Sleep(4 * time.Second)
 						synctest.Wait()
 						assert.Zero(t, mgr.callCount())
-						assert.FileExists(t, s.batteryDeferredPath)
 						if idleExit {
 							select {
 							case <-idled:
+								assert.Fail(t, "battery-deferred work lost its idle lease")
 							default:
-								assert.Fail(t, "battery-deferred work kept the daemon alive")
 							}
-							return
 						}
 						synctest.Sleep(3 * batteryRecheckInterval)
 						synctest.Wait()
@@ -1943,84 +1940,9 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						synctest.Sleep(batteryRecheckInterval)
 						synctest.Wait()
 						assert.Equal(t, []vector.BuildRequest{{Backstop: backstop}}, mgr.callsSnapshot())
-						assert.NoFileExists(t, s.batteryDeferredPath)
 					})
 				})
 			}
-		})
-	}
-}
-
-func TestEmbedSchedulerBatteryBackstopClearsRetryTimer(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		mgr := &fakeEmbedManager{}
-		var battery atomic.Bool
-		battery.Store(true)
-		s := newEmbedScheduler(mgr, time.Second, 45*time.Second, false, nil)
-		s.onBattery = battery.Load
-		s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
-		go s.Run(t.Context())
-		defer s.Stop()
-		synctest.Sleep(50 * time.Second)
-		synctest.Wait()
-		assert.Zero(t, mgr.callCount())
-		battery.Store(false)
-		synctest.Sleep(80 * time.Second)
-		synctest.Wait()
-		assert.Equal(t, []vector.BuildRequest{{Backstop: true}}, mgr.callsSnapshot())
-		assert.NoFileExists(t, s.batteryDeferredPath)
-	})
-}
-
-func TestMessageSchedulerACStartupReplaysDeferredWork(t *testing.T) {
-	for _, tc := range []struct {
-		name                        string
-		marker, runAfterSync, retry bool
-		backstop                    string
-		want                        []vector.BuildRequest
-	}{
-		{name: "ordinary startup", runAfterSync: true, backstop: "24h"},
-		{name: "deferred sync", marker: true, runAfterSync: true, backstop: "0", want: []vector.BuildRequest{{Backstop: true}}},
-		{name: "deferred backstop", marker: true, backstop: "24h", want: []vector.BuildRequest{{Backstop: true}}},
-		{name: "disabled", marker: true, backstop: "0"},
-		{name: "retry", marker: true, runAfterSync: true, retry: true, backstop: "0", want: []vector.BuildRequest{{Backstop: true}, {Backstop: true}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				dataDir := t.TempDir()
-				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-				cfg := vectorTestConfig(dataDir)
-				cfg.Vector.Embed.RunAfterSync = new(tc.runAfterSync)
-				cfg.Vector.Embed.BackstopInterval = tc.backstop
-				marker := cfg.Vector.ResolvedDBPath(dataDir) + ".battery-deferred"
-				if tc.marker {
-					require.NoError(t, os.WriteFile(marker, nil, 0o600))
-				}
-				vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-				require.NoError(t, err)
-				defer vs.Close()
-				mgr := &fakeEmbedManager{}
-				if tc.retry {
-					mgr.results = []fakeTryBuildResult{{started: true, err: errors.New("temporary failure")}, {started: true}}
-				}
-				vs.Scheduler.mgr = mgr
-				vs.Scheduler.onBattery = func() bool { return false }
-				go vs.Scheduler.Run(t.Context())
-				defer vs.Scheduler.Stop()
-				synctest.Sleep(embedDebounceInterval)
-				synctest.Wait()
-				if tc.retry {
-					assert.FileExists(t, marker)
-					synctest.Sleep(embedDebounceInterval)
-					synctest.Wait()
-				}
-				assert.Equal(t, tc.want, mgr.callsSnapshot())
-				if tc.marker && len(tc.want) == 0 {
-					assert.FileExists(t, marker)
-				} else {
-					assert.NoFileExists(t, marker)
-				}
-			})
 		})
 	}
 }
