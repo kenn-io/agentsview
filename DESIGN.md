@@ -128,7 +128,10 @@ props or forked styles.
 - `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
 - `CodeBlock` forwards `copyLabel` but keeps CopyButton's English "Copied" label.
 - `TopBar` cannot express "no active tab"; on routes that are not tabs
-  (settings), the first tab renders as current.
+  (settings), it falls back to the first tab. Until the pin includes a fix,
+  `AppHeader.svelte` corrects the result with the temporary
+  `topBarNoCurrentTab` action and the `no-current-tab` styles; remove both
+  when the pin moves.
 
 Resolved upstream (adopted at the current pin): `RefreshControl` takes a
 `formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`

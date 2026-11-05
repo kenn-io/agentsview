@@ -76,8 +76,33 @@ function menuItem(text: string): HTMLButtonElement | undefined {
   );
 }
 
+// jsdom has no layout, so TopBar's collapse measurement needs widths: a
+// tab row narrower than the bar keeps the tabs, a wider one collapses them.
+function stubTopBarWidths(tabRow: number, bar: number): () => void {
+  const offsetWidth = vi
+    .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("kit-top-bar__probe") ? tabRow : 0;
+    });
+  const clientWidth = vi
+    .spyOn(HTMLElement.prototype, "clientWidth", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("kit-top-bar") ? bar : 0;
+    });
+  return () => {
+    offsetWidth.mockRestore();
+    clientWidth.mockRestore();
+  };
+}
+
+const currentTabs = () =>
+  Array.from(document.querySelectorAll('[aria-current="page"]'), (element) =>
+    element.textContent?.trim(),
+  );
+
 describe("AppHeader export actions", () => {
   let component: ReturnType<typeof mount> | undefined;
+  let restoreWidths: (() => void) | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -99,6 +124,8 @@ describe("AppHeader export actions", () => {
       unmount(component);
       component = undefined;
     }
+    restoreWidths?.();
+    restoreWidths = undefined;
     document.body.innerHTML = "";
     ui.isMobileViewport = false;
     ui.sidebarOpen = true;
@@ -379,19 +406,69 @@ describe("AppHeader export actions", () => {
         read_only: true,
       };
       router.route = "friction";
+      restoreWidths = stubTopBarWidths(600, 2000);
       component = mount(AppHeader, { target: document.body });
       await tick();
 
       const bar = document.querySelector(".kit-top-bar")!;
       expect(bar.classList.contains("no-current-tab")).toBe(!readable);
-      // The bar shows the current destination as a pressed tab, or as the
-      // collapsed menu's value when the tabs do not fit.
-      const current =
-        document.querySelector('.kit-top-bar__tabs [aria-current="page"]') ??
-        document.querySelector(".kit-top-bar__nav-select .kit-select-dropdown__value");
-      expect(current?.textContent?.trim()).toBe(readable ? "Friction Log" : "Sessions");
+      expect(document.querySelector(".kit-top-bar__tabs")).not.toBeNull();
+      expect(currentTabs()).toEqual(readable ? ["Friction Log"] : []);
     });
   }
+
+  it("marks no tab current on Settings and the routed tab again after it", async () => {
+    router.route = "settings";
+    restoreWidths = stubTopBarWidths(600, 2000);
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    expect(document.querySelector(".kit-top-bar__tabs")).not.toBeNull();
+    expect(currentTabs()).toEqual([]);
+
+    // Sessions is the tab the bar falls back to, so returning to it is the
+    // case where nothing re-renders the attribute by itself.
+    router.route = "sessions";
+    await tick();
+    expect(currentTabs()).toEqual(["Sessions"]);
+
+    router.route = "settings";
+    await tick();
+    expect(currentTabs()).toEqual([]);
+
+    router.route = "usage";
+    await tick();
+    expect(currentTabs()).toEqual(["Usage"]);
+  });
+
+  it("shows a neutral collapsed menu on Settings and the routed tab after it", async () => {
+    router.route = "settings";
+    restoreWidths = stubTopBarWidths(2000, 600);
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const trigger = () =>
+      document.querySelector<HTMLElement>(
+        ".kit-top-bar__nav-select .kit-select-dropdown__trigger",
+      )!;
+    const shown = () => ({
+      text: trigger().querySelector(".kit-select-dropdown__value")?.textContent,
+      label: trigger().getAttribute("aria-label"),
+    });
+    expect(shown()).toEqual({ text: "—", label: "Primary navigation" });
+
+    router.route = "sessions";
+    await tick();
+    expect(shown()).toEqual({ text: "Sessions", label: "Primary navigation: Sessions" });
+
+    router.route = "settings";
+    await tick();
+    expect(shown()).toEqual({ text: "—", label: "Primary navigation" });
+
+    router.route = "usage";
+    await tick();
+    expect(shown()).toEqual({ text: "Usage", label: "Primary navigation: Usage" });
+  });
 
   it("distinguishes global sync from page refresh controls", async () => {
     component = mount(AppHeader, { target: document.body });

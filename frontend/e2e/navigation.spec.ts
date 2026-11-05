@@ -216,6 +216,23 @@ test.describe("Top bar current tab", () => {
     await page.goto("/settings");
     const tabs = await tabLooks(page);
     expect(new Set(tabs.map((t) => t.look)).size).toBe(1);
+    await expect(page.locator('[aria-current="page"]')).toHaveCount(0);
+
+    // Leaving Settings for the tab the bar would fall back to marks it again.
+    await page.getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("button", { name: "Sessions", exact: true })
+      .click();
+    await expect(page.locator('[aria-current="page"]')).toHaveText("Sessions");
+  });
+
+  test("shows a neutral collapsed menu on Settings", async ({ page }) => {
+    // Ten destinations do not fit at this width, so the tabs collapse.
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.goto("/settings");
+    const trigger = page.locator(".kit-top-bar__nav-select .kit-select-dropdown__trigger");
+    await expect(trigger).toHaveText("—");
+    await expect(trigger).toHaveAccessibleName("Primary navigation");
+    await expect(page.locator('[aria-current="page"]')).toHaveCount(0);
   });
 });
 
