@@ -32,6 +32,7 @@ func TestSessionCommits(t *testing.T) {
 		require.NoError(t, err)
 		got := decodeCLIJSON[db.SessionCommitList](t, out)
 		require.Len(t, got.Commits, 2)
+		assert.ElementsMatch(t, []string{"transcript", "trailer"}, []string{got.Commits[0].Source, got.Commits[1].Source})
 		var exact *db.CommitLink
 		for i := range got.Commits {
 			if got.Commits[i].Source == "transcript" {
@@ -47,7 +48,7 @@ func TestSessionCommits(t *testing.T) {
 	t.Run("human", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit")
 		require.NoError(t, err)
-		assert.Contains(t, out, "trailer")
+		assert.Contains(t, out, "commit message")
 		assert.Contains(t, out, "Editor commit")
 		assert.Contains(t, out, "SOURCE")
 		assert.Contains(t, out, "transcript")

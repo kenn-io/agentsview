@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func commitMessages(id, input, result string) []Message {
@@ -945,26 +944,27 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 	const firstSHA = "abc1234000000000000000000000000000000000"
 	const secondSHA = "abc1234111111111111111111111111111111111"
 	for _, tt := range []struct {
-		name      string
-		collision bool
-		wantSHAs  []string
+		name          string
+		transcriptSHA string
+		collision     bool
+		wantSHAs      []string
 	}{
-		{"unique", false, []string{"abc1234"}},
-		{"collision", true, []string{"abc1234", firstSHA, secondSHA}},
+		{"prefix", "abc1234", false, []string{"abc1234", firstSHA}},
+		{"exact", firstSHA, false, []string{firstSHA}},
+		{"collision", "abc1234", true, []string{"abc1234", firstSHA, secondSHA}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "editor", "project-a")
-			insertMessages(t, d, commitMessages("editor", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			insertMessages(t, d, commitMessages("editor", `{"command":"git commit -m fix"}`, "[main "+tt.transcriptSHA+"] Fix parser")...)
 			insertSession(t, d, "other", "project-a")
-			owners := []string{"claude:other"}
-			if tt.collision {
-				owners = append(owners, "claude:editor")
+			commits := []gitlog.TrailerCommit{
+				{SHA: firstSHA, Sessions: []string{"claude:editor", "claude:other"}, CommittedAt: tsZero},
 			}
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{
-				{SHA: firstSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero},
-				{SHA: secondSHA, Sessions: owners, CommittedAt: tsZero},
-			}))
+			if tt.collision {
+				commits = append(commits, gitlog.TrailerCommit{SHA: secondSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero})
+			}
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", commits))
 
 			session, err := d.SessionCommitLinks(t.Context(), "editor")
 			require.NoError(t, err)
@@ -973,6 +973,16 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 				shas = append(shas, link.SHA)
 			}
 			assert.ElementsMatch(t, tt.wantSHAs, shas)
+			for _, link := range session.Commits {
+				if link.SHA == tt.transcriptSHA {
+					assert.Equal(t, "transcript", link.Source)
+				}
+			}
+			other, err := d.SessionCommitLinks(t.Context(), "other")
+			require.NoError(t, err)
+			require.Len(t, other.Commits, 1)
+			assert.Equal(t, firstSHA, other.Commits[0].SHA)
+			assert.Equal(t, "trailer", other.Commits[0].Source)
 
 			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
@@ -985,78 +995,6 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 				}
 			}
 			assert.ElementsMatch(t, tt.wantSHAs, shas)
-		})
-	}
-}
-
-func TestTrailerCommitHostOwners(t *testing.T) {
-	for _, tt := range []struct {
-		name, trailer string
-		owners        []string
-		unrelated     []string
-	}{
-		{"claude", "claude:edit_%", []string{"edit_%", "host-a~edit_%", "host-b~edit_%"}, []string{"host-a~editXY", "host-a~Edit_%", "host-a~codex:edit_%"}},
-		{"codex", "codex:edit_%", []string{"codex:edit_%", "host-a~codex:edit_%", "host-b~codex:edit_%"}, []string{"host-a~codex:editXY", "host-a~codex:Edit_%", "host-a~edit_%"}},
-		{"imported only", "codex:edit", []string{"host-a~codex:edit", "host-b~codex:edit"}, []string{"host-a~edit"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			sha := strings.Repeat("a", 40)
-			// Evidence can arrive before the imported sessions, without a rescan.
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{tt.trailer}, CommittedAt: tsZero}}))
-			before, err := d.CommitSessionLinks(t.Context(), []string{sha})
-			require.NoError(t, err)
-			require.Len(t, before.Commits, 1)
-			assert.Empty(t, before.Commits[0].Links)
-			for _, id := range append(append([]string{}, tt.owners...), tt.unrelated...) {
-				insertSession(t, d, id, "project-a", func(s *Session) {
-					_, nativeID := parser.StripHostPrefix(id)
-					if strings.HasPrefix(nativeID, "codex:") {
-						s.Agent = "codex"
-					}
-				})
-				insertMessages(t, d, userMsg(id, 0, "Save the edit"))
-			}
-			t.Run("commit to sessions", func(t *testing.T) {
-				links, err := d.CommitSessionLinks(t.Context(), []string{sha})
-				require.NoError(t, err)
-				require.Len(t, links.Commits, 1)
-				var ids []string
-				for _, link := range links.Commits[0].Links {
-					ids = append(ids, link.SessionID)
-					assert.False(t, link.Missing)
-				}
-				assert.ElementsMatch(t, tt.owners, ids)
-			})
-			for _, id := range tt.owners {
-				t.Run(id, func(t *testing.T) {
-					links, err := d.SessionCommitLinks(t.Context(), id)
-					require.NoError(t, err)
-					require.Len(t, links.Commits, 1)
-					assert.Equal(t, sha, links.Commits[0].SHA)
-					assert.Equal(t, id, links.Commits[0].SessionID)
-					assert.Equal(t, "trailer", links.Commits[0].Source)
-					assert.False(t, links.Commits[0].Missing)
-					rows, err := d.SessionCommitLinkRows(t.Context(), id)
-					require.NoError(t, err)
-					require.Len(t, rows, 1)
-					assert.Equal(t, sha, rows[0].SHA)
-				})
-			}
-			_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=?`, tsZero)
-			require.NoError(t, err)
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Subject: "Updated subject", Sessions: []string{tt.trailer}, CommittedAt: tsZero}}))
-			for _, id := range tt.owners {
-				var modified string
-				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id=?`, id).Scan(&modified))
-				assert.NotEqual(t, tsZero, modified)
-				require.NoError(t, d.DeleteSession(t.Context(), id))
-				links, err := d.SessionCommitLinks(t.Context(), id)
-				require.NoError(t, err)
-				require.Len(t, links.Commits, 1)
-				assert.Equal(t, sha, links.Commits[0].SHA)
-				assert.True(t, links.Commits[0].Missing)
-			}
 		})
 	}
 }

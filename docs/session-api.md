@@ -1601,11 +1601,9 @@ transcript links; `"usage"` archives keep neither.
 Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
 `source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their
-registered prefix. A trailer links every session with that archive ID, including
-copies imported from other hosts as `host~<archive-id>`. Both commit-to-session
-and session-to-commit lookups resolve these copies, even when they arrive after
-the Git scan. Matching is literal and case-sensitive. Unknown agents and invalid
-trailer values are ignored.
+registered prefix. Matching uses the exact archive ID. Sessions imported from
+other hosts as `host~<archive-id>` do not receive trailer links from the original
+session ID. Unknown agents and invalid trailer values are ignored.
 Every matching line in the commit message counts, including lines in squash
 commit bodies. Inline mentions don't create links. Merge commits count.
 
@@ -1627,5 +1625,6 @@ The suggested `turn` is the last real user prompt in transcript order with a
 usable timestamp at or before commit time. It carries
 `heuristic: true`; no eligible prompt means no turn. This time rule adapts
 [Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
-A transcript link for the same session takes precedence when its SHA prefix
-matches exactly one trailer SHA. Other sessions' trailer links remain visible.
+A transcript link for the same session takes precedence only when its SHA
+matches the trailer SHA exactly. Short transcript SHAs leave the full trailer
+SHA visible. Other sessions' trailer links remain visible.
