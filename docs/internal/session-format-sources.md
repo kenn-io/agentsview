@@ -1340,9 +1340,13 @@ fixtures retain this field; missing identities remain source-local.
   verified against `codex/fc_stdin.jsonl` and the parser's function-call path.
   `TestCommitLinksNativePollOwnership` writes both representations through
   the public archive API and checks the originating commit call's location.
-  Reverified 2026-11-04 against the stored code-mode input path:
-  `TestCommitLinksParsing` covers several `exec_command` command literals in
-  one input, including a status call before the successful commit call.
+  Reverified 2026-11-05 against the stored code-mode input path:
+  `TestCommitLinksParsing` covers a single `exec_command` command literal.
+  `TestCommitLinksNativePollOwnership` rejects new commit links from batches
+  with several tool calls, including completed and running batches. Their
+  outputs, process IDs, and working directories cannot identify the commit's
+  own execution. The unrelated-workdir and unrelated-`cd` cases also prevent
+  one shell execution's directory from leaking into another.
   `TestCommitLinksNativePollOwnership/mixed_call_with_unowned_output`
   reproduces an unrelated summary in a mixed commit-and-poll result. Only
   output whose process ID identifies a commit call contributes a link there.

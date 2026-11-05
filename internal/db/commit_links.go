@@ -149,29 +149,25 @@ func commitRepository(input, cwd string) string {
 }
 
 func commitCommandText(input string) string {
-	command := signals.CommandText(input)
-	if !jsontext.Value(input).IsValid() {
-		var commands []string
-		for _, match := range commitCommandRE.FindAllStringSubmatch(input, -1) {
-			literal := match[1]
-			var decoded strings.Builder
-			for rest := literal[1 : len(literal)-1]; rest != ""; {
-				r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
-				if err != nil {
-					break
-				}
-				decoded.WriteRune(r)
-				rest = tail
-				if rest == "" {
-					commands = append(commands, decoded.String())
-				}
-			}
-		}
-		if len(commands) > 0 {
-			command = strings.Join(commands, "\n")
-		}
+	if jsontext.Value(input).IsValid() {
+		return signals.CommandText(input)
 	}
-	return command
+	// A batch's output and process IDs do not identify which new call owns them.
+	matches := commitCommandRE.FindAllStringSubmatch(input, -1)
+	if strings.Count(input, "tools.") != 1 || len(matches) != 1 {
+		return ""
+	}
+	literal := matches[0][1]
+	var decoded strings.Builder
+	for rest := literal[1 : len(literal)-1]; rest != ""; {
+		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+		if err != nil {
+			return ""
+		}
+		decoded.WriteRune(r)
+		rest = tail
+	}
+	return decoded.String()
 }
 
 type commitCall struct {

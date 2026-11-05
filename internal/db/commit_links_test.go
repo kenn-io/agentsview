@@ -82,9 +82,9 @@ func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 
 func TestCommitLinksParsing(t *testing.T) {
 	for _, input := range []string{
-		`text(await tools.exec_command({cmd:"git status --short"})); text(await tools.exec_command({cmd:"git commit -m fix"})); text(await tools.exec_command({cmd:"git status --short"}));`,
-		`text(await tools.exec_command({cmd:'git status --short'})); text(await tools.exec_command({cmd:'git commit -m \'fix\''}));`,
-		"text(await tools.exec_command({cmd:`git status --short`})); text(await tools.exec_command({cmd:`git commit -m fix`}));",
+		`text(await tools.exec_command({cmd:"git commit -m fix"}));`,
+		`text(await tools.exec_command({cmd:'git commit -m \'fix\''}));`,
+		"text(await tools.exec_command({cmd:`git commit -m fix`}));",
 	} {
 		t.Run(input, func(t *testing.T) {
 			d := testDB(t)
@@ -507,6 +507,20 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 	}
 	cases := []ownershipCase{
 		{
+			name:     "failed commit with unrelated printed summary",
+			messages: []Message{call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"})); text(await tools.exec_command({cmd:"cat example.txt",workdir:"/other"}))`, `[{"type":"input_text","text":"{\"output\":\"nothing to commit\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main abc1234] Example\\n\"}"}]`)},
+		},
+		{
+			name:     "unrelated workdir before commit",
+			cwd:      "/work",
+			messages: []Message{call("exec", "commit-call", `text(await tools.exec_command({cmd:"git status",workdir:"/other"})); text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, `{"output":"[main abc1234] Fix parser\n"}`)},
+		},
+		{
+			name:     "unrelated cd before commit",
+			cwd:      "/work",
+			messages: []Message{call("exec", "commit-call", `text(await tools.exec_command({cmd:"cd /other && git status"})); text(await tools.exec_command({cmd:"git commit -m fix"}))`, `{"output":"[main abc1234] Fix parser\n"}`)},
+		},
+		{
 			name: "single poll mixed with unrelated command",
 			messages: []Message{
 				call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m first",workdir:"/first"}))`, `{"session_id":7,"output":""}`),
@@ -532,10 +546,6 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 		{
 			name:     "complete batch result",
 			messages: []Message{call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m first"})); text(await tools.exec_command({cmd:"git commit -m second"}))`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] First\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main def5678] Second\\n\"}"}]`)},
-			want: []ownedCommit{
-				{"abc1234", "commit-call", "", "Record the parser fix", tsZero, 2},
-				{"def5678", "commit-call", "", "Record the parser fix", tsZero, 2},
-			},
 		},
 		{
 			name: "running batch with native polls",
@@ -543,10 +553,6 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 				call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m first"})); text(await tools.exec_command({cmd:"git commit -m second"}))`, `[{"type":"input_text","text":"{\"session_id\":7,\"output\":\"\"}"},{"type":"input_text","text":"{\"session_id\":8,\"output\":\"\"}"}]`),
 				call("write_stdin", "poll-first", `{"session_id":7}`, "[main abc1234] First\n"),
 				call("write_stdin", "poll-second", `{"session_id":8}`, "[main def5678] Second\n"),
-			},
-			want: []ownedCommit{
-				{"abc1234", "commit-call", "", "Record the parser fix", tsZero, 2},
-				{"def5678", "commit-call", "", "Record the parser fix", tsZero, 2},
 			},
 		},
 	}
@@ -636,7 +642,6 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 			},
 			want: []ownedCommit{
 				{"abc1234", "commit-call", "/first", "Record the parser fix", tsZero, 2},
-				{"def5678", "second-call", "/second", "Record the second fix", "2026-01-02T03:04:05Z", 4},
 			},
 		})
 	}
