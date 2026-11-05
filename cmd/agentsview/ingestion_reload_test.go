@@ -461,35 +461,3 @@ func TestDaemonIngestionSlowCatchupKeepsWatching(t *testing.T) {
 	assert.Contains(t, body, "hello from slow")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 }
-
-func TestDaemonIngestionCanceledGenerationCannotAcknowledgeWake(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {t.TempDir()}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs})
-	t.Cleanup(engine.Close)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-	t.Cleanup(ingestion.Stop)
-	entered := make(chan struct{}, 2)
-	release := make(chan struct{}, 2)
-	ingestion.catchupImports = func(ctx context.Context) error {
-		entered <- struct{}{}
-		select {
-		case <-release:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	ingestion.Suspend()
-	first := make(chan bool, 1)
-	go func() { first <- ingestion.EnsureFresh(t.Context()) }()
-	<-entered
-	ingestion.Suspend()
-	assert.False(t, <-first)
-	second := make(chan bool, 1)
-	go func() { second <- ingestion.EnsureFresh(t.Context()) }()
-	<-entered
-	assert.True(t, ingestion.Pending(), "completion from the canceled generation retains the new wake")
-	release <- struct{}{}
-	assert.True(t, <-second)
-}

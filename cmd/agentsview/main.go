@@ -507,15 +507,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if idleTracker != nil {
 			idleTracker.SetSyncIdle(cfg.SyncIdleAfter, ingestion.Suspend)
 		}
-		if validRemotes {
-			for _, rh := range cfg.RemoteHosts {
-				if rh.Interval > 0 {
-					go startRemoteHostSync(ctx, cfg, database, engine, rh, emitter, idleTracker)
-				}
-			}
-		}
 		memoryRefresh = newMemoryRefreshQueue()
-		go startPeriodicSync(ctx, ingestion, engine, database, idleTracker, attachedSources)
+		go startPeriodicSync(ctx, cfg, ingestion, engine, database, idleTracker, validRemotes, emitter, attachedSources)
 		go runMemoryRefreshScheduler(ctx, memoryRefresh.requests, memoryRefreshDebounce, func() {
 			if localCtx := ingestion.ActiveContext(); localCtx != nil {
 				idleTracker.Do(func() { runScheduledSyncPass(localCtx, engine, scheduledReconcileTargets(ingestion.Config())) })
@@ -3201,12 +3194,25 @@ func collectLegacyWatchRoots(
 
 func startPeriodicSync(
 	ctx context.Context,
+	cfg config.Config,
 	ingestion *daemonIngestion,
 	engine *sync.Engine,
 	database *db.DB,
 	idleTracker *server.IdleTracker,
+	validRemotes bool,
+	emitter sync.Emitter,
 	attachedSources *archivesource.Manager,
 ) {
+	if validRemotes {
+		for _, rh := range cfg.RemoteHosts {
+			if rh.Interval > 0 {
+				go startRemoteHostSync(
+					ctx, cfg, database, engine, rh, emitter, idleTracker,
+				)
+			}
+		}
+	}
+
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for {

@@ -296,7 +296,6 @@
     color: var(--accent-green);
   }
 
-
   .codex-cloud-status {
     font-size: 10px;
     white-space: nowrap;
