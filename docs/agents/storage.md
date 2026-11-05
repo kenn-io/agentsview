@@ -18,6 +18,10 @@ reader connections so quick reads always get one. Each holder uses one reader
 connection at a time. Validate input before acquiring a permit. Release it
 before waiting for another bulk reader or doing host git/GitHub lookups.
 
+The archive writer caches up to 64 prepared SQL statements per connection to
+avoid compiling repeated import and project-attribution queries. The cache stays
+in memory and closes with its connection. Reader connections do not use it.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions
@@ -664,11 +668,11 @@ recheck against the archive: validating a snapshot against a source that changes
 one session at a time livelocks the request.
 
 Refills still extract complete session histories, but compare facts in bounded
-batches against one read-only cache snapshot and spool only changed or new
-rows. Comparison requires the expected install revision; installation checks
-that revision again. Complete per-session fact counts remove obsolete tails,
-and identity invalidation compares the complete cache before and after install.
-An append can still shift later activity or event indexes and spool those rows.
+batches against one read-only cache snapshot and spool only changed or new rows.
+Comparison requires the expected install revision; installation checks that
+revision again. Complete per-session fact counts remove obsolete tails, and
+identity invalidation compares the complete cache before and after install. An
+append can still shift later activity or event indexes and spool those rows.
 This reduces temporary writes; it does not make source extraction incremental.
 
 Timezone rollup identity includes both the resolved zone name and its rule

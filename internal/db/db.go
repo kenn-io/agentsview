@@ -1259,6 +1259,8 @@ func makeDSN(path string, readOnly bool) string {
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
+		// Imports repeatedly execute the same SQL, including project attribution.
+		params.Set("_stmt_cache_size", "64")
 		params.Set("_journal_mode", "WAL")
 		params.Set("_synchronous", "NORMAL")
 	}

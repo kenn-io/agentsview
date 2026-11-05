@@ -38,6 +38,12 @@ runner noise and fail loudly:
 - `TestWarmFullSyncDoesNoBulkWriteWork` (`internal/sync/perf_invariant_test.go`)
   — a second full sync over an unchanged Claude archive must skip everything
   and run zero bulk-write batches (`Engine.PhaseStats`).
+- `TestRepositoryProjectImportsReuseSQL` (`internal/db`) counts SQLite
+  preparation work while importing sessions with recorded repositories. Warm
+  imports reuse the repository lookup and retain both the effective project
+  and original source label. `BenchmarkRepositoryProjectImport` measures
+  imports with an existing project name and with a label that needs
+  attribution.
 - `TestProviderAuthoritativeUnchangedSessionSkipsOnResync`
   (`internal/sync/provider_freshness_integration_test.go`) — the generic
   freshness skip for provider-authoritative agents, Vibe as representative.
