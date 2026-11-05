@@ -15918,7 +15918,7 @@ func TestResyncAllCancelledPreservesOriginalDB(t *testing.T) {
 	stats := env.engine.ResyncAll(ctx, nil)
 
 	require.True(t, stats.Aborted, "expected ResyncAll to report Aborted")
-	assert.Equal(t, []string{"resync aborted: 0 synced, 0 failed"}, stats.Warnings)
+	assert.Equal(t, []string{"resync aborted: 0 synced, 0 failed: canceled: context canceled"}, stats.Warnings)
 	assert.Equal(t, stats, env.engine.LastSyncStats(),
 		"legacy LastSyncStats must match the returned cancellation result")
 

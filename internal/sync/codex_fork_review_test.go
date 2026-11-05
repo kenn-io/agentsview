@@ -234,7 +234,7 @@ func TestCodexForkReviewLegacyUsage(t *testing.T) {
 	stats := e.ResyncAll(t.Context(), nil)
 	require.True(t, stats.ArchiveRebuilt)
 	assert.Zero(t, stats.Failed)
-	assert.Contains(t, stats.Warnings, "resync: 1 sessions need retry")
+	assert.Contains(t, strings.Join(stats.Warnings, "\n"), "resync: 1 session needs retry; why: ")
 	events, err := d.GetUsageEvents(t.Context(), "codex:"+forkReviewChild)
 	require.NoError(t, err)
 	require.Len(t, events, 1)

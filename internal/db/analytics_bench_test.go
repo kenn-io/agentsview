@@ -154,3 +154,52 @@ func BenchmarkGetTrendsTermsOutOfRangeHistory(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkAnalyticsDateWindow(b *testing.B) {
+	for _, old := range []int{0, 3000, 30000} {
+		b.Run(fmt.Sprintf("history=%d", old), func(b *testing.B) {
+			d := testDB(b)
+			seedTrendsSessions(b, d, "recent", 300, "2026-11-01", 2, "hello")
+			if old > 0 {
+				seedTrendsSessions(b, d, "old", old, "2026-09-15", 300, "hello")
+			}
+			shuffleAnalyticsSessions(b, d)
+			for _, window := range []struct {
+				name, from, to string
+				want           int
+			}{
+				{"dense_two_days", "2026-10-31", "2026-11-01", 300},
+				{"empty", "2026-11-03", "2026-11-04", 0},
+				{"year", "2025-11-02", "2026-11-01", old + 300},
+				{"top_year", "2025-11-02", "2026-11-01", 10},
+			} {
+				b.Run(window.name, func(b *testing.B) {
+					f := AnalyticsFilter{From: window.from, To: window.to, Timezone: "UTC"}
+					b.ReportAllocs()
+					for b.Loop() {
+						if window.name == "top_year" {
+							resp, err := d.GetAnalyticsTopSessions(b.Context(), f, "messages")
+							require.NoError(b, err)
+							require.Len(b, resp.Sessions, window.want)
+						} else {
+							resp, err := d.GetAnalyticsSummary(b.Context(), f)
+							require.NoError(b, err)
+							require.Equal(b, window.want, resp.TotalSessions)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// Out-of-order syncs can place recent and old sessions on the same table pages.
+func shuffleAnalyticsSessions(b *testing.B, d *DB) {
+	b.Helper()
+	_, err := d.getWriter().ExecContext(b.Context(), `
+		WITH shuffled AS MATERIALIZED (
+			SELECT rowid AS old, -row_number() OVER (ORDER BY random()) AS shuffled FROM sessions
+		)
+		UPDATE sessions SET rowid = (SELECT shuffled FROM shuffled WHERE old = sessions.rowid)`)
+	require.NoError(b, err)
+}

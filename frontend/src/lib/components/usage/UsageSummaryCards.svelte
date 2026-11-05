@@ -156,11 +156,15 @@
   });
 
   const vsPrior = $derived.by(() => {
-    const c = usage.summary?.comparison;
-    if (!c) return null;
-    const sign = c.deltaPct >= 0 ? "+" : "";
+    const summary = usage.summary;
+    const c = summary?.comparison;
+    if (!summary || !c) return null;
+    const current = summary.totals.totalCost.microdollars;
+    const prior = c.priorTotalCost.microdollars;
+    const deltaPct = prior > 0 ? (current - prior) / prior : 0;
+    const sign = deltaPct >= 0 ? "+" : "";
     return m.usage_summary_vs_prior({
-      value: `${sign}${(c.deltaPct * 100).toFixed(0)}%`,
+      value: `${sign}${(deltaPct * 100).toFixed(0)}%`,
     });
   });
 

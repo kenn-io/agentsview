@@ -20,6 +20,7 @@ const {
   },
   mockSessions: {
     activeSessionId: null as string | null,
+    view: (row: unknown) => row,
     sessions: [] as Array<{
       id: string;
       project: string;

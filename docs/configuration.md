@@ -2414,13 +2414,14 @@ sudo sysctl fs.inotify.max_user_watches=524288
 
 The serve daemon installs a 4 GiB Go soft memory limit as a backstop so large
 requests run with normal GC pacing. Setting `GOMEMLIMIT` lower trades GC time
-for a smaller heap. On Linux it also limits glibc to two malloc
-arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
-off glibc's dynamic adjustment, which otherwise lets a long-running process stop
-trimming until as much as 64 MiB is free, so memory freed by the SQLite driver
-goes back to the operating system instead of accumulating as fragmentation.
-Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or `MALLOC_TRIM_THRESHOLD_` in the
-daemon's environment overrides the corresponding default.
+for a smaller heap. On Linux, every agentsview process limits glibc to two
+malloc arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold
+turns off glibc's dynamic adjustment, which otherwise lets a long-running
+process stop trimming until as much as 64 MiB is free, so memory freed by the
+SQLite driver goes back to the operating system instead of accumulating as
+fragmentation. Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or
+`MALLOC_TRIM_THRESHOLD_` in the process's environment overrides the
+corresponding default.
 
 ## Manual Sync
 

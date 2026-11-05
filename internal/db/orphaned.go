@@ -1684,6 +1684,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'database_id',
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
+				'usage_change_revision',
 				'conversation_publication_revision',
 				'worktree_mapping_publication_revision'
 			)
@@ -1703,11 +1704,9 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	// The session_deletion_changes journal is deliberately NOT copied from
-	// the source: its only consumers (the DuckDB mirror and internal/db)
-	// full-rebuild after every resync because the database_id changed, so
-	// journal continuity across the swap has no consumer. The fresh
-	// database's journal starts over with its own counter.
+	// The session_deletion_changes and usage_session_changes journals start
+	// over with their own counters. Consumers rebuild after a resync changes
+	// database_id, so they don't need journal continuity across the swap.
 
 	if oldDBHasTable(ctx, tx, "project_identity_observations") {
 		identityColumn := func(name, fallback string) string {

@@ -137,6 +137,17 @@ The latest release is
   because their file details alone could not show whether they changed, how
   many bytes were read, and how long the sync took. For a few less common
   agents, the read figures can be lower than the real reads.
+- When a sync or archive rebuild holds sessions for retry or stops early,
+  `debug.log` and the sync status now say why. Before, the log said only
+  `resync-build worker pass reported aborted`. A held session gets a
+  `sync: session needs retry:` line naming the session, its file, and the
+  reason, such as
+  `could not read the Codex session it was forked from (<session id>)` when a
+  fork's parent rollout file was deleted. Each pass then logs one summary. A
+  pass logs at most 20 sessions one by one and counts the rest. A rebuild that
+  stops names its cause, for example
+  `kept the existing archive: the rebuild found no session files, but the archive has 1 session from files`.
+  `agentsview doctor sync` includes the new lines in its log evidence.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
@@ -146,6 +157,7 @@ The latest release is
 - Large Usage and Activity pages no longer stall in garbage collection on big
   archives; peak memory during large requests can be higher, and a lower
   `GOMEMLIMIT` can reduce it by overriding the 4 GiB default.
+- The Usage page now starts loading the vs-prior comparison alongside the totals.
 - Codex code-mode `wait` calls now show their script output. The next sync
   restores missing results in previously imported sessions. Subagent waits
   keep their existing behavior.

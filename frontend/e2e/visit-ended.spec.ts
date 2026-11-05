@@ -68,8 +68,11 @@ for (const { remote, action } of [
       }
       await enabled;
       server.preflights.length = 0;
-      if (action === "close") await page.close();
-      else await page.reload();
+      if (action === "close") {
+        // Keep Chromium from killing the renderer before it dispatches pagehide.
+        await page.evaluate(() => window.addEventListener("beforeunload", () => {}));
+        await page.close({ runBeforeUnload: true });
+      } else await page.reload();
       await expect
         .poll(() => server.visits.map(({ payload }) => payload))
         .toEqual([

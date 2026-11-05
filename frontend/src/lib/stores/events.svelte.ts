@@ -27,18 +27,31 @@ class EventsStore {
   private permanentlyFailed = false;
   private available = false;
   private visibilityHandlerInstalled = false;
+  private resolveStartup!: () => void;
+  private startup = new Promise<void>((resolve) => {
+    this.resolveStartup = resolve;
+  });
+  private startupTimer: ReturnType<typeof setTimeout> | undefined;
+
+  whenReady(timeoutMs: number): Promise<void> {
+    this.startupTimer ??= setTimeout(() => this.settleStartup(), timeoutMs);
+    return this.startup;
+  }
+
+  settleStartup() {
+    this.resolveStartup();
+  }
 
   /** Enable or disable the live event stream for the current backend mode. */
   setAvailable(available: boolean) {
     this.available = available;
     if (!available) {
       this.close();
-      return;
-    }
-    if (this.listeners.size > 0) {
+    } else if (this.listeners.size > 0) {
       this.ensureOpen();
       this.ensureHealTimer();
     }
+    if (this.es === null) this.settleStartup();
   }
 
   /** Subscribe to every event. Returns unsubscribe. */
@@ -125,7 +138,9 @@ class EventsStore {
     es.addEventListener("events_ready", () => {
       if (this.es !== es) return;
       for (const fn of this.listeners.values()) fn({ scope: "sync" });
+      this.settleStartup();
     });
+    es.addEventListener("error", () => this.settleStartup());
   }
 
   private close() {

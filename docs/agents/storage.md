@@ -767,6 +767,19 @@ backdated fact timestamp, an appended activity-only fact, an edit, a deletion,
 or a usage event falls back to complete extraction. Claude suffix replacement
 and late Codex usage updates also use complete extraction.
 
+Full resync suspends the generation insert trigger,
+`messages_usage_generation_insert`, in the replacement archive during the bulk
+load. Any row trigger on `messages` makes SQLite stage every multi-row insert
+through a temporary table. With the search triggers already dropped, this
+trigger alone added about half to message insert time on a synthetic
+400,000-message resync. While it is suspended, an insert before an existing
+ordinal does not rotate the generation, and new sessions get none. Before the
+swap, `RebuildBulkImportIndexes` must reinstall the trigger and give every
+session a new generation in one transaction. A failed restore aborts the swap
+like a failed index rebuild. This discards only append prefixes cached from the
+replacement during the load: the replacement has a new database ID, so it starts
+with an empty usage cache. Live archives never suspend the trigger.
+
 Full extractions compare facts in bounded batches against one read-only cache
 snapshot and spool only changed or new rows. Comparison requires the expected
 install revision; installation checks that revision again. Complete per-session
@@ -847,7 +860,9 @@ to mutate the archive from a read-only command.
 Full resync drops these indexes in the temporary database during the bulk load
 (the FTS trade: one post-load build instead of per-row B-tree maintenance) and
 must rebuild them before the swap; a failed rebuild aborts the swap because
-read-only opens require the indexes.
+read-only opens require the indexes. The same drop and rebuild suspend and
+restore the usage generation insert trigger; see
+[Usage cache divergence](#usage-cache-divergence).
 
 ### Sidebar tree index
 

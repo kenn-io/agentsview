@@ -52,7 +52,9 @@ test("Back restoration starts a fresh visit", async ({ page, baseURL }) => {
     await page.evaluate(() =>
       (window as unknown as { advanceVisit(ms: number): void }).advanceVisit(30_000),
     );
-    await page.close();
+    // Keep Chromium from killing the renderer before it dispatches pagehide.
+    await page.evaluate(() => window.addEventListener("beforeunload", () => {}));
+    await page.close({ runBeforeUnload: true });
     await expect
       .poll(() => server.visits.map((visit) => visit.payload))
       .toEqual([

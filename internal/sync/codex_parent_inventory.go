@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -18,10 +17,8 @@ func (e *Engine) finishCodexParentInventoryBatch(ctx context.Context, stats *Syn
 	// Like collector flushes, demotion must finish even when parsing was canceled.
 	completionCtx := context.WithoutCancel(ctx)
 	for _, source := range sources {
-		if e.archiveStore != nil {
-			log.Printf("resync: deferred %s: Codex parent inventory changed", source.Path)
-		}
 		stats.recordDeferred(source.Path)
+		stats.recordRetryCause(retryCause{path: source.Path, reason: "Codex parent inventory changed"})
 		e.invalidateVerifiedSource(source.Agent, source.Path)
 		target := e.effectiveSourcePath(source.Path)
 		ids, readErr := e.db.ListSessionIDsByFilePath(completionCtx, target, string(source.Agent))
@@ -51,11 +48,12 @@ func (e *Engine) finishCodexParentInventoryBatch(ctx context.Context, stats *Syn
 		err = errors.Join(err, clearErr, e.db.DeleteProviderStatHash(completionCtx, source.Agent, target))
 	}
 	if err != nil {
+		err = fmt.Errorf("validate Codex parent inventory: %w", err)
 		stats.RecordFailed()
 		if e.archiveStore != nil {
-			stats.Aborted = true
+			stats.abort(err.Error())
 		}
-		return fmt.Errorf("validate Codex parent inventory: %w", err)
+		return err
 	}
 	return nil
 }

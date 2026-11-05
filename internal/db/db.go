@@ -1410,6 +1410,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
 	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
+	}
+	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
 	d.mu.Unlock()
@@ -2948,6 +2951,13 @@ WHEN NEW.session_id IS NOT OLD.session_id OR
 BEGIN
     UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id IN (OLD.session_id, NEW.session_id);
 END;
+` + messagesUsageGenerationInsertTriggerSQL
+
+// messagesUsageGenerationInsertTriggerSQL gives a session its first generation
+// and replaces it when an insert lands at or before an existing ordinal.
+// DropBulkImportIndexes suspends it during a resync bulk load and
+// RebuildBulkImportIndexes reinstalls it.
+const messagesUsageGenerationInsertTriggerSQL = `
 CREATE TRIGGER IF NOT EXISTS messages_usage_generation_insert BEFORE INSERT ON messages
 WHEN (SELECT usage_generation FROM sessions WHERE id=NEW.session_id) IS NULL
   OR EXISTS (SELECT 1 FROM messages WHERE session_id=NEW.session_id AND ordinal>=NEW.ordinal)
@@ -2963,6 +2973,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerDropsSQL); err != nil {
+		return fmt.Errorf("dropping usage change journal triggers: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, provider_freshnessDDL); err != nil {
 		return fmt.Errorf(
 			"creating provider_freshness side-table: %w", err)
@@ -2983,6 +2996,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing classification journal trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
+		return fmt.Errorf("installing usage change journal triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)
@@ -5021,7 +5037,10 @@ func bulkImportWALAutocheckpointPages(pageSize int) int {
 }
 
 // DropBulkImportIndexes omits derived index maintenance in a disposable
-// full-resync archive and defers its automatic WAL checkpoints.
+// full-resync archive and defers its automatic WAL checkpoints. It also drops
+// the usage generation insert trigger: any row trigger makes SQLite stage each
+// multi-row message INSERT through a temporary table, and with the search
+// triggers already dropped this one carried that cost alone.
 // RebuildBulkImportIndexes and CheckpointWALTruncate must succeed before the swap.
 func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 	db.mu.Lock()
@@ -5049,6 +5068,10 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 			return fmt.Errorf("dropping bulk import index %s: %w", name, err)
 		}
 	}
+	if _, err := w.Exec(ctx,
+		`DROP TRIGGER IF EXISTS messages_usage_generation_insert`); err != nil {
+		return fmt.Errorf("dropping usage generation insert trigger: %w", err)
+	}
 	return nil
 }
 
@@ -5057,6 +5080,9 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if err := restoreUsageGenerationsLocked(ctx, db.getWriter()); err != nil {
+		return err
+	}
 	if err := ensureUsageIndexesLocked(ctx, db.getWriter()); err != nil {
 		return err
 	}
@@ -5076,6 +5102,31 @@ func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 		}
 	}
 	return ensureAnalyticsIndexLocked(ctx, db.getWriter())
+}
+
+// restoreUsageGenerationsLocked reinstalls the usage generation insert trigger
+// and gives every session a new generation. Inserts made while the trigger was
+// dropped may have landed before an existing ordinal, so no generation from
+// that window may vouch for a cached usage prefix. The replacement has a new
+// database ID and starts with an empty usage cache, so the only prefixes this
+// discards were filled from the replacement during the load.
+func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting usage generation restore: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, messagesUsageGenerationInsertTriggerSQL); err != nil {
+		return fmt.Errorf("reinstalling usage generation insert trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))`); err != nil {
+		return fmt.Errorf("renewing usage generations: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing usage generation restore: %w", err)
+	}
+	return nil
 }
 
 // checkFTSModuleLoads fails when messages_fts is in the schema but this
