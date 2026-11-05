@@ -484,6 +484,7 @@
         swatch: seriesSwatch(key),
         patterned: seriesStyle(key).fill !== "solid",
       }))
+      .filter((row) => row.value > 0)
       .sort((a, b) => b.value - a.value);
   }
 

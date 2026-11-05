@@ -248,7 +248,7 @@ describe("CostTimeSeriesChart", () => {
     await tick();
     const tooltip = document.querySelector(".tooltip")!;
     expect(tooltip.querySelector(".tooltip-date")?.textContent).toContain("Jun 5, 2026");
-    expect(tooltip.querySelector(".tooltip-row")?.textContent).toContain("$0.00");
+    expect(tooltip.querySelectorAll(".tooltip-row")).toHaveLength(0);
 
     unmount(component);
   });
@@ -650,11 +650,14 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "small", cost: testMoney(1) },
         { modelName: "large", cost: testMoney(9) },
         { modelName: "medium", cost: testMoney(4) },
+        { modelName: "zero", cost: testMoney(0) },
       ]),
       modelDailyEntry(1, [
         { modelName: "small", cost: testMoney(2) },
         { modelName: "large", cost: testMoney(3) },
         { modelName: "medium", cost: testMoney(8) },
+        { modelName: "zero", cost: testMoney(2) },
+        { modelName: "absent", cost: testMoney(1) },
       ]),
     ]);
 
@@ -675,6 +678,34 @@ describe("CostTimeSeriesChart", () => {
     expect(rows[1]!.textContent).toContain("medium");
     expect(rows[2]!.textContent).toContain("small");
 
+    unmount(component);
+  });
+
+  it.each(["cost", "token"] as const)("hides zero Other rows in %s mode", async (mode) => {
+    usage.mode = mode;
+    usage.toggles.timeSeries.groupBy = "model";
+    const models = Array.from({ length: 11 }, (_, index) => ({
+      modelName: `model-${index}`,
+      cost: testMoney(11 - index),
+    }));
+    const first = modelDailyEntry(0, models);
+    const second = modelDailyEntry(1, models.slice(0, 10));
+    usage.summary = usageSummary([first, second]);
+
+    const component = mountChart();
+    await tick();
+    const hits = document.querySelectorAll(".slot-hit");
+    hits[0]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".tooltip-name"), (row) => row.textContent),
+    ).toContain("Other");
+
+    hits[1]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".tooltip-name"), (row) => row.textContent),
+    ).toEqual(names("model", 0, 10));
     unmount(component);
   });
 
