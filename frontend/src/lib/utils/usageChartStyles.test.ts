@@ -3,6 +3,27 @@ import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
 import { usageChartStyleMaps } from "./usageChartStyles.js";
 
+function oklab(hex: string): [number, number, number] {
+  const value = Number.parseInt(hex.slice(1), 16);
+  const [r, g, b] = [16, 8, 0].map((shift) => {
+    const channel = ((value >> shift) & 0xff) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+}
+
+function oklabDistance(left: string, right: string): number {
+  const [a, b] = [oklab(left), oklab(right)];
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
 function tenModelSummary(
   models = [
     "model-alpha",
@@ -101,6 +122,26 @@ describe("usageChartStyleMaps", () => {
     expect(colors).toContain("#4e85e0");
     expect(colors).not.toContain("var(--accent-blue)");
     expect(colors).toContain("var(--accent-purple)");
+  });
+
+  it("keeps calmed light teal and green series apart", () => {
+    const light: Record<string, string> = {
+      "var(--accent-teal)": "#0d9488",
+      "var(--accent-green)": "#059669",
+      "var(--usage-series-teal)": "#20acb3",
+    };
+    const resolveColor = (color: string) => light[color] ?? color;
+    // Cost order puts the fourth palette color (teal) on model-golf and the
+    // sixth (green) on model-echo.
+    const separated = usageChartStyleMaps(tenModelSummary(), "agentsview", { resolveColor }).model;
+    const shared = usageChartStyleMaps(tenModelSummary(), "agentsview", {
+      resolveColor: (color) => (color === "var(--usage-series-teal)" ? color : resolveColor(color)),
+    }).model;
+
+    const green = separated.get("model-echo")!.color;
+    const sharedTeal = shared.get("model-golf")!.color;
+    expect(oklabDistance(sharedTeal, green)).toBeLessThan(0.08);
+    expect(oklabDistance(separated.get("model-golf")!.color, green)).toBeGreaterThan(0.1);
   });
 
   it("keeps the color-blind safe palette exact", () => {

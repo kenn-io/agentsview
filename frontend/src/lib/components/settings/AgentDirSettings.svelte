@@ -196,16 +196,16 @@
     flex-direction: column;
   }
 
-  /* Same geometry as the shared settings row: the provider name sits in
-     the label column, its switch on that first line in the control column,
-     and the paths and alternate homes below the switch. */
+  /* Each provider is a block: a compact header line with the name on the
+     left and its switch on the right, then the paths and alternate homes
+     across the full inner width below, so long paths wrap less. */
   .provider-row {
     display: grid;
-    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
     column-gap: 12px;
-    row-gap: var(--space-2);
-    padding: var(--space-4) 0;
+    row-gap: 6px;
+    padding: var(--space-3) 0;
     border-bottom: 1px solid var(--border-muted);
   }
 
@@ -214,11 +214,11 @@
   }
 
   .provider-row > :global(.kit-toggle) {
-    justify-self: start;
+    justify-self: end;
   }
 
   .provider-details {
-    grid-column: 2;
+    grid-column: 1 / -1;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
@@ -226,8 +226,7 @@
   }
 
   /* Provider names head each block, so they read heavier than the
-     shared field labels; the 20px line box centers them on the switch
-     track beside them. */
+     shared field labels; the 20px line box matches the switch track. */
   .provider-name {
     color: var(--text-primary);
     font-size: 12px;
@@ -247,7 +246,8 @@
   .provider-not-configured {
     color: var(--text-muted);
     font-size: 11px;
-    line-height: 1.35;
+    line-height: 1.4;
+    letter-spacing: -0.01em;
   }
 
   /* Wrap only between segments (after a separator); each segment,
@@ -313,16 +313,5 @@
 
   .provider-error {
     color: var(--accent-red);
-  }
-
-  /* Phones: one column, matching the shared settings rows. */
-  @media (max-width: 640px) {
-    .provider-row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .provider-details {
-      grid-column: 1;
-    }
   }
 </style>

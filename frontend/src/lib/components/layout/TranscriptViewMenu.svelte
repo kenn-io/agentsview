@@ -53,43 +53,46 @@
   const triggerText = $derived(labelFor(layoutName, focused));
 </script>
 
-<!-- A schematic of each layout: role header bars, message blocks, and tool
-     rows, drawn as vectors so they stay sharp at any display scale. -->
+<!-- A schematic of each layout, drawn as vectors so it stays sharp at any
+     display scale. Each one shows what sets the layout apart: Default has
+     roomy cards with role icons and a tool block, Compact stacks more,
+     tighter cards without icons, Stream drops the headers and cards around
+     open prose, and Skim reduces every message and tool call to one line. -->
 {#snippet preview(layout: MessageLayout)}
   <svg class="preview" viewBox="0 0 48 32" aria-hidden="true">
     {#if layout === "default"}
-      <rect class="rail-user" x="2" y="2" width="1.5" height="9" />
-      <rect class="head" x="5" y="3" width="10" height="2" />
-      <rect class="text" x="5" y="7" width="38" height="2" />
-      <rect class="tool" x="2" y="13" width="44" height="7" rx="1" />
-      <rect class="row" x="5" y="15" width="24" height="1.5" />
-      <rect class="row" x="5" y="17.5" width="30" height="1.5" />
-      <rect class="rail" x="2" y="22" width="1.5" height="8" />
-      <rect class="head" x="5" y="23" width="12" height="2" />
-      <rect class="text" x="5" y="27" width="34" height="2" />
+      <rect class="card" x="2" y="2" width="44" height="10" />
+      <rect class="rail-user" x="2" y="2" width="1.5" height="10" />
+      <circle class="dot-user" cx="6.5" cy="5" r="1.5" />
+      <rect class="head-user" x="9.5" y="4.2" width="9" height="1.6" />
+      <rect class="text" x="5" y="8.2" width="34" height="1.6" />
+      <rect class="card" x="2" y="14" width="44" height="16" />
+      <rect class="rail" x="2" y="14" width="1.5" height="16" />
+      <circle class="dot" cx="6.5" cy="17" r="1.5" />
+      <rect class="head" x="9.5" y="16.2" width="11" height="1.6" />
+      <rect class="text" x="5" y="20.2" width="36" height="1.6" />
+      <rect class="tool" x="5" y="23.5" width="38" height="4.5" rx="0.5" />
+      <rect class="row" x="7" y="25" width="22" height="1.4" />
     {:else if layout === "compact"}
-      <rect class="rail-user" x="2" y="2" width="1" height="6" />
-      <rect class="head" x="4" y="2.5" width="8" height="1.5" />
-      <rect class="text" x="4" y="5.5" width="38" height="1.5" />
-      <rect class="tool" x="2" y="9.5" width="44" height="5" rx="1" />
-      <rect class="row" x="4" y="11" width="24" height="1.2" />
-      <rect class="row" x="4" y="12.8" width="30" height="1.2" />
-      <rect class="rail" x="2" y="16" width="1" height="6" />
-      <rect class="head" x="4" y="16.5" width="10" height="1.5" />
-      <rect class="text" x="4" y="19.5" width="34" height="1.5" />
-      <rect class="rail" x="2" y="24" width="1" height="6" />
-      <rect class="head" x="4" y="24.5" width="10" height="1.5" />
-      <rect class="text" x="4" y="27.5" width="30" height="1.5" />
+      {#each [2, 9.5, 17, 24.5] as y, index (y)}
+        <rect class="card" x="2" y={y} width="44" height="6" />
+        <rect class={index === 0 ? "rail-user" : "rail"} x="2" y={y} width="1" height="6" />
+        <rect class={index === 0 ? "head-user" : "head"} x="4" y={y + 1.2} width="6" height="1.1" />
+        <rect class={index === 2 ? "row" : "text"} x="4" y={y + 3.5} width={[36, 40, 26, 32][index]} height="1.2" />
+      {/each}
     {:else if layout === "stream"}
-      <rect class="user-wash" x="2" y="2" width="44" height="7" rx="1" />
-      <rect class="text" x="5" y="4.5" width="34" height="2" />
-      <rect class="text" x="5" y="12" width="38" height="2" />
-      <rect class="text" x="5" y="16" width="32" height="2" />
-      <rect class="row" x="5" y="20.5" width="22" height="1.5" />
-      <rect class="text" x="5" y="25" width="36" height="2" />
+      <rect class="user-wash" x="2" y="2" width="44" height="8" />
+      <rect class="rail-user" x="2" y="2" width="1" height="8" />
+      <rect class="text" x="5" y="5.2" width="30" height="1.6" />
+      <rect class="text" x="5" y="13.5" width="38" height="1.6" />
+      <rect class="text" x="5" y="17.5" width="32" height="1.6" />
+      <rect class="row" x="7" y="21.5" width="18" height="1.4" />
+      <rect class="text" x="5" y="25.5" width="36" height="1.6" />
     {:else}
-      {#each [3, 7, 11, 15, 19, 23, 27] as y, index (y)}
-        <rect class={index % 3 === 1 ? "row" : "text"} x="3" y={y} width={[40, 26, 34, 42, 24, 36, 30][index]} height="1.6" />
+      {#each [2.5, 6.5, 10.5, 14.5, 18.5, 22.5, 26.5] as y, index (y)}
+        {@const tool = index % 3 === 1}
+        <rect class={index === 0 ? "rail-user" : tool ? "row" : "rail"} x="3" y={y} width="1.5" height="3" />
+        <rect class={tool ? "row" : "text"} x="6.5" y={y + 0.8} width={[36, 22, 32, 38, 20, 34, 28][index]} height="1.4" />
       {/each}
     {/if}
   </svg>
@@ -318,11 +321,15 @@
     background: var(--bg-primary);
   }
 
+  .preview .card { fill: var(--text-primary); opacity: 0.05; }
   .preview .text { fill: var(--text-secondary); opacity: 0.55; }
-  .preview .head { fill: var(--accent-purple); opacity: 0.7; }
-  .preview .row { fill: var(--accent-amber); opacity: 0.7; }
-  .preview .tool { fill: var(--text-primary); opacity: 0.06; }
+  .preview .head,
+  .preview .dot { fill: var(--accent-purple); opacity: 0.75; }
+  .preview .head-user,
+  .preview .dot-user { fill: var(--accent-blue); opacity: 0.85; }
+  .preview .row { fill: var(--accent-amber); opacity: 0.75; }
+  .preview .tool { fill: var(--text-primary); opacity: 0.07; }
   .preview .rail { fill: var(--accent-purple); opacity: 0.6; }
   .preview .rail-user { fill: var(--accent-blue); }
-  .preview .user-wash { fill: var(--accent-blue); opacity: 0.15; }
+  .preview .user-wash { fill: var(--accent-blue); opacity: 0.12; }
 </style>

@@ -1235,6 +1235,12 @@
     display: none;
   }
 
+  /* Skim rows touch, so rounded corners would leave notches between
+     neighboring cards; the run reads as one continuous stack. */
+  .layout-skim :global(.message) {
+    border-radius: 0;
+  }
+
   .layout-skim :global(.tool-block) {
     border-left: none;
     border-radius: 0;
@@ -1251,6 +1257,13 @@
   .layout-skim :global(.tool-header) {
     padding: 1px 12px;
     pointer-events: none;
+  }
+
+  /* Standalone tool rows start on the prose edge (the message bar plus its
+     16px padding); tools inside a message keep the one 12px nested inset
+     from that edge, over their own row background. */
+  .layout-skim .virtual-row > :global(:not(.message) .tool-header) {
+    padding-inline-start: calc(var(--role-assistant-bar-width) + 16px);
   }
 
   .layout-skim :global(.tool-meta),

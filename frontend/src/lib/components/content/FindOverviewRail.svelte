@@ -91,7 +91,10 @@
   .find-overview-rail {
     position: absolute;
     inset-block: 0;
-    inset-inline-end: 0;
+    /* On wide panes the rail sits in the gutter just past the reading
+       column's edge, next to the content it indexes; on narrow panes it
+       falls back to the 12px reserved at the pane edge. */
+    inset-inline-end: max(0px, calc((100% - var(--reading-column)) / 2 - 16px));
     width: 12px;
     height: 100%;
     color: var(--accent-blue);
