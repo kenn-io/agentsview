@@ -35,6 +35,8 @@ package main
 //
 // The constructor runs before main because Go's runtime threads already own
 // arenas by then. glibc latches its arena limit before a later mallopt can cap it.
+// Every process is capped because full sync and resync rebuilds showed no
+// measurable time cost.
 
 enum {
 	mallocArenaMax = 2,
@@ -46,10 +48,7 @@ static int env_unset(const char *name) {
 	return value == NULL || value[0] == '\0';
 }
 
-// One-shot commands and sync-worker exit before fragmentation accumulates.
-__attribute__((constructor)) static void tune_serve_malloc(int argc, char **argv, char **envp) {
-	if (!(argc > 1 && strcmp(argv[1], "serve") == 0) &&
-		!(!env_unset("AGENTSVIEW_MODE") && (argc < 2 || argv[1][0] == '-'))) return;
+__attribute__((constructor)) static void tune_malloc(void) {
 	if (env_unset("MALLOC_ARENA_MAX")) mallopt(M_ARENA_MAX, mallocArenaMax);
 	if (env_unset("MALLOC_TRIM_THRESHOLD_")) mallopt(M_TRIM_THRESHOLD, mallocTrimThreshold);
 }

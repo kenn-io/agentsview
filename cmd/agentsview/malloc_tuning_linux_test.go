@@ -69,8 +69,8 @@ func TestServeMallocArenaCap(t *testing.T) {
 		{name: "serve caps arenas before threads allocate", args: []string{"serve"}, capped: true},
 		{name: "empty arena override counts as unset", args: []string{"serve"}, env: []string{"MALLOC_ARENA_MAX="}, capped: true},
 		{name: "operator arena override wins", args: []string{"serve"}, env: []string{"MALLOC_ARENA_MAX=8"}},
-		{name: "other commands keep the default", args: []string{"sync-worker"}},
-		{name: "container launch is the daemon", env: []string{"AGENTSVIEW_MODE=serve"}, capped: true},
+		{name: "sync-worker caps arenas", args: []string{"sync-worker"}, capped: true},
+		{name: "serve with leading flag caps arenas", args: []string{"--port=9000", "serve"}, capped: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), binary, tt.args...)
