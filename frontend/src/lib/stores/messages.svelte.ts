@@ -162,7 +162,7 @@ export class MessagesStore {
         console.warn("Failed to fetch session metadata:", err);
       }
 
-      if (ready && countHint !== null && countHint > MESSAGE_PAGE_SIZE) {
+      if (ready) {
         await ready;
       }
       if (this.watchGate === generation) this.watchGate = null;

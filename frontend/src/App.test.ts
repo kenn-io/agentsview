@@ -230,6 +230,46 @@ describe("App Recall availability", () => {
 });
 
 describe("App session URL date state", () => {
+  it.each(["selection change", "selection cleared", "route exit", "unmount"])(
+    "ignores an old watch's children fallback after %s",
+    async (change) => {
+      stubAppDependencies();
+      vi.spyOn(sessions, "load").mockResolvedValue();
+      vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+      const ready = Promise.withResolvers<boolean>();
+      vi.mocked(sync.watchSession).mockReturnValueOnce(ready.promise);
+      router.route = "sessions";
+      router.isRootPath = false;
+      router.sessionId = "session-1";
+      sessions.activeSessionId = "session-1";
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      expect(sync.watchSession).toHaveBeenCalledWith(
+        "session-1",
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(sessions.loadChildSessions).not.toHaveBeenCalled();
+
+      if (change === "selection change") {
+        sessions.activeSessionId = "session-2";
+      } else if (change === "selection cleared") {
+        sessions.activeSessionId = null;
+      } else if (change === "route exit") {
+        router.navigate("usage");
+      } else {
+        await unmount(component);
+        component = undefined;
+      }
+      await flushEffects();
+      vi.mocked(sessions.loadChildSessions).mockClear();
+
+      ready.resolve(false);
+      await flushEffects();
+      expect(sessions.loadChildSessions).not.toHaveBeenCalled();
+    },
+  );
+
   it("requests children once when the session watch becomes ready on open", async () => {
     stubAppDependencies();
     vi.mocked(sync.watchSession).mockRestore();

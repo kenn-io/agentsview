@@ -195,21 +195,20 @@ describe("MessagesStore", () => {
     expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
   });
 
-  it.each([20, 1000])(
-    "reads %i-message sessions before ready and keeps the ready reload",
-    async (count) => {
-      const ready = createDeferred<void>();
-      api.getSession.mockResolvedValue(makeSession("s1", count));
-      api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
-      await messages.loadSession("s1", ready.promise);
-      expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
-      expect(api.getMessages).toHaveBeenCalledTimes(1);
+  it.each([20, 1000])("reads %i-message sessions once after ready", async (count) => {
+    const ready = createDeferred<void>();
+    api.getSession.mockResolvedValue(makeSession("s1", count));
+    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+    const load = messages.loadSession("s1", ready.promise);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.getMessages).not.toHaveBeenCalled();
 
-      ready.resolve();
-      await messages.reload();
-      expect(api.getMessages).toHaveBeenCalledTimes(2);
-    },
-  );
+    ready.resolve();
+    const reload = messages.reload();
+    await Promise.all([load, reload]);
+    expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+    expect(api.getMessages).toHaveBeenCalledTimes(1);
+  });
 
   it("recovers from a transient first read after the watch becomes ready", async () => {
     vi.useFakeTimers();

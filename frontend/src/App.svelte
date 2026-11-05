@@ -144,6 +144,7 @@
     const route = router.route;
     const id = sessions.activeSessionId;
     void sessions.activeSessionLoadVersion;
+    let current = true;
     untrack(() => {
       const idChanged = id !== lastMessageLoadSessionId;
       lastMessageLoadSessionId = id;
@@ -198,7 +199,7 @@
         );
         messages.loadSession(id, ready);
         void ready.then((seen) => {
-          if (!seen) sessions.loadChildSessions(id);
+          if (!seen && current) sessions.loadChildSessions(id);
         });
         sessionTiming.load(id);
         pins.loadForSession(id);
@@ -211,6 +212,9 @@
         pins.clearSession();
       }
     });
+    return () => {
+      current = false;
+    };
   });
 
   // Scroll to pending ordinal once messages finish loading.
