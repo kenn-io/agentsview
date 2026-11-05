@@ -643,7 +643,7 @@ describe("CostTimeSeriesChart", () => {
       usage.setSelectedTokenTypes(["output"]);
       usage.toggles.timeSeries.groupBy = "model";
       usage.toggles.timeSeries.view = "bars";
-      const names = ["large", "boundary", "tiny", "smallest"];
+      const modelNames = ["large", "boundary", "tiny", "smallest"];
       usage.summary = usageSummary(
         [
           [993, 5, 2, 0],
@@ -652,7 +652,7 @@ describe("CostTimeSeriesChart", () => {
           const entry = modelDailyEntry(
             day,
             values.map((value, index) => ({
-              modelName: names[index]!,
+              modelName: modelNames[index]!,
               cost: testMoney(value),
               inputTokens: 100_000,
               outputTokens: value,
@@ -671,13 +671,14 @@ describe("CostTimeSeriesChart", () => {
         item.textContent?.trim(),
       );
       expect(labels).toEqual(["large", "boundary", "Other"]);
-      const bars = Array.from(document.querySelectorAll("rect.cost-seg"));
-      expect(
-        bars.slice(0, 3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0),
-      ).toBeCloseTo(160);
-      expect(
-        bars.slice(3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0),
-      ).toBeCloseTo(160);
+      const bars = document.querySelectorAll("g[data-cost-bar]");
+      expect(bars).toHaveLength(2);
+      for (const bar of bars) {
+        const segments = Array.from(bar.querySelectorAll("rect.cost-seg"));
+        expect(
+          segments.reduce((sum, segment) => sum + Number(segment.getAttribute("height")), 0),
+        ).toBeCloseTo(160);
+      }
       for (const [day, value] of [2, 8].entries()) {
         document
           .querySelectorAll(".slot-hit")
@@ -699,18 +700,33 @@ describe("CostTimeSeriesChart", () => {
     },
   );
 
-  it("keeps zero-total day slots without legend entries", async () => {
+  it("omits zero-cost series and empty Other while keeping day slots", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const entry = modelDailyEntry(0, [
       { modelName: "zero-a", cost: testMoney(0) },
       { modelName: "zero-b", cost: testMoney(0) },
     ]);
     entry.totalCost = testMoney(0);
+    entry.inputTokens = 120;
+    entry.outputTokens = 60;
     usage.summary = usageSummary([entry]);
     const component = mountChart();
     await tick();
     expect(document.querySelectorAll(".slot-hit")).toHaveLength(1);
     expect(document.querySelector(".legend")).toBeNull();
+    const visibleEntry = modelDailyEntry(0, [
+      { modelName: "visible-a", cost: testMoney(9) },
+      { modelName: "visible-b", cost: testMoney(1) },
+      { modelName: "zero", cost: testMoney(0) },
+    ]);
+    visibleEntry.totalCost = testMoney(10);
+    visibleEntry.inputTokens = 180;
+    visibleEntry.outputTokens = 90;
+    usage.summary = usageSummary([visibleEntry]);
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["visible-a", "visible-b"]);
     unmount(component);
   });
 
