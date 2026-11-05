@@ -277,6 +277,9 @@ func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
 
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
 	return func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		if err := d.restoreCollection(); err != nil {
+			return agentsync.SyncStats{}, err
+		}
 		stats, err := runner(ctx, progress)
 		if err == nil && ctx.Err() == nil && stats.ProcessingComplete() {
 			d.acknowledgeSync()

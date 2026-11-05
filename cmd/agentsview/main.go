@@ -3245,16 +3245,16 @@ func startPeriodicSync(
 		idleTracker.Do(func() {
 			if ingestion.Pending() {
 				ingestion.ensureFresh(ctx, true)
-				return
-			}
-			// Roots follow provider settings changes, and the scheduled
-			// reconcile targets are re-probed each tick because disk
-			// availability changes.
-			current := ingestion.Config()
-			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
-			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
-			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("archive sources: %v", err)
+			} else {
+				// Roots follow provider settings changes, and the scheduled
+				// reconcile targets are re-probed each tick because disk
+				// availability changes.
+				current := ingestion.Config()
+				runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
+				runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
+				if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
+					log.Printf("archive sources: %v", err)
+				}
 			}
 			recomputePendingSessions(ctx, engine, database)
 			recomputeStaleFriction(ctx, engine)
