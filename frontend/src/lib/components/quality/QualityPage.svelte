@@ -1141,7 +1141,10 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     line-height: 30px;
   }
 
+  /* The grid owns the column count; a card's 120px minimum would make
+     tracks overlap when zoom narrows the page above the 900px query. */
   .summary-grid :global(.kit-card.stat-card) {
+    min-width: 0;
     padding-block: 8px;
   }
 
@@ -1701,10 +1704,11 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     animation: shimmer 1.4s ease-in-out infinite;
   }
 
+  /* Matches the loaded summary card so the page does not shift. */
   .skeleton-card {
     border-radius: var(--radius-md);
     border: 1px solid var(--border-muted);
-    height: 92px;
+    height: 84px;
   }
 
   .pattern-grid :global(.skeleton-pattern) {
