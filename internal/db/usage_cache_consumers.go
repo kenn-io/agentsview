@@ -70,17 +70,6 @@ func WithUsageWindowMemo(ctx context.Context) context.Context {
 	})
 }
 
-func (memo *usageWindowMemo) put(key string, value usagePreparedWindow) {
-	if memo == nil {
-		return
-	}
-	memo.mu.Lock()
-	defer memo.mu.Unlock()
-	memo.windows[key] = sync.OnceValues(func() (usagePreparedWindow, error) {
-		return value, nil
-	})
-}
-
 func (memo *usageWindowMemo) drop(key string) {
 	if memo == nil {
 		return
@@ -113,7 +102,12 @@ func (db *DB) sharedUsageWindow(ctx context.Context, key string, filter UsageFil
 		memo.windows[key] = prepare
 	}
 	memo.mu.Unlock()
-	return prepare()
+	prepared, err := prepare()
+	if ok {
+		// Only the call that owns preparation reports its phase timings.
+		prepared.timings = usageRollupRequestTimings{candidates: prepared.timings.candidates}
+	}
+	return prepared, err
 }
 
 func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, report func(string)) (usagePreparedWindow, error) {
@@ -171,7 +165,10 @@ func (db *DB) queryUsageRollups(
 	var lastErr error
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
 	cursor := includeCursor && usageCursorIncluded(filter)
-	key := usageWindowKey(filter, kind, cursor)
+	var key string
+	if memo != nil {
+		key = usageWindowKey(filter, kind, cursor)
+	}
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
 		if attempt > 1 {
 			memo.drop(key)
@@ -183,9 +180,6 @@ func (db *DB) queryUsageRollups(
 			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
 		} else {
 			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
-			if err == nil {
-				memo.put(key, prepared)
-			}
 		}
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {
