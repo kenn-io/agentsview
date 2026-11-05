@@ -1,6 +1,7 @@
 <script lang="ts">
   import { SegmentedControl } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import InlineCode from "../shared/InlineCode.svelte";
   import {
     settings,
     type ToolResultImagesPolicy,
@@ -14,6 +15,21 @@
     ]);
 
   let restartRequired = $state(false);
+
+  // Every locale keeps the command verbatim inside the hint; render it as
+  // code by splitting the translated sentence around it. A locale that
+  // drops or rewrites it falls back to plain text.
+  const MIGRATE_IMAGES_COMMAND = "agentsview db migrate --images";
+  const imagesHint = $derived.by(() => {
+    const text = m.settings_tool_result_images_hint();
+    const at = text.indexOf(MIGRATE_IMAGES_COMMAND);
+    if (at < 0) return { before: text, after: "", hasCommand: false };
+    return {
+      before: text.slice(0, at),
+      after: text.slice(at + MIGRATE_IMAGES_COMMAND.length),
+      hasCommand: true,
+    };
+  });
 </script>
 
 <div class="archive-content-settings">
@@ -35,7 +51,11 @@
       }}
     />
   </div>
-  <p class="setting-hint control-offset">{m.settings_tool_result_images_hint()}</p>
+  <p class="setting-hint control-offset">
+    {imagesHint.before}{#if imagesHint.hasCommand}<InlineCode
+        >{MIGRATE_IMAGES_COMMAND}</InlineCode
+      >{/if}{imagesHint.after}
+  </p>
   {#if restartRequired}
     <p class="setting-hint control-offset" role="status" aria-live="polite">
       {m.settings_tool_result_images_restart_notice()}

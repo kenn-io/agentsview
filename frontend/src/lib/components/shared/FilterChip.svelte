@@ -1,7 +1,7 @@
 <!-- Dresses a single-choice kit-ui Typeahead as an analytics filter chip so
      it matches the multi-select FilterDropdown chips ("Project: All"): the
-     same 26px height, radius, border, and muted medium-weight text, and no
-     chevron. Chips carry no funnel: the "Project:" prefix already says what
+     same 26px height, radius, border, and muted medium-weight text, and a small
+     muted chevron after the label that says the chip opens a list. Chips carry no funnel: the "Project:" prefix already says what
      each one filters, and a funnel on every chip in a row repeated the same
      mark without telling them apart. Callers pass the dimension through
      the Typeahead's `triggerPrefix` ("Agent:") and give the unfiltered
@@ -50,8 +50,11 @@
     color: inherit;
   }
 
+  /* The same 12px muted chevron as the FilterDropdown chips, and it
+     stays muted when the chip is active. */
   .filter-chip :global(.kit-typeahead__chevron) {
-    display: none;
+    color: var(--text-muted);
+    opacity: 0.8;
   }
 
   .filter-chip.active :global(.kit-typeahead__trigger) {

@@ -103,6 +103,19 @@ describe("ArchiveContentSettings", () => {
     expect(getByRole("radio", { name: "Keep" }).getAttribute("aria-checked")).toBe("true");
   });
 
+  it("sets the migrate command in the hint as code without losing any of the sentence", () => {
+    const { getByText } = render(ArchiveContentSettings);
+
+    const command = getByText("agentsview db migrate --images");
+    expect(command.tagName).toBe("CODE");
+    const hint = command.closest("p");
+    expect(hint?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Stored results keep the policy they were written under, and switching " +
+        "back to Keep cannot restore payloads already removed. Run agentsview " +
+        "db migrate --images to project existing rows.",
+    );
+  });
+
   it("disables all radios when settings are read-only", () => {
     settings.readOnly = true;
     const { getByRole } = render(ArchiveContentSettings);

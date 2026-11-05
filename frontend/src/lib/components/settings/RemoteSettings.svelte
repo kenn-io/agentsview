@@ -318,11 +318,12 @@
     color: var(--accent-green, #22c55e);
   }
 
+  /* Upright muted text, like the other settings notes. */
   .restart-note {
     font-size: 11px;
+    line-height: 1.4;
     color: var(--text-muted);
     margin: 0;
-    font-style: italic;
   }
 
   .security-warning {

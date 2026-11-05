@@ -427,9 +427,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    /* Titles are the row's name, not the loudest column: primary ink at
-       rest, link color and underline on hover or focus. */
-    color: var(--text-primary);
+    /* Titles open the session, so they carry the link ink at rest, as
+       other in-table session links do, at normal weight; underline on
+       hover or focus. */
+    color: var(--accent-blue);
+    font-weight: 400;
     text-decoration: none;
   }
 
@@ -452,7 +454,6 @@
 
   .session-link:hover,
   .session-link:focus-visible {
-    color: var(--accent-blue);
     text-decoration: underline;
   }
 
