@@ -400,16 +400,7 @@ class SessionsStore {
     const next = rows.map((row) => {
       const previous = this.byId.get(row.id);
       if (!previous) return row;
-      if (sameSessionFields(previous, row)) return previous;
-      return {
-        ...row,
-        parent_session_ids: sameField(previous.parent_session_ids, row.parent_session_ids)
-          ? previous.parent_session_ids
-          : row.parent_session_ids,
-        source_machines: sameField(previous.source_machines, row.source_machines)
-          ? previous.source_machines
-          : row.source_machines,
-      };
+      return sameSessionFields(previous, row) ? previous : row;
     });
     if (next.length !== this.sessions.length || next.some((row, i) => row !== this.sessions[i])) {
       this.sessions = next;
@@ -630,7 +621,7 @@ class SessionsStore {
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
-      this.hydratedSessionsByVersion.set(indexVersion, new Set());
+      this.hydratedSessionsByVersion.set(indexVersion, new Map());
       this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
       this.pruneSidebarHydrationVersions(indexVersion);
       const rows = index.sessions.map((row) => sidebarIndexRowToSession(row));
@@ -668,7 +659,7 @@ class SessionsStore {
   // this.sessions outside this set were appended out of position
   // (see loadSidebarPage / loadMore).
   private sidebarIndexIds: Set<string> = new Set();
-  hydratedSessionsByVersion: Map<number, Set<string>> = $state(new Map());
+  hydratedSessionsByVersion: Map<number, Map<string, Session>> = $state(new Map());
 
   private pruneSidebarHydrationVersions(retainVersion: number) {
     for (const version of this.hydratedSessionsByVersion.keys()) {
@@ -689,7 +680,8 @@ class SessionsStore {
   }
 
   async hydrateVisibleSessions(ids: string[], version: number = this.sidebarIndexVersion) {
-    const cache = this.hydratedSessionsByVersion.get(version) ?? new Set<string>();
+    const uniqueIds = [...new Set(ids)];
+    const cache = this.hydratedSessionsByVersion.get(version) ?? new Map<string, Session>();
     this.hydratedSessionsByVersion.set(version, cache);
     const inflight =
       this.sidebarHydrationInflightByVersion.get(version) ?? new Map<string, Promise<void>>();
@@ -697,7 +689,7 @@ class SessionsStore {
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
     const signal = this.routeSignal();
 
-    const uncached = [...new Set(ids)].filter((id) => !cache.has(id));
+    const uncached = uniqueIds.filter((id) => !cache.has(id));
     await Promise.all(
       uncached.map((id) => {
         const existing = inflight.get(id);
@@ -708,13 +700,12 @@ class SessionsStore {
           try {
             const hydrated = await SessionsService.getApiV1SessionsById({ id }, { signal });
             if (
-              signal.aborted ||
               version !== this.sidebarIndexVersion ||
               epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
             ) {
               return;
             }
-            cache.add(id);
+            cache.set(id, hydrated);
             this.details.set(id, { ...this.details.get(id), ...hydrated });
             this.mergeDetailIntoList(id);
             this.markActiveSessionFound(id);
@@ -725,7 +716,6 @@ class SessionsStore {
             // epoch guards keep a stale 404 from flagging a session a
             // newer fetch already resolved.
             if (
-              !signal.aborted &&
               version === this.sidebarIndexVersion &&
               epoch === (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
             ) {
@@ -759,7 +749,7 @@ class SessionsStore {
 
   private invalidateHydratedSessionDetails() {
     const version = this.sidebarIndexVersion;
-    this.hydratedSessionsByVersion.set(version, new Set());
+    this.hydratedSessionsByVersion.set(version, new Map());
     this.sidebarHydrationInflightByVersion.delete(version);
     this.sidebarHydrationEpochByVersion.set(
       version,
@@ -1793,7 +1783,6 @@ class SessionsStore {
         (this.sidebarHydrationEpochByVersion.get(version) ?? 0) + 1,
       );
     }
-    this.sidebarHydrationInflightByVersion.clear();
     for (const resume of this.sidebarHydrationQueue.splice(0)) resume();
   }
 

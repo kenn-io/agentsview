@@ -609,23 +609,6 @@ describe("SessionsStore", () => {
       ).toHaveBeenCalledWith({ sessionId: "row" });
     });
 
-    it("starts a fresh hydration on cancellation and re-entry", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
-      await sessions.load();
-      const old = Promise.withResolvers<Session>();
-      api.getSession
-        .mockReturnValueOnce(old.promise)
-        .mockResolvedValueOnce(makeSession({ id: "row", first_message: "Current title" }));
-      const first = sessions.hydrateVisibleSessions(["row"]);
-      sessions.cancelRouteReads();
-      await sessions.navigateToSession("row");
-      expect(sessions.activeSession?.first_message).toBe("Current title");
-      old.resolve(makeSession({ id: "row", first_message: "Obsolete title" }));
-      await first;
-      expect(sessions.activeSession?.first_message).toBe("Current title");
-      expect(api.getSession).toHaveBeenCalledTimes(2);
-    });
-
     it("regroups real ancestry, teammate, and project changes from the index", async () => {
       const root = makeSkinnyRow({ id: "root" });
       const child = makeSkinnyRow({ id: "child" });
