@@ -150,9 +150,9 @@ test.describe("Scrollbar layout", () => {
 
     const scroller = page.locator(".page-scroll");
     const heading = page.getByRole("heading", { name: "Trends" });
-    // Refresh reads "Refreshing" while the request is held. It ends the
+    // Recompute reads "Recomputing" while the request is held. It ends the
     // right-aligned toolbar group, so its right edge must hold either way.
-    const refresh = page.getByRole("button", { name: /^Refresh/ });
+    const refresh = page.getByRole("button", { name: /^Recomput/ });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
     const headingBefore = await leftEdge(heading);

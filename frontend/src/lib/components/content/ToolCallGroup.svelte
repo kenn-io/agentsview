@@ -15,7 +15,7 @@
   import ParallelGroup from "./ParallelGroup.svelte";
   import { CopyButton } from "@kenn-io/kit-ui";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { SettingsIcon } from "../../icons.js";
+  import { WrenchIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -88,7 +88,7 @@
 
 <div class="tool-group">
   <div class="tool-group-header">
-    <span class="gear-icon"><SettingsIcon size="12" strokeWidth="2" aria-hidden="true" /></span>
+    <span class="tool-icon"><WrenchIcon size="12" strokeWidth="2" aria-hidden="true" /></span>
     <span class="group-label">{label}</span>
     <CopyButton
       revealOnHover
@@ -158,7 +158,7 @@
     padding: 6px 10px;
   }
   .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
-  .gear-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
+  .tool-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
   .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
   .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
   .tool-group:hover :global(.kit-copy-btn) { opacity: 1; }

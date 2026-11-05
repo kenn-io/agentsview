@@ -76,4 +76,5 @@ export { default as UserRoundIcon } from "@lucide/svelte/icons/user-round";
 export { default as UsersRoundIcon } from "@lucide/svelte/icons/users-round";
 export { default as WholeWordIcon } from "@lucide/svelte/icons/whole-word";
 export { default as WorkflowIcon } from "@lucide/svelte/icons/workflow";
+export { default as WrenchIcon } from "@lucide/svelte/icons/wrench";
 export { default as XIcon } from "@lucide/svelte/icons/x";

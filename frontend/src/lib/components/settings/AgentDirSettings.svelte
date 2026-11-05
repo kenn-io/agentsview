@@ -217,12 +217,13 @@
     min-width: 0;
   }
 
-  /* Matches the panel label style; the 20px line box centers it on the
-     switch track beside it. */
+  /* Provider names head each block, so they read heavier than the
+     shared field labels; the 20px line box centers them on the switch
+     track beside them. */
   .provider-name {
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 20px;
     overflow-wrap: anywhere;
   }

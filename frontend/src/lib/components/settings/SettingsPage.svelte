@@ -347,9 +347,13 @@
     grid-column: 1 / -1;
   }
 
-  /* Long translated labels wrap inside the label column instead of
-     running under the control. */
+  /* Every panel's field labels share one size, weight, and ink, so no
+     panel reads bolder than another. Long translated labels wrap inside
+     the label column instead of running under the control. */
   .settings-page :global(.kit-settings__panel .setting-row:not(.column) > .setting-label) {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
     white-space: normal;
     overflow-wrap: anywhere;
   }

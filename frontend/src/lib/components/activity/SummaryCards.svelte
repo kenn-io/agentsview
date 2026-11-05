@@ -118,6 +118,7 @@
       sub={card.sub ?? ""}
       tier={card.featured ? "lead" : card.context ? "context" : "standard"}
       featured={card.featured}
+      subLines={2}
     />
   {/each}
 </div>
