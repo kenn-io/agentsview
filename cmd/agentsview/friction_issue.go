@@ -159,6 +159,12 @@ func resolveFrictionIssueTarget(cmd *cobra.Command) (frictionIssueTarget, error)
 	if err := filing.CheckHub(conn.Config()); err != nil {
 		return frictionIssueTarget{}, err
 	}
+	// Issue text carries links built from public_url, so an invalid value
+	// stops filing here even though local commands only warn about it.
+	publicURL, err := cfg.ResolvedPublicURL()
+	if err != nil {
+		return frictionIssueTarget{}, err
+	}
 	database, lock, err := openWriteDB(cmd.Context(), cfg)
 	if err != nil {
 		return frictionIssueTarget{}, fmt.Errorf("opening database: %w", err)
@@ -166,7 +172,7 @@ func resolveFrictionIssueTarget(cmd *cobra.Command) (frictionIssueTarget, error)
 	return frictionIssueTarget{
 		filer: &filing.Filer{
 			Kata: conn, Store: database,
-			PublicURL: strings.TrimRight(strings.TrimSpace(cfg.PublicURL), "/"),
+			PublicURL: strings.TrimRight(publicURL, "/"),
 		},
 		cleanup: func() { closeWriteDB(database, lock) },
 	}, nil

@@ -371,3 +371,63 @@ func TestFrictionIssueLinkProbeNeedsEveryWritePrivilege(t *testing.T) {
 		})
 	}
 }
+
+// An insert-only link save that waits on a competing, uncommitted insert
+// must return the competitor's link once it commits.
+func TestAddFrictionIssueLinkReturnsAConcurrentWinner(t *testing.T) {
+	const schema = "agentsview_friction_race_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := t.Context()
+	pg, err := Open(ctx, pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	_, err = pg.ExecContext(ctx, "CREATE SCHEMA "+schema)
+	require.NoError(t, err)
+	for _, statement := range append(strings.Split(coreDDL, ";\n")[:2], strings.Split(frictionReviewDDL, ";\n")...) {
+		if strings.TrimSpace(statement) != "" {
+			_, err = pg.ExecContext(ctx, statement)
+			require.NoError(t, err)
+		}
+	}
+	store := &Store{pg: pg, ownedDB: pg}
+	linkedAt := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
+	winner := db.FrictionIssueLink{
+		Fingerprint: "fl1:race", KataInstanceUID: "i", KataProjectUID: "p", IssueUID: "manual-uid",
+		QualifiedID: "agentsview#m001", Source: db.FrictionIssueSourceManual, LinkedAt: linkedAt,
+	}
+	loser := winner
+	loser.IssueUID, loser.QualifiedID, loser.Source = "filed-uid", "agentsview#f001", db.FrictionIssueSourceCreated
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	_, err = tx.ExecContext(ctx, `INSERT INTO friction_issue_links (fingerprint, kata_instance_uid,
+		kata_project_uid, issue_uid, qualified_id, web_url, source, linked_at)
+		VALUES ($1, $2, $3, $4, $5, '', $6, $7)`,
+		winner.Fingerprint, winner.KataInstanceUID, winner.KataProjectUID, winner.IssueUID,
+		winner.QualifiedID, winner.Source, winner.LinkedAt)
+	require.NoError(t, err)
+
+	type result struct {
+		link db.FrictionIssueLink
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		link, err := store.AddFrictionIssueLink(ctx, loser)
+		done <- result{link, err}
+	}()
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := pg.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting)
+		return err == nil && waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "the add waits on the uncommitted insert")
+	require.NoError(t, tx.Commit())
+
+	got := <-done
+	require.NoError(t, got.err)
+	assert.Equal(t, winner, got.link)
+}

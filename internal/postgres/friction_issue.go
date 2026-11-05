@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -33,34 +34,37 @@ func (s *Store) SaveFrictionIssueLink(ctx context.Context, l db.FrictionIssueLin
 }
 
 // AddFrictionIssueLink records l unless its pattern is already linked and
-// returns the stored link, in one statement so a concurrent link wins
-// cleanly.
+// returns the stored link. The read runs as its own statement so it sees a
+// link a concurrent insert committed while this one waited; if that link
+// is removed before the read, the insert is tried again.
 func (s *Store) AddFrictionIssueLink(ctx context.Context, l db.FrictionIssueLink) (db.FrictionIssueLink, error) {
-	stored := db.FrictionIssueLink{Fingerprint: l.Fingerprint}
-	err := s.pg.QueryRowContext(ctx, `
-		WITH added AS (
+	for range 3 {
+		if _, err := s.pg.ExecContext(ctx, `
 			INSERT INTO friction_issue_links (fingerprint, kata_instance_uid,
 				kata_project_uid, issue_uid, qualified_id, web_url, source, linked_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			ON CONFLICT (fingerprint) DO NOTHING
-			RETURNING kata_instance_uid, kata_project_uid, issue_uid,
-				qualified_id, web_url, source, linked_at
-		)
-		SELECT * FROM added
-		UNION ALL
-		SELECT kata_instance_uid, kata_project_uid, issue_uid, qualified_id,
-			web_url, source, linked_at
-		FROM friction_issue_links
-		WHERE fingerprint = $1 AND NOT EXISTS (SELECT 1 FROM added)`,
-		l.Fingerprint, l.KataInstanceUID, l.KataProjectUID, l.IssueUID,
-		l.QualifiedID, l.WebURL, l.Source, l.LinkedAt.UTC()).Scan(
-		&stored.KataInstanceUID, &stored.KataProjectUID, &stored.IssueUID,
-		&stored.QualifiedID, &stored.WebURL, &stored.Source, &stored.LinkedAt)
-	if err != nil {
-		return db.FrictionIssueLink{}, fmt.Errorf("adding friction issue link: %w", err)
+			ON CONFLICT (fingerprint) DO NOTHING`,
+			l.Fingerprint, l.KataInstanceUID, l.KataProjectUID, l.IssueUID,
+			l.QualifiedID, l.WebURL, l.Source, l.LinkedAt.UTC()); err != nil {
+			return db.FrictionIssueLink{}, fmt.Errorf("adding friction issue link: %w", err)
+		}
+		stored := db.FrictionIssueLink{Fingerprint: l.Fingerprint}
+		err := s.pg.QueryRowContext(ctx, `
+			SELECT kata_instance_uid, kata_project_uid, issue_uid, qualified_id,
+				web_url, source, linked_at
+			FROM friction_issue_links WHERE fingerprint = $1`, l.Fingerprint).Scan(
+			&stored.KataInstanceUID, &stored.KataProjectUID, &stored.IssueUID,
+			&stored.QualifiedID, &stored.WebURL, &stored.Source, &stored.LinkedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return db.FrictionIssueLink{}, fmt.Errorf("reading friction issue link: %w", err)
+		}
+		stored.LinkedAt = stored.LinkedAt.UTC()
+		return stored, nil
 	}
-	stored.LinkedAt = stored.LinkedAt.UTC()
-	return stored, nil
+	return db.FrictionIssueLink{}, errors.New("adding friction issue link: the link kept being removed")
 }
 
 // DeleteFrictionIssueLink removes the local link only; the Kata issue stays.

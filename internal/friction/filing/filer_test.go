@@ -428,3 +428,53 @@ func mustIssue(t *testing.T, s *katatest.Server, uid string) katatest.Issue {
 	require.True(t, ok, "issue %s", uid)
 	return is
 }
+
+// barrierStore fails link writes made outside the filer's exclusive
+// section, as SQLite does while archive maintenance holds the writer.
+type barrierStore struct {
+	*db.DB
+	inside *bool
+}
+
+var errOutsideBarrier = errors.New("link written outside the archive write barrier")
+
+func (b barrierStore) SaveFrictionIssueLink(ctx context.Context, l db.FrictionIssueLink) error {
+	if !*b.inside {
+		return errOutsideBarrier
+	}
+	return b.DB.SaveFrictionIssueLink(ctx, l)
+}
+
+func (b barrierStore) AddFrictionIssueLink(ctx context.Context, l db.FrictionIssueLink) (db.FrictionIssueLink, error) {
+	if !*b.inside {
+		return db.FrictionIssueLink{}, errOutsideBarrier
+	}
+	return b.DB.AddFrictionIssueLink(ctx, l)
+}
+
+func (b barrierStore) DeleteFrictionIssueLink(ctx context.Context, fingerprint string) (bool, error) {
+	if !*b.inside {
+		return false, errOutsideBarrier
+	}
+	return b.DB.DeleteFrictionIssueLink(ctx, fingerprint)
+}
+
+func TestLinkWritesRunInsideTheExclusiveSection(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	fp := correction.Fingerprint()
+	inside := false
+	f.Store = barrierStore{DB: d, inside: &inside}
+	f.Exclusive = func(work func() error) error {
+		inside = true
+		defer func() { inside = false }()
+		return work()
+	}
+
+	_, err := f.File(t.Context(), fp)
+	require.NoError(t, err)
+	is := s.AddIssue(katatest.Issue{Title: "tracked by hand", Status: "open"})
+	_, err = f.Link(t.Context(), fp, is.UID)
+	require.NoError(t, err)
+	require.NoError(t, f.Unlink(t.Context(), fp))
+}

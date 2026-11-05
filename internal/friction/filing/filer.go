@@ -85,6 +85,10 @@ type Filer struct {
 	// bodies link back to the session and digest only when it is set.
 	PublicURL string
 	Now       func() time.Time
+	// Exclusive, when set, runs each link write. The server passes its
+	// archive write barrier, so a write that meets archive maintenance waits
+	// for it instead of failing after Kata created the issue.
+	Exclusive func(func() error) error
 }
 
 // Result is the outcome of filing one pattern.
@@ -218,12 +222,16 @@ func (f *Filer) Link(ctx context.Context, fingerprint, ref string) (db.FrictionI
 	if err != nil {
 		return db.FrictionIssueLink{}, err
 	}
-	return link, f.Store.SaveFrictionIssueLink(ctx, link)
+	return link, f.write(func() error { return f.Store.SaveFrictionIssueLink(ctx, link) })
 }
 
 // Unlink removes the local link. The Kata issue is left as it is.
 func (f *Filer) Unlink(ctx context.Context, fingerprint string) error {
-	removed, err := f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
+	var removed bool
+	err := f.write(func() (err error) {
+		removed, err = f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -259,7 +267,19 @@ func (f *Filer) add(ctx context.Context, fingerprint string, is kata.Issue, sour
 	if err != nil {
 		return db.FrictionIssueLink{}, err
 	}
-	return f.Store.AddFrictionIssueLink(ctx, link)
+	var stored db.FrictionIssueLink
+	err = f.write(func() (err error) {
+		stored, err = f.Store.AddFrictionIssueLink(ctx, link)
+		return err
+	})
+	return stored, err
+}
+
+func (f *Filer) write(work func() error) error {
+	if f.Exclusive == nil {
+		return work()
+	}
+	return f.Exclusive(work)
 }
 
 func (f *Filer) pattern(ctx context.Context, fingerprint string) (db.FrictionPattern, error) {

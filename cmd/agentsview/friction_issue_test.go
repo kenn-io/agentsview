@@ -105,6 +105,12 @@ func TestFrictionFileLocalWithoutDaemon(t *testing.T) {
 			name: "pusher_never_files", config: "[pg]\nurl = \"postgres://pg.example.test/agentsview\"\n",
 			wantErr: "only the AgentsView hub files to Kata",
 		},
+		{
+			// Local commands only warn about public_url; filing would copy
+			// the credential into the issue.
+			name: "credentials_in_public_url", config: "public_url = \"https://user:s3cret@av.example.test\"\n",
+			wantErr: "invalid public url",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -121,7 +127,7 @@ func TestFrictionFileLocalWithoutDaemon(t *testing.T) {
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
-				assert.Empty(t, s.Requests(), "a pusher never contacts Kata")
+				assert.Empty(t, s.Requests(), "a refused filing never contacts Kata")
 				return
 			}
 			require.NoError(t, err)

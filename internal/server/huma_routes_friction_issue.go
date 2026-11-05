@@ -152,7 +152,10 @@ func (s *Server) frictionFiler(ctx context.Context, writes bool) (*filing.Filer,
 	if w, ok := store.(interface{ FrictionIssueLinksWritable() bool }); ok && writes && !w.FrictionIssueLinksWritable() {
 		return nil, apiError(http.StatusConflict, "this database role cannot record friction issue links")
 	}
-	return &filing.Filer{Kata: s.kataConn(), Store: store, PublicURL: s.frictionPublicURL()}, nil
+	return &filing.Filer{
+		Kata: s.kataConn(), Store: store, PublicURL: s.frictionPublicURL(),
+		Exclusive: func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
+	}, nil
 }
 
 func frictionIssueError(err error) error {

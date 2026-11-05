@@ -69,6 +69,18 @@ func (c *Config) validateDaemonIdleTimeout() error {
 	return nil
 }
 
+// ResolvedPublicURL validates public_url as the server does and returns it
+// normalized. A command that loads only local settings, where an invalid
+// value is just a warning, calls it before putting the URL into content
+// that leaves the machine.
+func (c Config) ResolvedPublicURL() (string, error) {
+	value, err := resolvePublicURL(c.PublicURL, c.Proxy)
+	if err != nil {
+		return "", fmt.Errorf("invalid public url: %w", err)
+	}
+	return value, nil
+}
+
 func (c *Config) resolvePublicConfig() error {
 	value, err := resolvePublicURL(c.PublicURL, c.Proxy)
 	if err != nil {
