@@ -361,8 +361,8 @@ func hasFTSColumnFilter(query string) bool {
 //
 //  1. FTS branch — message content matches. ROW_NUMBER() picks the single
 //     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC).
-//     The outer JOIN messages_fts includes a MATCH clause to prevent segment
-//     duplicates. Ordinal is the matched message's ordinal (≥ 0).
+//     After pagination, a rowid lookup with MATCH builds each snippet without
+//     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
 //  2. Name branch — display_name / first_message LIKE matches that are NOT
 //     already covered by the FTS branch. Ordinal is -1 (no specific message
@@ -439,27 +439,29 @@ func (db *DB) Search(
 
 	// Build args in SQL order, with best_query prepended below.
 	args := make([]any, 0, 2*len(ftsArgs)+7+len(nameProjectArgs))
-	args = append(args, ftsArgs...)          // (1) ROW_NUMBER WHERE
-	args = append(args, f.Query)             // (2) outer MATCH re-filter
-	args = append(args, likePattern)         // (3) CASE COALESCE(display_name,session_name) LIKE
-	args = append(args, likePattern)         // (4) CASE first_message LIKE
-	args = append(args, likePattern)         // (5) name WHERE COALESCE(display_name,session_name) LIKE
-	args = append(args, likePattern)         // (6) name WHERE first_message LIKE
-	args = append(args, nameProjectArgs...)  // (7) optional name branch project
-	args = append(args, ftsArgs...)          // (8) NOT IN WHERE
-	args = append(args, f.Limit+1, f.Cursor) // (9) LIMIT / OFFSET
+	args = append(args, ftsArgs...)          // ROW_NUMBER WHERE
+	args = append(args, likePattern)         // CASE COALESCE(display_name,session_name) LIKE
+	args = append(args, likePattern)         // CASE first_message LIKE
+	args = append(args, likePattern)         // name WHERE COALESCE(display_name,session_name) LIKE
+	args = append(args, likePattern)         // name WHERE first_message LIKE
+	args = append(args, nameProjectArgs...)  // optional name branch project and dates
+	args = append(args, ftsArgs...)          // NOT IN WHERE
+	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
+	args = append(args, f.Query)             // paged snippet MATCH
 
+	// Materialize the ordered page before evaluating snippet(). match_pos stays
+	// in the page query because relevance ordering depends on it.
 	query := fmt.Sprintf(`
+		WITH page AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, snippet, rank, match_pos
+			session_ended_at, ordinal, best_rowid, snippet, rank, match_pos
 		FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-				best.best_ordinal AS ordinal,
-				snippet(messages_fts, -1, '<mark>', '</mark>',
-					'...', %d) AS snippet,
+				best.best_ordinal AS ordinal, best.best_rowid,
+				NULL AS snippet,
 				best.best_rank AS rank,
 				instr(LOWER(m.content), LOWER(best.best_query))
 					AS match_pos
@@ -483,10 +485,8 @@ func (db *DB) Search(
 				)
 				WHERE rn = 1
 			) AS best
-			JOIN messages_fts ON messages_fts.rowid = best.best_rowid
 			JOIN messages m ON m.id = best.best_rowid
 			JOIN sessions s ON m.session_id = s.id
-			WHERE %s
 
 			UNION ALL
 
@@ -494,7 +494,7 @@ func (db *DB) Search(
 			SELECT s.id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-				-1 AS ordinal,
+				-1 AS ordinal, NULL AS best_rowid,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 						THEN COALESCE(s.display_name, s.session_name, '')
@@ -524,13 +524,25 @@ func (db *DB) Search(
 				)
 		)
 		ORDER BY %s
-		LIMIT ? OFFSET ?`,
-		snippetTokenLength,
+		LIMIT ? OFFSET ?
+		)
+		SELECT session_id, project, agent, machine, name,
+			session_ended_at, ordinal,
+			CASE WHEN best_rowid IS NULL THEN snippet ELSE (
+				SELECT snippet(messages_fts, -1, '<mark>', '</mark>', '...', %d)
+				FROM messages_fts
+				WHERE messages_fts.rowid = page.best_rowid AND %s
+			) END AS snippet,
+			rank, match_pos
+		FROM page
+		ORDER BY %s`,
 		innerWhereSQL,     // ROW_NUMBER inner WHERE (%s at rn subquery)
-		matchSQL,          // outer MATCH re-filter (%s)
 		nameProjectClause, // optional project filter for name branch (%s)
 		innerWhereSQL,     // NOT IN subquery WHERE (%s)
 		orderBy,           // ORDER BY (%s)
+		snippetTokenLength,
+		matchSQL,
+		orderBy,
 	)
 	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
