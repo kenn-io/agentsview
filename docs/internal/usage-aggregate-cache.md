@@ -113,8 +113,9 @@ An aggregate request:
 
 Within one Pairwise request, reads with the same window, session predicate, and
 Cursor need share one capture, fill check, and rollup check, including sides
-read concurrently. Project and agent sides prepare separately because their
-session predicates differ. Each read applies its own filter to the rollups.
+read concurrently. Project sides prepare separately because their session
+predicates differ. Each side reads rollups from the request's captured snapshot
+with its own filter.
 Cache retirement or a changed install triggers a fresh capture that bypasses the
 shared result. Separate requests never share a preparation.
 

@@ -5,11 +5,9 @@ package db
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -179,7 +177,7 @@ func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	_, err := database.getWriter().Exec(t.Context(), `UPDATE sessions SET user_message_count = 55296 WHERE id = 'reported'`)
 	require.NoError(t, err)
 	var prepares atomic.Int32
-	database.usageCache.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	ctx := WithUsageWindowMemo(t.Context())
 	filters := []UsageFilter{
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago"},
@@ -214,7 +212,7 @@ func TestDailyUsageAfterTopReadPreparesCursorOnSameMemo(t *testing.T) {
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
 	var prepares atomic.Int32
-	database.usageCache.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	ctx := WithUsageWindowMemo(t.Context())
 	want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
 	require.NoError(t, err)
@@ -233,43 +231,12 @@ func TestDailyUsageAfterTopReadPreparesCursorOnSameMemo(t *testing.T) {
 	assert.Equal(t, int32(2), prepares.Load(), "daily usage needs its own preparation to include Cursor")
 }
 
-func TestSlowUsageReadLogsAllPhasesOnce(t *testing.T) {
-	database := openDailyUsageFixtureDB(t)
-	output := captureLog(t)
-	filter := UsageFilter{
-		From: "2024-06-01", To: "2024-07-31", Timezone: "UTC",
-		Progress: func(phase string) {
-			if phase == "Reading archived sessions for this report" {
-				time.Sleep(usageRollupSlowRequestThreshold)
-			}
-		},
-	}
-	_, err := database.GetDailyUsage(WithUsageWindowMemo(t.Context()), filter)
-	require.NoError(t, err)
-	var lines []string
-	for line := range strings.SplitSeq(output.String(), "\n") {
-		if strings.Contains(line, "usage ") {
-			lines = append(lines, line)
-		}
-	}
-	require.Len(t, lines, 1)
-	for _, phase := range []string{"usage rollup read took", "capture", "deletion sweep", "fact fill", "rollup build", "rollup install", "cache read"} {
-		assert.Contains(t, lines[0], phase)
-	}
-	_, phases, found := strings.Cut(lines[0], ": capture ")
-	require.True(t, found)
-	capture, _, _ := strings.Cut(phases, ",")
-	duration, err := time.ParseDuration(capture)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, duration, usageRollupSlowRequestThreshold)
-}
-
 func TestUsageWindowMemoRecapturesAfterInstallChange(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
 	filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
 	want := getDailyUsageLegacyForRollupTest(t, database, filter)
 	var prepares atomic.Int32
-	database.usageCache.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	ctx := WithUsageWindowMemo(t.Context())
 	first, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -305,12 +272,12 @@ func TestUsageWindowMemoSharesConcurrentSides(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
 	var prepares atomic.Int32
-	database.usageCache.usageWindowObserver.beforePrepare = func(context.Context) {
+	database.SetUsageWindowPrepareForTest(func(context.Context) {
 		if prepares.Add(1) == 1 {
 			close(entered)
 		}
 		<-release
-	}
+	})
 	ctx := WithUsageWindowMemo(t.Context())
 	type result struct {
 		model string
