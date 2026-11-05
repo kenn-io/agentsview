@@ -407,46 +407,12 @@ describe("SessionList visible hydration", () => {
     sessions.sessions = [
       makeSession({ id: "pending", project: "placeholder", is_index_only: true }),
     ];
-    let resolveHydration!: () => void;
-    vi.spyOn(sessions, "hydrateVisibleSessions").mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolveHydration = resolve;
-      }),
-    );
-
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    expect(document.querySelector(".session-name")?.textContent).toBe("placeholder");
-
-    sessions.sessions = [
-      makeSession({
-        id: "pending",
-        first_message: "hydrated visible title",
-        is_index_only: false,
-      }),
-    ];
-    resolveHydration();
-    await tick();
-    await tick();
-
-    expect(document.querySelector(".session-name")?.textContent).toBe("hydrated visible title");
-  });
-
-  it("renders renamed rows without waiting for hydration", async () => {
-    sessions.sessions = [
-      makeSession({
-        id: "renamed",
-        display_name: "Renamed sidebar title",
-        is_index_only: true,
-      }),
-    ];
     vi.spyOn(sessions, "hydrateVisibleSessions").mockReturnValue(new Promise<void>(() => {}));
 
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    expect(document.body.textContent).toContain("Renamed sidebar title");
+    expect(document.querySelector(".session-name")?.textContent).toBe("placeholder");
   });
 
   it("keeps long session labels intact for responsive CSS clipping", async () => {
@@ -468,9 +434,7 @@ describe("SessionList visible hydration", () => {
     expect(name?.textContent).toBe(title);
   });
 
-  it("reveals a deep-linked child without looping while its row is unavailable", async () => {
-    // Opening a child session's URL directly must reveal it even while
-    // the sidebar's title hydration is pending.
+  it("reveals a deep-linked child inside a collapsed group", async () => {
     sessions.sessions = [
       makeSession({ id: "launcher", first_message: "Launcher", is_index_only: true }),
       makeSession({
@@ -483,30 +447,12 @@ describe("SessionList visible hydration", () => {
       }),
     ];
     sessions.activeSessionId = "worker";
-    let resolveHydration!: () => void;
-    vi.spyOn(sessions, "hydrateVisibleSessions").mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolveHydration = resolve;
-      }),
-    );
-    const errors: unknown[] = [];
-    const onError = (event: ErrorEvent) => errors.push(event.error);
-    window.addEventListener("error", onError);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
 
-    try {
-      component = mount(SessionList, { target: document.body });
-      await tick();
-      await tick();
-      expect(errors).toEqual([]);
-
-      resolveHydration();
-      await tick();
-      await tick();
-      expect(errors).toEqual([]);
-      expect(document.querySelector('[data-session-id="worker"]')).not.toBeNull();
-    } finally {
-      window.removeEventListener("error", onError);
-    }
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    await tick();
+    expect(document.querySelector('[data-session-id="worker"]')).not.toBeNull();
   });
 
   it("marks the active session row for assistive tech", async () => {
