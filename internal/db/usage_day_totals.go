@@ -17,7 +17,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
 	where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "s.reported_model"), "")
 	rows, err := conn.QueryContext(ctx, `SELECT s.local_date, s.project, s.agent, s.machine,
-        s.reported_model, s.provider_id, s.priced_model, s.matched_pattern, s.rate_ok, s.pricing_timestamp,
+        s.reported_model, s.provider_id, s.priced_model, s.pricing_timestamp,
         SUM(s.input_tokens), SUM(s.output_tokens), SUM(s.reasoning_tokens),
         SUM(s.cache_creation_tokens), SUM(s.cache_read_tokens),
         SUM(s.estimated_cost_microdollars), SUM(s.savings_microdollars),
@@ -33,7 +33,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		var band int
 		group.SessionID = "\x00usage-day-totals"
 		if err := rows.Scan(&group.Date, &group.Project, &group.Agent, &group.Machine,
-			&group.Model, &group.ProviderID, &group.PricedModel, &group.MatchedPattern, &group.RateOK, &group.PricingTimestamp,
+			&group.Model, &group.ProviderID, &group.PricedModel, &group.PricingTimestamp,
 			&group.InputTokens, &group.OutputTokens, &group.ReasoningTokens, &group.CacheCreationTokens, &group.CacheReadTokens,
 			&group.CostMicrodollars, &group.SavingsMicrodollars, &group.ComputedRequestCount, &group.ComputedAggregateCount,
 			&group.ReportedCount, &group.BaseRequestCount, &band); err != nil {

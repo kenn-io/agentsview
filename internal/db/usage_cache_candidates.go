@@ -188,19 +188,20 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 	).Scan(&snapshot.DatabaseID); err != nil {
 		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot database id: %w", err)
 	}
+	pricingRows, err := db.loadPricingMapFrom(ctx, tx)
+	if err != nil {
+		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot pricing: %w", err)
+	}
+	snapshot.PricingRows = pricingRows
 	snapshot.ChangeRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change")
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
-	snapshot.PricingRows, err = db.loadPricingMapFrom(ctx, tx)
-	if err != nil {
-		return usageQuerySnapshot{}, err
-	}
+
 	snapshot.PricingDigest, err = export.EffectivePricingDigest(snapshot.PricingRows)
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
-
 	snapshot.PricingIdentity = usagePricingIdentityWithDigest(snapshot.PricingDigest)
 
 	if err := capture(ctx, tx, &snapshot); err != nil {

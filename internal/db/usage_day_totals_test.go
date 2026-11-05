@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 // Compare persisted totals with an independent GROUP BY, including dimensions
@@ -138,4 +139,46 @@ func TestUsageDayTotalsInvalidation(t *testing.T) {
 			assertUsageDayTotals(t, cache)
 		})
 	}
+}
+
+func TestUsageDayTotalsDeleteFirstPricingTimestamp(t *testing.T) {
+	database := testDB(t)
+	// Equal rates across adjacent periods share a hash. Both UTC dates fall
+	// on one New York day, so deleting the first leaves its pricing timestamp.
+	data := []byte(`[{"id":"test","name":"Test","api_pattern":"https://example.invalid","model_match":{"starts_with":"dated-"},
+			"models":[{"id":"dated-model","match":{"equals":"dated-model"},"prices":[
+				{"prices":{"input_mtok":1}},
+				{"constraint":{"start_date":"2026-08-11"},"prices":{"input_mtok":1}},
+				{"constraint":{"start_date":"2026-08-12"},"prices":{"input_mtok":2}}
+			]}]}]`)
+	prices, err := pricingpkg.ParseGenAIPrices(data)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertGenAIPricing(t.Context(), GenAIPricingDocument{
+		Version: prices.Version(), Source: GenAIPricingSourceFetched, Data: data,
+	}))
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "America/New_York", Breakdowns: true}
+	insertSession(t, database, "first", "project-a", func(s *Session) { s.Agent = "codex"; s.StartedAt = new("2026-08-10T23:30:00Z") })
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "first", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:30:00Z", Model: "dated-model", TokenUsage: []byte(`{"input_tokens":100}`)}}))
+	cache := warmJournaledUsage(t, database, filter)
+	insertSession(t, database, "second", "project-a", func(s *Session) { s.Agent = "codex"; s.StartedAt = new("2026-08-11T01:30:00Z") })
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "second", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-11T01:30:00Z", Model: "dated-model", TokenUsage: []byte(`{"input_tokens":200}`)}}))
+	_, err = database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	var hashes, timestamps int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(DISTINCT rate_hash), COUNT(DISTINCT pricing_timestamp) FROM usage_daily_rollups`).Scan(&hashes, &timestamps))
+	require.Equal(t, 1, hashes, "both effective periods must contribute to the same totals key")
+	require.Equal(t, 2, timestamps)
+	var firstTimestamp string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT pricing_timestamp FROM usage_day_totals`).Scan(&firstTimestamp))
+	require.Equal(t, "2026-08-10T23:30:00Z", firstTimestamp)
+
+	require.NoError(t, database.DeleteSession(t.Context(), "first"))
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 200, got.Totals.InputTokens)
+	assert.Equal(t, int64(200), got.Totals.TotalCost.Microdollars)
+	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
+	assertUsageDayTotals(t, cache)
 }

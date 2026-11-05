@@ -194,7 +194,8 @@ func recordUsageFactsPricing(
 	if group.ComputedAggregateCount == 0 && requestCount == 0 {
 		return nil
 	}
-	_, computedLookup, err := resolver.ResolveBilledAt(group.ProviderID, group.Model, group.PricedModel, timestamp)
+	_, computedLookup, err := resolver.ResolveBilledAt(
+		group.ProviderID, group.Model, group.PricedModel, timestamp)
 	if err != nil {
 		return fmt.Errorf("resolving billed pricing for model %q: %w", group.Model, err)
 	}
