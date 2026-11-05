@@ -1025,21 +1025,11 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 	t.Cleanup(stop)
 	require.Empty(t, unwatched)
 	open()
-	receive := func() time.Time {
-		t.Helper()
-		select {
-		case at := <-calls:
-			return at
-		case <-time.After(10 * time.Second):
-			require.FailNow(t, "watcher did not dispatch a file write")
-			return time.Time{}
-		}
-	}
 	path := filepath.Join(project, "active.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
-	first := receive()
+	first := receiveArchiveTest(t, calls)
 	require.NoError(t, os.WriteFile(path, []byte("second\n"), 0o600))
-	gap := receive().Sub(first)
+	gap := receiveArchiveTest(t, calls).Sub(first)
 	// Callback timestamps follow dispatch; allow scheduling delay before the first timestamp.
 	const dispatchJitter = 250 * time.Millisecond
 	assert.GreaterOrEqual(t, gap, cfg.SyncInterval-dispatchJitter)
