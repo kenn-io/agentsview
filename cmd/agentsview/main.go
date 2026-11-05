@@ -360,7 +360,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if extractSched != nil {
 		if cfg.Recall.Extract.Enabled {
 			extractSched.onBattery = power.OnBattery
-			extractSched.onBatteryMgr = extract.NewReconciler(database)
 		}
 		if vectorServe.RecallMutationNotify != nil {
 			extractSched.onPassFinished = vectorServe.RecallMutationNotify

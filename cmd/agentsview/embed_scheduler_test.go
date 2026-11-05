@@ -1190,12 +1190,7 @@ func TestMessageSchedulerQueuesBuildOnSessionDeletion(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, vs.Scheduler)
 			t.Cleanup(func() { require.NoError(t, vs.Close()) })
-			// Consume the startup signal to isolate the deletion notification.
-			select {
-			case release := <-vs.Scheduler.dirty:
-				release()
-			default:
-			}
+			require.Empty(t, vs.Scheduler.dirty, "setup must not queue a message build")
 
 			srv := server.New(cfg, database, nil, vs.ServerOpts...)
 			ts := startTestServer(t, ln, srv.Handler())
@@ -2002,9 +1997,9 @@ func TestEmbedSchedulerBatteryBackstopClearsRetryTimer(t *testing.T) {
 func TestMessageSchedulerStartupBuildsBatteryDeferredCorpus(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "offline", "project", []db.Message{
-		dbtest.UserMsg("offline", 0, "Embed this message after restarting the daemon."),
-	})
+	dbtest.SeedSessionWithMessages(t, database, "current", "project", []db.Message{
+		dbtest.UserMsg("current", 0, "Already indexed message."),
+	}, func(s *db.Session) { s.EndedAt = new("2026-01-02T00:00:00Z") })
 	stub := newEmbeddingsStubServer(t, 3)
 	defer stub.Close()
 	cfg := vectorTestConfig(dataDir)
@@ -2016,17 +2011,15 @@ func TestMessageSchedulerStartupBuildsBatteryDeferredCorpus(t *testing.T) {
 		vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 		require.NoError(t, err)
 		defer vs.Close()
-		vs.Scheduler.onBattery = func() bool { return true }
-		vs.Scheduler.debounce = 10 * time.Millisecond
-		vs.Scheduler.Notify()
-		go vs.Scheduler.Run(t.Context())
-		defer vs.Scheduler.Stop()
-		waitForSchedulerCondition(t, func() bool {
-			_, statErr := os.Stat(vs.Scheduler.batteryDeferredPath)
-			return statErr == nil
-		}, "battery deferral was not retained for the next daemon")
+		started, err := vs.Scheduler.mgr.TryBuild(t.Context(), vector.BuildRequest{})
+		require.NoError(t, err)
+		require.True(t, started)
 	}()
-
+	dbtest.SeedSessionWithMessages(t, database, "offline", "project", []db.Message{
+		dbtest.UserMsg("offline", 0, "Imported behind the index watermark."),
+	}, func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
+	marker := cfg.Vector.ResolvedDBPath(dataDir) + ".battery-deferred"
+	require.NoError(t, os.WriteFile(marker, nil, 0o600))
 	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
 	defer vs.Close()
@@ -2036,30 +2029,60 @@ func TestMessageSchedulerStartupBuildsBatteryDeferredCorpus(t *testing.T) {
 	defer vs.Scheduler.Stop()
 	waitForSchedulerCondition(t, func() bool {
 		generations, listErr := directListGenerations(t.Context(), cfg, vector.MessageIndexSpec())
-		_, statErr := os.Stat(vs.Scheduler.batteryDeferredPath)
-		return listErr == nil && len(generations) == 1 && generations[0].Embedded == 1 && errors.Is(statErr, os.ErrNotExist)
-	}, "daemon startup did not embed an offline message")
+		_, statErr := os.Stat(marker)
+		return listErr == nil && len(generations) == 1 && generations[0].Embedded == 2 && errors.Is(statErr, os.ErrNotExist)
+	}, "startup did not replay the deferred full reconciliation")
 }
 
-func TestMessageSchedulerACStartupWithoutDeferredWorkDoesNotBuild(t *testing.T) {
-	for _, runAfterSync := range []bool{false, true} {
-		t.Run(fmt.Sprintf("run_after_sync=%t", runAfterSync), func(t *testing.T) {
+func TestMessageSchedulerACStartupReplaysDeferredWork(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		marker, runAfterSync, retry bool
+		backstop                    string
+		want                        []vector.BuildRequest
+	}{
+		{name: "ordinary startup", runAfterSync: true, backstop: "24h"},
+		{name: "ordinary startup without sync", backstop: "24h"},
+		{name: "deferred sync", marker: true, runAfterSync: true, backstop: "0", want: []vector.BuildRequest{{Backstop: true}}},
+		{name: "deferred backstop", marker: true, backstop: "24h", want: []vector.BuildRequest{{Backstop: true}}},
+		{name: "disabled", marker: true, backstop: "0"},
+		{name: "retry", marker: true, runAfterSync: true, retry: true, backstop: "0", want: []vector.BuildRequest{{Backstop: true}, {Backstop: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				dataDir := t.TempDir()
 				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 				cfg := vectorTestConfig(dataDir)
-				cfg.Vector.Embed.RunAfterSync = new(runAfterSync)
+				cfg.Vector.Embed.RunAfterSync = new(tc.runAfterSync)
+				cfg.Vector.Embed.BackstopInterval = tc.backstop
+				marker := cfg.Vector.ResolvedDBPath(dataDir) + ".battery-deferred"
+				if tc.marker {
+					require.NoError(t, os.WriteFile(marker, nil, 0o600))
+				}
 				vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 				require.NoError(t, err)
 				defer vs.Close()
 				mgr := &fakeEmbedManager{}
+				if tc.retry {
+					mgr.results = []fakeTryBuildResult{{started: true, err: errors.New("temporary failure")}, {started: true}}
+				}
 				vs.Scheduler.mgr = mgr
 				vs.Scheduler.onBattery = func() bool { return false }
 				go vs.Scheduler.Run(t.Context())
 				defer vs.Scheduler.Stop()
-				synctest.Sleep(time.Minute)
+				synctest.Sleep(embedDebounceInterval)
 				synctest.Wait()
-				assert.Zero(t, mgr.callCount())
+				if tc.retry {
+					assert.FileExists(t, marker)
+					synctest.Sleep(embedDebounceInterval)
+					synctest.Wait()
+				}
+				assert.Equal(t, tc.want, mgr.callsSnapshot())
+				if tc.marker && len(tc.want) == 0 {
+					assert.FileExists(t, marker)
+				} else {
+					assert.NoFileExists(t, marker)
+				}
 			})
 		})
 	}

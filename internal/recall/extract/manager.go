@@ -114,6 +114,8 @@ type PassOptions struct {
 	SessionID string
 	Full      bool
 	Limit     int
+	// ReconcileOnly retracts ineligible entries without starting model work.
+	ReconcileOnly bool
 }
 
 // PassResult summarizes one pass.
@@ -264,6 +266,12 @@ func (m *Manager) runPassLocked(
 		); err != nil {
 			return result, err
 		}
+	}
+	if opts.ReconcileOnly {
+		if opts.SessionID == "" && opts.Limit == 0 && passStart.After(m.reconcileWatermark) {
+			m.reconcileWatermark = passStart
+		}
+		return result, nil
 	}
 	sessionIDs, err := m.passSessions(ctx, opts)
 	if err != nil {

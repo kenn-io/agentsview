@@ -44,7 +44,6 @@ type extractScheduler struct {
 	// call it because they cannot have changed the corpus.
 	onPassFinished func()
 	onBattery      func() bool
-	onBatteryMgr   extractPassManager
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -148,16 +147,21 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// only reloads done sessions written to since their coverage stamp.
 	// Single-goroutine state, no locking needed.
 	pendingFull := true
-	deferOnBattery := func() bool {
+	batteryWaiting := false
+	deferOnBattery := func(periodic bool) bool {
 		if s.onBattery == nil || !s.onBattery() {
+			batteryWaiting = false
 			return false
 		}
-		started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
-		if err != nil {
-			log.Printf("extract scheduler: reconciliation failed: %v", err)
-		}
-		if started {
-			startupDone()
+		if periodic || !batteryWaiting {
+			started, _, err := s.tryPassWithLease(ctx, s.mgr, extract.PassOptions{ReconcileOnly: true})
+			if err != nil {
+				log.Printf("extract scheduler: reconciliation failed: %v", err)
+			}
+			if started {
+				startupDone()
+				batteryWaiting = true
+			}
 		}
 		resetTimer(debounceTimer, batteryRecheckInterval)
 		return true
@@ -170,9 +174,10 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.stop:
 			return
 		case <-s.dirty:
+			batteryWaiting = false
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			if deferOnBattery() {
+			if deferOnBattery(false) {
 				continue
 			}
 			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
@@ -205,7 +210,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			if deferOnBattery() {
+			if deferOnBattery(true) {
 				pendingFull = full
 				continue
 			}

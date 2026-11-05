@@ -106,6 +106,7 @@ type embedScheduler struct {
 	includeAutomated    bool
 	onBattery           func() bool
 	batteryDeferredPath string
+	startupBackstop     bool
 
 	dirty chan func()
 	stop  chan struct{}
@@ -183,7 +184,7 @@ func (s *embedScheduler) run(
 	// be silently deferred until the next backstop tick (24h by default)
 	// instead of retrying on the debounce interval. It is read and written only
 	// from this single goroutine, so it needs no synchronization of its own.
-	var pendingBackstop bool
+	pendingBackstop := s.startupBackstop
 	var pendingRelease func()
 	var buildErrorRetries int
 	defer func() {
@@ -222,7 +223,7 @@ func (s *embedScheduler) run(
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
 			if s.onBattery != nil && s.onBattery() {
-				s.setBatteryDeferred(ctx, true)
+				s.setBatteryDeferred(true)
 				if pendingRelease != nil {
 					pendingRelease()
 					pendingRelease = nil
@@ -264,7 +265,7 @@ func (s *embedScheduler) run(
 				resetTimer(debounceTimer, s.debounce)
 				continue
 			}
-			s.setBatteryDeferred(ctx, false)
+			s.setBatteryDeferred(false)
 			if pendingRelease != nil {
 				pendingRelease()
 				pendingRelease = nil
@@ -283,7 +284,7 @@ func (s *embedScheduler) run(
 				continue
 			}
 			if s.onBattery != nil && s.onBattery() {
-				s.setBatteryDeferred(ctx, true)
+				s.setBatteryDeferred(true)
 				pendingBackstop = true
 				if pendingRelease != nil {
 					pendingRelease()
@@ -318,7 +319,7 @@ func (s *embedScheduler) run(
 				continue
 			}
 
-			s.setBatteryDeferred(ctx, false)
+			s.setBatteryDeferred(false)
 			release()
 			pendingBackstop = false
 			if pendingRelease != nil {
@@ -335,7 +336,7 @@ func (s *embedScheduler) run(
 }
 
 // setBatteryDeferred carries a paused message build across a daemon idle exit.
-func (s *embedScheduler) setBatteryDeferred(_ context.Context, deferred bool) {
+func (s *embedScheduler) setBatteryDeferred(deferred bool) {
 	if s.batteryDeferredPath == "" {
 		return
 	}
@@ -826,12 +827,15 @@ func setupVectorServing(
 		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
 	}
 	scheduler.batteryDeferredPath = path + ".battery-deferred"
-	if cfg.Vector.Embed.RunAfterSyncEnabled() {
-		if _, err := os.Stat(scheduler.batteryDeferredPath); err == nil {
+	if _, err := os.Stat(scheduler.batteryDeferredPath); err == nil {
+		if cfg.Vector.Embed.RunAfterSyncEnabled() || backstop > 0 {
+			scheduler.startupBackstop = true
 			scheduler.Notify()
-		} else if !errors.Is(err, os.ErrNotExist) {
-			log.Printf("embed scheduler: checking battery-deferred work: %v", err)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		log.Printf("embed scheduler: checking battery-deferred work: %v", err)
+	}
+	if cfg.Vector.Embed.RunAfterSyncEnabled() {
 		// A permanent delete must reach the message mirror's journal refresh without waiting for a sync.
 		serverOpts = append(serverOpts, server.WithSessionMutationNotifier(scheduler.Notify))
 	}
