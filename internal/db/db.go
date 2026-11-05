@@ -3996,6 +3996,17 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	if err := ensureUsageIndexesLocked(ctx, w); err != nil {
 		return err
 	}
+	// Session shape, activity, and stats count messages by role and flags.
+	// Covering those columns keeps the counts off message bodies, which are
+	// usually kilobytes. Widened here, after column migrations, since legacy
+	// archives lack source_subtype.
+	if err := ensureIndexColumnsLocked(ctx,
+		w, "idx_messages_session_role", messageSessionRoleIndexColumns,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
+		 ON messages(session_id, role, is_system, has_thinking, has_tool_use, source_subtype)`,
+	); err != nil {
+		return err
+	}
 	// Widened here, after column migrations, since legacy archives lack is_automated.
 	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_sessions_parent", []string{"parent_session_id", "is_automated"},
@@ -4070,6 +4081,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		return fmt.Errorf("recreating idx_insights_lookup: %w", err)
 	}
 	return nil
+}
+
+var messageSessionRoleIndexColumns = []string{
+	"session_id", "role", "is_system", "has_thinking", "has_tool_use", "source_subtype",
 }
 
 var usageSessionCoveringIndexColumns = []string{
