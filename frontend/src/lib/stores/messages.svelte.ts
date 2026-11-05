@@ -183,7 +183,9 @@ export class MessagesStore {
     } catch (err) {
       if (isAbortError(err)) return;
       if (this.sessionId === id) this.historyComplete = false;
-      if (this.loadGeneration === generation) sessions.markActiveSessionMissing(id, err);
+      if (this.loadGeneration === generation) {
+        sessions.markActiveSessionMissing(id, err);
+      }
       // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
       console.warn("Failed to load session messages:", err);
