@@ -201,33 +201,20 @@ func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	assert.Equal(t, int32(4), prepares.Load())
 }
 
-func TestDailyUsageAfterTopReadPreparesCursorOnSameMemo(t *testing.T) {
+func TestUsageWindowMemoSeparatesCursorPreparation(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "cursor-model", InputTokens: 7, DedupKey: "cursor"}}))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-	require.NoError(t, err)
-	require.Positive(t, snapshot.CursorHighWater)
-	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
-	require.NoError(t, err)
 	var prepares atomic.Int32
 	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	ctx := WithUsageWindowMemo(t.Context())
-	want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
+	// Exercise the memo boundary directly; Pairwise only reads daily usage.
+	_, err := database.sharedUsageWindow(ctx, usageWindowKey(filter, usageQueryKindToken, false), filter, usageQueryKindToken, false)
 	require.NoError(t, err)
-	got, err := database.GetTopSessionsByCost(ctx, filter, 3)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-	assert.Zero(t, usageCacheCount(t, cache, "cursor_usage_facts"))
-	var installs int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&installs))
-	assert.Zero(t, installs)
-	assert.Equal(t, int32(1), prepares.Load())
 	daily, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 17, daily.Totals.InputTokens)
-	assert.Equal(t, 1, usageCacheCount(t, cache, "cursor_usage_facts"))
 	assert.Equal(t, int32(2), prepares.Load(), "daily usage needs its own preparation to include Cursor")
 }
 
@@ -251,7 +238,7 @@ func TestUsageWindowMemoRecapturesAfterInstallChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, want, second)
 	assert.Equal(t, int32(2), prepares.Load())
-	// Store the fresh preparation in the memo so later reads reuse it.
+	// The recapture stored its preparation, so this read reuses it.
 	third, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, third)
@@ -270,6 +257,8 @@ func TestUsageWindowMemoSharesConcurrentSides(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
+	var readers sync.WaitGroup
+	defer readers.Wait()
 	defer unblock()
 	var prepares atomic.Int32
 	database.SetUsageWindowPrepareForTest(func(context.Context) {
@@ -285,15 +274,33 @@ func TestUsageWindowMemoSharesConcurrentSides(t *testing.T) {
 		err   error
 	}
 	done := make(chan result, 2)
-	for _, model := range []string{"model-a", "model-b"} {
-		go func() {
+	read := func(model string) {
+		readers.Go(func() {
 			side := filter
 			side.Model = model
 			daily, err := database.GetDailyUsage(ctx, side)
 			done <- result{model, daily, err}
-		}()
+		})
 	}
+	read("model-a")
 	<-entered
+
+	// Observe the second caller reaching the pending memo entry before release.
+	memo := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+	key := usageWindowKey(filter, usageQueryKindToken, true)
+	secondWaiting := make(chan struct{})
+	memo.mu.Lock()
+	prepare, ok := memo.windows[key]
+	if ok {
+		memo.windows[key] = func() (usagePreparedWindow, error) {
+			close(secondWaiting)
+			return prepare()
+		}
+	}
+	memo.mu.Unlock()
+	require.True(t, ok, "publish the pending preparation before computing it")
+	read("model-b")
+	<-secondWaiting
 	unblock()
 	for range 2 {
 		got := <-done

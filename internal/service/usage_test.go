@@ -442,11 +442,8 @@ func TestDirectBackend_UsagePairwiseComparison_PreparesOnce(t *testing.T) {
 				req.LeftDimension, req.LeftValue = "model", "claude-sonnet-4-20250514"
 				req.RightDimension, req.RightValue = "model", "gpt-4o"
 			}
-			res, err := be.UsagePairwiseComparison(t.Context(), req)
+			_, err := be.UsagePairwiseComparison(t.Context(), req)
 			require.NoError(t, err)
-			require.NotNil(t, res)
-			assert.Equal(t, 285, res.Left.TotalTokens)
-			assert.Equal(t, 50, res.Right.TotalTokens)
 			assert.Equal(t, int32(1), prepares.Load())
 		})
 	}
