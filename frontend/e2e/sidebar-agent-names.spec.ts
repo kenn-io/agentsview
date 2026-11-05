@@ -179,7 +179,7 @@ async function openSessions(page: Page, viewportWidth: number, sidebarWidth: num
 async function measureRow(page: Page, sessionId: string) {
   return page.locator(`[data-session-id="${sessionId}"]`).evaluate((row) => {
     const rect = row.getBoundingClientRect();
-    const meta = row.querySelector<HTMLElement>(".side-meta")!;
+    const meta = row.querySelector<HTMLElement>(".meta-end")!;
     const agent = row.querySelector<HTMLElement>(".agent-tag")!;
     const name = row.querySelector<HTMLElement>(".session-name")!;
     const controls = [...row.querySelectorAll<HTMLElement>("button, a")];
@@ -238,7 +238,7 @@ async function collectRenderFindings(page: Page) {
     for (const row of sidebar.querySelectorAll<HTMLElement>(".session-item")) {
       const rowRect = row.getBoundingClientRect();
       const name = row.querySelector<HTMLElement>(".session-name");
-      const meta = row.querySelector<HTMLElement>(".side-meta");
+      const meta = row.querySelector<HTMLElement>(".meta-end");
       if (rowRect.right > sidebarRect.right + 1) violations.push("row escaped sidebar");
       if (name && name.getBoundingClientRect().right > rowRect.right + 1) {
         violations.push("title escaped row");
@@ -247,7 +247,7 @@ async function collectRenderFindings(page: Page) {
         violations.push("metadata escaped row");
       }
       for (const element of row.querySelectorAll<HTMLElement>(
-        ".session-name, .side-meta, .side-meta > *, button, a",
+        ".session-name, .meta-end, .meta-end > *, button, a",
       )) {
         const elementRect = element.getBoundingClientRect();
         if (elementRect.right > rowRect.right + 1 || elementRect.left < rowRect.left - 1) {
@@ -280,12 +280,12 @@ test.describe("sidebar agent names", () => {
     const wide = await measureRow(page, "open-code-review-session");
     expect(wide.row.width).toBeGreaterThanOrEqual(518);
     expect(wide.row.width).toBeLessThanOrEqual(520);
-    expect(wide.meta.width).toBeLessThanOrEqual(wide.row.width * 0.4 + 1);
+    expect(wide.meta.width).toBeLessThanOrEqual(wide.row.width * 0.6 + 1);
     expect(wide.agent.scrollWidth).toBeLessThanOrEqual(wide.agent.clientWidth + 1);
     console.log(`width=520px ${JSON.stringify(wide)}`);
     await expect(
       page.locator('[data-session-id="open-code-review-session"] .agent-tag'),
-    ).toHaveAttribute("title", REVIEW_LABEL);
+    ).toHaveAttribute("title", `${REVIEW_LABEL} · sdk-cli`);
     await expect(page.locator('[data-session-id="opencode-session"] .agent-tag')).toHaveAttribute(
       "title",
       REGISTRY_LABEL,
@@ -303,20 +303,20 @@ test.describe("sidebar agent names", () => {
     const narrow = await measureRow(page, "open-code-review-session");
     expect(narrow.row.width).toBeGreaterThanOrEqual(218);
     expect(narrow.row.width).toBeLessThanOrEqual(220);
-    expect(narrow.meta.width).toBeLessThanOrEqual(narrow.row.width * 0.4 + 1);
+    expect(narrow.meta.width).toBeLessThanOrEqual(narrow.row.width * 0.6 + 1);
     expect(
       await prefixFitsBeforeEllipsis(page, "open-code-review-session", "Open Code".length),
     ).toBe(true);
     const longLabel = await measureRow(page, "long-label-session");
-    expect(longLabel.row.height).toBeCloseTo(52, 0);
-    expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.4 + 1);
+    expect(longLabel.row.height).toBeCloseTo(42, 0);
+    expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.6 + 1);
     expect(longLabel.name.width).toBeGreaterThan(0);
     expect(longLabel.agent.scrollWidth).toBeGreaterThan(longLabel.agent.clientWidth);
-    expect(longLabel.entrypoint?.bottom).toBeLessThanOrEqual(longLabel.row.bottom + 1);
-    expect(longLabel.entrypoint?.top).toBeGreaterThanOrEqual(longLabel.row.top - 1);
+    // The entrypoint moved from the row into the agent tooltip.
+    expect(longLabel.entrypoint).toBeNull();
     await expect(page.locator('[data-session-id="long-label-session"] .agent-tag')).toHaveAttribute(
       "title",
-      LONG_LABEL,
+      `${LONG_LABEL} · sdk-python-experimental-runner`,
     );
     console.log(`width=220px ${JSON.stringify(narrow)}`);
     console.log(`width=220px long-label ${JSON.stringify(longLabel)}`);
@@ -327,12 +327,12 @@ test.describe("sidebar agent names", () => {
   }, testInfo) => {
     await openSessions(page, 1280, 260);
     const desktop = await measureRow(page, "open-code-review-session");
-    expect(desktop.row.height).toBeCloseTo(52, 0);
+    expect(desktop.row.height).toBeCloseTo(42, 0);
     expect(desktop.name.width).toBeGreaterThan(0);
-    expect(desktop.meta.width).toBeLessThanOrEqual(desktop.row.width * 0.4 + 1);
+    expect(desktop.meta.width).toBeLessThanOrEqual(desktop.row.width * 0.6 + 1);
     expect(desktop.controls.every((control) => control.right <= desktop.row.right + 1)).toBe(true);
     const longDesktop = await measureRow(page, "long-label-session");
-    expect(longDesktop.entrypoint?.bottom).toBeLessThanOrEqual(longDesktop.row.bottom + 1);
+    expect(longDesktop.entrypoint).toBeNull();
     const desktopLint = await collectRenderFindings(page);
     expect(desktopLint).toEqual([]);
     console.log(`render-lint width=1280px violations=${JSON.stringify(desktopLint)}`);
@@ -372,8 +372,8 @@ test.describe("sidebar agent names", () => {
     const drawerBox = await drawer.boundingBox();
     expect(drawerBox?.width).toBeCloseTo(280, 0);
     const mobile = await measureRow(page, "open-code-review-session");
-    expect(mobile.row.height).toBeCloseTo(52, 0);
-    expect(mobile.meta.width).toBeLessThanOrEqual(mobile.row.width * 0.4 + 1);
+    expect(mobile.row.height).toBeCloseTo(42, 0);
+    expect(mobile.meta.width).toBeLessThanOrEqual(mobile.row.width * 0.6 + 1);
     const mobileLint = await collectRenderFindings(page);
     expect(mobileLint).toEqual([]);
     console.log(`render-lint viewport=400px drawer=280px violations=${JSON.stringify(mobileLint)}`);

@@ -20,19 +20,25 @@ const SESSIONS = {
   DELTA_5500: { project: "project-delta", count: 2750 },
 };
 
-function getSessionItem(page: Page, project: string, count: number) {
+async function getSessionItem(page: Page, project: string, count: number) {
+  // Counts are formatted for the app's language: the saved choice, else the
+  // browser's. Format the expected count the same way.
+  const shown = await page.evaluate(
+    (n) => new Intl.NumberFormat(localStorage.getItem("agentsview-locale") ?? navigator.language).format(n),
+    count,
+  );
   return page
     .locator(LOC.sessionItem)
     .filter({
       has: page.locator(`${LOC.sessionProject}:text-is("${project}")`),
     })
     .filter({
-      has: page.locator(`${LOC.sessionCount}:text-is("${count}")`),
+      has: page.locator(`${LOC.sessionCount}:text-is("${shown}")`),
     });
 }
 
 async function selectSession(page: Page, project: string, count: number): Promise<string> {
-  const item = getSessionItem(page, project, count);
+  const item = await getSessionItem(page, project, count);
   const sessionId = await item.getAttribute("data-session-id");
   expect(sessionId).toBeTruthy();
   await item.click();
