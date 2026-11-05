@@ -31,6 +31,7 @@ import (
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
+	"go.kenn.io/agentsview/internal/power"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -355,6 +356,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("setting up recall extraction: %v", err)
 	}
 	if extractSched != nil {
+		if cfg.Recall.Extract.Enabled {
+			extractSched.onBattery = power.OnBattery
+			extractSched.onBatteryMgr = extract.NewReconciler(database)
+		}
 		if vectorServe.RecallMutationNotify != nil {
 			extractSched.onPassFinished = vectorServe.RecallMutationNotify
 		}
@@ -669,7 +674,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 		go func() {
 			defer close(auditDone)
-			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady)
+			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady, power.OnBattery)
 		}()
 		if startupRebuild {
 			select {
@@ -756,6 +761,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	defer startSetupTelemetry(ctx, telemetryReporter, cfg, database, broadcaster)()
 
 	if vectorServe.Scheduler != nil {
+		vectorServe.Scheduler.onBattery = power.OnBattery
 		go vectorServe.Scheduler.Run(ctx)
 		// Registered after the vectors.db Close defer above, so LIFO
 		// unwind order runs Stop (which waits for any in-flight
@@ -763,6 +769,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer vectorServe.Scheduler.Stop()
 	}
 	if vectorServe.RecallScheduler != nil {
+		vectorServe.RecallScheduler.onBattery = power.OnBattery
 		go vectorServe.RecallScheduler.Run(ctx)
 		defer vectorServe.RecallScheduler.Stop()
 	}
@@ -3252,6 +3259,7 @@ func startArchiveAudit(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 	startupReady chan struct{},
+	onBattery func() bool,
 ) {
 	first := archiveAuditInterval
 	if database.NeedsResync() {
@@ -3266,11 +3274,16 @@ func startArchiveAudit(
 		func(ctx context.Context, delay time.Duration) bool {
 			timer := time.NewTimer(delay)
 			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return false
-			case <-timer.C:
-				return true
+			for {
+				select {
+				case <-ctx.Done():
+					return false
+				case <-timer.C:
+					if startupReady != nil || database.NeedsResync() || onBattery == nil || !onBattery() {
+						return true
+					}
+					timer.Reset(batteryRecheckInterval)
+				}
 			}
 		},
 		func(ctx context.Context) bool {
