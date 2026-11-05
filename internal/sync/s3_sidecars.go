@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/smithy-go"
 	"go.kenn.io/kit/atomicfile"
 )
 
@@ -274,8 +274,8 @@ func localS3ClaudeToolResultPath(
 }
 
 func isMissingS3Object(err error) bool {
-	resp, hasResp := errors.AsType[minio.ErrorResponse](err)
-	return hasResp && resp.Code == minio.NoSuchKey
+	resp, hasResp := errors.AsType[smithy.APIError](err)
+	return hasResp && (resp.ErrorCode() == "NoSuchKey" || resp.ErrorCode() == "NotFound")
 }
 
 func s3ClaudeToolResultRel(original string) (string, bool) {

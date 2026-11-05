@@ -3,22 +3,43 @@ package sync
 import (
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 func missingS3ObjectError() error {
-	return minio.ErrorResponse{
-		Code:    minio.NoSuchKey,
+	return &smithy.GenericAPIError{
+		Code:    "NoSuchKey",
 		Message: "not found",
 	}
+}
+
+func TestIsMissingS3Object(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want bool
+	}{
+		{"NoSuchKey", true},
+		{"NotFound", true},
+		{"NoSuchBucket", false},
+		{"AccessDenied", false},
+		{"InvalidAccessKeyId", false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			err := fmt.Errorf("S3 request: %w", &smithy.GenericAPIError{Code: tc.code})
+			assert.Equal(t, tc.want, isMissingS3Object(err))
+		})
+	}
+	assert.False(t, isMissingS3Object(errors.New("connection failed")))
+	assert.False(t, isMissingS3Object(nil))
 }
 
 func TestRewriteS3ClaudeToolResultLinePreservesUntouchedNumbers(t *testing.T) {
