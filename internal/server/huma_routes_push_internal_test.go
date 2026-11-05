@@ -20,6 +20,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -1434,4 +1435,28 @@ func TestSyncThenRunForPushRejectsDeferredRebuild(t *testing.T) {
 			assert.Contains(t, err.Error(), "local sync processing incomplete")
 		})
 	}
+}
+
+// An offline attachment can fail the drain after a rebuild that kept a
+// deferred fork. Suppressing that attachment error must not let the push run.
+func TestSyncThenRunForPushRejectsDeferredRebuildWithAttachmentFailure(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1},
+			archivesource.DrainError{Err: errors.New("attachment offline")}
+	}))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+
+	err := f.srv.syncThenRunForPush(
+		t.Context(), engine, f.db, true, nil, nil, nil,
+		func(bool) error {
+			require.FailNow(t, "push work must not run while a fork is deferred")
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local sync processing incomplete")
 }
