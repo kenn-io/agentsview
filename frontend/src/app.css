@@ -178,6 +178,9 @@
      and the session panels share both of its edges. Prose fills the card,
      so this width also sets the line length (about 110 characters). */
   --reading-column: 880px;
+  /* Analytics filter chips ("Project: All"), both the multi-select
+     FilterDropdown and single-choice Typeahead (shared/FilterChip). */
+  --filter-chip-height: 26px;
   --role-user-accent: var(--accent-blue);
   --role-user-accent-foreground: var(--accent-blue-foreground);
   /* Labels mix the role color toward the text color, the same recipe
@@ -235,6 +238,34 @@
 :root.dark {
   --selected-bg: var(--bg-surface-hover);
   --selected-list-bg: var(--bg-surface-hover);
+}
+
+/* The date picker's preset pills ("30d") use the same neutral selected
+ * state as the Relative/Calendar/Custom tabs above them. */
+:root .kit-date-range-picker__pills .kit-date-range-picker__pill.active {
+  background: var(--selected-bg);
+  color: var(--text-primary);
+  box-shadow: var(--selected-edge), var(--shadow-sm);
+}
+
+/* One overlay chrome for dialogs, the search palette, and popovers
+ * (project picker, date picker, menus): the same 1px default border,
+ * large radius, and lifted shadow. The light backdrop dims the page a
+ * little more than kit-ui's default so the dialog separates from it. */
+:root {
+  --overlay-shadow: var(--shadow-lg), var(--shadow-sm);
+  --overlay-bg: rgba(0, 0, 0, 0.42); /* kit-ui-check-ignore: light backdrop strength; dark keeps kit-ui's value */
+}
+
+:root.dark {
+  --overlay-bg: rgba(0, 0, 0, 0.6); /* kit-ui-check-ignore: matches kit-ui's dark backdrop */
+}
+
+html:root .kit-popover-card,
+html:root .kit-modal-panel {
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--overlay-shadow);
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */

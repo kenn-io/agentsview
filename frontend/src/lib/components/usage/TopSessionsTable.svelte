@@ -196,7 +196,7 @@
     font-size: 11px;
     font-weight: 500;
     font-family: var(--font-mono);
-    color: var(--accent-blue);
+    color: var(--text-primary);
     min-width: 48px;
     text-align: right;
   }

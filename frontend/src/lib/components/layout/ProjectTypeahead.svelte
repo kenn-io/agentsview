@@ -16,6 +16,11 @@
     title?: string;
     emptyLabel?: string;
     disabled?: boolean;
+    /** Dim label before the value on the closed trigger ("Project:"). */
+    triggerPrefix?: string;
+    /** Closed-trigger text for the all-projects choice; defaults to the
+     * full "All Projects" label. Filter chips pass a short "All". */
+    allLabel?: string;
   }
 
   let {
@@ -30,14 +35,16 @@
     title = m.shared_select_project(),
     emptyLabel = m.shared_no_matching_projects(),
     disabled = false,
+    triggerPrefix = "",
+    allLabel = m.shared_all_projects(),
   }: Props = $props();
 
-  const allOption = {
+  const allOption = $derived({
     name: "",
     label: m.shared_all_projects(),
-    displayLabel: m.shared_all_projects(),
+    displayLabel: allLabel,
     count: 0,
-  };
+  });
 
   const options = $derived.by(() => {
     // An empty-name project would duplicate the all-projects key, and "" already means unfiltered.
@@ -59,7 +66,7 @@
     value
       ? projects.find((p) => p.name === value)?.name ?? value
       : includeAll
-        ? m.shared_all_projects()
+        ? allLabel
         : placeholder,
   );
 </script>
@@ -76,4 +83,5 @@
   {customLabel}
   {onquery}
   {onselect}
+  {triggerPrefix}
 />

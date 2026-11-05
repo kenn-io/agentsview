@@ -104,6 +104,17 @@ describe("RecentEditsPage", () => {
     expect(document.body.textContent).toContain("b/config.go");
   });
 
+  it("labels the columns above the file rows", async () => {
+    component = mount(RecentEditsPage, { target: document.body });
+    await tick();
+    await tick();
+
+    const head = document.querySelector(".re-list > .re-head");
+    expect(
+      Array.from(head?.children ?? [], (cell) => cell.textContent),
+    ).toEqual(["Project", "File", "Edits", "Last edit"]);
+  });
+
   it("shows truncation hint when edits_truncated is true", async () => {
     component = mount(RecentEditsPage, { target: document.body });
     await tick();

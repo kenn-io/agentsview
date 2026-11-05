@@ -398,6 +398,11 @@
     --trend-indigo: var(--accent-indigo);
     --trend-black: var(--text-primary);
     color: var(--text-primary);
+    /* Fill the scroll host so the chart can take the height left below
+       the toolbar instead of stopping at a fixed 300px. */
+    height: 100%;
+    display: flex;
+    flex-direction: column;
   }
 
   :global(:root.dark) .trends-page {
@@ -425,6 +430,8 @@
   }
 
   .trends-content {
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 16px;
     display: flex;
     flex-direction: column;
@@ -570,6 +577,8 @@
     grid-template-areas:
       "query chart"
       "table chart";
+    grid-template-rows: auto 1fr;
+    flex: 1 0 auto;
     gap: var(--space-6);
     align-items: start;
   }
@@ -580,6 +589,9 @@
 
   .chart-panel {
     grid-area: chart;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
     min-width: 0;
     position: relative;
   }
@@ -644,6 +656,12 @@
         "query"
         "chart"
         "table";
+      grid-template-rows: none;
+      flex: none;
+    }
+
+    .chart-panel {
+      --trends-chart-height: 300px;
     }
   }
 </style>

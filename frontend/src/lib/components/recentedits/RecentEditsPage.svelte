@@ -180,6 +180,12 @@
     </StateNotice>
   {:else}
     <div class="re-list">
+      <div class="re-head">
+        <span class="re-project">{m.recent_edits_col_project()}</span>
+        <span class="re-path">{m.recent_edits_col_file()}</span>
+        <span class="re-count">{m.recent_edits_col_edits()}</span>
+        <span class="re-time">{m.recent_edits_col_last_edit()}</span>
+      </div>
       {#each files as f (key(f))}
         <div class="re-file">
           <button class="re-file-row" onclick={() => toggle(f)}>
@@ -289,6 +295,25 @@
     background: var(--bg-surface);
   }
 
+  /* Column labels over the rows: same flex columns and padding as a row,
+     in small uppercase muted type. */
+  .re-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--border-muted);
+  }
+
+  .re-head > span {
+    font-family: inherit;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
   .re-file + .re-file {
     border-top: 1px solid var(--border-muted);
   }
@@ -347,6 +372,12 @@
   /* Phones: the project moves above the path so the file name keeps the
      row's width, and count and time take only what they need. */
   @media (max-width: 520px) {
+    /* Rows stack project over path here, so the column labels no longer
+       line up with anything. */
+    .re-head {
+      display: none;
+    }
+
     .recent-edits-page {
       padding: 20px 12px;
     }
