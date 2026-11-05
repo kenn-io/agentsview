@@ -143,7 +143,6 @@ func sidebarColumns(dialect db.QueryDialect, idColumn string) string {
 func (SessionQueries) SidebarRootPageSQL(f db.SessionFilter, dialect db.QueryDialect, cur db.SessionCursor, count bool) (string, []any) {
 	rootFilter := f
 	rootFilter.IncludeChildren = false
-	rootFilter.Cursor = ""
 	rootFilter.Starred = false
 	where, args := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
 	where += " AND " + db.BuildCanonicalRootWhere(dialect, "sessions", f.IncludeOrphans)
@@ -196,7 +195,14 @@ func (SessionQueries) SidebarTreePageSQL(f db.SessionFilter, dialect db.QueryDia
 		SELECT t.root_id AS root_id, s.id AS id
 		FROM sessions s JOIN tree t ON ` + dialect.ParentRelation("s", "t") + `
 		WHERE ` + db.SessionTreeMemberPredicate(f, dialect, "s") + `
+	), root_activity AS (
+		SELECT t.root_id AS root_id, MAX(COALESCE(s.ended_at, s.started_at, s.created_at)) AS activity
+		FROM tree t JOIN sessions s ON s.id = t.id
+		GROUP BY t.root_id
 	) SELECT t.root_id, ` + sidebarColumns(dialect, "sessions.id") + `
-	FROM sessions JOIN tree t ON sessions.id = t.id`
+	FROM sessions JOIN tree t ON sessions.id = t.id
+	JOIN root_activity ra ON ra.root_id = t.root_id
+	ORDER BY ra.activity DESC, t.root_id DESC,
+		COALESCE(ended_at, started_at, created_at) DESC, sessions.id DESC`
 	return query, page.Args()
 }

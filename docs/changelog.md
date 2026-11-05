@@ -107,6 +107,9 @@ The latest release is
 
 **Improvements**
 
+- Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
+  rows show quickly on large archives.
+
 - Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
   parent links when counting roots and loading child trees, including pages
   filtered by labels or pull requests.

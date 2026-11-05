@@ -1,12 +1,10 @@
 package readbase
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -286,10 +284,6 @@ func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFi
 			EndedAt: activities[f.Limit-1], ID: ids[f.Limit-1], Total: index.Total,
 		})
 	}
-	positions := make(map[string]int, len(ids))
-	for i, id := range ids {
-		positions[id] = i
-	}
 	query, args = queries.SidebarTreePageSQL(f, dialect, ids)
 	treeRows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -297,42 +291,21 @@ func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFi
 	}
 	defer treeRows.Close()
 	// A session reachable from several roots belongs to the earliest root.
-	rowPositions := map[string]int{}
+	seen := map[string]struct{}{}
 	for treeRows.Next() {
 		var rootID string
 		row, err := s.scanSidebarRow(treeRows, []any{&rootID})
 		if err != nil {
 			return db.SidebarSessionIndex{}, err
 		}
-		pos := positions[rootID]
-		if previous, exists := rowPositions[row.ID]; exists {
-			rowPositions[row.ID] = min(previous, pos)
+		if _, exists := seen[row.ID]; exists {
 			continue
 		}
-		rowPositions[row.ID] = pos
+		seen[row.ID] = struct{}{}
 		index.Sessions = append(index.Sessions, row)
 	}
 	if err := treeRows.Err(); err != nil {
 		return db.SidebarSessionIndex{}, fmt.Errorf("iterating %s sidebar tree page: %w", s.backend.MemoryBackendName(), err)
 	}
-	activity := func(row db.SidebarSessionIndexRow) time.Time {
-		value := row.CreatedAt
-		if row.EndedAt != nil {
-			value = *row.EndedAt
-		} else if row.StartedAt != nil {
-			value = *row.StartedAt
-		}
-		timestamp, _ := s.backend.ParseTime(value)
-		return timestamp
-	}
-	slices.SortStableFunc(index.Sessions, func(a, b db.SidebarSessionIndexRow) int {
-		if order := cmp.Compare(rowPositions[a.ID], rowPositions[b.ID]); order != 0 {
-			return order
-		}
-		if order := activity(b).Compare(activity(a)); order != 0 {
-			return order
-		}
-		return cmp.Compare(b.ID, a.ID)
-	})
 	return index, nil
 }
