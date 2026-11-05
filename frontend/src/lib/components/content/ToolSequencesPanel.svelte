@@ -48,7 +48,7 @@
 
   const uid = $props.id();
   const ENDING_TONES: Record<Ending, ChipTone> = {
-    recovered: "success",
+    recovered: "neutral",
     abandoned: "danger",
     open: "warning",
     unknown: "neutral",
@@ -259,7 +259,7 @@
                 <span class="facts">{flags.join(" · ")}</span>
               {/if}
               <span class="where">{messageRange(sequence)}</span>
-              <Chip size="xs" tone={ENDING_TONES[sequence.ending]} title={endingExplanation(sequence.ending)} class="ending">
+              <Chip size="xs" uppercase={false} tone={ENDING_TONES[sequence.ending]} title={endingExplanation(sequence.ending)} class="ending">
                 {endingLabel(sequence.ending)}
               </Chip>
             </button>
@@ -384,8 +384,10 @@
     max-height: clamp(10rem, 34vh, 24rem);
     min-width: 0;
     overflow: auto;
-    /* Content sits on the transcript's shared reading column. */
-    padding: 10px max(12px, calc((100% - var(--reading-column)) / 2)) var(--space-5);
+    /* The panel sits on the transcript's shared reading column, under
+       SignalPanel; its fill and bottom rule span the column, not the pane. */
+    margin-inline: max(12px, calc((100% - var(--reading-column)) / 2));
+    padding: 10px 12px var(--space-5);
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-default);
     color: var(--text-primary);
@@ -395,6 +397,7 @@
   .tool-sequences-panel.embedded {
     max-height: none;
     overflow: visible;
+    margin-inline: 0;
     padding: 0;
     background: none;
     border-bottom: 0;

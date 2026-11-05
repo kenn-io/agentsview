@@ -2299,6 +2299,17 @@
     }
   }
 
+  /* At desktop widths both header rows sit on the transcript's centered
+     reading column (MessageList .virtual-row), so the title shares the
+     first card's left edge and the stats end at its right edge. The bottom
+     rule still spans the pane. A pane narrower than the column keeps the
+     usual 14px inset. */
+  @media (min-width: 1100px) {
+    .session-breadcrumb {
+      padding-inline: max(14px, calc((100% - var(--reading-column)) / 2));
+    }
+  }
+
   /* Below 1100px the title, transcript controls, and actions do not fit on
      one row. The title and actions keep the first row, and the transcript
      controls start the second, ahead of the metadata. */

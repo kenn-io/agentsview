@@ -144,10 +144,11 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 9px;
+    /* Same type as the other Vitals section headings (SessionVitals .v-h). */
     color: var(--text-muted);
-    font-size: 9px;
-    font-weight: 500;
-    letter-spacing: 0.6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
   }
 

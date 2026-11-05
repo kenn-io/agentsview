@@ -39,4 +39,28 @@ describe("SignalPanel", () => {
     expect(document.body.textContent).toContain("Not enough activity");
     expect(document.querySelector(".signal-panel .friction-findings")).not.toBeNull();
   });
+
+  it("lists penalties largest first, whatever order the session reports them in", async () => {
+    const orders = [];
+    for (const health_penalties of [
+      { edit_churn: 4, zz_custom: 4, tool_failures: 6 },
+      { tool_failures: 6, zz_custom: 4, edit_churn: 4 },
+    ]) {
+      component = mount(SignalPanel, {
+        target: document.body,
+        props: { session: { ...session, health_score: 90, health_penalties } },
+      });
+      await tick();
+      orders.push(
+        [...document.querySelectorAll(".penalty .penalty-value")].map((el) =>
+          el.parentElement!.textContent!.replace(/\s+/g, " ").trim(),
+        ),
+      );
+      await unmount(component);
+      component = undefined;
+    }
+    expect(orders[0]).toEqual(orders[1]);
+    expect(orders[0]!.map((text) => text.split(" ")[0])).toEqual(["-6", "-4", "-4"]);
+    expect(orders[0]![2]).toContain("zz_custom");
+  });
 });

@@ -48,9 +48,9 @@
   );
   const filtered = $derived(ui.hasBlockFilters);
   const focused = $derived(ui.transcriptMode === "focused");
-  const labelFor = (layout: string) =>
-    focused ? m.header_view_trigger_focused({ layout }) : m.header_view_trigger({ layout });
-  const triggerText = $derived(labelFor(layoutName));
+  const labelFor = (layout: string, inFocus: boolean) =>
+    inFocus ? m.header_view_trigger_focused({ layout }) : m.header_view_trigger({ layout });
+  const triggerText = $derived(labelFor(layoutName, focused));
 </script>
 
 <!-- A schematic of each layout: role header bars, message blocks, and tool
@@ -104,13 +104,15 @@
       : m.header_view_trigger_label({ layout: layoutName })}
   >
     <LayoutListIcon size="14" strokeWidth="1.75" aria-hidden="true" />
-    <!-- Hidden copies of the label for every layout share one grid cell
-         with the visible label, so the trigger is as wide as its widest
-         layout label in the current language and mode. Switching layouts
-         does not move its neighbors. -->
+    <!-- Hidden copies of the label for every layout in both modes share
+         one grid cell with the visible label, so the trigger is as wide as
+         its widest label in the current language. Switching layouts or
+         modes does not move its neighbors. -->
     <span class="view-trigger-label-box">
       {#each LAYOUTS as layout (layout.id)}
-        <span class="view-trigger-sizer" aria-hidden="true">{labelFor(layout.name())}</span>
+        {#each [false, true] as inFocus (inFocus)}
+          <span class="view-trigger-sizer" aria-hidden="true">{labelFor(layout.name(), inFocus)}</span>
+        {/each}
       {/each}
       <span class="view-trigger-text">{triggerText}</span>
     </span>
@@ -164,6 +166,7 @@
         {BLOCK_LABELS[block]()}
       </MenuItem>
     {/each}
+    <MenuSeparator />
     <!-- Always mounted (disabled when nothing is hidden) so keyboard focus
          never lands on an item that disappears under it. -->
     <MenuItem
@@ -243,8 +246,11 @@
     background: var(--accent-blue);
   }
 
+  /* The block toggles' icon slot matches the radio items' 12px check
+     slot, so all three sections share one indent. */
   :global(.view-menu) {
     width: 300px;
+    --menu-icon-width: 12px;
   }
 
   .view-heading {

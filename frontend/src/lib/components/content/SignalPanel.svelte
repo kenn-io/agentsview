@@ -31,6 +31,14 @@
   const hasPenalties = $derived(
     penalties != null && Object.keys(penalties).length > 0,
   );
+  // JSON key order is not stable across loads, so list the largest
+  // deduction first and break ties by key.
+  const sortedPenalties = $derived(
+    Object.entries(penalties ?? {}).sort(
+      ([aKey, aValue], [bKey, bValue]) =>
+        bValue - aValue || (aKey < bKey ? -1 : aKey > bKey ? 1 : 0),
+    ),
+  );
   const compactions = $derived(session.compaction_count ?? 0);
   const midTaskCompactions = $derived(
     session.mid_task_compaction_count ?? 0,
@@ -127,10 +135,10 @@
       {/if}
     </div>
 
-    {#if hasPenalties && penalties}
+    {#if hasPenalties}
       <div class="penalties-row">
         <span class="penalties-heading">{m.signal_panel_penalties()}</span>
-        {#each Object.entries(penalties) as [key, value]}
+        {#each sortedPenalties as [key, value] (key)}
           <div
             class="penalty"
             title={m.signal_panel_penalty_title({ label: getPenaltyLabel(key), value })}
@@ -148,10 +156,12 @@
 </div>
 
 <style>
-  /* The band spans the pane; its content sits on the transcript's shared
-     reading column (see MessageList .virtual-row). */
+  /* The panel sits on the transcript's shared reading column (see
+     MessageList .virtual-row): its fill and bottom rule span the column,
+     not the pane. ToolSequencesPanel continues the same block below. */
   .signal-panel {
-    padding: 10px max(12px, calc((100% - var(--reading-column)) / 2));
+    margin-inline: max(12px, calc((100% - var(--reading-column)) / 2));
+    padding: 10px 12px;
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-muted);
     font-size: 12px;
@@ -191,12 +201,12 @@
     font-weight: 600;
     margin-right: 2px;
   }
+  /* Neutral, so the factors read as labels rather than links. */
   .basis-tag {
-    padding: 1px 6px;
-    background: color-mix(
-      in srgb, var(--accent-blue) 15%, transparent
-    );
-    color: var(--accent-blue);
+    padding: 0 6px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
     border-radius: 3px;
     font-size: 11px;
     cursor: help;

@@ -320,7 +320,7 @@
 </div>
 
 <style>
-  .search-output-hint { color: var(--text-muted); font-size: 10px; margin-inline-start: auto; }
+  .search-output-hint { color: var(--text-muted); font-size: 11px; white-space: nowrap; flex: 0 0 auto; margin-inline: auto 8px; }
   .tool-block {
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
