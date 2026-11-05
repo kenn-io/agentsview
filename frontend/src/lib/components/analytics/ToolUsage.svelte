@@ -612,8 +612,8 @@
   }
 
   .trend-label {
-    font-size: 10px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     margin-top: 2px;
     white-space: nowrap;
   }

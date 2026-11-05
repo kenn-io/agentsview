@@ -425,7 +425,7 @@
     flex-shrink: 0;
     padding: 1px 5px;
     border-radius: 999px;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 600;
     --badge-color: var(--accent-orange);
     color: var(--badge-color);

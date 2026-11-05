@@ -542,7 +542,7 @@
   .rail-rank {
     width: 14px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     font-family: var(--font-mono);
@@ -612,7 +612,7 @@
   .list-rank {
     width: 18px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     font-family: var(--font-mono);
@@ -658,7 +658,7 @@
     flex-shrink: 0;
     min-width: 36px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -681,8 +681,8 @@
   }
 
   .hint {
-    font-size: 10px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     margin-bottom: 6px;
     line-height: 14px;
     height: 14px;

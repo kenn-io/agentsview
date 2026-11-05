@@ -1,6 +1,6 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import { Card } from "@kenn-io/kit-ui";
+  import StatCard from "../analytics/StatCard.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import { formatCount } from "../../utils/format.js";
@@ -293,25 +293,14 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <Card
-      level="default"
-      padding="none"
-      class={card.featured ? "card featured" : card.context ? "card context" : "card"}
-    >
-      {#if usage.errors.summary}
-        <span class="card-value error">--</span>
-        <span class="card-label">{card.label()}</span>
-      {:else}
-        <span class="card-value">{card.value()}</span>
-        <span class="card-label">{card.label()}</span>
-        {#if card.sub}
-          {@const subtext = card.sub()}
-          {#if subtext}
-            <span class="card-sub">{subtext}</span>
-          {/if}
-        {/if}
-      {/if}
-    </Card>
+    <StatCard
+      value={card.value()}
+      label={card.label()}
+      sub={card.sub?.() ?? ""}
+      tier={card.featured ? "lead" : card.context ? "context" : "standard"}
+      featured={card.featured}
+      error={!!usage.errors.summary}
+    />
   {/each}
 </div>
 
@@ -334,65 +323,10 @@
     flex-wrap: wrap;
   }
 
-  .summary-cards :global(.card) {
-    flex: 1;
-    min-width: 120px;
-    /* One shared height for every card, so wrapped rows stay aligned. */
-    min-height: 84px;
-    padding: 8px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .summary-cards :global(.card > .kit-card__body) {
-    display: contents;
-  }
-
-  /* The featured total keeps a quiet accent edge instead of a heavy frame. */
-  .summary-cards :global(.card.featured) {
-    background: var(--selected-bg);
-    box-shadow: var(--selected-edge);
-  }
-
-  .card-value {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.2;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
-  }
-
-  .summary-cards :global(.card.featured .card-value) {
-    font-size: 22px;
-  }
-
-  .summary-cards :global(.card.context) {
-    border-color: var(--border-muted);
-    box-shadow: none;
-  }
-
-  /* Context counts share the KPI numeral style; a wider gap before the
-     first one sets them apart as a group. */
+  /* Context counts form a quieter group; a wider gap before the first
+     one sets them apart. */
   .summary-cards :global(.card.context:not(.context + .context)) {
     margin-left: 8px;
-  }
-
-  .card-value.error {
-    color: var(--text-muted);
-  }
-
-  .card-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-
-  .card-sub {
-    font-size: 10px;
-    color: var(--text-muted);
-    margin-top: 2px;
   }
 
   .error-bar {

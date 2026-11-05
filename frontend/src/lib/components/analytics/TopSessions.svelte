@@ -328,8 +328,8 @@
   }
 
   .session-project {
-    font-size: 10.5px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

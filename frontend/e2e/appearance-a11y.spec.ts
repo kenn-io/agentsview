@@ -181,7 +181,7 @@ test.describe("Appearance accessibility", () => {
         getComputedStyle(document.querySelector(selector)!).display;
       return {
         recommendation: display(".recommendation-content"),
-        summary: display(".summary-card-content"),
+        summary: display(".summary-grid .stat-card"),
         pattern: display(".pattern-card-content"),
         evidence: display(".evidence-panel-live"),
       };

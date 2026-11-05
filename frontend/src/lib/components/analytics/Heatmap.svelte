@@ -330,8 +330,8 @@
 
   .heatmap-container :global(.day-label),
   .heatmap-container :global(.month-label) {
-    font-size: 10.5px;
-    fill: var(--text-muted);
+    font-size: 11px;
+    fill: var(--text-secondary);
     font-family: var(--font-sans);
   }
 

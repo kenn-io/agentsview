@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
-  import { Card } from "@kenn-io/kit-ui";
+  import StatCard from "./StatCard.svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -12,26 +12,31 @@
     label: () => string;
     value: () => string;
     sub?: () => string;
+    tier?: "lead" | "standard" | "context";
   }
 
   const cards: SummaryCard[] = [
     {
       label: () => m.analytics_summary_sessions(),
+      tier: "lead",
       value: () =>
         formatCount(analytics.summary?.total_sessions ?? 0),
     },
     {
       label: () => m.analytics_summary_messages(),
+      tier: "lead",
       value: () =>
         formatCount(analytics.summary?.total_messages ?? 0),
     },
     {
       label: () => m.analytics_summary_projects(),
+      tier: "context",
       value: () =>
         formatCount(analytics.summary?.active_projects ?? 0),
     },
     {
       label: () => m.analytics_summary_active_days(),
+      tier: "context",
       value: () =>
         formatCount(analytics.summary?.active_days ?? 0),
     },
@@ -61,23 +66,13 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <Card level="default" padding="none" class="card">
-      {#if analytics.errors.summary}
-        <span class="card-value error">--</span>
-        <span class="card-label">{card.label()}</span>
-      {:else}
-        <span class="card-value">
-          {card.value()}
-        </span>
-        <span class="card-label">{card.label()}</span>
-        {#if card.sub}
-          {@const subtext = card.sub()}
-          {#if subtext}
-            <span class="card-sub">{subtext}</span>
-          {/if}
-        {/if}
-      {/if}
-    </Card>
+    <StatCard
+      value={card.value()}
+      label={card.label()}
+      sub={card.sub?.() ?? ""}
+      tier={card.tier}
+      error={!!analytics.errors.summary}
+    />
   {/each}
 </div>
 
@@ -98,42 +93,6 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-  }
-
-  .summary-cards :global(.card) {
-    flex: 1;
-    min-width: 120px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .summary-cards :global(.card > .kit-card__body) {
-    display: contents;
-  }
-
-  .card-value {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.2;
-  }
-
-  .card-value.error {
-    color: var(--text-muted);
-  }
-
-  .card-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-
-  .card-sub {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 2px;
   }
 
   .error-bar {

@@ -1056,14 +1056,14 @@
   }
 
   .timeline :global(.y-label) {
-    font-size: 10.5px;
-    fill: var(--text-muted);
+    font-size: 11px;
+    fill: var(--text-secondary);
     font-family: var(--font-mono);
   }
 
   .timeline :global(.x-label) {
-    font-size: 10.5px;
-    fill: var(--text-muted);
+    font-size: 11px;
+    fill: var(--text-secondary);
     font-family: var(--font-mono);
   }
 
@@ -1127,7 +1127,7 @@
   }
 
   .timeline :global(.overlay-y-label) {
-    font-size: 10.5px;
+    font-size: 11px;
     fill: var(--accent-amber);
     font-family: var(--font-mono);
   }

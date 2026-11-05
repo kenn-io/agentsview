@@ -266,8 +266,8 @@
     gap: var(--space-5);
     min-width: 0;
     padding: 0 4px 6px;
-    color: var(--text-muted);
-    font-size: 10.5px;
+    color: var(--text-secondary);
+    font-size: 11px;
   }
 
   .agent-breakdown {

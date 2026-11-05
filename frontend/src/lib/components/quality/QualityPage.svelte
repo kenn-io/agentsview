@@ -27,6 +27,7 @@
   import type { AutomatedScope } from "../../api/types.js";
 import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { Card, Typeahead } from "@kenn-io/kit-ui";
+  import StatCard from "../analytics/StatCard.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
@@ -744,42 +745,31 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         {/if}
 
         <div class="summary-grid">
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_average_score()}</span>
-              <strong>
-                {summary.avgHealthScore == null
-                  ? "--"
-                  : Math.round(summary.avgHealthScore)}
-              </strong>
-              <span>
-                {summary.avgHealthScore == null
-                  ? m.insights_page_no_scored_sessions()
-                  : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
-              </span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_scored_sessions()}</span>
-              <strong>{formatCount(summary.scoredSessions)}</strong>
-              <span>{m.insights_page_unscored_count({ count: formatCount(summary.unscoredSessions) })}</span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_low_quality()}</span>
-              <strong>{formatCount(summary.lowQualitySessions)}</strong>
-              <span>{m.insights_page_df_graded()}</span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_prompt_signals()}</span>
-              <strong>{formatCount(summary.computedQualitySessions)}</strong>
-              <span>{m.insights_page_sessions_computed()}</span>
-            </article>
-          </Card>
+          <StatCard
+            tier="lead"
+            label={m.insights_page_average_score()}
+            value={summary.avgHealthScore == null
+              ? "--"
+              : String(Math.round(summary.avgHealthScore))}
+            sub={summary.avgHealthScore == null
+              ? m.insights_page_no_scored_sessions()
+              : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
+          />
+          <StatCard
+            label={m.insights_page_scored_sessions()}
+            value={formatCount(summary.scoredSessions)}
+            sub={m.insights_page_unscored_count({ count: formatCount(summary.unscoredSessions) })}
+          />
+          <StatCard
+            label={m.insights_page_low_quality()}
+            value={formatCount(summary.lowQualitySessions)}
+            sub={m.insights_page_df_graded()}
+          />
+          <StatCard
+            label={m.insights_page_prompt_signals()}
+            value={formatCount(summary.computedQualitySessions)}
+            sub={m.insights_page_sessions_computed()}
+          />
         </div>
 
         <Card
@@ -1164,48 +1154,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: var(--space-5);
-  }
-
-  .summary-grid :global(.summary-card) {
-    min-height: 92px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    justify-content: space-between;
-  }
-
-  .summary-grid :global(.summary-card > .kit-card__body) {
-    display: contents;
-  }
-
-  .summary-card-content {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 0;
-    justify-content: space-between;
-    min-width: 0;
-  }
-
-  .summary-grid :global(.summary-card .label) {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .summary-grid :global(.summary-card strong) {
-    font-size: 28px;
-    line-height: 1;
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .summary-grid :global(.summary-card span:last-child) {
-    color: var(--text-secondary);
-    font-size: 12px;
   }
 
   .content :global(.distribution-row) {
