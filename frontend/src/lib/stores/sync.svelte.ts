@@ -230,6 +230,7 @@ class SyncStore {
       this.markRemoteReachable(true);
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
     } catch (error) {
+      events.settleStartup();
       if (updateBackendHealth) {
         this.markBackendFailure(error);
       }

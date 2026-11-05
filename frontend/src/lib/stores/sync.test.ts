@@ -57,6 +57,7 @@ vi.mock("../api/generated/index", () => ({
 vi.mock("./events.svelte.js", () => ({
   events: {
     setAvailable: api.setEventsAvailable,
+    settleStartup: vi.fn(),
   },
 }));
 
