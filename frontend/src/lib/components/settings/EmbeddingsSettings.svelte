@@ -200,7 +200,10 @@
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
-    <p class="state">{m.settings_embeddings_unavailable()}</p>
+    <p class="state">
+      <span class="status-mark" aria-hidden="true"></span>
+      {m.settings_embeddings_unavailable()}
+    </p>
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
@@ -358,15 +361,31 @@
   /* The readable unavailable state leads; the raw diagnostic below it
      stays muted monospace. */
   .state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin: 0;
     font-size: 13px;
     font-weight: 500;
     color: var(--text-primary);
   }
 
+  /* The hollow status ring GitHub uses for "Not configured": the
+     feature is off here, not failing. */
+  .status-mark {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-muted);
+  }
+
+  /* The diagnostic hangs under the sentence, past the ring. */
   .muted.detail {
     font-family: var(--font-mono, monospace);
     font-size: 11px;
+    padding-left: 15px;
   }
 
   .msg {

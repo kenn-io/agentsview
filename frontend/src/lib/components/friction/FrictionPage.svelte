@@ -2,7 +2,7 @@
   import { onDestroy, onMount, untrack } from "svelte";
   import { Button, Card, EmptyState, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { ChevronLeftIcon, ChevronRightIcon } from "../../icons.js";
+  import { ChevronLeftIcon, ChevronRightIcon, TriangleAlertIcon } from "../../icons.js";
   import { friction } from "../../stores/friction.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -154,9 +154,14 @@
 
     {#if friction.errors.dates && frictionUnreadable}
       <div class="state-notice" role="status">
-        <strong>{m.friction_load_error()}</strong>
-        <span>{friction.errors.dates}</span>
-        <Button size="sm" label={m.friction_retry()} onclick={refresh} />
+        <span class="state-notice-icon" aria-hidden="true">
+          <TriangleAlertIcon size="16" strokeWidth="2" />
+        </span>
+        <div class="state-notice-body">
+          <strong>{m.friction_load_error()}</strong>
+          <span class="state-notice-detail">{friction.errors.dates}</span>
+          <Button size="sm" label={m.friction_retry()} onclick={refresh} />
+        </div>
       </div>
     {:else if friction.errors.dates}
       <Card level="default" padding="none" class="state-panel">
@@ -310,17 +315,39 @@
      used for failed loads. */
   .state-notice {
     display: flex;
-    flex-direction: column;
     align-items: flex-start;
-    gap: 6px;
+    gap: 10px;
     max-width: 640px;
     padding: 12px 14px;
     border: 1px solid var(--card-border);
+    /* A thin amber status edge marks an unavailable feature, the same
+       calm amber the session panels use when the backend lacks one. */
+    border-left: 3px solid color-mix(in srgb, var(--accent-amber) 70%, var(--card-border));
     border-radius: var(--radius-md);
     background: var(--bg-surface);
     color: var(--text-secondary);
     font-size: 13px;
     line-height: 1.45;
+  }
+  .state-notice-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    margin-top: 1px;
+    color: color-mix(in srgb, var(--accent-amber) 80%, var(--text-secondary));
+  }
+  .state-notice-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+  }
+  /* Backend reasons arrive lowercase; set them as a sentence. */
+  .state-notice-detail {
+    display: block;
+  }
+  .state-notice-detail::first-letter {
+    text-transform: uppercase;
   }
   .state-notice strong {
     color: var(--text-primary);

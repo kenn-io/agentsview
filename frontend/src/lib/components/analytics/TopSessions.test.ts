@@ -313,12 +313,16 @@ describe("TopSessions", () => {
       // the sessions in this fixture have no timestamps, so
       // age comparisons fail and they fall straight into the
       // unclean tier.
-      expect(document.querySelectorAll(".kit-status-dot--unclean").length).toBe(2);
+      expect(
+        document.querySelectorAll(".session-row .kit-status-dot--unclean").length,
+      ).toBe(2);
 
       // The clean and NULL sessions resolve to "quiet" — a
       // transparent dot is still rendered so the layout column
       // stays consistent.
-      expect(document.querySelectorAll(".kit-status-dot--quiet").length).toBe(2);
+      expect(
+        document.querySelectorAll(".session-row .kit-status-dot--quiet").length,
+      ).toBe(2);
 
       unmount(component);
     });
@@ -332,6 +336,8 @@ describe("TopSessions", () => {
       const pill = document.querySelector(".status-count-pill") as HTMLButtonElement | null;
       expect(pill).toBeTruthy();
       expect(pill!.textContent?.trim()).toBe("2 unclean");
+      // The pill leads with the rows' unclean dot as its legend.
+      expect(pill!.querySelector(".kit-status-dot--unclean")).toBeTruthy();
 
       pill!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();

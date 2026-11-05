@@ -191,9 +191,27 @@
     if (!first || !last) return undefined;
     return [first.instant, xInterval.offset(last.instant, 1)];
   });
+  // The left padding holds the y-axis value labels; the selection
+  // overlay's inset in the styles below matches it.
+  const PLOT_PADDING = { top: 20, right: 24, bottom: 20, left: 40 };
+  const Y_TICKS = 4;
+  const percentTickFormat = $derived(
+    new Intl.NumberFormat(getLocale(), {
+      style: "percent",
+      maximumFractionDigits: 0,
+    }),
+  );
+  function formatYTick(value: number): string {
+    return percentScale
+      ? percentTickFormat.format(value / 100)
+      : formatCount(value);
+  }
   const barInset = $derived.by(() => {
     if (chart.bars.length === 0 || chartAreaWidth === 0) return 0;
-    const plotWidth = Math.max(chartAreaWidth - 48, 0);
+    const plotWidth = Math.max(
+      chartAreaWidth - PLOT_PADDING.left - PLOT_PADDING.right,
+      0,
+    );
     const bucketWidth = plotWidth / chart.bars.length;
     return Math.max(0, Math.min(1, (bucketWidth - 0.75) / 2));
   });
@@ -546,11 +564,11 @@
         {xDomain}
         yDomain={[0, null]}
         yNice
-        padding={{ top: 20, right: 24, bottom: 20, left: 24 }}
+        padding={PLOT_PADDING}
         height={164}
         class="timeline-chart"
-        axis="x"
-        grid={{ class: "grid-line" }}
+        axis={true}
+        grid={{ class: "grid-line", yTicks: Y_TICKS }}
         rule={false}
         highlight={false}
         tooltipContext={false}
@@ -570,6 +588,13 @@
             tickMarks: false,
             rule: false,
             classes: { tickLabel: "x-label" },
+          },
+          yAxis: {
+            ticks: Y_TICKS,
+            format: (value) => formatYTick(value as number),
+            tickMarks: false,
+            rule: false,
+            classes: { tickLabel: "y-label" },
           },
         }}
       >
@@ -828,7 +853,7 @@
 
   .activity-selection-overlay {
     position: absolute;
-    inset: 20px 24px 24px;
+    inset: 20px 24px 24px 40px;
     pointer-events: none;
     background: color-mix(
       in srgb,
@@ -837,6 +862,15 @@
     );
     border-left: 1px solid var(--accent-blue);
     border-right: 1px solid var(--accent-blue);
+  }
+
+  /* Value labels are quieter than the date labels: they give scale,
+     the dates locate the bars. */
+  .timeline-container :global(.y-label) {
+    font-size: 10px;
+    fill: var(--text-muted);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
   }
 
   .timeline-container :global(.x-label) {

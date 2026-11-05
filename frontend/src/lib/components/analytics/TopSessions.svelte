@@ -99,6 +99,13 @@
           onclick={() => sessions.setTerminationFilter("unclean")}
           title={m.analytics_top_sessions_filter_unclean()}
         >
+          <!-- The same dot the unclean rows carry, so the pill is
+               also their legend. -->
+          <StatusDot
+            status="unclean"
+            label={sessionStatusLabel("unclean")}
+            size={7}
+          />
           {m.analytics_top_sessions_unclean_count({
             countLabel: formatCount(uncleanCount),
           })}
@@ -214,32 +221,26 @@
     gap: 8px;
   }
 
+  /* Red like the unclean row dots and the sidebar's unclean pill;
+     the leading dot ties the count to the rows it counts. */
   .status-count-pill {
-    padding: 2px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 6px;
     font-size: 11px;
     font-weight: 500;
+    font-variant-numeric: tabular-nums;
     border-radius: 999px;
-    color: var(--accent-amber);
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 10%,
-      transparent
-    );
-    border: 1px solid color-mix(
-      in srgb,
-      var(--accent-amber) 35%,
-      transparent
-    );
+    color: color-mix(in srgb, var(--accent-red) 80%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-red) 35%, transparent);
     cursor: pointer;
     transition: background 0.1s;
   }
 
   .status-count-pill:hover {
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 18%,
-      transparent
-    );
+    background: color-mix(in srgb, var(--accent-red) 15%, transparent);
   }
 
   .metric-toggle {
