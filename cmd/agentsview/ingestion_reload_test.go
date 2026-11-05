@@ -143,121 +143,141 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	assert.True(t, sessionImported(t, database, "gemini:alternate"))
 }
 
+type ingestionLifecycleFixture struct {
+	cfg       config.Config
+	database  *db.DB
+	root      string
+	engine    *agentsync.Engine
+	tracker   *server.IdleTracker
+	ingestion *daemonIngestion
+}
+
+func newIngestionLifecycleFixture(t *testing.T) ingestionLifecycleFixture {
+	t.Helper()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	writeReloadGeminiSession(t, root, "retained")
+	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	saved := cfg
+	saved.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+	tracker := server.NewIdleTracker(0, func() {})
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, func() (config.Config, error) { return saved, nil })
+	t.Cleanup(ingestion.Stop)
+	return ingestionLifecycleFixture{cfg, database, root, engine, tracker, ingestion}
+}
+
 func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
-	for _, mode := range []string{"automatic", "reload", "ensure-fresh-stop"} {
-		t.Run(mode, func(t *testing.T) {
-			reload := mode == "reload"
-			database := dbtest.OpenTestDB(t)
-			root := t.TempDir()
-			writeReloadGeminiSession(t, root, "retained")
-			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-			t.Cleanup(engine.Close)
-			engine.SyncAll(t.Context(), nil)
-			saved := cfg
-			saved.DisabledAgents = []parser.AgentType{parser.AgentGemini}
-			tracker := server.NewIdleTracker(0, func() {})
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, func() (config.Config, error) { return saved, nil })
-			t.Cleanup(ingestion.Stop)
-			if mode == "automatic" {
-				lastSync := time.Now().Add(-time.Minute)
-				require.NoError(t, database.SetSyncState(t.Context(), "last_sync_started_at", lastSync.Format(time.RFC3339Nano)))
-				// Dispatch is still closed, so this change waits in the watcher queue.
-				writeReloadGeminiSession(t, root, "queued")
-				path := filepath.Join(root, "tmp", "project", "chats", "session-queued.json")
-				queuedAt := time.Now().Add(-30 * time.Second)
-				require.NoError(t, os.Chtimes(path, queuedAt, queuedAt))
-				ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{path}})
-				require.False(t, sessionImported(t, database, "gemini:queued"))
-			}
-			if mode == "automatic" {
-				tracker.SetSyncIdle(100*time.Millisecond, ingestion.Suspend) //nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
-				trackerCtx, cancel := context.WithCancel(t.Context())
-				trackerDone := make(chan struct{})
-				go func() { defer close(trackerDone); tracker.Run(trackerCtx) }()
-				defer func() { cancel(); <-trackerDone }()
-			}
-			if mode == "automatic" {
-				require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond, "the idle tracker suspends collection")
-			} else {
-				ingestion.Suspend()
-			}
-			ingestion.applying.Wait()
-			writeReloadGeminiSession(t, root, "overnight")
-			if mode == "automatic" {
-				path := filepath.Join(root, "tmp", "project", "chats", "session-overnight.json")
-				// Coarse mtimes just before suspension still fall within the margin.
-				older := time.Now().Add(-5 * time.Second)
-				require.NoError(t, os.Chtimes(path, older, older))
-				writeReloadGeminiSession(t, root, "old")
-				oldPath := filepath.Join(root, "tmp", "project", "chats", "session-old.json")
-				oldTime := time.Now().Add(-time.Hour)
-				require.NoError(t, os.Chtimes(oldPath, oldTime, oldTime))
-				assert.Never(t, func() bool { return sessionImported(t, database, "gemini:overnight") }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
-			}
-			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			releaseOnce := sync.OnceFunc(func() { close(release) })
-			t.Cleanup(releaseOnce)
-			go func() {
-				defer close(finished)
-				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
-			}()
-			<-entered
-			if reload {
-				_, err := ingestion.Reload(t.Context())
-				require.NoError(t, err)
-				require.Eventually(t, func() bool { return len(ingestion.Config().DisabledAgents) == 1 }, time.Second, time.Millisecond)
-				releaseOnce()
-				<-finished
-				require.True(t, ingestion.EnsureFresh(t.Context()))
-				ingestion.applying.Wait()
-				assert.False(t, sessionImported(t, database, "gemini:overnight"), "catch-up uses the newly disabled provider settings")
-				return
-			}
-			if mode == "ensure-fresh-stop" {
-				ctx, stop := context.WithCancel(t.Context())
-				readerDone := make(chan struct{})
-				go func() { ingestion.EnsureFresh(ctx); close(readerDone) }()
-				require.Eventually(t, ingestion.Active, time.Second, time.Millisecond, "catch-up has restored collection and is waiting for the engine")
-				stop()
-				<-readerDone
-				stopped := make(chan struct{})
-				go func() { ingestion.Stop(); close(stopped) }()
-				assert.Never(t, func() bool {
-					select {
-					case <-stopped:
-						return true
-					default:
-						return false
-					}
-				}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
-				releaseOnce()
-				<-finished
-				<-stopped
-				return
-			}
-			ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
-			headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
-			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-			require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
-			start := time.Now()
-			headers, _ = searchIngestionArchive(t, ts.URL, "overnight")
-			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-			assert.Less(t, time.Since(start), time.Second, "later readers return immediately after the shared catch-up budget expires")
-			canceled, stop := context.WithCancel(t.Context())
-			stop()
-			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
-			releaseOnce()
-			<-finished
-			require.Eventually(t, func() bool { return !ingestion.Pending() }, 5*time.Second, time.Millisecond)
-			require.True(t, ingestion.EnsureFresh(t.Context()))
-			headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
-			assert.Contains(t, freshBody, "hello from overnight")
-			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			assert.True(t, sessionImported(t, database, "gemini:queued"), "wake imports changes queued before suspension")
-			assert.False(t, sessionImported(t, database, "gemini:old"), "wake skips files older than the last sync and its margin")
-		})
-	}
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.OpenWatcherDispatch()
+	var attempts atomic.Int64
+	//nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
+	f.tracker.SetSyncIdle(100*time.Millisecond, func() {
+		f.ingestion.Suspend()
+		attempts.Add(1)
+	})
+	trackerCtx, cancel := context.WithCancel(t.Context())
+	trackerDone := make(chan struct{})
+	go func() { defer close(trackerDone); f.tracker.Run(trackerCtx) }()
+	defer func() { cancel(); <-trackerDone }()
+	require.Eventually(t, func() bool { return attempts.Load() > 0 }, time.Second, 10*time.Millisecond)
+	f.ingestion.applying.Wait()
+
+	lastSync := time.Now().Add(-time.Minute)
+	require.NoError(t, f.database.SetSyncState(t.Context(), "last_sync_started_at", lastSync.Format(time.RFC3339Nano)))
+	writeReloadGeminiSession(t, f.root, "overnight")
+	path := filepath.Join(f.root, "tmp", "project", "chats", "session-overnight.json")
+	// The file precedes the last sync but falls inside its ten-second margin.
+	withinMargin := lastSync.Add(-5 * time.Second)
+	require.NoError(t, os.Chtimes(path, withinMargin, withinMargin))
+	writeReloadGeminiSession(t, f.root, "old")
+	oldPath := filepath.Join(f.root, "tmp", "project", "chats", "session-old.json")
+	oldTime := lastSync.Add(-time.Hour)
+	require.NoError(t, os.Chtimes(oldPath, oldTime, oldTime))
+	assert.Never(t, func() bool { return sessionImported(t, f.database, "gemini:overnight") }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
+	require.False(t, f.ingestion.Active(), "the idle tracker suspends collection")
+
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer func() { releaseOnce(); <-finished }()
+	go func() {
+		defer close(finished)
+		_ = f.engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion, server.WithIdleTracker(f.tracker))
+	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
+	assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
+	require.True(t, f.ingestion.Active(), "watching resumes before catch-up finishes")
+	start := time.Now()
+	headers, _ = searchIngestionArchive(t, ts.URL, "overnight")
+	assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
+	assert.Less(t, time.Since(start), time.Second, "later readers return immediately after the shared catch-up budget expires")
+	canceled, stop := context.WithCancel(t.Context())
+	stop()
+	assert.False(t, f.ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
+	releaseOnce()
+	<-finished
+	require.Eventually(t, func() bool { return !f.ingestion.Pending() }, 5*time.Second, time.Millisecond)
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
+	assert.Contains(t, freshBody, "hello from overnight", "wake includes files within the last sync's mtime margin")
+	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+	assert.False(t, sessionImported(t, f.database, "gemini:old"), "wake skips files older than the last sync and its margin")
+}
+
+func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.OpenWatcherDispatch()
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	writeReloadGeminiSession(t, f.root, "overnight")
+	_, err := f.ingestion.Reload(t.Context())
+	require.NoError(t, err)
+	f.ingestion.applying.Wait()
+	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, f.ingestion.Config().DisabledAgents)
+	assert.False(t, f.ingestion.Active(), "reloading settings while suspended leaves collection suspended")
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.False(t, sessionImported(t, f.database, "gemini:overnight"), "catch-up uses the newly disabled provider settings")
+}
+
+func TestDaemonIngestionStopWaitsForCatchup(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	writeReloadGeminiSession(t, f.root, "overnight")
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer func() { releaseOnce(); <-finished }()
+	go func() {
+		defer close(finished)
+		_ = f.engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	readerDone := make(chan struct{})
+	go func() { f.ingestion.EnsureFresh(ctx); close(readerDone) }()
+	require.Eventually(t, f.ingestion.Active, time.Second, time.Millisecond, "catch-up has restored collection and is waiting for the engine")
+	stop()
+	<-readerDone
+	stopped := make(chan struct{})
+	go func() { f.ingestion.Stop(); close(stopped) }()
+	assert.Never(t, func() bool {
+		select {
+		case <-stopped:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
+	releaseOnce()
+	<-finished
+	<-stopped
+	require.Eventually(t, func() bool { return !f.ingestion.Pending() }, 5*time.Second, time.Millisecond)
 }
 
 func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {

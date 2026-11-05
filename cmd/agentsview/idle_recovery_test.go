@@ -65,23 +65,23 @@ func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	tracker := server.NewIdleTracker(0, func() {})
 	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
 	t.Cleanup(ingestion.Stop)
-	attempted := make(chan struct{}, 4)
+	var attempts atomic.Int64
 	//nolint:kennlint // deadlinetest: the held engine must outlast the suspension deadline before release
 	tracker.SetSyncIdle(100*time.Millisecond, func() {
 		ingestion.Suspend()
-		attempted <- struct{}{}
+		attempts.Add(1)
 	})
 	trackerCtx, cancel := context.WithCancel(t.Context())
 	trackerDone := make(chan struct{})
 	go func() { defer close(trackerDone); tracker.Run(trackerCtx) }()
 	defer func() { cancel(); <-trackerDone }()
 	require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond)
-	<-attempted
+	require.Eventually(t, func() bool { return attempts.Load() == 1 }, time.Second, time.Millisecond)
 	ingestion.applying.Wait()
 	writeReloadGeminiSession(t, root, "overnight")
 	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
-	defer unblock()
+	defer func() { unblock(); <-finished }()
 	go func() {
 		defer close(finished)
 		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
@@ -90,14 +90,13 @@ func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
 	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
 	require.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-	<-attempted
-	require.True(t, ingestion.Active(), "an idle deadline during catch-up keeps collection alive")
-	require.True(t, ingestion.Pending())
+	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, time.Second, time.Millisecond, "the idle deadline fires while catch-up holds the engine")
+	assert.True(t, ingestion.Active(), "an idle deadline during catch-up keeps collection alive")
+	assert.True(t, ingestion.Pending(), "the blocked catch-up still owes an archive refresh")
 	unblock()
 	<-finished
-	<-attempted
+	require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, time.Millisecond, "catch-up completed after the idle deadline, so collection must stop without needing another request")
 	require.True(t, sessionImported(t, database, "gemini:overnight"))
-	assert.False(t, ingestion.Active(), "catch-up completed after the idle deadline, so collection must stop without needing another request")
 }
 
 func TestIdleManualWakeRunsOneFullPass(t *testing.T) {

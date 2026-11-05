@@ -124,15 +124,14 @@ describe("SemanticSetupHelp", () => {
       await settle();
       expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledOnce();
       visibility.mockReturnValue(true);
-      document.dispatchEvent(new Event("visibilitychange"));
       await settle(15 * 60_000);
       expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledOnce();
       visibility.mockReturnValue(false);
-      document.dispatchEvent(new Event("visibilitychange"));
       await settle(2000);
       expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     } finally {
       unmount(component);
+      visibility.mockRestore();
     }
     await settle(4000);
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
