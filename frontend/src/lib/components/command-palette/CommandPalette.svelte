@@ -684,4 +684,38 @@
     background: var(--bg-inset);
     color: var(--text-primary);
   }
+
+  /* Phones: the agent, metadata, and ID would leave the title and snippet
+     no room, so each result wraps. The title and snippet take the first
+     line; the agent and metadata shorten beside the ID on the second. */
+  .palette-results {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 520px) {
+    .palette-item {
+      flex-wrap: wrap;
+      row-gap: 2px;
+    }
+
+    .item-body {
+      flex: 1 0 100%;
+    }
+
+    .item-agent {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 40%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .item-meta {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
+    }
+  }
 </style>
