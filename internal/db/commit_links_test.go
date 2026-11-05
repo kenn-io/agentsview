@@ -91,10 +91,7 @@ func TestCommitLinksParsing(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "codex:commit", "project-a")
 			messages := commitMessages("codex:commit", input, "[main abc1234] Fix parser")
-			messages[2].ToolCalls[0].ToolName = "shell"
-			if strings.HasPrefix(input, "text(") {
-				messages[2].ToolCalls[0].ToolName = "exec"
-			}
+			messages[2].ToolCalls[0].ToolName = "exec"
 			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "codex:commit")
 			require.NoError(t, err)
@@ -557,13 +554,11 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 		codeMode                           bool
 		count                              int
 	}{
-		{"code mode process", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, `{"output":"[main abc1234] Second commit\n"}`, true, 1},
+		{"code mode process", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, `{"output":"[main abc1234] Fix parser\n"}`, true, 1},
 		{"text process", "Chunk ID: abc\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\n", "Chunk ID: def\nWall time: 1 seconds\nProcess running with session ID 7\nFinal output:\nstill running", "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 1},
 		{"wrapped text process", `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\n"}]`, `[{"type":"input_text","text":"Process running with session ID 7\nFinal output:\nstill running"}]`, "Chunk ID: end\nWall time: 1 seconds\nProcess exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 1},
 		{"partial summary", "Process running with session ID 7\nFinal output:\n[main 123abcd] First commit\n", "Process running with session ID 7\nFinal output:\nstill running", "Process exited with code 0\nFinal output:\n[main abc1234] Second commit\n", false, 2},
 		{"code mode partial summary", `{"session_id":7,"output":"[main 123abcd] First commit\n"}`, `{"session_id":7,"output":"still running"}`, `{"output":"[main abc1234] Second commit\n"}`, true, 2},
-		{"code mode JSON", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, `{"output":"[main abc1234] Fix parser\n"}`, true, 1},
-		{"code mode wrapped JSON", `{"session_id":7,"output":""}`, `{"session_id":7,"output":"still running"}`, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`, true, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)

@@ -94,16 +94,7 @@ func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.
 	} {
 		t.Run(step.name, func(t *testing.T) {
 			push(step.projects, step.exclude)
-			links, err := reader().SessionCommitLinks(t.Context(), "commit-delete")
-			require.NoError(t, err)
-			if !step.want {
-				assert.Empty(t, links.Commits)
-				return
-			}
-			require.Len(t, links.Commits, 1)
-			assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
-			assert.True(t, links.Commits[0].Missing)
-			assert.Nil(t, links.Commits[0].Turn)
+			AssertRetainedCommitLink(t, reader(), step.want)
 		})
 	}
 	// Move after the last publication, then delete without another live push.
@@ -138,4 +129,19 @@ func AssertTrailerIncrementalPush(t *testing.T, local *db.DB, reader func() db.C
 	require.Len(t, links.Commits, 2)
 	assert.ElementsMatch(t, []string{strings.Repeat("b", 40), strings.Repeat("c", 40)}, []string{links.Commits[0].SHA, links.Commits[1].SHA})
 	AssertCommitLinkParity(t, local, reader())
+}
+
+// AssertRetainedCommitLink checks the deleted fixture's visibility and evidence.
+func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want bool) {
+	t.Helper()
+	links, err := reader.SessionCommitLinks(t.Context(), "commit-delete")
+	require.NoError(t, err)
+	if !want {
+		assert.Empty(t, links.Commits)
+		return
+	}
+	require.Len(t, links.Commits, 1)
+	assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
+	assert.True(t, links.Commits[0].Missing)
+	assert.Nil(t, links.Commits[0].Turn)
 }
