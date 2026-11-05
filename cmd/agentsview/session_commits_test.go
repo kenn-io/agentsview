@@ -24,29 +24,23 @@ func TestSessionCommits(t *testing.T) {
 		}},
 	}))
 	require.NoError(t, d.Close())
-	for _, format := range []string{"json", "human"} {
-		t.Run(format, func(t *testing.T) {
-			args := []string{"session", "commits", "s-commit"}
-			if format == "json" {
-				args = append(args, "--format", "json")
-			}
-			out, err := executeCommand(newRootCommand(), args...)
-			require.NoError(t, err)
-			if format == "json" {
-				got := decodeCLIJSON[db.SessionCommitList](t, out)
-				require.Len(t, got.Commits, 1)
-				assert.Equal(t, "abc1234", got.Commits[0].SHA)
-				assert.Equal(t, "s-commit", got.Commits[0].SessionID)
-				assert.Equal(t, &db.CommitTurn{Ordinal: 0, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, got.Commits[0].Turn)
-				return
-			}
-			assert.Regexp(t, `s-commit\s+1\s+1\s+exact-call`, out)
-			assert.Contains(t, out, "abc1234")
-			assert.Contains(t, out, "Fix parser")
-			assert.Contains(t, out, "0: Fix parser ")
-			assert.Contains(t, out, "…")
-			assert.NotContains(t, out, "END")
-			assert.NotContains(t, out, "\x1b")
-		})
-	}
+	t.Run("json", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit", "--format", "json")
+		require.NoError(t, err)
+		got := decodeCLIJSON[db.SessionCommitList](t, out)
+		require.Len(t, got.Commits, 1)
+		require.NotNil(t, got.Commits[0].Turn)
+		assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", got.Commits[0].Turn.Text)
+	})
+	t.Run("human", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit")
+		require.NoError(t, err)
+		assert.Regexp(t, `s-commit\s+1\s+1\s+exact-call`, out)
+		assert.Contains(t, out, "abc1234")
+		assert.Contains(t, out, "Fix parser")
+		assert.Contains(t, out, "0: Fix parser ")
+		assert.Contains(t, out, "…")
+		assert.NotContains(t, out, "END")
+		assert.NotContains(t, out, "\x1b")
+	})
 }

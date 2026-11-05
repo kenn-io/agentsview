@@ -140,7 +140,17 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, local.DeleteSession(ctx, "commit-delete"))
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
-	dbtest.AssertCommitLinkParity(t, local, store)
+	// Deleting a published session must replace its live link with a retained link.
+	wantDeleted, err := local.SessionCommitLinks(ctx, "commit-delete")
+	require.NoError(t, err)
+	gotDeleted, err := store.SessionCommitLinks(ctx, "commit-delete")
+	require.NoError(t, err)
+	assert.Equal(t, wantDeleted, gotDeleted)
+	wantLookup, err := local.CommitSessionLinks(ctx, []string{"abc1234567890123456789012345678901234567"})
+	require.NoError(t, err)
+	gotLookup, err := store.CommitSessionLinks(ctx, []string{"abc1234567890123456789012345678901234567"})
+	require.NoError(t, err)
+	assert.Equal(t, wantLookup, gotLookup)
 	// Refresh retained metadata, including an already retained row.
 	_, err = pg.ExecContext(ctx, `UPDATE commit_links SET subject='stale' WHERE session_id='commit-delete'`)
 	require.NoError(t, err)

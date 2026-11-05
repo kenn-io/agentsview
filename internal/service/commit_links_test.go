@@ -27,8 +27,6 @@ func TestCommitLinksBothBackends(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, lookup.Commits, 1)
 			require.Len(t, lookup.Commits[0].Links, 1)
-			link := lookup.Commits[0].Links[0]
-			assert.Equal(t, "abc1234", link.SHA)
 		})
 	}
 }

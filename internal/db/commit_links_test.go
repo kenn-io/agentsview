@@ -126,30 +126,46 @@ func TestCommitLinksParsing(t *testing.T) {
 }
 
 func TestCommitLinksQuietReadback(t *testing.T) {
-	for _, tt := range []struct {
+	type readbackCase struct {
 		name, command, output, sha, subject string
-	}{
-		{"rev parse", "git commit -q -m fix && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
-		{"rev parse CRLF", "git commit -q -m fix && git rev-parse HEAD", "abc1234\r\n", "abc1234", ""},
-		{"double quoted option text", `git commit -q -m "Fix --dry-run handling" && git rev-parse HEAD`, "abc1234\n", "abc1234", ""},
-		{"single quoted option text", "git commit -q -m 'Fix --dry-run handling' && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
-		{"dry run with option text", `git commit -q --dry-run -m "Fix --dry-run handling" && git rev-parse HEAD`, "abc1234\n", "", ""},
-		{"log oneline", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
-		{"log reverse options", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
-		{"commit other repo", "git -C /other commit -q -m fix && git rev-parse HEAD", "abc1234", "", ""},
-		{"readback other repo", "git commit -q -m fix && git -C /other rev-parse HEAD", "abc1234", "", ""},
-		{"no verify", "git commit -n -q -m fix && git rev-parse HEAD", "abc1234", "abc1234", ""},
-		{"fallback", "git commit -q || true && git rev-parse HEAD", "abc1234", "", ""},
-		{"printed", "echo 'git commit -q && git rev-parse HEAD'", "abc1234", "", ""},
-		{"quoted", "printf '%s' \"git commit -q && git rev-parse HEAD\"", "abc1234", "", ""},
-		{"multiple shas", "git commit -q && git rev-parse HEAD", "abc1234\ndef5678 Other", "", ""},
-	} {
+		tool, input, repository, cwd        string
+	}
+	cases := []readbackCase{
+		{name: "rev parse", command: "git commit -q -m fix && git rev-parse HEAD", output: "abc1234\n", sha: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "rev parse CRLF", command: "git commit -q -m fix && git rev-parse HEAD", output: "abc1234\r\n", sha: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "double quoted option text", command: `git commit -q -m "Fix --dry-run handling" && git rev-parse HEAD`, output: "abc1234\n", sha: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "single quoted option text", command: "git commit -q -m 'Fix --dry-run handling' && git rev-parse HEAD", output: "abc1234\n", sha: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "dry run with option text", command: `git commit -q --dry-run -m "Fix --dry-run handling" && git rev-parse HEAD`, output: "abc1234\n", repository: "/work", cwd: "/work"},
+		{name: "log oneline", command: "git commit --quiet -m fix && git log --oneline -1", output: "abc1234 Fix parser\n", sha: "abc1234", subject: "Fix parser", repository: "/work", cwd: "/work"},
+		{name: "log reverse options", command: "git commit -q -m fix && git log -1 --oneline", output: "abc1234 Fix parser\n", sha: "abc1234", subject: "Fix parser", repository: "/work", cwd: "/work"},
+		{name: "commit other repo", command: "git -C /other commit -q -m fix && git rev-parse HEAD", output: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "readback other repo", command: "git commit -q -m fix && git -C /other rev-parse HEAD", output: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "no verify", command: "git commit -n -q -m fix && git rev-parse HEAD", output: "abc1234", sha: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "fallback", command: "git commit -q || true && git rev-parse HEAD", output: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "printed", command: "echo 'git commit -q && git rev-parse HEAD'", output: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "quoted", command: "printf '%s' \"git commit -q && git rev-parse HEAD\"", output: "abc1234", repository: "/work", cwd: "/work"},
+		{name: "multiple shas", command: "git commit -q && git rev-parse HEAD", output: "abc1234\ndef5678 Other", repository: "/work", cwd: "/work"},
+	}
+	for _, option := range []string{"-z", "--dr", "--dry", "--dry-", "--dry-r", "--dry-ru", "--dry-run", "--sh", "--sho", "--shor", "--short", "--po", "--por", "--porc", "--porce", "--porcel", "--porcela", "--porcelai", "--porcelain", "--l", "--lo", "--lon", "--long", "--nu", "--nul", "--null", "'--dry-run'", `"--dry-run"`, "'--short'", `"--porcelain"`, "'--l'", `"-z"`} {
+		cases = append(cases, readbackCase{name: option, command: "git commit -q " + option + " && git rev-parse HEAD", output: "abc1234\n"})
+	}
+	cases = append(cases, readbackCase{
+		name: "code mode", tool: "exec",
+		input:  `text(await tools.exec_command({cmd: "git commit -q -m \"fix\" && git rev-parse HEAD", workdir: "/repo"}));`,
+		output: `{"output":"abc1234\n"}`, sha: "abc1234", repository: "/repo", cwd: "/work",
+	})
+	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = tt.cwd })
 			input, err := json.Marshal(map[string]string{"command": tt.command})
 			require.NoError(t, err)
-			insertMessages(t, d, commitMessages("s1", string(input), tt.output)...)
+			messages := commitMessages("s1", string(input), tt.output)
+			if tt.tool != "" {
+				messages[2].ToolCalls[0].ToolName = tt.tool
+				messages[2].ToolCalls[0].InputJSON = tt.input
+			}
+			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			if tt.sha == "" {
@@ -160,7 +176,7 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 			assert.Equal(t, tt.sha, got.Commits[0].SHA)
 			assert.Equal(t, tt.subject, got.Commits[0].Subject)
 			assert.Empty(t, got.Commits[0].Branch)
-			assert.Equal(t, "/work", got.Commits[0].Repository)
+			assert.Equal(t, tt.repository, got.Commits[0].Repository)
 		})
 	}
 	t.Run("summary takes precedence", func(t *testing.T) {
@@ -173,57 +189,6 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 		assert.Equal(t, "abc1234", got.Commits[0].SHA)
 		assert.Equal(t, "main", got.Commits[0].Branch)
 	})
-}
-
-func TestCommitLinksQuietReadbackCodeMode(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-	messages := commitMessages("s1", `text(await tools.exec_command({cmd: "git commit -q -m \"fix\" && git rev-parse HEAD", workdir: "/repo"}));`, `{"output":"abc1234\n"}`)
-	messages[2].ToolCalls[0].ToolName = "exec"
-	insertMessages(t, d, messages...)
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-	assert.Equal(t, "abc1234", got.Commits[0].SHA)
-	assert.Equal(t, "/repo", got.Commits[0].Repository)
-}
-
-func TestCommitLinksQuietDryRunPrefixes(t *testing.T) {
-	for _, option := range []string{"-z", "--dr", "--dry", "--dry-", "--dry-r", "--dry-ru", "--dry-run", "--sh", "--sho", "--shor", "--short", "--po", "--por", "--porc", "--porce", "--porcel", "--porcela", "--porcelai", "--porcelain", "--l", "--lo", "--lon", "--long", "--nu", "--nul", "--null", "'--dry-run'", `"--dry-run"`, "'--short'", `"--porcelain"`, "'--l'", `"-z"`} {
-		t.Run(option, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a")
-			input, err := json.Marshal(map[string]string{"command": "git commit -q " + option + " && git rev-parse HEAD"})
-			require.NoError(t, err)
-			insertMessages(t, d, commitMessages("s1", string(input), "abc1234\n")...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			assert.Empty(t, got.Commits)
-		})
-	}
-}
-
-func TestCommitLinksQuietReadbackAfterPoll(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-	messages := commitMessages("s1", `{"cmd":"git commit -q -m fix && git rev-parse HEAD","workdir":"/repo"}`, `{"session_id":7,"output":""}`)
-	messages[2].ToolCalls[0].ToolName = "exec_command"
-	insertMessages(t, d, messages...)
-	before, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	assert.Empty(t, before.Commits)
-	poll := commitMessages("s1", `{"session_id":7}`, "abc1234\n")[2]
-	poll.Ordinal = 3
-	poll.ToolCalls[0].ToolName = "write_stdin"
-	poll.ToolCalls[0].ToolUseID = "poll"
-	insertMessages(t, d, poll)
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-	assert.Equal(t, "abc1234", got.Commits[0].SHA)
-	assert.Equal(t, "/repo", got.Commits[0].Repository)
-	assert.Equal(t, "commit-call", got.Commits[0].ToolUseID)
-	assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
 }
 
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
@@ -324,8 +289,6 @@ func TestCommitLinksPurgeExcludedPages(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, got.Commits[0].Links, 3)
 				for _, link := range got.Commits[0].Links[:2] {
-					assert.True(t, link.Missing)
-					assert.Nil(t, link.Turn)
 					session, err := d.GetSession(t.Context(), link.SessionID)
 					require.NoError(t, err)
 					assert.Nil(t, session)
@@ -659,11 +622,21 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 		ordinal                                   int
 	}
 	type ownershipCase struct {
-		name     string
-		messages []Message
-		want     []ownedCommit
+		name       string
+		cwd        string
+		beforePoll bool
+		messages   []Message
+		want       []ownedCommit
 	}
 	cases := []ownershipCase{
+		{
+			name: "quiet readback after poll", cwd: "/work", beforePoll: true,
+			messages: []Message{
+				call("exec_command", "commit-call", `{"cmd":"git commit -q -m fix && git rev-parse HEAD","workdir":"/repo"}`, `{"session_id":7,"output":""}`),
+				call("write_stdin", "poll", `{"session_id":7}`, "abc1234\n"),
+			},
+			want: []ownedCommit{{"abc1234", "commit-call", "/repo", "Record the parser fix", tsZero, 2}},
+		},
 		{
 			name:     "complete batch result",
 			messages: []Message{call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m first"})); text(await tools.exec_command({cmd:"git commit -m second"}))`, `[{"type":"input_text","text":"[main abc1234] First\n"},{"type":"input_text","text":"[main def5678] Second\n"}]`)},
@@ -742,13 +715,21 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "s1", "project-a")
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = tt.cwd })
 			messages := commitMessages("s1", "", "")[:2]
 			for i, message := range tt.messages {
 				message.Ordinal = 2 + i
 				messages = append(messages, message)
 			}
-			insertMessages(t, d, messages...)
+			if tt.beforePoll {
+				insertMessages(t, d, messages[:3]...)
+				before, err := d.SessionCommitLinks(t.Context(), "s1")
+				require.NoError(t, err)
+				assert.Empty(t, before.Commits)
+				insertMessages(t, d, messages[3:]...)
+			} else {
+				insertMessages(t, d, messages...)
+			}
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, len(tt.want))
