@@ -979,6 +979,7 @@ describe("SessionsStore", () => {
 
       resolvePage({ sessions: [], total: 0, next_cursor: null });
       await Promise.all([first, second]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       detach();
     });
 

@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   checkForUpdate: vi.fn(),
   isRemoteConnection: vi.fn(),
   setEventsAvailable: vi.fn(),
+  settleStartup: vi.fn(),
   ApiError: class MockGeneratedApiError extends Error {
     status: number;
 
@@ -57,7 +58,7 @@ vi.mock("../api/generated/index", () => ({
 vi.mock("./events.svelte.js", () => ({
   events: {
     setAvailable: api.setEventsAvailable,
-    settleStartup: vi.fn(),
+    settleStartup: api.settleStartup,
   },
 }));
 
@@ -950,6 +951,7 @@ describe("SyncStore.remoteUnreachable", () => {
     await sync.loadVersion();
 
     expect(api.setEventsAvailable).not.toHaveBeenCalled();
+    expect(api.settleStartup).toHaveBeenCalledTimes(1);
 
     await sync.loadStatus();
 

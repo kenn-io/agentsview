@@ -60,68 +60,70 @@ afterEach(() => {
 });
 
 describe("events store", () => {
-  it.each([
-    "ready",
-    "unavailable",
-    "no subscriber",
-    "hidden",
-    "error",
-    "version failure",
-    "timeout",
-  ])("starts one first sidebar read after startup settles: %s", async (scenario) => {
-    vi.useFakeTimers();
-    vi.resetModules();
-    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(scenario === "hidden");
-    const { events } = await import("./events.svelte.js");
-    const { createSessionsStore } = await import("./sessions.svelte.js");
-    const { MetadataService, SessionsService } = await import("../api/generated/index");
-    const received = vi.fn();
-    const index = vi
-      .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
-      .mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve({ sessions: [], total: 0 }), 400)),
-      );
-    const sessions = createSessionsStore();
-    const detach = scenario === "no subscriber" ? () => {} : sessions.attachSidebar();
-    const unsub = scenario === "no subscriber" ? () => {} : events.subscribe(received);
-    try {
-      const first = sessions.load();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(index).not.toHaveBeenCalled();
-      if (scenario === "version failure") {
-        const { sync } = await import("./sync.svelte.js");
-        vi.spyOn(MetadataService, "getApiV1Version").mockRejectedValueOnce(new Error("down"));
-        await sync.loadVersion();
-      } else {
+  it.each(["unavailable", "no subscriber", "hidden", "error", "timeout"])(
+    "settles startup readiness: %s",
+    async (scenario) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(scenario === "hidden");
+      const { events } = await import("./events.svelte.js");
+      const received = vi.fn();
+      let detach = () => {};
+      let first: Promise<void> | undefined;
+      let index: ReturnType<typeof vi.spyOn> | undefined;
+      if (scenario === "timeout") {
+        const { createSessionsStore } = await import("./sessions.svelte.js");
+        const { SessionsService } = await import("../api/generated/index");
+        index = vi
+          .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
+          .mockImplementation(
+            () =>
+              new Promise((resolve) => setTimeout(() => resolve({ sessions: [], total: 0 }), 400)),
+          );
+        const sessions = createSessionsStore();
+        detach = sessions.attachSidebar();
+        first = sessions.load();
+      }
+      const unsub = scenario === "no subscriber" ? () => {} : events.subscribe(received);
+      try {
+        const settled = vi.fn();
+        const ready = events.whenReady(1000).then(settled);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).not.toHaveBeenCalled();
         events.setAvailable(scenario !== "unavailable");
-        const stream = FakeEventSource.instances[0];
-        if (scenario === "error") stream!.fireError();
+        if (scenario === "error" || scenario === "timeout") {
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).not.toHaveBeenCalled();
+        }
+        if (scenario === "error") FakeEventSource.instances[0]!.fireError();
         else if (scenario === "timeout") {
           await vi.advanceTimersByTimeAsync(999);
+          expect(settled).not.toHaveBeenCalled();
           expect(index).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
-        } else if (scenario === "ready") {
-          stream!.fire("events_ready", {});
-          expect(received).toHaveBeenCalledExactlyOnceWith({ scope: "sync" });
-          expect(index).not.toHaveBeenCalled();
         }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toHaveBeenCalledTimes(1);
+        await expect(ready).resolves.toBeUndefined();
+        if (scenario === "timeout") {
+          expect(index).toHaveBeenCalledTimes(1);
+          await vi.advanceTimersByTimeAsync(400);
+          await first;
+          // A ready after the timeout still catches up on the gap.
+          FakeEventSource.instances[0]!.fire("events_ready", {});
+          await vi.advanceTimersByTimeAsync(1000);
+          expect(index).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        detach();
+        unsub();
+        vi.restoreAllMocks();
+        visibility.mockRestore();
+        vi.clearAllTimers();
+        vi.useRealTimers();
       }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(index).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(400);
-      await first;
-      // A ready after the timeout still catches up on the gap.
-      if (scenario === "timeout") FakeEventSource.instances[0]!.fire("events_ready", {});
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(index).toHaveBeenCalledTimes(scenario === "timeout" ? 2 : 1);
-    } finally {
-      detach();
-      unsub();
-      vi.restoreAllMocks();
-      visibility.mockRestore();
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("releases hidden streams and refreshes subscribers on return and every reconnect", async () => {
     vi.useFakeTimers();
