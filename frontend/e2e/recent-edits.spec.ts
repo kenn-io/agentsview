@@ -26,7 +26,12 @@ async function withRecentEdits(page: Page) {
       json: {
         has_more: false,
         files: [
-          fileRow("2026-03-04-agentsview-long-project-name", "/src/server/handler.go", 3, "2026-11-05T10:00:00Z"),
+          fileRow(
+            "2026-03-04-agentsview-long-project-name",
+            "/src/server/handler.go",
+            3,
+            "2026-11-05T10:00:00Z",
+          ),
           fileRow("tools", "/cmd/agentsview/main.go", 123456, "2026-11-01T10:00:00Z"),
           fileRow("tools", "/internal/db/sessions.go", 7),
         ],
@@ -72,7 +77,9 @@ test.describe("Recent Edits feed", () => {
     });
   }
 
-  test("header and rows share columns with long headings and rows without a time", async ({ page }) => {
+  test("header and rows share columns with long headings and rows without a time", async ({
+    page,
+  }) => {
     // French has the longest column headings ("Dernière modification").
     await page.addInitScript(() => localStorage.setItem("agentsview-locale", "fr"));
     await withRecentEdits(page);
@@ -105,7 +112,9 @@ test.describe("Recent Edits feed", () => {
   });
 
   for (const width of [521, 600]) {
-    test(`keeps file names readable just above the stacked layout at ${width}px`, async ({ page }) => {
+    test(`keeps file names readable just above the stacked layout at ${width}px`, async ({
+      page,
+    }) => {
       await withRecentEdits(page);
       await page.setViewportSize({ width, height: 800 });
       await page.goto("/recent-edits");
@@ -129,7 +138,8 @@ test.describe("Recent Edits feed", () => {
         columns: [...list.querySelectorAll("thead th")].map((th) =>
           Math.round(th.getBoundingClientRect().width),
         ),
-        overflow: list.querySelector(".kit-table")!.getBoundingClientRect().width -
+        overflow:
+          list.querySelector(".kit-table")!.getBoundingClientRect().width -
           list.getBoundingClientRect().width,
         projectClipped: (() => {
           const head = list.querySelector<HTMLElement>(".re-file-row .re-project-head")!;

@@ -110,9 +110,12 @@ describe("RecentEditsPage", () => {
     await tick();
 
     const head = document.querySelectorAll(".re-list thead th");
-    expect(
-      Array.from(head, (cell) => cell.textContent?.trim()),
-    ).toEqual(["Project", "File", "Edits", "Last edit"]);
+    expect(Array.from(head, (cell) => cell.textContent?.trim())).toEqual([
+      "Project",
+      "File",
+      "Edits",
+      "Last edit",
+    ]);
   });
 
   it("shows truncation hint when edits_truncated is true", async () => {
