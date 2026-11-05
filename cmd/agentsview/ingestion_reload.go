@@ -265,10 +265,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
-	since := d.engine.LastSyncStartedAt(d.ctx)
-	if !since.IsZero() {
-		since = since.Add(-quickSyncMargin)
-	}
+	since := quickSyncCutoff(d.engine.LastSyncStartedAt(d.ctx))
 	err := d.restoreCollection()
 	if err == nil {
 		stats := d.engine.SyncAllSince(d.ctx, since, nil)

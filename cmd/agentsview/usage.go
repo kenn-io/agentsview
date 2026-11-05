@@ -35,6 +35,13 @@ import (
 // missing recent writes; 10s is a safe default.
 const quickSyncMargin = 10 * time.Second
 
+func quickSyncCutoff(since time.Time) time.Time {
+	if !since.IsZero() {
+		return since.Add(-quickSyncMargin)
+	}
+	return since
+}
+
 // defaultUsageDays is the default lookback window for
 // `agentsview usage daily` when neither --since nor --all is
 // given. Matches ccusage's default and avoids scanning the
@@ -483,11 +490,7 @@ func ensureFreshData(
 	})
 	defer engine.Close()
 
-	since := engine.LastSyncStartedAt(ctx)
-	if !since.IsZero() {
-		since = since.Add(-quickSyncMargin)
-	}
-
+	since := quickSyncCutoff(engine.LastSyncStartedAt(ctx))
 	engine.SyncAllSince(ctx, since, func(sync.Progress) {})
 }
 
