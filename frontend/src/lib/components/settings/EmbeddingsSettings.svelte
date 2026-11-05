@@ -273,7 +273,7 @@
               <span class="gen-coverage">
                 {m.settings_embeddings_coverage({
                   embeddedLabel: formatCount(gen.embedded),
-                  missingLabel: numberFormat.format(gen.missing),
+                  missingLabel: formatCount(gen.missing),
                 })}
               </span>
             </li>

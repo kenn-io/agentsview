@@ -177,7 +177,7 @@
       {#each files as f (key(f))}
         <div class="re-file">
           <button class="re-file-row" onclick={() => toggle(f)}>
-            <span class="re-project">{f.project}</span>
+            <span class="re-project" title={f.project}>{f.project}</span>
             <span class="re-path" title={f.file_path}
               >{shortPath(f.file_path)}</span
             >
@@ -359,6 +359,46 @@
     white-space: nowrap;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Phones: the project moves above the path so the file name keeps the
+     row's width, and count and time take only what they need. */
+  @media (max-width: 520px) {
+    .recent-edits-page {
+      padding: 20px 12px;
+    }
+
+    .re-file-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-areas:
+        "project project project"
+        "path count time";
+      column-gap: var(--space-3);
+      row-gap: 2px;
+      padding: 7px 10px;
+    }
+
+    .re-project {
+      grid-area: project;
+      width: auto;
+      min-width: 0;
+    }
+
+    .re-path {
+      grid-area: path;
+      min-width: 0;
+    }
+
+    .re-count {
+      grid-area: count;
+      min-width: 0;
+    }
+
+    .re-time {
+      grid-area: time;
+      min-width: 0;
+    }
   }
 
   .re-edits {

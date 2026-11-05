@@ -297,6 +297,12 @@
     .settings-page :global(.kit-settings .kit-settings__sidebar) {
       width: 236px;
     }
+
+    /* Room at the end of the vertical nav so the last item scrolls clear
+       of the status bar. Narrow widths show a horizontal strip instead. */
+    .settings-page :global(.kit-settings__nav) {
+      padding-bottom: var(--space-8);
+    }
   }
 
   /* Descriptions stay one step below the item names. */
@@ -305,12 +311,6 @@
     font-weight: 400;
     line-height: 1.3;
     color: var(--text-muted);
-  }
-
-  /* Room at the end of the nav so the last item scrolls clear of the
-     status bar. */
-  .settings-page :global(.kit-settings__nav) {
-    padding-bottom: var(--space-8);
   }
 
   .settings-page :global(.kit-settings__nav-item) {
@@ -335,6 +335,30 @@
 
   .settings-page :global(.kit-settings__panel .setting-row:not(.column) > :only-child) {
     grid-column: 1 / -1;
+  }
+
+  /* Long translated labels wrap inside the label column instead of
+     running under the control. */
+  .settings-page :global(.kit-settings__panel .setting-row:not(.column) > .setting-label) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* Phones: one column, label above control, and option rows let their
+     segmented controls take the full width. */
+  @media (max-width: 640px) {
+    .settings-page :global(.kit-settings__panel .setting-row:not(.column)) {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-2);
+    }
+
+    .settings-page :global(.kit-settings__panel .setting-row.option-row) {
+      justify-items: stretch;
+    }
+
+    .settings-page :global(.kit-settings__panel .setting-row.option-row > .setting-label) {
+      justify-self: start;
+    }
   }
 
   /* Room below the panel so the sticky footer never clips the preview. */
