@@ -486,11 +486,9 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				if tc.idle && tc.stale {
 					synctest.Sleep(archiveAuditRetryInitial)
 					synctest.Wait()
-					if !assert.Len(t, attempts, 1, "required rebuild must retry while idle") {
-						cancel()
-						<-done
-						return
-					}
+					assert.Empty(t, attempts, "the idle rebuild waits for catch-up")
+					ingestion.finishCatchup(ingestion.catchup, true)
+					synctest.Wait()
 				}
 				if tc.idle && !tc.stale {
 					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)

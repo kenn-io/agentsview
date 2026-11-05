@@ -77,9 +77,6 @@ func (t *IdleTracker) BeginWork() (func(), bool) {
 	return sync.OnceFunc(func() {
 		t.mu.Lock()
 		t.activeWork = max(t.activeWork-1, 0)
-		if t.syncIdle { // retry a suspension in-flight catch-up declined
-			t.syncIdle, t.lastSyncActivity = false, time.Now()
-		}
 		t.mu.Unlock()
 		t.signal()
 	}), true

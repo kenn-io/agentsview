@@ -292,13 +292,13 @@ func TestDaemonIngestionWakeCatchesUpChangedSources(t *testing.T) {
 						w.Header().Set("Content-Type", "application/xml")
 						contents := ""
 						if published.Load() {
-							contents = fmt.Sprintf("<Contents><Key>sessions/project/overnight.jsonl</Key><LastModified>2026-01-02T00:00:00.000Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>%d</Size><StorageClass>STANDARD</StorageClass></Contents>", len(content))
+							contents = fmt.Sprintf("<Contents><Key>sessions/project/overnight.jsonl</Key><LastModified>2030-01-02T00:00:00.000Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>%d</Size><StorageClass>STANDARD</StorageClass></Contents>", len(content))
 						}
 						_, _ = fmt.Fprintf(w, `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix>sessions/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>%s</ListBucketResult>`, contents)
 						return
 					}
 					if strings.HasSuffix(r.URL.Path, "overnight.jsonl") {
-						w.Header().Set("Last-Modified", "Fri, 02 Jan 2026 00:00:00 GMT")
+						w.Header().Set("Last-Modified", "Wed, 02 Jan 2030 00:00:00 GMT")
 						w.Header().Set("ETag", `"abc123"`)
 						w.Header().Set("Content-Length", strconv.Itoa(len(content)))
 						_, _ = io.WriteString(w, content)

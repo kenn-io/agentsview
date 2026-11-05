@@ -270,51 +270,23 @@ func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
 	err := d.restoreCollection()
+	complete := false
 	if err == nil {
-		err = d.catchUpSources(d.Config())
+		stats := d.engine.SyncAll(d.ctx, nil)
+		complete = stats.ProcessingComplete()
+		if !complete {
+			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
+		}
+		if d.attached != nil {
+			var attachedStats agentsync.SyncStats
+			attachedStats, err = d.attached.DrainScheduled(d.ctx)
+			complete = complete && attachedStats.ProcessingComplete() && err == nil
+		}
 	}
 	if err != nil {
 		log.Printf("idle catch-up incomplete: %v", err)
 	}
-	d.finishCatchup(done, err == nil && d.ctx.Err() == nil)
-}
-
-// catchUpSources syncs what changed while collection was released: local
-// scopes the watcher only learns about by polling, then the scheduled passes.
-func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
-	roots, unwatched, symlinks, persistent := collectWatchRoots(cfg)
-	obligations := watchPollingObligations(roots, nil, unwatched, persistent)
-	obligations = append(obligations, symlinkPollingObligations(symlinks)...)
-	polling := make([]pollingObligation, 0, len(obligations))
-	for _, obligation := range obligations {
-		polling = append(polling, syncObligationToPoller(obligation))
-	}
-	groups, _ := availableUnwatchedPollScopes(polling)
-	return errors.Join(pollUnwatchedScopesOnce(d.ctx, d.engine, groups), d.catchUpScheduledSources(cfg))
-}
-
-// catchUpScheduledSources runs the remote and attached-source passes the
-// scheduled tick skips while collection is released.
-func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
-	remoteErr := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
-	if attached := d.attached; attached != nil {
-		_, err := attached.DrainScheduled(d.ctx)
-		return errors.Join(remoteErr, err)
-	}
-	return remoteErr
-}
-
-// syncScheduled runs the existing periodic passes while collection is active.
-func (d *daemonIngestion) syncScheduled(ctx context.Context) error {
-	if d.Pending() {
-		if !d.ensureFresh(ctx, true) {
-			return errors.New("scheduled catch-up remains incomplete")
-		}
-		return nil
-	}
-	cfg := d.Config()
-	runScheduledSyncPass(ctx, d.engine, scheduledReconcileTargets(cfg))
-	return d.catchUpScheduledSources(cfg)
+	d.finishCatchup(done, complete && d.ctx.Err() == nil)
 }
 
 // Reload reads the saved configuration and applies it in the background. It

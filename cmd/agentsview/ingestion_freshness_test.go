@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -29,14 +32,27 @@ func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
 			root := t.TempDir()
 			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
 			var denied atomic.Bool
+			var published atomic.Bool
 			if source != parser.AgentGemini {
-				remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				content := `{"type":"user","sessionId":"overnight","timestamp":"2026-11-05T10:00:00Z","message":{"role":"user","content":"hello from overnight"}}` + "\n"
+				remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "overnight.jsonl") {
+						w.Header().Set("Last-Modified", "Wed, 02 Jan 2030 00:00:00 GMT")
+						w.Header().Set("ETag", `"overnight"`)
+						w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+						_, _ = w.Write([]byte(content))
+						return
+					}
 					if denied.Load() {
 						w.WriteHeader(http.StatusForbidden)
 						_, _ = w.Write([]byte("<Error><Code>AccessDenied</Code></Error>"))
 						return
 					}
-					_, _ = w.Write([]byte("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"))
+					if !published.Load() {
+						_, _ = w.Write([]byte("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"))
+						return
+					}
+					_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>sessions/project/overnight.jsonl</Key><LastModified>2030-01-02T00:00:00.000Z</LastModified><ETag>&quot;overnight&quot;</ETag><Size>%d</Size></Contents></ListBucketResult>`, len(content))
 				}))
 				t.Cleanup(remote.Close)
 				t.Setenv("AWS_S3_ENDPOINT", remote.URL)
@@ -61,13 +77,12 @@ func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
 				_, err := os.ReadFile(path)
 				require.Error(t, err, "fixture must cause an actual source-read failure")
 			} else {
+				published.Store(true)
 				denied.Store(true)
 			}
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
 			headers, body := searchIngestionArchive(t, ts.URL, "overnight")
-			if source == parser.AgentGemini {
-				assert.NotContains(t, body, "hello from overnight")
-			}
+			assert.NotContains(t, body, "hello from overnight")
 			assert.Equal(t, "true", headers.Get(apiclient.SyncPendingHeader))
 			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader), "failed source catch-up must warn the reader about missing overnight messages")
 			assert.True(t, ingestion.Pending())
@@ -76,12 +91,10 @@ func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
 			} else {
 				denied.Store(false)
 			}
-			require.NoError(t, ingestion.syncScheduled(t.Context()))
+			require.True(t, ingestion.ensureFresh(t.Context(), true))
 			headers, body = searchIngestionArchive(t, ts.URL, "overnight")
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader), "successful scheduled recovery clears the warning")
-			if source == parser.AgentGemini {
-				assert.Contains(t, body, "hello from overnight")
-			}
+			assert.Contains(t, body, "hello from overnight")
 		})
 	}
 }
