@@ -663,7 +663,11 @@ func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path stri
 		}
 		return nil
 	}
-	return streamDirectoryTreeRecursive(ctx, path, emit)
+	return streamDirectoryTreeRecursive(ctx, path, emit, func(dir string) bool {
+		rel, err := filepath.Rel(root, dir)
+		parts := strings.Split(rel, string(filepath.Separator))
+		return err == nil && (len(parts) < 3 || parts[2] == "subagents")
+	})
 }
 
 func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {

@@ -365,7 +365,7 @@ func streamDirectoryTree(
 	root string,
 	yield func(path string, entry os.DirEntry) error,
 ) error {
-	err := streamDirectoryTreeRecursive(ctx, root, yield)
+	err := streamDirectoryTreeRecursive(ctx, root, yield, nil)
 	if cause, ok := discoveryYieldCause(err); ok {
 		return cause
 	}
@@ -376,12 +376,16 @@ func streamDirectoryTreeRecursive(
 	ctx context.Context,
 	root string,
 	yield func(path string, entry os.DirEntry) error,
+	descend func(path string) bool,
 ) error {
+	if descend != nil && !descend(root) {
+		return nil
+	}
 	var incomplete error
 	err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
 		path := filepath.Join(root, entry.Name())
 		if entry.IsDir() {
-			err := streamDirectoryTreeRecursive(ctx, path, yield)
+			err := streamDirectoryTreeRecursive(ctx, path, yield, descend)
 			if err == nil {
 				return nil
 			}

@@ -1186,3 +1186,51 @@ func claudeProviderFixture(firstMessage string) string {
 		testjsonl.ClaudeAssistantJSON("Done.", tsEarlyS1),
 	)
 }
+
+func TestClaudeDiscoveryIgnoresToolOutput(t *testing.T) {
+	for _, mode := range []string{"unreadable", "many files"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			transcript := filepath.Join(root, "project", "session.jsonl")
+			writeSourceFile(t, transcript, claudeProviderFixture("readable history"))
+			child := filepath.Join(root, "project", "session", "subagents", "workflows", "job", "agent-child.jsonl")
+			writeSourceFile(t, child, claudeProviderFixture("child history"))
+			tools := filepath.Join(root, "project", "session", "tool-results")
+			require.NoError(t, os.MkdirAll(tools, 0o755))
+			if mode == "unreadable" {
+				if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+					t.Skip("fixture needs enforced POSIX directory permissions")
+				}
+				require.NoError(t, os.Chmod(tools, 0))
+				t.Cleanup(func() { _ = os.Chmod(tools, 0o755) })
+			} else {
+				for i := range 2000 {
+					writeSourceFile(t, filepath.Join(tools, fmt.Sprintf("result-%d.jsonl", i)), "tool output")
+				}
+			}
+			reads, entries := 0, 0
+			ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
+				if path == tools {
+					reads++
+				}
+				return streamDirectoryEntriesDirect(ctx, path, func(entry os.DirEntry) error {
+					if path == tools {
+						entries++
+					}
+					return yield(entry)
+				})
+			})
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(ctx)
+			require.NoError(t, err)
+			var paths []string
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, []string{transcript, child}, paths)
+			assert.Zero(t, reads, "tool-output directory must not be traversed")
+			assert.Zero(t, entries, "tool outputs must not be enumerated")
+		})
+	}
+}

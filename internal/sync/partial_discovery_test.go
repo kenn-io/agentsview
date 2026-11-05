@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,4 +59,27 @@ func TestPartialDiscoveryImportsHealthyLocalHistory(t *testing.T) {
 			assert.Equal(t, "healthy local history", messages[0].Content)
 		})
 	}
+}
+
+func TestClaudeSyncIgnoresToolOutput(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("fixture needs enforced POSIX directory permissions")
+	}
+	root := t.TempDir()
+	content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "readable history", "session").String()
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", "session.jsonl"), []byte(content))
+	tools := filepath.Join(root, "project", "session", "tool-results")
+	require.NoError(t, os.MkdirAll(tools, 0o755))
+	require.NoError(t, os.Chmod(tools, 0))
+	t.Cleanup(func() { _ = os.Chmod(tools, 0o755) })
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.True(t, stats.ProcessingComplete(), "%+v", stats)
+	assert.Zero(t, stats.Failed)
+	messages, err := database.GetAllMessages(t.Context(), "session")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "readable history", messages[0].Content)
 }
