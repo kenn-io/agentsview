@@ -1654,7 +1654,11 @@ class SessionsStore {
     );
     const idx = this.sessions.findIndex((s) => s.id === id);
     if (idx !== -1) {
-      const merged = { ...this.sessions[idx]!, ...indexFields(updated) };
+      const merged = {
+        ...this.sessions[idx]!,
+        ...indexFields(updated),
+        is_teammate: this.sessions[idx]!.is_teammate,
+      };
       // When the caller cleared the rename and the backend found no agent name
       // to restore, display_name is absent from the response (omitempty on nil).
       // Explicitly null it out so the store reflects the cleared state rather
@@ -1830,7 +1834,7 @@ function sidebarIndexRowToSession(row: SessionGroupInput): Session {
     tool_retry_count: 0,
     id: row.id,
     ...indexFields(row),
-    first_message: null,
+    first_message: row.first_message ?? null,
     total_output_tokens: 0,
     peak_context_tokens: 0,
     has_total_output_tokens: false,
@@ -1860,7 +1864,7 @@ function indexFields(row: SessionGroupInput) {
     termination_status: row.termination_status ?? undefined,
     transcript_revision: row.transcript_revision,
     is_automated: row.is_automated ?? false,
-    is_teammate: row.is_teammate ?? false,
+    is_teammate: row.is_teammate,
     created_at: row.created_at,
   };
 }

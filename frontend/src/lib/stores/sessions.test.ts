@@ -1216,7 +1216,7 @@ describe("SessionsStore", () => {
       );
       const hydratePromise = (sessions as any).hydrateVisibleSessions(["stale"], staleVersion);
 
-      mockSidebarIndex([makeSkinnyRow({ id: "fresh" })]);
+      mockSidebarIndex([makeSkinnyRow({ id: "stale" })]);
       await sessions.load();
       resolveDetail!(
         makeSession({
@@ -1226,7 +1226,7 @@ describe("SessionsStore", () => {
       );
       await hydratePromise;
 
-      expect(sessions.sessions.map((s) => s.id)).toEqual(["fresh"]);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["stale"]);
       expect(sessions.view(sessions.sessions[0]!).first_message).toBeNull();
     });
 
@@ -2759,6 +2759,38 @@ describe("SessionsStore", () => {
   });
 
   describe("renameSession", () => {
+    it("keeps an indexed teammate in its group when the rename response omits classification", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "main" }),
+        makeSkinnyRow({ id: "teammate", is_teammate: true }),
+      ]);
+      await sessions.load();
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+      api.renameSession.mockResolvedValue(makeSession({ id: "teammate", display_name: "Renamed" }));
+
+      await sessions.renameSession("teammate", "Renamed");
+
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+    });
+
+    it("groups an off-page teammate from its first message through a rename", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "main" })]);
+      api.getSession.mockResolvedValue(
+        makeSession({ id: "teammate", first_message: "<teammate-message>Task</teammate-message>" }),
+      );
+      api.renameSession.mockResolvedValue(makeSession({ id: "teammate", display_name: "Renamed" }));
+      await sessions.load();
+
+      await sessions.navigateToSession("teammate");
+
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+      await sessions.renameSession("teammate", "Renamed");
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+    });
+
     it("clears display_name in store when rename is cleared and response omits the field", async () => {
       // Session starts with a custom user rename.
       mockSidebarIndex([makeSkinnyRow({ id: "s1", display_name: "custom-name" })]);
