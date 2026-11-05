@@ -19,6 +19,11 @@ import (
 // within SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999).
 const maxSQLVars = 500
 
+// analyticsDateIndexMaxWindow matches 90 days, the widest short range preset
+// in the UI (frontend/src/lib/components/shared/rangeSelection.ts).
+// Wider windows keep the scan plan to avoid fetching most rows in date-index order.
+const analyticsDateIndexMaxWindow = 90 * 24 * time.Hour
+
 var ErrUnsupportedAnalyticsSignal = errors.New(
 	"unsupported analytics signal",
 )
@@ -355,6 +360,12 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	var dates []string
 	if includeDate {
+		start, startErr := time.Parse(time.DateOnly, f.From)
+		end, endErr := time.Parse(time.DateOnly, f.To)
+		if startErr != nil || endErr != nil || end.Sub(start) > analyticsDateIndexMaxWindow {
+			// Wide windows keep the scan plan instead of fetching rows through the date index.
+			dateCol = "+" + dateCol
+		}
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
 	}
@@ -2457,6 +2468,18 @@ func (db *DB) GetAnalyticsSessionShape(
 	}, nil
 }
 
+func autonomyChunkSQL(placeholders string) string {
+	return `SELECT session_id,
+		SUM(CASE WHEN role='user' AND is_system=0
+			AND COALESCE(source_subtype, '') <> 'tool_result'
+			THEN 1 ELSE 0 END),
+		SUM(CASE WHEN role='assistant'
+			AND has_tool_use=1 THEN 1 ELSE 0 END)
+		FROM messages
+		WHERE session_id IN ` + placeholders + `
+		GROUP BY session_id`
+}
+
 // queryAutonomyChunk queries autonomy stats for a chunk of
 // session IDs and accumulates results into counts.
 func (db *DB) queryAutonomyChunk(
@@ -2465,17 +2488,7 @@ func (db *DB) queryAutonomyChunk(
 	counts map[string]int,
 ) error {
 	ph, args := InPlaceholders(chunk)
-	q := `SELECT session_id,
-		SUM(CASE WHEN role='user' AND is_system=0
-			AND COALESCE(source_subtype, '') <> 'tool_result'
-			THEN 1 ELSE 0 END),
-		SUM(CASE WHEN role='assistant'
-			AND has_tool_use=1 THEN 1 ELSE 0 END)
-		FROM messages
-		WHERE session_id IN ` + ph + `
-		GROUP BY session_id`
-
-	rows, err := db.getReader().QueryContext(ctx, q, args...)
+	rows, err := db.getReader().QueryContext(ctx, autonomyChunkSQL(ph), args...)
 	if err != nil {
 		return fmt.Errorf("querying autonomy: %w", err)
 	}

@@ -111,6 +111,7 @@ test.describe("Session list", () => {
       .catch(() => false);
     expect(hasMessages || process.env.AGENTSVIEW_E2E_BACKEND === "duckdb").toBe(true);
     await expect(sessionWithMessages).toHaveClass(/active/);
+    await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
 
     await sessionWithMessages.focus();
     const activeSessionBefore = await sessionWithMessages.getAttribute("data-session-id");

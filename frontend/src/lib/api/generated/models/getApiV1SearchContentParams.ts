@@ -18,7 +18,7 @@ export type GetApiV1SearchContentParams = {
    */
   mode?: GetApiV1SearchContentMode;
   /**
-   * Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
+   * Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)
    */
   scope?: GetApiV1SearchContentScope;
   /**

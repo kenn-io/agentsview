@@ -2028,8 +2028,9 @@ and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Semantic and hybrid results can be scoped with
 `--scope top|all|subordinate` (default `all`) to include or exclude sidechain
 and subagent content — see
-[Semantic Search](/docs/semantic-search/#scoping-results-scope). The
-human-readable table includes an `AGE` column derived from each match's
+[Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
+also accept `scope` for substring and regex searches. CLI lexical searches use
+`--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
 timestamp, so recent evidence is visible without opening the session. Matches
 without a usable timestamp show `—`.
 

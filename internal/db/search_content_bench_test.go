@@ -170,3 +170,43 @@ func BenchmarkSearchContentFTSPage(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkSearchContentTermsCommonWord searches terms mode for a word that
+// appears in one user message of 800 of 2,000 sessions. Each session holds
+// 30 exchanges of 1-3 KB messages, so most exchange text in the matching
+// sessions does not contain the word.
+func BenchmarkSearchContentTermsCommonWord(b *testing.B) {
+	d := testDB(b)
+	for _, stmt := range []string{
+		`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 1999)
+		INSERT INTO sessions(id, project, agent, started_at, ended_at, created_at,
+			message_count, user_message_count)
+		SELECT printf('terms-%04d', i), 'project-' || (i % 20), 'claude',
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-01-01T00:00:00Z', printf('+%d minutes', i * 240)),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-01-01T01:00:00Z', printf('+%d minutes', i * 240)),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-01-01T00:00:00Z', printf('+%d minutes', i * 240)),
+			60, 30
+		FROM n`,
+		`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 59)
+		INSERT INTO messages(session_id, ordinal, role, content, content_length, timestamp)
+		SELECT s.id, n.i,
+			CASE WHEN n.i % 2 = 0 THEN 'user' ELSE 'assistant' END,
+			CASE WHEN n.i = 10 AND CAST(substr(s.id, 7) AS INTEGER) % 5 < 2
+				THEN 'please deploy the service ' ELSE 'turn text ' END
+				|| printf('%.*c', 1000 + (n.i * 397) % 2000, 'x'),
+			1000 + (n.i * 397) % 2000,
+			strftime('%Y-%m-%dT%H:%M:%SZ', s.started_at, printf('+%d seconds', n.i * 30))
+		FROM sessions s CROSS JOIN n`,
+		`ANALYZE`,
+	} {
+		_, err := d.getWriter().Exec(b.Context(), stmt)
+		require.NoError(b, err)
+	}
+	f := ContentSearchFilter{Pattern: "deploy", Mode: "terms", Limit: 50}
+	b.ReportAllocs()
+	for b.Loop() {
+		page, err := d.SearchContent(b.Context(), f)
+		require.NoError(b, err)
+		require.Len(b, page.Matches, 50)
+	}
+}

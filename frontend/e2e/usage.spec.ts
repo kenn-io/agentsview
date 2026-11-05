@@ -358,7 +358,7 @@ test.describe("Usage input cards", () => {
     await page.route(/\/api\/v1\/usage\/comparison(\?|$)/, (route) =>
       route.fulfill({
         json: {
-          deltaPct: 1.25,
+          deltaPct: 0,
           priorFrom: "2026-06-30",
           priorTo: "2026-06-30",
           priorTotalCost: { microdollars: 444_444 },

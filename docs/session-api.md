@@ -861,6 +861,9 @@ Transcript display, block order, and artifact format v4 remain unchanged.
 
 One-shot, automated, and subagent sessions are excluded by default; opt back in
 with `--include-one-shot`, `--include-automated`, or `--include-children`.
+HTTP substring and regex searches also accept `scope`; an omitted scope keeps
+these exclusions. Explicit scope uses each session's own filters and exempts
+child sessions from the one-shot exclusion.
 
 | Flag                  | HTTP param             | Notes                                                                                                                                                                             |
 | --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -868,7 +871,7 @@ with `--include-one-shot`, `--include-automated`, or `--include-children`.
 | `--fts`               | `mode=fts`             | Tokenized FTS5 search; messages-only                                                                                                                                              |
 | `--semantic`          | `mode=semantic`        | Vector search over user/assistant messages; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                         |
 | `--hybrid`            | `mode=hybrid`          | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
-| `--scope`             | `scope`                | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
+| `--scope`             | `scope`                | `top`, `all`, or `subordinate`; CLI: semantic/hybrid only, default `all`. HTTP: substring/regex/terms/semantic/hybrid; explicit scope supersedes `include_children`                                                                     |
 | `--context`           | `context`              | int — N messages of context before/after each match (max 10)                                                                                                                      |
 | `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, PostgreSQL, DuckDB, or ClickHouse substring/regex                                                                                                                  |
 | `--exclude-system`    | `exclude_system`       | Drop system messages from the scan                                                                                                                                                |

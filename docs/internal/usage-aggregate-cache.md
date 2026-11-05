@@ -111,6 +111,13 @@ An aggregate request:
 1. verifies all required installs inside one pinned cache read transaction
    before assembling the result.
 
+Within one Pairwise request, concurrent and sequential reads share one capture,
+fill check, and rollup check when their window, session predicate, and Cursor
+need match. Project sides prepare separately because their session predicates
+differ. Each side reads rollups from the request's captured snapshot with its own
+filter. Cache retirement or a changed install triggers a fresh capture that
+bypasses the shared result. Separate requests never share a preparation.
+
 The pricing generation uses the canonical, order-independent effective-pricing
 digest. Daily rows also retain the resolved per-model rate hash. Pricing changes
 therefore invalidate the appropriate derived data without relying on a

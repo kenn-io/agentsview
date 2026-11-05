@@ -1961,6 +1961,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 		},
 	)
 	inventoryErr := e.finishCodexParentInventoryBatch(processingCtx, &stats)
+	stats.logRetrySummary("sync")
 	linkErr := affectedSessionIDs.link(ctx, e, &stats)
 	if linkErr != nil {
 		stats.RecordFailed()
@@ -2001,10 +2002,11 @@ func (e *Engine) applyChangedPathSyncLocked(
 	if err := errors.Join(prepared.classificationErr, inventoryErr, linkErr, ctx.Err()); err != nil {
 		if stats.Deferred > 0 {
 			return stats, tombstoned, &incompleteReconciliationError{
-				deferred: stats.Deferred,
-				paths:    append([]string(nil), stats.deferredRetryPaths...),
-				overflow: stats.deferredRetryOverflow,
-				cause:    err,
+				deferred:    stats.Deferred,
+				paths:       append([]string(nil), stats.deferredRetryPaths...),
+				overflow:    stats.deferredRetryOverflow,
+				cause:       err,
+				retryCauses: stats.retryCauseSample(),
 			}
 		}
 		return stats, tombstoned, err
@@ -2016,11 +2018,12 @@ func (e *Engine) applyChangedPathSyncLocked(
 		)
 		if stats.Deferred > 0 {
 			incompleteErr = &incompleteReconciliationError{
-				deferred:  stats.Deferred,
-				paths:     append([]string(nil), stats.deferredRetryPaths...),
-				overflow:  stats.deferredRetryOverflow,
-				cause:     incompleteErr,
-				deferOnly: stats.Failed == 0 && stats.providerFailures == 0 && !stats.Aborted,
+				deferred:    stats.Deferred,
+				paths:       append([]string(nil), stats.deferredRetryPaths...),
+				overflow:    stats.deferredRetryOverflow,
+				cause:       incompleteErr,
+				deferOnly:   stats.Failed == 0 && stats.providerFailures == 0 && !stats.Aborted,
+				retryCauses: stats.retryCauseSample(),
 			}
 		}
 		return stats, tombstoned, incompleteErr
@@ -2946,9 +2949,49 @@ var closeWriterForResyncBarrier = func(d *db.DB) error { return d.CloseWriter() 
 // atomically swaps the files and reopens the original DB
 // handle. This avoids the per-row trigger overhead of bulk
 // deleting hundreds of thousands of messages in place.
-// shouldAbortResyncSwap decides whether a finished resync pass built a
+// passAbortCause names why a sync pass stopped: cancellation, or the cause the
+// pass recorded when it set Aborted.
+func passAbortCause(ctx context.Context, stats SyncStats) string {
+	if err := ctx.Err(); err != nil {
+		return "canceled: " + err.Error()
+	}
+	if stats.abortCause != "" {
+		return stats.abortCause
+	}
+	return "the sync stopped without saying why"
+}
+
+// keptArchive leads every cause for a rebuild that the swap safety check
+// refused, so the reader knows the existing archive is unchanged.
+const keptArchive = "kept the existing archive: "
+
+// contributorAbortCause names why an attached archive source stopped a
+// rebuild. A contributor that finished with deferred sources, such as a Codex
+// fork whose parent rollout is missing, did not complete processing.
+func contributorAbortCause(
+	ctx context.Context, contributorErr error,
+	contributorStats, stats SyncStats, safetyReason string,
+) string {
+	switch {
+	case ctx.Err() != nil:
+		return "canceled: " + ctx.Err().Error()
+	case contributorErr != nil:
+		return contributorErr.Error()
+	case safetyReason != "":
+		return keptArchive + safetyReason
+	case contributorStats.Aborted:
+		return passAbortCause(ctx, contributorStats)
+	case !contributorStats.ProcessingComplete():
+		return contributorStats.IncompleteCause()
+	default:
+		return passAbortCause(ctx, stats)
+	}
+}
+
+// resyncSwapAbortReason decides whether a finished resync pass built a
 // database that would be worse than the original, so the swap must be
-// abandoned:
+// abandoned, and returns why. It returns "" when the swap may proceed. It
+// aborts when:
 //   - sync was cancelled (partial rebuild)
 //   - nothing synced at all (empty discovery, or all skipped)
 //     when old DB had data
@@ -2965,9 +3008,9 @@ var closeWriterForResyncBarrier = func(d *db.DB) error { return d.CloseWriter() 
 // check just as it is subtracted from oldFileSessions by the caller.
 // Otherwise its discovery would mask the disappearance of plain
 // file-backed sessions whose directories went empty.
-func shouldAbortResyncSwap(
+func resyncSwapAbortReason(
 	stats SyncStats, oldFileSessions, trashedCopied int,
-) bool {
+) string {
 	emptyDiscovery := stats.nonContainerDiscovered == 0 &&
 		oldFileSessions > 0
 	preservedOnly := stats.Synced == 0 &&
@@ -2999,15 +3042,38 @@ func shouldAbortResyncSwap(
 		stats.Failed == 0 &&
 		stats.cwdFilteredSessions > 0 &&
 		stats.filesOK == stats.cwdFilteredFiles+stats.parserExcludedFiles
-	return stats.Aborted ||
-		emptyDiscovery ||
-		(stats.Synced == 0 &&
-			stats.TotalSessions > 0 &&
-			!preservedOnly &&
-			!deferredOnly &&
-			!excludedOnly &&
-			!cwdFilteredOnly) ||
-		(stats.Failed > 0 && stats.Failed > stats.filesOK)
+	switch {
+	case stats.Aborted:
+		if stats.abortCause != "" {
+			return "the rebuild stopped early: " + stats.abortCause
+		}
+		return "the rebuild stopped early"
+	case emptyDiscovery:
+		return fmt.Sprintf(
+			"the rebuild found no session files, but the archive has %s from files",
+			countNoun(oldFileSessions, "session", "sessions"),
+		)
+	case stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		!preservedOnly &&
+		!deferredOnly &&
+		!excludedOnly &&
+		!cwdFilteredOnly:
+		reason := fmt.Sprintf(
+			"the rebuild found %s but saved none (%d could not be read, %d wait for a retry)",
+			countNoun(stats.TotalSessions, "session", "sessions"), stats.Failed, stats.Deferred,
+		)
+		if sample := stats.retryCauseSample(); sample != "" {
+			reason += "; why: " + sample
+		}
+		return reason
+	case stats.Failed > 0 && stats.Failed > stats.filesOK:
+		return fmt.Sprintf(
+			"%d session files could not be read, more than the %d that could",
+			stats.Failed, stats.filesOK,
+		)
+	}
+	return ""
 }
 
 func (e *Engine) ResyncAll(
@@ -3090,7 +3156,8 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	ops rebuildOperations,
 ) (stats SyncStats, retErr error) {
 	if err := ctx.Err(); err != nil {
-		stats = SyncStats{Aborted: true, Warnings: []string{"resync aborted: 0 synced, 0 failed"}}
+		cause := "canceled: " + err.Error()
+		stats = SyncStats{Aborted: true, Warnings: []string{"resync aborted: 0 synced, 0 failed: " + cause}, abortCause: cause}
 		e.mu.Lock()
 		e.lastSyncStats = stats
 		e.mu.Unlock()
@@ -3598,7 +3665,10 @@ func (e *Engine) resyncBuildLocked(
 	}
 	localStats := stats
 	if stats.Deferred > 0 {
-		warning := fmt.Sprintf("resync: %d sessions need retry; newly imported forks without their parent may include copied parent history and usage", stats.Deferred)
+		warning := fmt.Sprintf("resync: %s retry", countNoun(stats.Deferred, "session needs", "sessions need"))
+		if sample := stats.retryCauseSample(); sample != "" {
+			warning += "; why: " + sample
+		}
 		log.Print(warning)
 		stats.Warnings = append(stats.Warnings, warning)
 	}
@@ -3606,10 +3676,11 @@ func (e *Engine) resyncBuildLocked(
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
-		stats.Aborted = true
+		cause := passAbortCause(ctx, stats)
+		stats.abort(cause)
 		stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-			"resync aborted: %d synced, %d failed",
-			stats.Synced, stats.Failed,
+			"resync aborted: %d synced, %d failed: %s",
+			stats.Synced, stats.Failed, cause,
 		))
 		e.mu.Lock()
 		e.lastSyncStats = stats
@@ -3654,13 +3725,14 @@ func (e *Engine) resyncBuildLocked(
 		e.failures.Merge(&contributorEngine.failures)
 		contributorEngine.phaseStats.Log("resync contributor " + contributor.Name)
 		phase := phaseSnapshot(contributor.Name, &contributorEngine.phaseStats)
-		contributorSafetyAbort := shouldAbortResyncSwap(
+		contributorSafetyReason := resyncSwapAbortReason(
 			contributorStats,
 			contributorOldFileSessions[contributorIndex],
 			0,
 		)
+		contributorSafetyAbort := contributorSafetyReason != ""
 		if contributorSafetyAbort {
-			contributorStats.Aborted = true
+			contributorStats.abort(keptArchive + contributorSafetyReason)
 		}
 		mergeSyncStats(&stats, contributorStats)
 		pendingTombstoned += stats.Tombstoned
@@ -3696,11 +3768,13 @@ func (e *Engine) resyncBuildLocked(
 			newDB.Close()
 			removeTempDB(tempPath)
 			restoreSkipCache()
+			cause := contributorAbortCause(
+				ctx, contributorErr, contributorStats, stats, contributorSafetyReason,
+			)
+			// The contributor's outcome replaces any cause merged from its stats.
 			stats.Aborted = true
-			stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-				"resync aborted: contributor %q did not complete",
-				contributor.Name,
-			))
+			stats.abortCause = fmt.Sprintf("sync source %q did not finish: %s", contributor.Name, cause)
+			stats.Warnings = append(stats.Warnings, "resync aborted: "+stats.abortCause)
 			e.mu.Lock()
 			e.lastSyncStats = stats
 			e.mu.Unlock()
@@ -3745,30 +3819,35 @@ func (e *Engine) resyncBuildLocked(
 		}
 	}
 
-	localSafetyAbort := false
+	swapAbortReason := ""
 	if len(opts.Contributors) > 0 ||
 		len(opts.UnavailableContributorIDPrefixes) > 0 {
 		// Evaluate local safety after contributors so a contributor's own
 		// cancellation or failure remains the reported abort reason. Trash
 		// copied from the old archive cannot make an empty local pass safe.
-		localSafetyAbort = shouldAbortResyncSwap(
+		if reason := resyncSwapAbortReason(
 			localStats, localOldFileSessions, 0,
-		)
+		); reason != "" {
+			swapAbortReason = "in this machine's session folders, " + reason
+		}
 	}
-	abortSwap := localSafetyAbort ||
-		shouldAbortResyncSwap(stats, rebuildOldFileSessions, trashedCopied)
-	if abortSwap {
+	if swapAbortReason == "" {
+		swapAbortReason = resyncSwapAbortReason(stats, rebuildOldFileSessions, trashedCopied)
+	}
+	if swapAbortReason != "" {
+		cause := keptArchive + swapAbortReason
 		log.Printf(
-			"resync: aborting swap, %d synced / %d failed / %d total",
-			stats.Synced, stats.Failed, stats.TotalSessions,
+			"resync: aborting swap, %d synced / %d failed / %d total: %s",
+			stats.Synced, stats.Failed, stats.TotalSessions, cause,
 		)
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
 		stats.Aborted = true
+		stats.abortCause = cause
 		stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-			"resync aborted: %d synced, %d failed",
-			stats.Synced, stats.Failed,
+			"resync aborted: %d synced, %d failed: %s",
+			stats.Synced, stats.Failed, cause,
 		))
 
 		e.mu.Lock()
@@ -6058,6 +6137,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		cursor = page[len(page)-1].Cursor()
 	}
 	retErr = errors.Join(retErr, e.finishCodexParentInventoryBatch(ctx, &stats))
+	stats.logRetrySummary("sync")
 	// Pending linking depends only on committed archive rows. Unrelated source
 	// failures must not suppress it; full reconciliation without pending work
 	// still requires a completed pass. Grouped callers consume this eligibility
@@ -6112,14 +6192,15 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			retryRoots = slices.Compact(retryRoots)
 		}
 		incomplete := &incompleteReconciliationError{
-			failures:  failures,
-			deferred:  stats.Deferred,
-			roots:     retryRoots,
-			paths:     append([]string(nil), stats.deferredRetryPaths...),
-			overflow:  stats.deferredRetryOverflow,
-			completed: completedScopes,
-			cause:     discoveryErr,
-			deferOnly: failures == 0 && retErr == nil && discoveryErr == nil && stats.Failed == 0 && !stats.Aborted,
+			failures:    failures,
+			deferred:    stats.Deferred,
+			roots:       retryRoots,
+			paths:       append([]string(nil), stats.deferredRetryPaths...),
+			overflow:    stats.deferredRetryOverflow,
+			completed:   completedScopes,
+			cause:       discoveryErr,
+			deferOnly:   failures == 0 && retErr == nil && discoveryErr == nil && stats.Failed == 0 && !stats.Aborted,
+			retryCauses: stats.retryCauseSample(),
 		}
 		if retErr == nil {
 			retErr = incomplete
@@ -6192,12 +6273,13 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 	slices.Sort(retryRoots)
 	retryRoots = slices.Compact(retryRoots)
 	return deleted, &incompleteReconciliationError{
-		failures: incomplete.failures,
-		deferred: incomplete.deferred,
-		roots:    retryRoots,
-		paths:    append([]string(nil), incomplete.paths...),
-		overflow: incomplete.overflow,
-		cause:    errors.Join(incomplete, err),
+		failures:    incomplete.failures,
+		deferred:    incomplete.deferred,
+		roots:       retryRoots,
+		paths:       append([]string(nil), incomplete.paths...),
+		overflow:    incomplete.overflow,
+		cause:       errors.Join(incomplete, err),
+		retryCauses: incomplete.retryCauses,
 	}
 }
 
@@ -6762,14 +6844,20 @@ type incompleteReconciliationError struct {
 	completed []reconciliationProviderScope
 	cause     error
 	deferOnly bool
+	// retryCauses is a bounded sample of why results need retry.
+	retryCauses string
 }
 
 func (e *incompleteReconciliationError) Error() string {
 	if e.failures == 0 {
-		return fmt.Sprintf(
+		msg := fmt.Sprintf(
 			"watch root reconciliation deferred: %d provider results need retry",
 			e.deferred,
 		)
+		if e.retryCauses != "" {
+			msg += ": " + e.retryCauses
+		}
+		return msg
 	}
 	return fmt.Sprintf(
 		"watch root reconciliation incomplete: %d provider discoveries failed",
@@ -7420,6 +7508,7 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.TitlesUpdated += src.TitlesUpdated
 	dst.LinksUpdated += src.LinksUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
+	dst.mergeCauses(src)
 	if !dst.deferredRetryOverflow {
 		deferred := dst.Deferred
 		for _, path := range src.deferredRetryPaths {
@@ -8360,7 +8449,7 @@ func (e *Engine) syncAllLocked(
 	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
 	if e.sourceSyncErr != nil && e.archiveStore == nil {
-		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}}
+		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}, abortCause: e.sourceSyncErr.Error()}
 	}
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
@@ -8368,11 +8457,11 @@ func (e *Engine) syncAllLocked(
 	e.invalidateNativeTitleCache(nil)
 	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, nil)
 	if err != nil {
-		return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
 	defer func() {
 		if err := closeProviderCache(); err != nil {
-			stats.Aborted = true
+			stats.abort(err.Error())
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
@@ -8524,6 +8613,7 @@ func (e *Engine) syncAllLocked(
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
 	}
+	stats.logRetrySummary("sync")
 	stats.providerFailures = providerFailures
 	for range providerFailures {
 		stats.RecordFailed()
@@ -11021,8 +11111,15 @@ func (e *Engine) collectAndBatchWithOptions(
 		for range r.providerFailureCount {
 			stats.RecordFailed()
 		}
+		if isCodexFormatAgent(r.agent) && r.deferredCount > 0 && !slices.Contains(stats.Warnings, codexForkUnresolvedWarning) {
+			stats.Warnings = append(stats.Warnings, codexForkUnresolvedWarning)
+		}
 		for range r.deferredCount {
 			stats.recordDeferred(r.path)
+		}
+		for _, cause := range r.retryCauses {
+			cause.sessionID = applyIDPrefixToID(e.idPrefix, cause.sessionID)
+			stats.recordRetryCause(cause)
 		}
 		proofWithheld := r.sourceProofWithheld(false)
 		if proofWithheld {
@@ -11319,6 +11416,11 @@ func (e *Engine) collectAndBatchWithOptions(
 				}
 				kept := allowed[:0]
 				for _, pr := range allowed {
+					if isCodexFormatAgent(r.agent) && pr.Session.CodexFork != nil {
+						// The shared writer reconciles explicit replay provenance atomically.
+						kept = append(kept, pr)
+						continue
+					}
 					if !r.needsRetryForSession(pr.Session.ID) {
 						kept = append(kept, pr)
 						continue
@@ -11326,9 +11428,10 @@ func (e *Engine) collectAndBatchWithOptions(
 					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
 					stored, err := savedHistory(ctx, store, id)
 					if err != nil {
-						log.Printf("resync: read deferred session %s: %v", id, err)
+						cause := fmt.Sprintf("read saved history of deferred session %s: %v", id, err)
+						log.Printf("sync: %s", cause)
 						stats.RecordFailed()
-						stats.Aborted = true
+						stats.abort(cause)
 						continue
 					}
 					if stored == nil {
@@ -11340,9 +11443,10 @@ func (e *Engine) collectAndBatchWithOptions(
 						}
 					} else if stored.DataVersion >= db.CurrentDataVersion() {
 						if err := e.db.SetSessionDataVersion(ctx, id, max(db.CurrentDataVersion()-1, 0)); err != nil {
-							log.Printf("sync: mark deferred session %s for retry: %v", id, err)
+							cause := fmt.Sprintf("mark deferred session %s for retry: %v", id, err)
+							log.Printf("sync: %s", cause)
 							stats.RecordFailed()
-							stats.Aborted = true
+							stats.abort(cause)
 						}
 					}
 				}
@@ -11926,6 +12030,9 @@ type processResult struct {
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
 	deferredCount   int
+	// retryCauses names each result held for retry and why, for logs and
+	// the pass summary.
+	retryCauses []retryCause
 	// suppressPresenceSweep marks a source result that must not authorize
 	// presence or tombstone reconciliation, including clean unsupported skips.
 	suppressPresenceSweep bool
@@ -13134,13 +13241,26 @@ func (e *Engine) processProviderFile(
 	// Large Codex full parses stream through the scratch staging sink: the
 	// in-memory model keeps placeholders instead of tool-result content, so
 	// peak memory stays bounded by messages + one scratch batch rather than
-	// the transcript size. Small files keep the collecting path. Report-only
+	// the transcript size. Forks with archived calls also stage: a shortened
+	// source does not bound their retained result payloads. Report-only
 	// parse-diff disables staging through e.forceParse; ordinary forced full
 	// syncs retain the bounded-memory path.
 	var stagedSink *codexStagingSink
 	var stagedGCRelease func()
+	stageCodex := unknownSourceSize || sourceBytes > e.stagedCodexMin
+	if file.Agent == parser.AgentCodex && !stageCodex && !e.forceParse {
+		reader := e.db
+		if archive, ok := e.archiveStore.(*db.DB); ok {
+			reader = archive
+		}
+		stageCodex, err = reader.HasCodexForkToolHistory(ctx, string(file.Agent), e.effectiveSourcePath(providerDiscoveredPath(source)))
+		if err != nil {
+			lease.Release()
+			return processResult{err: err}, true
+		}
+	}
 	if file.Agent == parser.AgentCodex &&
-		(unknownSourceSize || sourceBytes > e.stagedCodexMin) &&
+		stageCodex &&
 		!e.forceParse {
 		stagedSink, err = newCodexStagingSink(ctx,
 			e.stagedCodexDir, e.blockedResultCategories, sourceBytes,
@@ -13260,7 +13380,7 @@ func (e *Engine) processProviderFile(
 			cacheKey = providerProcessCacheKey(file, source, fingerprint, providerSemantics)
 		}
 	}
-	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome) && len(admission.retryIDs) == 0
+	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome) && len(admission.retries) == 0
 	providerWideFailureCount := len(outcome.SourceErrors)
 	if !outcome.ResultSetComplete {
 		providerWideFailureCount++
@@ -13483,7 +13603,9 @@ func (e *Engine) processProviderFile(
 	// appending on top of stale state. Match the legacy process arm,
 	// which stamped inode/device from the source file stat.
 	e.stampProviderFileIdentity(provider, source, res.results)
-	for _, id := range admission.retryIDs {
+	res.retryCauses = admission.retries
+	for _, retry := range admission.retries {
+		id := retry.sessionID
 		if res.retrySessionIDs == nil {
 			res.retrySessionIDs = make(map[string]bool)
 		}
@@ -16465,6 +16587,17 @@ func (e *Engine) tryProviderIncrementalAppend(
 		}, true
 	}
 	path := providerDiscoveredPath(source)
+	if isCodexFormatAgent(file.Agent) {
+		fork, err := e.db.HasCodexForkSource(ctx, string(file.Agent), e.effectiveSourcePath(path))
+		if err != nil {
+			return processResult{err: err}, true
+		}
+		if fork {
+			// A full fork write updates provenance with content. This declines
+			// cursor resumption without defeating later unchanged-source gates.
+			return processResult{}, false
+		}
+	}
 	if path == "" {
 		return processResult{}, false
 	}
@@ -18663,7 +18796,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if claudeSources != nil {
+		if claudeSources != nil || pw.sess.CodexFork != nil {
 			// Keep contributing paths and content in the same transaction.
 			version := e.db.GetSessionDataVersion(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
 			stale := version > 0 && version < db.CurrentDataVersion()
@@ -18944,7 +19077,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 	derive bool,
-) (ingest.PreparedSession, sessionWriteVerdict, error) {
+) (preparedSessionWrite, sessionWriteVerdict, error) {
 	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
 		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
 	}, ingest.ContentOptions{
@@ -18953,17 +19086,17 @@ func (e *Engine) prepareSessionNormalizedContext(
 		ArchiveContent:          e.db.ArchiveContent(),
 	})
 	if err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	s, msgs := candidate.Session, candidate.Messages
 	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	if e.archiveSessionPolicy != nil {
 		keep, err := e.archiveSessionPolicy(ctx, &s, pw.sess.ID)
 		if err != nil || !keep {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
+			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
 	applySourceCwdResolution(
@@ -18982,48 +19115,78 @@ func (e *Engine) prepareSessionNormalizedContext(
 	// preserve/merge handling so a filtered session is not written by
 	// any downstream path.
 	if !e.cwdFilter.allows(s.Cwd) {
-		return ingest.PreparedSession{}, sessionWriteCwdFiltered, nil
+		return preparedSessionWrite{}, sessionWriteCwdFiltered, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 
 	candidate.Session, candidate.Messages = s, msgs
 	if e.localClaudeSubagentSources(pw) != nil {
 		missing, err := e.missingClaudeSubagentSource(ctx, s.ID)
 		if err != nil || missing {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
+			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
 	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
 	if err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	if history.Action == ingest.HistoryPreserve {
-		return ingest.PreparedSession{}, sessionWritePreserved, nil
+		return preparedSessionWrite{}, sessionWritePreserved, nil
 	}
 	candidate = history.Candidate
+	candidate, forkState, stagedToolKeys, err := e.reconcileCodexFork(ctx, candidate, pw.staged)
+	if err != nil {
+		return preparedSessionWrite{}, sessionWritePreserved, err
+	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	if err := ctx.Err(); err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
 		ArchiveContent:          e.db.ArchiveContent(),
 	}
-	prepared, err := ingest.FinalizeRows(ctx, candidate, options)
+	rows, err := ingest.FinalizeRows(ctx, candidate, options)
 	if err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
+	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
+	if forkState != nil {
+		// Totals describe the sanitized message and independent event rows that
+		// will be committed. Session-summary events are not additive usage.
+		if err := ingest.ApplySessionTokenTotalsFromMessagesContext(ctx, &prepared.Session, prepared.Messages); err != nil {
+			return preparedSessionWrite{}, sessionWritePreserved, err
+		}
+		for _, event := range prepared.UsageEvents {
+			if event.Source == "session" {
+				continue
+			}
+			prepared.Session.TotalOutputTokens += event.OutputTokens
+			prepared.Session.HasTotalOutputTokens = prepared.Session.HasTotalOutputTokens || event.OutputTokens > 0
+			contextTokens := event.InputTokens + event.CacheCreationInputTokens + event.CacheReadInputTokens
+			prepared.Session.PeakContextTokens = max(prepared.Session.PeakContextTokens, contextTokens)
+			prepared.Session.HasPeakContextTokens = prepared.Session.HasPeakContextTokens || contextTokens > 0
+		}
+		for _, m := range prepared.Messages {
+			digest, keyErr := db.CodexForkMessageKey(m)
+			if keyErr != nil {
+				return preparedSessionWrite{}, sessionWritePreserved, keyErr
+			}
+			forkState.Messages[m.Ordinal].Digest = digest
+		}
+	}
+
 	if prepared.PlanUsage != nil {
 		prepared.PlanUsage.CountedUnder = applyIDPrefixToID(
 			e.idPrefix, prepared.PlanUsage.CountedUnder,
 		)
 	}
 	if candidate.Parsed.Session.Agent == parser.AgentCodexCloud {
-		if err := e.keepCodexCloudUsage(ctx, &prepared); err != nil {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
+		if err := e.keepCodexCloudUsage(ctx, &prepared.PreparedSession); err != nil {
+			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
 	if derive && pw.staged == nil && !e.disableSignalRecompute {
@@ -19323,9 +19486,6 @@ func stagedToolCallPositions(
 	callOccurrences := make(map[string]int)
 	for _, m := range msgs {
 		for callIdx, tc := range m.ToolCalls {
-			if tc.ToolUseID == "" {
-				continue
-			}
 			occurrence := callOccurrences[tc.ToolUseID]
 			callOccurrences[tc.ToolUseID] = occurrence + 1
 			stageKey := db.StagedToolCallKey(tc.ToolUseID, occurrence)
@@ -19355,11 +19515,27 @@ func (e *Engine) writeStagedFullParse(
 		}
 	}
 	positions := stagedToolCallPositions(msgs)
+	if write != nil && write.CodexForkState != nil {
+		sourcePositions := make(map[string]db.StagedToolCallPosition, len(write.StagedToolKeys))
+		for final, source := range write.StagedToolKeys {
+			sourcePositions[source] = positions[final]
+		}
+		positions = sourcePositions
+	}
 	var closure db.StagedSignalsFunc
 	if !e.disableSignalRecompute {
 		closure = func(verdicts map[string]db.StagedToolVerdict) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
+			if write != nil && write.CodexForkState != nil {
+				finalVerdicts := make(map[string]db.StagedToolVerdict, len(verdicts))
+				for final, source := range write.StagedToolKeys {
+					if verdict, ok := verdicts[source]; ok {
+						finalVerdicts[final] = verdict
+					}
+				}
+				verdicts = finalVerdicts
+			}
 			update, findings, err := e.computeFullSignalsAndSecretsForStorage(s, msgs, verdicts)
 			if err != nil {
 				return db.SessionSignalUpdate{}, nil, err
@@ -19378,6 +19554,9 @@ func (e *Engine) writeStagedFullParse(
 	cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
 		pw.sess.File.Path, pw,
 	)
+	if pw.sess.CodexFork != nil {
+		cp, blobs = nil, nil
+	}
 	if cpErr != nil {
 		log.Printf("checkpoint build %s: %v", pw.sess.File.Path, cpErr)
 		cp, blobs = nil, nil
@@ -19445,7 +19624,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if pw.staged != nil && provenance != nil {
+		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
 			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
 			if err != nil {
 				if isIntentionalSessionSkip(err) {
@@ -19562,7 +19741,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		snapshotProject := pw.sess.Project
 		var checkpoint *db.ParserCheckpoint
 		var checkpointBlobs *db.ParserCheckpointBlobs
-		if isCodexFormatAgent(pw.sess.Agent) {
+		if isCodexFormatAgent(pw.sess.Agent) && pw.sess.CodexFork == nil {
 			var checkpointErr error
 			checkpoint, checkpointBlobs, checkpointErr = e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
 			if checkpointErr != nil {
@@ -19581,6 +19760,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			return outcome
 		}
 		writes = append(writes, db.SessionBatchWrite{
+			CodexForkState:    prepared.codexForkState,
+			StagedToolKeys:    prepared.stagedToolKeys,
 			ArchiveProvenance: provenance,
 			Session:           s,
 			Messages:          msgs,
@@ -20130,7 +20311,7 @@ func remoteNameFromGitConfigSection(section string) string {
 func shouldReplaceFullParseMessages(
 	pw pendingWrite, forceReplace, stale, revivingSourceMissing bool,
 ) bool {
-	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
+	return forceReplace || pw.forceReplace || pw.needsRetry || pw.sess.CodexFork != nil || stale ||
 		revivingSourceMissing ||
 		isCodexFormatAgent(pw.sess.Agent) ||
 		// Kiro full parses rebuild the complete accepted message projection;
@@ -20538,7 +20719,7 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err != nil {
 		return err
 	}
-	if claudeSources != nil {
+	if claudeSources != nil || pw.sess.CodexFork != nil {
 		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true)
 		if outcome.err != nil {
 			return outcome.err
@@ -22014,12 +22195,15 @@ func (e *Engine) processAndWriteSessionFile(
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
 		}
 	}
+	for _, cause := range res.retryCauses {
+		log.Printf("sync: session needs retry: %s", cause)
+	}
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
 		// Match the batch path: these fallback parses cannot replace saved
 		// history until the higher-fidelity source is available.
-		if (isCodexFormatAgent(file.Agent) || file.Agent == parser.AgentAntigravityCLI) && res.needsRetryForSession(pr.Session.ID) {
+		if (file.Agent == parser.AgentAntigravityCLI || (isCodexFormatAgent(file.Agent) && pr.Session.CodexFork == nil)) && res.needsRetryForSession(pr.Session.ID) {
 			stored, readErr := savedHistory(ctx, e.db, resultIDs[i])
 			if readErr != nil {
 				return false, sessionsChanged, fmt.Errorf("read deferred session %s: %w", resultIDs[i], readErr)

@@ -262,6 +262,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_file_path
 -- Analytics indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_started
     ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_effective_start
+    ON sessions(COALESCE(NULLIF(started_at, ''), created_at));
 CREATE INDEX IF NOT EXISTS idx_sessions_message_count
     ON sessions(message_count);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_message_count
@@ -1154,6 +1156,14 @@ END;
 -- trigger body referencing sync_marker here would fail to create against a
 -- pre-migration sessions table that doesn't have the column yet.
 
+-- Latest usage-affecting change per session, including hard deletions.
+CREATE TABLE IF NOT EXISTS usage_session_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_session_changes_revision
+    ON usage_session_changes(revision);
+
 -- Session-deletion journal: a compact publication journal recording hard
 -- session deletions so mirror pushes can apply bounded tombstone deltas
 -- instead of enumerating the whole archive. Unlike sync_marker, this only
@@ -1704,3 +1714,9 @@ CREATE TABLE IF NOT EXISTS archive_session_provenance (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_session_source
     ON archive_session_provenance(archive_id,device_id,root_id,source_key);
+
+-- Local replay evidence commits with fork messages and survives archive rebuilds.
+CREATE TABLE IF NOT EXISTS codex_fork_state (
+ session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+ state_json TEXT NOT NULL
+);

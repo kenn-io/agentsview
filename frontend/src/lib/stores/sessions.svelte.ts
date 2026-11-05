@@ -1,3 +1,4 @@
+import { SvelteMap } from "svelte/reactivity";
 import type { DataChangedEvent } from "../api/client.js";
 import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
 import { ApiError, isAbortError, isNotFoundError } from "../api/runtime.js";
@@ -5,7 +6,6 @@ import type { Session } from "../api/types.js";
 import type {
   DbProjectInfo as ProjectInfo,
   DbAgentInfo as AgentInfo,
-  DbSidebarSessionIndexRow as SidebarSessionIndexRow,
 } from "../api/generated/index.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
@@ -84,7 +84,6 @@ export interface SessionGroup {
   allSessions?: SessionGroupInput[];
   primarySessionId: string;
   totalMessages: number;
-  firstMessage: string | null;
   startedAt: string | null;
   endedAt: string | null;
 }
@@ -306,7 +305,9 @@ export function parseFiltersFromParams(params: Record<string, string>): Filters 
 }
 
 class SessionsStore {
-  sessions: Session[] = $state([]);
+  sessions: Session[] = $state.raw([]);
+  details = new SvelteMap<string, Session>();
+  byId = $derived(new Map(this.sessions.map((row) => [row.id, row])));
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
@@ -375,13 +376,58 @@ class SessionsStore {
   private liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private safetyNetTimer: ReturnType<typeof setInterval> | null = null;
 
-  get activeSession(): Session | undefined {
-    const session = this.sessions.find((s) => s.id === this.activeSessionId);
-    return session?.is_index_only ? undefined : session;
+  activeSession = $derived.by(() => {
+    const id = this.activeSessionId;
+    if (!id) return undefined;
+    const row = this.byId.get(id);
+    const detail = this.details.get(id);
+    return row && (detail ? !detail.is_index_only : !row.is_index_only)
+      ? this.view(row)
+      : undefined;
+  });
+
+  private groups = $derived(groupSessions(this.sessions));
+  private tiers = $derived(statusTiers(this.groups));
+  groupedSessions = $derived(orderSessionGroups(this.groups, this.tiers));
+
+  view(row: SessionGroupInput): Session {
+    const detail = this.details.get(row.id);
+    if (!detail) return row as Session;
+    return { ...row, ...detail, ...indexFields(row), is_index_only: detail.is_index_only ?? false };
   }
 
-  get groupedSessions(): SessionGroup[] {
-    return buildSessionGroups(this.sessions);
+  private reconcileRows(rows: Session[]) {
+    const next = rows.map((row) => {
+      const previous = this.byId.get(row.id);
+      if (!previous) return row;
+      return sameSessionFields(previous, row) ? previous : row;
+    });
+    if (next.length !== this.sessions.length || next.some((row, i) => row !== this.sessions[i])) {
+      this.sessions = next;
+    }
+  }
+
+  private replaceAt(index: number, row: Session) {
+    this.sessions = this.sessions.map((current, i) => (i === index ? row : current));
+  }
+
+  private updateActiveIndex(session: Session) {
+    const index = this.sessions.findIndex((row) => row.id === session.id);
+    if (index < 0) return;
+    const current = this.sessions[index]!;
+    const row = {
+      ...current,
+      ...indexFields({
+        ...current,
+        ...session,
+        parent_session_id: session.parent_session_id,
+        parent_session_ids: session.parent_session_ids,
+        relationship_type: session.relationship_type,
+        display_name: session.display_name ?? current.display_name,
+        is_teammate: session.is_teammate ?? current.is_teammate,
+      }),
+    };
+    if (!sameSessionFields(current, row)) this.replaceAt(index, row);
   }
 
   private get apiParams(): SidebarIndexParams {
@@ -415,6 +461,9 @@ class SessionsStore {
 
   private resetPagination() {
     this.sessions = [];
+    this.sidebarIndexIds = new Set();
+    this.invalidateHydratedSessionDetails();
+    this.details.clear();
     this.nextCursor = null;
     this.total = 0;
   }
@@ -563,6 +612,8 @@ class SessionsStore {
     void this.load();
   }
 
+  private firstReadWaiting = false;
+
   private async loadSidebarPage(params: SidebarIndexParams, signal: AbortSignal) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
@@ -570,15 +621,12 @@ class SessionsStore {
     // loading=true so large filter expansions expose that more
     // pages are still being fetched after page 1 is published.
     this.loading = true;
-    // Preserve old data during reload — clearing eagerly causes
-    // a flash because the sidebar and content area briefly see
-    // an empty session list.
-    const prev = {
-      sessions: this.sessions,
-      nextCursor: this.nextCursor,
-      total: this.total,
-    };
     try {
+      if (this.sidebarIndexVersion === 0) {
+        this.firstReadWaiting = true;
+        await events.whenReady(1000);
+        this.firstReadWaiting = false;
+      }
       const index = await SessionsService.getApiV1SessionsSidebarIndex(params, { signal });
       if (this.loadVersion !== version) return;
 
@@ -586,23 +634,14 @@ class SessionsStore {
       this.hydratedSessionsByVersion.set(indexVersion, new Map());
       this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
       this.pruneSidebarHydrationVersions(indexVersion);
-      const existing = new Map(this.sessions.map((session) => [session.id, session]));
-      this.sessions = index.sessions.map((row) =>
-        sidebarIndexRowToSession(row, existing.get(row.id)),
-      );
+      const rows = index.sessions.map((row) => sidebarIndexRowToSession(row));
       this.sidebarIndexIds = new Set(index.sessions.map((row) => row.id));
-      // Keep the active session's hydrated row when the new index
-      // page doesn't contain it: navigateToSession appends deep-linked,
-      // cross-page, and subagent targets, and dropping them here would
-      // revert activeSession to undefined mid-view. It stays outside
-      // sidebarIndexIds, so later pages keep it at the tail until
-      // pagination reaches its real position.
       const activeId = this.activeSessionId;
-      if (activeId && !this.sessions.some((s) => s.id === activeId)) {
-        const kept = existing.get(activeId);
-        if (kept && !kept.is_index_only) {
-          this.sessions = [...this.sessions, kept];
-        }
+      const kept = activeId ? this.byId.get(activeId) : undefined;
+      if (kept && !this.sidebarIndexIds.has(kept.id) && this.activeSession) rows.push(kept);
+      this.reconcileRows(rows);
+      for (const id of this.details.keys()) {
+        if (!this.sidebarIndexIds.has(id) && id !== activeId) this.details.delete(id);
       }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
@@ -612,18 +651,10 @@ class SessionsStore {
       // A rejected filter has no matching rows; showing the previous
       // filter's rows under it would mislabel them.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-        this.sessions = [];
-        this.sidebarIndexIds = new Set();
-        this.nextCursor = null;
-        this.total = 0;
+        this.resetPagination();
         this.sidebarLoadError = error.message;
         return;
       }
-      // Restore previous state so a transient failure
-      // doesn't wipe the visible session list.
-      this.sessions = prev.sessions;
-      this.nextCursor = prev.nextCursor;
-      this.total = prev.total;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -683,7 +714,8 @@ class SessionsStore {
               return;
             }
             cache.set(id, hydrated);
-            this.mergeHydratedSession(hydrated);
+            this.details.set(id, { ...this.details.get(id), ...hydrated });
+            this.mergeDetailIntoList(id);
             this.markActiveSessionFound(id);
           } catch (err) {
             // Visible hydration is best-effort; the skinny row remains usable.
@@ -723,22 +755,6 @@ class SessionsStore {
     }
   }
 
-  private mergeHydratedSession(hydrated: Session) {
-    const idx = this.sessions.findIndex((s) => s.id === hydrated.id);
-    if (idx < 0) return;
-    const current = this.sessions[idx]!;
-    this.sessions[idx] = {
-      ...current,
-      ...hydrated,
-      parent_session_id: hydrated.parent_session_id,
-      parent_session_ids: hydrated.parent_session_ids,
-      relationship_type: hydrated.relationship_type,
-      display_name: hydrated.display_name ?? current.display_name,
-      is_teammate: hydrated.is_teammate ?? current.is_teammate,
-      is_index_only: false,
-    };
-  }
-
   private invalidateHydratedSessionDetails() {
     const version = this.sidebarIndexVersion;
     this.hydratedSessionsByVersion.set(version, new Map());
@@ -771,29 +787,26 @@ class SessionsStore {
       // sidebarIndexIds were appended out of position (the active
       // session kept by loadSidebarPage, navigateToSession targets);
       // they stay at the tail until pagination reaches their real
-      // position, then merge in place carrying their hydrated fields.
-      const existingById = new Map(this.sessions.map((session) => [session.id, session]));
+      // position, then move to the position supplied by the index.
+      const pageIds = new Set(index.sessions.map((row) => row.id));
       for (const row of index.sessions) {
         this.sidebarIndexIds.add(row.id);
       }
       const paged = this.sessions.filter(
-        (s) => this.sidebarIndexIds.has(s.id) && !index.sessions.some((row) => row.id === s.id),
+        (s) => this.sidebarIndexIds.has(s.id) && !pageIds.has(s.id),
       );
       const appended = this.sessions.filter((s) => !this.sidebarIndexIds.has(s.id));
-      this.sessions = [
+      this.reconcileRows([
         ...paged,
-        ...index.sessions.map((row) => sidebarIndexRowToSession(row, existingById.get(row.id))),
+        ...index.sessions.map((row) => sidebarIndexRowToSession(row)),
         ...appended,
-      ];
+      ]);
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch (error) {
       if (signal.aborted || isAbortError(error) || this.loadVersion !== version) return;
       if (error instanceof ApiError && error.code === "invalid_machine_filter") {
-        this.sessions = [];
-        this.sidebarIndexIds = new Set();
-        this.nextCursor = null;
-        this.total = 0;
+        this.resetPagination();
         this.sidebarLoadError = error.message;
         return;
       }
@@ -1003,7 +1016,7 @@ class SessionsStore {
       return this.navigateInFlight.promise;
     }
     this.setActiveSession(id);
-    const existing = this.sessions.find((s) => s.id === id);
+    const existing = this.byId.get(id);
     if (existing) {
       await this.hydrateSelectedIndexOnlySession(id);
       return;
@@ -1014,11 +1027,11 @@ class SessionsStore {
       try {
         const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
         if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
-          const idx = this.sessions.findIndex((s) => s.id === id);
-          if (idx >= 0) {
-            this.mergeHydratedSession(session);
+          this.details.set(id, session);
+          if (!this.byId.has(id)) {
+            this.sessions = [...this.sessions, sidebarIndexRowToSession(session)];
           } else {
-            this.sessions = [...this.sessions, session];
+            this.updateActiveIndex(session);
           }
           this.markActiveSessionFound(id);
         }
@@ -1084,10 +1097,10 @@ class SessionsStore {
   async retryActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
-    const existing = this.sessions.find((s) => s.id === id);
+    const existing = this.byId.get(id);
     if (!existing) {
       await this.navigateToSession(id);
-    } else if (existing.is_index_only) {
+    } else if (existing.is_index_only && !this.details.has(id)) {
       await this.hydrateSelectedIndexOnlySession(id);
     } else {
       await this.refreshActiveSession();
@@ -1095,9 +1108,18 @@ class SessionsStore {
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {
-    const existing = this.sessions.find((s) => s.id === id);
-    if (!existing?.is_index_only) return;
+    const existing = this.byId.get(id);
+    if (!existing?.is_index_only || this.details.has(id)) return;
     await this.hydrateVisibleSessions([id]);
+    const detail = this.details.get(id);
+    const current = this.byId.get(id);
+    if (!detail || !current || this.activeSessionId !== id) return;
+    // Keep index edits made while the detail request was in flight.
+    const previousFields = indexFields(existing);
+    const changedFields = Object.entries(indexFields(current)).filter(
+      ([key, value]) => !sameField(previousFields[key as keyof typeof previousFields], value),
+    );
+    this.updateActiveIndex({ ...detail, ...Object.fromEntries(changedFields) });
   }
 
   deselectSession() {
@@ -1119,9 +1141,9 @@ class SessionsStore {
       ) {
         return;
       }
-      const idx = this.sessions.findIndex((s) => s.id === id);
-      if (idx >= 0) {
-        this.mergeHydratedSession(session);
+      if (this.byId.has(id)) {
+        this.details.set(id, { ...this.details.get(id), ...session });
+        this.updateActiveIndex(session);
       }
       this.markActiveSessionFound(id);
     } catch (err) {
@@ -1206,16 +1228,13 @@ class SessionsStore {
   private mergeDetailIntoList(id: string) {
     const detail = this.signalDetailCache.get(id);
     if (!detail) return;
-    const idx = this.sessions.findIndex((s) => s.id === id);
-    if (idx >= 0) {
-      const s = this.sessions[idx]!;
-      if (s.health_score_basis === undefined && detail.basis != null) {
-        this.sessions[idx] = {
-          ...s,
-          health_score_basis: detail.basis,
-          health_penalties: detail.penalties ?? undefined,
-        };
-      }
+    const s = this.byId.has(id) ? this.details.get(id) : undefined;
+    if (s && s.health_score_basis === undefined && detail.basis != null) {
+      this.details.set(id, {
+        ...s,
+        health_score_basis: detail.basis,
+        health_penalties: detail.penalties ?? undefined,
+      });
     }
   }
 
@@ -1637,9 +1656,14 @@ class SessionsStore {
       { id },
       { display_name: displayName },
     );
+    const detail = this.details.get(id);
+    if (detail) this.details.set(id, { ...detail, ...updated });
     const idx = this.sessions.findIndex((s) => s.id === id);
     if (idx !== -1) {
-      const merged = { ...this.sessions[idx]!, ...updated };
+      const merged = {
+        ...this.sessions[idx]!,
+        ...indexFields({ ...this.sessions[idx]!, ...updated }),
+      };
       // When the caller cleared the rename and the backend found no agent name
       // to restore, display_name is absent from the response (omitempty on nil).
       // Explicitly null it out so the store reflects the cleared state rather
@@ -1647,7 +1671,7 @@ class SessionsStore {
       if (displayName === null && updated.display_name === undefined) {
         merged.display_name = undefined;
       }
-      this.sessions[idx] = merged;
+      this.replaceAt(idx, merged);
     }
   }
 
@@ -1660,11 +1684,11 @@ class SessionsStore {
     );
     const idx = this.sessions.findIndex((session) => session.id === id);
     if (idx !== -1) {
-      this.sessions[idx] = {
+      this.replaceAt(idx, {
         ...this.sessions[idx]!,
         project: assignment.project,
         project_assigned: true,
-      };
+      });
     }
     this.invalidateProjectCache();
     await this.load({ force: true });
@@ -1677,11 +1701,11 @@ class SessionsStore {
     });
     const idx = this.sessions.findIndex((session) => session.id === id);
     if (idx !== -1) {
-      this.sessions[idx] = {
+      this.replaceAt(idx, {
         ...this.sessions[idx]!,
         project: cleared.project,
         project_assigned: false,
-      };
+      });
     }
     this.invalidateProjectCache();
     await this.load({ force: true });
@@ -1720,7 +1744,8 @@ class SessionsStore {
   }
 
   private scheduleIndexRefresh() {
-    if (this.sidebarConsumers === 0) return;
+    // The read waiting on events_ready starts after this event and covers it.
+    if (this.sidebarConsumers === 0 || this.firstReadWaiting) return;
     if (this.liveRefreshTimer !== null) {
       clearTimeout(this.liveRefreshTimer);
     }
@@ -1800,7 +1825,7 @@ export function createSessionsStore(): SessionsStore {
   return new SessionsStore();
 }
 
-function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Session): Session {
+function sidebarIndexRowToSession(row: SessionGroupInput): Session {
   const skinny: Session = {
     compaction_count: 0,
     consecutive_failure_max: 0,
@@ -1814,6 +1839,19 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     tool_failure_signal_count: 0,
     tool_retry_count: 0,
     id: row.id,
+    ...indexFields(row),
+    first_message: row.first_message ?? null,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
+    has_total_output_tokens: false,
+    has_peak_context_tokens: false,
+    is_index_only: true,
+  };
+  return skinny;
+}
+
+function indexFields(row: SessionGroupInput) {
+  return {
     project: row.project,
     project_assigned: row.project_assigned ?? false,
     machine: row.machine,
@@ -1821,52 +1859,45 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     agent: row.agent,
     agent_label: row.agent_label ?? undefined,
     entrypoint: row.entrypoint ?? undefined,
-    first_message: null,
     display_name: row.display_name ?? undefined,
     started_at: row.started_at,
     ended_at: row.ended_at,
     message_count: row.message_count,
-    user_message_count: row.user_message_count,
+    user_message_count: row.user_message_count ?? 0,
     parent_session_id: row.parent_session_id ?? undefined,
     parent_session_ids: row.parent_session_ids,
     relationship_type: row.relationship_type ?? undefined,
     termination_status: row.termination_status ?? undefined,
-    total_output_tokens: 0,
-    peak_context_tokens: 0,
-    has_total_output_tokens: false,
-    has_peak_context_tokens: false,
     transcript_revision: row.transcript_revision,
-    is_automated: row.is_automated,
-    is_teammate: row.is_teammate ?? false,
-    is_index_only: true,
+    is_automated: row.is_automated ?? false,
+    is_teammate: row.is_teammate,
     created_at: row.created_at,
   };
-  if (!existing || existing.is_index_only) return skinny;
-  return {
-    ...skinny,
-    ...existing,
-    project: skinny.project,
-    project_assigned: skinny.project_assigned,
-    machine: skinny.machine,
-    source_machines: skinny.source_machines,
-    agent: skinny.agent,
-    agent_label: skinny.agent_label,
-    entrypoint: skinny.entrypoint,
-    display_name: skinny.display_name,
-    started_at: skinny.started_at,
-    ended_at: skinny.ended_at,
-    message_count: skinny.message_count,
-    user_message_count: skinny.user_message_count,
-    parent_session_id: skinny.parent_session_id,
-    parent_session_ids: skinny.parent_session_ids,
-    relationship_type: skinny.relationship_type,
-    termination_status: skinny.termination_status,
-    transcript_revision: skinny.transcript_revision,
-    is_automated: skinny.is_automated,
-    is_teammate: skinny.is_teammate ?? existing.is_teammate,
-    is_index_only: false,
-    created_at: skinny.created_at,
-  };
+}
+
+function sameSessionFields(a: Session, b: Session): boolean {
+  for (const key in a) {
+    if (Object.hasOwn(a, key) && !sameField(a[key as keyof Session], b[key as keyof Session]))
+      return false;
+  }
+  for (const key in b) {
+    if (
+      Object.hasOwn(b, key) &&
+      !Object.prototype.propertyIsEnumerable.call(a, key) &&
+      !sameField(a[key as keyof Session], b[key as keyof Session])
+    )
+      return false;
+  }
+  return true;
+}
+
+function sameField(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (i in a && a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function maxString(a: string | null, b: string | null): string | null {
@@ -2033,6 +2064,11 @@ function findPublicRoots(id: string, byId: Map<string, SessionGroupInput>): stri
 }
 
 export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[] {
+  const groups = groupSessions(sessions);
+  return orderSessionGroups(groups, statusTiers(groups));
+}
+
+function groupSessions(sessions: SessionGroupInput[]): SessionGroup[] {
   const byId = new Map<string, SessionGroupInput>();
   for (const s of sessions) {
     byId.set(s.id, s);
@@ -2060,7 +2096,6 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
           sessions: [],
           primarySessionId: s.id,
           totalMessages: 0,
-          firstMessage: null,
           startedAt: null,
           endedAt: null,
         };
@@ -2185,7 +2220,6 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
         return ta < tb ? -1 : ta > tb ? 1 : 0;
       });
     }
-    group.firstMessage = group.sessions[0]?.first_message ?? null;
 
     // For groups containing subagent children, the root session
     // should always be the main entry (not the most recent child).
@@ -2208,7 +2242,19 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
     }
   }
 
-  const ordered = insertionOrder.filter((k) => !keysToRemove.has(k)).map((k) => groupMap.get(k)!);
+  return insertionOrder.filter((k) => !keysToRemove.has(k)).map((k) => groupMap.get(k)!);
+}
+
+function statusTiers(groups: SessionGroup[]): string {
+  return groups.map(statusSortKey).join("");
+}
+
+function orderSessionGroups(groups: SessionGroup[], tiers: string): SessionGroup[] {
+  const ordered = groups.map((group, i) => ({
+    group,
+    tier: Number(tiers[i]),
+    freshness: groupFreshness(group),
+  }));
 
   // Two-key sort:
   //   1. status priority — working → waiting → idle → stale →
@@ -2221,16 +2267,16 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
   //      the time-since-last-update order the sidebar had before
   //      the status sort was added.
   ordered.sort((a, b) => {
-    const sa = statusSortKey(a);
-    const sb = statusSortKey(b);
+    const sa = a.tier;
+    const sb = b.tier;
     if (sa !== sb) return sa - sb;
-    const ra = groupFreshness(a);
-    const rb = groupFreshness(b);
+    const ra = a.freshness;
+    const rb = b.freshness;
     if (ra > rb) return -1;
     if (ra < rb) return 1;
     return 0;
   });
-  return ordered;
+  return ordered.map(({ group }) => group);
 }
 
 function statusSortKey(group: SessionGroup): number {

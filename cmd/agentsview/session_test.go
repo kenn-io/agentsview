@@ -299,10 +299,10 @@ func seedSessionWithOpts(
 	})
 }
 
-func seedSessionsWithOpts(t *testing.T, dataDir string, seeds ...sessionSeed) {
+func seedSessionsWithOpts(t *testing.T, dataDir string, seeds ...sessionSeed) string {
 	t.Helper()
 	seedSessionArchiveRows(t, dataDir, seeds...)
-	registerSQLiteDaemonRuntime(t, dataDir)
+	return registerSQLiteDaemonRuntime(t, dataDir)
 }
 
 func seedSessionArchiveRows(t *testing.T, dataDir string, seeds ...sessionSeed) {
@@ -340,9 +340,9 @@ func seedSessionArchiveRows(t *testing.T, dataDir string, seeds ...sessionSeed) 
 	require.NoError(t, err)
 }
 
-func registerSQLiteDaemonRuntime(t *testing.T, dataDir string) {
+func registerSQLiteDaemonRuntime(t *testing.T, dataDir string) string {
 	t.Helper()
-	registerSQLiteDaemonRuntimeWithEngine(t, dataDir, false)
+	return registerSQLiteDaemonRuntimeWithEngine(t, dataDir, false)
 }
 
 func registerSQLiteWritableDaemonRuntime(t *testing.T, dataDir string) {
@@ -352,7 +352,7 @@ func registerSQLiteWritableDaemonRuntime(t *testing.T, dataDir string) {
 
 func registerSQLiteDaemonRuntimeWithEngine(
 	t *testing.T, dataDir string, writable bool,
-) {
+) string {
 	t.Helper()
 
 	cfg, err := config.LoadMinimal()
@@ -389,6 +389,7 @@ func registerSQLiteDaemonRuntimeWithEngine(
 		RemoveDaemonRuntime(dataDir)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+	return ts.URL
 }
 
 func recordFixtureInstallation(t *testing.T, database *db.DB) {
