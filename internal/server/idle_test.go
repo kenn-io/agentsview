@@ -248,3 +248,20 @@ func TestIdleTrackerSyncSuspensionRepeatsAndKeepsSSEActive(t *testing.T) {
 		}
 	})
 }
+
+func TestIdleTrackerDesktopProbesPermitSyncIdle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		tracker := NewIdleTracker(time.Minute, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
+		suspensions := 0
+		tracker.SetSyncIdle(10*time.Minute, func() { suspensions++ })
+		go tracker.Run(ctx)
+		for range 24 {
+			time.Sleep(30 * time.Second)
+			tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/ping", nil))
+		}
+		synctest.Wait()
+		require.Equal(t, 1, suspensions)
+	})
+}

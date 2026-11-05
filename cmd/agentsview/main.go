@@ -503,6 +503,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
+		ingestion.catchupImports = func(catchupCtx context.Context) error {
+			remoteErr := runRemoteSourceSyncPass(catchupCtx, engine, remoteSourceSyncRoots(ingestion.Config()))
+			_, attachmentErr := attachedSources.Drain(catchupCtx, nil)
+			return errors.Join(remoteErr, attachmentErr)
+		}
 		ingestion.StartLiveActivity()
 		if idleTracker != nil {
 			idleTracker.SetSyncIdle(cfg.SyncIdleAfter, ingestion.Suspend)
@@ -514,11 +519,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				idleTracker.Do(func() { runScheduledSyncPass(localCtx, engine, scheduledReconcileTargets(ingestion.Config())) })
 			}
 		})
-		ingestion.catchupImports = func(catchupCtx context.Context) error {
-			remoteErr := runRemoteSourceSyncPass(catchupCtx, engine, remoteSourceSyncRoots(ingestion.Config()))
-			_, attachmentErr := attachedSources.Drain(catchupCtx, nil)
-			return errors.Join(remoteErr, attachmentErr)
-		}
 	} else if opts.ReloadConfig != nil {
 		// Without a background engine the server reconfigures its own
 		// on-demand engine from the reloaded settings.

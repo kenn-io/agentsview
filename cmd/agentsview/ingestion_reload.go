@@ -251,16 +251,25 @@ func (d *daemonIngestion) resume() {
 	d.applyMu.Lock()
 	defer d.applyMu.Unlock()
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	done := d.wake
-	d.wake = nil
 	if d.stopped {
+		d.wake = nil
 		close(done)
+		d.mu.Unlock()
 		return
 	}
+	d.mu.Unlock()
 	g := d.newGeneration(d.Config())
 	g.attempt = done
+	d.mu.Lock()
+	d.wake = nil
+	if d.stopped {
+		d.mu.Unlock()
+		d.stopGeneration(g)
+		return
+	}
 	d.installGeneration(g)
+	d.mu.Unlock()
 }
 
 func (d *daemonIngestion) recover(g *ingestionGeneration) error {
@@ -378,16 +387,24 @@ func (d *daemonIngestion) applySaved() {
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.stopped && d.generation != nil {
+	active := !d.stopped && d.generation != nil
+	d.mu.Unlock()
+	var g *ingestionGeneration
+	if active {
 		// Collect before switching providers so new roots cannot lose writes.
-		g := d.newGeneration(next)
-		d.engine.ReconfigureSources(engineSourceConfig(next))
+		g = d.newGeneration(next)
+	}
+	d.engine.ReconfigureSources(engineSourceConfig(next))
+	d.mu.Lock()
+	if g != nil && !d.stopped && d.generation != nil {
 		old = d.generation
 		old.cancel()
 		d.installGeneration(g)
-	} else {
-		d.engine.ReconfigureSources(engineSourceConfig(next))
+		g = nil
+	}
+	d.mu.Unlock()
+	if g != nil {
+		d.stopGeneration(g)
 	}
 	log.Printf("applied session provider settings: disabled=%v", next.DisabledAgents)
 }

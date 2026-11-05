@@ -10,25 +10,27 @@ import (
 // IdleTracker tracks external client activity and internal write work for a
 // server that suspends local ingestion and optionally exits after a quiet period.
 type IdleTracker struct {
-	mu             sync.Mutex
-	timeout        time.Duration
-	onIdle         func()
-	lastExternal   time.Time
-	activeExternal int
-	activeWork     int
-	draining       bool
-	notify         chan struct{}
-	syncTimeout    time.Duration
-	onSyncIdle     func()
-	syncIdle       bool
+	mu               sync.Mutex
+	timeout          time.Duration
+	onIdle           func()
+	lastExternal     time.Time
+	lastSyncActivity time.Time
+	activeExternal   int
+	activeWork       int
+	draining         bool
+	notify           chan struct{}
+	syncTimeout      time.Duration
+	onSyncIdle       func()
+	syncIdle         bool
 }
 
 func NewIdleTracker(timeout time.Duration, onIdle func()) *IdleTracker {
 	return &IdleTracker{
-		timeout:      timeout,
-		onIdle:       onIdle,
-		lastExternal: time.Now(),
-		notify:       make(chan struct{}, 1),
+		timeout:          timeout,
+		onIdle:           onIdle,
+		lastExternal:     time.Now(),
+		lastSyncActivity: time.Now(),
+		notify:           make(chan struct{}, 1),
 	}
 }
 
@@ -45,11 +47,12 @@ func (t *IdleTracker) Wrap(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !t.beginExternal() {
+		syncActivity := r.URL.Path != "/api/ping"
+		if !t.beginExternal(syncActivity) {
 			http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 			return
 		}
-		defer t.endExternal()
+		defer t.endExternal(syncActivity)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -104,6 +107,7 @@ func (t *IdleTracker) Touch() {
 	if !t.draining {
 		t.syncIdle = false
 		t.lastExternal = time.Now()
+		t.lastSyncActivity = t.lastExternal
 	}
 	t.mu.Unlock()
 	t.signal()
@@ -135,25 +139,31 @@ func (t *IdleTracker) Run(ctx context.Context) {
 	}
 }
 
-func (t *IdleTracker) beginExternal() bool {
+func (t *IdleTracker) beginExternal(syncActivity bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.draining {
 		return false
 	}
-	t.syncIdle = false
 	t.lastExternal = time.Now()
+	if syncActivity {
+		t.syncIdle = false
+		t.lastSyncActivity = t.lastExternal
+	}
 	t.activeExternal++
 	return true
 }
 
-func (t *IdleTracker) endExternal() {
+func (t *IdleTracker) endExternal(syncActivity bool) {
 	t.mu.Lock()
 	if t.activeExternal > 0 {
 		t.activeExternal--
 	}
-	t.syncIdle = false
 	t.lastExternal = time.Now()
+	if syncActivity {
+		t.syncIdle = false
+		t.lastSyncActivity = t.lastExternal
+	}
 	t.mu.Unlock()
 	t.signal()
 }
@@ -167,7 +177,7 @@ func (t *IdleTracker) nextWait() (time.Duration, bool) {
 	wait := time.Hour
 	if t.activeExternal == 0 && t.activeWork == 0 {
 		if t.syncTimeout > 0 && !t.syncIdle {
-			remaining := t.syncTimeout - time.Since(t.lastExternal)
+			remaining := t.syncTimeout - time.Since(t.lastSyncActivity)
 			if remaining <= 0 {
 				t.syncIdle = true
 				t.onSyncIdle()

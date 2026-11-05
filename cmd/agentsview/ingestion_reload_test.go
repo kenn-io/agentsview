@@ -461,3 +461,48 @@ func TestDaemonIngestionSlowCatchupKeepsWatching(t *testing.T) {
 	assert.Contains(t, body, "hello from slow")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 }
+
+func TestDaemonIngestionReloadKeepsArchiveRequestBudget(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	writeReloadGeminiSession(t, root, "retained")
+	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	saved := cfg
+	saved.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, func() (config.Config, error) { return saved, nil })
+	t.Cleanup(ingestion.Stop)
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
+	go func() {
+		defer close(finished)
+		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	ingestion.Suspend()
+	_, err := ingestion.Reload(t.Context())
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return len(ingestion.Config().DisabledAgents) == 1 }, time.Second, time.Millisecond)
+	// Reload has published its config and is waiting on real engine work.
+	ts := httptest.NewUnstartedServer(nil)
+	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+	ts.Config.Handler = server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
+	ts.Start()
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/search?q=retained", nil)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	releaseOnce()
+	<-finished
+	require.NoError(t, err, "archive reads retain their two-second catch-up budget during reload")
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "hello from retained")
+	assert.Equal(t, "true", response.Header.Get(apiclient.ArchiveStaleHeader))
+}

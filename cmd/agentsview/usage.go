@@ -412,15 +412,8 @@ func applyCustomPricing(database *db.DB, cfg config.Config) {
 // ensureFreshData makes sure the database reflects recent
 // session file changes before serving a usage query.
 //
-// Decision tree:
-//  1. If the stored data version is stale (parser changes on
-//     upgrade), run a full resync.
-//  2. If a server process is active (via kit runtime record), trust
-//     its file watcher and skip on-demand sync. This avoids
-//     duplicate work and write contention.
-//  3. Otherwise, run a quick incremental sync scoped to files
-//     modified since the last recorded sync start time, with
-//     a small safety margin.
+// An active daemon owns refreshes, including waking paused collection. Without
+// one, rebuild stale parser data or sync files changed since the last pass.
 //
 // Callers that need stale data (e.g. offline benchmarks) can
 // bypass via skip=true.
@@ -448,7 +441,7 @@ func ensureFreshData(
 		if err == nil && tr.Mode == transportHTTP && !tr.ReadOnly {
 			_, err = postDaemonPush[sync.SyncStats](ctx, tr, appCfg.AuthToken, startupSyncOperation, apiclient.DaemonPushRequest{}, func(sync.Progress) {})
 		} else if err == nil {
-			err = errors.New("daemon is unreachable")
+			err = errors.New("daemon is unavailable for refresh")
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Unable to refresh archive: %v\n", err)
