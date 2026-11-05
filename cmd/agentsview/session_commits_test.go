@@ -38,8 +38,6 @@ func TestSessionCommits(t *testing.T) {
 		require.NoError(t, err)
 		assert.Regexp(t, `SESSION\s+ORDINAL\s+CALL\s+TIME\s+SHA\s+BRANCH\s+SUBJECT\s+USER TURN`, out)
 		assert.Regexp(t, `s-commit\s+1\s+1\s+abc1234\s+main\s+Fix parser`, out)
-		assert.Contains(t, out, "abc1234")
-		assert.Contains(t, out, "Fix parser")
 		assert.Contains(t, out, "0: Fix parser ")
 		assert.Contains(t, out, "…")
 		assert.NotContains(t, out, "END")
