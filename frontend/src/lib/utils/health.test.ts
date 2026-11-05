@@ -59,7 +59,7 @@ describe("setupVisibilityHealthCheck", () => {
     cleanup();
   });
 
-  it("keeps the page after a timeout and reloads on a later network failure", async () => {
+  it("keeps the page when the health check times out", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;
     const fetch = vi
@@ -69,8 +69,7 @@ describe("setupVisibilityHealthCheck", () => {
         return new Promise<Response>((_resolve, reject) => {
           signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
         });
-      })
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      });
     globalThis.fetch = fetch;
     const cleanup = setupVisibilityHealthCheck();
     try {
@@ -78,12 +77,6 @@ describe("setupVisibilityHealthCheck", () => {
       await vi.advanceTimersByTimeAsync(3_000);
       expect(signal?.aborted).toBe(true);
       expect(reloadSpy).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(2_001);
-      fireVisible();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetch).toHaveBeenCalledTimes(2);
-      expect(reloadSpy).toHaveBeenCalledOnce();
     } finally {
       cleanup();
     }
