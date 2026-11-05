@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -39,96 +40,181 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 		timings.rollup.ExceptionRows, timings.rollup.ExceptionGroups)
 }
 
+type usagePreparedWindow struct {
+	snapshot usageQuerySnapshot
+	installs map[string]usageRollupInstall
+	timings  usageRollupRequestTimings
+}
+
+// usageWindowObserver provides deterministic synchronization for tests.
+type usageWindowObserver struct {
+	beforePrepare func(context.Context)
+}
+
+// SetUsageWindowPrepareForTest observes preparations. Call before starting reads.
+func (db *DB) SetUsageWindowPrepareForTest(beforePrepare func(context.Context)) {
+	db.usageCache.usageWindowObserver.beforePrepare = beforePrepare
+}
+
+type usageWindowMemoKey struct{}
+
+type usageWindowMemo struct {
+	mu      sync.Mutex
+	windows map[string]func() (usagePreparedWindow, error)
+}
+
+// WithUsageWindowMemo reuses prepared windows across reads in one request.
+func WithUsageWindowMemo(ctx context.Context) context.Context {
+	return context.WithValue(ctx, usageWindowMemoKey{}, &usageWindowMemo{
+		windows: make(map[string]func() (usagePreparedWindow, error)),
+	})
+}
+
+func (memo *usageWindowMemo) drop(key string) {
+	if memo == nil {
+		return
+	}
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	delete(memo.windows, key)
+}
+
+func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string {
+	where, args := filter.appendUsageSessionFilterClauses("1=1", nil)
+	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%#v", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
+}
+
+func (db *DB) sharedUsageWindow(ctx context.Context, key string, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
+	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+	if memo == nil {
+		return db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+	}
+	memo.mu.Lock()
+	prepare, ok := memo.windows[key]
+	if !ok {
+		prepare = sync.OnceValues(func() (usagePreparedWindow, error) {
+			prepared, err := db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+			if err != nil {
+				memo.drop(key)
+			}
+			return prepared, err
+		})
+		memo.windows[key] = prepare
+	}
+	memo.mu.Unlock()
+	prepared, err := prepare()
+	if ok {
+		// Only the call that owns preparation reports its phase timings.
+		prepared.timings = usageRollupRequestTimings{candidates: prepared.timings.candidates}
+	}
+	return prepared, err
+}
+
+func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, report func(string)) (usagePreparedWindow, error) {
+	if db.usageCache.usageWindowObserver.beforePrepare != nil {
+		db.usageCache.usageWindowObserver.beforePrepare(ctx)
+	}
+	if report == nil {
+		report = func(string) {}
+	}
+	started := time.Now()
+	report("Reading archived sessions for this report")
+	filter.Progress = nil
+	snapshot, err := db.captureUsageQuery(ctx, filter, kind)
+	if err != nil {
+		return usagePreparedWindow{}, err
+	}
+	if !cursor {
+		snapshot.CursorHighWater = 0
+	}
+	timings := usageRollupRequestTimings{capture: time.Since(started), candidates: len(snapshot.Versions)}
+	report("Checking the usage cache for this report")
+	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
+	if err != nil {
+		return usagePreparedWindow{}, err
+	}
+	defer release()
+	sweepStarted := time.Now()
+	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
+		return usagePreparedWindow{}, err
+	}
+	timings.sweep = time.Since(sweepStarted)
+	fillStarted := time.Now()
+	report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
+	fills, err := cache.fill.Ensure(ctx, snapshot.Versions, snapshot.CursorHighWater)
+	if err != nil {
+		return usagePreparedWindow{}, err
+	}
+	timings.fill = time.Since(fillStarted)
+	snapshot.dropDeleted(fills)
+	resolver := export.NewPricingResolver(snapshot.PricingRows)
+	report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
+	installs, metrics, err := cache.rollup.Ensure(ctx, snapshot, fills, resolver)
+	if err != nil {
+		return usagePreparedWindow{}, err
+	}
+	timings.rollup = metrics
+	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
+}
+
 func (db *DB) queryUsageRollups(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 	includeCursor bool,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
-	// Live archive writes no longer force a recapture: facts are filled from
-	// their own read snapshot and rollups aggregate committed facts only.
-	// What remains is cache-generation retirement, which replaces the whole
-	// cache, and cache-side invalidation of an install between the build and
-	// the read. Both are resolved by recapturing, and neither is driven by
-	// the write rate.
+	// Retirement and cache-side install invalidation require a fresh capture.
 	var lastErr error
-	report := func(phase string) {
-		if filter.Progress != nil {
-			filter.Progress(phase)
-		}
+	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+	cursor := includeCursor && usageCursorIncluded(filter)
+	var key string
+	if memo != nil {
+		key = usageWindowKey(filter, kind, cursor)
 	}
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
+		if attempt > 1 {
+			memo.drop(key)
+		}
 		started := time.Now()
-		var timings usageRollupRequestTimings
-		report("Reading archived sessions for this report")
-		snapshot, captureErr := db.captureUsageQuery(ctx, filter, kind)
-		if captureErr != nil {
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, captureErr
+		var prepared usagePreparedWindow
+		var err error
+		if attempt == 1 {
+			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
+		} else {
+			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
 		}
-		timings.capture = time.Since(started)
-		timings.candidates = len(snapshot.Versions)
-		report("Checking the usage cache for this report")
-		if !includeCursor || !usageCursorIncluded(filter) {
-			snapshot.CursorHighWater = 0
-		}
-		cache, release, generationErr := db.usageCache.acquireGeneration(
-			ctx, snapshot.DatabaseID)
-		if generationErr != nil {
-			if errors.Is(generationErr, errUsageCacheSourceChanged) {
-				lastErr = generationErr
+		if err != nil {
+			if errors.Is(err, errUsageCacheSourceChanged) {
+				lastErr = err
 				continue
 			}
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, generationErr
+			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
 		}
-		sweepStarted := time.Now()
-		if sweepErr := cache.sweepDeletionJournal(ctx, db); sweepErr != nil {
-			release()
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, sweepErr
-		}
-		timings.sweep = time.Since(sweepStarted)
-		fillStarted := time.Now()
-		report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
-		fills, fillErr := cache.fill.Ensure(
-			ctx, snapshot.Versions, snapshot.CursorHighWater,
-		)
-		if fillErr != nil {
-			release()
-			if errors.Is(fillErr, errUsageCacheSourceChanged) {
-				lastErr = fillErr
-				continue
-			}
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, fillErr
-		}
-		timings.fill = time.Since(fillStarted)
-		snapshot.dropDeleted(fills)
+		snapshot := prepared.snapshot
 		resolver := export.NewPricingResolver(snapshot.PricingRows)
-		report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
-		installs, rollupMetrics, rollupErr := cache.rollup.Ensure(
-			ctx, snapshot, fills, resolver)
-		if rollupErr != nil {
-			release()
-			if errors.Is(rollupErr, errUsageCacheSourceChanged) {
-				lastErr = rollupErr
+		cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
+		if err != nil {
+			if errors.Is(err, errUsageCacheSourceChanged) {
+				lastErr = err
 				continue
 			}
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, rollupErr
+			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
 		}
-		timings.rollup = rollupMetrics
 		readStarted := time.Now()
-		report("Reading cached daily totals")
+		if filter.Progress != nil {
+			filter.Progress("Reading cached daily totals")
+		}
 		var facts usageFactsResult
 		var queryErr error
 		if kind == usageQueryKindActivity {
 			var matching map[string]UsageSessionInfo
-			matching, queryErr = cache.usageRollupActivityQuery(
-				ctx, snapshot, filter, installs)
+			matching, queryErr = cache.usageRollupActivityQuery(ctx, snapshot, filter, prepared.installs)
 			facts.MatchingSessions = matching
 		} else {
-			facts, queryErr = cache.usageRollupQuery(
-				ctx, snapshot, filter, installs, resolver)
+			facts, queryErr = cache.usageRollupQuery(ctx, snapshot, filter, prepared.installs, resolver)
 		}
+		timings := prepared.timings
 		timings.read = time.Since(readStarted)
 		if queryErr == nil {
-			cache.recordUsageTimezoneRequest(
-				ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
+			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
 			timings.logIfSlow(started)
 			return snapshot, facts, resolver, nil
