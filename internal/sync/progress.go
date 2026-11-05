@@ -533,7 +533,7 @@ func (s *SyncStats) logRetrySummary(prefix string) {
 	if s.retryCauseCount == 0 {
 		return
 	}
-	log.Printf("%s: %d sessions need retry: %s", prefix, s.retryCauseCount, s.retryCauseSample())
+	log.Printf("%s: %s retry: %s", prefix, countNoun(s.retryCauseCount, "session needs", "sessions need"), s.retryCauseSample())
 }
 
 // abort marks the pass aborted and keeps the first cause reported for it.
@@ -553,18 +553,32 @@ func (s *SyncStats) AbortCause() string {
 // IncompleteCause describes the unfinished work of a pass that completed
 // without an error but did not process every source.
 func (s *SyncStats) IncompleteCause() string {
-	parts := []string{fmt.Sprintf("%d failed", s.Failed)}
+	var parts []string
+	if s.Failed > 0 {
+		parts = append(parts, countNoun(s.Failed, "session file", "session files")+" could not be read")
+	}
 	if s.Deferred > 0 {
-		parts = append(parts, fmt.Sprintf("%d deferred", s.Deferred))
+		parts = append(parts, countNoun(s.Deferred, "session waits", "sessions wait")+" for a retry")
 	}
 	if s.providerFailures > 0 {
-		parts = append(parts, fmt.Sprintf("%d provider discoveries incomplete", s.providerFailures))
+		parts = append(parts, countNoun(s.providerFailures, "agent", "agents")+" could not list their session files")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "not every session file was read")
 	}
 	cause := strings.Join(parts, ", ")
 	if sample := s.retryCauseSample(); sample != "" {
-		cause += "; retry causes: " + sample
+		cause += "; why: " + sample
 	}
 	return cause
+}
+
+// countNoun formats a count with the singular or plural form of its noun.
+func countNoun(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // DeferredRetryBatch retains exact paths when possible and falls back to a

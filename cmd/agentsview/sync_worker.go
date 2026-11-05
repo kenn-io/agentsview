@@ -356,7 +356,7 @@ func resyncBuildResultFromStats(
 		result.Error = stats.AbortCause()
 	case !result.DiscoveryComplete:
 		result.Status = "failed"
-		result.Error = "discovery incomplete: " + stats.IncompleteCause()
+		result.Error = "did not read every session: " + stats.IncompleteCause()
 	default:
 		result.Status = "ok"
 	}

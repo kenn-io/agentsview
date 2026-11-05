@@ -616,8 +616,8 @@ func TestSyncWorkerFailureNamesDeferredFork(t *testing.T) {
 
 	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "sync"}, &wire)
 
-	want := "0 failed, 1 deferred; retry causes: codex:" + child + " (" + childPath +
-		"): codex parent turns unresolved for " + parent
+	want := "1 session waits for a retry; why: codex:" + child + " (" + childPath +
+		"): could not read the Codex session it was forked from (" + parent + ")"
 	require.EqualError(t, err, "sync worker sync: failed ("+want+")")
 	result := decodeSingleResult(t, &wire)
 	assert.Equal(t, "failed", result.Status)

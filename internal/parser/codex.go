@@ -139,7 +139,7 @@ func (g *codexForkGate) retryReason() string {
 	if g.resolvedOnce {
 		return ""
 	}
-	return "codex parent turns unresolved for " + g.parentSessionID
+	return "could not read the Codex session it was forked from (" + g.parentSessionID + ")"
 }
 
 type codexParentTurnResolver func(string) (map[string]struct{}, bool)

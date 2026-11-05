@@ -2958,8 +2958,12 @@ func passAbortCause(ctx context.Context, stats SyncStats) string {
 	if stats.abortCause != "" {
 		return stats.abortCause
 	}
-	return "sync pass aborted without a recorded cause"
+	return "the sync stopped without saying why"
 }
+
+// keptArchive leads every cause for a rebuild that the swap safety check
+// refused, so the reader knows the existing archive is unchanged.
+const keptArchive = "kept the existing archive: "
 
 // contributorAbortCause names why an attached archive source stopped a
 // rebuild. A contributor that finished with deferred sources, such as a Codex
@@ -2974,7 +2978,7 @@ func contributorAbortCause(
 	case contributorErr != nil:
 		return contributorErr.Error()
 	case safetyReason != "":
-		return "safety check: " + safetyReason
+		return keptArchive + safetyReason
 	case contributorStats.Aborted:
 		return passAbortCause(ctx, contributorStats)
 	case !contributorStats.ProcessingComplete():
@@ -3041,13 +3045,13 @@ func resyncSwapAbortReason(
 	switch {
 	case stats.Aborted:
 		if stats.abortCause != "" {
-			return "sync pass aborted: " + stats.abortCause
+			return "the rebuild stopped early: " + stats.abortCause
 		}
-		return "sync pass aborted"
+		return "the rebuild stopped early"
 	case emptyDiscovery:
 		return fmt.Sprintf(
-			"discovered no session files, but the archive holds %d",
-			oldFileSessions,
+			"the rebuild found no session files, but the archive has %s from files",
+			countNoun(oldFileSessions, "session", "sessions"),
 		)
 	case stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
@@ -3056,16 +3060,16 @@ func resyncSwapAbortReason(
 		!excludedOnly &&
 		!cwdFilteredOnly:
 		reason := fmt.Sprintf(
-			"wrote no sessions from %d discovered (%d failed, %d deferred)",
-			stats.TotalSessions, stats.Failed, stats.Deferred,
+			"the rebuild found %s but saved none (%d could not be read, %d wait for a retry)",
+			countNoun(stats.TotalSessions, "session", "sessions"), stats.Failed, stats.Deferred,
 		)
 		if sample := stats.retryCauseSample(); sample != "" {
-			reason += "; retry causes: " + sample
+			reason += "; why: " + sample
 		}
 		return reason
 	case stats.Failed > 0 && stats.Failed > stats.filesOK:
 		return fmt.Sprintf(
-			"%d files failed, more than the %d that parsed",
+			"%d session files could not be read, more than the %d that could",
 			stats.Failed, stats.filesOK,
 		)
 	}
@@ -3661,9 +3665,9 @@ func (e *Engine) resyncBuildLocked(
 	}
 	localStats := stats
 	if stats.Deferred > 0 {
-		warning := fmt.Sprintf("resync: %d sessions need retry; newly imported forks without their parent may include copied parent history and usage", stats.Deferred)
+		warning := fmt.Sprintf("resync: %s retry; newly imported forks without their parent may include copied parent history and usage", countNoun(stats.Deferred, "session needs", "sessions need"))
 		if sample := stats.retryCauseSample(); sample != "" {
-			warning += "; causes: " + sample
+			warning += "; why: " + sample
 		}
 		log.Print(warning)
 		stats.Warnings = append(stats.Warnings, warning)
@@ -3728,7 +3732,7 @@ func (e *Engine) resyncBuildLocked(
 		)
 		contributorSafetyAbort := contributorSafetyReason != ""
 		if contributorSafetyAbort {
-			contributorStats.abort("safety check: " + contributorSafetyReason)
+			contributorStats.abort(keptArchive + contributorSafetyReason)
 		}
 		mergeSyncStats(&stats, contributorStats)
 		pendingTombstoned += stats.Tombstoned
@@ -3769,7 +3773,7 @@ func (e *Engine) resyncBuildLocked(
 			)
 			// The contributor's outcome replaces any cause merged from its stats.
 			stats.Aborted = true
-			stats.abortCause = fmt.Sprintf("contributor %q did not complete: %s", contributor.Name, cause)
+			stats.abortCause = fmt.Sprintf("sync source %q did not finish: %s", contributor.Name, cause)
 			stats.Warnings = append(stats.Warnings, "resync aborted: "+stats.abortCause)
 			e.mu.Lock()
 			e.lastSyncStats = stats
@@ -3824,14 +3828,14 @@ func (e *Engine) resyncBuildLocked(
 		if reason := resyncSwapAbortReason(
 			localStats, localOldFileSessions, 0,
 		); reason != "" {
-			swapAbortReason = "local sources: " + reason
+			swapAbortReason = "in this machine's session folders, " + reason
 		}
 	}
 	if swapAbortReason == "" {
 		swapAbortReason = resyncSwapAbortReason(stats, rebuildOldFileSessions, trashedCopied)
 	}
 	if swapAbortReason != "" {
-		cause := "safety check: " + swapAbortReason
+		cause := keptArchive + swapAbortReason
 		log.Printf(
 			"resync: aborting swap, %d synced / %d failed / %d total: %s",
 			stats.Synced, stats.Failed, stats.TotalSessions, cause,

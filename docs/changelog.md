@@ -138,13 +138,15 @@ The latest release is
   many bytes were read, and how long the sync took. For a few less common
   agents, the read figures can be lower than the real reads.
 - When a sync or archive rebuild holds sessions for retry or stops early,
-  `debug.log` and the sync status now say why. A held session gets a
+  `debug.log` and the sync status now say why. Before, the log said only
+  `resync-build worker pass reported aborted`. A held session gets a
   `sync: session needs retry:` line naming the session, its file, and the
-  reason, such as a Codex fork whose parent rollout file was deleted. Each pass
-  then logs one summary. A pass logs at most 20 sessions one by one and counts
-  the rest. A rebuild that stops names its cause, such as cancellation, a safety
-  check, or an attached archive source with a fork whose parent is missing.
-  Before, the log said only `resync-build worker pass reported aborted`.
+  reason, such as
+  `could not read the Codex session it was forked from (<session id>)` when a
+  fork's parent rollout file was deleted. Each pass then logs one summary. A
+  pass logs at most 20 sessions one by one and counts the rest. A rebuild that
+  stops names its cause, for example
+  `kept the existing archive: the rebuild found no session files, but the archive has 1 session from files`.
   `agentsview doctor sync` includes the new lines in its log evidence.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See

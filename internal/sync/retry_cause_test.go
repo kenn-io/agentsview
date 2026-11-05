@@ -47,13 +47,13 @@ func TestSyncLogsBoundedRetryCauses(t *testing.T) {
 	}
 	assert.Len(t, perSession, 20)
 	for _, line := range perSession {
-		assert.Contains(t, line, "codex parent turns unresolved for "+parent)
+		assert.Contains(t, line, "could not read the Codex session it was forked from ("+parent+")")
 	}
 	require.Len(t, summaries, 1)
-	assert.Equal(t, 5, strings.Count(summaries[0], "codex parent turns unresolved for "+parent))
+	assert.Equal(t, 5, strings.Count(summaries[0], "could not read the Codex session it was forked from ("+parent+")"))
 	assert.True(t, strings.HasSuffix(summaries[0], "; 20 more\n"), summaries[0])
 	cause := stats.IncompleteCause()
-	assert.True(t, strings.HasPrefix(cause, "0 failed, 25 deferred; retry causes: codex:bbbbbbbb-"), cause)
+	assert.True(t, strings.HasPrefix(cause, "25 sessions wait for a retry; why: codex:bbbbbbbb-"), cause)
 	assert.True(t, strings.HasSuffix(cause, "; 20 more"), cause)
 }
 
@@ -86,8 +86,8 @@ func TestRebuildAbortNamesContributorForkWithoutParent(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, stats.Aborted)
-	want := `contributor "remote" did not complete: 0 failed, 1 deferred; retry causes: remote~codex:` +
-		child + " (" + childPath + "): codex parent turns unresolved for " + parent
+	want := `sync source "remote" did not finish: 1 session waits for a retry; why: remote~codex:` +
+		child + " (" + childPath + "): could not read the Codex session it was forked from (" + parent + ")"
 	assert.Equal(t, want, stats.AbortCause())
 	assert.Contains(t, stats.Warnings, "resync aborted: "+want)
 }
