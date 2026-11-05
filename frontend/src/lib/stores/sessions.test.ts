@@ -1031,6 +1031,43 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
     });
 
+    it("updates the active off-page row and its group when details refresh", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "parent" })]);
+      vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({ id: "offpage" }));
+      await sessions.load();
+      await sessions.navigateToSession("offpage");
+      await sessions.load();
+
+      vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({
+        id: "offpage",
+        message_count: 12,
+        user_message_count: 4,
+        ended_at: "2026-01-01T12:00:00Z",
+        termination_status: "awaiting_user",
+        transcript_revision: "rev-2",
+        parent_session_id: "parent",
+        parent_session_ids: ["parent"],
+        relationship_type: "subagent",
+      }));
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession).toMatchObject({
+        message_count: 12,
+        user_message_count: 4,
+        ended_at: "2026-01-01T12:00:00Z",
+        termination_status: "awaiting_user",
+        transcript_revision: "rev-2",
+        parent_session_id: "parent",
+        parent_session_ids: ["parent"],
+        relationship_type: "subagent",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+      await sessions.load();
+      expect(sessions.activeSession?.message_count).toBe(12);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+    });
+
     it("moves the appended active row into place when pagination reaches it", async () => {
       vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
         sessions: [makeSkinnyRow({ id: "listed" })],
@@ -3514,6 +3551,8 @@ describe("SessionsStore", () => {
         makeSession({
           id: "racy",
           first_message: "fetched during navigation",
+          message_count: 7,
+          parent_session_id: "parent",
         }),
       );
       await promise;
@@ -3522,6 +3561,8 @@ describe("SessionsStore", () => {
       expect(sessions.view(sessions.sessions[0]!).first_message).toBe("fetched during navigation");
       expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
       expect(sessions.activeSession?.first_message).toBe("fetched during navigation");
+      expect(sessions.activeSession?.message_count).toBe(7);
+      expect(sessions.sessions[0]?.parent_session_id).toBe("parent");
     });
   });
 
@@ -4218,7 +4259,7 @@ describe("SessionsStore live refresh", () => {
     }
   });
 
-  it("sessions events refresh labels while the index owns ancestry", async () => {
+  it("sessions events refresh active labels and ancestry", async () => {
     const { events } = await import("./events.svelte.js");
     let registered: ((e: { scope: string }) => void) | null = null;
     const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
@@ -4244,9 +4285,9 @@ describe("SessionsStore live refresh", () => {
     registered!({ scope: "sessions" });
     await vi.waitFor(() => {
       expect(sessions.activeSession?.labels).toEqual([]);
-      expect(sessions.activeSession?.parent_session_id).toBe("manager");
-      expect(sessions.activeSession?.parent_session_ids).toEqual(["manager"]);
-      expect(sessions.activeSession?.relationship_type).toBe("subagent");
+      expect(sessions.activeSession?.parent_session_id).toBeUndefined();
+      expect(sessions.activeSession?.parent_session_ids).toBeUndefined();
+      expect(sessions.activeSession?.relationship_type).toBeUndefined();
     });
     expect(SessionsService.getApiV1SessionsById).toHaveBeenCalledWith(
       { id: "worker" },

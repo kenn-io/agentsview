@@ -74,7 +74,7 @@ describe("SessionList filter dropdown", () => {
     sessions.selectedIds = new Set();
     sessions.selectMode = false;
     sessions.sidebarIndexVersion++;
-    sessions.hydratedSessionsByVersion = new Map([[sessions.sidebarIndexVersion, new Map()]]);
+    sessions.hydratedSessionsByVersion = new Map([[sessions.sidebarIndexVersion, new Set()]]);
     readProgress.reset();
     starred.filterOnly = false;
     starred.ids = new Set();
@@ -337,7 +337,7 @@ describe("SessionList visible hydration", () => {
     sessions.selectedIds = new Set();
     sessions.selectMode = false;
     sessions.sidebarIndexVersion++;
-    sessions.hydratedSessionsByVersion = new Map([[sessions.sidebarIndexVersion, new Map()]]);
+    sessions.hydratedSessionsByVersion = new Map([[sessions.sidebarIndexVersion, new Set()]]);
     readProgress.reset();
     starred.filterOnly = false;
     starred.ids = new Set();

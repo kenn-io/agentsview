@@ -414,6 +414,25 @@ class SessionsStore {
     this.sessions = this.sessions.map((current, i) => i === index ? row : current);
   }
 
+  private updateActiveIndex(session: Session) {
+    const index = this.sessions.findIndex((row) => row.id === session.id);
+    if (index < 0) return;
+    const current = this.sessions[index]!;
+    const row = {
+      ...current,
+      ...indexFields({
+        ...current,
+        ...session,
+        parent_session_id: session.parent_session_id,
+        parent_session_ids: session.parent_session_ids,
+        relationship_type: session.relationship_type,
+        display_name: session.display_name ?? current.display_name,
+        is_teammate: session.is_teammate ?? current.is_teammate,
+      }),
+    };
+    if (!sameSessionFields(current, row)) this.replaceAt(index, row);
+  }
+
   private get apiParams(): SidebarIndexParams {
     const f = this.filters;
     // Don't exclude "unknown" when explicitly viewing it.
@@ -605,7 +624,7 @@ class SessionsStore {
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
-      this.hydratedSessionsByVersion.set(indexVersion, new Map());
+      this.hydratedSessionsByVersion.set(indexVersion, new Set());
       this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
       this.pruneSidebarHydrationVersions(indexVersion);
       const rows = index.sessions.map((row) => sidebarIndexRowToSession(row));
@@ -644,7 +663,7 @@ class SessionsStore {
   // this.sessions outside this set were appended out of position
   // (see loadSidebarPage / loadMore).
   private sidebarIndexIds: Set<string> = new Set();
-  hydratedSessionsByVersion: Map<number, Map<string, Session>> = $state(new Map());
+  hydratedSessionsByVersion: Map<number, Set<string>> = $state(new Map());
 
   private pruneSidebarHydrationVersions(retainVersion: number) {
     for (const version of this.hydratedSessionsByVersion.keys()) {
@@ -666,7 +685,7 @@ class SessionsStore {
 
   async hydrateVisibleSessions(ids: string[], version: number = this.sidebarIndexVersion) {
     const uniqueIds = [...new Set(ids)];
-    const cache = this.hydratedSessionsByVersion.get(version) ?? new Map<string, Session>();
+    const cache = this.hydratedSessionsByVersion.get(version) ?? new Set<string>();
     this.hydratedSessionsByVersion.set(version, cache);
     const inflight =
       this.sidebarHydrationInflightByVersion.get(version) ?? new Map<string, Promise<void>>();
@@ -691,7 +710,7 @@ class SessionsStore {
             ) {
               return;
             }
-            cache.set(id, hydrated);
+            cache.add(id);
             this.details.set(id, { ...this.details.get(id), ...hydrated });
             this.markActiveSessionFound(id);
           } catch (err) {
@@ -735,7 +754,7 @@ class SessionsStore {
 
   private invalidateHydratedSessionDetails() {
     const version = this.sidebarIndexVersion;
-    this.hydratedSessionsByVersion.set(version, new Map());
+    this.hydratedSessionsByVersion.set(version, new Set());
     this.sidebarHydrationInflightByVersion.delete(version);
     this.sidebarHydrationEpochByVersion.set(
       version,
@@ -1011,6 +1030,8 @@ class SessionsStore {
           this.details.set(id, session);
           if (!this.byId.has(id)) {
             this.sessions = [...this.sessions, sidebarIndexRowToSession(session)];
+          } else {
+            this.updateActiveIndex(session);
           }
           this.markActiveSessionFound(id);
         }
@@ -1113,6 +1134,7 @@ class SessionsStore {
       }
       if (this.byId.has(id)) {
         this.details.set(id, { ...this.details.get(id), ...session });
+        this.updateActiveIndex(session);
       }
       this.markActiveSessionFound(id);
     } catch (err) {
