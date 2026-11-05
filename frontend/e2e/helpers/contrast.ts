@@ -22,14 +22,16 @@ export async function useTheme(page: Page, mode: "light" | "dark", highContrast 
  * their ancestors' fills, and translucent text over that result.
  *
  * `foreground` is a CSS color or, by default, the element's own `color`.
- * `opacity` multiplies the text alpha (for SVG fill-opacity and the like).
+ * `background` is a CSS color layered over the element's backdrop (for an
+ * SVG shape behind text). `opacity` multiplies the text alpha (for SVG
+ * fill-opacity and the like).
  */
 export async function renderedContrast(
   locator: Locator,
-  options: { foreground?: string; opacity?: number } = {},
+  options: { foreground?: string; background?: string; opacity?: number } = {},
 ): Promise<Contrast> {
   return locator.evaluate(
-    (element, { foreground, opacity }) => {
+    (element, { foreground, background: backdrop, opacity }) => {
       const canvas = document.createElement("canvas");
       canvas.width = canvas.height = 1;
       const context = canvas.getContext("2d", { willReadFrequently: true })!;
@@ -53,6 +55,7 @@ export async function renderedContrast(
       }
       let background: Rgba = [255, 255, 255, 1];
       for (const layer of layers.reverse()) background = over(layer, background);
+      if (backdrop) background = over(rgba(backdrop), background);
       const text = rgba(foreground ?? getComputedStyle(element).color);
       const ink = over([text[0], text[1], text[2], text[3] * (opacity ?? 1)], background);
       const luminance = (c: Rgba) => {
@@ -71,7 +74,7 @@ export async function renderedContrast(
         ratio: Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100,
       };
     },
-    { foreground: options.foreground, opacity: options.opacity },
+    { foreground: options.foreground, background: options.background, opacity: options.opacity },
   );
 }
 

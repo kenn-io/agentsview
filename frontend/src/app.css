@@ -188,6 +188,12 @@
   --message-role-tint: 14%;
 }
 
+/* High contrast: the folded "Other" tail stays quieter than the named
+   series but still reads as a 3:1 mark against the surface. */
+:root.high-contrast {
+  --usage-series-other: var(--text-muted);
+}
+
 /*
  * Message role colors. Each role has an accent (bar, icon fill), an
  * accent foreground (icon letter), and an ink (label text). Defaults follow
@@ -329,6 +335,12 @@
   background: var(--accent-orange);
 }
 
+/* Light orange is too pale for a 3:1 status mark on white and on tinted
+   rows; step it toward primary ink, keeping the hue. */
+:root:not(.dark) .kit-status-dot.kit-status-dot--unclean {
+  background: color-mix(in srgb, var(--accent-orange) 72%, var(--text-primary));
+}
+
 /* Page toolbars' refresh belongs to its "Updated ..." status: a smaller
    quiet glyph set tight against the text, so it reads as part of that
    label and not as a second copy of the top bar's Refresh button. */
@@ -408,6 +420,11 @@ html:root.dark .kit-popover-card {
   --selected-strong-edge:
     inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 20%, transparent),
     0 1px 2px rgba(0, 0, 0, 0.4); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
+}
+
+/* High contrast keeps its strong default edge on the raised surface. */
+html:root.dark.high-contrast .kit-popover-card {
+  border-color: var(--border-default);
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */

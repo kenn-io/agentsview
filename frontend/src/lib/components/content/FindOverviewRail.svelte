@@ -112,4 +112,8 @@
      in-text frame is the stronger mark. */
   .tick { fill: color-mix(in srgb, var(--accent-amber) 72%, transparent); }
   .tick.current { fill: var(--accent-amber); }
+  /* Light amber is too pale for a 3:1 mark on the track; light ticks step
+     the same hue toward primary ink, the current match furthest. */
+  :global(:root:not(.dark)) .tick { fill: color-mix(in srgb, var(--accent-amber) 75%, var(--text-primary)); }
+  :global(:root:not(.dark)) .tick.current { fill: color-mix(in srgb, var(--accent-amber) 60%, var(--text-primary)); }
 </style>
