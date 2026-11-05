@@ -494,3 +494,34 @@ func TestUsageTimezoneRecencyBreaksStampTies(t *testing.T) {
 		})
 	}
 }
+
+// A resync bulk load suspends the usage generation insert trigger. Usage
+// cached before the load must not let a message inserted before the cached
+// tail during the load be skipped as an append, and the restored trigger must
+// keep catching such inserts afterwards.
+func TestBulkImportRestoresUsageGenerationInvalidation(t *testing.T) {
+	database := testDB(t)
+	const day = "2026-08-10T09:00:00Z"
+	seedLiveWriteSession(t, database, "session", "project", day, 0, 10)
+	appendLiveWriteMessage(t, database, "session", day, 4, 7)
+	require.Equal(t, 17, liveWriteDailyInput(t, database, "project"))
+
+	require.NoError(t, database.DropBulkImportIndexes(t.Context()))
+	appendLiveWriteMessage(t, database, "session", day, 2, 5)
+	seedLiveWriteSession(t, database, "loaded", "project", day, 0, 3)
+	require.NoError(t, database.RebuildBulkImportIndexes(t.Context()))
+	assert.Equal(t, 25, liveWriteDailyInput(t, database, "project"))
+
+	appendLiveWriteMessage(t, database, "session", day, 1, 11)
+	assert.Equal(t, 36, liveWriteDailyInput(t, database, "project"))
+	appendLiveWriteMessage(t, database, "loaded", day, 1, 13)
+	assert.Equal(t, 49, liveWriteDailyInput(t, database, "project"))
+
+	// Append reuse needs a generation; a session created during the load has
+	// none until the rebuild assigns one.
+	var missing int
+	require.NoError(t, database.getReader().QueryRow(t.Context(),
+		`SELECT count(*) FROM sessions WHERE usage_generation IS NULL`,
+	).Scan(&missing))
+	assert.Zero(t, missing)
+}
