@@ -414,9 +414,8 @@ func applyCustomPricing(database *db.DB, cfg config.Config) {
 // Decision tree:
 //  1. If the stored data version is stale (parser changes on
 //     upgrade), run a full resync.
-//  2. If a server process is active (via kit runtime record), trust
-//     its file watcher and skip on-demand sync. This avoids
-//     duplicate work and write contention.
+//  2. If a server process is active (via kit runtime record), wake
+//     it through the API and wait for its bounded catch-up.
 //  3. Otherwise, run a quick incremental sync scoped to files
 //     modified since the last recorded sync start time, with
 //     a small safety margin.
@@ -463,12 +462,14 @@ func ensureFreshData(
 		return
 	}
 
-	// Skip on-demand sync only when a writable local daemon is
-	// already keeping the SQLite archive fresh. pg serve daemons
-	// (read-only) do not sync the local DB, so we still want to
-	// run our own sync when only one of those is present.
+	// A non-probe API read wakes idle ingestion and waits for the same
+	// catch-up as other readers. Read-only daemons don't sync this archive.
 	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
-		return
+		if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
+			if _, err := fetchHTTPProjects(ctx, transportFromRuntime(rt), appCfg.AuthToken, false, false); err == nil {
+				return
+			}
+		}
 	}
 
 	engine := sync.NewEngine(ctx, database, sync.EngineConfig{

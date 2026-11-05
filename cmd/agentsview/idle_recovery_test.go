@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +24,65 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
+
+func TestIdleDirectReadWakesDaemon(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	cfg := config.Config{DataDir: t.TempDir(), Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	writeReloadGeminiSession(t, root, "overnight")
+	require.False(t, sessionImported(t, database, "gemini:overnight"))
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
+	ep := serverEndpoint(t, ts)
+	_, err := WriteDaemonRuntime(cfg.DataDir, ep.Host, ep.Port, "test", false)
+	require.NoError(t, err)
+	require.True(t, IsLocalDaemonActive(cfg.DataDir))
+
+	ensureFreshData(t.Context(), cfg, database, false)
+
+	assert.True(t, ingestion.Active(), "the direct reader wakes daemon collection")
+	messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "hello from overnight", messages[0].Content)
+}
+
+func TestIdleDirectReadFallsBackAfterDaemonRequestFails(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	cfg := config.Config{DataDir: t.TempDir(), Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	var reads atomic.Int64
+	ts := httptest.NewUnstartedServer(nil)
+	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+	daemon := server.New(cfg, database, nil).Handler()
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/projects" {
+			reads.Add(1)
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		daemon.ServeHTTP(w, r)
+	})
+	ts.Start()
+	t.Cleanup(ts.Close)
+	_, err := WriteDaemonRuntime(cfg.DataDir, cfg.Host, cfg.Port, "test", false)
+	require.NoError(t, err)
+	writeReloadGeminiSession(t, root, "overnight")
+
+	ensureFreshData(t.Context(), cfg, database, false)
+
+	assert.Equal(t, int64(1), reads.Load())
+	messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "hello from overnight", messages[0].Content)
+}
 
 func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {

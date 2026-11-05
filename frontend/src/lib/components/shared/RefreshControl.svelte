@@ -52,7 +52,6 @@
     querySteps = [],
     liveQuery = undefined,
     lastUpdatedAt,
-    onRefresh,
     ...rest
   }: Props = $props();
 
@@ -141,7 +140,6 @@
 
 <KitRefreshControl
   {...rest}
-  onRefresh={() => { if (!document.hidden) return onRefresh(); }}
   lastUpdatedAt={status === undefined ? lastUpdatedAt : null}
   formatAge={status === undefined
     ? (at, now) => formatRefreshStatus(at, durationMs, now)

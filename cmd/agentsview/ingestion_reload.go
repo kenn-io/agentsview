@@ -111,6 +111,7 @@ func (d *daemonIngestion) QueueWatchRetry(batch agentsync.WatchBatch) {
 	d.mu.Lock()
 	watchers := d.watchers
 	d.mu.Unlock()
+	// The wake full pass covers batches dropped while collection is suspended.
 	if watchers != nil {
 		watchers.queueRetry(batch)
 	}
