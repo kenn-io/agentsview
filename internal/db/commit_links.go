@@ -289,8 +289,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || strings.Count(call.input, "tools.") == 1)
 		if singlePoll {
 			var ok bool
-			singleOwner, ok = pending[pollIDs[0]]
-			if !ok {
+			if singleOwner, ok = pending[pollIDs[0]]; !ok {
 				continue
 			}
 			delete(pending, pollIDs[0])
@@ -308,11 +307,10 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				if !isCommit && !slices.Contains(pollIDs, pollID) {
 					continue
 				}
-				original, ok := pending[pollID]
-				if !ok {
+				var ok bool
+				if owner, ok = pending[pollID]; !ok {
 					continue
 				}
-				owner = original
 			}
 			for _, match := range commitSummaryRE.FindAllStringSubmatch(output.text, -1) {
 				if seen[match[2]] {
