@@ -42,8 +42,9 @@
   --accent-teal: #0d9488; /* kit-ui-check-ignore: app token definition */
   /* Deliberate override: kit-ui's light --text-muted (#878ea0) is about
      3.3:1 on white, too faint for the metadata agentsview leans on. This
-     value clears 4.5:1 on the surface and the page background. */
-  --text-muted: #656b7d; /* kit-ui-check-ignore: app token override, upstream later */
+     value is 6.1:1 on the surface, 5.6:1 on the page background, and 5.2:1
+     on inset fills, while staying a step lighter than --text-secondary. */
+  --text-muted: #5c6274; /* kit-ui-check-ignore: app token override, upstream later */
   /* Extra identity accents beyond kit-ui's core set */
   --accent-rose: #e11d48; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */

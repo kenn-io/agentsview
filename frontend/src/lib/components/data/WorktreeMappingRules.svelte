@@ -19,6 +19,8 @@
   import { formatDateTime, m } from "../../i18n/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { LockIcon } from "../../icons.js";
+  import StateNotice from "../shared/StateNotice.svelte";
 
   interface Props {
     readOnly?: boolean;
@@ -343,7 +345,7 @@
   {:else if error && machine === ""}
     <div class="error-text">{error}</div>
   {:else}
-    <div class="machine-row">
+    <div class="machine-field">
       <span class="label">{m.worktree_machine()}</span>
       <Typeahead
         options={machineOptions}
@@ -432,7 +434,11 @@
     </div>
 
     {#if readOnly}
-      <p class="warning" role="note">{m.data_rules_read_only()}</p>
+      <StateNotice role="note" description={m.data_rules_read_only()}>
+        {#snippet icon()}
+          <LockIcon size="16" strokeWidth="2" />
+        {/snippet}
+      </StateNotice>
     {:else}
       <div class="form-grid">
         <div class="field">
@@ -543,18 +549,20 @@
     gap: 4px;
   }
 
+  /* Section heading under the page title. */
   h3 {
     margin: 0;
-    font-size: 13px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
   }
 
   .description {
     margin: 0;
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 13px;
   }
 
-  .machine-row,
   .button-row,
   .row-actions {
     display: flex;
@@ -562,9 +570,23 @@
     gap: 8px;
   }
 
-  .machine-row {
-    justify-content: space-between;
-    font-size: 12px;
+  /* Label above the control, as in the Recall scope fields. The machine is
+     an opaque ID, so it reads in monospace and truncates. */
+  .machine-field {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+    --typeahead-min-width: 240px;
+    --typeahead-max-width: 320px;
+  }
+
+  .machine-field :global(.kit-typeahead) {
+    width: 100%;
+  }
+
+  .machine-field :global(.kit-typeahead__value-text) {
+    font-family: var(--font-mono);
   }
 
   .label,
@@ -624,10 +646,14 @@
 
   .derived-label,
   .hint,
-  .muted,
-  .empty {
+  .muted {
     color: var(--text-muted);
     font-size: 11px;
+  }
+
+  .empty {
+    color: var(--text-secondary);
+    font-size: 13px;
   }
 
   .link-btn {
@@ -660,12 +686,6 @@
     flex-direction: column;
     align-items: stretch;
     gap: 4px;
-  }
-
-  .warning {
-    margin: 0;
-    color: var(--accent-orange);
-    font-size: 12px;
   }
 
   .error-text,

@@ -45,8 +45,11 @@
       .filter((p) => p.name !== "")
       .map((p) => ({
         name: p.name,
-        label: `${p.name} (${formatCount(p.session_count)})`,
+        label: p.name,
         displayLabel: p.name,
+        // The count sits in the trailing meta lane, so a long name
+        // truncates before its count instead of pushing it out of view.
+        meta: formatCount(p.session_count),
         count: p.session_count,
       }));
     return includeAll ? [allOption, ...items] : items;

@@ -107,7 +107,7 @@ test.describe("Scrollbar layout", () => {
     await page.goto("/pinned");
 
     const scroller = page.locator(".page-scroll");
-    const heading = page.getByRole("heading", { name: "Pinned Messages" });
+    const heading = page.getByRole("heading", { name: "Pinned messages" });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
     const before = await leftEdge(heading);
@@ -128,7 +128,7 @@ test.describe("Scrollbar layout", () => {
     await page.goto("/recent-edits");
 
     const scroller = page.locator(".page-scroll");
-    const heading = page.getByRole("heading", { name: "Recent Edits" });
+    const heading = page.getByRole("heading", { name: "Recent edits" });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
     const before = await leftEdge(heading);

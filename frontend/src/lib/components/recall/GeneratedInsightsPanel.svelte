@@ -27,6 +27,8 @@
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
+  import StateNotice from "../shared/StateNotice.svelte";
+  import { InfoIcon } from "../../icons.js";
   import ToolEffectivenessReport from "./ToolEffectivenessReport.svelte";
   import {
     resolveRange,
@@ -382,10 +384,14 @@
       {m.insights_page_loading_archive()}
     </Card>
   {:else if insights.items.length === 0 && insights.tasks.length === 0}
-    <Card level="default" class="archive-state">
-      <strong>{m.insights_page_no_generated_saved()}</strong>
-      <span>{m.insights_page_no_generated_hint()}</span>
-    </Card>
+    <StateNotice
+      title={m.insights_page_no_generated_saved()}
+      description={m.insights_page_no_generated_hint()}
+    >
+      {#snippet icon()}
+        <InfoIcon size="16" strokeWidth="2" />
+      {/snippet}
+    </StateNotice>
   {:else}
     <div class="generated-layout">
       <div class="generated-list" aria-label={m.recall_generated_archive_label()}>
@@ -536,19 +542,21 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: 1rem 1.5rem 1.5rem;
+    padding: 0.5rem 1.5rem 1.5rem;
   }
 
+  /* Section heading under the Recall page title. */
   .generated-heading h2 {
     margin: 0;
     color: var(--text-primary);
-    font-size: 1rem;
+    font-size: 14px;
+    font-weight: 600;
   }
 
   .generated-heading p {
     margin: 0.25rem 0 0;
     color: var(--text-secondary);
-    font-size: 0.82rem;
+    font-size: 13px;
   }
 
   .scope-grid {
