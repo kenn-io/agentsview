@@ -240,6 +240,17 @@
   --role-code-frame-style: solid;
 }
 
+/* Settings > Appearance > Reading width widens the shared column. Full uses
+   100%, which each consumer resolves against its own box, so the column
+   fills the pane up to that consumer's normal gutters. */
+:root[data-reading-width="wider"] {
+  --reading-column: 1120px;
+}
+
+:root[data-reading-width="full"] {
+  --reading-column: 100%;
+}
+
 :root[data-message-role-patterns] {
   --role-user-bar-width: 4px;
   --role-assistant-bar-style: double;
