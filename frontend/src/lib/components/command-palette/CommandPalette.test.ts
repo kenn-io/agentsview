@@ -583,7 +583,10 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
 
-    expect(document.querySelector(".palette-empty")?.textContent).toContain("Searching");
+    const loading = document.querySelector(".palette-loading");
+    expect(loading?.getAttribute("role")).toBe("status");
+    expect(loading?.textContent).toContain("Searching");
+    expect(loading?.querySelectorAll(".skeleton-row").length).toBeGreaterThan(0);
     expect(document.querySelector(".palette-error")).toBeNull();
     expect(document.querySelector(".palette-item")).toBeNull();
 
