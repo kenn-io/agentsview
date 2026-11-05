@@ -299,6 +299,17 @@
     color: var(--text-muted);
   }
 
+  /* Phones put the trigger in the top bar beside its actions, where the
+     reserved label width pushed them off screen. There the trigger shows
+     only its icon, filter dot, and chevron; the tooltip and accessible
+     name still carry the label. Matches the 760px mobile layout query. */
+  @media (max-width: 760px) {
+    .view-trigger-sizer,
+    .view-trigger-text {
+      display: none;
+    }
+  }
+
   :global(.view-trigger) :global(svg) {
     flex-shrink: 0;
   }
