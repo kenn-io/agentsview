@@ -158,6 +158,11 @@ func commitCommandText(input string) string {
 		if len(args) == 3 && slices.Contains([]string{"sh", "bash", "zsh"}, args[0]) && slices.Contains([]string{"-c", "-lc"}, args[1]) {
 			return args[2]
 		}
+		for i, arg := range args {
+			if arg == "" || strings.ContainsAny(arg, " \t\n\r\f\v;&|\"'") {
+				args[i] = strconv.Quote(arg)
+			}
+		}
 		return strings.Join(args, " ")
 	}
 	command := signals.CommandText(input)

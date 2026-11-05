@@ -83,6 +83,7 @@ func TestCommitLinksParsing(t *testing.T) {
 	for _, input := range []string{
 		`{"command":["bash","-lc","git commit -m fix"]}`,
 		`{"command":["git","commit","-m","fix"]}`,
+		`{"command":["git","-C","/path with spaces","commit","-m","x"]}`,
 	} {
 		t.Run(input, func(t *testing.T) {
 			d := testDB(t)
