@@ -5,7 +5,6 @@ package db
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,27 +175,41 @@ func TestDailyUsageFactsDoesNotDeduplicateSourceUUIDWithoutAgent(t *testing.T) {
 }
 
 func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
-	database := openDailyUsageFixtureDB(t)
-	var prepares atomic.Int32
-	database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
-	ctx := WithUsageWindowMemo(t.Context())
-	filters := []UsageFilter{
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago"},
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Model: "model-a"},
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Project: "proj-a"},
+	for _, readOnly := range []bool{false, true} {
+		name := "writable"
+		if readOnly {
+			name = "read-only"
+		}
+		t.Run(name, func(t *testing.T) {
+			database := openDailyUsageFixtureDB(t)
+			if readOnly {
+				reader, err := OpenReadOnly(t.Context(), database.path)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				database = reader
+			}
+			var prepares atomic.Int32
+			database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+			ctx := WithUsageWindowMemo(t.Context())
+			filters := []UsageFilter{
+				{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago"},
+				{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Model: "model-a"},
+				{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Project: "proj-a"},
+			}
+			for _, filter := range filters {
+				want := getDailyUsageLegacyForRollupTest(t, database, filter)
+				got, err := database.GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				assert.Equal(t, want, got)
+			}
+			want, err := database.getTopSessionsByCostLegacy(t.Context(), filters[0], 3)
+			require.NoError(t, err)
+			got, err := database.GetTopSessionsByCost(ctx, filters[0], 3)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.Equal(t, int32(3), prepares.Load())
+		})
 	}
-	for _, filter := range filters {
-		want := getDailyUsageLegacyForRollupTest(t, database, filter)
-		got, err := database.GetDailyUsage(ctx, filter)
-		require.NoError(t, err)
-		assert.Equal(t, want, got)
-	}
-	want, err := database.getTopSessionsByCostLegacy(t.Context(), filters[0], 3)
-	require.NoError(t, err)
-	got, err := database.GetTopSessionsByCost(ctx, filters[0], 3)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-	assert.Equal(t, int32(3), prepares.Load())
 }
 
 func TestUsageWindowMemoKeepsIntegerFiltersDistinct(t *testing.T) {
@@ -412,7 +425,75 @@ func TestConcurrentUsageReadsCancelAbandonedWindow(t *testing.T) {
 
 func usageFlightKeyForTest(t *testing.T, database *DB, filter UsageFilter) string {
 	t.Helper()
-	return usageWindowKey(filter, usageQueryKindToken, usageCursorIncluded(filter)) + "|" + fmt.Sprintf("%d", database.archiveCommits.Load())
+	return database.usageFlightKey(usageWindowKey(filter, usageQueryKindToken, usageCursorIncluded(filter)))
+}
+
+func TestConcurrentUsageReadsSeeCommitsAfterWriterHandoff(t *testing.T) {
+	for _, mode := range []string{"reopen", "reopen writer", "read-only", "closed writer"} {
+		t.Run(mode, func(t *testing.T) {
+			writer := testDB(t)
+			seedLiveWriteSession(t, writer, "first", "project", "2026-08-10T09:00:00Z", 0, 10)
+			database := writer
+			switch mode {
+			case "reopen":
+				require.NoError(t, writer.Reopen())
+			case "reopen writer":
+				require.NoError(t, writer.CloseWriter())
+				require.NoError(t, writer.ReopenWriter())
+			case "read-only":
+				reader, err := OpenReadOnly(t.Context(), writer.path)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				database = reader
+			case "closed writer":
+				require.NoError(t, database.CloseWriter())
+				external, err := OpenPreparedTestDB(database.path)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, external.Close()) })
+				writer = external
+			}
+			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+			require.Equal(t, 10, getDailyUsageLegacyForRollupTest(t, database, filter).Totals.InputTokens)
+			snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+			require.NoError(t, err)
+			cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+			require.NoError(t, err)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			var prepares, ensures atomic.Int32
+			database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+			// Hold the first preparation after its archive snapshot was captured.
+			cache.rollup.observer.beforeEnsure = func() {
+				if ensures.Add(1) == 1 {
+					close(entered)
+					<-release
+				}
+			}
+			type result struct {
+				daily DailyUsageResult
+				err   error
+			}
+			first, second := make(chan result, 1), make(chan result, 1)
+			read := func(done chan<- result) {
+				daily, err := database.GetDailyUsage(t.Context(), filter)
+				done <- result{daily, err}
+			}
+			go read(first)
+			<-entered
+			seedLiveWriteSession(t, writer, "second", "project", "2026-08-10T09:00:00Z", 0, 7)
+			go read(second)
+			assert.Eventually(t, func() bool { return prepares.Load() == 2 }, 10*time.Second, time.Millisecond)
+			unblock()
+			old, fresh := <-first, <-second
+			require.NoError(t, old.err)
+			require.NoError(t, fresh.err)
+			assert.Equal(t, 10, old.daily.Totals.InputTokens)
+			assert.Equal(t, 17, fresh.daily.Totals.InputTokens)
+			assert.Equal(t, getDailyUsageLegacyForRollupTest(t, writer, filter), fresh.daily)
+		})
+	}
 }
 
 func applyUsageArchiveChange(t *testing.T, database *DB, change string) {
@@ -461,4 +542,9 @@ func TestArchiveCommitCountAdvancesOnCommitOnly(t *testing.T) {
 	before = database.archiveCommits.Load()
 	applyUsageArchiveChange(t, database, "session project")
 	assert.Greater(t, database.archiveCommits.Load(), before, "the reopened writer must retain commit tracking")
+	require.NoError(t, database.CloseWriter())
+	require.NoError(t, database.ReopenWriter())
+	before = database.archiveCommits.Load()
+	applyUsageArchiveChange(t, database, "session project")
+	assert.Greater(t, database.archiveCommits.Load(), before, "writer handoff must retain commit tracking")
 }

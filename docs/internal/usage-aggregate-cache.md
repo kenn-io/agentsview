@@ -118,6 +118,10 @@ joiner therefore sees archive data at least as recent as its own capture would.
 Each request reads rollups with its own filter. Cache retirement or a changed
 install triggers a fresh capture that bypasses the shared result.
 
+Handles without an open archive writer prepare independently across requests,
+since they cannot track another writer's commits. Pairwise still reuses prepared
+windows within its request.
+
 The pricing generation uses the canonical, order-independent effective-pricing
 digest. Daily rows also retain the resolved per-model rate hash. Pricing changes
 therefore invalidate the appropriate derived data without relying on a

@@ -41,6 +41,12 @@ type archiveWriterConnector struct {
 	commits *atomic.Uint64
 }
 
+func openArchiveWriter(path string, commits *atomic.Uint64) *sql.DB {
+	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(path, false), commits: commits})
+	writer.SetMaxOpenConns(1)
+	return writer
+}
+
 func (c *archiveWriterConnector) Driver() driver.Driver { return archiveSQLiteDriver }
 
 func (c *archiveWriterConnector) Connect(context.Context) (driver.Conn, error) {

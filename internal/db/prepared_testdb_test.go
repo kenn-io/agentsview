@@ -12,8 +12,7 @@ import (
 // test-only so production code cannot bypass the normal open/migration path.
 func OpenPreparedTestDB(path string) (*DB, error) {
 	commits := new(atomic.Uint64)
-	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(path, false), commits: commits})
-	writer.SetMaxOpenConns(1)
+	writer := openArchiveWriter(path, commits)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("configuring prepared test wal: %w", err)

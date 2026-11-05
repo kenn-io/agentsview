@@ -97,16 +97,28 @@ func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string
 	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%#v", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
 }
 
+func (db *DB) usageFlightKey(key string) string {
+	return fmt.Sprintf("%s|%d", key, db.archiveCommits.Load())
+}
+
 func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
 	key := usageWindowKey(filter, kind, cursor)
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
 	if prepared, ok := memo.get(key); ok {
 		return prepared, nil
 	}
-	flightKey := key + "|" + fmt.Sprintf("%d", db.archiveCommits.Load())
-	prepared, err := db.usageWindows.Do(ctx, flightKey, func(ctx context.Context) (usagePreparedWindow, error) {
+	prepare := func(ctx context.Context) (usagePreparedWindow, error) {
 		return db.prepareUsageWindow(ctx, filter, kind, cursor, nil)
-	})
+	}
+	var prepared usagePreparedWindow
+	var err error
+	// Without a writer hook, other processes can commit unseen by this handle.
+	// Keep request memoization, but capture independently across requests.
+	if db.writer.Load() == nil {
+		prepared, err = prepare(ctx)
+	} else {
+		prepared, err = db.usageWindows.Do(ctx, db.usageFlightKey(key), prepare)
+	}
 	if err == nil {
 		memo.put(key, prepared)
 	}

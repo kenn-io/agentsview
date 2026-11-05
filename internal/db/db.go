@@ -4780,8 +4780,7 @@ func openAndInit(
 		return nil, err
 	}
 	commits := new(atomic.Uint64)
-	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(path, false), commits: commits})
-	writer.SetMaxOpenConns(1)
+	writer := openArchiveWriter(path, commits)
 	if err := configureWALContext(ctx, writer); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("configuring wal: %w", err)
@@ -5554,8 +5553,7 @@ func (db *DB) reopenLocked() error {
 // barrier kept up so no write can land before the replacement commits; every
 // other caller clears the barrier.
 func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
-	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(db.path, false), commits: db.archiveCommits})
-	writer.SetMaxOpenConns(1)
+	writer := openArchiveWriter(db.path, db.archiveCommits)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
@@ -5682,11 +5680,7 @@ func (db *DB) ReopenWriter() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(db.path, false))
-	if err != nil {
-		return fmt.Errorf("reopening writer: %w", err)
-	}
-	writer.SetMaxOpenConns(1)
+	writer := openArchiveWriter(db.path, db.archiveCommits)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
