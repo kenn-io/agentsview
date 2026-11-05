@@ -181,7 +181,10 @@ func (s *embedScheduler) run(
 	// be silently deferred until the next backstop tick (24h by default)
 	// instead of retrying on the debounce interval. It is read and written only
 	// from this single goroutine, so it needs no synchronization of its own.
-	var pendingBackstop bool
+	// A battery marker left by an earlier daemon does not record whether the
+	// deferred work was a backstop, so its replay is a full reconciliation.
+	_, markerErr := os.Stat(s.batteryDeferredPath)
+	pendingBackstop := s.batteryDeferredPath != "" && markerErr == nil
 	var pendingRelease func()
 	var buildErrorRetries int
 	defer func() {
