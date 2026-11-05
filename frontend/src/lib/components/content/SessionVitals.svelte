@@ -466,7 +466,7 @@
                 {displayToolName(slowest)} · {formatDuration(slowest.duration_ms ?? 0)}
               </button>
             {:else}
-              <div class="val slow">—</div>
+              <div class="val empty">—</div>
             {/if}
           </div>
           <div>
@@ -985,6 +985,7 @@
     font-variant-numeric: tabular-nums;
   }
   .stat-grid .val.slow { color: var(--slow-fg); }
+  .stat-grid .val.empty { color: var(--text-muted); }
   .stat-grid .val-link {
     background: transparent;
     border: 0;

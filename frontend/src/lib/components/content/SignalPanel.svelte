@@ -162,7 +162,6 @@
   }
   .no-signal-note {
     color: var(--text-muted);
-    font-style: italic;
   }
   .grade-large {
     font-size: 20px;
@@ -217,7 +216,6 @@
   }
   .no-penalties {
     color: var(--text-muted);
-    font-style: italic;
   }
   .penalties-row {
     display: flex;

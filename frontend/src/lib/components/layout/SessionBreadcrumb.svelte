@@ -1320,9 +1320,7 @@
       {/if}
       <button
         class="grade-badge"
-        style:background={gradeStyle.bg}
-        style:color={gradeStyle.text}
-        style:border-color={gradeStyle.border}
+        style:--grade-ink={gradeStyle.text}
         onclick={() => ui.toggleSignalPanel()}
         title={m.session_breadcrumb_session_health_and_tool_sequences()}
         aria-expanded={ui.signalPanelOpen}
@@ -1683,6 +1681,7 @@
     flex-shrink: 0;
   }
 
+  /* An outlined text chip, so the grade does not read as a role avatar. */
   .grade-badge {
     display: inline-flex;
     align-items: center;
@@ -1690,13 +1689,15 @@
     border-radius: 4px;
     font-size: 11px;
     font-weight: 700;
-    border: 1px solid;
+    background: transparent;
+    border: 1px solid var(--border-default);
+    color: color-mix(in srgb, var(--grade-ink) 62%, var(--text-primary));
     cursor: pointer;
     line-height: 1.4;
   }
 
   .grade-badge:hover {
-    opacity: 0.85;
+    background: var(--bg-surface-hover);
   }
 
   .open-group {

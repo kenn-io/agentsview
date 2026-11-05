@@ -136,7 +136,6 @@
   .findings-state {
     margin: 0;
     color: var(--text-muted);
-    font-style: italic;
   }
   .findings-list {
     max-height: 240px;

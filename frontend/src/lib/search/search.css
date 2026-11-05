@@ -8,7 +8,8 @@
   color: var(--bg-primary, #111827);
 }
 
+/* A quiet frame marks the current block; the match highlight leads. */
 [data-search-current="true"] {
-  outline: 2px solid var(--accent-amber, #d29922);
-  outline-offset: -2px;
+  outline: 1px solid color-mix(in srgb, var(--accent-amber, #d29922) 45%, transparent);
+  outline-offset: -1px;
 }

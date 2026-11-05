@@ -364,6 +364,10 @@
   .tool-content { padding: 8px 14px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); line-height: 1.5; overflow-x: auto; border-top: 1px solid var(--border-muted); }
   .tool-command { background: var(--code-bg); color: var(--code-text); }
   .tool-command code { font-family: inherit; }
+  /* The command highlighter's palette is built for a dark surface. In the
+     light theme the command sits on the tool surface in plain ink instead. */
+  :global(:root:not(.dark)) .tool-command { background: color-mix(in srgb, var(--text-primary) 3%, var(--tool-bg)); color: var(--text-primary); }
+  :global(:root:not(.dark)) .tool-command code :global(span) { color: inherit !important; font-style: normal !important; }
   .output-header {
     display: flex; align-items: center; gap: 6px; padding: 5px 10px; width: 100%; text-align: left;
     font-size: 12px; color: var(--text-secondary); min-width: 0; transition: background 0.1s; user-select: text; flex: 1 1 auto;
