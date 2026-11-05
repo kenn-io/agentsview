@@ -355,6 +355,12 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	var dates []string
 	if includeDate {
+		start, startErr := time.Parse(time.DateOnly, f.From)
+		end, endErr := time.Parse(time.DateOnly, f.To)
+		if startErr != nil || endErr != nil || end.Sub(start) > 90*24*time.Hour {
+			// Wide windows keep the scan plan instead of fetching rows through the date index.
+			dateCol = "+" + strings.TrimPrefix(dateCol, "+")
+		}
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
 	}

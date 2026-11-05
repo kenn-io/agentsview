@@ -5282,14 +5282,33 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 func TestAnalyticsDateWindowPlan(t *testing.T) {
 	d := testDB(t)
 	seedAnalyticsData(t, d)
-	for _, tc := range []struct{ name, table, date, index string }{
-		{"short", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "idx_sessions_effective_start"},
-		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "idx_sessions_effective_start"},
+	for _, tc := range []struct {
+		name, from, to string
+		indexed        bool
+	}{
+		{"2-day", "2024-06-01", "2024-06-03", true},
+		{"90-day", "2024-06-01", "2024-08-30", true},
+		{"91-day", "2024-06-01", "2024-08-31", false},
+		{"year", "2024-01-01", "2025-01-01", false},
+		{"from-only", "2024-06-01", "", false},
+		{"to-only", "", "2024-06-03", false},
+		{"all-time", "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := baseFilter()
-			where, args := f.buildWhere(tc.date)
-			assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...), tc.index)
+			f.From, f.To = tc.from, tc.to
+			for _, table := range []struct{ name, date string }{
+				{"sessions", "COALESCE(NULLIF(started_at, ''), created_at)"},
+				{"sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)"},
+			} {
+				where, args := f.buildWhere(table.date)
+				plan := queryPlanOf(t, d, "SELECT id FROM "+table.name+" WHERE "+where, args...)
+				if tc.indexed {
+					assert.Contains(t, plan, "idx_sessions_effective_start")
+				} else {
+					assert.NotContains(t, plan, "idx_sessions_effective_start")
+				}
+			}
 		})
 	}
 }
