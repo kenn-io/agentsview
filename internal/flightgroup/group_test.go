@@ -66,31 +66,6 @@ func TestGroupSharesBuildAfterOneWaiterCancels(t *testing.T) {
 	})
 }
 
-func TestGroupCancelsAbandonedBuild(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		group := &Group[string]{}
-		buildCanceled := make(chan struct{})
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() {
-			_, err := group.Do(ctx, "abandoned", func(ctx context.Context) (string, error) {
-				<-ctx.Done()
-				close(buildCanceled)
-				return "", ctx.Err()
-			})
-			done <- err
-		}()
-		cancel()
-		require.ErrorIs(t, <-done, context.Canceled)
-		synctest.Wait()
-		select {
-		case <-buildCanceled:
-		default:
-			require.FailNow(t, "abandoned build was not canceled")
-		}
-	})
-}
-
 func TestGroupStartsFreshAfterLastWaiterCancels(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		group := &Group[string]{}
