@@ -342,10 +342,11 @@ func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 			require.NoError(t, err)
 			snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
 			require.NoError(t, err)
+			// The archive now has different prices before the pass starts building.
+			require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 			var once atomic.Bool
 			cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
 				if once.CompareAndSwap(false, true) {
-					require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 					if revert {
 						require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}}}))
 					}
@@ -354,12 +355,15 @@ func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 			zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
 			require.NoError(t, err)
 			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
-			prepared, ok, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
+			require.True(t, once.Load(), "the pass must build before the catalog can revert")
+			var capturedCost int64
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(d.estimated_cost_microdollars)
+                FROM usage_daily_rollups d JOIN usage_rollup_installs i ON i.id=d.rollup_install_id
+                WHERE i.session_id='session' AND i.timezone_id=?`, zone.id).Scan(&capturedCost))
+			assert.EqualValues(t, 100, capturedCost)
+			_, ok, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
 			require.NoError(t, err)
-			if !revert {
-				assert.False(t, ok)
-				assert.False(t, prepared.journaled)
-			}
+			assert.Equal(t, revert, ok, "only the reverted catalog can use the journaled result")
 			require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 			assertJournaledUsageLegacy(t, database, filter)
 			got, err := database.GetDailyUsage(t.Context(), filter)
@@ -399,12 +403,28 @@ func TestUsageJournaledPassRejectsForeignCatalog(t *testing.T) {
 	cache := warmJournaledUsage(t, database, filter)
 	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
 	require.NoError(t, err)
+	// Rebuild an evicted install without advancing the zone claim. The pass
+	// captures an install sequence newer than that claim's boundary.
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs`)
+	require.NoError(t, err)
+	fills, err := cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills, export.NewPricingResolver(snapshot.PricingRows))
+	require.NoError(t, err)
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
 	require.NoError(t, err)
 	other, err := OpenIsolatedContext(t.Context(), database.Path())
 	require.NoError(t, err)
 	other.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: 3_000_000}})
-	_, err = other.GetDailyUsage(t.Context(), filter)
+	// Install the peer's catalog without making its own zone claim, so the
+	// old pass still matches the compare-and-set and must hit the catalog guard.
+	foreign, err := other.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	peerCache, err := other.usageCache.Generation(t.Context(), foreign.DatabaseID)
+	require.NoError(t, err)
+	peerFills, err := peerCache.fill.Ensure(t.Context(), foreign.Versions, 0)
+	require.NoError(t, err)
+	_, _, err = peerCache.rollup.Ensure(t.Context(), foreign, peerFills, export.NewPricingResolver(foreign.PricingRows))
 	require.NoError(t, err)
 	require.NoError(t, other.Close())
 	// The old pass reuses its captured catalog; a foreign install after its
@@ -412,27 +432,37 @@ func TestUsageJournaledPassRejectsForeignCatalog(t *testing.T) {
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
 	catalog, err := usagePricingIdentity(snapshot.PricingRows)
 	require.NoError(t, err)
+	var beforePricing string
+	var beforeInstallRevision int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT change_pricing, change_install_revision FROM usage_rollup_timezones WHERE timezone_key=?`, identity.Key).Scan(&beforePricing, &beforeInstallRevision))
+	require.NotEqual(t, zone.installSeq, beforeInstallRevision, "an old pass would move the claim boundary")
+	var foreignInstalls int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE timezone_id=? AND install_revision>=? AND source_pricing<>?`, zone.id, zone.installSeq, catalog).Scan(&foreignInstalls))
+	require.Positive(t, foreignInstalls)
 	require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, catalog))
-	prepared, ok, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
+	var afterPricing string
+	var afterInstallRevision int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT change_pricing, change_install_revision FROM usage_rollup_timezones WHERE timezone_key=?`, identity.Key).Scan(&afterPricing, &afterInstallRevision))
+	assert.Equal(t, beforePricing, afterPricing)
+	assert.Equal(t, beforeInstallRevision, afterInstallRevision)
+	_, ok, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
 	require.NoError(t, err)
 	assert.False(t, ok)
-	assert.False(t, prepared.journaled)
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 	assertJournaledUsageLegacy(t, database, filter)
 }
 
-func TestUsageJournaledTopMetadata(t *testing.T) {
-	database := openDailyUsageFixtureDB(t)
-	filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
-	warmJournaledUsage(t, database, filter)
-	want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
-	require.NoError(t, err)
-	got, err := database.GetTopSessionsByCost(t.Context(), filter, 3)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-}
-
 func TestUsageJournaledTopSharesSummary(t *testing.T) {
+	t.Run("metadata", func(t *testing.T) {
+		database := openDailyUsageFixtureDB(t)
+		filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
+		warmJournaledUsage(t, database, filter)
+		want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
+		require.NoError(t, err)
+		got, err := database.GetTopSessionsByCost(t.Context(), filter, 3)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	})
 	for _, topFirst := range []bool{false, true} {
 		t.Run(fmt.Sprint(topFirst), func(t *testing.T) {
 			database := openDailyUsageFixtureDB(t)
@@ -451,8 +481,11 @@ func TestUsageJournaledTopSharesSummary(t *testing.T) {
 			if topFirst {
 				readTop()
 			}
-			_, err := database.GetDailyUsage(ctx, filter)
+			want, err := database.getDailyUsageLegacy(t.Context(), filter)
 			require.NoError(t, err)
+			got, err := database.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
 			readTop()
 			assert.EqualValues(t, 1, prepares.Load())
 		})
@@ -532,6 +565,10 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id='original'`).Scan(&remaining))
 			require.Zero(t, remaining)
 			resume()
+			coverage, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
+			require.NoError(t, err)
+			require.True(t, coverage.revision.Valid)
+			assert.LessOrEqual(t, coverage.revision.Int64, delayed.ChangeRevision, "replay changes after the delayed snapshot")
 			// Each consumer must repair the date without another consumer warming it.
 			for range 2 {
 				switch consumer {
@@ -561,32 +598,41 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 
 func TestUsageJournaledConcurrentWriter(t *testing.T) {
 	database := testDB(t)
-	for i := range 30 {
+	seedJournaledUsage(t, database, "session")
+	for i := range 29 {
 		seedJournaledUsage(t, database, fmt.Sprintf("session-%02d", i))
 	}
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC", SkipSessionCounts: true}
 	warmJournaledUsage(t, database, filter)
-	ctx, cancel := context.WithCancel(t.Context())
-	writerDone := make(chan error, 1)
+	other, err := OpenIsolatedContext(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	writes, results, done := make(chan int), make(chan error), make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(3 * time.Millisecond)
-		defer ticker.Stop()
-		for ordinal := 1; ; ordinal++ {
-			select {
-			case <-ctx.Done():
-				writerDone <- nil
-				return
-			case <-ticker.C:
-				// Let an in-flight write finish before joining the writer.
-				err := database.InsertMessages(context.WithoutCancel(t.Context()), []Message{{SessionID: "session-00", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}})
-				if err != nil {
-					writerDone <- err
-					return
-				}
+		defer close(done)
+		for ordinal := range writes {
+			err := other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}})
+			if err == nil {
+				_, err = other.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
 			}
+			results <- err
 		}
 	}()
-	t.Cleanup(func() { cancel(); require.NoError(t, <-writerDone) })
+	t.Cleanup(func() { close(writes); <-done })
+	var reads, conflicts atomic.Int64
+	filter.Progress = func(phase string) {
+		if phase != "Reading cached daily totals" {
+			return
+		}
+		ordinal := reads.Add(1)
+		if ordinal > 3 {
+			return
+		}
+		// Hold prepared readers until the peer has replaced their installs.
+		writes <- int(ordinal)
+		assert.NoError(t, <-results)
+		conflicts.Add(1)
+	}
 	var readers sync.WaitGroup
 	for range 7 {
 		readers.Go(func() {
@@ -596,10 +642,16 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 					return
 				}
 				assert.GreaterOrEqual(t, got.Totals.InputTokens, 3000)
+				assert.LessOrEqual(t, got.Totals.InputTokens, 3003)
 			}
 		})
 	}
 	readers.Wait()
+	assert.EqualValues(t, 3, conflicts.Load())
+	filter.Progress = nil
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 3003, got.Totals.InputTokens)
 }
 
 func TestUsageJournaledUntrustedReadsSharePass(t *testing.T) {

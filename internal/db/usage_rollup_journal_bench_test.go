@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,16 +98,27 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	return database, filter, want
 }
 
-// Run with the same machine's base benchmark ns/op to check the warm-read gate.
+// Warm reads must reuse installed totals. The optional timing gate keeps its
+// larger fixture for callers supplying a base measurement.
 func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
-	raw := os.Getenv("AGENTSVIEW_USAGE_BASE_NS")
-	if raw == "" {
-		t.Skip("set AGENTSVIEW_USAGE_BASE_NS to the measured base ns/op")
+	var base int64
+	count := 300
+	if raw := os.Getenv("AGENTSVIEW_USAGE_BASE_NS"); raw != "" {
+		count = 30000
+		var err error
+		base, err = strconv.ParseInt(raw, 10, 64)
+		require.NoError(t, err)
+		require.Positive(t, base)
 	}
-	base, err := strconv.ParseInt(raw, 10, 64)
+	database, filter, want := seedUsageJournalBenchmark(t, count, 1)
+	database.StopUsageCacheBackfill()
+	databaseID, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
-	require.Positive(t, base)
-	database, filter, want := seedUsageJournalBenchmark(t, 30000, 1)
+	cache, err := database.usageCache.Generation(t.Context(), databaseID)
+	require.NoError(t, err)
+	var fills, builds atomic.Int64
+	cache.fill.observer.beforeInstall = func([]usageSourceVersion) { fills.Add(1) }
+	cache.rollup.observer.beforeEnsure = func() { builds.Add(1) }
 	// Benchmarks collect fixture garbage before timing their warm reads.
 	runtime.GC()
 	// Compare means, as the supplied base ns/op measures repeated warm reads.
@@ -119,5 +131,9 @@ func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
-	assert.Less(t, elapsed/reads, time.Duration(base/2), "warm 7-day read must take under half the base time")
+	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
+	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
+	if base > 0 {
+		assert.Less(t, elapsed/reads, time.Duration(base/2), "warm 7-day read must take under half the base time")
+	}
 }

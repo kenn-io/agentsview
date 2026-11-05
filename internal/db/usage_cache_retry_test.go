@@ -4,6 +4,7 @@ package db
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,9 @@ func TestUsageJournaledRetryPreservesOffsetDay(t *testing.T) {
 			seedJournaledUsage(t, database, "session")
 			timestamp := "2026-08-09T07:00:00-04:00"
 			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Ordinal: 0, Role: "assistant", Timestamp: timestamp, Model: "journal-model", TokenUsage: []byte(`{"input_tokens":100}`)}}))
+			// This session belongs to the following local day and must stay out
+			// of each consumer's result after the final retry.
+			seedJournaledUsage(t, database, "outside-window")
 			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "Pacific/Kiritimati"}
 			warmJournaledUsage(t, database, filter)
 			conflictJournaledUsageReads(t, database, &filter, timestamp, nil)
@@ -70,6 +74,7 @@ func TestUsageJournaledRetryPreservesOffsetDay(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, got.Daily, 1)
 				assert.Equal(t, "2026-08-10", got.Daily[0].Date)
+				assert.Equal(t, 250, got.Daily[0].InputTokens)
 				assert.Equal(t, 250, got.Totals.InputTokens)
 				assert.Equal(t, 1, got.SessionCounts.Total)
 			case "ranking":
@@ -94,11 +99,14 @@ func TestUsageJournaledRetryHonorsBulkLane(t *testing.T) {
 			seedJournaledUsage(t, database, "session")
 			filter := UsageFilter{Timezone: "UTC"}
 			warmJournaledUsage(t, database, filter)
+			var releases []func()
 			conflictJournaledUsageReads(t, database, &filter, "2026-08-10T23:31:00Z", func(reads int) {
 				if reads == 3 {
 					for range bulkReadSlots {
 						release, err := database.acquireBulkRead(t.Context())
 						require.NoError(t, err)
+						release = sync.OnceFunc(release)
+						releases = append(releases, release)
 						t.Cleanup(release)
 					}
 				}
@@ -115,6 +123,27 @@ func TestUsageJournaledRetryHonorsBulkLane(t *testing.T) {
 				_, err = database.GetUsageSessionCounts(ctx, filter)
 			}
 			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			for _, release := range releases {
+				release()
+			}
+			// The same request succeeds once the lane has room again.
+			filter.Progress = nil
+			switch consumer {
+			case "daily":
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 250, got.Totals.InputTokens)
+			case "ranking":
+				got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+				require.NoError(t, err)
+				require.Len(t, got, 1)
+				assert.Equal(t, "session", got[0].SessionID)
+				assert.Equal(t, 250, got[0].InputTokens)
+			case "counts":
+				got, err := database.GetUsageSessionCounts(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, UsageSessionCounts{Total: 1, ByProject: map[string]int{"project": 1}, ByAgent: map[string]int{"codex": 1}}, got)
+			}
 		})
 	}
 }
