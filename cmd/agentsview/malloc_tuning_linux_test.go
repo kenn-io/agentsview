@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -22,9 +21,6 @@ func init() {
 	if os.Getenv("AVTEST_MALLOC_ARENA_CHILD") != "1" {
 		return
 	}
-	// This helper owns its lifetime before the test runner starts.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	ready := make(chan error, 16)
 	release := make(chan struct{})
 	var workers sync.WaitGroup
@@ -39,7 +35,7 @@ func init() {
 			}
 			defer db.Close()
 			var length int
-			err = db.QueryRowContext(ctx, "SELECT length(zeroblob(65536))").Scan(&length)
+			err = db.QueryRow("SELECT length(zeroblob(65536))").Scan(&length) //nolint:noctx // The child owns its lifetime and exits directly.
 			ready <- err
 			<-release
 		})
