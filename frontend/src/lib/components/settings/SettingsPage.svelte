@@ -368,7 +368,7 @@
   .settings-page :global(.kit-settings__panel) {
     /* Panels with their own row grids (providers, remote access, tool-result
        images) read the same label width. */
-    --setting-label-width: 148px;
+    --setting-label-width: 222px;
     /* One control height for every settings control: buttons, inputs, and
        typeahead triggers read this through kit-ui. */
     --kit-control-height: 28px;

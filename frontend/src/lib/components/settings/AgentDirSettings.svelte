@@ -203,7 +203,7 @@
      the control column below the switch. */
   .provider-row {
     display: grid;
-    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
+    grid-template-columns: var(--setting-label-width, 222px) minmax(0, 1fr);
     align-items: center;
     column-gap: 12px;
     row-gap: 4px;

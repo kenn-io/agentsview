@@ -87,7 +87,7 @@
   /* Notes about the control sit under it, on the shared control column,
      as Remote access and GitHub place theirs. */
   .control-offset {
-    padding-left: calc(var(--setting-label-width, 148px) + 12px);
+    padding-left: calc(var(--setting-label-width, 222px) + 12px);
   }
 
   .setting-hint {
