@@ -30,11 +30,12 @@ test("Back restoration starts a fresh visit", async ({ page, baseURL }) => {
         Object.assign(window, { restored: event.persisted }),
       );
     });
+    // The screen request starts after the app has consumed the enabled open receipt.
     const enabled = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
         new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
-        response.request().postDataJSON()?.event === "app_opened",
+        response.request().postDataJSON()?.event === "screen_viewed",
     );
     await page.goto(server.url);
     await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
