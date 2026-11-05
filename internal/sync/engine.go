@@ -572,9 +572,11 @@ type Engine struct {
 	sourceSyncErr  error
 	rebuildSources func(context.Context) (RebuildOptions, error)
 
-	db    *db.DB
-	stat  func(string) (os.FileInfo, error)
-	lstat func(string) (os.FileInfo, error)
+	db *db.DB
+	// Rebuilds swap db temporarily; annotation writes must stay on the live archive.
+	archive *db.DB
+	stat    func(string) (os.FileInfo, error)
+	lstat   func(string) (os.FileInfo, error)
 	// archiveStore is the database holding previously archived
 	// sessions for the preserve guards in prepareSessionWrite.
 	// During a resync/rebuild it points at the original DB while
@@ -1027,6 +1029,7 @@ func NewEngine(ctx context.Context,
 	}
 	e := &Engine{
 		db:                      database,
+		archive:                 database,
 		stat:                    os.Stat,
 		lstat:                   os.Lstat,
 		baseProviderFactories:   providerFactories,
@@ -5210,7 +5213,7 @@ func (e *Engine) AssignSessionProject(
 	project string,
 ) (db.SessionProjectAssignment, error) {
 	return runSessionAnnotationWrite(ctx, e, func() (db.SessionProjectAssignment, error) {
-		return e.db.AssignSessionProject(ctx, sessionID, project)
+		return e.archive.AssignSessionProject(ctx, sessionID, project)
 	}, func(db.SessionProjectAssignment) bool { return true })
 }
 
@@ -5221,7 +5224,7 @@ func (e *Engine) ClearSessionProjectAssignment(
 	sessionID string,
 ) (db.ClearedSessionProjectAssignment, error) {
 	return runSessionAnnotationWrite(ctx, e, func() (db.ClearedSessionProjectAssignment, error) {
-		return e.db.ClearSessionProjectAssignment(ctx, sessionID)
+		return e.archive.ClearSessionProjectAssignment(ctx, sessionID)
 	}, func(db.ClearedSessionProjectAssignment) bool { return true })
 }
 
@@ -5231,7 +5234,7 @@ func (e *Engine) SetSessionLabels(
 	ctx context.Context, sessionID string, labels []string,
 ) (db.SessionLabels, error) {
 	return runSessionAnnotationWrite(ctx, e, func() (db.SessionLabels, error) {
-		return e.db.SetSessionLabels(ctx, sessionID, labels)
+		return e.archive.SetSessionLabels(ctx, sessionID, labels)
 	}, sessionLabelsChanged)
 }
 
@@ -5241,7 +5244,7 @@ func (e *Engine) UpdateSessionLabels(
 	ctx context.Context, sessionID string, add, remove []string,
 ) (db.SessionLabels, error) {
 	return runSessionAnnotationWrite(ctx, e, func() (db.SessionLabels, error) {
-		return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
+		return e.archive.UpdateSessionLabels(ctx, sessionID, add, remove)
 	}, sessionLabelsChanged)
 }
 
@@ -5251,7 +5254,7 @@ func (e *Engine) SetSessionExternalParent(
 	ctx context.Context, sessionID, parentID string,
 ) (db.SessionExternalParent, error) {
 	return runSessionAnnotationWrite(ctx, e, func() (db.SessionExternalParent, error) {
-		return e.db.SetSessionExternalParent(ctx, sessionID, parentID)
+		return e.archive.SetSessionExternalParent(ctx, sessionID, parentID)
 	}, sessionExternalParentChanged)
 }
 
@@ -5261,7 +5264,7 @@ func (e *Engine) ClearSessionExternalParent(
 	ctx context.Context, sessionID string,
 ) (db.SessionExternalParent, error) {
 	return runSessionAnnotationWrite(ctx, e, func() (db.SessionExternalParent, error) {
-		return e.db.ClearSessionExternalParent(ctx, sessionID)
+		return e.archive.ClearSessionExternalParent(ctx, sessionID)
 	}, sessionExternalParentChanged)
 }
 
@@ -5281,7 +5284,7 @@ func runSessionAnnotationWrite[T any](
 	if e.refuseWriteInForceParse("runSessionAnnotationWrite") {
 		return result, errors.New("runSessionAnnotationWrite refused on report-only parse-diff engine")
 	}
-	result, err := db.RetryAcrossHandoff(ctx, e.db, write)
+	result, err := db.RetryAcrossHandoff(ctx, e.archive, write)
 	if err == nil && changed(result) {
 		e.emit("sessions")
 	}
