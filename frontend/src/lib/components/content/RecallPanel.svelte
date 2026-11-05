@@ -74,7 +74,7 @@
   {#if loading}
     <p class="recall-state">{m.session_recall_loading()}</p>
   {:else if failed}
-    <p class="recall-state" class:recall-error={!unavailable} {@attach errorTelemetry("session")}>{m.session_recall_error()}</p>
+    <p class="recall-state" class:recall-error={!unavailable} class:recall-unavailable={unavailable} {@attach errorTelemetry("session")}>{m.session_recall_error()}</p>
   {:else if entries.length === 0}
     <p class="recall-state">{m.session_recall_empty()}</p>
   {:else}
@@ -166,6 +166,12 @@
 
   .recall-error {
     color: var(--slow-fg);
+  }
+
+  /* Recall the backend does not offer is a limit, not a failure: a calm
+     warning amber, kept apart from the error color above. */
+  .recall-unavailable {
+    color: color-mix(in srgb, var(--accent-amber) 70%, var(--text-primary));
   }
 
   .recall-list {

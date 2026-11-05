@@ -557,7 +557,9 @@
     position: sticky;
     bottom: 0;
     display: block;
-    height: 14px;
+    /* Taller than a section heading, so a heading cut by the edge fades
+       out completely instead of showing its top half. */
+    height: 28px;
     margin-inline: -6px;
     background: linear-gradient(transparent, var(--popover-bg, var(--bg-surface)));
     pointer-events: none;

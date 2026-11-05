@@ -564,8 +564,9 @@
                 style="width: {(cat.duration_ms / Math.max(timing.tool_duration_ms, 1)) * 100}%; background: {categoryToken(cat.category)};"
               ></span>
             </span>
-            <!-- An unmeasured row draws no track and a dash; the section
-                 hint says "Not measured" once instead of on every row. -->
+            <!-- An unmeasured row draws a dashed hairline and a dash; the
+                 section hint says "Not measured" once instead of on every
+                 row. -->
             <span class="agg-val" class:unmeasured={!isMeasured}>{#if isMeasured}{formatDuration(cat.duration_ms)}{:else}<span aria-hidden="true">—</span><span class="kit-sr-only">{m.session_vitals_not_measured()}</span>{/if}</span>
           </button>
         {/each}
@@ -1087,8 +1088,17 @@
     height: 100%;
     border-radius: 1px;
   }
+  /* An unmeasured row keeps the chart's shape with a dashed hairline where
+     the bar would be, ending at the muted dash in the value column, so the
+     row reads as "no reading" rather than a missing bar. */
   .agg-bar.unmeasured {
-    visibility: hidden;
+    height: 0;
+    background: transparent;
+    border-top: 1px dashed color-mix(in srgb, var(--text-muted) 45%, transparent);
+    border-radius: 0;
+  }
+  .agg-row:has(.agg-bar.unmeasured) {
+    margin-bottom: 1px;
   }
   .agg-val {
     min-width: 56px;

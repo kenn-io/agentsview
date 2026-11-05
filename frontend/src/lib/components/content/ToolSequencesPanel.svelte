@@ -394,6 +394,11 @@
     font-size: var(--font-size-sm);
   }
 
+  /* Dark: the same raised band as SignalPanel, which this panel continues. */
+  :global(:root.dark) .tool-sequences-panel:not(.embedded) {
+    background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+  }
+
   .tool-sequences-panel.embedded {
     max-height: none;
     overflow: visible;

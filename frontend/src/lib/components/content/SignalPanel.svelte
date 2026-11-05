@@ -166,6 +166,13 @@
     border-bottom: 1px solid var(--border-muted);
     font-size: 12px;
   }
+
+  /* Dark inset sits within a step of the page, so the panel would melt into
+     the transcript; one step above the card surface keeps it a distinct
+     band, as the inset fill does in light. */
+  :global(:root.dark) .signal-panel {
+    background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+  }
   .signal-row {
     display: flex;
     gap: 12px;
