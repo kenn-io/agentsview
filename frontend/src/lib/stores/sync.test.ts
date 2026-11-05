@@ -107,7 +107,60 @@ describe("session watch visibility", () => {
 
   afterEach(() => {
     sync.unwatchSession();
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each(["session_ready", "hidden", "timeout"])(
+    "releases the initial read on %s and keeps ready updates",
+    async (reason) => {
+      vi.useFakeTimers();
+      if (reason === "hidden") vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      const onUpdate = vi.fn();
+      const settled = vi.fn();
+      const ready = sync.watchSession("session-a", onUpdate);
+      void ready.then(settled);
+      const stream = api.watchSession.mock.results[0]?.value;
+      if (reason === "session_ready") {
+        await Promise.resolve();
+        expect(settled).not.toHaveBeenCalled();
+        stream.dispatchEvent(new Event(reason));
+      } else if (reason === "timeout") {
+        await vi.advanceTimersByTimeAsync(999);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+      } else {
+        expect(api.watchSession).not.toHaveBeenCalled();
+      }
+      expect(await ready).toBe(reason === "session_ready");
+      expect(vi.getTimerCount()).toBe(0);
+      if (stream) {
+        const initialUpdates = reason === "session_ready" ? 1 : 0;
+        expect(onUpdate).toHaveBeenCalledTimes(initialUpdates);
+        stream.dispatchEvent(new Event("session_ready"));
+        stream.dispatchEvent(new Event("session_ready"));
+        expect(onUpdate).toHaveBeenCalledTimes(initialUpdates + 2);
+      }
+    },
+  );
+
+  it("releases the initial read immediately on a watch error", async () => {
+    vi.useFakeTimers();
+    const onUpdate = vi.fn();
+    const settled = vi.fn();
+    const ready = sync.watchSession("session-a", onUpdate);
+    void ready.then(settled);
+    const stream = api.watchSession.mock.results[0]!.value;
+
+    stream.dispatchEvent(new Event("error"));
+    await Promise.resolve();
+
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    stream.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("closes a hidden session stream and refreshes on return and every reconnect", () => {
