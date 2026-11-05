@@ -2064,27 +2064,6 @@ func TestManagerIncrementalPassReconcilesIneligibleSessions(t *testing.T) {
 	}
 }
 
-func TestManagerReconcileOnlyRetractsWithoutModelWork(t *testing.T) {
-	d := newTestArchive(t)
-	server, calls := modelServer(t, alwaysEntries(t, "fact"))
-	seedSession(t, d, "trashed", turnMessages("request", "answer"), nil)
-	m := newManager(t, d, server.URL, nil)
-	_, err := m.RunPass(t.Context(), PassOptions{})
-	require.NoError(t, err)
-	before := calls.count()
-	require.Positive(t, before)
-	seedSession(t, d, "eligible", turnMessages("another request", "another answer"), nil)
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "trashed"))
-	settleSessionWrite(t, d)
-	result, err := m.RunPass(t.Context(), PassOptions{ReconcileOnly: true})
-	require.NoError(t, err)
-	assert.Zero(t, result.Sessions)
-	assert.Equal(t, before, calls.count(), "reconciliation must leave the eligible session's model work pending")
-	entries, err := d.ListRecallEntries(t.Context(), db.RecallQuery{Limit: 50})
-	require.NoError(t, err)
-	assert.Empty(t, entries, "the trashed session's generated entries must be retracted")
-}
-
 func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
