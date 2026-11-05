@@ -372,6 +372,7 @@
         </div>
       </div>
     {:else}
+      <div class="list-view-frame">
       <div class="list-view">
         {#each rows as row, i (row.id)}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
@@ -414,6 +415,7 @@
             </span>
           </div>
         {/each}
+      </div>
       </div>
     {/if}
   {/if}
@@ -599,6 +601,26 @@
     grid-template-columns: 18px 12px fit-content(13rem) minmax(96px, 1fr) 56px 88px;
     column-gap: 12px;
     row-gap: 2px;
+  }
+
+  /* Phones: the fixed columns would leave no room for names, so each name
+     takes the free column with its share and total beside it, and its bar
+     runs underneath across the same width. */
+  .list-view-frame {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 420px) {
+    .list-view {
+      grid-template-columns: 14px 8px minmax(0, 1fr) max-content max-content;
+      column-gap: 8px;
+    }
+
+    .list-bar-track {
+      grid-column: 3 / -1;
+      grid-row: 2;
+      margin-top: 3px;
+    }
   }
 
   .list-row {
