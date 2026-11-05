@@ -179,6 +179,18 @@ CREATE TABLE usage_rollup_installs (
 );
 CREATE INDEX usage_rollup_installs_changes
     ON usage_rollup_installs (timezone_id, install_revision, source_change_revision);
+CREATE TABLE usage_rollup_invalidations (
+    timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES usage_cached_sessions(session_id) ON DELETE CASCADE,
+    PRIMARY KEY (timezone_id, session_id)
+) WITHOUT ROWID;
+CREATE TRIGGER usage_rollup_invalidated AFTER DELETE ON usage_rollup_installs
+WHEN EXISTS (SELECT 1 FROM usage_cached_sessions WHERE session_id=OLD.session_id)
+ AND EXISTS (SELECT 1 FROM usage_rollup_timezones WHERE id=OLD.timezone_id)
+BEGIN
+    INSERT OR IGNORE INTO usage_rollup_invalidations(timezone_id, session_id)
+        VALUES (OLD.timezone_id, OLD.session_id);
+END;
 CREATE TABLE usage_daily_rollups (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
@@ -812,6 +824,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		 FROM usage_rollup_timezones LIMIT 0`,
 		`SELECT timezone_id, local_date, from_ms, to_ms
 		 FROM usage_rollup_days LIMIT 0`,
+		`SELECT timezone_id, session_id FROM usage_rollup_invalidations LIMIT 0`,
 		`SELECT id, timezone_id, session_id, source_change_revision, source_pricing, source_sync_marker,
 		        source_transcript_rev, usage_event_fingerprint,
 		        fact_install_revision, baked_agent, baked_started_at,

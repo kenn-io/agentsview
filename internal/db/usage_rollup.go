@@ -22,6 +22,9 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
+// A superseded build needs fresh archive metadata, not another fact-only retry.
+var errUsageRollupSuperseded = fmt.Errorf("%w: newer usage rollup already installed", errUsageCacheSourceChanged)
+
 const usageRollupCursorSessionID = "\x00cursor"
 
 // usageRollupMaxBuildAttempts bounds the reclassification retry an install
@@ -252,10 +255,7 @@ func (c *usageRollupCoordinator) Ensure(
 		return installs, usageRollupMetrics{}, nil
 	}
 	// The catalog digest only keys single-flight; staleness is per session.
-	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
-	if err != nil {
-		return nil, usageRollupMetrics{}, fmt.Errorf("hashing usage pricing: %w", err)
-	}
+	catalogHash := snapshot.PricingIdentity
 	batch := snapshot
 	batch.Sessions = make([]usageQuerySession, 0, len(stale))
 	batch.Versions = make([]usageSourceVersion, 0, len(stale))
@@ -332,7 +332,7 @@ func (c *usageRollupCoordinator) ensureChunk(
 			}
 			c.mu.Unlock()
 			call.installs, call.metrics, call.err = c.ensureNow(
-				c.ctx, snapshot, fills, resolver)
+				c.ctx, snapshot, fills, resolver, catalogHash)
 			zone.Unlock()
 			c.mu.Lock()
 			delete(c.calls, key)
@@ -365,7 +365,7 @@ func (c *usageRollupCoordinator) ensureChunk(
 // rollup install stale and rebuilds it on a later aggregation.
 func (c *usageRollupCoordinator) ensureNow(
 	ctx context.Context, snapshot usageQuerySnapshot,
-	fills map[string]usageFillResult, resolver *export.PricingResolver,
+	fills map[string]usageFillResult, resolver *export.PricingResolver, catalogHash string,
 ) (map[string]usageRollupInstall, usageRollupMetrics, error) {
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
 	pricing := newUsagePricingIdentities(resolver)
@@ -382,7 +382,7 @@ func (c *usageRollupCoordinator) ensureNow(
 	// failing the caller.
 	for attempt := 1; ; attempt++ {
 		installs, done, attemptMetrics, attemptErr := c.ensureAttempt(
-			ctx, conn, identity, snapshot, currentFills, pricing)
+			ctx, conn, identity, snapshot, currentFills, pricing, catalogHash)
 		metrics.DailyRows += attemptMetrics.DailyRows
 		metrics.ExceptionRows += attemptMetrics.ExceptionRows
 		metrics.ExceptionGroups += attemptMetrics.ExceptionGroups
@@ -410,7 +410,7 @@ func (c *usageRollupCoordinator) ensureNow(
 func (c *usageRollupCoordinator) ensureAttempt(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
-	pricing *usagePricingIdentities,
+	pricing *usagePricingIdentities, catalogHash string,
 ) (map[string]usageRollupInstall, bool, usageRollupMetrics, error) {
 	if c.observer.beforeAttempt != nil {
 		c.observer.beforeAttempt(fills)
@@ -465,12 +465,8 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		}
 		builds = append(builds, cursorBuild)
 	}
-	catalog, err := usagePricingIdentity(snapshot.PricingRows)
-	if err != nil {
-		return nil, false, usageRollupMetrics{}, err
-	}
 	for i := range builds {
-		builds[i].SourcePricing = catalog
+		builds[i].SourcePricing = catalogHash
 		builds[i].ChangeRevision = snapshot.ChangeRevision
 	}
 	metrics := usageRollupMetrics{BuildDuration: time.Since(started)}
@@ -491,6 +487,9 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		ctx, conn, identity, snapshot.location, builds, cross)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
+		if errors.Is(err, errUsageRollupSuperseded) {
+			return nil, false, metrics, err
+		}
 		if errors.Is(err, errUsageCacheSourceChanged) {
 			return nil, false, metrics, nil
 		}
@@ -698,13 +697,16 @@ func installUsageRollupBuilds(
 	dates := make(map[string]bool)
 	for _, build := range builds {
 		var installID int64
-		var installedFactRevision int64
-		err := conn.QueryRowContext(ctx, `SELECT id, fact_install_revision
+		var installedFactRevision, installedChangeRevision int64
+		err := conn.QueryRowContext(ctx, `SELECT id, fact_install_revision, source_change_revision
 			FROM usage_rollup_installs
 			WHERE timezone_id = ? AND session_id = ?`, timezoneID, build.SessionID).
-			Scan(&installID, &installedFactRevision)
+			Scan(&installID, &installedFactRevision, &installedChangeRevision)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if err == nil && installedChangeRevision > build.ChangeRevision {
+			return errUsageRollupSuperseded
 		}
 		if err == nil && build.SessionID == usageRollupCursorSessionID &&
 			installedFactRevision > build.FactRevision {
@@ -750,6 +752,9 @@ func installUsageRollupBuilds(
 			return err
 		}
 		if err := installUsageRollupRows(ctx, conn, installID, build, dates); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `DELETE FROM usage_rollup_invalidations WHERE timezone_id=? AND session_id=?`, timezoneID, build.SessionID); err != nil {
 			return err
 		}
 		nextRevision++

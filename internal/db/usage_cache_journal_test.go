@@ -3,7 +3,9 @@
 package db
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,6 +47,21 @@ func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) 
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+	wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
+	require.NoError(t, err)
+	gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, wantTop, gotTop)
+	wantCounts, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantCounts, gotCounts)
+	wantMatching, err := database.getUsageMatchingSessionCountLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	gotMatching, err := database.GetUsageMatchingSessionCount(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantMatching, gotMatching)
 }
 
 func TestUsageJournaledFreshness(t *testing.T) {
@@ -205,7 +222,7 @@ func TestUsageJournaledForeignInstall(t *testing.T) {
 	}
 }
 
-func TestUsageJournaledOlderInstallRepairs(t *testing.T) {
+func TestUsageJournaledOlderRollupCannotReplaceNewer(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")
 	filter := UsageFilter{Timezone: "UTC"}
@@ -215,6 +232,7 @@ func TestUsageJournaledOlderInstallRepairs(t *testing.T) {
 	fills, err := cache.fill.Ensure(t.Context(), old.Versions, 0)
 	require.NoError(t, err)
 	held, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
 	var once atomic.Bool
 	// Force a rebuild with the old archive metadata.
 	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id='session'`)
@@ -226,25 +244,41 @@ func TestUsageJournaledOlderInstallRepairs(t *testing.T) {
 		}
 	}
 	done := make(chan error, 1)
+	t.Cleanup(func() { unblock(); <-done })
 	go func() {
 		_, _, err := cache.rollup.Ensure(t.Context(), old, fills, export.NewPricingResolver(old.PricingRows))
 		done <- err
+		close(done)
 	}()
 	<-held
 	other, err := OpenIsolatedContext(t.Context(), database.Path())
 	require.NoError(t, err)
-	_, err = other.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='session'`)
+	session, err := other.GetSession(t.Context(), "session")
 	require.NoError(t, err)
+	require.NotNil(t, session)
+	session.Agent = "claude"
+	require.NoError(t, other.UpsertSession(t.Context(), *session))
 	// A second handle owns its own coordinator, so its newer build can finish.
 	_, err = other.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	require.NoError(t, other.Close())
-	close(release)
-	require.NoError(t, <-done)
+	var newerRevision int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision FROM usage_rollup_installs WHERE session_id='session'`).Scan(&newerRevision))
+	unblock()
+	buildErr := <-done
+	var installedRevision int64
+	var agent string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&installedRevision, &agent))
+	assert.Equal(t, newerRevision, installedRevision)
+	assert.Equal(t, "claude", agent)
+	require.ErrorIs(t, buildErr, errUsageCacheSourceChanged)
+	var rebuilt atomic.Int64
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) { rebuilt.Add(int64(len(builds))) }
 	assertJournaledUsageLegacy(t, database, filter)
+	assert.Zero(t, rebuilt.Load())
 }
 
-func TestUsageJournaledPassCannotVouchForPrices(t *testing.T) {
+func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 	for _, revert := range []bool{false, true} {
 		t.Run(fmt.Sprint(revert), func(t *testing.T) {
 			database := testDB(t)
@@ -270,10 +304,19 @@ func TestUsageJournaledPassCannotVouchForPrices(t *testing.T) {
 			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
 			prepared, ok, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
 			require.NoError(t, err)
-			assert.False(t, ok)
-			assert.False(t, prepared.journaled)
+			if !revert {
+				assert.False(t, ok)
+				assert.False(t, prepared.journaled)
+			}
 			require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 			assertJournaledUsageLegacy(t, database, filter)
+			got, err := database.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			wantCost := int64(200)
+			if revert {
+				wantCost = 100
+			}
+			assert.Equal(t, wantCost, got.Totals.TotalCost.Microdollars)
 		})
 	}
 }
@@ -335,4 +378,50 @@ func TestUsageJournaledTopMetadata(t *testing.T) {
 	got, err := database.GetTopSessionsByCost(t.Context(), filter, 3)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+}
+
+func TestUsageJournaledTopSharesSummary(t *testing.T) {
+	for _, topFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(topFirst), func(t *testing.T) {
+			database := openDailyUsageFixtureDB(t)
+			filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"}
+			warmJournaledUsage(t, database, filter)
+			var prepares atomic.Int64
+			database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+			ctx := WithUsageWindowMemo(t.Context())
+			readTop := func() {
+				want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
+				require.NoError(t, err)
+				got, err := database.GetTopSessionsByCost(ctx, filter, 3)
+				require.NoError(t, err)
+				assert.Equal(t, want, got)
+			}
+			if topFirst {
+				readTop()
+			}
+			_, err := database.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			readTop()
+			assert.EqualValues(t, 1, prepares.Load())
+		})
+	}
+}
+
+func TestUsageJournaledDedupInvalidation(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "original", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	seedUsageSnapshotSession(t, database, "sibling", "project-b", "2026-08-10T10:00:00Z", 0, 20, "model-a")
+	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	var installed int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id='original'`).Scan(&installed))
+	require.Zero(t, installed)
+	assertJournaledUsageLegacy(t, database, filter)
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 20, got.Totals.OutputTokens)
 }

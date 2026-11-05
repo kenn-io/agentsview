@@ -99,32 +99,34 @@ day: unbounded matching counts include it, while bounded reads exclude it.
 
 After a completed timezone coverage pass, an aggregate request reads the archive
 change journal and refreshes only journaled sessions and cached sessions that
-lost their rollup install. It reads window IDs and missing installs in one cache
-transaction, then captures archive revisions, pricing, current session metadata,
-and changed-session fingerprints in one archive transaction. Cursor history is
-checked with the first refresh batch only. Each batch contains at most 256
-sessions.
+lost their rollup install. Deleting an install queues its session in an indexed
+worklist in the same transaction. Reinstalling it clears that entry, and
+deleting its cached facts removes it. Requests read window IDs and that worklist
+in one cache transaction, then capture archive revisions, pricing, current
+session metadata, and changed-session fingerprints in one archive transaction.
+Cursor history is checked with the first refresh batch only. Each batch contains
+at most 256 sessions.
 
 Every install records the archive revision and catalog digest used to build it.
-A timezone claim records both an archive revision and an install counter. Its
-coverage is the lower of that claim and the oldest source revision installed
-since its counter. A compare-and-set advances the claim from actual installed
-stamps; concurrent claim losers leave it alone. A completed pass uses the
-revision and install counter captured at its start. It records its catalog only
-when no intervening install used another catalog.
+The install transaction rejects builds older than the stored revision, and the
+caller recaptures archive metadata. A timezone claim records both an archive
+revision and an install counter. A compare-and-set advances the claim from
+actual installed stamps; concurrent claim losers leave it alone. A completed
+pass uses the revision and install counter captured at its start. It records its
+catalog only when no intervening install used another catalog.
 
 A timezone without a completed pass, a new cache generation, a changed pricing
 catalog, or coverage outside the archive's revision range takes the full
 candidate, fingerprint, fill, and rollup path. An untrusted request starts a
 coverage pass when background backfill is enabled and idle. Catalog checks
-include handle-specific custom pricing. Pricing triggers retain their latest
-revision even when prices revert, so an older pass cannot vouch for newer rates.
+include handle-specific custom pricing. The captured catalog digest determines
+whether a pass can vouch for the current rates.
 
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty
 windows run the same checks. A conflicting install or invalidated dedup peer
 uses the existing bounded recapture loop. Warm window reads load filter and
-attribution metadata; Top sessions also retains its display fields.
+attribution metadata, including the display fields shared with Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor

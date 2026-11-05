@@ -7,7 +7,6 @@ import (
 )
 
 const archiveMetadataUsageChangeRevisionKey = "usage_change_revision"
-const archiveMetadataUsagePricingRevisionKey = "usage_pricing_revision"
 
 // Replace triggers atomically with column migrations.
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
@@ -27,10 +26,7 @@ func usageChangeJournalSQL() (string, string) {
 	var drops, creates strings.Builder
 	add := func(name, event, table, condition, sessionID string) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
-		body := counterBody + `
- INSERT INTO archive_metadata (key, value)
-  SELECT 'usage_pricing_revision', value FROM archive_metadata WHERE key = 'usage_change_revision'
- ON CONFLICT(key) DO UPDATE SET value = excluded.value;`
+		body := counterBody
 		if sessionID != "" {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
 		}

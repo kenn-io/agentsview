@@ -122,12 +122,16 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	started := time.Now()
 	report("Reading archived sessions for this report")
 	filter.Progress = nil
-	if prepared, ok, err := db.prepareJournaledUsageWindow(ctx, filter, kind, cursor, report); ok || err != nil {
+	prepared, ok, err := db.prepareJournaledUsageWindow(ctx, filter, kind, cursor, report)
+	if ok || err != nil {
 		return prepared, err
 	}
-	snapshot, err := db.captureUsageQuery(ctx, filter, kind)
-	if err != nil {
-		return usagePreparedWindow{}, err
+	snapshot := prepared.snapshot
+	if snapshot.DatabaseID == "" {
+		snapshot, err = db.captureUsageQuery(ctx, filter, kind)
+		if err != nil {
+			return usagePreparedWindow{}, err
+		}
 	}
 	if !cursor {
 		snapshot.CursorHighWater = 0
@@ -238,7 +242,7 @@ func (db *DB) GetTopSessionsByCost(
 	ctx context.Context, filter UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
 	snapshot, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindTop, false)
+		ctx, filter, usageQueryKindToken, false)
 	if err != nil {
 		return nil, err
 	}

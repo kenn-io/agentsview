@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -18,7 +19,6 @@ type usageQueryKind int
 const (
 	usageQueryKindToken usageQueryKind = iota
 	usageQueryKindActivity
-	usageQueryKindTop
 )
 
 type usageSourceVersion struct {
@@ -70,13 +70,13 @@ type usageQueryInterval struct {
 
 type usageQuerySnapshot struct {
 	ChangeRevision  int64
-	PricingRevision int64
 	DatabaseID      string
 	Sessions        []usageQuerySession
 	Versions        []usageSourceVersion
 	Intervals       []usageQueryInterval
 	CursorHighWater int64
 	PricingRows     []export.EffectivePricingRow
+	PricingIdentity string
 	location        *time.Location
 }
 
@@ -93,51 +93,57 @@ func (db *DB) captureUsageQuery(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 ) (usageQuerySnapshot, error) {
 	return db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
-		ids, err := discoverUsageCandidates(ctx, tx, filter, kind)
-		if err != nil {
-			return err
-		}
-		if err := loadUsageSnapshotSessions(ctx, tx, ids, filter, snapshot); err != nil {
-			return err
-		}
-		fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, ids, nil, false)
-		if err != nil {
-			return fmt.Errorf("fingerprinting usage events: %w", err)
-		}
-		for i := range snapshot.Versions {
-			snapshot.Versions[i].UsageEventFingerprint = fingerprints[snapshot.Versions[i].SessionID]
-		}
-		snapshot.Intervals = usageQueryIntervals(filter)
-		var hasCursorTable bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM sqlite_master
-		WHERE type = 'table' AND name = 'cursor_usage_events'
-	)`).Scan(&hasCursorTable); err != nil {
-			return fmt.Errorf("checking Cursor usage table: %w", err)
-		}
-		if hasCursorTable {
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`,
-			).Scan(&snapshot.CursorHighWater); err != nil {
-				return fmt.Errorf("reading Cursor usage high-water mark: %w", err)
-			}
-		}
-		return nil
+		return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 	})
+}
+
+func captureUsageQueryFrom(ctx context.Context, tx *sql.Tx, filter UsageFilter, kind usageQueryKind, snapshot *usageQuerySnapshot) error {
+	ids, err := discoverUsageCandidates(ctx, tx, filter, kind)
+	if err != nil {
+		return err
+	}
+	if err := loadUsageSnapshotSessions(ctx, tx, ids, filter, false, snapshot); err != nil {
+		return err
+	}
+	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, ids, nil, false)
+	if err != nil {
+		return fmt.Errorf("fingerprinting usage events: %w", err)
+	}
+	for i := range snapshot.Versions {
+		snapshot.Versions[i].UsageEventFingerprint = fingerprints[snapshot.Versions[i].SessionID]
+	}
+	snapshot.Intervals = usageQueryIntervals(filter)
+	var hasCursorTable bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+	SELECT 1 FROM sqlite_master
+	WHERE type = 'table' AND name = 'cursor_usage_events'
+)`).Scan(&hasCursorTable); err != nil {
+		return fmt.Errorf("checking Cursor usage table: %w", err)
+	}
+	if hasCursorTable {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`,
+		).Scan(&snapshot.CursorHighWater); err != nil {
+			return fmt.Errorf("reading Cursor usage high-water mark: %w", err)
+		}
+	}
+	return nil
 }
 
 func (db *DB) captureUsageSessions(ctx context.Context, ids []string) (usageQuerySnapshot, error) {
 	// Rollups use committed fills' source versions, so metadata capture skips usage-event fingerprints.
 	return db.captureUsageSnapshot(ctx, UsageFilter{}, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
-		return loadUsageSnapshotSessions(ctx, tx, ids, UsageFilter{}, snapshot)
+		return loadUsageSnapshotSessions(ctx, tx, ids, UsageFilter{}, false, snapshot)
 	})
 }
 
-func loadUsageSnapshotSessions(ctx context.Context, tx *sql.Tx, ids []string, filter UsageFilter, snapshot *usageQuerySnapshot) error {
-	records, err := loadUsageQuerySessionRecords(ctx, tx, ids, filter)
+func loadUsageSnapshotSessions(ctx context.Context, tx *sql.Tx, ids []string, filter UsageFilter, narrow bool, snapshot *usageQuerySnapshot) error {
+	records, err := loadUsageQuerySessionRecords(ctx, tx, ids, filter, narrow)
 	if err != nil {
 		return err
 	}
+	snapshot.Sessions = slices.Grow(snapshot.Sessions, len(records))
+	snapshot.Versions = slices.Grow(snapshot.Versions, len(records))
 	for _, record := range records {
 		snapshot.Sessions = append(snapshot.Sessions, record.session)
 		snapshot.Versions = append(snapshot.Versions, record.version)
@@ -183,7 +189,7 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 		return usageQuerySnapshot{}, err
 	}
 
-	snapshot.PricingRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsagePricingRevisionKey, "usage pricing")
+	snapshot.PricingIdentity, err = usagePricingIdentity(snapshot.PricingRows)
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
@@ -312,7 +318,7 @@ func usageCandidateDiscoverySQL(
 }
 
 func loadUsageQuerySessionRecords(
-	ctx context.Context, tx *sql.Tx, candidateIDs []string, filter UsageFilter,
+	ctx context.Context, tx *sql.Tx, candidateIDs []string, filter UsageFilter, narrow bool,
 ) ([]usageQuerySessionRecord, error) {
 	if len(candidateIDs) == 0 {
 		return nil, nil
@@ -330,7 +336,7 @@ func loadUsageQuerySessionRecords(
 				placeholders[i] = "?"
 				idArgs[i] = id
 			}
-			query := `SELECT
+			projection := `
 			s.id, s.project, s.group_key, COALESCE(s.session_name, ''), s.machine, s.agent, COALESCE(s.git_branch, ''),
 			COALESCE(s.created_at, ''), COALESCE(s.started_at, ''),
 			COALESCE(s.ended_at, ''),
@@ -342,11 +348,16 @@ func loadUsageQuerySessionRecords(
 			COALESCE(s.is_automated, 0),
 			COALESCE(s.termination_status, ''),
 			CASE WHEN (` + filterWhere + `) THEN 1 ELSE 0 END,
-			COALESCE(s.sync_marker, ''), COALESCE(s.transcript_revision, '0')
+			COALESCE(s.sync_marker, ''), COALESCE(s.transcript_revision, '0')`
+			if narrow {
+				projection = `s.id, s.project, s.group_key, COALESCE(s.session_name, ''), s.machine, s.agent,
+				COALESCE(s.started_at, ''),
+				COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id),
+				CASE WHEN (` + filterWhere + `) THEN 1 ELSE 0 END`
+			}
+			query := `SELECT ` + projection + `
 		FROM sessions s
-		WHERE s.deleted_at IS NULL AND s.id IN (` +
-				strings.Join(placeholders, ",") + `)
-		ORDER BY s.id`
+		WHERE s.deleted_at IS NULL AND s.id IN (` + strings.Join(placeholders, ",") + `) ORDER BY s.id`
 			args := append(append([]any(nil), filterArgs...), idArgs...)
 			rows, err := tx.QueryContext(ctx, query, args...)
 			if err != nil {
@@ -356,8 +367,7 @@ func loadUsageQuerySessionRecords(
 			for rows.Next() {
 				var record usageQuerySessionRecord
 				var passes, automated, hasTotalOutput, hasPeakContext int
-				if err := rows.Scan(
-					&record.session.ID, &record.session.Project, &record.session.GroupKey, &record.session.SessionName,
+				targets := []any{&record.session.ID, &record.session.Project, &record.session.GroupKey, &record.session.SessionName,
 					&record.session.Machine, &record.session.Agent,
 					&record.session.GitBranch, &record.session.CreatedAt,
 					&record.session.StartedAt, &record.session.EndedAt,
@@ -367,8 +377,11 @@ func loadUsageQuerySessionRecords(
 					&hasTotalOutput, &hasPeakContext,
 					&automated, &record.session.TerminationStatus, &passes,
 					&record.version.SyncMarker, &record.version.TranscriptRevision,
-				); err != nil {
-					_ = rows.Close()
+				}
+				if narrow {
+					targets = []any{&record.session.ID, &record.session.Project, &record.session.GroupKey, &record.session.SessionName, &record.session.Machine, &record.session.Agent, &record.session.StartedAt, &record.session.DisplayName, &passes}
+				}
+				if err := rows.Scan(targets...); err != nil {
 					return fmt.Errorf("scanning usage candidate metadata: %w", err)
 				}
 				record.session.IsAutomated = automated != 0
@@ -441,32 +454,4 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 		FromMillis: math.MinInt64, ToMillis: next.UTC().UnixMilli(),
 		ToLocalDate: filter.To,
 	}}
-}
-
-// Window reads need attribution and the filter result. Top sessions also needs
-// its display fields, so it keeps the existing full metadata loader.
-func loadUsageWindowSessions(ctx context.Context, tx *sql.Tx, ids []string, filter UsageFilter, kind usageQueryKind, snapshot *usageQuerySnapshot) error {
-	if kind == usageQueryKindTop {
-		return loadUsageSnapshotSessions(ctx, tx, ids, filter, snapshot)
-	}
-	where, filterArgs := filter.appendUsageSessionFilterClauses("1=1", nil)
-	return queryChunked(ids, func(chunk []string) error {
-		placeholders, args := InPlaceholders(chunk)
-		rows, err := tx.QueryContext(ctx, `SELECT s.id, s.project, s.agent, s.machine, COALESCE(s.started_at, ''), CASE WHEN (`+where+`) THEN 1 ELSE 0 END FROM sessions s WHERE s.deleted_at IS NULL AND s.id IN `+placeholders+` ORDER BY s.id`, append(append([]any(nil), filterArgs...), args...)...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var session usageQuerySession
-			if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.PassesFilter); err != nil {
-				return err
-			}
-			session.StartedAtMillis, _, _ = usagefacts.ParseTimestamp(session.StartedAt)
-			session.StartedAtNanos = usagefacts.ParseTimestampNanos(session.StartedAt)
-			snapshot.Sessions = append(snapshot.Sessions, session)
-			snapshot.Versions = append(snapshot.Versions, usageSourceVersion{SessionID: session.ID})
-		}
-		return rows.Err()
-	})
 }

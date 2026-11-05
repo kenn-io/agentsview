@@ -15,7 +15,6 @@ type usageZoneCoverage struct {
 	id                          int64
 	revision                    sql.NullInt64
 	installRevision, installSeq int64
-	lowWater                    sql.NullInt64
 	pricing                     string
 	foreignPricing              bool
 }
@@ -23,9 +22,8 @@ type usageZoneCoverage struct {
 func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key string) (usageZoneCoverage, error) {
 	var zone usageZoneCoverage
 	err := q.QueryRowContext(ctx, `SELECT id, change_revision, change_install_revision, change_pricing,
- (SELECT MIN(source_change_revision) FROM usage_rollup_installs WHERE timezone_id=z.id AND install_revision >= z.change_install_revision)
-  , EXISTS(SELECT 1 FROM usage_rollup_installs WHERE timezone_id=z.id AND install_revision>=z.change_install_revision AND source_pricing<>z.change_pricing)
- FROM usage_rollup_timezones z WHERE timezone_key=?`, key).Scan(&zone.id, &zone.revision, &zone.installRevision, &zone.pricing, &zone.lowWater, &zone.foreignPricing)
+ EXISTS(SELECT 1 FROM usage_rollup_installs WHERE timezone_id=z.id AND install_revision>=z.change_install_revision AND source_pricing<>z.change_pricing)
+ FROM usage_rollup_timezones z WHERE timezone_key=?`, key).Scan(&zone.id, &zone.revision, &zone.installRevision, &zone.pricing, &zone.foreignPricing)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return zone, err
 	}
@@ -86,9 +84,6 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return fallback()
 	}
 	low := zone.revision.Int64
-	if zone.lowWater.Valid {
-		low = min(low, zone.lowWater.Int64)
-	}
 	lost, err := usageSessionsWithoutRollup(ctx, tx, zone.id, -1)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
@@ -108,13 +103,10 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if snapshot.DatabaseID != databaseID {
 			return errUsageCacheSourceChanged
 		}
-		catalog, err = usagePricingIdentity(snapshot.PricingRows)
-		if err != nil {
-			return err
-		}
-		trusted = snapshot.PricingRevision <= low && low <= snapshot.ChangeRevision && catalog == zone.pricing
+		catalog = snapshot.PricingIdentity
+		trusted = low <= snapshot.ChangeRevision && catalog == zone.pricing
 		if !trusted {
-			return nil
+			return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 		}
 		changes, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", low, nil)
 		if err != nil {
@@ -124,7 +116,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		slices.Sort(refreshIDs)
 		refreshIDs = slices.Compact(refreshIDs)
 		refresh = *snapshot
-		if err := loadUsageSnapshotSessions(ctx, tx, refreshIDs, filter, &refresh); err != nil {
+		if err := loadUsageSnapshotSessions(ctx, tx, refreshIDs, filter, false, &refresh); err != nil {
 			return err
 		}
 		fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, refreshIDs, nil, false)
@@ -134,7 +126,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		for i := range refresh.Versions {
 			refresh.Versions[i].UsageEventFingerprint = fingerprints[refresh.Versions[i].SessionID]
 		}
-		if err := loadUsageWindowSessions(ctx, tx, window, filter, kind, snapshot); err != nil {
+		if err := loadUsageSnapshotSessions(ctx, tx, window, filter, true, snapshot); err != nil {
 			return err
 		}
 		// Replace window metadata for refresh targets with its complete record.
@@ -162,7 +154,8 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return usagePreparedWindow{}, false, err
 	}
 	if !trusted {
-		return fallback()
+		_, _, err := fallback()
+		return usagePreparedWindow{snapshot: snapshot}, false, err
 	}
 	// Deleted IDs must still reach Ensure, which removes their cached facts.
 	versions := make(map[string]usageSourceVersion, len(refresh.Versions))
@@ -171,7 +164,10 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		versions[version.SessionID] = version
 		sessions[version.SessionID] = refresh.Sessions[i]
 	}
-	resolver := export.NewPricingResolver(snapshot.PricingRows)
+	var resolver *export.PricingResolver
+	if len(refreshIDs) > 0 || snapshot.CursorHighWater > 0 {
+		resolver = export.NewPricingResolver(snapshot.PricingRows)
+	}
 	installs := make(map[string]usageRollupInstall)
 	for start := 0; start < len(refreshIDs) || start == 0 && snapshot.CursorHighWater > 0; start += usageFillInstallBatchSize {
 		end := min(start+usageFillInstallBatchSize, len(refreshIDs))
@@ -212,7 +208,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 }
 
 func usageSessionsWithoutRollup(ctx context.Context, q sessionExportQuerier, timezoneID int64, limit int) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT c.session_id FROM usage_cached_sessions c LEFT JOIN usage_rollup_installs i ON i.timezone_id=? AND i.session_id=c.session_id WHERE i.id IS NULL LIMIT ?`, timezoneID, limit)
+	rows, err := q.QueryContext(ctx, `SELECT session_id FROM usage_rollup_invalidations WHERE timezone_id=? LIMIT ?`, timezoneID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -237,14 +233,17 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 		if kind == usageQueryKindActivity {
 			tables = []string{"usage_activity_rollups"}
 		}
-		query, args = "", nil
-		for _, table := range tables {
-			if query != "" {
-				query += " UNION "
+		query = `SELECT i.session_id FROM usage_rollup_installs i WHERE i.timezone_id=? AND (`
+		for i, table := range tables {
+			if i > 0 {
+				query += " OR "
 			}
-			query += `SELECT i.session_id FROM ` + table + ` r JOIN usage_rollup_installs i ON i.id=r.rollup_install_id WHERE i.timezone_id=? AND (?='' OR r.local_date>=?) AND (?='' OR r.local_date<=?) GROUP BY i.session_id`
-			args = append(args, timezoneID, from, from, to, to)
+			// Seek one matching day per install, avoiding a fan-out and sort
+			// over every daily row when sessions span several days.
+			query += `EXISTS(SELECT 1 FROM ` + table + ` r WHERE r.rollup_install_id=i.id AND (?='' OR r.local_date>=?) AND (?='' OR r.local_date<=?))`
+			args = append(args, from, from, to, to)
 		}
+		query += ")"
 	}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -277,11 +276,8 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 		return 0, err
 	}
 	snapshot := prepared.snapshot
-	catalog, err := usagePricingIdentity(snapshot.PricingRows)
-	if err != nil {
-		return 0, err
-	}
-	if !zone.revision.Valid || zone.revision.Int64 < snapshot.ChangeRevision || snapshot.PricingRevision > zone.revision.Int64 || zone.pricing != catalog {
+	catalog := snapshot.PricingIdentity
+	if !zone.revision.Valid || zone.revision.Int64 < snapshot.ChangeRevision || zone.pricing != catalog {
 		return 0, errUsageCacheSourceChanged
 	}
 	// Only installs written since preparation can mix newer facts with this
@@ -290,12 +286,15 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 	if err != nil {
 		return 0, err
 	}
-	sessions := usageRollupSessionMap(snapshot)
+	var sessions map[string]*usageQuerySession
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
 			return 0, err
+		}
+		if sessions == nil {
+			sessions = usageRollupSessionMap(snapshot)
 		}
 		if _, ok := sessions[id]; ok {
 			_ = rows.Close()

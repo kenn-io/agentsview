@@ -339,12 +339,8 @@ func (db *DB) runUsageCacheBackfillPass(
 	); err != nil {
 		return fmt.Errorf("recording usage cache completion time: %w", err)
 	}
-	catalog, err := usagePricingIdentity(snapshot.PricingRows)
-	if err != nil {
-		return err
-	}
 	for i, location := range locations {
-		if err := cache.claimUsageZone(ctx, usageTimezoneIdentityFor(location, nil), zones[i], snapshot.ChangeRevision, catalog); err != nil {
+		if err := cache.claimUsageZone(ctx, usageTimezoneIdentityFor(location, nil), zones[i], snapshot.ChangeRevision, snapshot.PricingIdentity); err != nil {
 			return err
 		}
 	}
