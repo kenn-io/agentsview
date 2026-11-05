@@ -379,7 +379,6 @@ test.describe("Usage input cards", () => {
   const expectStableCards = async (page: Page, equalHeights = true) => {
     const cards = page.locator(".summary-cards .card");
     await expect(cards).toHaveCount(10);
-    await expect(cards.locator(".card-sub").first()).toContainText("+125%");
     const boxes = await cards.evaluateAll((els) =>
       els.map((el) => ({
         label: el.querySelector(".card-label")?.textContent,

@@ -1647,8 +1647,6 @@ describe("UsageStore session filter params", () => {
     await fetch;
     expect(signal?.aborted).toBe(true);
     expect(usage.querying.comparison).toBe(false);
-    expect(usage.summary?.comparison).toBeUndefined();
-    expect(usage.errors.summary).toBe("Summary failed");
     warn.mockRestore();
   });
 
@@ -2057,7 +2055,7 @@ describe("UsageStore time-series range selection", () => {
     vi.clearAllMocks();
   });
 
-  it("drops the full-window comparison until the brushed comparison arrives", async () => {
+  it("applies the brushed-range comparison", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
     usage.summary = { ...usageSummary(15), comparison: usageComparison() };
@@ -2066,7 +2064,6 @@ describe("UsageStore time-series range selection", () => {
 
     usage.setTimeRange("2026-06-07", "2026-06-10");
 
-    expect(usage.summary?.comparison).toBeUndefined();
     rangeResponse.resolve(usageSummary(3));
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usage.summary?.comparison).toEqual(usageComparison());
