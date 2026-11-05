@@ -484,8 +484,8 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
-// StoreTrailerCommitLinks adds or updates one repository's evidence after a full scan.
-// Call it only after a successful scan, including an empty result.
+// StoreTrailerCommitLinks adds or updates one repository's trailer evidence.
+// Existing evidence is retained; an empty result leaves it unchanged.
 // The stored session_id is the trailer's agent:ID, independent of archive owners.
 func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) error {
 	return d.Update(ctx, func(tx *sql.Tx) error {
@@ -496,7 +496,7 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 		for _, c := range commits {
 			for _, value := range c.Sessions {
 				agent, _, ok := strings.Cut(value, ":")
-				_, known := parser.AgentByType(parser.AgentType(agent))
+				_, known := parser.AgentByPrefix(strings.TrimPrefix(agent+":", "claude:"))
 				if !ok || !known {
 					continue
 				}
@@ -618,7 +618,7 @@ func trailerIdentityOwners(identities []string) (string, error) {
 	owners := make(map[string]string, len(identities))
 	for _, value := range identities {
 		agent, id, ok := strings.Cut(value, ":")
-		def, known := parser.AgentByType(parser.AgentType(agent))
+		def, known := parser.AgentByPrefix(strings.TrimPrefix(agent+":", "claude:"))
 		if ok && known {
 			owners[value] = def.IDPrefix + id
 		}
@@ -629,11 +629,9 @@ func trailerIdentityOwners(identities []string) (string, error) {
 
 // Enumerate the trailer identities for this archive ID.
 func sessionTrailerIdentities(id string) []string {
-	var identities []string
-	for _, def := range parser.Registry {
-		if raw, ok := strings.CutPrefix(id, def.IDPrefix); ok {
-			identities = append(identities, string(def.Type)+":"+raw)
-		}
+	identities := []string{"claude:" + id}
+	if def, ok := parser.AgentByPrefix(id); ok && def.IDPrefix != "" {
+		identities = append(identities, id)
 	}
 	return identities
 }

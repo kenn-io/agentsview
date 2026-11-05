@@ -831,6 +831,38 @@ func TestTrailerCommitMirrorRows(t *testing.T) {
 	assert.Equal(t, "trailer", rows[0].Source)
 }
 
+func TestTrailerCommitAgentAliases(t *testing.T) {
+	for _, tt := range []struct {
+		identity, sessionID string
+	}{
+		{identity: "freebuff:project-a:123", sessionID: "freebuff:project-a:123"},
+		{identity: "codebuff:project-a:123", sessionID: "codebuff:project-a:123"},
+		{identity: "claude:editor", sessionID: "editor"},
+	} {
+		t.Run(tt.identity, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, tt.sessionID, "project-a")
+			sha := strings.Repeat("a", 40)
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{tt.identity}, CommittedAt: tsZero}}))
+			t.Run("session commits", func(t *testing.T) {
+				links, err := d.SessionCommitLinks(t.Context(), tt.sessionID)
+				require.NoError(t, err)
+				require.Len(t, links.Commits, 1)
+				assert.Equal(t, sha, links.Commits[0].SHA)
+				assert.Equal(t, "trailer", links.Commits[0].Source)
+			})
+			t.Run("commit sessions", func(t *testing.T) {
+				links, err := d.CommitSessionLinks(t.Context(), []string{sha})
+				require.NoError(t, err)
+				require.Len(t, links.Commits, 1)
+				require.Len(t, links.Commits[0].Links, 1)
+				assert.Equal(t, tt.sessionID, links.Commits[0].Links[0].SessionID)
+				assert.False(t, links.Commits[0].Links[0].Missing)
+			})
+		})
+	}
+}
+
 func TestTrailerCommitUpsert(t *testing.T) {
 	for _, tt := range []struct {
 		name                       string
