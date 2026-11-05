@@ -1886,7 +1886,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		}
 	}
 	if transcriptChanged {
-		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+		if err := bumpIncrementalTranscriptRevisionTx(tx, sessionID, msgs, update); err != nil {
 			return false, err
 		}
 	}
@@ -2288,7 +2288,7 @@ func replaceSessionMessagesTx(
 // mutated existing session. Touching local_modified_at fires the
 // sync_marker trigger so push targets re-select the session.
 func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
-	return bumpTranscriptRevision(tx, sessionID, true)
+	return bumpTranscriptRevision(tx, sessionID, true, true)
 }
 
 // bumpInsertedTranscriptRevisionTx advances the revision for a session
@@ -2296,11 +2296,11 @@ func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 // sync_marker, so skipping the local_modified_at touch avoids a
 // redundant trigger recompute on every bulk-loaded session.
 func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
-	return bumpTranscriptRevision(tx, sessionID, false)
+	return bumpTranscriptRevision(tx, sessionID, false, true)
 }
 
 func bumpTranscriptRevision(
-	tx transactionQueries, sessionID string, touchModified bool,
+	tx transactionQueries, sessionID string, touchModified, refreshCommitLinks bool,
 ) error {
 	// Advancing the revision revokes secret-scan and friction freshness in
 	// the same transaction. The mutated transcript has content those
@@ -2341,7 +2341,10 @@ func bumpTranscriptRevision(
 			sessionID, rows,
 		)
 	}
-	return refreshSessionCommitLinksTx(tx, sessionID)
+	if refreshCommitLinks {
+		return refreshSessionCommitLinksTx(tx, sessionID)
+	}
+	return nil
 }
 
 func sessionHasFTSTableTx(tx transactionQueries, table string) (bool, error) {

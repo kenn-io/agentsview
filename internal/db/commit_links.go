@@ -331,6 +331,58 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	return links
 }
 
+func commitLinkCandidate(input, tool, category string) bool {
+	return (category == "Bash" || tool == "wait") &&
+		(invokesGitCommit(commitCommandText(input)) || len(commitPollIDs(input, tool)) > 0)
+}
+
+func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
+	// Replacements can remove evidence. Appends only affect links through
+	// commit commands and polls, including late results for existing calls.
+	refresh := update.ReplaceFromOrdinal != nil
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls {
+			refresh = refresh || commitLinkCandidate(call.InputJSON, call.ToolName, call.Category)
+		}
+	}
+	var ids []string
+	for _, link := range update.SubagentLinks {
+		if link.HasResult {
+			ids = append(ids, link.ToolUseID)
+		}
+	}
+	for _, result := range update.ToolCallResultUpdates {
+		if len(result.Events) > 0 {
+			ids = append(ids, result.ToolUseID)
+		}
+	}
+	for chunk := range slices.Chunk(ids, maxSQLVars-1) {
+		if refresh {
+			break
+		}
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := tx.Query(`SELECT COALESCE(input_json,''), tool_name, category FROM tool_calls
+ WHERE session_id=? AND tool_use_id IN `+placeholders, append([]any{sessionID}, args...)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var input, tool, category string
+			if err := rows.Scan(&input, &tool, &category); err != nil {
+				return err
+			}
+			refresh = refresh || commitLinkCandidate(input, tool, category)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return bumpTranscriptRevision(tx, sessionID, true, refresh)
+}
+
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
 	var calls []commitCall
 	var cwd string

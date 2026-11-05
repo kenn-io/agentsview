@@ -83,6 +83,91 @@ func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 	require.NoError(t, refreshSessionCommitLinksTx(tx, "candidate"))
 }
 
+func TestCommitLinksAppendWithoutCandidatesSkipsInputScan(t *testing.T) {
+	for _, input := range []string{`{"command":"true"}`, `{"command":"git log --grep=commit"}`} {
+		t.Run(input, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "candidate", "project-a")
+			insertMessages(t, d, commitMessages("candidate", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			conn, err := d.getWriter().Conn(t.Context())
+			require.NoError(t, err)
+			var sqlite *sqlite3.SQLiteConn
+			require.NoError(t, conn.Raw(func(raw any) error {
+				sqlite = raw.(*sqlite3.SQLiteConn)
+				sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
+					if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
+						return sqlite3.SQLITE_DENY
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			defer sqlite.RegisterAuthorizer(nil)
+			message := commitMessages("candidate", input, "")[2]
+			message.Ordinal = 3
+			_, err = d.WriteSessionIncremental(t.Context(), "candidate", []Message{message}, IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4})
+			require.NoError(t, err)
+			links, err := d.SessionCommitLinks(t.Context(), "candidate")
+			require.NoError(t, err)
+			require.Len(t, links.Commits, 1)
+			assert.Equal(t, "abc1234", links.Commits[0].SHA)
+		})
+	}
+}
+
+func TestCommitLinksIncrementalCandidates(t *testing.T) {
+	for _, tt := range []struct {
+		name, tool, input, initial string
+		late, replace              bool
+	}{
+		{name: "commit", tool: "Bash", input: `{"command":"git commit -m fix"}`},
+		{name: "shell poll", tool: "write_stdin", input: `{"session_id":7}`},
+		{name: "code poll", tool: "exec", input: `text(await tools.write_stdin({session_id:7}))`},
+		{name: "cell poll", tool: "wait", input: `{"cell_id":"cell-a"}`, initial: "Script running with cell ID cell-a"},
+		{name: "late commit", tool: "Bash", input: `{"command":"git commit -m fix"}`, late: true},
+		{name: "late poll", tool: "write_stdin", input: `{"session_id":7}`, late: true},
+		{name: "replacement", tool: "Bash", input: `{"command":"true"}`, initial: "[main abc1234] Fix parser", replace: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "candidate", "project-a")
+			initial := tt.initial
+			if initial == "" {
+				initial = "Process running with session ID 7"
+			}
+			insertMessages(t, d, commitMessages("candidate", `{"command":"git commit -m fix"}`, initial)...)
+			message := commitMessages("candidate", tt.input, "[main def5678] Next fix")[2]
+			message.Ordinal = 3
+			message.ToolCalls[0].ToolName = tt.tool
+			message.ToolCalls[0].ToolUseID = "next-call"
+			update := IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4}
+			messages := []Message{message}
+			if tt.late {
+				message.ToolCalls[0].ResultContent = ""
+				message.ToolCalls[0].ResultEvents = nil
+				insertMessages(t, d, message)
+				messages = nil
+				update.ToolCallResultUpdates = []ToolCallResultUpdate{{ToolUseID: "next-call", Position: ToolCallPosition{MessageOrdinal: 3}, Events: []ToolResultEvent{{Source: "tool_result", Content: "[main def5678] Next fix"}}}}
+			}
+			if tt.replace {
+				messages[0].Ordinal = 2
+				update.ReplaceFromOrdinal = &messages[0].Ordinal
+			}
+			_, err := d.WriteSessionIncremental(t.Context(), "candidate", messages, update)
+			require.NoError(t, err)
+			links, err := d.SessionCommitLinks(t.Context(), "candidate")
+			require.NoError(t, err)
+			if tt.replace {
+				assert.Empty(t, links.Commits)
+			} else {
+				require.Len(t, links.Commits, 1)
+				assert.Equal(t, "def5678", links.Commits[0].SHA)
+			}
+		})
+	}
+}
+
 func TestCommitLinksParsing(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
