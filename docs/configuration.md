@@ -262,6 +262,8 @@ Codex Cloud capture, replica push, and raw uploads keep their own schedules.
 The next archive request waits up to two seconds for catch-up;
 slower catch-up continues in the background with a stale-results warning.
 A failed catch-up keeps the warning and retries on the periodic sync schedule.
+Every client request except `/api/ping` counts as activity. Version and sync-status
+probes report readiness without starting catch-up.
 The warning clears after local files, remote roots, and attached sources
 finish catching up.
 Desktop health probes keep the daemon alive without restarting sync.

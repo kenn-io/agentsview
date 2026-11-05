@@ -8873,7 +8873,7 @@ components:
         - project
       type: object
 info:
-  description: "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild is pending; GET /api/v1/sync/status reports its state."
+  description: "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild or idle catch-up is incomplete; GET /api/v1/sync/status reports its state."
   title: AgentsView API
   version: dev
 openapi: 3.1.0

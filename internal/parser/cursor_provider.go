@@ -278,41 +278,25 @@ var cursorS3Provider = DefaultS3Provider{
 func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	resolutionCache := make(cursorResolutionCache)
-	s3FilesByRoot, err := discoverCursorS3ByRoot(ctx, s.roots)
-	if err != nil {
-		return nil, err
-	}
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if isS3URI(root) {
-			for _, file := range s3FilesByRoot[root] {
-				addJSONLSource(s3SourceRefFromDiscoveredFile(root, file), &sources, seen)
-			}
-			continue
-		}
-		for _, chats := range s.chatsDirs(root) {
-			s.storeIndex.refresh(chats)
-		}
-		for _, path := range s.discoverTranscriptPaths(root) {
-			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
-			if !ok {
-				continue
-			}
-			addJSONLSource(source, &sources, seen)
-		}
-	}
+	err := s.DiscoverEach(ctx, func(source SourceRef) error {
+		addJSONLSource(source, &sources, seen)
+		return nil
+	})
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, err
 }
 
 func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	resolutionCache := make(cursorResolutionCache)
-	s3FilesByRoot, err := discoverCursorS3ByRoot(ctx, s.roots)
-	if err != nil {
-		return err
+	s3FilesByRoot, incomplete := discoverCursorS3ByRoot(ctx, s.roots)
+	emit := func(source SourceRef) error {
+		if err := ctx.Err(); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
 	}
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -320,87 +304,103 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 		}
 		if isS3URI(root) {
 			for _, file := range s3FilesByRoot[root] {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		for _, chats := range s.chatsDirs(root) {
-			s.storeIndex.refresh(chats)
-		}
-		resolvedRoot, err := filepath.EvalSymlinks(root)
-		if err != nil {
-			if _, lstatErr := os.Lstat(root); errors.Is(lstatErr, os.ErrNotExist) {
-				continue
+		if err := s.discoverLocalRootEach(ctx, root, resolutionCache, emit); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			return fmt.Errorf("resolve cursor root %s: %w", root, err)
+			if cause, ok := discoveryYieldCause(err); ok {
+				return cause
+			}
+			incomplete = errors.Join(incomplete, incompleteDiscoveryError(AgentCursor, "discover "+root, err))
 		}
-		err = streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
-			if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
+	}
+	return errors.Join(incomplete, ctx.Err())
+}
+
+func (s cursorSourceSet) discoverLocalRootEach(ctx context.Context, root string, resolutionCache cursorResolutionCache, yield func(SourceRef) error) error {
+	for _, chats := range s.chatsDirs(root) {
+		s.storeIndex.refresh(chats)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		if _, lstatErr := os.Lstat(root); errors.Is(lstatErr, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("resolve cursor root %s: %w", root, err)
+	}
+	err = streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
+		if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		dir := filepath.Join(root, project.Name(), "agent-transcripts")
+		resolvedDir, resolveErr := filepath.EvalSymlinks(dir)
+		if errors.Is(resolveErr, os.ErrNotExist) {
+			if _, lstatErr := os.Lstat(dir); errors.Is(lstatErr, os.ErrNotExist) {
 				return nil
 			}
-			dir := filepath.Join(root, project.Name(), "agent-transcripts")
-			resolvedDir, resolveErr := filepath.EvalSymlinks(dir)
-			if errors.Is(resolveErr, os.ErrNotExist) {
-				if _, lstatErr := os.Lstat(dir); errors.Is(lstatErr, os.ErrNotExist) {
+			return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+		}
+		if resolveErr != nil {
+			return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+		}
+		if !isContainedIn(resolvedDir, resolvedRoot) {
+			return nil
+		}
+		topLevel := make(map[string]struct{})
+		var sessionDirs []string
+		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			if !entry.IsDir() {
+				if !IsCursorTranscriptExt(entry.Name()) {
 					return nil
 				}
-				return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+				if entry.Type().IsRegular() {
+					name := entry.Name()
+					topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
+				}
+				return s.yieldIfCanonical(
+					root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
+				)
 			}
-			if resolveErr != nil {
-				return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+			sessionDir := filepath.Join(dir, entry.Name())
+			sessionDirs = append(sessionDirs, sessionDir)
+			base := filepath.Join(sessionDir, entry.Name())
+			path := ""
+			for _, ext := range []string{".jsonl", ".txt"} {
+				// Preserve broken-link errors without letting a symlink
+				// reserve the stem or outrank a regular file.
+				regular, statErr := streamingRegularFileCandidate(base + ext)
+				if statErr != nil {
+					return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
+				}
+				if regular && IsRegularFile(base+ext) {
+					path = base + ext
+					break
+				}
 			}
-			if !isContainedIn(resolvedDir, resolvedRoot) {
+			if path == "" {
 				return nil
 			}
-			topLevel := make(map[string]struct{})
-			var sessionDirs []string
-			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
-				if !entry.IsDir() {
-					if !IsCursorTranscriptExt(entry.Name()) {
-						return nil
-					}
-					if entry.Type().IsRegular() {
-						name := entry.Name()
-						topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
-					}
-					return s.yieldIfCanonical(
-						root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
-					)
-				}
-				sessionDir := filepath.Join(dir, entry.Name())
-				sessionDirs = append(sessionDirs, sessionDir)
-				base := filepath.Join(sessionDir, entry.Name())
-				path := ""
-				for _, ext := range []string{".jsonl", ".txt"} {
-					// Preserve broken-link errors without letting a symlink
-					// reserve the stem or outrank a regular file.
-					regular, statErr := streamingRegularFileCandidate(base + ext)
-					if statErr != nil {
-						return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
-					}
-					if regular && IsRegularFile(base+ext) {
-						path = base + ext
-						break
-					}
-				}
-				if path == "" {
-					return nil
-				}
-				topLevel[entry.Name()] = struct{}{}
-				return s.yieldIfCanonical(root, path, resolutionCache, yield)
-			})
-			if err != nil {
-				return err
-			}
-			return s.streamSubagentTranscripts(
-				ctx, root, sessionDirs, topLevel, resolutionCache, yield,
-			)
+			topLevel[entry.Name()] = struct{}{}
+			return s.yieldIfCanonical(root, path, resolutionCache, yield)
 		})
 		if err != nil {
 			return err
 		}
+		return s.streamSubagentTranscripts(
+			ctx, root, sessionDirs, topLevel, resolutionCache, yield,
+		)
+	})
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -1229,6 +1229,7 @@ func cursorProviderCapabilities() Capabilities {
 			ToolResultEvents: CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
+			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 		},

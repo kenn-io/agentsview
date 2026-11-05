@@ -323,23 +323,18 @@ func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
 		polling = append(polling, syncObligationToPoller(obligation))
 	}
 	groups, _ := availableUnwatchedPollScopes(polling)
-	if err := pollUnwatchedScopesOnce(d.ctx, d.engine, groups); err != nil {
-		return err
-	}
-	return d.catchUpScheduledSources(cfg)
+	return errors.Join(pollUnwatchedScopesOnce(d.ctx, d.engine, groups), d.catchUpScheduledSources(cfg))
 }
 
 // catchUpScheduledSources runs the remote and attached-source passes the
 // scheduled tick skips while collection is released.
 func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
-	if err := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg)); err != nil {
-		return err
-	}
+	remoteErr := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
 	if attached := d.attached.Load(); attached != nil {
 		_, err := attached.DrainScheduled(d.ctx)
-		return err
+		return errors.Join(remoteErr, err)
 	}
-	return nil
+	return remoteErr
 }
 
 // syncScheduled retries incomplete recovery on the existing periodic cadence.

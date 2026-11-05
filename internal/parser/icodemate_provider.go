@@ -88,6 +88,7 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 // terminal CLI transcripts.
 func icodemateProviderCapabilities() Capabilities {
 	caps := openCodeFormatProviderCapabilities()
+	caps.Sync.PartialDiscovery = true
 	caps.Source.MultiSessionSource = CapabilitySupported
 	caps.Source.ExcludedSessions = CapabilitySupported
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
@@ -136,24 +137,44 @@ type icodemateProvider struct {
 }
 
 func (p *icodemateProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	opencodeSources, err := p.opencode.Discover(ctx)
-	if err != nil {
-		return nil, err
+	opencodeSources, opencodeErr := p.opencode.Discover(ctx)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
-	cliSources, err := p.cli.Discover(ctx)
-	if err != nil {
-		return nil, err
+	cliSources, cliErr := p.cli.Discover(ctx)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
-	return append(opencodeSources, cliSources...), nil
+	err := errors.Join(opencodeErr, cliErr)
+	if err != nil {
+		err = incompleteDiscoveryError(AgentIcodemate, "discover storage families", err)
+	}
+	return append(opencodeSources, cliSources...), err
 }
 
-func (p *icodemateProvider) DiscoverEach(
-	ctx context.Context, yield func(SourceRef) error,
-) error {
-	if err := p.opencode.DiscoverEach(ctx, yield); err != nil {
-		return err
+func (p *icodemateProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	emit := func(source SourceRef) error {
+		if err := ctx.Err(); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
 	}
-	return p.cli.DiscoverEach(ctx, yield)
+	var incomplete error
+	for _, sources := range []StreamingDiscoverer{p.opencode, p.cli} {
+		if err := sources.DiscoverEach(ctx, emit); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if cause, ok := discoveryYieldCause(err); ok {
+				return cause
+			}
+			incomplete = errors.Join(incomplete, incompleteDiscoveryError(AgentIcodemate, "discover storage family", err))
+		}
+	}
+	return errors.Join(incomplete, ctx.Err())
 }
 
 func (p *icodemateProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {

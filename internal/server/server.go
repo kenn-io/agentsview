@@ -768,7 +768,7 @@ func (s *Server) humaConfig() huma.Config {
 		"application/json": jsonFormat,
 		"json":             jsonFormat,
 	}
-	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild is pending; GET /api/v1/sync/status reports its state."
+	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild or idle catch-up is incomplete; GET /api/v1/sync/status reports its state."
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""

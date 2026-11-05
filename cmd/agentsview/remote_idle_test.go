@@ -66,6 +66,7 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
 			t.Cleanup(engine.Close)
+			published.Store(forbidden)
 			engine.SyncAll(t.Context(), nil)
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 			t.Cleanup(ingestion.Stop)
@@ -80,6 +81,9 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 			assert.Equal(t, !forbidden, ingestion.EnsureFresh(t.Context()))
 			assert.Equal(t, forbidden, ingestion.Pending())
 			if forbidden {
+				archived, err := database.GetAllMessages(t.Context(), "overnight")
+				require.NoError(t, err)
+				require.Len(t, archived, 1, "history under the denied scope stays archived")
 				endpoint := serveIngestionArchive(t, cfg, database, engine, ingestion)
 				headers, _ := searchIngestionArchive(t, endpoint.URL, "overnight")
 				assert.Equal(t, "true", headers.Get("X-Agentsview-Archive-Stale"))
