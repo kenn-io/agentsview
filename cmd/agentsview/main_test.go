@@ -1008,6 +1008,45 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 	assert.Equal(t, roots, fake.callRoots[1])
 }
 
+func TestStartFileWatcherUsesLoadedSyncInterval(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("sync_interval = '1500ms'\n"), 0o600))
+	cfg, err := config.LoadMinimalFor(config.ScopeServer)
+	require.NoError(t, err)
+	projects := filepath.Join(dir, "projects")
+	require.NoError(t, os.Mkdir(projects, 0o700))
+	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {projects}}
+	calls := make(chan time.Time, 8)
+	stop, open, unwatched, _, _ := startFileWatcher(cfg, nil,
+		func(context.Context, agentsync.WatchBatch) error {
+			calls <- time.Now()
+			return nil
+		}, agentsync.WatcherOptions{})
+	t.Cleanup(stop)
+	require.Empty(t, unwatched)
+	open()
+	receive := func() time.Time {
+		t.Helper()
+		select {
+		case at := <-calls:
+			return at
+		case <-time.After(10 * time.Second):
+			t.Fatal("watcher did not dispatch a file write")
+			return time.Time{}
+		}
+	}
+	path := filepath.Join(projects, "active.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
+	first := receive()
+	require.NoError(t, os.WriteFile(path, []byte("second\n"), 0o600))
+	gap := receive().Sub(first)
+	assert.GreaterOrEqual(t, gap, 1400*time.Millisecond)
+	assert.Less(t, gap, 3500*time.Millisecond)
+}
+
 func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "codex-state")
 	require.NoError(t, os.Mkdir(parent, 0o755), "mkdir parent")
