@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
-  ARCHIVE_STALE_EVENT,
   orvalFetch,
   getServerUrl,
   responseTimingOf,
@@ -100,37 +99,6 @@ describe("orvalFetch", () => {
     expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe(
       "Bearer candidate-token",
     );
-  });
-  it("dispatches a stale event when a search response reports incomplete catch-up", async () => {
-    const listener = vi.fn();
-    window.addEventListener(ARCHIVE_STALE_EVENT, listener);
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response('{"results":[]}', {
-            headers: {
-              "Content-Type": "application/json",
-              "X-Agentsview-Archive-Stale": "true",
-              "X-Agentsview-Sync-Pending": "true",
-            },
-          }),
-        )
-        .mockResolvedValueOnce(
-          new Response('{"results":[]}', {
-            headers: { "Content-Type": "application/json", "X-Agentsview-Archive-Stale": "true" },
-          }),
-        ),
-    );
-    try {
-      await orvalFetch("/api/v1/search?q=overnight", {});
-      expect(listener).toHaveBeenCalledOnce();
-      await orvalFetch("/api/v1/search?q=overnight", {});
-      expect(listener).toHaveBeenCalledOnce();
-    } finally {
-      window.removeEventListener(ARCHIVE_STALE_EVENT, listener);
-    }
   });
 });
 

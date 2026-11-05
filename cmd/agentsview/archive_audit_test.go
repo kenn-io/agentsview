@@ -437,18 +437,16 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 		mode  string
 	}
 	for _, tc := range []struct {
-		name          string
-		stale         bool
-		battery       bool
-		idle          bool
-		failedCatchup bool
-		want          attempt
+		name    string
+		stale   bool
+		battery bool
+		idle    bool
+		want    attempt
 	}{
 		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
 		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 		{name: "required while idle", idle: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
-		{name: "required after failed wake", idle: true, stale: true, failedCatchup: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 		{name: "idle", idle: true, want: attempt{archiveAuditInterval + batteryRecheckInterval, "audit"}},
 		{name: "idle on battery", idle: true, battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 	} {
@@ -489,14 +487,14 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					synctest.Sleep(archiveAuditRetryInitial)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the idle rebuild waits for catch-up")
-					ingestion.finishCatchup(ingestion.catchup, !tc.failedCatchup)
+					ingestion.finishCatchup(ingestion.catchup)
 					synctest.Wait()
 				}
 				if tc.idle && !tc.stale {
 					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for catch-up")
-					ingestion.finishCatchup(ingestion.catchup, true)
+					ingestion.finishCatchup(ingestion.catchup)
 					synctest.Wait()
 				}
 				if tc.battery && !tc.stale {
@@ -510,7 +508,6 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					battery.Store(false)
 				}
 				assert.Equal(t, tc.want, <-attempts)
-				assert.Equal(t, tc.failedCatchup, ingestion.Pending(), "audit admission preserves incomplete-recovery warnings")
 				cancel()
 				<-done
 			})

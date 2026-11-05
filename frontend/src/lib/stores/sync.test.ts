@@ -1,8 +1,6 @@
 import { reportSyncFailed } from "../utils/telemetry.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
-import { ARCHIVE_STALE_EVENT } from "../api/runtime.js";
-import { searchStore } from "./search.svelte.js";
 import type {
   SyncSyncStats as SyncStats,
   UpdateCheckResponse as UpdateCheck,
@@ -1031,41 +1029,5 @@ describe("SyncStore.remoteUnreachable", () => {
     expect(sync.backendDegraded).toBe(false);
     expect(sync.backendDegradedMessage).toBeNull();
     expect(sync.remoteUnreachable).toBe(true);
-  });
-});
-
-// Response-reported catch-up can finish entirely between two status polls.
-describe("idle catch-up completion", () => {
-  it("refreshes the current search once after response-reported catch-up completes", async () => {
-    sync.syncPending = false;
-    sync.serverVersion = {
-      api_version: 1,
-      build_date: "",
-      commit: "abc123",
-      data_version: 1,
-      friction_available: false,
-      friction_build_allowed: false,
-      insight_generation_available: false,
-      kata_available: false,
-      read_only: false,
-      session_stats_available: false,
-      version: "dev",
-    };
-    const refresh = vi.spyOn(searchStore, "refresh").mockImplementation(() => {});
-    vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", sync_pending: false });
-    try {
-      await sync.loadStatus();
-      expect(refresh).not.toHaveBeenCalled();
-      window.dispatchEvent(new Event(ARCHIVE_STALE_EVENT));
-      expect(sync.syncPending).toBe(true);
-      await sync.loadStatus();
-      expect(sync.syncPending).toBe(false);
-      expect(refresh).toHaveBeenCalledOnce();
-      await sync.loadStatus();
-      expect(refresh).toHaveBeenCalledOnce();
-    } finally {
-      refresh.mockRestore();
-      sync.syncPending = false;
-    }
   });
 });

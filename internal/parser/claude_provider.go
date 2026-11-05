@@ -519,6 +519,7 @@ type claudeLayoutSpec struct {
 	dirLabel      string
 	debounceScope string
 	watchGlobs    []string
+	listFiles     func(string) []DiscoveredFile
 	// sidecarSources includes persisted tool-result companions in watch
 	// coverage, changed-path mapping, and source fingerprints. The Claude
 	// provider keeps this off: its stored fingerprints hash only the
@@ -533,6 +534,7 @@ func claudeLayoutSpecClaude() claudeLayoutSpec {
 		dirLabel:      "Claude project directory",
 		debounceScope: "projects",
 		watchGlobs:    []string{"*.jsonl"},
+		listFiles:     ClaudeProjectSessionFiles,
 	}
 }
 
@@ -554,38 +556,34 @@ func newClaudeLayoutSourceSet(
 func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	err := s.DiscoverEach(ctx, func(source SourceRef) error {
-		addJSONLSource(source, &sources, seen)
-		return nil
-	})
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		for _, file := range s.spec.listFiles(root) {
+			source, ok := s.discoveredSourceRef(root, file)
+			if !ok {
+				continue
+			}
+			addJSONLSource(source, &sources, seen)
+		}
+	}
 	sortJSONLSources(sources)
-	return sources, err
+	return sources, nil
 }
 
 func (s claudeSourceSet) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
-	var incomplete error
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var yieldErr error
-		err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
-			yieldErr = yield(source)
-			return yieldErr
-		})
-		if yieldErr != nil {
-			return yieldErr
-		}
-		if err != nil {
-			if _, partial := errors.AsType[DiscoveryIncompleteError](err); !partial || ctx.Err() != nil {
-				return err
-			}
-			incomplete = errors.Join(incomplete, err)
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
+			return err
 		}
 	}
-	return incomplete
+	return nil
 }
 
 func (s claudeSourceSet) discoverEachRoot(
@@ -594,11 +592,7 @@ func (s claudeSourceSet) discoverEachRoot(
 	yield func(SourceRef) error,
 ) error {
 	if strings.HasPrefix(root, "s3://") {
-		files, err := s.discoverFiles(root)
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
+		for _, file := range s.spec.listFiles(root) {
 			source, ok := s.discoveredSourceRef(root, file)
 			if ok {
 				if err := yield(source); err != nil {
@@ -609,12 +603,6 @@ func (s claudeSourceSet) discoverEachRoot(
 		return nil
 	}
 	return s.streamLocalRoot(ctx, root, yield)
-}
-
-func (s claudeSourceSet) discoverFiles(root string) ([]DiscoveredFile, error) {
-	scanner := claudeS3Scanner()
-	scanner.Agent = s.spec.agent
-	return s3PrefixScan(root, scanner)
 }
 
 func (s claudeSourceSet) streamLocalRoot(
@@ -688,7 +676,7 @@ func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path stri
 
 // discoveredSourceRef builds the SourceRef for one enumerated session file.
 // Local files resolve through the regular file-backed source ref; s3://
-// objects enumerated by the agent's S3 scanner carry
+// objects (which spec.listFiles enumerates via the agent's S3 scanner) carry
 // their durable object metadata in the Opaque payload, because the
 // IsRegularFile gate that sourceRef applies to a local path would otherwise drop
 // every remote object.
@@ -1042,7 +1030,6 @@ func claudeProviderCapabilities() Capabilities {
 			StopReason:           CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,

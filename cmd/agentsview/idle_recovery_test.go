@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,6 +23,36 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
+
+func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("fixture needs enforced POSIX file permissions")
+	}
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	writeReloadGeminiSession(t, root, "overnight")
+	path := filepath.Join(root, "tmp", "project", "chats", "session-overnight.json")
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(path, 0o600)) })
+	_, err := os.ReadFile(path)
+	require.ErrorIs(t, err, os.ErrPermission)
+	logs := captureLogOutput(t)
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
+	headers, body := searchIngestionArchive(t, ts.URL, "overnight")
+	ingestion.applying.Wait()
+	ingestion.Stop()
+	assert.NotContains(t, body, "hello from overnight")
+	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+	assert.False(t, ingestion.Pending(), "a finished wake pass clears pending even when a source fails")
+	assert.Contains(t, logs.String(), "permission denied")
+}
 
 func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -56,7 +89,7 @@ func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	<-entered
 	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
 	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
-	require.Equal(t, "true", headers.Get(apiclient.SyncPendingHeader))
+	require.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
 	<-attempted
 	unblock()
 	<-finished

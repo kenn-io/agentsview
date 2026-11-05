@@ -20,8 +20,7 @@ vi.mock("../../api/generated/index", () => ({
     postApiV1SettingsWorktreeMappingsReclassify: api.apply,
   },
 }));
-vi.mock("../../api/runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api/runtime.js")>()),
+vi.mock("../../api/runtime.js", () => ({
   isAbortError: vi.fn(() => false),
 }));
 

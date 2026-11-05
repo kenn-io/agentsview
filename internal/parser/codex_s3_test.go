@@ -34,8 +34,7 @@ func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 		}, nil
 	}
 
-	got, err := s3PrefixScan("s3://bucket/root/codex", codexS3Scanner())
-	require.NoError(t, err)
+	got := s3PrefixScan("s3://bucket/root/codex", codexS3Scanner())
 	require.Len(t, got, 1)
 	assert.Equal(t, "s3://bucket/root/codex/2026/06/24/rollout-2026-06-24T00-00-00-good.jsonl", got[0].Path)
 	assert.Equal(t, int64(11), got[0].SourceSize)
@@ -68,9 +67,8 @@ func TestDiscoverCodexS3KeepsSessionIndexMetadataSeparate(t *testing.T) {
 		return S3Object{}, nil
 	}
 
-	got, err := s3PrefixScan(root, codexS3Scanner())
+	got := s3PrefixScan(root, codexS3Scanner())
 
-	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, rolloutURI, got[0].Path)
 	assert.Equal(t, int64(11), got[0].SourceSize)

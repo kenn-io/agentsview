@@ -7,11 +7,10 @@
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
-  import { tick, onDestroy, onMount, untrack } from "svelte";
+  import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { searchStore } from "../../stores/search.svelte.js";
-  import { events } from "../../stores/events.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
     formatRelativeTime,
@@ -40,8 +39,6 @@
     { value: "semantic", label: m.command_palette_mode_semantic() },
     { value: "hybrid", label: m.command_palette_mode_hybrid() },
   ]);
-
-  onMount(() => events.subscribeDebounced(() => searchStore.refresh()));
 
   // Clear state and reset sort whenever the palette is unmounted, regardless
   // of close path (Escape key, overlay click, command-palette toggle, or any other

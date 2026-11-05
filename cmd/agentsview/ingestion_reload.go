@@ -165,7 +165,7 @@ func (d *daemonIngestion) Suspend() {
 	if d.stopped || d.watchers == nil || d.catchup != nil {
 		return
 	}
-	if !d.pending || released(d.resumed) {
+	if !d.pending {
 		d.pending, d.resumed = true, make(chan struct{})
 	}
 	watchers, stopLive := d.watchers, d.stopLive
@@ -196,10 +196,6 @@ func (d *daemonIngestion) WaitActive(ctx context.Context) bool {
 
 // EnsureFresh shares one catch-up; each reader owns only its bounded wait.
 func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
-	return d.ensureFresh(ctx, false)
-}
-
-func (d *daemonIngestion) ensureFresh(ctx context.Context, retry bool) bool {
 	waitCtx, cancel := context.WithTimeout(ctx, ingestionWaitBudget)
 	defer cancel()
 	finish, ok := d.idleTracker.BeginWork()
@@ -214,11 +210,6 @@ func (d *daemonIngestion) ensureFresh(ctx context.Context, retry bool) bool {
 		return fresh
 	}
 	done := d.catchup
-	if done == nil && d.watchers != nil && !retry {
-		d.mu.Unlock()
-		finish()
-		return false
-	}
 	started := done == nil
 	if started {
 		done = make(chan struct{})
@@ -255,41 +246,15 @@ func (d *daemonIngestion) restoreCollection() error {
 	return nil
 }
 
-// AcknowledgeSync settles recovery after a complete manual pass.
-func (d *daemonIngestion) AcknowledgeSync() {
+func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.settleLocked(true)
-}
-
-func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.settleLocked(complete)
-	d.catchup = nil
-	close(done)
-}
-
-// settleLocked releases waiting audits once a recovery pass leaves the
-// engine; only a complete pass clears the reader warning.
-func (d *daemonIngestion) settleLocked(complete bool) {
-	if d.stopped || !d.pending {
-		return
-	}
-	d.pending = !complete
-	if !released(d.resumed) {
+	if d.pending {
+		d.pending = false
 		close(d.resumed)
 	}
-}
-
-// released reports whether audits waiting on ch may run.
-func released(ch chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
-	}
+	d.catchup = nil
+	close(done)
 }
 
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
@@ -298,8 +263,13 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 			return agentsync.SyncStats{}, err
 		}
 		stats, err := runner(ctx, progress)
-		if err == nil && ctx.Err() == nil && stats.ProcessingComplete() {
-			d.AcknowledgeSync()
+		if err == nil {
+			d.mu.Lock()
+			if d.pending {
+				d.pending = false
+				close(d.resumed)
+			}
+			d.mu.Unlock()
 		}
 		return stats, err
 	}
@@ -308,23 +278,19 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
 	err := d.restoreCollection()
-	complete := false
 	if err == nil {
 		stats := d.engine.SyncAll(d.ctx, nil)
-		complete = stats.ProcessingComplete()
-		if !complete {
+		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}
 		if d.attached != nil {
-			var attachedStats agentsync.SyncStats
-			attachedStats, err = d.attached.DrainScheduled(d.ctx)
-			complete = complete && attachedStats.ProcessingComplete() && err == nil
+			_, err = d.attached.DrainScheduled(d.ctx)
 		}
 	}
 	if err != nil {
 		log.Printf("idle catch-up incomplete: %v", err)
 	}
-	d.finishCatchup(done, complete && d.ctx.Err() == nil)
+	d.finishCatchup(done)
 }
 
 // Reload reads the saved configuration and applies it in the background. It

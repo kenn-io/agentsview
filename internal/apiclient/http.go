@@ -43,7 +43,6 @@ func (c httpTransport) Do(ctx context.Context, req *http.Request) (*http.Respons
 
 const (
 	ArchiveStaleHeader  = "X-Agentsview-Archive-Stale"
-	SyncPendingHeader   = "X-Agentsview-Sync-Pending"
 	ArchiveStaleWarning = "Archive results may be stale."
 )
 

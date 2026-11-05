@@ -262,8 +262,6 @@ local sync timers, S3 imports, and attachment imports. Remote-host polling,
 Codex Cloud capture, replica push, and raw uploads keep their own schedules.
 The next archive request waits up to two seconds for catch-up;
 slower catch-up continues in the background with a stale-results warning.
-Source failures are logged and keep the warning visible until catch-up succeeds.
-Failed catch-up retries through the next scheduled sync while collection is active.
 Every client request except `/api/ping` counts as activity. Version and sync-status
 probes report readiness without starting catch-up.
 Desktop health probes keep the daemon alive without restarting sync.

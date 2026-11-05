@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"errors"
 	"path"
 	"slices"
 	"strings"
@@ -43,7 +42,6 @@ func discoverCursorS3ByRoot(
 	ctx context.Context, roots []string,
 ) (map[string][]DiscoveredFile, error) {
 	var candidates []cursorS3Transcript
-	var incomplete error
 	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -51,12 +49,7 @@ func discoverCursorS3ByRoot(
 		if !isS3URI(root) {
 			continue
 		}
-		files, err := s3PrefixScan(root, cursorS3Scanner())
-		if err != nil {
-			incomplete = errors.Join(incomplete, err)
-			continue
-		}
-		for _, file := range files {
+		for _, file := range s3PrefixScan(root, cursorS3Scanner()) {
 			candidates = append(candidates, cursorS3Transcript{
 				root: root,
 				file: file,
@@ -70,7 +63,7 @@ func discoverCursorS3ByRoot(
 			byRoot[transcript.root], transcript.file,
 		)
 	}
-	return byRoot, incomplete
+	return byRoot, nil
 }
 
 // keepCursorS3Session accepts the documented harvest layout

@@ -279,7 +279,10 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
 	resolutionCache := make(cursorResolutionCache)
-	s3FilesByRoot, incomplete := discoverCursorS3ByRoot(ctx, s.roots)
+	s3FilesByRoot, err := discoverCursorS3ByRoot(ctx, s.roots)
+	if err != nil {
+		return nil, err
+	}
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -302,12 +305,15 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		}
 	}
 	sortJSONLSources(sources)
-	return sources, incomplete
+	return sources, nil
 }
 
 func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	resolutionCache := make(cursorResolutionCache)
-	s3FilesByRoot, incomplete := discoverCursorS3ByRoot(ctx, s.roots)
+	s3FilesByRoot, err := discoverCursorS3ByRoot(ctx, s.roots)
+	if err != nil {
+		return err
+	}
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -396,7 +402,7 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			return err
 		}
 	}
-	return incomplete
+	return nil
 }
 
 func (s cursorSourceSet) yieldIfCanonical(
@@ -1223,7 +1229,6 @@ func cursorProviderCapabilities() Capabilities {
 			ToolResultEvents: CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 		},

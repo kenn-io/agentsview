@@ -100,17 +100,6 @@ function generatedErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
-/** Dispatched when a response says idle catch-up is still incomplete. */
-export const ARCHIVE_STALE_EVENT = "agentsview:archive-stale";
-
-async function fetchNotingStale(input: string, init: RequestInit): Promise<Response> {
-  const response = await fetch(input, init);
-  if (response.headers.get("X-Agentsview-Sync-Pending") === "true") {
-    window.dispatchEvent(new Event(ARCHIVE_STALE_EVENT));
-  }
-  return response;
-}
-
 export type ApiRequestOptions = RequestInit & {
   baseUrl?: string;
 };
@@ -120,7 +109,7 @@ export async function orvalRequest<T extends Response = Response>(
   options: ApiRequestOptions = {},
 ): Promise<T> {
   const { baseUrl, ...init } = options;
-  const response = await fetchNotingStale(`${baseUrl ?? getGeneratedBase()}${url}`, {
+  const response = await fetch(`${baseUrl ?? getGeneratedBase()}${url}`, {
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
   });
