@@ -6,7 +6,7 @@
     CirclePlayIcon,
     CodeIcon,
     CopyIcon,
-    EllipsisVerticalIcon,
+    EllipsisIcon,
     FileTextIcon,
     FolderIcon,
     LightbulbIcon,
@@ -1187,7 +1187,9 @@
         bind:this={menuBtnEl}
         onclick={toggleMenu}
       >
-        <EllipsisVerticalIcon size="14" aria-hidden="true" />
+        <!-- The same horizontal dots as the top bar menu, so the two overflow
+             menus share one glyph. -->
+        <EllipsisIcon size="14" aria-hidden="true" />
       </button>
       {#if menuOpen}
         <div class="actions-menu" bind:this={menuEl}>

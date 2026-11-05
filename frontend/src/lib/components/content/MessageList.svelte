@@ -1284,20 +1284,15 @@
     padding-inline-start: calc(var(--role-assistant-bar-width) + 16px - 16px);
   }
 
-  /* Skim is read by scanning tool names down the left, so they carry the
-     tool color and weight. Names take their own width, so short ones such
-     as Bash sit right beside their command, and very long MCP names end in
+  /* Skim is read by scanning tool names down the left. They keep the
+     calm tool ink and medium weight of the other layouts, so a long MCP
+     name is never the loudest text. Names take their own width and show
+     in full when they fit; only a name wider than most of the row ends in
      an ellipsis instead of crowding out the command. */
   .layout-skim :global(.tool-label) {
-    max-width: 28ch;
+    max-width: 60%;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--role-tool-accent);
-    font-weight: 600;
-  }
-
-  :global(:root:not(.dark)) .layout-skim :global(.tool-label) {
-    color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary));
   }
 
   .layout-skim :global(.tool-meta),

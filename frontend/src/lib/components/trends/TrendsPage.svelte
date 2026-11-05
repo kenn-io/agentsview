@@ -275,10 +275,11 @@
     />
     <div class="toolbar-actions">
       <Button size="sm" label={m.trends_reset()} onclick={resetTerms} />
+      <!-- Recompute reruns the term counts. It is a text action, so it does
+           not read as a third refresh button beside the top bar's Refresh. -->
       <Button
         size="sm"
-        tone="info"
-        surface="solid"
+        class="recompute-action"
         label={trends.loading.terms ? m.trends_refreshing() : m.trends_refresh()}
         disabled={trends.loading.terms}
         onclick={refresh}
@@ -383,6 +384,24 @@
 </section>
 
 <style>
+  /* kit-ui Button has no text surface yet (logged upstream), so the
+     neutral button drops its fill and edge here and takes accent ink. */
+  .toolbar-actions :global(.kit-button.recompute-action) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: color-mix(in srgb, var(--accent-blue) 85%, var(--text-primary));
+  }
+
+  .toolbar-actions :global(.kit-button.recompute-action:hover:not(:disabled)) {
+    background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+    color: var(--accent-blue);
+  }
+
+  .toolbar-actions :global(.kit-button.recompute-action:disabled) {
+    color: var(--text-muted);
+  }
+
   .trends-page {
     --trend-blue: var(--accent-blue);
     --trend-gold: var(--accent-amber);
@@ -590,11 +609,11 @@
 
   /* The chart fills the window down to a bottom margin of about 60px
      above the status bar (the 300px offset covers the header, toolbar,
-     title and chart options), between 380px and a 600px cap so a tall
-     window does not stretch every spike. It still grows with a long
+     title and chart options), between 320px and a 420px cap so a tall
+     window does not leave a mostly empty plot. It still grows with a long
      term table. */
   .chart-panel {
-    --trends-chart-height: clamp(380px, calc(100vh - 300px), 600px);
+    --trends-chart-height: clamp(320px, calc(100vh - 300px), 420px);
     grid-area: chart;
     align-self: stretch;
     display: flex;

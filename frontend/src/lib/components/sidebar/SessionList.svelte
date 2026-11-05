@@ -731,6 +731,21 @@
     width: auto;
   }
 
+  /* While the popover is open, the rows under it fade back, so the row its
+     bottom edge lands on reads as background instead of a sliced row. The
+     veil ignores the pointer and the sidebar clips it. */
+  .session-list-header:has(:global(.filter-dropdown))::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: 100vh;
+    background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
+    pointer-events: none;
+    z-index: calc(var(--z-popover) - 1);
+  }
+
   .session-count {
     font-weight: 600;
   }

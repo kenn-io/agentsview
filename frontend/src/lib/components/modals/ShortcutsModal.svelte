@@ -4,37 +4,40 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
 
+  // Each shortcut lists its alternatives; each alternative is the keys
+  // pressed together. Every key renders as its own keycap, so a literal
+  // "/" key never reads as the separator between alternatives.
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? "⌘" : "Ctrl";
   const escapeKey = isMac ? "⎋" : "Esc";
   const deleteKey = isMac ? "⌫" : "Del";
 
   const baseShortcuts = $derived([
-    { key: `${mod} K`, action: m.shortcuts_open_command_palette() },
-    { key: `${mod} F / /`, action: m.shortcuts_find_in_session() },
-    { key: `${mod} G`, action: m.shortcuts_go_to_session() },
-    { key: escapeKey, action: m.shortcuts_close_palette() },
-    { key: "j / \u2193", action: m.shortcuts_next_message() },
-    { key: "k / \u2191", action: m.shortcuts_prev_message() },
-    { key: "Shift J", action: m.shortcuts_next_user_prompt() },
-    { key: "Shift K", action: m.shortcuts_prev_user_prompt() },
-    { key: "]", action: m.shortcuts_next_session() },
-    { key: "[", action: m.shortcuts_prev_session() },
-    { key: "o", action: m.shortcuts_toggle_sort() },
-    { key: "l", action: m.shortcuts_cycle_layout() },
-    { key: "r", action: m.shortcuts_trigger_sync() },
-    { key: "s", action: m.shortcuts_star_session() },
-    { key: "e", action: m.shortcuts_export_session() },
-    { key: "p", action: m.shortcuts_publish_gist() },
-    { key: "c", action: m.shortcuts_copy_resume() },
-    { key: deleteKey, action: m.shortcuts_delete_session() },
-    { key: "?", action: m.shortcuts_show_modal() },
+    { keys: [[mod, "K"]], action: m.shortcuts_open_command_palette() },
+    { keys: [[mod, "F"], ["/"]], action: m.shortcuts_find_in_session() },
+    { keys: [[mod, "G"]], action: m.shortcuts_go_to_session() },
+    { keys: [[escapeKey]], action: m.shortcuts_close_palette() },
+    { keys: [["j"], ["\u2193"]], action: m.shortcuts_next_message() },
+    { keys: [["k"], ["\u2191"]], action: m.shortcuts_prev_message() },
+    { keys: [["Shift", "J"]], action: m.shortcuts_next_user_prompt() },
+    { keys: [["Shift", "K"]], action: m.shortcuts_prev_user_prompt() },
+    { keys: [["]"]], action: m.shortcuts_next_session() },
+    { keys: [["["]], action: m.shortcuts_prev_session() },
+    { keys: [["o"]], action: m.shortcuts_toggle_sort() },
+    { keys: [["l"]], action: m.shortcuts_cycle_layout() },
+    { keys: [["r"]], action: m.shortcuts_trigger_sync() },
+    { keys: [["s"]], action: m.shortcuts_star_session() },
+    { keys: [["e"]], action: m.shortcuts_export_session() },
+    { keys: [["p"]], action: m.shortcuts_publish_gist() },
+    { keys: [["c"]], action: m.shortcuts_copy_resume() },
+    { keys: [[deleteKey]], action: m.shortcuts_delete_session() },
+    { keys: [["?"]], action: m.shortcuts_show_modal() },
   ]);
 
   const zoomShortcuts = $derived([
-    { key: `${mod} +`, action: m.shortcuts_zoom_in() },
-    { key: `${mod} -`, action: m.shortcuts_zoom_out() },
-    { key: `${mod} 0`, action: m.shortcuts_reset_zoom() },
+    { keys: [[mod, "+"]], action: m.shortcuts_zoom_in() },
+    { keys: [[mod, "-"]], action: m.shortcuts_zoom_out() },
+    { keys: [[mod, "0"]], action: m.shortcuts_reset_zoom() },
   ]);
 
   // Rows that end a family (palette and find, message navigation, session
@@ -56,7 +59,14 @@
     {#each shortcuts as shortcut, index}
       <div class="shortcut-row" class:group-end={GROUP_ENDS.has(index) && index < shortcuts.length - 1}>
         <!-- kit-ui-check-ignore: reference list enumerates compound alternatives ("j / ↓") and must stay visible on touch, where KbdBadge hides itself -->
-        <kbd class="shortcut-key">{shortcut.key}</kbd>
+        <span class="shortcut-keys">
+          {#each shortcut.keys as combo, alt}
+            {#if alt > 0}<span class="shortcut-or" aria-hidden="true">/</span>{/if}
+            <span class="shortcut-combo">
+              {#each combo as key}<kbd class="shortcut-key">{key}</kbd>{/each}
+            </span>
+          {/each}
+        </span>
         <span class="shortcut-action">{shortcut.action}</span>
       </div>
     {/each}
@@ -71,7 +81,7 @@
   /* Keys in a fixed column, descriptions left-aligned beside them. */
   .shortcut-row {
     display: grid;
-    grid-template-columns: 96px minmax(0, 1fr);
+    grid-template-columns: 108px minmax(0, 1fr);
     align-items: center;
     gap: 12px;
     padding: 3px 0;
@@ -83,6 +93,24 @@
     border-bottom: 1px solid var(--border-muted);
   }
 
+  .shortcut-keys {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    justify-self: start;
+    white-space: nowrap;
+  }
+
+  .shortcut-combo {
+    display: inline-flex;
+    gap: 3px;
+  }
+
+  .shortcut-or {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
   .shortcut-key {
     font-family: var(--font-mono);
     font-size: 11px;
@@ -91,8 +119,7 @@
     border-radius: var(--radius-sm);
     background: var(--bg-inset);
     color: var(--text-secondary);
-    justify-self: start;
-    min-width: 28px;
+    min-width: 20px;
     text-align: center;
   }
 

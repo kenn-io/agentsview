@@ -260,9 +260,10 @@
     z-index: 1;
   }
 
+  /* Numeric columns use the tabular sans shared by the other tables. */
   .col-num {
     text-align: right;
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   tbody td {

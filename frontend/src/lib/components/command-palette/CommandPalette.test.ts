@@ -193,17 +193,19 @@ describe("CommandPalette", () => {
     mockSessions.sessions = [makeSession("s1", "cursor"), makeSession("s2", "unknown")];
   });
 
-  it("uses agentColor for recent-session dots including fallback", async () => {
+  it("names each recent session's agent in its agentColor, including fallback", async () => {
     const component = mount(CommandPalette, {
       target: document.body,
     });
 
     await tick();
 
-    const dots = Array.from(document.querySelectorAll<HTMLElement>(".item-dot"));
-    expect(dots).toHaveLength(2);
-    expect(dots[0]?.getAttribute("style")).toContain("var(--accent-black)");
-    expect(dots[1]?.getAttribute("style")).toContain("var(--accent-blue)");
+    const agents = Array.from(document.querySelectorAll<HTMLElement>(".item-agent"));
+    expect(agents).toHaveLength(2);
+    expect(agents[0]?.textContent).toBe("Cursor");
+    expect(agents[0]?.getAttribute("style")).toContain("var(--accent-black)");
+    expect(agents[1]?.textContent).toBe("Unknown");
+    expect(agents[1]?.getAttribute("style")).toContain("var(--accent-blue)");
 
     unmount(component);
   });

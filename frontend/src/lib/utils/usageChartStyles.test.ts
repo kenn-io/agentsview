@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
 import { usageChartStyleMaps } from "./usageChartStyles.js";
+import { calmSeriesColor } from "./calmSeriesColor.js";
 
 function oklab(hex: string): [number, number, number] {
   const value = Number.parseInt(hex.slice(1), 16);
@@ -142,6 +143,30 @@ describe("usageChartStyleMaps", () => {
     const sharedTeal = shared.get("model-golf")!.color;
     expect(oklabDistance(sharedTeal, green)).toBeLessThan(0.08);
     expect(oklabDistance(separated.get("model-golf")!.color, green)).toBeGreaterThan(0.1);
+  });
+
+  it("keeps calmed light amber and orange series apart", () => {
+    const light: Record<string, string> = {
+      "var(--accent-amber)": "#d97706",
+      "var(--accent-orange)": "#e09040",
+      "var(--usage-series-amber)": "#a48b08",
+    };
+    const resolveColor = (color: string) => light[color] ?? color;
+    const seriesFrom = (styles: ReadonlyMap<string, { color: string }>, hex: string) =>
+      [...styles.values()].map((style) => style.color).find((c) => c === calmSeriesColor(hex));
+
+    const separated = usageChartStyleMaps(tenModelSummary(), "agentsview", { resolveColor }).model;
+    const shared = usageChartStyleMaps(tenModelSummary(), "agentsview", {
+      resolveColor: (color) => (color === "var(--usage-series-amber)" ? color : resolveColor(color)),
+    }).model;
+
+    const orange = seriesFrom(separated, "#e09040")!;
+    const gold = seriesFrom(separated, "#a48b08")!;
+    const sharedAmber = seriesFrom(shared, "#d97706")!;
+    expect(orange).toBeDefined();
+    expect(gold).toBeDefined();
+    expect(sharedAmber).toBeDefined();
+    expect(oklabDistance(gold, orange)).toBeGreaterThan(oklabDistance(sharedAmber, orange) * 1.5);
   });
 
   it("separates the closest dark pastel series more than chroma calming did", () => {

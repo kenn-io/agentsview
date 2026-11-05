@@ -348,10 +348,13 @@
   .tool-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
-  .tool-label { font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
+  .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
   /* Light theme: the shared tool ink is an olive near 4.2:1 on the tool
      wash; a deeper amber keeps the name warm and above 4.5:1. */
   :global(:root:not(.dark)) .tool-label { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
+  /* Dark: at medium weight the shared ink reads as beige, so names take a
+     larger share of the tool amber, still below the full accent. */
+  :global(:root.dark) .tool-label { color: color-mix(in srgb, var(--role-tool-accent) 60%, var(--text-secondary)); }
   .summary-path { color: var(--text-primary); }
   .stat-add { color: color-mix(in srgb, var(--accent-green) 75%, var(--text-primary)); }
   .stat-del { color: color-mix(in srgb, var(--accent-red) 75%, var(--text-primary)); }
@@ -436,5 +439,9 @@
     background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
     box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 60%, transparent);
   }
+  /* Dark: single-digit tints barely separate from the near-black page, so
+     added and removed lines take a stronger wash there. */
+  :global(:root.dark) .diff-add { background: color-mix(in srgb, var(--accent-green, #3fb950) 14%, transparent); }
+  :global(:root.dark) .diff-del { background: color-mix(in srgb, var(--accent-red, #f85149) 13%, transparent); }
   .diff-ctx { color: var(--text-muted); }
 </style>

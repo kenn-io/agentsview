@@ -473,9 +473,20 @@
 
   /* A disabled switch keeps its on/off state readable, but its track is
      clearly quieter than a live switch so read-only rows do not look
-     editable beside their disabled inputs and buttons. */
+     editable beside their disabled inputs and buttons. The track mixes
+     the accent into the surface color in both themes (mixing into the
+     border kept dark tracks bright enough to look live), and the knob
+     steps down from white. */
   .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__input:checked + .kit-toggle__track) {
-    background: color-mix(in srgb, var(--accent-blue) 38%, var(--border-default));
+    background: color-mix(in srgb, var(--accent-blue) 30%, var(--bg-surface));
+  }
+
+  .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__knob) {
+    background: color-mix(in srgb, var(--text-muted) 35%, var(--bg-surface));
+  }
+
+  :global(:root.dark) .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__knob) {
+    background: color-mix(in srgb, var(--text-muted) 70%, var(--bg-surface));
   }
 
   /* Placeholders sit a clear step below entered values (which use muted

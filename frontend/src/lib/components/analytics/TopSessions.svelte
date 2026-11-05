@@ -232,15 +232,17 @@
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     border-radius: 999px;
-    color: color-mix(in srgb, var(--accent-red) 80%, var(--text-primary));
-    background: color-mix(in srgb, var(--accent-red) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent-red) 35%, transparent);
+    /* Unclean endings are a warning, not an error: the warning tone the
+       unclean dots carry, so the pill does not overstate them. */
+    color: color-mix(in srgb, var(--accent-orange) 70%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-orange) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-orange) 38%, transparent);
     cursor: pointer;
     transition: background 0.1s;
   }
 
   .status-count-pill:hover {
-    background: color-mix(in srgb, var(--accent-red) 15%, transparent);
+    background: color-mix(in srgb, var(--accent-orange) 16%, transparent);
   }
 
   .metric-toggle {

@@ -17,7 +17,7 @@
     truncate,
     sanitizeSnippet, highlightTerms,
   } from "../../utils/format.js";
-  import { agentColor } from "../../utils/agents.js";
+  import { agentColor, agentLabel } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -366,10 +366,6 @@
               onclick={() => selectSearchResult(result)}
               onmouseenter={() => (selectedIndex = i)}
             >
-              <span
-                class="item-dot"
-                style:background={agentColor(result.agent)}
-              ></span>
               <span class="item-body">
                 {#if result.name}
                   <span class="item-name">{truncate(result.name, 60)}</span>
@@ -385,6 +381,7 @@
                   </span>
                 {/if}
               </span>
+              <span class="item-agent" style:--agent-color={agentColor(result.agent)}>{agentLabel(result.agent)}</span>
               <span class="item-meta">
                 {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
               </span>
@@ -411,12 +408,12 @@
             onclick={() => selectSession(session)}
             onmouseenter={() => (selectedIndex = i)}
           >
-            <span class="item-dot" style:background={agentColor(session.agent)}></span>
             <span class="item-body">
               <span class="item-name">{preview
                 ? truncate(preview, 60)
                 : session.project}</span>
             </span>
+            <span class="item-agent" style:--agent-color={agentColor(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
             <span class="item-meta">
               {formatRelativeTime(session.ended_at ?? session.started_at)}
             </span>
@@ -548,12 +545,15 @@
     box-shadow: inset 3px 0 0 var(--accent-blue);
   }
 
-  .item-dot {
-    width: 6px;
-    height: 6px;
-    margin-top: 7px;
-    border-radius: 50%;
+  /* The agent is named in its color, as in the sidebar, instead of an
+     unlabeled dot. A touch of the text color keeps it legible. */
+  .item-agent {
     flex-shrink: 0;
+    padding-top: 2px;
+    font-size: 12px;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--agent-color, var(--text-muted)) 82%, var(--text-primary));
+    white-space: nowrap;
   }
 
   .item-body {
@@ -578,7 +578,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: 12.5px;
-    color: var(--text-secondary);
+    /* Muted so the result titles carry the list; matches stay highlighted. */
+    color: var(--text-muted);
   }
 
   .item-meta {
