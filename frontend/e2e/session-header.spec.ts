@@ -66,6 +66,53 @@ test("the usage breakdown stays inside a narrow transcript pane", async ({ page 
   expect(placed.y).toBeGreaterThanOrEqual(anchor.y + anchor.height);
 });
 
+async function expectMenuInsidePane(page: Page) {
+  const menu = page.locator(".usage-breakdown-menu");
+  await expect(menu.locator(".usage-breakdown-row").first()).toBeVisible();
+  await expect(async () => {
+    const pane = await box(page, ".session-breadcrumb");
+    const placed = (await menu.boundingBox())!;
+    expect(placed.x).toBeGreaterThanOrEqual(pane.x - 0.5);
+    expect(placed.x + placed.width).toBeLessThanOrEqual(pane.x + pane.width + 0.5);
+  }).toPass();
+}
+
+test("the usage breakdown stays inside the pane at interface zoom", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("agentsview-zoom-level", "150"));
+  await withUsageSteps(page);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const sp = new SessionsPage(page);
+  await sp.goto();
+  await sp.selectFirstSession();
+  const analysis = page.getByRole("button", { name: "Show session analysis" });
+  if (await analysis.isVisible()) await analysis.click();
+
+  await page.locator(".usage-breakdown-trigger").first().click();
+  await expectMenuInsidePane(page);
+});
+
+test("the usage breakdown follows the pane when the sidebar opens", async ({ page }) => {
+  await withUsageSteps(page);
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const sp = new SessionsPage(page);
+  await sp.goto();
+  await sp.selectFirstSession();
+  const analysis = page.getByRole("button", { name: "Show session analysis" });
+  if (await analysis.isVisible()) await analysis.click();
+  const sidebar = page.locator("#session-sidebar");
+  await page.keyboard.press("b");
+  await expect(sidebar).toBeHidden();
+
+  await page.locator(".usage-breakdown-trigger").first().click();
+  await expectMenuInsidePane(page);
+  // Opening the sidebar narrows the pane without resizing the window.
+  await page.locator(".usage-breakdown-trigger").first().focus();
+  await page.keyboard.press("b");
+  await expect(sidebar).toBeVisible();
+  await expect(page.locator(".usage-breakdown-menu")).toBeVisible();
+  await expectMenuInsidePane(page);
+});
+
 test("transcript controls fit a very narrow transcript pane", async ({ page }) => {
   // Just above the phone layout, the sidebar and analysis panel at their
   // minimum widths leave the transcript about 260px.
