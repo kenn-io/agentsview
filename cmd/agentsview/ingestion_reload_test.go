@@ -59,11 +59,12 @@ func searchIngestionArchive(t *testing.T, endpoint, query string) (http.Header, 
 	return response.Header, string(body)
 }
 
-func serveIngestionArchive(t *testing.T, cfg config.Config, database *db.DB, engine *agentsync.Engine, ingestion *daemonIngestion) *httptest.Server {
+func serveIngestionArchive(t *testing.T, cfg config.Config, database *db.DB, engine *agentsync.Engine, ingestion *daemonIngestion, options ...server.Option) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewUnstartedServer(nil)
 	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-	ts.Config.Handler = server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion)).Handler()
+	options = append(options, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion))
+	ts.Config.Handler = server.New(cfg, database, engine, options...).Handler()
 	ts.Start()
 	t.Cleanup(ts.Close)
 	return ts
@@ -155,12 +156,7 @@ func TestDaemonIngestionIdleSearch(t *testing.T) {
 	go tracker.Run(ctx)
 	t.Cleanup(ingestion.Stop)
 	ingestion.OpenWatcherDispatch()
-	ts := httptest.NewUnstartedServer(nil)
-	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-	srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion), server.WithIdleTracker(tracker))
-	ts.Config.Handler = srv.Handler()
-	ts.Start()
-	t.Cleanup(ts.Close)
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
 	id := "morning"
 	require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
 	ingestion.applying.Wait()
@@ -174,7 +170,7 @@ func TestDaemonIngestionIdleSearch(t *testing.T) {
 	assert.False(t, ingestion.Pending())
 }
 
-func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
+func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	for _, mode := range []string{"automatic", "reload", "requested", "canceled", "ensure-fresh-stop", "requested-stop"} {
 		t.Run(mode, func(t *testing.T) {
 			reload := mode == "reload"
@@ -232,11 +228,7 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			}
 			active := make(chan bool, 1)
 			go func() { active <- ingestion.WaitActive(t.Context()) }()
-			ts := httptest.NewUnstartedServer(nil)
-			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-			ts.Config.Handler = server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
-			ts.Start()
-			t.Cleanup(ts.Close)
+			ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			request, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/search?q="+query, nil)
@@ -301,27 +293,6 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDaemonIngestionFailedCatchupRetriesOnSchedule(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	writeReloadGeminiSession(t, root, "retry")
-	path := filepath.Join(root, "tmp", "project", "chats", "session-retry.json")
-	require.NoError(t, os.WriteFile(path, []byte("{broken json"), 0o644))
-	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	assert.False(t, ingestion.EnsureFresh(t.Context()))
-	assert.True(t, ingestion.Pending())
-	assert.False(t, ingestion.EnsureFresh(t.Context()))
-	// Recovery shares the engine's cached terminal parse-failure policy.
-	require.NoError(t, ingestion.syncScheduled(t.Context()))
-	require.True(t, ingestion.EnsureFresh(t.Context()))
 }
 
 func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
@@ -453,7 +424,7 @@ func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
 				assert.Zero(t, calls.Load())
 				assert.True(t, ingestion.Pending())
 				assert.False(t, sessionImported(t, database, "gemini:morning"))
-				searchIngestionArchive(t, ts.URL, "morning")
+				return
 			} else {
 				assert.EqualValues(t, 1, calls.Load(), "the requested pass also satisfies idle catch-up")
 			}

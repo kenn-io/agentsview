@@ -698,6 +698,7 @@ describe("SyncStore.remoteUnreachable", () => {
     s.backendDegraded = false;
     s.backendDegradedMessage = null;
     s.statusHydrated = false;
+    s.syncPending = false;
   });
 
   it("flags unreachable when a remote load fails", async () => {
@@ -715,12 +716,21 @@ describe("SyncStore.remoteUnreachable", () => {
     s.remoteUnreachable = true;
     vi.mocked(api.getSyncStatus).mockResolvedValue({
       last_sync: "",
+      sync_pending: true,
       stats: MOCK_STATS,
     });
 
     await sync.loadStatus();
 
     expect(sync.remoteUnreachable).toBe(false);
+    expect(sync.syncPending).toBe(true);
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+      sync_pending: false,
+    });
+    await sync.loadStatus();
+    expect(sync.syncPending).toBe(false);
   });
 
   it("adopts in-flight progress from sync status polling", async () => {

@@ -98,6 +98,14 @@ func TestIdleRecoveryImportsAvailableHistory(t *testing.T) {
 					denied.Store(false)
 				}
 				if stage == "local" {
+					require.False(t, ingestion.EnsureFresh(t.Context()))
+					// The unchanged malformed file becomes a cached terminal
+					// parse failure on the next scheduled pass.
+					require.NoError(t, ingestion.syncScheduled(t.Context()))
+					require.True(t, ingestion.EnsureFresh(t.Context()))
+					require.False(t, sessionImported(t, database, "gemini:repair"))
+					ingestion.Suspend()
+					ingestion.applying.Wait()
 					writeReloadGeminiSession(t, local, "repair")
 				}
 				require.NoError(t, ingestion.syncScheduled(t.Context()))

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { MetadataService, SearchService, SyncService } from "../api/generated/index.js";
+import { SearchService } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
@@ -9,7 +9,6 @@ import {
   searchStore,
   type SearchMode,
 } from "./search.svelte.js";
-import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import type { DataChangedEvent } from "../api/client.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
@@ -138,37 +137,8 @@ describe("SearchStore", () => {
   });
 
   it.each(["fulltext", "hybrid"] as const)(
-    "refreshes an open %s search after partial recovery without a new sync timestamp",
+    "refreshes an open %s search from committed archive events",
     async (mode) => {
-      vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({
-        version: "dev",
-        commit: "unknown",
-        build_date: "",
-        api_version: 0,
-        data_version: 0,
-        friction_available: false,
-        friction_build_allowed: false,
-        insight_generation_available: false,
-        kata_available: false,
-        session_stats_available: false,
-      });
-      vi.spyOn(MetadataService, "getApiV1Stats").mockResolvedValue({
-        session_count: 1,
-        message_count: 1,
-        project_count: 1,
-        machine_count: 1,
-        earliest_session: null,
-      });
-      const status = vi.spyOn(SyncService, "getApiV1SyncStatus");
-      const initialStatus = {
-        last_sync: "2026-07-01T00:00:00Z",
-        sync_pending: false,
-        archive_stale: false,
-        startup_pending: false,
-        stats: { total_sessions: 0, synced: 0, skipped: 0, failed: 0 },
-      };
-      status.mockResolvedValueOnce(initialStatus);
-      await sync.loadStatus();
       events.setAvailable(true);
       const unsubscribe = events.subscribe(() => {});
       searchStore.setMode(mode);
@@ -184,10 +154,7 @@ describe("SearchStore", () => {
       await runDebounce();
       expect(searchStore.results).toEqual([]);
 
-      // A healthy transcript committed while another failed. The status polls
-      // miss the whole pass, so last_sync and progress never announce completion.
-      status.mockResolvedValueOnce({ ...initialStatus, sync_pending: true });
-      await sync.loadStatus();
+      // Committed messages refresh the query without a sync-status poll.
       expect(wire.deliver).toBeTypeOf("function");
       wire.deliver!({ scope: "sessions" });
       await vi.advanceTimersByTimeAsync(200);
@@ -209,7 +176,6 @@ describe("SearchStore", () => {
         }),
         expect.objectContaining({ signal: expect.anything() }),
       );
-      expect(sync.syncPending).toBe(true);
       expect(searchStore.mode).toBe(mode);
       expect(searchStore.sort).toBe("recency");
       searchStore.clear();
