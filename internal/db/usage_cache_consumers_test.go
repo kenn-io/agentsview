@@ -3,7 +3,10 @@
 package db
 
 import (
+	"context"
 	"encoding/json"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,4 +169,166 @@ func TestDailyUsageFactsDoesNotDeduplicateSourceUUIDWithoutAgent(t *testing.T) {
 	facts, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, legacy.Totals, facts.Totals)
+}
+
+func TestUsageWindowMemoPreparesOnceAcrossFilters(t *testing.T) {
+	database := openDailyUsageFixtureDB(t)
+	var prepares atomic.Int32
+	database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+	ctx := WithUsageWindowMemo(t.Context())
+	filters := []UsageFilter{
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Project: "proj-a", Model: "model-a"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", ExcludeAgent: "codex"},
+	}
+	for _, filter := range filters {
+		want := getDailyUsageLegacyForRollupTest(t, database, filter)
+		got, err := database.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	}
+	want, err := database.getTopSessionsByCostLegacy(t.Context(), filters[0], 3)
+	require.NoError(t, err)
+	got, err := database.GetTopSessionsByCost(ctx, filters[0], 3)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	assert.Equal(t, int32(1), prepares.Load())
+}
+
+func TestConcurrentUsageReadsShareOneWindow(t *testing.T) {
+	database := openDailyUsageFixtureDB(t)
+	filters := []UsageFilter{
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Model: "model-a"},
+	}
+	wants := make([]DailyUsageResult, len(filters))
+	for i, filter := range filters {
+		wants[i] = getDailyUsageLegacyForRollupTest(t, database, filter)
+	}
+	wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filters[0], 3)
+	require.NoError(t, err)
+	joined := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var prepares atomic.Int32
+	database.usageWindowObserver = usageWindowObserver{
+		beforePrepare: func(context.Context) { prepares.Add(1); <-release },
+		joined:        func() { joined <- struct{}{} },
+	}
+	type dailyResult struct {
+		daily DailyUsageResult
+		err   error
+	}
+	done := make([]chan dailyResult, len(filters))
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	for i, filter := range filters {
+		done[i] = make(chan dailyResult, 1)
+		ctx := t.Context()
+		if i == 0 {
+			ctx = canceledCtx
+		}
+		go func() {
+			daily, err := database.GetDailyUsage(ctx, filter)
+			done[i] <- dailyResult{daily, err}
+		}()
+	}
+	type topResult struct {
+		top []TopSessionEntry
+		err error
+	}
+	topDone := make(chan topResult, 1)
+	go func() {
+		top, err := database.GetTopSessionsByCost(t.Context(), filters[0], 3)
+		topDone <- topResult{top, err}
+	}()
+	for range 4 {
+		<-joined
+	}
+	cancel()
+	require.ErrorIs(t, (<-done[0]).err, context.Canceled)
+	unblock()
+	for i := 1; i < len(done); i++ {
+		got := <-done[i]
+		require.NoError(t, got.err)
+		assert.Equal(t, wants[i], got.daily)
+	}
+	top := <-topDone
+	require.NoError(t, top.err)
+	assert.Equal(t, wantTop, top.top)
+	assert.Equal(t, int32(1), prepares.Load())
+}
+
+func TestUsageWindowMemoRecapturesAfterInstallChange(t *testing.T) {
+	database := openDailyUsageFixtureDB(t)
+	filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
+	want := getDailyUsageLegacyForRollupTest(t, database, filter)
+	var prepares atomic.Int32
+	database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+	ctx := WithUsageWindowMemo(t.Context())
+	first, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, first)
+	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs SET install_revision = install_revision + 1 WHERE id = (SELECT MIN(id) FROM usage_rollup_installs)`)
+	require.NoError(t, err)
+	second, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, second)
+	assert.Equal(t, int32(2), prepares.Load())
+	// The fresh preparation replaces the stale memo for later reads too.
+	third, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, third)
+	assert.Equal(t, int32(2), prepares.Load())
+}
+
+func TestConcurrentUsageReadsCancelAbandonedWindow(t *testing.T) {
+	database := openDailyUsageFixtureDB(t)
+	filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
+	want := getDailyUsageLegacyForRollupTest(t, database, filter)
+	joined := make(chan struct{}, 4)
+	canceled := make(chan struct{})
+	var prepares atomic.Int32
+	database.usageWindowObserver = usageWindowObserver{
+		beforePrepare: func(ctx context.Context) {
+			if prepares.Add(1) == 1 {
+				<-ctx.Done()
+				close(canceled)
+			}
+		},
+		joined: func() { joined <- struct{}{} },
+	}
+	cancels := make([]context.CancelFunc, 4)
+	done := make(chan error, 4)
+	for i := range cancels {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancels[i] = cancel
+		t.Cleanup(cancel)
+		go func() {
+			_, err := database.GetDailyUsage(ctx, filter)
+			done <- err
+		}()
+	}
+	for range 4 {
+		<-joined
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for range 4 {
+		require.ErrorIs(t, <-done, context.Canceled)
+	}
+	<-canceled
+	// A later request must start new work instead of joining the canceled build.
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	assert.Equal(t, int32(2), prepares.Load())
 }

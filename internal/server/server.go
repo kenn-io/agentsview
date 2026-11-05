@@ -23,11 +23,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/flightgroup"
 	"go.kenn.io/agentsview/internal/friction/filing"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
@@ -116,7 +118,7 @@ type Server struct {
 	db                    db.Store
 	activityReports       *activityReportCache
 	assetCache            *assetCache
-	activityReportFlights *activityReportBuildGroup
+	activityReportFlights *flightgroup.Group[activity.CandidateArtifacts]
 	engine                *sync.Engine
 	onDemandEngine        *sync.Engine
 	sessions              service.SessionService
@@ -301,7 +303,7 @@ func New(
 		activeDisabledAgents:      append([]parser.AgentType(nil), cfg.DisabledAgents...),
 		db:                        database,
 		activityReports:           newActivityReportCache(),
-		activityReportFlights:     newActivityReportBuildGroup(),
+		activityReportFlights:     &flightgroup.Group[activity.CandidateArtifacts]{},
 		engine:                    engine,
 		sessions:                  sessions,
 		mux:                       http.NewServeMux(),

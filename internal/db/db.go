@@ -23,6 +23,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/flightgroup"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -876,6 +877,8 @@ type DB struct {
 	reader               atomic.Pointer[sql.DB]
 	reads                readRegistry
 	usageCache           *usageCacheManager
+	usageWindows         flightgroup.Group[usagePreparedWindow]
+	usageWindowObserver  usageWindowObserver
 	activityMemo         activityCandidateMemo
 	frustrationMemo      frustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
