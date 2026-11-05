@@ -87,10 +87,9 @@
 </div>
 
 <style>
+  /* Sits inside the terms panel, which frames and scrolls it; the header
+     stays put while the rows scroll. */
   .term-table-wrap {
-    overflow: auto;
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
     background: var(--bg-surface);
   }
 
@@ -101,15 +100,20 @@
   }
 
   th {
-    padding: 9px 10px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 8px 14px;
+    background: var(--bg-surface);
+    box-shadow: inset 0 -1px 0 var(--border-muted);
     color: var(--text-muted);
+    font-size: 11px;
     font-weight: 600;
     text-align: left;
-    border-bottom: 1px solid var(--border-muted);
   }
 
   td {
-    padding: 10px;
+    padding: 8px 14px;
     border-bottom: 1px solid var(--border-muted);
     vertical-align: top;
   }

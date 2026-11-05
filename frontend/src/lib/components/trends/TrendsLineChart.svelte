@@ -26,9 +26,6 @@
   }: Props = $props();
 
   const hasData = $derived(series.some((item) => item.total > 0));
-  const metricLabel = $derived(
-    normalized ? m.trends_occurrences_per1k() : m.trends_occurrences(),
-  );
 
   function pointValue(count: number, index: number): number {
     if (!normalized) return count;
@@ -78,7 +75,6 @@
   {#if buckets.length === 0 || series.length === 0}
     <div class="empty">{m.trends_no_trend_data()}</div>
   {:else}
-    <div class="y-title">{metricLabel}</div>
     <Chart
       data={flatPoints}
       x="date"
@@ -86,7 +82,7 @@
       xScale={scalePoint().padding(0.5)}
       yDomain={[0, null]}
       yNice
-      padding={{ top: 28, right: 28, bottom: 38, left: 56 }}
+      padding={{ top: 20, right: 28, bottom: 38, left: 56 }}
       class="chart"
       role="img"
       aria-label={normalized
@@ -148,17 +144,12 @@
 </div>
 
 <style>
-  /* Starts at the page's chart height and grows with a taller chart
-     panel; the chart measures this box. */
+  /* Fills the chart panel's body, which sets the height; the chart
+     measures this box. The panel draws the frame. */
   .chart-wrap {
     position: relative;
-    flex: 1 1 auto;
     width: 100%;
-    height: var(--trends-chart-height, auto);
-    min-height: 300px;
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    background: var(--bg-surface);
+    height: 100%;
     overflow: hidden;
   }
 
@@ -168,17 +159,6 @@
     inset: 0;
     width: 100%;
     height: 100%;
-  }
-
-  .y-title {
-    position: absolute;
-    top: 8px;
-    left: 56px;
-    z-index: 1;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    text-anchor: start;
   }
 
   .empty,
@@ -191,7 +171,6 @@
 
   .empty {
     height: 100%;
-    min-height: 300px;
     display: grid;
     place-items: center;
   }
