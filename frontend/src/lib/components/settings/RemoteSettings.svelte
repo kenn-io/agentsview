@@ -263,7 +263,7 @@
 
   /* Notes, actions, and messages start on the control column's edge. */
   .control-offset {
-    padding-left: calc(var(--setting-label-width, 148px) + 12px);
+    padding-left: calc(var(--setting-label-width, 222px) + 12px);
   }
 
   .token-row {

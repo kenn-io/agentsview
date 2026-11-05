@@ -400,7 +400,7 @@
   .status-grid {
     display: grid;
     /* Same label column as the other settings rows. */
-    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
+    grid-template-columns: var(--setting-label-width, 222px) minmax(0, 1fr);
     column-gap: 12px;
     row-gap: 6px;
     align-items: center;

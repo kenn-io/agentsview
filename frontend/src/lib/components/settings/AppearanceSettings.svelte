@@ -310,7 +310,7 @@
   }
 
   .appearance-settings {
-    --setting-label-width: 148px;
+    --setting-label-width: 222px;
   }
 
   .setting-row > :global(:only-child) {

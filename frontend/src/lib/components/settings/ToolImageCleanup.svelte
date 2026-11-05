@@ -363,7 +363,7 @@
 
   /* The Preview action starts on the control column's edge. */
   .control-offset {
-    padding-left: calc(var(--setting-label-width, 148px) + 12px);
+    padding-left: calc(var(--setting-label-width, 222px) + 12px);
   }
 
   @media (max-width: 640px) {
@@ -394,7 +394,7 @@
   .status-grid {
     display: grid;
     /* Same label column as the other settings rows. */
-    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
+    grid-template-columns: var(--setting-label-width, 222px) minmax(0, 1fr);
     column-gap: 12px;
     row-gap: 6px;
     align-items: start;
