@@ -209,9 +209,6 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 }
 
 func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
-		return db.ContentSearchPage{}, err
-	}
 	if f.Limit <= 0 || f.Limit > db.MaxContentSearchLimit {
 		f.Limit = db.DefaultContentSearchLimit
 	}
@@ -232,6 +229,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		}
 		return s.searchContentSemantic(ctx, f)
 	}
+	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+		return db.ContentSearchPage{}, err
+	}
+
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
 		if f.Mode == "" || f.Mode == "substring" || f.Mode == "regex" {
@@ -299,10 +300,7 @@ func contentSearchPredicate(column string, f db.ContentSearchFilter, args *[]any
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
 	scopeWhere, scopeArgs := contentScope(f)
 	var branches []string
@@ -487,10 +485,7 @@ func (s *Store) collectContentRegexMatches(
 func (s *Store) collectContentSource(
 	ctx context.Context, source, scopeWhere string, scopeArgs []any, prefix string, f db.ContentSearchFilter,
 ) ([]contentCandidate, error) {
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
 	var query string
 	args := append([]any{}, scopeArgs...)

@@ -292,9 +292,6 @@ func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 func (db *DB) SearchContent(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	if err := ValidateContentSearchScope(f.Scope); err != nil {
-		return ContentSearchPage{}, err
-	}
 	if f.Limit <= 0 || f.Limit > MaxContentSearchLimit {
 		f.Limit = DefaultContentSearchLimit
 	}
@@ -312,6 +309,10 @@ func (db *DB) SearchContent(
 		return db.searchContentHybrid(ctx, f)
 	case "terms":
 		return db.searchContentTerms(ctx, f)
+	}
+
+	if err := ValidateContentSearchScope(f.Scope); err != nil {
+		return ContentSearchPage{}, err
 	}
 
 	if len(f.Sources) == 0 {
@@ -357,10 +358,7 @@ func (db *DB) searchContentSubstring(
 	}
 
 	scope, scopeArgs := sessionScopeSubquery(f)
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	like := "%" + escapeLike(f.Pattern) + "%"
 
@@ -680,10 +678,7 @@ func (db *DB) regexCandidateRows(
 	ctx context.Context, f ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	var branches []string
 	var args []any
@@ -1308,6 +1303,15 @@ func ValidateContentSearchScope(scope string) error {
 	default:
 		return searchInputErrorf("search: invalid scope %q (valid: top, all, subordinate)", scope)
 	}
+}
+
+// LexicalEventAnchorJoinSQL resolves sidechain flags for scoped result events.
+// Default and all scopes need no anchor lookup.
+func LexicalEventAnchorJoinSQL(scope string) string {
+	if scope != "top" && scope != "subordinate" {
+		return ""
+	}
+	return " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
 }
 
 // LexicalAnchorScopeSQL filters anchors before pagination. The anchor may

@@ -853,9 +853,6 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 }
 
 func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
-		return db.ContentSearchPage{}, err
-	}
 	if f.Limit <= 0 || f.Limit > db.MaxContentSearchLimit {
 		f.Limit = db.DefaultContentSearchLimit
 	}
@@ -882,6 +879,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
 			"semantic search is not supported by the DuckDB backend",
 		)
+	}
+
+	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+		return db.ContentSearchPage{}, err
 	}
 
 	if len(f.Sources) == 0 {
@@ -973,10 +974,7 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
@@ -1206,10 +1204,7 @@ func (s *Store) collectContentSource(
 	ctx context.Context, source, scopeWhere string, scopeArgs []any,
 	prefix string, f db.ContentSearchFilter,
 ) ([]duckContentCandidate, error) {
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
 	var query string
 	var orderBy string

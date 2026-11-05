@@ -18,9 +18,6 @@ import (
 func (s *Store) SearchContent(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
-	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
-		return db.ContentSearchPage{}, err
-	}
 	if f.Limit <= 0 || f.Limit > db.MaxContentSearchLimit {
 		f.Limit = db.DefaultContentSearchLimit
 	}
@@ -52,6 +49,10 @@ func (s *Store) SearchContent(
 	}
 	if f.Mode == "terms" {
 		return s.searchContentTermsPG(ctx, f)
+	}
+
+	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+		return db.ContentSearchPage{}, err
 	}
 
 	if len(f.Sources) == 0 {
@@ -298,10 +299,7 @@ func pgToolResultContentBranch(
 func pgToolResultEventsBranch(
 	f db.ContentSearchFilter, escapedPat string, pb *paramBuilder,
 ) string {
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 	ilikePat := "%" + escapedPat + "%"
 	ilikeParam := pb.add(ilikePat)
 
@@ -574,10 +572,7 @@ func pgToolResultContentCandidateBranch(
 func pgToolResultEventsCandidateBranch(
 	f db.ContentSearchFilter, lit string, pb *paramBuilder,
 ) string {
-	eventAnchorJoin := ""
-	if f.Scope == "top" || f.Scope == "subordinate" {
-		eventAnchorJoin = " LEFT JOIN messages m ON m.session_id = tre.session_id AND m.ordinal = tre.tool_call_message_ordinal "
-	}
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 	prefilter := pgPrefilterClause("tre.content", lit, pb)
 	prefilter += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 
