@@ -47,6 +47,16 @@ func TestUsageChangeJournal(t *testing.T) {
 					s.StartedAt = new("2026-07-02T10:00:00Z")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
+				{"end time", func(t *testing.T, s Session) {
+					t.Helper()
+					s.EndedAt = new("2026-07-02T11:00:00Z")
+					require.NoError(t, d.UpsertSession(ctx, s))
+				}},
+				{"termination status", func(t *testing.T, s Session) {
+					t.Helper()
+					s.TerminationStatus = new("completed")
+					require.NoError(t, d.UpsertSession(ctx, s))
+				}},
 				{"agent", func(t *testing.T, s Session) {
 					t.Helper()
 					s.Agent = "codex"

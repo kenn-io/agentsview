@@ -161,8 +161,8 @@ func replaceSessionUsageEventsTx(
 		return fmt.Errorf("reading usage events for replacement: %w", err)
 	}
 	defer rows.Close()
-	var stored []usageEventRow
-	var ids []int64
+	prefix := 0
+	var firstDifferentID sql.NullInt64
 	for rows.Next() {
 		var id int64
 		var storedSessionID string
@@ -170,8 +170,13 @@ func replaceSessionUsageEventsTx(
 		if err := r.scan(rows, &id, &storedSessionID); err != nil {
 			return fmt.Errorf("scanning usage events for replacement: %w", err)
 		}
-		stored = append(stored, r)
-		ids = append(ids, id)
+		if !firstDifferentID.Valid {
+			if prefix < len(incoming) && r == incoming[prefix] {
+				prefix++
+			} else {
+				firstDifferentID = sql.NullInt64{Int64: id, Valid: true}
+			}
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating usage events for replacement: %w", err)
@@ -179,15 +184,11 @@ func replaceSessionUsageEventsTx(
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("closing usage events for replacement: %w", err)
 	}
-	prefix := 0
-	for prefix < len(stored) && prefix < len(incoming) && stored[prefix] == incoming[prefix] {
-		prefix++
-	}
-	if prefix == len(stored) && prefix == len(incoming) {
+	if !firstDifferentID.Valid && prefix == len(incoming) {
 		return nil
 	}
-	if prefix < len(stored) {
-		if _, err := tx.Exec(`DELETE FROM usage_events WHERE session_id = ? AND id >= ?`, sessionID, ids[prefix]); err != nil {
+	if firstDifferentID.Valid {
+		if _, err := tx.Exec(`DELETE FROM usage_events WHERE session_id = ? AND id >= ?`, sessionID, firstDifferentID.Int64); err != nil {
 			return fmt.Errorf("deleting usage events: %w", err)
 		}
 	}

@@ -36,7 +36,7 @@ func usageChangeJournalSQL() (string, string) {
 		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id")
-	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count"}
+	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status"}
 	changes := make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
