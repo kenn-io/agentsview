@@ -1178,14 +1178,29 @@
 
   /* Stream hides the role header, so pattern mode keeps the patterned bar
      as the role marker. */
-  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message) {
+  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message:not(.is-user)) {
     border-left: none;
+  }
+
+  /* The prompt keeps a thin accent rule, as in Default, so it is easy to
+     find in a stream of unlabeled prose. */
+  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message.is-user) {
+    border-left-width: 2px;
+    border-left-style: solid;
   }
 
   .layout-stream :global(.message.is-user) {
     background: color-mix(
       in srgb,
       var(--role-user-accent) 5%,
+      transparent
+    ) !important;
+  }
+
+  :global(:root.dark) .layout-stream :global(.message.is-user) {
+    background: color-mix(
+      in srgb,
+      var(--role-user-accent) 9%,
       transparent
     ) !important;
   }

@@ -956,13 +956,9 @@
     stroke-width: 1;
   }
 
-  /* Same seam and softened fill as the bar segments, so stacked areas
-     read as layers instead of one saturated mass. */
+  /* Near-solid fills in both themes, so each layer matches its legend
+     swatch; the surface seam keeps the layers apart. */
   .chart-container :global(.cost-area) {
-    fill-opacity: 0.8;
-  }
-
-  :global(:root.dark) .chart-container :global(.cost-area) {
     fill-opacity: 0.92;
   }
 

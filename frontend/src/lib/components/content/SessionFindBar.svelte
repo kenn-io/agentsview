@@ -96,6 +96,17 @@
     padding-inline-start: var(--find-side);
     padding-inline-end: calc(var(--find-side) + var(--find-rail));
   }
+  .find-controls { padding-block: 6px 4px; }
   .find-input { flex: 1; min-width: 0; }
+  /* A contained field on the reading column instead of a pane-wide
+     underline, so the bar reads as one control. */
+  .find-input :global(.kit-find-bar--pinned) {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md, 6px);
+    background: var(--bg-surface);
+  }
+  .find-input :global(.kit-find-bar--pinned:focus-within) { border-color: var(--accent-blue); }
+  .find-input :global(.kit-find-bar--pinned.kit-find-bar--no-results:focus-within) { border-color: var(--accent-red); }
+  .find-input :global(.kit-find-bar__counter) { color: var(--text-secondary); }
   .history-status { display: flex; align-items: center; gap: 8px; padding: 2px calc(var(--find-side) + var(--find-rail)) 6px var(--find-side); font-size: 11px; color: var(--text-muted); }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { m } from "../../i18n/index.js";
   import { router } from "../../stores/router.svelte.js";
   import type { Report } from "../../api/types.js";
@@ -102,7 +103,7 @@
   }
 
   function fmtMinutes(v: number): string {
-    return Math.round(v).toLocaleString();
+    return formatCount(Math.round(v));
   }
 
   function fmtValue(row: ActivityKeyMinutes): string {

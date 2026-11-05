@@ -40,6 +40,7 @@
         content=""
         label={displayToolName(toolCall)}
         durationLabel={dur}
+        durationUnknown={ct !== undefined && ct.duration_ms == null}
         inGroup={true}
         searchScope={searchOrdinal === undefined ? undefined : { ordinal: searchOrdinal, callIdx: i }}
       />

@@ -587,12 +587,12 @@
     color: var(--text-primary);
   }
 
-  /* List view: a full-width table with fixed columns. Only the bar
-     flexes, so the name, share, and total keep a stable rhythm while the
-     row spans the card. */
+  /* List view: a full-width table. The name column fits the longest
+     name (up to 15rem), so each bar starts right after the names; only
+     the bar flexes, and share and total keep a stable rhythm. */
   .list-view {
     display: grid;
-    grid-template-columns: 18px 12px minmax(0, 15rem) minmax(96px, 1fr) 56px 88px;
+    grid-template-columns: 18px 12px fit-content(15rem) minmax(96px, 1fr) 56px 88px;
     column-gap: 12px;
     row-gap: 2px;
   }
@@ -641,6 +641,12 @@
     background: var(--bg-inset);
     border-radius: 3px;
     overflow: hidden;
+  }
+
+  /* In dark the inset track nearly matches the card, so lift it one step
+     to show the full scale behind each bar. */
+  :global(:root.dark) .list-bar-track {
+    background: color-mix(in srgb, var(--text-primary) 8%, var(--bg-inset));
   }
 
   .list-bar-fill {

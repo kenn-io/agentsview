@@ -1934,7 +1934,7 @@
   "insights_page_generate": "Generate",
   "insights_page_loading_archive": "Loading archive...",
   "insights_page_no_generated_saved": "No generated insights saved.",
-  "insights_page_no_generated_hint": "The deterministic dashboard above works without LLM configuration. Generated insight creation is reserved for the generated-insights phase.",
+  "insights_page_no_generated_hint": "The deterministic dashboard above works without LLM configuration. Generated insight creation is reserved for the generated‑insights phase.",
   "insights_page_error": "Error",
   "insights_page_running": "Running",
   "insights_page_global": "global",

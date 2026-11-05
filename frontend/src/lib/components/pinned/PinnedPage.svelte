@@ -120,7 +120,7 @@
   {#if pins.loading}
     <div class="loading-state">{m.pinned_loading()}</div>
   {:else if pins.pins.length === 0 && sessions.filters.project}
-    <StateNotice
+    <StateNotice variant="empty"
       title={m.pinned_none_for_project()}
       description={m.pinned_none_for_project_hint()}
     >
@@ -129,7 +129,7 @@
       {/snippet}
     </StateNotice>
   {:else if pins.pins.length === 0}
-    <StateNotice title={m.pinned_none()} description={m.pinned_none_hint()}>
+    <StateNotice variant="empty" title={m.pinned_none()} description={m.pinned_none_hint()}>
       {#snippet icon()}
         <PinIcon size="16" strokeWidth="2" />
       {/snippet}

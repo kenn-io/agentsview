@@ -130,12 +130,14 @@
     >
       {#each LAYOUTS as layout (layout.id)}
         <MenuRadioItem value={layout.id} closeOnSelect textValue={layout.name()} class="view-option">
+          <!-- The schematic sits at the right edge, so layout names share one
+               text column with the mode and block-visibility labels. -->
           <span class="option">
-            {@render preview(layout.id)}
             <span class="option-text">
               <span class="option-name">{layout.name()}</span>
               <span class="option-description">{layout.description()}</span>
             </span>
+            {@render preview(layout.id)}
           </span>
         </MenuRadioItem>
       {/each}
@@ -253,6 +255,24 @@
     --menu-icon-width: 12px;
   }
 
+  /* Single-choice items (layout, mode) mark the selection with a radio
+     dot; the check stays for the independent block toggles. */
+  :global(.view-menu .kit-menu__radio-item .kit-menu__indicator svg) {
+    display: none;
+  }
+
+  :global(.view-menu .kit-menu__radio-item[aria-checked="true"] .kit-menu__indicator::before) {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  :global(.view-menu .kit-menu__radio-content) {
+    flex: 1;
+  }
+
   .view-heading {
     padding: 6px 10px 2px;
     font-size: var(--font-size-2xs);
@@ -264,11 +284,14 @@
 
   .option {
     display: flex;
+    flex: 1;
     align-items: center;
     gap: 10px;
+    min-width: 0;
   }
 
   .option-text {
+    flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;

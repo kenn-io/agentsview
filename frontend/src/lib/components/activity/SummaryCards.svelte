@@ -1,14 +1,14 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
   import StatCard from "../analytics/StatCard.svelte";
-  import { formatDateTime, getLocale, m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { formatMoney } from "../../money.js";
 
   let { report }: { report: Report } = $props();
 
   function fmtMinutes(v: number): string {
-    return Math.round(v).toLocaleString(getLocale());
+    return formatCount(Math.round(v));
   }
 
   // Subagents are separate from interactive and automated conversation counts.

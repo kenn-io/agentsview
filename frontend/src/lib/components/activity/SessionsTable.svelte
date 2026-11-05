@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
@@ -86,7 +87,7 @@
 
   function fmtMinutes(v: number | null): string {
     if (v === null) return "—";
-    return Math.round(v).toLocaleString();
+    return formatCount(Math.round(v));
   }
 
   function rowModel(row: ActivitySessionRow): string {

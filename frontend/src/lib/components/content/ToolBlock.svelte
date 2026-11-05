@@ -36,12 +36,15 @@
     durationLabel?: string;
     isSlow?: boolean;
     isRunning?: boolean;
+    /** The duration label is a status ("unknown"), not a measurement. */
+    durationUnknown?: boolean;
     /** Flatten outer spacing when inside a parallel group. */
     inGroup?: boolean;
   }
 
   let { content, label, toolCall, searchScope, durationLabel,
-    isSlow = false, isRunning = false, inGroup = false }: Props = $props();
+    isSlow = false, isRunning = false, durationUnknown = false,
+    inGroup = false }: Props = $props();
   let userCollapsed = $state(true);
   let userOutputCollapsed = $state(true);
   let userHistoryCollapsed = $state(true);
@@ -213,7 +216,7 @@
           {#if summaryDiffStat}<span class="summary-path">{summaryDiffStat.path}</span> (<span class="stat-add">{summaryDiffStat.add}</span>{#if summaryDiffStat.del}{" "}<span class="stat-del">{summaryDiffStat.del}</span>{/if}){:else}{structuredSummary}{/if}{#if structuredSummaryTitle}<span class="kit-sr-only">{structuredSummaryTitle}</span>{/if}
         </span>
       {:else if collapsed && legacyPreview}<span class="tool-preview">{legacyPreview}</span>{/if}
-      {#if durationLabel}<span class="tool-duration" class:slow={isSlow} class:running={isRunning}>{durationLabel}</span>{/if}
+      {#if durationLabel}<span class="tool-duration" class:slow={isSlow} class:running={isRunning} class:unknown={durationUnknown}>{durationLabel}</span>{/if}
     </button>
     {#if inputCopySource}
       <CopyButton class="tool-copy input-copy" revealOnHover copied={inputCopied}
@@ -351,6 +354,14 @@
     background: transparent;
     border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: right;
   }
+  /* An unknown duration is a status, so it gets the same quiet chip shape
+     as the other statuses instead of floating as bare text. */
+  .tool-duration.unknown {
+    font-family: var(--font-sans); min-width: 0; padding: 0 6px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border-color: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
   .tool-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 2px 14px; border-top: 1px solid color-mix(in srgb, var(--border-muted) 55%, transparent); }
@@ -392,7 +403,9 @@
   }
   .history-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .output-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
-  .output-content { max-height: 300px; overflow-y: auto; }
+  /* A match scrolled into view keeps a line of air above it, so the first
+     output line is not cut by the block's top edge. */
+  .output-content { max-height: 300px; overflow-y: auto; scroll-padding-block: 8px; }
   .result-history, .result-event + .result-event { border-top: 1px solid var(--border-muted); }
   .result-event-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px 0; }
   .history-content { border-top: 0; margin-top: 0; }

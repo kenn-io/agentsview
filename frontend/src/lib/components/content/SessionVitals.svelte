@@ -541,9 +541,12 @@
           {/if}
         </header>
         {#if !categoryFilter}
-          <p class="v-hint">{m.session_vitals_completed_turns_hint()}</p>
+          <p class="v-hint">
+            {m.session_vitals_completed_turns_hint()}{#if measuredCategories.size === 0}<span class="v-hint-state"> · {m.session_vitals_not_measured()}</span>{/if}
+          </p>
         {/if}
         {#each timing.by_category as cat (cat.category)}
+          {@const isMeasured = measuredCategories.has(cat.category)}
           {@const isActive = categoryFilter === cat.category}
           {@const isDimmed = categoryFilter !== null && !isActive}
           <button
@@ -555,13 +558,15 @@
             type="button"
           >
             <span class="agg-name">{cat.category}</span>
-            <span class="agg-bar">
+            <span class="agg-bar" class:unmeasured={!isMeasured}>
               <span
                 class="agg-fill"
                 style="width: {(cat.duration_ms / Math.max(timing.tool_duration_ms, 1)) * 100}%; background: {categoryToken(cat.category)};"
               ></span>
             </span>
-            <span class="agg-val" class:unmeasured={!measuredCategories.has(cat.category)}>{measuredCategories.has(cat.category) ? formatDuration(cat.duration_ms) : m.session_vitals_not_measured()}</span>
+            <!-- An unmeasured row draws no track and a dash; the section
+                 hint says "Not measured" once instead of on every row. -->
+            <span class="agg-val" class:unmeasured={!isMeasured}>{#if isMeasured}{formatDuration(cat.duration_ms)}{:else}<span aria-hidden="true">—</span><span class="kit-sr-only">{m.session_vitals_not_measured()}</span>{/if}</span>
           </button>
         {/each}
       </section>
@@ -844,9 +849,10 @@
 
   .v-meta {
     color: var(--text-muted);
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 400;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
     text-transform: none;
     letter-spacing: 0;
     text-align: right;
@@ -862,6 +868,9 @@
     color: var(--text-muted);
     font-size: 11px;
     line-height: 1.4;
+  }
+  .v-hint-state {
+    white-space: nowrap;
   }
   .v-meta.live {
     color: var(--running-fg);
@@ -988,9 +997,11 @@
   .context-label::first-letter {
     text-transform: uppercase;
   }
+  /* Values share one face: the UI sans with tabular figures. Monospace
+     stays for identifiers and paths (repository, worktree, tool names). */
   .stat-grid .val {
     color: var(--text-primary);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
   }
   .stat-grid .val.slow { color: var(--slow-fg); }
@@ -1076,9 +1087,12 @@
     height: 100%;
     border-radius: 1px;
   }
+  .agg-bar.unmeasured {
+    visibility: hidden;
+  }
   .agg-val {
     min-width: 56px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 11px;
     color: var(--text-muted);
     text-align: right;

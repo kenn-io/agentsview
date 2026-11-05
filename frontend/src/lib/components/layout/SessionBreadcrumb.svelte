@@ -2289,14 +2289,9 @@
       margin-right: 6px;
     }
 
-    .breadcrumb-meta > .session-id {
-      margin-left: auto;
-    }
-
-    /* The ID now starts the right-hand group, so it needs no divider. */
-    .session-id::before {
-      display: none;
-    }
+    /* The metadata reads as one packed line: the ID follows the date
+       cluster after the usual divider instead of jumping to the far edge
+       across an empty gap. */
   }
 
   /* At desktop widths both header rows sit on the transcript's centered

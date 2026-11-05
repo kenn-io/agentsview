@@ -398,8 +398,8 @@
     --trend-indigo: var(--accent-indigo);
     --trend-black: var(--text-primary);
     color: var(--text-primary);
-    /* Fill the scroll host so the chart can take the height left below
-       the toolbar instead of stopping at a fixed 300px. */
+    /* The page fills the scroll host; the chart keeps a content height
+       (see .chart-panel). */
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -438,17 +438,18 @@
     gap: 12px;
   }
 
+  /* A real page title, the same size and weight as the library and
+     Friction titles, with the date range under it. */
   .section-head {
     display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 4px 10px;
+    flex-direction: column;
+    gap: 4px;
   }
 
   h1 {
     margin: 0;
-    font-size: 13px;
-    line-height: 1.3;
+    font-size: 18px;
+    line-height: 1.25;
     font-weight: 600;
   }
 
@@ -578,7 +579,7 @@
       "query chart"
       "table chart";
     grid-template-rows: auto 1fr;
-    flex: 1 0 auto;
+    flex: none;
     gap: var(--space-6);
     align-items: start;
   }
@@ -587,7 +588,11 @@
     grid-area: query;
   }
 
+  /* A content-height chart beside the terms column instead of one
+     stretched to the footer, which exaggerated every spike. It still
+     grows with a long term table. */
   .chart-panel {
+    --trends-chart-height: 380px;
     grid-area: chart;
     align-self: stretch;
     display: flex;
