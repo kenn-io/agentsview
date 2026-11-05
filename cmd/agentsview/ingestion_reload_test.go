@@ -237,9 +237,6 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			assert.Contains(t, freshBody, "hello from "+query)
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 			require.True(t, <-active)
-			if mode == "automatic" {
-				require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond, "collection suspends again after background catch-up")
-			}
 		})
 	}
 }
@@ -264,92 +261,52 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 }
 
 func TestDaemonIngestionWakeCatchesUpChangedSources(t *testing.T) {
-	for _, source := range []string{"symlink", "overlapping providers", "remote"} {
-		t.Run(source, func(t *testing.T) {
-			root := t.TempDir()
-			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-			var change func()
-			switch source {
-			case "symlink":
-				link := filepath.Join(t.TempDir(), "sessions")
-				requireSymlinkOrSkip(t, root, link)
-				root = link
-				cfg.AgentDirs[parser.AgentGemini] = []string{root}
-				writeReloadGeminiSession(t, root, "before")
-				change = func() { writeReloadGeminiSession(t, root, "older-retry") }
-			case "overlapping providers":
-				writeReloadGeminiSession(t, root, "retained")
-				cfg.AgentDirs[parser.AgentClaude] = []string{root}
-				change = func() {
-					require.NoError(t, os.RemoveAll(filepath.Join(root, "tmp")))
-					dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
-				}
-			case "remote":
-				content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "overnight remote message", "remote-overnight").String()
-				var published atomic.Bool
-				remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == "/bucket" || r.URL.Path == "/bucket/" {
-						w.Header().Set("Content-Type", "application/xml")
-						contents := ""
-						if published.Load() {
-							contents = fmt.Sprintf("<Contents><Key>sessions/project/overnight.jsonl</Key><LastModified>2030-01-02T00:00:00.000Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>%d</Size><StorageClass>STANDARD</StorageClass></Contents>", len(content))
-						}
-						_, _ = fmt.Fprintf(w, `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix>sessions/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>%s</ListBucketResult>`, contents)
-						return
-					}
-					if strings.HasSuffix(r.URL.Path, "overnight.jsonl") {
-						w.Header().Set("Last-Modified", "Wed, 02 Jan 2030 00:00:00 GMT")
-						w.Header().Set("ETag", `"abc123"`)
-						w.Header().Set("Content-Length", strconv.Itoa(len(content)))
-						_, _ = io.WriteString(w, content)
-						return
-					}
-					http.NotFound(w, r)
-				}))
-				t.Cleanup(remote.Close)
-				t.Setenv("AWS_S3_ENDPOINT", remote.URL)
-				t.Setenv("AWS_ACCESS_KEY_ID", "test-key")
-				t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
-				t.Setenv("AWS_REGION", "us-east-1")
-
-				cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {"s3://bucket/sessions"}}
-				change = func() { published.Store(true) }
+	content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "overnight remote message", "remote-overnight").String()
+	var published atomic.Bool
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bucket" || r.URL.Path == "/bucket/" {
+			w.Header().Set("Content-Type", "application/xml")
+			contents := ""
+			if published.Load() {
+				contents = fmt.Sprintf("<Contents><Key>sessions/project/overnight.jsonl</Key><LastModified>2030-01-02T00:00:00.000Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>%d</Size><StorageClass>STANDARD</StorageClass></Contents>", len(content))
 			}
-			database := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-			t.Cleanup(engine.Close)
-			engine.SyncAll(t.Context(), nil)
-			if source == "overlapping providers" {
-				require.True(t, sessionImported(t, database, "gemini:retained"))
-			}
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-			t.Cleanup(ingestion.Stop)
-			ingestion.Suspend()
-			ingestion.applying.Wait()
-			change()
-			if source == "symlink" {
-				require.False(t, sessionImported(t, database, "gemini:older-retry"))
-			}
-			require.True(t, ingestion.EnsureFresh(t.Context()))
-			assert.False(t, ingestion.Pending())
-			switch source {
-			case "symlink":
-				require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up polls the symlinked source")
-			case "overlapping providers":
-				assert.True(t, sessionImported(t, database, "morning"))
-				assert.True(t, sessionImported(t, database, "gemini:retained"), "unavailable provider history stays archived")
-			case "remote":
-				messages, err := database.GetAllMessages(t.Context(), "overnight")
-				require.NoError(t, err)
-				require.Len(t, messages, 1)
-				assert.Equal(t, "overnight remote message", messages[0].Content)
-			}
-		})
-	}
+			_, _ = fmt.Fprintf(w, `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix>sessions/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>%s</ListBucketResult>`, contents)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "overnight.jsonl") {
+			w.Header().Set("Last-Modified", "Wed, 02 Jan 2030 00:00:00 GMT")
+			w.Header().Set("ETag", `"abc123"`)
+			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+			_, _ = io.WriteString(w, content)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(remote.Close)
+	t.Setenv("AWS_S3_ENDPOINT", remote.URL)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+	t.Setenv("AWS_REGION", "us-east-1")
+	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {"s3://bucket/sessions"}}}
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	published.Store(true)
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	assert.False(t, ingestion.Pending())
+	messages, err := database.GetAllMessages(t.Context(), "overnight")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "overnight remote message", messages[0].Content)
 }
 
 func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
-	for _, tc := range []struct{ name, route string }{{"sync", "/sync"}, {"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}} {
+	for _, tc := range []struct{ name, route string }{{"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()

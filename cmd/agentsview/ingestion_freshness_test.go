@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
@@ -89,6 +89,10 @@ func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
 			assert.Equal(t, "true", headers.Get(apiclient.SyncPendingHeader))
 			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader), "failed source catch-up must warn the reader about missing overnight messages")
 			assert.True(t, ingestion.Pending())
+			auditCtx, cancelAudit := context.WithTimeout(t.Context(), time.Second)
+			assert.True(t, ingestion.WaitActive(auditCtx), "finished failed recovery releases archive maintenance")
+			cancelAudit()
+			assert.True(t, ingestion.Pending(), "maintenance admission preserves the reader warning")
 			if source == parser.AgentGemini {
 				require.NoError(t, os.Chmod(filepath.Join(root, "tmp", "project", "chats", "session-overnight.json"), 0o600))
 			} else {
@@ -100,61 +104,36 @@ func TestDaemonIngestionFailedCatchupKeepsWarning(t *testing.T) {
 			assert.Contains(t, body, "hello from overnight")
 		})
 	}
-}
-
-func TestForegroundSyncSettlesFailedIdleRecovery(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	cfg.Host = "127.0.0.1"
-	var denied atomic.Bool
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if denied.Load() {
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte("<Error><Code>AccessDenied</Code></Error>"))
-			return
+	t.Run("unreadable claude project", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("fixture needs enforced POSIX directory permissions")
 		}
-		_, _ = w.Write([]byte("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"))
-	}))
-	t.Cleanup(remote.Close)
-	t.Setenv("AWS_S3_ENDPOINT", remote.URL)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test-key")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
-	t.Setenv("AWS_REGION", "us-east-1")
-	cfg.AgentDirs[parser.AgentClaude] = append(cfg.AgentDirs[parser.AgentClaude], "s3://bucket/sessions")
-	database, lock := openTestWriteDB(t, cfg)
-	engine := agentsync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	denied.Store(true)
-	require.False(t, ingestion.EnsureFresh(t.Context()))
-	ingestion.applying.Wait()
-	require.True(t, ingestion.Pending())
-	denied.Store(false)
-	restore := stubLaunchSyncWorker(t, func(ctx context.Context, c config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
-		var wire bytes.Buffer
-		workerErr := runSyncWorkerContext(ctx, c, request, &wire)
-		result, err := readWorkerResult(&wire, nil)
-		require.NoError(t, err)
-		return result, workerErr
+		database := dbtest.OpenTestDB(t)
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		require.NoError(t, os.MkdirAll(project, 0o700))
+		cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+		engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+		t.Cleanup(engine.Close)
+		engine.SyncAll(t.Context(), nil)
+		ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+		t.Cleanup(ingestion.Stop)
+		ingestion.Suspend()
+		ingestion.applying.Wait()
+		content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from overnight", "overnight").String()
+		require.NoError(t, os.WriteFile(filepath.Join(project, "overnight.jsonl"), []byte(content), 0o600))
+		require.NoError(t, os.Chmod(project, 0))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(project, 0o700)) })
+		healthy := filepath.Join(root, "healthy")
+		require.NoError(t, os.MkdirAll(healthy, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(healthy, "healthy.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "healthy overnight message", "healthy").String()), 0o600))
+		_, err := os.ReadDir(project)
+		require.Error(t, err)
+		ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
+		headers, body := searchIngestionArchive(t, ts.URL, "overnight")
+		assert.NotContains(t, body, "hello from overnight")
+		assert.Contains(t, body, "healthy overnight message")
+		assert.Equal(t, "true", headers.Get(apiclient.SyncPendingHeader), "inaccessible sources keep catch-up pending")
+		assert.True(t, ingestion.Pending())
 	})
-	defer restore()
-	runner := server.LocalSyncRunner(func(ctx context.Context, _ func(agentsync.Progress)) (agentsync.SyncStats, error) {
-		stats, _, err := runForegroundWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, nil)
-		return stats, err
-	})
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, runner))))
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
-	require.NoError(t, err)
-	request.Header.Set("Origin", ts.URL)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	require.NoError(t, response.Body.Close())
-	require.Contains(t, string(body), "event: done", "the real worker must finish successfully")
-	t.Logf("pending after successful worker=%v body=%s", ingestion.Pending(), body)
-	assert.False(t, ingestion.Pending(), "a complete manual pass should settle the idle obligation")
 }

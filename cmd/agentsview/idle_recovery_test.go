@@ -1,13 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,41 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-func TestIdleUnreadableClaudeProjectKeepsWarning(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("fixture needs enforced POSIX directory permissions")
-	}
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o700))
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from overnight", "overnight").String()
-	require.NoError(t, os.WriteFile(filepath.Join(project, "overnight.jsonl"), []byte(content), 0o600))
-	require.NoError(t, os.Chmod(project, 0))
-	t.Cleanup(func() { require.NoError(t, os.Chmod(project, 0o700)) })
-	healthy := filepath.Join(root, "healthy")
-	require.NoError(t, os.MkdirAll(healthy, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(healthy, "healthy.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "healthy overnight message", "healthy").String()), 0o600))
-	_, err := os.ReadDir(project)
-	require.Error(t, err)
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
-	headers, body := searchIngestionArchive(t, ts.URL, "overnight")
-	assert.NotContains(t, body, "hello from overnight")
-	assert.Contains(t, body, "healthy overnight message")
-	assert.Equal(t, "true", headers.Get(apiclient.SyncPendingHeader), "inaccessible sources keep catch-up pending")
-	assert.True(t, ingestion.Pending())
-}
 
 func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -112,8 +76,10 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "test-key")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
 	t.Setenv("AWS_REGION", "us-east-1")
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {"s3://bucket/sessions"}}}
-	database := dbtest.OpenTestDB(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	cfg.AgentDirs[parser.AgentClaude] = append(cfg.AgentDirs[parser.AgentClaude], "s3://bucket/sessions")
+	database, lock := openTestWriteDB(t, cfg)
 	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
 	t.Cleanup(engine.Close)
 	engine.SyncAll(t.Context(), nil)
@@ -122,7 +88,19 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 	ingestion.Suspend()
 	ingestion.applying.Wait()
 	lists.Store(0)
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(newForegroundSyncRunner(t.Context(), cfg, engine, database, nil))))
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, c config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		var wire bytes.Buffer
+		workerErr := runSyncWorkerContext(ctx, c, request, &wire)
+		result, err := readWorkerResult(&wire, nil)
+		require.NoError(t, err)
+		return result, workerErr
+	})
+	defer restore()
+	runner := server.LocalSyncRunner(func(ctx context.Context, _ func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		stats, _, err := runForegroundWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, nil)
+		return stats, err
+	})
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, runner))))
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
 	require.NoError(t, err)
 	request.Header.Set("Origin", ts.URL)

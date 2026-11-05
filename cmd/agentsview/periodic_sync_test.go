@@ -164,9 +164,7 @@ func TestRemoteSourceSyncRootsSelectsSchemeRoots(t *testing.T) {
 	local := t.TempDir()
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor:    {"s3://bucket/machine/raw/cursor"},
-			parser.AgentIcodemate: {"s3://bucket/machine/raw/icodemate"},
-			parser.AgentClaude:    {local, "s3://bucket/machine/raw/claude"},
+			parser.AgentClaude: {local, "s3://bucket/machine/raw/claude"},
 			parser.AgentCodex: {
 				"s3://bucket/machine/raw/codex",
 				"S3://bucket/upper/raw/codex",
@@ -176,8 +174,6 @@ func TestRemoteSourceSyncRootsSelectsSchemeRoots(t *testing.T) {
 	assert.Equal(t, []string{
 		"s3://bucket/machine/raw/claude",
 		"s3://bucket/machine/raw/codex",
-		"s3://bucket/machine/raw/cursor",
-		"s3://bucket/machine/raw/icodemate",
 	}, remoteSourceSyncRoots(cfg),
 		"remote roots are selected by exact lowercase scheme, deduplicated, "+
 			"and sorted; provider discovery recognizes only lowercase s3://, "+

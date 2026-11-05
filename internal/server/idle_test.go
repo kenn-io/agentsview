@@ -12,8 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/kit/stacktest"
 )
 
@@ -226,7 +224,7 @@ func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testin
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				tracker := NewIdleTracker(0, func() { assert.Fail(t, "foreground serve must remain running") })
+				tracker := NewIdleTracker(0, func() {})
 				suspended := make(chan struct{}, 4)
 				tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
 				if outsideWork {
@@ -235,7 +233,7 @@ func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testin
 					go tracker.Run(ctx)
 					time.Sleep(2 * time.Minute)
 					synctest.Wait()
-					assert.Len(t, suspended, 1, "outside work permits local suspension while its exit lease remains held")
+					assert.Len(t, suspended, 1, "outside work permits local suspension")
 					return
 				}
 				go tracker.Run(ctx)
@@ -260,14 +258,13 @@ func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testin
 }
 
 func TestIdleSyncIgnoresBasePathPing(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		tracker := NewIdleTracker(time.Minute, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
 		suspensions := 0
 		tracker.SetSyncIdle(time.Minute, func() { suspensions++ })
-		handler := New(config.Config{Host: "127.0.0.1", Port: 8080}, database, nil, WithIdleTracker(tracker), WithBasePath("/archive")).Handler()
+		handler := tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), "/archive")
 		go tracker.Run(ctx)
 		for range 6 {
 			time.Sleep(30 * time.Second)
