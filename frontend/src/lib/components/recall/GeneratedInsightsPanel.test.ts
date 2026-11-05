@@ -119,6 +119,7 @@ describe("GeneratedInsightsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.serverVersion.insight_generation_available = true;
+    state.serverVersion.read_only = false;
     router.route = "recall";
     router.params = { tab: "generated" };
     state.store.selectedTask = undefined;
@@ -205,6 +206,37 @@ describe("GeneratedInsightsPanel", () => {
     expect(generate!.disabled).toBe(true);
     generate!.click();
     expect(mocks.generate).not.toHaveBeenCalled();
+    // The reason sits beside the button and describes it.
+    const reason = document.getElementById(generate!.getAttribute("aria-describedby")!);
+    expect(reason?.textContent?.trim()).toBe(
+      "Insight generation is unavailable for this archive",
+    );
+  });
+
+  it("explains a read-only archive beside the disabled Generate button", async () => {
+    state.serverVersion.insight_generation_available = false;
+    state.serverVersion.read_only = true;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    const generate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Generate",
+    );
+    expect(generate!.disabled).toBe(true);
+    const reason = document.getElementById(generate!.getAttribute("aria-describedby")!);
+    expect(reason?.textContent?.trim()).toBe(
+      "This archive is read-only, so new reports can't be generated here.",
+    );
+  });
+
+  it("shows no unavailable reason while generation is available", async () => {
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    const generate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Generate",
+    );
+    expect(generate!.disabled).toBe(false);
+    expect(generate!.hasAttribute("aria-describedby")).toBe(false);
+    expect(document.querySelector(".generate-reason")).toBeNull();
   });
 
   it("generates from the scope retained in the insights store", async () => {

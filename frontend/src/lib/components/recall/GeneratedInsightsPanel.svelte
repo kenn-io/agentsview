@@ -57,6 +57,14 @@
   const generationUnavailable = $derived(
     sync.serverVersion === null || !insightGenerationAvailable,
   );
+  // Shown beside the disabled Generate button once the backend has said
+  // why; nothing while its version is still loading.
+  const generationReason = $derived.by((): string | null => {
+    if (sync.serverVersion === null || insightGenerationAvailable) return null;
+    return sync.serverVersion.read_only === true
+      ? m.recall_generated_read_only_reason()
+      : m.insights_page_generate_disabled();
+  });
 
   const generationAgentOptions = AGENT_NAMES.map((name) => ({
     name,
@@ -287,95 +295,117 @@
   </header>
 
   <Card level="default" padding="none" class="scope-card">
-    <div class="scope-grid">
-      <div class="scope-field date-field">
-        <span>{m.recall_generated_date_range()}</span>
-        <RangePicker
-          selection={rangeSelection}
-          onSelect={applyRange}
-          {earliestSession}
-          block
+    <div class="scope-form">
+      <fieldset class="scope-group">
+        <legend>{m.recall_generated_group_sessions()}</legend>
+        <div class="scope-grid sessions-grid">
+          <div class="scope-field">
+            <span>{m.recall_generated_date_range()}</span>
+            <RangePicker
+              selection={rangeSelection}
+              onSelect={applyRange}
+              {earliestSession}
+              block
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.recall_generated_project()}</span>
+            <ProjectTypeahead
+              projects={sessions.projects}
+              value={insights.project}
+              onselect={(value) => insights.setProject(value)}
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.recall_generated_session_agent()}</span>
+            <Typeahead
+              options={sessionAgentOptions}
+              value={insights.sessionAgent}
+              fallbackLabel={insights.sessionAgent
+                ? agentLabel(insights.sessionAgent)
+                : m.insights_page_all_agents()}
+              placeholder={m.insights_page_filter_agents()}
+              title={m.recall_generated_select_session_agent()}
+              emptyLabel={m.insights_page_no_matching_agents()}
+              onselect={(value) => insights.setSessionAgent(value)}
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.insights_page_session_scope()}</span>
+            <Typeahead
+              options={scopeOptions}
+              value={insights.automatedScope}
+              fallbackLabel={m.insights_page_scope_no_automated()}
+              placeholder={m.insights_page_filter_scopes()}
+              title={m.insights_page_filter_by_scope()}
+              emptyLabel={m.insights_page_no_matching_scopes()}
+              onselect={(value) =>
+                insights.setAutomatedScope(value as AutomatedScope)}
+            />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="scope-group">
+        <legend>{m.recall_generated_group_report()}</legend>
+        <div class="scope-grid report-grid">
+          <div class="scope-field">
+            <span>{m.insights_page_template_label()}</span>
+            <Typeahead
+              options={templateOptions}
+              value={insights.cannedKind}
+              fallbackLabel={cannedKindLabel(insights.cannedKind)}
+              placeholder={m.insights_page_filter_templates()}
+              title={m.insights_page_select_template()}
+              emptyLabel={m.insights_page_no_matching_templates()}
+              onselect={(value) =>
+                insights.setCannedKind(value as CannedInsightKind)}
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.insights_page_generator_label()}</span>
+            <Typeahead
+              options={generationAgentOptions}
+              value={insights.agent}
+              fallbackLabel={agentLabel(insights.agent)}
+              placeholder={m.insights_page_filter_generators()}
+              title={m.insights_page_select_generator()}
+              emptyLabel={m.insights_page_no_matching_generators()}
+              onselect={(value) => insights.setAgent(value as AgentName)}
+            />
+          </div>
+          <label class="scope-field focus-field">
+            <span>{m.insights_page_optional_focus()}</span>
+            <textarea
+              value={insights.promptText}
+              maxlength="1200"
+              rows="2"
+              placeholder={m.insights_page_focus_placeholder()}
+              oninput={handlePromptChange}
+            ></textarea>
+          </label>
+        </div>
+      </fieldset>
+
+      <!-- The action row: why Generate is unavailable, beside it. -->
+      <div class="scope-actions">
+        {#if generationReason}
+          <p class="generate-reason" id="generate-reason">
+            <InfoIcon size="14" strokeWidth="2" aria-hidden="true" />
+            <span>{generationReason}</span>
+          </p>
+        {/if}
+        <Button
+          tone="info"
+          surface="solid"
+          class="generate-action"
+          label={m.insights_page_generate()}
+          disabled={generationUnavailable}
+          title={generationReason ?? m.insights_page_generate_title()}
+          ariaDescribedby={generationReason ? "generate-reason" : undefined}
+          onclick={handleGenerate}
         />
       </div>
-      <div class="scope-field">
-        <span>{m.recall_generated_project()}</span>
-        <ProjectTypeahead
-          projects={sessions.projects}
-          value={insights.project}
-          onselect={(value) => insights.setProject(value)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.recall_generated_session_agent()}</span>
-        <Typeahead
-          options={sessionAgentOptions}
-          value={insights.sessionAgent}
-          fallbackLabel={insights.sessionAgent
-            ? agentLabel(insights.sessionAgent)
-            : m.insights_page_all_agents()}
-          placeholder={m.insights_page_filter_agents()}
-          title={m.recall_generated_select_session_agent()}
-          emptyLabel={m.insights_page_no_matching_agents()}
-          onselect={(value) => insights.setSessionAgent(value)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.insights_page_session_scope()}</span>
-        <Typeahead
-          options={scopeOptions}
-          value={insights.automatedScope}
-          fallbackLabel={m.insights_page_scope_no_automated()}
-          placeholder={m.insights_page_filter_scopes()}
-          title={m.insights_page_filter_by_scope()}
-          emptyLabel={m.insights_page_no_matching_scopes()}
-          onselect={(value) =>
-            insights.setAutomatedScope(value as AutomatedScope)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.insights_page_template_label()}</span>
-        <Typeahead
-          options={templateOptions}
-          value={insights.cannedKind}
-          fallbackLabel={cannedKindLabel(insights.cannedKind)}
-          placeholder={m.insights_page_filter_templates()}
-          title={m.insights_page_select_template()}
-          emptyLabel={m.insights_page_no_matching_templates()}
-          onselect={(value) =>
-            insights.setCannedKind(value as CannedInsightKind)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.insights_page_generator_label()}</span>
-        <Typeahead
-          options={generationAgentOptions}
-          value={insights.agent}
-          fallbackLabel={agentLabel(insights.agent)}
-          placeholder={m.insights_page_filter_generators()}
-          title={m.insights_page_select_generator()}
-          emptyLabel={m.insights_page_no_matching_generators()}
-          onselect={(value) => insights.setAgent(value as AgentName)}
-        />
-      </div>
-      <label class="scope-field focus-field">
-        <span>{m.insights_page_optional_focus()}</span>
-        <textarea
-          value={insights.promptText}
-          maxlength="1200"
-          rows="2"
-          placeholder={m.insights_page_focus_placeholder()}
-          oninput={handlePromptChange}
-        ></textarea>
-      </label>
-      <Button
-        class="generate-action"
-        label={m.insights_page_generate()}
-        disabled={generationUnavailable}
-        title={sync.serverVersion !== null && !insightGenerationAvailable
-          ? m.insights_page_generate_disabled()
-          : m.insights_page_generate_title()}
-        onclick={handleGenerate}
-      />
     </div>
   </Card>
 
@@ -559,15 +589,55 @@
     font-size: 13px;
   }
 
-  .scope-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px 16px;
-    padding: 16px;
+  /* The scope card: two labelled groups (which sessions, what report) and
+     an action row. Every field uses the same enabled field chrome as the
+     date range trigger: surface fill, default edge, primary ink. */
+  .scope-form {
     --typeahead-max-width: none;
+    --typeahead-control-height: 30px;
+    --typeahead-control-font-size: var(--font-size-sm);
+    display: flex;
+    flex-direction: column;
   }
 
-  /* Every control fills its column, so the three columns share edges. */
+  .scope-group {
+    min-width: 0;
+    margin: 0;
+    padding: 14px 16px 16px;
+    border: 0;
+  }
+
+  .scope-group + .scope-group {
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .scope-group legend {
+    float: left;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 0;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .scope-grid {
+    clear: both;
+    display: grid;
+    gap: 12px 16px;
+  }
+
+  .sessions-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .report-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Every control fills its column, so the columns share edges. */
   .scope-field > :global(*:not(span)) {
     width: 100%;
     max-width: none;
@@ -579,9 +649,9 @@
     display: flex;
     min-width: 0;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 6px;
     color: var(--text-secondary);
-    font-size: 0.72rem;
+    font-size: 12px;
     font-weight: 400;
   }
 
@@ -589,61 +659,81 @@
     font-weight: 500;
   }
 
-  /* The date range trigger takes the same chrome as the select triggers
-     beside it: height, fill, edge, radius, and value size. */
-  .date-field :global(.kit-date-range-picker__trigger) {
-    height: var(--typeahead-control-height, 26px);
-    padding: 0 8px;
-    background: var(--bg-raised, var(--bg-inset));
-    border-color: var(--border-muted);
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-xs);
-    font-weight: 400;
-    color: var(--text-secondary);
+  .scope-form :global(.kit-typeahead__trigger:not(:disabled)),
+  .scope-form :global(.kit-date-range-picker__trigger),
+  .focus-field textarea {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
   }
 
-  .date-field :global(.kit-date-range-picker__trigger.open) {
+  .scope-form :global(.kit-date-range-picker__trigger) {
+    height: 30px;
+  }
+
+  .scope-form :global(.kit-typeahead__trigger:not(:disabled):hover),
+  .scope-form :global(.kit-date-range-picker__trigger:hover) {
+    background: var(--bg-surface-hover);
+  }
+
+  .scope-form :global(.kit-typeahead__trigger:focus),
+  .scope-form :global(.kit-date-range-picker__trigger.open),
+  .focus-field textarea:focus {
     border-color: var(--accent-blue);
   }
 
-  /* Light: the grey inset fill made editable fields look like the
-     disabled Generate button beside them. Enabled fields take the white
-     surface and the default edge, so only the unavailable control is grey. */
-  :global(:root:not(.dark)) .scope-grid {
-    --bg-raised: var(--bg-surface);
-  }
-
-  :global(:root:not(.dark)) .scope-grid :global(.kit-typeahead__trigger:not(:disabled):not(:focus)),
-  :global(:root:not(.dark)) .date-field :global(.kit-date-range-picker__trigger:not(.open)),
-  :global(:root:not(.dark)) .focus-field textarea:not(:focus) {
-    border-color: var(--border-default);
-  }
-
   .focus-field {
-    grid-column: span 2;
+    grid-column: 1 / -1;
   }
 
   .focus-field textarea {
     min-height: 3.75rem;
     resize: vertical;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-raised, var(--bg-inset));
-    color: var(--text-primary);
-    font: inherit;
-    font-weight: 400;
-    padding: 0.55rem 0.65rem;
+    font-family: inherit;
+    line-height: 1.45;
+    padding: 7px 10px;
+    outline: none;
   }
 
-  :global(.scope-grid .generate-action) {
-    align-self: end;
+  .focus-field textarea::placeholder {
+    color: var(--text-muted);
   }
 
-  /* Light: the half-opacity fade left the disabled label nearly invisible
-     on white. Full opacity with muted ink still reads as disabled. */
-  :global(:root:not(.dark) .scope-grid .generate-action:disabled) {
-    opacity: 1;
-    color: color-mix(in srgb, var(--text-muted) 72%, var(--bg-surface));
+  /* Generate sits at the end of the card as the primary action. When the
+     backend cannot generate, the reason sits beside the disabled button
+     instead of only in a tooltip. */
+  .scope-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-muted);
+    background: color-mix(in srgb, var(--bg-inset) 55%, var(--bg-surface));
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+
+  .generate-reason {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin: 0 auto 0 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .generate-reason :global(svg) {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  .scope-actions :global(.generate-action) {
+    flex-shrink: 0;
+    min-width: 112px;
   }
 
   :global(.archive-state) {
@@ -752,7 +842,7 @@
   }
 
   @media (max-width: 900px) {
-    .scope-grid {
+    .sessions-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -766,12 +856,13 @@
       padding: 0.85rem 1rem 1rem;
     }
 
-    .scope-grid {
+    .sessions-grid,
+    .report-grid {
       grid-template-columns: 1fr;
     }
 
-    .focus-field {
-      grid-column: auto;
+    .scope-actions {
+      flex-wrap: wrap;
     }
 
     .generated-detail-head {
