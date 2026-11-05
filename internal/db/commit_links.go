@@ -136,6 +136,19 @@ func commitRepository(input, cwd string) string {
 	if dir != "" {
 		cwd = resolve(cwd, dir)
 	}
+	command := commitCommandText(input)
+	if match := commitCDRE.FindStringSubmatch(command); match != nil {
+		cwd = resolve(cwd, match[1])
+	}
+	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
+		if strings.HasPrefix(option, "-C") {
+			cwd = resolve(cwd, strings.TrimSpace(option[2:]))
+		}
+	}
+	return cwd
+}
+
+func commitCommandText(input string) string {
 	command := signals.CommandText(input)
 	if !jsontext.Value(input).IsValid() {
 		if match := commitCommandRE.FindStringSubmatch(input); match != nil {
@@ -154,15 +167,7 @@ func commitRepository(input, cwd string) string {
 			}
 		}
 	}
-	if match := commitCDRE.FindStringSubmatch(command); match != nil {
-		cwd = resolve(cwd, match[1])
-	}
-	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
-		if strings.HasPrefix(option, "-C") {
-			cwd = resolve(cwd, strings.TrimSpace(option[2:]))
-		}
-	}
-	return cwd
+	return command
 }
 
 type commitCall struct {
@@ -322,11 +327,12 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		if (!isCommit || len(pollIDs) != 0) && !singlePoll || summaryMatched {
 			continue
 		}
-		quiet := commitQuietReadbackRE.FindStringSubmatch(signals.CommandText(cmp.Or(singleOwner, call).input))
+		quiet := commitQuietReadbackRE.FindStringSubmatch(commitCommandText(cmp.Or(singleOwner, call).input))
 		if quiet == nil {
 			continue
 		}
 		for arg := range strings.FieldsSeq(quiet[1]) {
+			arg = strings.Trim(arg, "\"'")
 			//nolint:gocritic // Git accepts unambiguous prefixes of these option names.
 			if arg == "-z" || arg == "--l" || len(arg) >= 4 && (strings.HasPrefix("--dry-run", arg) || strings.HasPrefix("--short", arg) || strings.HasPrefix("--porcelain", arg) || strings.HasPrefix("--long", arg) || strings.HasPrefix("--null", arg)) {
 				quiet = nil
@@ -340,7 +346,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		quietCount := 0
 		for _, output := range outputs {
 			for line := range strings.SplitSeq(output.text, "\n") {
-				sha, subject, _ := strings.Cut(line, " ")
+				sha, subject, _ := strings.Cut(strings.TrimSpace(line), " ")
 				if commitSHARE.MatchString(sha) {
 					quietSHA, quietSubject = sha, subject
 					quietOwner = cmp.Or(pending[output.process], singleOwner, call)

@@ -138,6 +138,7 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 		name, command, output, sha, subject string
 	}{
 		{"rev parse", "git commit -q -m fix && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
+		{"rev parse CRLF", "git commit -q -m fix && git rev-parse HEAD", "abc1234\r\n", "abc1234", ""},
 		{"log oneline", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
 		{"log reverse options", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
 		{"commit other repo", "git -C /other commit -q -m fix && git rev-parse HEAD", "abc1234", "", ""},
@@ -179,8 +180,21 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 	})
 }
 
+func TestCommitLinksQuietReadbackCodeMode(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+	messages := commitMessages("s1", `text(await tools.exec_command({cmd: "git commit -q -m \"fix\" && git rev-parse HEAD", workdir: "/repo"}));`, `{"output":"abc1234\n"}`)
+	messages[2].ToolCalls[0].ToolName = "exec"
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.Equal(t, "/repo", got.Commits[0].Repository)
+}
+
 func TestCommitLinksQuietDryRunPrefixes(t *testing.T) {
-	for _, option := range []string{"-z", "--dr", "--dry", "--dry-", "--dry-r", "--dry-ru", "--dry-run", "--sh", "--sho", "--shor", "--short", "--po", "--por", "--porc", "--porce", "--porcel", "--porcela", "--porcelai", "--porcelain", "--l", "--lo", "--lon", "--long", "--nu", "--nul", "--null"} {
+	for _, option := range []string{"-z", "--dr", "--dry", "--dry-", "--dry-r", "--dry-ru", "--dry-run", "--sh", "--sho", "--shor", "--short", "--po", "--por", "--porc", "--porce", "--porcel", "--porcela", "--porcelai", "--porcelain", "--l", "--lo", "--lon", "--long", "--nu", "--nul", "--null", "'--dry-run'", `"--dry-run"`, "'--short'", `"--porcelain"`, "'--l'", `"-z"`} {
 		t.Run(option, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
