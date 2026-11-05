@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,7 +119,9 @@ func (db *DB) GetSessionStats(
 	for _, r := range rowsWithSubagents {
 		sessionIDsAll = append(sessionIDsAll, r.id)
 	}
-	accum, err := populateVelocityAccumulator(ctx, db, sessionIDs, tz)
+	accum, err := populateVelocityAccumulator(
+		ctx, db, slices.Sorted(slices.Values(sessionIDs)), tz,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("populating velocity accumulator: %w", err)
 	}
