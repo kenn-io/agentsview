@@ -1,5 +1,6 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
+import "./fonts.css";
 import "@kenn-io/kit-ui/theme.css";
 import "@kenn-io/kit-ui/mermaid.css";
 import "./app.css";

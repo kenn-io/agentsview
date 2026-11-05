@@ -622,6 +622,9 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	root=$$(pwd); \
 	dirs=$$(go list -export -f '{{.Dir}}' ./...); \
 	pkgs=$$(for dir in $$dirs; do \
+		case "$${dir#$$root/}" in \
+			node_modules/*|*/node_modules/*) continue ;; \
+		esac; \
 		if [ "$$dir" = "$$root" ]; then \
 			printf '%s\n' "."; \
 		else \

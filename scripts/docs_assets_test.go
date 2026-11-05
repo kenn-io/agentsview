@@ -295,6 +295,15 @@ func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
 
 	scriptPath := installScript(t, repo,
 		filepath.Join("docs", "zensical-docs.sh"))
+	installScript(t, repo, filepath.Join("docs", "scripts", "first_paint.py"))
+	installScript(t, repo, filepath.Join("docs", "scripts", "hold-first-paint.js"))
+	pythonPath := requireRunnablePython3(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(docsDir, "stylesheets"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(docsDir, "stylesheets", "extra.css"),
+		[]byte(`@font-face { font-family: Inter; src: url("/fonts/Inter-Regular.woff2"); }`),
+		0o644,
+	))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(docsDir, "zensical.toml"),
 		[]byte("[project]\ndocs_dir = \"docs\"\nsite_dir = \"site\"\n"),
@@ -345,7 +354,8 @@ cp -R "$public_docs"/. site/docs/
 printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 `), 0o755))
 
-	output, err := runBash(t, docsDir, nil, scriptPath, "build")
+	output, err := runBash(t, docsDir,
+		append(envWithout("PYTHON"), "PYTHON="+pythonPath), scriptPath, "build")
 	require.NoError(t, err, string(output))
 	assert.FileExists(t, filepath.Join(docsDir, "site", "docs", "index.md"))
 	assert.FileExists(t, filepath.Join(
@@ -374,13 +384,13 @@ func writeWebsiteTierFixture(t *testing.T, docsDir string) {
 
 	websiteDir := filepath.Join(docsDir, "website")
 	files := map[string]string{
-		"index.html":                         "<!doctype html>\n",
+		"index.html":                         "<!doctype html><meta charset=\"utf-8\">\n",
 		"index.md":                           "# Home\n",
-		filepath.Join("guide", "index.html"): "<!doctype html>\n",
+		filepath.Join("guide", "index.html"): "<!doctype html><meta charset=\"utf-8\">\n",
 		"guide.md":                           "# Guide\n",
-		"404.html":                           "<!doctype html>\n",
+		"404.html":                           "<!doctype html><meta charset=\"utf-8\">\n",
 		"favicon.svg":                        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
-		filepath.Join("styles", "site.css"):  "body {}\n",
+		filepath.Join("styles", "site.css"):  `@font-face { font-family: Inter; src: url("/fonts/Inter-Regular.woff2"); }`,
 		filepath.Join("scripts", "site.js"):  "// site\n",
 		filepath.Join("fonts", "Inter-Regular.woff2"): "font\n",
 	}

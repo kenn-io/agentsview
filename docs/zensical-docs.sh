@@ -176,6 +176,8 @@ case "$command_name" in
     (cd "$docs_root" && "$zensical_bin" build --strict --config-file "$tmp_config_name" "$@")
     copy_route_markdown_pages
     assemble_site_root
+    # Embed fonts and hold first paint so no page paints in a fallback face.
+    "${PYTHON:-python3}" "$docs_root/scripts/first_paint.py" "$site_output_dir"
     ;;
   serve)
     (cd "$docs_root" && "$zensical_bin" serve --config-file "$tmp_config_name" "$@")
