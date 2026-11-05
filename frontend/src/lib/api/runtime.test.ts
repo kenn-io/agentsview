@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { sync } from "../stores/sync.svelte.js";
+import { getApiV1Search } from "./generated/search/search.js";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
@@ -14,6 +16,7 @@ import { requestUrl } from "../test-support/request-url.js";
 describe("orvalFetch", () => {
   afterEach(() => {
     localStorage.clear();
+    sync.syncPending = false;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -99,6 +102,19 @@ describe("orvalFetch", () => {
     expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe(
       "Bearer candidate-token",
     );
+  });
+  it("marks catch-up pending when a search response carries the stale header", async () => {
+    sync.syncPending = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response('{"results":[]}', {
+          headers: { "Content-Type": "application/json", "X-Agentsview-Archive-Stale": "true" },
+        }),
+      ),
+    );
+    await getApiV1Search({ q: "overnight" });
+    expect(sync.syncPending).toBe(true);
   });
 });
 

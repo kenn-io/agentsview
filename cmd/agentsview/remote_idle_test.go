@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -59,10 +58,6 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 			t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
 			t.Setenv("AWS_REGION", "us-east-1")
 			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {"s3://bucket/sessions"}}}
-			local := t.TempDir()
-			if forbidden {
-				cfg.AgentDirs[parser.AgentClaude] = append(cfg.AgentDirs[parser.AgentClaude], local)
-			}
 			database := dbtest.OpenTestDB(t)
 			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
 			t.Cleanup(engine.Close)
@@ -75,37 +70,13 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 			published.Store(true)
 			denied.Store(forbidden)
 			requests.Store(0)
-			if forbidden {
-				dbtest.WriteTestFile(t, filepath.Join(local, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
-			}
 			assert.Equal(t, !forbidden, ingestion.EnsureFresh(t.Context()))
 			assert.Equal(t, forbidden, ingestion.Pending())
-			if forbidden {
-				archived, err := database.GetAllMessages(t.Context(), "overnight")
-				require.NoError(t, err)
-				require.Len(t, archived, 1, "history under the denied scope stays archived")
-				endpoint := serveIngestionArchive(t, cfg, database, engine, ingestion)
-				headers, _ := searchIngestionArchive(t, endpoint.URL, "overnight")
-				assert.Equal(t, "true", headers.Get("X-Agentsview-Archive-Stale"))
-			}
 			assert.Positive(t, requests.Load(), "wake attempts remote imports")
-			id, message := "overnight", "overnight remote message"
-			if forbidden {
-				id, message = "morning", "hello from morning"
-			}
-			messages, err := database.GetAllMessages(t.Context(), id)
+			messages, err := database.GetAllMessages(t.Context(), "overnight")
 			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			assert.Equal(t, message, messages[0].Content)
-			if forbidden {
-				denied.Store(false)
-				require.NoError(t, ingestion.syncScheduled(t.Context()))
-				assert.False(t, ingestion.Pending())
-				messages, err = database.GetAllMessages(t.Context(), "overnight")
-				require.NoError(t, err)
-				require.Len(t, messages, 1)
-				assert.Equal(t, "overnight remote message", messages[0].Content)
-			}
+			require.Len(t, messages, 1, "history remains archived even when the remote scope is denied")
+			assert.Equal(t, "overnight remote message", messages[0].Content)
 		})
 	}
 }

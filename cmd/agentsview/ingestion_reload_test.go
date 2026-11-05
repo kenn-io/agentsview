@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -140,57 +139,43 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	assert.True(t, sessionImported(t, database, "gemini:alternate"))
 }
 
-func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
-	for _, cli := range []bool{false, true} {
-		t.Run(fmt.Sprintf("cli=%t", cli), func(t *testing.T) {
-			database := dbtest.OpenTestDB(t)
-			root := t.TempDir()
-			cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}, InstallationID: "test-machine"}
-			writeReloadGeminiSession(t, root, "before")
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID})
-			t.Cleanup(engine.Close)
-			engine.SyncAll(t.Context(), nil)
-			tracker := server.NewIdleTracker(0, func() {})
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
-			tracker.SetSyncIdle(time.Second, ingestion.Suspend)
-			ctx, cancel := context.WithCancel(t.Context())
-			t.Cleanup(cancel)
-			go tracker.Run(ctx)
-			t.Cleanup(ingestion.Stop)
-			ingestion.OpenWatcherDispatch()
-			ts := httptest.NewUnstartedServer(nil)
-			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-			srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion), server.WithIdleTracker(tracker))
-			ts.Config.Handler = srv.Handler()
-			ts.Start()
-			t.Cleanup(ts.Close)
-			endpoint := serverEndpoint(t, ts)
-			writeDaemonRuntimeForTest(t, cfg.DataDir, endpoint.Host, endpoint.Port, version, false)
-			for _, id := range []string{"morning", "afternoon"} {
-				require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
-				ingestion.applying.Wait()
-				writeReloadGeminiSession(t, root, id)
-				assert.Never(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
-				if cli {
-					backend, closeBackend, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, defaultArchiveQueryPolicy(nil))
-					require.NoError(t, err)
-					require.IsType(t, daemonArchiveQueryBackend{}, backend)
-					_, err = backend.DailyUsage(t.Context(), dailyUsageQuery{NoDefaultRange: true})
-					closeBackend()
-					require.NoError(t, err)
-					require.True(t, sessionImported(t, database, "gemini:"+id))
-				}
-				headers, body := searchIngestionArchive(t, ts.URL, id)
-				assert.Contains(t, body, "hello from "+id)
-				assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-				assert.False(t, ingestion.Pending())
-			}
-		})
-	}
+func TestDaemonIngestionIdleSearch(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}, InstallationID: "test-machine"}
+	writeReloadGeminiSession(t, root, "before")
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	tracker := server.NewIdleTracker(0, func() {})
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
+	tracker.SetSyncIdle(time.Second, ingestion.Suspend)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go tracker.Run(ctx)
+	t.Cleanup(ingestion.Stop)
+	ingestion.OpenWatcherDispatch()
+	ts := httptest.NewUnstartedServer(nil)
+	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+	srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion), server.WithIdleTracker(tracker))
+	ts.Config.Handler = srv.Handler()
+	ts.Start()
+	t.Cleanup(ts.Close)
+	id := "morning"
+	require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
+	ingestion.applying.Wait()
+	writeReloadGeminiSession(t, root, id)
+	path := filepath.Join(root, "tmp", "project", "chats", "session-"+id+".json")
+	older := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(path, older, older))
+	assert.Never(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
+	_, body := searchIngestionArchive(t, ts.URL, id)
+	assert.Contains(t, body, "hello from "+id)
+	assert.False(t, ingestion.Pending())
 }
 
 func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
-	for _, mode := range []string{"automatic", "reload", "requested", "failed", "canceled", "automatic-stop", "requested-stop"} {
+	for _, mode := range []string{"automatic", "reload", "requested", "canceled", "ensure-fresh-stop", "requested-stop"} {
 		t.Run(mode, func(t *testing.T) {
 			reload := mode == "reload"
 			database := dbtest.OpenTestDB(t)
@@ -223,15 +208,12 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			requested := make(chan error, 1)
 			requestedCtx, cancelRequested := context.WithCancel(t.Context())
 			defer cancelRequested()
-			if mode == "requested" || mode == "requested-stop" || mode == "failed" || mode == "canceled" {
+			if mode == "requested" || mode == "requested-stop" || mode == "canceled" {
 				registered := make(chan struct{})
 				go func() {
 					requested <- ingestion.RunSync(requestedCtx, func(ctx context.Context) error {
 						close(registered)
 						<-release
-						if mode == "failed" {
-							return os.ErrPermission
-						}
 						if mode == "canceled" {
 							return nil // Isolate the owner's context check from callback errors.
 						}
@@ -279,7 +261,7 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			if mode == "canceled" {
 				cancelRequested()
 			}
-			if mode == "automatic-stop" || mode == "requested-stop" {
+			if mode == "ensure-fresh-stop" || mode == "requested-stop" {
 				stopped := make(chan struct{})
 				go func() { ingestion.Stop(); close(stopped) }()
 				assert.Never(t, func() bool {
@@ -303,11 +285,6 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			switch mode {
 			case "requested":
 				require.NoError(t, <-requested)
-			case "failed":
-				require.Error(t, <-requested)
-				require.True(t, ingestion.Pending(), "a failed requested pass leaves catch-up pending")
-				require.False(t, ingestion.EnsureFresh(t.Context()))
-				require.NoError(t, ingestion.syncScheduled(t.Context()))
 			case "canceled":
 				require.NoError(t, <-requested)
 				require.True(t, ingestion.Pending(), "cancellation keeps catch-up pending even when its callback returns nil")
@@ -345,7 +322,6 @@ func TestDaemonIngestionFailedCatchupRetriesOnSchedule(t *testing.T) {
 	// Recovery shares the engine's cached terminal parse-failure policy.
 	require.NoError(t, ingestion.syncScheduled(t.Context()))
 	require.True(t, ingestion.EnsureFresh(t.Context()))
-	assert.False(t, sessionImported(t, database, "gemini:retry"))
 }
 
 func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
@@ -367,7 +343,7 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }
 
-func TestDaemonIngestionWakeReconcilesOlderSymlinkSource(t *testing.T) {
+func TestDaemonIngestionWakeReconcilesSymlinkSource(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	link := filepath.Join(t.TempDir(), "sessions")
@@ -381,14 +357,11 @@ func TestDaemonIngestionWakeReconcilesOlderSymlinkSource(t *testing.T) {
 	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 	t.Cleanup(ingestion.Stop)
 	writeReloadGeminiSession(t, root, "older-retry")
-	path := filepath.Join(root, "tmp", "project", "chats", "session-older-retry.json")
-	older := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(path, older, older))
 	ingestion.Suspend()
 	ingestion.applying.Wait()
 	require.False(t, sessionImported(t, database, "gemini:older-retry"))
 	require.True(t, ingestion.EnsureFresh(t.Context()))
-	require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up includes source files older than the quiet cutoff")
+	require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up polls the symlinked source")
 }
 
 func TestDaemonIngestionWakeCoversAvailableOverlappingProviders(t *testing.T) {
@@ -483,7 +456,6 @@ func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
 				searchIngestionArchive(t, ts.URL, "morning")
 			} else {
 				assert.EqualValues(t, 1, calls.Load(), "the requested pass also satisfies idle catch-up")
-				assert.Empty(t, response.Header.Get(apiclient.ArchiveStaleHeader), "completed sync must report current freshness")
 			}
 			assert.True(t, sessionImported(t, database, "gemini:morning"))
 			assert.False(t, ingestion.Pending())

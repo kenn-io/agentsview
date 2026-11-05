@@ -965,14 +965,14 @@ func TestNewDaemonIdleTrackerUsesConfigTimeout(t *testing.T) {
 
 func TestNewDaemonIdleTrackerConfigZeroDisables(t *testing.T) {
 	t.Setenv(backgroundChildEnvVar, "1")
-	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 0}, func() { require.FailNow(t, "idle tracker fired") })
+	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 0, SyncIdleAfter: 0}, func() { require.FailNow(t, "idle tracker fired") })
 	assert.Nil(t, tracker)
 }
 
 func TestNewDaemonIdleTrackerEnvOverridesConfig(t *testing.T) {
 	t.Setenv(backgroundChildEnvVar, "1")
 	t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0")
-	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 20 * time.Minute}, func() { require.FailNow(t, "idle tracker fired") })
+	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 20 * time.Minute, SyncIdleAfter: 0}, func() { require.FailNow(t, "idle tracker fired") })
 	assert.Nil(t, tracker)
 }
 

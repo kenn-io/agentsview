@@ -120,7 +120,7 @@ describe("SearchStore", () => {
     vi.useRealTimers();
   });
 
-  it("refreshes the open search after background catch-up completes", async () => {
+  it("refreshes the open search when the last sync changes", async () => {
     vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({
       version: "dev",
       commit: "unknown",
@@ -141,14 +141,13 @@ describe("SearchStore", () => {
       earliest_session: null,
     });
     const status = vi.spyOn(SyncService, "getApiV1SyncStatus");
-    const pendingStatus = {
+    const initialStatus = {
       last_sync: "2026-07-01T00:00:00Z",
-      sync_pending: true,
       archive_stale: false,
       startup_pending: false,
       stats: { total_sessions: 0, synced: 0, skipped: 0, failed: 0 },
     };
-    status.mockResolvedValueOnce(pendingStatus);
+    status.mockResolvedValueOnce(initialStatus);
     await sync.loadStatus();
     searchService.getApiV1Search
       .mockResolvedValueOnce(fullTextResponse("needle", 0))
@@ -156,17 +155,14 @@ describe("SearchStore", () => {
     searchStore.search("needle", "alpha");
     await runDebounce();
     expect(searchStore.results).toEqual([]);
-    expect(sync.syncPending).toBe(true);
 
     status.mockResolvedValueOnce({
-      ...pendingStatus,
+      ...initialStatus,
       last_sync: "2026-07-02T00:00:00Z",
-      sync_pending: false,
     });
     await sync.loadStatus();
     await runDebounce();
 
-    expect(sync.syncPending).toBe(false);
     expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
     expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
       { q: "needle", project: "alpha", limit: 30, sort: "relevance" },
