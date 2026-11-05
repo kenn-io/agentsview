@@ -159,7 +159,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			recheck = false
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			mgr, onBattery := s.passManager()
+			onBattery, mgr := s.passManager()
 			if recheck && onBattery {
 				break // Only waiting for AC; nothing new is owed.
 			}
@@ -193,7 +193,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			mgr, onBattery := s.passManager()
+			onBattery, mgr := s.passManager()
 			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: full})
 			if !ok {
@@ -221,11 +221,11 @@ func (s *extractScheduler) Run(ctx context.Context) {
 
 // passManager returns the battery reconciler while on battery power, and the
 // real manager otherwise.
-func (s *extractScheduler) passManager() (extractPassManager, bool) {
+func (s *extractScheduler) passManager() (bool, extractPassManager) {
 	if s.onBattery != nil && s.onBattery() {
-		return s.onBatteryMgr, true
+		return true, s.onBatteryMgr
 	}
-	return s.mgr, false
+	return false, s.mgr
 }
 
 // tryPassWithLease runs one TryPass under an idle-tracker work lease, so a
