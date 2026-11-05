@@ -121,37 +121,40 @@ describe("idle catch-up", () => {
   it.each([
     { name: "parser-stale response", archiveStale: true, pending: false, completions: 0 },
     { name: "catch-up finished", archiveStale: false, pending: true, completions: 1 },
-  ])("handles $name without advancing last_sync", async ({ archiveStale, pending, completions }) => {
-    const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
-    const notify = vi.spyOn(sync, "notifySyncComplete");
-    try {
-      (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
-      api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
-      api.getSyncStatus.mockResolvedValue({
-        sync_pending: pending,
-        archive_stale: archiveStale,
-        last_sync: "",
-        stats: null,
-      });
-      await sync.loadStatus();
-      expect(sync.syncPending).toBe(pending);
-      expect(sync.archiveStale).toBe(archiveStale);
-      if (archiveStale) window.dispatchEvent(new Event("agentsview:archive-stale"));
-      api.getSyncStatus.mockResolvedValue({
-        sync_pending: false,
-        archive_stale: archiveStale,
-        last_sync: "",
-        stats: null,
-      });
-      await sync.loadStatus();
-      expect(sync.syncPending).toBe(false);
-      expect(refresh).toHaveBeenCalledTimes(completions);
-      expect(notify).toHaveBeenCalledTimes(completions);
-    } finally {
-      refresh.mockRestore();
-      notify.mockRestore();
-    }
-  });
+  ])(
+    "handles $name without advancing last_sync",
+    async ({ archiveStale, pending, completions }) => {
+      const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
+      const notify = vi.spyOn(sync, "notifySyncComplete");
+      try {
+        (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
+        api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
+        api.getSyncStatus.mockResolvedValue({
+          sync_pending: pending,
+          archive_stale: archiveStale,
+          last_sync: "",
+          stats: null,
+        });
+        await sync.loadStatus();
+        expect(sync.syncPending).toBe(pending);
+        expect(sync.archiveStale).toBe(archiveStale);
+        if (archiveStale) window.dispatchEvent(new Event("agentsview:archive-stale"));
+        api.getSyncStatus.mockResolvedValue({
+          sync_pending: false,
+          archive_stale: archiveStale,
+          last_sync: "",
+          stats: null,
+        });
+        await sync.loadStatus();
+        expect(sync.syncPending).toBe(false);
+        expect(refresh).toHaveBeenCalledTimes(completions);
+        expect(notify).toHaveBeenCalledTimes(completions);
+      } finally {
+        refresh.mockRestore();
+        notify.mockRestore();
+      }
+    },
+  );
 });
 
 describe("session watch visibility", () => {

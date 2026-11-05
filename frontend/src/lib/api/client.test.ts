@@ -453,10 +453,11 @@ function mockFetchWithStream(chunks: string[]): void {
   const stream = makeSSEStream(chunks);
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({
-      ok: true,
-      body: stream,
-    }),
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(stream, { headers: { "Content-Type": "text/event-stream" } }),
+      ),
   );
 }
 
@@ -598,10 +599,11 @@ describe("generateInsight SSE parsing", () => {
     const stream = makeSSEStream(chunks);
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        body: stream,
-      }),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(stream, { headers: { "Content-Type": "text/event-stream" } }),
+        ),
     );
   }
 
