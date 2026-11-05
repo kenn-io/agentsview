@@ -1928,6 +1928,7 @@ func TestEmbedSchedulerDefersBatteryBackstop(t *testing.T) {
 		battery.Store(true)
 		s := newEmbedScheduler(mgr, time.Second, 0, false, nil)
 		s.onBattery = battery.Load
+		s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
 		ticks := make(chan time.Time)
 		go s.run(t.Context(), ticks)
 		defer s.Stop()
@@ -1935,10 +1936,12 @@ func TestEmbedSchedulerDefersBatteryBackstop(t *testing.T) {
 		synctest.Sleep(2 * batteryRecheckInterval)
 		synctest.Wait()
 		assert.Zero(t, mgr.callCount())
+		assert.FileExists(t, s.batteryDeferredPath)
 		battery.Store(false)
 		synctest.Sleep(batteryRecheckInterval)
 		synctest.Wait()
 		assert.Equal(t, []vector.BuildRequest{{Backstop: true}}, mgr.callsSnapshot())
+		assert.NoFileExists(t, s.batteryDeferredPath)
 	})
 }
 
@@ -1982,6 +1985,7 @@ func TestEmbedSchedulerBatteryBackstopClearsRetryTimer(t *testing.T) {
 		battery.Store(true)
 		s := newEmbedScheduler(mgr, time.Second, 45*time.Second, false, nil)
 		s.onBattery = battery.Load
+		s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
 		go s.Run(t.Context())
 		defer s.Stop()
 		synctest.Sleep(50 * time.Second)
@@ -1991,10 +1995,11 @@ func TestEmbedSchedulerBatteryBackstopClearsRetryTimer(t *testing.T) {
 		synctest.Sleep(80 * time.Second)
 		synctest.Wait()
 		assert.Equal(t, []vector.BuildRequest{{Backstop: true}}, mgr.callsSnapshot())
+		assert.NoFileExists(t, s.batteryDeferredPath)
 	})
 }
 
-func TestMessageSchedulerStartupBuildsOfflineImportedCorpus(t *testing.T) {
+func TestMessageSchedulerStartupBuildsBatteryDeferredCorpus(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	dbtest.SeedSessionWithMessages(t, database, "offline", "project", []db.Message{
@@ -2007,33 +2012,55 @@ func TestMessageSchedulerStartupBuildsOfflineImportedCorpus(t *testing.T) {
 	embeddingsServer := cfg.Vector.Embeddings.Servers["local"]
 	embeddingsServer.Endpoint = stub.URL + "/v1"
 	cfg.Vector.Embeddings.Servers["local"] = embeddingsServer
+	func() {
+		vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+		require.NoError(t, err)
+		defer vs.Close()
+		vs.Scheduler.onBattery = func() bool { return true }
+		vs.Scheduler.debounce = 10 * time.Millisecond
+		vs.Scheduler.Notify()
+		go vs.Scheduler.Run(t.Context())
+		defer vs.Scheduler.Stop()
+		waitForSchedulerCondition(t, func() bool {
+			_, statErr := os.Stat(vs.Scheduler.batteryDeferredPath)
+			return statErr == nil
+		}, "battery deferral was not retained for the next daemon")
+	}()
+
 	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
 	defer vs.Close()
+	vs.Scheduler.onBattery = func() bool { return false }
 	vs.Scheduler.debounce = 10 * time.Millisecond
 	go vs.Scheduler.Run(t.Context())
 	defer vs.Scheduler.Stop()
 	waitForSchedulerCondition(t, func() bool {
 		generations, listErr := directListGenerations(t.Context(), cfg, vector.MessageIndexSpec())
-		return listErr == nil && len(generations) == 1 && generations[0].Embedded == 1
+		_, statErr := os.Stat(vs.Scheduler.batteryDeferredPath)
+		return listErr == nil && len(generations) == 1 && generations[0].Embedded == 1 && errors.Is(statErr, os.ErrNotExist)
 	}, "daemon startup did not embed an offline message")
 }
 
-func TestMessageSchedulerStartupBuildsRequireRunAfterSync(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		dataDir := t.TempDir()
-		database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-		cfg := vectorTestConfig(dataDir)
-		cfg.Vector.Embed.RunAfterSync = new(false)
-		vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-		require.NoError(t, err)
-		defer vs.Close()
-		mgr := &fakeEmbedManager{}
-		vs.Scheduler.mgr = mgr
-		go vs.Scheduler.Run(t.Context())
-		defer vs.Scheduler.Stop()
-		synctest.Sleep(time.Minute)
-		synctest.Wait()
-		assert.Zero(t, mgr.callCount())
-	})
+func TestMessageSchedulerACStartupWithoutDeferredWorkDoesNotBuild(t *testing.T) {
+	for _, runAfterSync := range []bool{false, true} {
+		t.Run(fmt.Sprintf("run_after_sync=%t", runAfterSync), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				dataDir := t.TempDir()
+				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+				cfg := vectorTestConfig(dataDir)
+				cfg.Vector.Embed.RunAfterSync = new(runAfterSync)
+				vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+				require.NoError(t, err)
+				defer vs.Close()
+				mgr := &fakeEmbedManager{}
+				vs.Scheduler.mgr = mgr
+				vs.Scheduler.onBattery = func() bool { return false }
+				go vs.Scheduler.Run(t.Context())
+				defer vs.Scheduler.Stop()
+				synctest.Sleep(time.Minute)
+				synctest.Wait()
+				assert.Zero(t, mgr.callCount())
+			})
+		})
+	}
 }
