@@ -18590,12 +18590,12 @@ paths:
               - semantic
               - hybrid
             type: string
-        - description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
+        - description: "Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)"
           explode: false
           in: query
           name: scope
           schema:
-            description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
+            description: "Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)"
             enum:
               - top
               - all

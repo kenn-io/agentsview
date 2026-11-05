@@ -20600,7 +20600,7 @@ func (g GetAPIV1SearchContentQueryMode) Validate() error {
 	}
 }
 
-// GetAPIV1SearchContentQueryScope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
+// GetAPIV1SearchContentQueryScope Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)
 type GetAPIV1SearchContentQueryScope string
 
 const (
@@ -21547,7 +21547,7 @@ type GetAPIV1SearchContentQuery struct {
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
 
-	// Scope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
+	// Scope Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
 	// In Comma-separated content sources

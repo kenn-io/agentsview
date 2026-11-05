@@ -887,6 +887,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		)
 	}
 
+	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+		return db.ContentSearchPage{}, err
+	}
+
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
 		if f.Mode == "" || f.Mode == "substring" || f.Mode == "regex" {
@@ -976,6 +980,8 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
+
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
@@ -1005,7 +1011,7 @@ func (s *Store) collectContentSubstringMatches(
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
 					AND `+sysPred+`
-					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 		case "thinking":
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
@@ -1028,7 +1034,7 @@ func (s *Store) collectContentSubstringMatches(
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
 					AND `+sysPred+`
-					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 		case "tool_input":
 			inputPred := addSearchArgs("tc.input_json")
 			branches = append(branches, `
@@ -1043,7 +1049,7 @@ func (s *Store) collectContentSubstringMatches(
 				JOIN messages m ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
 				WHERE `+inputPred+`
-					AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+					AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 		case "tool_result":
 			contentPred := addSearchArgs("tc.result_content")
 			branches = append(branches, `
@@ -1064,7 +1070,7 @@ func (s *Store) collectContentSubstringMatches(
 								AND tre.tool_use_id = tc.tool_use_id
 								AND tc.tool_use_id <> ''
 						)
-						AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+						AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 			eventPred := addSearchArgs("tre.content")
 			branches = append(branches, `
 					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
@@ -1077,8 +1083,9 @@ func (s *Store) collectContentSubstringMatches(
 						tre.call_index AS call_index,
 						tre.event_index AS event_index
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
+				`+eventAnchorJoin+`
 					WHERE `+eventPred+`
-						AND tre.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+						AND tre.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 		default:
 			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -1203,6 +1210,8 @@ func (s *Store) collectContentSource(
 	ctx context.Context, source, scopeWhere string, scopeArgs []any,
 	prefix string, f db.ContentSearchFilter,
 ) ([]duckContentCandidate, error) {
+	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
+
 	var query string
 	var orderBy string
 	args := append([]any{}, scopeArgs...)
@@ -1223,7 +1232,7 @@ func (s *Store) collectContentSource(
 			0 AS src, COALESCE(m.id, 0) AS row_id,
 			0 AS call_index, 0 AS event_index, false AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("COALESCE(m.dialogue_text, m.content)")
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
@@ -1237,7 +1246,7 @@ func (s *Store) collectContentSource(
 			4 AS src, COALESCE(m.id, 0) AS row_id,
 			0 AS call_index, 0 AS event_index, m.dialogue_text IS NULL AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("m.thinking_text")
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
@@ -1253,7 +1262,7 @@ func (s *Store) collectContentSource(
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				JOIN messages m ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
-				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("tc.input_json")
 		orderBy = "tc.session_id, m.ordinal, COALESCE(tc.id, 0), tc.call_index"
 	case "tool_result":
@@ -1274,7 +1283,7 @@ func (s *Store) collectContentSource(
 					FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 					JOIN messages m ON m.session_id = tc.session_id
 						AND m.id = tc.message_id
-					WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+					WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()) + `
 						AND NOT EXISTS (
 							SELECT 1 FROM tool_result_events tre
 							WHERE tre.session_id = tc.session_id
@@ -1292,7 +1301,8 @@ func (s *Store) collectContentSource(
 						COALESCE(tre.id, 0) AS row_id,
 						tre.call_index AS call_index, tre.event_index, false AS legacy_thinking
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)` + eventFilter + `
+				` + eventAnchorJoin + `
+					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()) + eventFilter + `
 				)`
 		orderBy = "session_id, ordinal, src, row_id, call_index, event_index"
 	default:

@@ -37,12 +37,7 @@ func ValidateTermsFilter(f ContentSearchFilter) error {
 				"search: terms searches messages only (got source %q)", source)
 		}
 	}
-	switch f.Scope {
-	case "", "all", "top", "subordinate":
-		return nil
-	default:
-		return searchInputErrorf("search: invalid scope %q", f.Scope)
-	}
+	return ValidateContentSearchScope(f.Scope)
 }
 
 // termsSQLFragments holds the SQL that differs between the backends that
