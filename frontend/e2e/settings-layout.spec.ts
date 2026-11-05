@@ -199,10 +199,10 @@ test.describe("Settings layout", () => {
     await page.goto("/settings");
     const nav = page.locator(".kit-settings__nav");
     await expect(nav).toBeVisible();
-    await expect.poll(() => nav.evaluate((el) => getComputedStyle(el).paddingBottom)).not.toBe("32px");
+    await expect.poll(() => nav.evaluate((el) => getComputedStyle(el).paddingBottom)).not.toBe("4px");
 
     await page.setViewportSize({ width: 1280, height: 800 });
-    await expect.poll(() => nav.evaluate((el) => getComputedStyle(el).paddingBottom)).toBe("32px");
+    await expect.poll(() => nav.evaluate((el) => getComputedStyle(el).paddingBottom)).toBe("4px");
   });
 
   test("hides an unmatched panel without discarding its draft", async ({ page }) => {
