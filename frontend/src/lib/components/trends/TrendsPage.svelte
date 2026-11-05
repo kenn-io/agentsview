@@ -17,7 +17,7 @@
   import { chartSeriesStyleMap } from "../../utils/chartPalette.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
-  import { Spinner, Toggle } from "@kenn-io/kit-ui";
+  import { Button, Spinner, Toggle } from "@kenn-io/kit-ui";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -266,113 +266,118 @@
 </script>
 
 <section class="trends-page">
-  <div class="page-head">
-    <div>
-      <h1>{m.trends_title()}</h1>
-      <p>{m.trends_date_range({ from: trends.response?.from ?? trends.from, to: trends.response?.to ?? trends.to })}</p>
-    </div>
-    <div class="head-actions">
-      <button class="secondary" onclick={resetTerms}>{m.trends_reset()}</button>
-      <button class="primary" onclick={refresh} disabled={trends.loading.terms}>
-        {trends.loading.terms ? m.trends_refreshing() : m.trends_refresh()}
-      </button>
-    </div>
-  </div>
-
-  <div class="toolbar">
+  <div class="trends-toolbar">
     <RangePicker
       selection={rangeSelection}
       busy={trends.loading.terms}
       {earliestSession}
       onSelect={applyRange}
     />
+    <div class="toolbar-actions">
+      <Button size="sm" label={m.trends_reset()} onclick={resetTerms} />
+      <Button
+        size="sm"
+        tone="info"
+        surface="solid"
+        label={trends.loading.terms ? m.trends_refreshing() : m.trends_refresh()}
+        disabled={trends.loading.terms}
+        onclick={refresh}
+      />
+    </div>
   </div>
 
-  <div class="content-grid">
-    <div class="query-panel">
-      <label class="terms-label" for="trend-terms">
-        <span>{m.trends_terms()}</span>
-        <span class="terms-hint">{m.trends_one_per_line()}</span>
-      </label>
-      <textarea
-        id="trend-terms"
-        bind:value={trends.termText}
-        rows="9"
-        spellcheck="false"
-      ></textarea>
-      {#if trends.errors.terms}
-        <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
-      {/if}
+  <div class="trends-content">
+    <div class="section-head">
+      <h1>{m.trends_title()}</h1>
+      <p>{m.trends_date_range({ from: trends.response?.from ?? trends.from, to: trends.response?.to ?? trends.to })}</p>
     </div>
 
-    <div class="chart-panel" aria-busy={trends.loading.terms}>
-      <div class="chart-options">
-        <div class="group-by" bind:this={groupByEl}>
-          <button
-            class="group-trigger"
-            onclick={() => (groupByOpen = !groupByOpen)}
-            aria-haspopup="menu"
-            aria-expanded={groupByOpen}
-          >
-            <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
-            {m.trends_group_by()} <span class="gval">{trends.granularity}</span>
-            <ChevronDownIcon
-              class={groupByOpen ? "g-chev open" : "g-chev"}
-              size="11"
-              strokeWidth="2.2"
-              aria-hidden="true"
-            />
-          </button>
-          {#if groupByOpen}
-            <div class="group-menu" role="menu">
-              {#each GRANULARITIES as g (g)}
-                <button
-                  class="group-item"
-                  class:active={trends.granularity === g}
-                  role="menuitemradio"
-                  aria-checked={trends.granularity === g}
-                  onclick={() => pickGranularity(g)}
-                >
-                  {g}
-                </button>
-              {/each}
-            </div>
-          {/if}
+    <div class="content-grid">
+      <div class="query-panel">
+        <label class="terms-label" for="trend-terms">
+          <span>{m.trends_terms()}</span>
+          <span class="terms-hint">{m.trends_one_per_line()}</span>
+        </label>
+        <textarea
+          id="trend-terms"
+          bind:value={trends.termText}
+          rows="9"
+          spellcheck="false"
+        ></textarea>
+        {#if trends.errors.terms}
+          <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
+        {/if}
+      </div>
+
+      <div class="chart-panel" aria-busy={trends.loading.terms}>
+        <div class="chart-options">
+          <div class="group-by" bind:this={groupByEl}>
+            <button
+              class="group-trigger"
+              onclick={() => (groupByOpen = !groupByOpen)}
+              aria-haspopup="menu"
+              aria-expanded={groupByOpen}
+            >
+              <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
+              {m.trends_group_by()} <span class="gval">{trends.granularity}</span>
+              <ChevronDownIcon
+                class={groupByOpen ? "g-chev open" : "g-chev"}
+                size="11"
+                strokeWidth="2.2"
+                aria-hidden="true"
+              />
+            </button>
+            {#if groupByOpen}
+              <div class="group-menu" role="menu">
+                {#each GRANULARITIES as g (g)}
+                  <button
+                    class="group-item"
+                    class:active={trends.granularity === g}
+                    role="menuitemradio"
+                    aria-checked={trends.granularity === g}
+                    onclick={() => pickGranularity(g)}
+                  >
+                    {g}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <Toggle
+            checked={trends.normalized}
+            onchange={(checked) => {
+              trends.normalized = checked;
+              writeUrl();
+            }}
+            label={m.trends_normalize()}
+          />
         </div>
-        <Toggle
-          checked={trends.normalized}
-          onchange={(checked) => {
-            trends.normalized = checked;
-            writeUrl();
-          }}
-          label={m.trends_normalize()}
+        <TrendsLineChart
+          buckets={trends.response?.buckets ?? []}
+          series={trends.response?.series ?? []}
+          {styleFor}
+          {activeTerm}
+          normalized={trends.normalized}
+          onHover={(term) => (activeTerm = term)}
+        />
+        {#if trends.loading.terms}
+          <div class="loading-overlay" role="status" aria-live="polite">
+            <span aria-hidden="true"><Spinner size={18} /></span>
+            <span>{m.trends_computing()}</span>
+          </div>
+        {/if}
+      </div>
+
+      <div class="table-panel">
+        <TermTable
+          series={trends.response?.series ?? []}
+          {styleFor}
+          {activeTerm}
+          normalized={trends.normalized}
+          messageCount={trends.response?.message_count ?? 0}
+          onHover={(term) => (activeTerm = term)}
         />
       </div>
-      <TrendsLineChart
-        buckets={trends.response?.buckets ?? []}
-        series={trends.response?.series ?? []}
-        {styleFor}
-        {activeTerm}
-        normalized={trends.normalized}
-        onHover={(term) => (activeTerm = term)}
-      />
-      {#if trends.loading.terms}
-        <div class="loading-overlay" role="status" aria-live="polite">
-          <span aria-hidden="true"><Spinner size={18} /></span>
-          <span>{m.trends_computing()}</span>
-        </div>
-      {/if}
-    </div>
-
-    <div class="table-panel">
-      <TermTable
-        series={trends.response?.series ?? []}
-        {styleFor}
-        {activeTerm}
-        normalized={trends.normalized}
-        messageCount={trends.response?.message_count ?? 0}
-        onHover={(term) => (activeTerm = term)}
-      />
     </div>
   </div>
 </section>
@@ -392,9 +397,6 @@
     --trend-lime: var(--accent-lime);
     --trend-indigo: var(--accent-indigo);
     --trend-black: var(--text-primary);
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 22px;
     color: var(--text-primary);
   }
 
@@ -403,33 +405,50 @@
     --trend-brown: #fb923c;
   }
 
-  .page-head {
+  /* Same frame as Usage and Activity: a full-width toolbar strip, then
+     content on the shared 16px gutter. */
+  .trends-toolbar {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-muted);
+  }
+
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .trends-content {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 10px;
   }
 
   h1 {
     margin: 0;
-    font-size: 24px;
-    line-height: 1.2;
-    font-weight: 650;
-    letter-spacing: 0;
-  }
-
-  p {
-    margin: 4px 0 0;
-    color: var(--text-muted);
     font-size: 13px;
+    line-height: 1.3;
+    font-weight: 600;
   }
 
-  .head-actions,
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  .section-head p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
   }
 
   button,
@@ -437,47 +456,15 @@
     font: inherit;
   }
 
-  button {
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-surface);
-    color: var(--text-primary);
+  .group-trigger,
+  .group-item {
     cursor: pointer;
   }
 
-  button:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  button:disabled {
+  .group-trigger:disabled,
+  .group-item:disabled {
     opacity: var(--opacity-disabled);
     cursor: default;
-  }
-
-  .primary,
-  .secondary {
-    height: 32px;
-    padding: 0 12px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  /* The page's main action: recompute trends. Reset stays secondary. */
-  .primary {
-    background: var(--accent-blue);
-    border-color: var(--accent-blue);
-    color: var(--accent-blue-foreground);
-  }
-
-  .primary:hover:not(:disabled) {
-    filter: brightness(0.95);
-    background: var(--accent-blue);
-  }
-
-  .toolbar {
-    flex-wrap: wrap;
-    padding: 12px 0 18px;
-    border-top: 1px solid var(--border-muted);
   }
 
   label {
@@ -651,14 +638,6 @@
   }
 
   @media (max-width: 900px) {
-    .trends-page {
-      padding: 16px;
-    }
-
-    .page-head {
-      flex-direction: column;
-    }
-
     .content-grid {
       grid-template-columns: 1fr;
       grid-template-areas:

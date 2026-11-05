@@ -28,6 +28,9 @@
   // Builds also need a caller the server accepts: localhost, or any caller
   // when the server requires auth. A proxied page without auth cannot build.
   const buildAllowed = $derived(sync.serverVersion?.friction_build_allowed === true);
+  // A mirror without friction tables cannot serve these reads at all. Its
+  // list request fails, but that is a fact about the backend, not a fault.
+  const frictionUnreadable = $derived(sync.serverVersion?.friction_readable === false);
   const dateOptions = $derived(
     friction.dates.map((item) => ({ name: item.date, label: item.date })),
   );
@@ -149,7 +152,13 @@
       </div>
     {/if}
 
-    {#if friction.errors.dates}
+    {#if friction.errors.dates && frictionUnreadable}
+      <div class="state-notice" role="status">
+        <strong>{m.friction_load_error()}</strong>
+        <span>{friction.errors.dates}</span>
+        <Button size="sm" label={m.friction_retry()} onclick={refresh} />
+      </div>
+    {:else if friction.errors.dates}
       <Card level="default" padding="none" class="state-panel">
         <div class="state-panel-alert" role="alert">
           <strong>{m.friction_load_error()}</strong>
@@ -295,6 +304,26 @@
     padding: 12px;
     font-size: 12px;
     align-items: flex-start;
+  }
+  /* Neutral notice for a backend that has no Friction Log: an inset panel
+     in secondary ink, not the alert card used for failed loads. */
+  .state-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    max-width: 640px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .state-notice strong {
+    color: var(--text-primary);
+    font-weight: 600;
   }
   .empty-hint {
     max-width: 60ch;

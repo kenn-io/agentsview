@@ -70,6 +70,20 @@ const syntheticEditedFiles = Array.from({ length: 30 }, (_, index) => ({
   project: "synthetic-project",
 }));
 
+const syntheticTrendsResponse = {
+  granularity: "week",
+  from: "2026-01-01",
+  to: "2026-01-31",
+  message_count: 100,
+  buckets: [],
+  series: Array.from({ length: 30 }, (_, index) => ({
+    term: `synthetic term ${index + 1}`,
+    total: 30 - index,
+    variants: [`synthetic term ${index + 1}`],
+    points: [],
+  })),
+};
+
 const syntheticTrashedSessions = Array.from({ length: 12 }, (_, index) => ({
   id: `synthetic-trashed-${index + 1}`,
   project: "synthetic-project",
@@ -126,20 +140,30 @@ test.describe("Scrollbar layout", () => {
     expect(await leftEdge(heading)).toBe(before);
   });
 
-  test("keeps the Trends column in place when results make the page scroll", async ({ page }) => {
-    const release = await holdRequests(page, "**/api/v1/trends/terms*");
+  test("keeps the Trends layout in place when results make the page scroll", async ({ page }) => {
+    // Thirty terms fill the term table, so the page scrolls at this viewport
+    // whatever the fixture archive holds.
+    const release = await holdRequests(page, "**/api/v1/trends/terms*", (route) =>
+      route.fulfill({ json: syntheticTrendsResponse }),
+    );
     await page.goto("/trends");
 
     const scroller = page.locator(".page-scroll");
     const heading = page.getByRole("heading", { name: "Trends" });
+    // Refresh reads "Refreshing" while the request is held. It ends the
+    // right-aligned toolbar group, so its right edge must hold either way.
+    const refresh = page.getByRole("button", { name: /^Refresh/ });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
-    const before = await leftEdge(heading);
+    const headingBefore = await leftEdge(heading);
+    const refreshBefore = await rightEdge(refresh);
 
     release();
+    await expect(page.getByText("synthetic term 30", { exact: true })).toBeVisible();
     await expectScrollbarAppeared(scroller);
 
-    expect(await leftEdge(heading)).toBe(before);
+    expect(await leftEdge(heading)).toBe(headingBefore);
+    expect(await rightEdge(refresh)).toBe(refreshBefore);
   });
 
   test("keeps the Trash column in place when restoring removes the scrollbar", async ({ page }) => {
