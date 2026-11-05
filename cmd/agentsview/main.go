@@ -509,12 +509,22 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			idleTracker.SetSyncIdle(cfg.SyncIdleAfter, ingestion.Suspend)
 		}
 		memoryRefresh = newMemoryRefreshQueue()
-		go startPeriodicSync(ctx, cfg, ingestion, engine, database, idleTracker, validRemotes, emitter, attachedSources)
-		go runMemoryRefreshScheduler(ctx, memoryRefresh.requests, memoryRefreshDebounce, func() {
-			if ingestion.Active() {
-				idleTracker.Do(func() { runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(ingestion.Config())) })
-			}
-		})
+		go startPeriodicSync(
+			ctx, cfg, ingestion, engine, database, idleTracker,
+			validRemotes, emitter, attachedSources,
+		)
+		go runMemoryRefreshScheduler(
+			ctx, memoryRefresh.requests, memoryRefreshDebounce,
+			func() {
+				if ingestion.Active() {
+					idleTracker.Do(func() {
+						runScheduledSyncPass(
+							ctx, engine, scheduledReconcileTargets(ingestion.Config()),
+						)
+					})
+				}
+			},
+		)
 	} else if opts.ReloadConfig != nil {
 		// Without a background engine the server reconfigures its own
 		// on-demand engine from the reloaded settings.

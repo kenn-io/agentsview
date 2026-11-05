@@ -245,13 +245,17 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	if !stopped {
 		// Include older queued local retries; remote imports keep their schedule.
 		var stats agentsync.SyncStats
-		var err error
-		if roots := reconcileRootPaths(d.Config()); len(roots) > 0 {
-			stats, _, err = d.engine.ReconcileWatchRootsWithStats(d.ctx, roots, false, nil)
+		cfg := d.Config()
+		var roots []string
+		for _, factory := range cfg.LocalProviderFactories() {
+			roots = append(roots, rawSyncFilesystemRoots(cfg.ResolveDirs(factory.Definition().Type))...)
 		}
-		complete = err == nil && d.ctx.Err() == nil && stats.ProcessingComplete()
+		if len(roots) > 0 {
+			stats = d.engine.SyncRootsSince(d.ctx, roots, time.Time{}, nil)
+		}
+		complete = d.ctx.Err() == nil && stats.ProcessingComplete()
 		if !complete {
-			log.Printf("idle catch-up incomplete: %d failed, aborted=%v, error=%v", stats.Failed, stats.Aborted, err)
+			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}
 	}
 	d.mu.Lock()

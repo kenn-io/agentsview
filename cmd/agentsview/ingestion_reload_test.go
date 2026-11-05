@@ -406,3 +406,40 @@ func TestDaemonIngestionWakeLeavesRemoteImportsScheduled(t *testing.T) {
 		})
 	}
 }
+
+func TestDaemonIngestionWakeCoversAvailableOverlappingProviders(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nested=%v", nested), func(t *testing.T) {
+			root := t.TempDir()
+			gemini := root
+			if nested {
+				gemini = filepath.Join(root, "nested")
+			}
+			writeReloadGeminiSession(t, gemini, "retained")
+			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {root}, parser.AgentGemini: {gemini},
+			}}
+			database := dbtest.OpenTestDB(t)
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+			t.Cleanup(engine.Close)
+			engine.SyncAll(t.Context(), nil)
+			require.True(t, sessionImported(t, database, "gemini:retained"))
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			t.Cleanup(ingestion.Stop)
+			ingestion.Suspend()
+			ingestion.applying.Wait()
+			require.NoError(t, os.RemoveAll(filepath.Join(gemini, "tmp")))
+			dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
+			ts := httptest.NewUnstartedServer(nil)
+			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+			srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion))
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			t.Cleanup(ts.Close)
+			headers, body := searchIngestionArchive(t, ts.URL, "morning")
+			assert.Contains(t, body, "hello from morning")
+			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+			assert.True(t, sessionImported(t, database, "gemini:retained"), "unavailable provider history stays archived")
+		})
+	}
+}

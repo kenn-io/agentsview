@@ -1236,7 +1236,7 @@ func TestFindDaemonRuntime_IgnoresIncompatibleRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeLiveRuntime(t, dir, false,
 		withRuntimeVersion("old"),
-		withRuntimeAPIVersion(0),
+		withRuntimeAPIVersion(14),
 	)
 
 	assert.Nil(t, FindDaemonRuntime(dir))
