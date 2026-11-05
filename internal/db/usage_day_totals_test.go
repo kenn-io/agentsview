@@ -3,6 +3,7 @@
 package db
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,11 +18,11 @@ import (
 func assertUsageDayTotals(t *testing.T, cache *usageCache) {
 	t.Helper()
 	const query = `WITH expected AS (
-        SELECT i.timezone_id AS timezone_id, r.local_date AS local_date, i.project AS project, i.baked_agent AS agent, i.machine AS machine, i.git_branch AS git_branch, i.is_automated AS is_automated, i.user_message_count AS user_message_count, r.reported_model AS reported_model, r.provider_id AS provider_id, r.rate_hash AS rate_hash, r.band_threshold AS band_threshold, COUNT(*) AS row_count, SUM(r.input_tokens) AS input_tokens, SUM(r.output_tokens) AS output_tokens, SUM(r.reasoning_tokens) AS reasoning_tokens, SUM(r.cache_creation_tokens) AS cache_creation_tokens, SUM(r.cache_read_tokens) AS cache_read_tokens, SUM(r.estimated_cost_microdollars) AS estimated_cost_microdollars, SUM(r.savings_microdollars) AS savings_microdollars, SUM(r.computed_request_count) AS computed_request_count, SUM(r.computed_aggregate_count) AS computed_aggregate_count, SUM(r.reported_count) AS reported_count, SUM(r.base_request_count) AS base_request_count
+        SELECT i.timezone_id AS timezone_id, r.local_date AS local_date, i.project AS project, i.baked_agent AS agent, i.machine AS machine, i.git_branch AS git_branch, i.is_automated AS is_automated, i.user_message_count AS user_message_count, r.reported_model AS reported_model, r.provider_id AS provider_id, r.rate_hash AS rate_hash, r.band_threshold AS band_threshold, COUNT(*) AS row_count, SUM(r.input_tokens) AS input_tokens, SUM(r.output_tokens) AS output_tokens, SUM(r.cache_creation_tokens) AS cache_creation_tokens, SUM(r.cache_read_tokens) AS cache_read_tokens, SUM(r.estimated_cost_microdollars) AS estimated_cost_microdollars, SUM(r.savings_microdollars) AS savings_microdollars, SUM(r.computed_request_count) AS computed_request_count, SUM(r.computed_aggregate_count) AS computed_aggregate_count, SUM(r.reported_count) AS reported_count, SUM(r.base_request_count) AS base_request_count
         FROM usage_daily_rollups r JOIN usage_rollup_installs i ON i.id=r.rollup_install_id
         WHERE i.has_authoritative=0 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-    ), missing AS (SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM expected EXCEPT SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals),
-    extra AS (SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals EXCEPT SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM expected)
+    ), missing AS (SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM expected EXCEPT SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals),
+    extra AS (SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals EXCEPT SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM expected)
     SELECT (SELECT COUNT(*) FROM missing)+(SELECT COUNT(*) FROM extra)+(SELECT COUNT(*) FROM usage_day_totals WHERE row_count<=0)`
 	var differences int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), query).Scan(&differences))
@@ -181,4 +182,33 @@ func TestUsageDayTotalsDeleteFirstPricingTimestamp(t *testing.T) {
 	assert.Equal(t, int64(200), got.Totals.TotalCost.Microdollars)
 	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
 	assertUsageDayTotals(t, cache)
+}
+
+func seedUsageDayTotalsPage(tb testing.TB, count int) *DB {
+	tb.Helper()
+	database, _, _ := seedUsageJournalBenchmark(tb, count, 1)
+	// A prior-period row makes Comparison exercise real data too.
+	started := "2026-08-03T23:30:00Z"
+	_, err := database.WriteSessionBatchAtomic(tb.Context(), []SessionBatchWrite{
+		{Session: Session{ID: "reported", Project: "project-0", Machine: "machine-0", Agent: "copilot", StartedAt: &started, UserMessageCount: 2}, Messages: []Message{
+			{SessionID: "reported", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`)},
+			{SessionID: "reported", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-04T00:30:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":200,"output_tokens":30}`)},
+		}},
+		{Session: Session{ID: "duplicate-a", Project: "project-0", Agent: "claude", StartedAt: &started, UserMessageCount: 1}, Messages: []Message{{SessionID: "duplicate-a", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"output_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
+		{Session: Session{ID: "duplicate-b", Project: "project-1", Agent: "claude", StartedAt: &started, UserMessageCount: 2}, Messages: []Message{{SessionID: "duplicate-b", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"output_tokens":20}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
+	})
+	require.NoError(tb, err)
+	cost := money.Money{Microdollars: 1234567}
+	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: "2026-08-04T01:00:00Z", DedupKey: "reported"}}))
+	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
+	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
+	database.StopUsageCacheBackfill()
+	return database
+}
+
+func mustUsageJSON(tb testing.TB, result DailyUsageResult) string {
+	tb.Helper()
+	raw, err := json.Marshal(result)
+	require.NoError(tb, err)
+	return string(raw)
 }

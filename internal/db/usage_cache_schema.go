@@ -249,7 +249,6 @@ CREATE TABLE usage_day_totals (
     row_count INTEGER NOT NULL,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
-    reasoning_tokens INTEGER NOT NULL,
     cache_creation_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     estimated_cost_microdollars INTEGER NOT NULL,
@@ -262,14 +261,13 @@ CREATE TABLE usage_day_totals (
 ) WITHOUT ROWID;
 CREATE TRIGGER usage_day_totals_insert AFTER INSERT ON usage_daily_rollups
 BEGIN
-    INSERT INTO usage_day_totals (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count)
-    SELECT i.timezone_id, NEW.local_date, i.project, i.baked_agent, i.machine, i.git_branch, i.is_automated, i.user_message_count, NEW.reported_model, NEW.provider_id, NEW.rate_hash, NEW.band_threshold, NEW.priced_model, NEW.pricing_timestamp, 1, NEW.input_tokens, NEW.output_tokens, NEW.reasoning_tokens, NEW.cache_creation_tokens, NEW.cache_read_tokens, NEW.estimated_cost_microdollars, NEW.savings_microdollars, NEW.computed_request_count, NEW.computed_aggregate_count, NEW.reported_count, NEW.base_request_count
+    INSERT INTO usage_day_totals (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count)
+    SELECT i.timezone_id, NEW.local_date, i.project, i.baked_agent, i.machine, i.git_branch, i.is_automated, i.user_message_count, NEW.reported_model, NEW.provider_id, NEW.rate_hash, NEW.band_threshold, NEW.priced_model, NEW.pricing_timestamp, 1, NEW.input_tokens, NEW.output_tokens, NEW.cache_creation_tokens, NEW.cache_read_tokens, NEW.estimated_cost_microdollars, NEW.savings_microdollars, NEW.computed_request_count, NEW.computed_aggregate_count, NEW.reported_count, NEW.base_request_count
     FROM usage_rollup_installs i WHERE i.id=NEW.rollup_install_id AND i.has_authoritative=0
     ON CONFLICT (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold) DO UPDATE SET
         row_count=usage_day_totals.row_count+excluded.row_count,
         input_tokens=usage_day_totals.input_tokens+excluded.input_tokens,
         output_tokens=usage_day_totals.output_tokens+excluded.output_tokens,
-        reasoning_tokens=usage_day_totals.reasoning_tokens+excluded.reasoning_tokens,
         cache_creation_tokens=usage_day_totals.cache_creation_tokens+excluded.cache_creation_tokens,
         cache_read_tokens=usage_day_totals.cache_read_tokens+excluded.cache_read_tokens,
         estimated_cost_microdollars=usage_day_totals.estimated_cost_microdollars+excluded.estimated_cost_microdollars,
@@ -281,14 +279,13 @@ BEGIN
 END;
 CREATE TRIGGER usage_day_totals_delete AFTER DELETE ON usage_daily_rollups
 BEGIN
-    INSERT INTO usage_day_totals (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count)
-    SELECT i.timezone_id, OLD.local_date, i.project, i.baked_agent, i.machine, i.git_branch, i.is_automated, i.user_message_count, OLD.reported_model, OLD.provider_id, OLD.rate_hash, OLD.band_threshold, OLD.priced_model, OLD.pricing_timestamp, -1, -OLD.input_tokens, -OLD.output_tokens, -OLD.reasoning_tokens, -OLD.cache_creation_tokens, -OLD.cache_read_tokens, -OLD.estimated_cost_microdollars, -OLD.savings_microdollars, -OLD.computed_request_count, -OLD.computed_aggregate_count, -OLD.reported_count, -OLD.base_request_count
+    INSERT INTO usage_day_totals (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count)
+    SELECT i.timezone_id, OLD.local_date, i.project, i.baked_agent, i.machine, i.git_branch, i.is_automated, i.user_message_count, OLD.reported_model, OLD.provider_id, OLD.rate_hash, OLD.band_threshold, OLD.priced_model, OLD.pricing_timestamp, -1, -OLD.input_tokens, -OLD.output_tokens, -OLD.cache_creation_tokens, -OLD.cache_read_tokens, -OLD.estimated_cost_microdollars, -OLD.savings_microdollars, -OLD.computed_request_count, -OLD.computed_aggregate_count, -OLD.reported_count, -OLD.base_request_count
     FROM usage_rollup_installs i WHERE i.id=OLD.rollup_install_id AND i.has_authoritative=0
     ON CONFLICT (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold) DO UPDATE SET
         row_count=usage_day_totals.row_count+excluded.row_count,
         input_tokens=usage_day_totals.input_tokens+excluded.input_tokens,
         output_tokens=usage_day_totals.output_tokens+excluded.output_tokens,
-        reasoning_tokens=usage_day_totals.reasoning_tokens+excluded.reasoning_tokens,
         cache_creation_tokens=usage_day_totals.cache_creation_tokens+excluded.cache_creation_tokens,
         cache_read_tokens=usage_day_totals.cache_read_tokens+excluded.cache_read_tokens,
         estimated_cost_microdollars=usage_day_totals.estimated_cost_microdollars+excluded.estimated_cost_microdollars,
@@ -924,7 +921,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        computed_aggregate_count, reported_count, base_request_count,
 		        discarded_snapshot_output_tokens
 		 FROM usage_daily_rollups LIMIT 0`,
-		`SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals LIMIT 0`,
+		`SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals LIMIT 0`,
 		`SELECT rollup_install_id, local_date, model, user_message_count
 		 FROM usage_activity_rollups LIMIT 0`,
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,
