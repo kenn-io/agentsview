@@ -17,9 +17,9 @@ import (
 const usageRollupSlowRequestThreshold = 2 * time.Second
 
 type usageRollupRequestTimings struct {
-	capture, sweep, fill time.Duration
-	rollup               usageRollupMetrics
-	candidates           int
+	capture, sweep, fill, read time.Duration
+	rollup                     usageRollupMetrics
+	candidates                 int
 }
 
 func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
@@ -30,12 +30,12 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 	round := func(value time.Duration) time.Duration {
 		return value.Round(time.Millisecond)
 	}
-	log.Printf("usage window preparation took %s: capture %s, deletion sweep %s, "+
-		"fact fill %s, rollup build %s, rollup install %s "+
+	log.Printf("usage rollup read took %s: capture %s, deletion sweep %s, "+
+		"fact fill %s, rollup build %s, rollup install %s, cache read %s "+
 		"(%d candidate sessions; built %d daily rows, %d exception rows in %d groups)",
 		round(total), round(timings.capture), round(timings.sweep),
 		round(timings.fill), round(timings.rollup.BuildDuration),
-		round(timings.rollup.InstallDuration),
+		round(timings.rollup.InstallDuration), round(timings.read),
 		timings.candidates, timings.rollup.DailyRows,
 		timings.rollup.ExceptionRows, timings.rollup.ExceptionGroups)
 }
@@ -43,6 +43,7 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 type usagePreparedWindow struct {
 	snapshot usageQuerySnapshot
 	installs map[string]usageRollupInstall
+	timings  usageRollupRequestTimings
 }
 
 // usageWindowObserver provides deterministic synchronization for tests.
@@ -94,12 +95,11 @@ func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string
 	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%#v", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
 }
 
-func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
+func (db *DB) sharedUsageWindow(ctx context.Context, key string, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
 	if memo == nil {
 		return db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
 	}
-	key := usageWindowKey(filter, kind, cursor)
 	memo.mu.Lock()
 	prepare, ok := memo.windows[key]
 	if !ok {
@@ -160,8 +160,7 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 		return usagePreparedWindow{}, err
 	}
 	timings.rollup = metrics
-	timings.logIfSlow(started)
-	return usagePreparedWindow{snapshot: snapshot, installs: installs}, nil
+	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
 }
 
 func (db *DB) queryUsageRollups(
@@ -181,7 +180,7 @@ func (db *DB) queryUsageRollups(
 		var prepared usagePreparedWindow
 		var err error
 		if attempt == 1 {
-			prepared, err = db.sharedUsageWindow(ctx, filter, kind, cursor)
+			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
 		} else {
 			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
 			if err == nil {
@@ -218,14 +217,12 @@ func (db *DB) queryUsageRollups(
 		} else {
 			facts, queryErr = cache.usageRollupQuery(ctx, snapshot, filter, prepared.installs, resolver)
 		}
-		readDuration := time.Since(readStarted)
+		timings := prepared.timings
+		timings.read = time.Since(readStarted)
 		if queryErr == nil {
 			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
-			if total := time.Since(started); total >= usageRollupSlowRequestThreshold {
-				log.Printf("usage rollup read took %s: preparation wait %s, cache read %s",
-					total.Round(time.Millisecond), readStarted.Sub(started).Round(time.Millisecond), readDuration.Round(time.Millisecond))
-			}
+			timings.logIfSlow(started)
 			return snapshot, facts, resolver, nil
 		}
 		release()

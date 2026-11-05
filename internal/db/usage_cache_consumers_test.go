@@ -5,9 +5,11 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -211,6 +213,8 @@ func TestDailyUsageAfterTopReadPreparesCursorOnSameMemo(t *testing.T) {
 	require.Positive(t, snapshot.CursorHighWater)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
+	var prepares atomic.Int32
+	database.usageCache.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
 	ctx := WithUsageWindowMemo(t.Context())
 	want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
 	require.NoError(t, err)
@@ -221,10 +225,43 @@ func TestDailyUsageAfterTopReadPreparesCursorOnSameMemo(t *testing.T) {
 	var installs int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&installs))
 	assert.Zero(t, installs)
+	assert.Equal(t, int32(1), prepares.Load())
 	daily, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 17, daily.Totals.InputTokens)
 	assert.Equal(t, 1, usageCacheCount(t, cache, "cursor_usage_facts"))
+	assert.Equal(t, int32(2), prepares.Load(), "daily usage needs its own preparation to include Cursor")
+}
+
+func TestSlowUsageReadLogsAllPhasesOnce(t *testing.T) {
+	database := openDailyUsageFixtureDB(t)
+	output := captureLog(t)
+	filter := UsageFilter{
+		From: "2024-06-01", To: "2024-07-31", Timezone: "UTC",
+		Progress: func(phase string) {
+			if phase == "Reading archived sessions for this report" {
+				time.Sleep(usageRollupSlowRequestThreshold)
+			}
+		},
+	}
+	_, err := database.GetDailyUsage(WithUsageWindowMemo(t.Context()), filter)
+	require.NoError(t, err)
+	var lines []string
+	for line := range strings.SplitSeq(output.String(), "\n") {
+		if strings.Contains(line, "usage ") {
+			lines = append(lines, line)
+		}
+	}
+	require.Len(t, lines, 1)
+	for _, phase := range []string{"usage rollup read took", "capture", "deletion sweep", "fact fill", "rollup build", "rollup install", "cache read"} {
+		assert.Contains(t, lines[0], phase)
+	}
+	_, phases, found := strings.Cut(lines[0], ": capture ")
+	require.True(t, found)
+	capture, _, _ := strings.Cut(phases, ",")
+	duration, err := time.ParseDuration(capture)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, duration, usageRollupSlowRequestThreshold)
 }
 
 func TestUsageWindowMemoRecapturesAfterInstallChange(t *testing.T) {

@@ -113,8 +113,9 @@ An aggregate request:
 
 Within one Pairwise request, reads with the same window, session predicate, and
 Cursor need share one capture, fill check, and rollup check, including sides
-read concurrently. Each read applies its own filter to the rollups. Cache
-retirement or a changed install triggers a fresh capture that bypasses the
+read concurrently. Project and agent sides prepare separately because their
+session predicates differ. Each read applies its own filter to the rollups.
+Cache retirement or a changed install triggers a fresh capture that bypasses the
 shared result. Separate requests never share a preparation.
 
 The pricing generation uses the canonical, order-independent effective-pricing
