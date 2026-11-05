@@ -18,7 +18,7 @@ func TestSessionCommits(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END", Timestamp: "2026-10-30T10:00:00Z"},
+		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END", Timestamp: "2026-10-30T10:09:00Z"},
 		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{
 			{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", ToolUseID: "exact-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}},
 		}},
