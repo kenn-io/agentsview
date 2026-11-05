@@ -94,6 +94,8 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 	logPath := filepath.Join(dataDir, "debug.log")
 	require.NoError(t, os.WriteFile(logPath, []byte(
 		"2026/06/18 data version outdated; full resync required\n"+
+			"2026/06/18 sync: session needs retry: codex:child (child.jsonl): codex parent turns unresolved for parent\n"+
+			"2026/06/18 sync: 1 sessions need retry: codex:child (child.jsonl): codex parent turns unresolved for parent\n"+
 			"2026/06/18 resync aborted: 0 synced, 3 failed\n",
 	), 0o644), "write debug log")
 
@@ -109,6 +111,8 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 	assert.Contains(t, out, "version 0: 1")
 	assert.Contains(t, out, "Recent debug.log evidence:")
 	assert.Contains(t, out, "resync aborted: 0 synced, 3 failed")
+	assert.Contains(t, out, "sync: session needs retry: codex:child (child.jsonl): codex parent turns unresolved for parent")
+	assert.Contains(t, out, "sync: 1 sessions need retry: codex:child")
 	assert.Contains(t, out,
 		"Likely cause: previous data-version resync likely aborted before completion")
 }

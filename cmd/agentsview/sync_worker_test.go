@@ -437,7 +437,7 @@ func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 }
 
 // TestResyncBuildResultFromStatsToleratesMinorityParseFailures pins the
-// resync-build completion semantics: shouldAbortResyncSwap already folds the
+// resync-build completion semantics: resyncSwapAbortReason already folds the
 // failure-majority judgment into stats.Aborted, so a completed build with a
 // minority of permanent parse failures is a valid replacement the daemon must
 // not discard.
@@ -572,6 +572,7 @@ func TestStartupWorkerQueuesMissingParentAfterRestart(t *testing.T) {
 	result := decodeSingleResult(t, &wire)
 	require.Equal(t, "ok", result.Status)
 	require.Equal(t, 1, result.Deferred)
+	assert.Empty(t, result.Error, "a startup whose only open work is queued retries has no error")
 	database, _ := openTestWriteDB(t, cfg)
 	var retries []sync.WatchBatch
 	engineCfg := workerEngineConfig(cfg)
@@ -594,6 +595,33 @@ func TestSyncWorkerSyncModeSyncsLikeStartup(t *testing.T) {
 	assert.Equal(t, "ok", result.Status)
 	assert.True(t, result.DiscoveryComplete)
 	assert.Equal(t, 3, result.Synced)
+}
+
+// A live sync that holds a fork for retry fails, and the result the daemon
+// logs names the fork and its missing parent.
+func TestSyncWorkerFailureNamesDeferredFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	var wire bytes.Buffer
+
+	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "sync"}, &wire)
+
+	want := "0 failed, 1 deferred; retry causes: codex:" + child + " (" + childPath +
+		"): codex parent turns unresolved for " + parent
+	require.EqualError(t, err, "sync worker sync: failed ("+want+")")
+	result := decodeSingleResult(t, &wire)
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, want, result.Error)
 }
 
 // Run the real worker body and protocol through the daemon's writer handoff.

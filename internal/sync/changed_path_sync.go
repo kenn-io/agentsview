@@ -194,6 +194,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	)
 	fallback.applyFailures(&stats)
 	processErr = errors.Join(processErr, e.finishCodexParentInventoryBatch(processingCtx, &stats))
+	stats.logRetrySummary("sync")
 	if err := affectedSessionIDs.link(ctx, e, &stats); err != nil {
 		stats.RecordFailed()
 		processErr = errors.Join(processErr, err)

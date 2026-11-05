@@ -131,7 +131,10 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			stats := engine.ResyncAll(t.Context(), nil)
 			require.True(t, stats.ArchiveRebuilt)
 			assert.Equal(t, 1, stats.Deferred)
-			assert.NotEmpty(t, stats.Warnings)
+			assert.Contains(t, stats.Warnings,
+				"resync: 1 sessions need retry; newly imported forks without their parent may include copied parent history and usage; causes: codex:"+
+					child+" ("+childPath+"): codex parent turns unresolved for "+parent,
+			)
 			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
 			usage, err := database.GetSessionUsage(t.Context(), "codex:"+child, true)
 			require.NoError(t, err)

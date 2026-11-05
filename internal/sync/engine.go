@@ -1961,6 +1961,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 		},
 	)
 	inventoryErr := e.finishCodexParentInventoryBatch(processingCtx, &stats)
+	stats.logRetrySummary("sync")
 	linkErr := affectedSessionIDs.link(ctx, e, &stats)
 	if linkErr != nil {
 		stats.RecordFailed()
@@ -2001,10 +2002,11 @@ func (e *Engine) applyChangedPathSyncLocked(
 	if err := errors.Join(prepared.classificationErr, inventoryErr, linkErr, ctx.Err()); err != nil {
 		if stats.Deferred > 0 {
 			return stats, tombstoned, &incompleteReconciliationError{
-				deferred: stats.Deferred,
-				paths:    append([]string(nil), stats.deferredRetryPaths...),
-				overflow: stats.deferredRetryOverflow,
-				cause:    err,
+				deferred:    stats.Deferred,
+				paths:       append([]string(nil), stats.deferredRetryPaths...),
+				overflow:    stats.deferredRetryOverflow,
+				cause:       err,
+				retryCauses: stats.retryCauseSample(),
 			}
 		}
 		return stats, tombstoned, err
@@ -2016,11 +2018,12 @@ func (e *Engine) applyChangedPathSyncLocked(
 		)
 		if stats.Deferred > 0 {
 			incompleteErr = &incompleteReconciliationError{
-				deferred:  stats.Deferred,
-				paths:     append([]string(nil), stats.deferredRetryPaths...),
-				overflow:  stats.deferredRetryOverflow,
-				cause:     incompleteErr,
-				deferOnly: stats.Failed == 0 && stats.providerFailures == 0 && !stats.Aborted,
+				deferred:    stats.Deferred,
+				paths:       append([]string(nil), stats.deferredRetryPaths...),
+				overflow:    stats.deferredRetryOverflow,
+				cause:       incompleteErr,
+				deferOnly:   stats.Failed == 0 && stats.providerFailures == 0 && !stats.Aborted,
+				retryCauses: stats.retryCauseSample(),
 			}
 		}
 		return stats, tombstoned, incompleteErr
@@ -2946,9 +2949,45 @@ var closeWriterForResyncBarrier = func(d *db.DB) error { return d.CloseWriter() 
 // atomically swaps the files and reopens the original DB
 // handle. This avoids the per-row trigger overhead of bulk
 // deleting hundreds of thousands of messages in place.
-// shouldAbortResyncSwap decides whether a finished resync pass built a
+// passAbortCause names why a sync pass stopped: cancellation, or the cause the
+// pass recorded when it set Aborted.
+func passAbortCause(ctx context.Context, stats SyncStats) string {
+	if err := ctx.Err(); err != nil {
+		return "canceled: " + err.Error()
+	}
+	if stats.abortCause != "" {
+		return stats.abortCause
+	}
+	return "sync pass aborted without a recorded cause"
+}
+
+// contributorAbortCause names why an attached archive source stopped a
+// rebuild. A contributor that finished with deferred sources, such as a Codex
+// fork whose parent rollout is missing, did not complete processing.
+func contributorAbortCause(
+	ctx context.Context, contributorErr error,
+	contributorStats, stats SyncStats, safetyReason string,
+) string {
+	switch {
+	case ctx.Err() != nil:
+		return "canceled: " + ctx.Err().Error()
+	case contributorErr != nil:
+		return contributorErr.Error()
+	case safetyReason != "":
+		return "safety check: " + safetyReason
+	case contributorStats.Aborted:
+		return passAbortCause(ctx, contributorStats)
+	case !contributorStats.ProcessingComplete():
+		return contributorStats.IncompleteCause()
+	default:
+		return passAbortCause(ctx, stats)
+	}
+}
+
+// resyncSwapAbortReason decides whether a finished resync pass built a
 // database that would be worse than the original, so the swap must be
-// abandoned:
+// abandoned, and returns why. It returns "" when the swap may proceed. It
+// aborts when:
 //   - sync was cancelled (partial rebuild)
 //   - nothing synced at all (empty discovery, or all skipped)
 //     when old DB had data
@@ -2965,9 +3004,9 @@ var closeWriterForResyncBarrier = func(d *db.DB) error { return d.CloseWriter() 
 // check just as it is subtracted from oldFileSessions by the caller.
 // Otherwise its discovery would mask the disappearance of plain
 // file-backed sessions whose directories went empty.
-func shouldAbortResyncSwap(
+func resyncSwapAbortReason(
 	stats SyncStats, oldFileSessions, trashedCopied int,
-) bool {
+) string {
 	emptyDiscovery := stats.nonContainerDiscovered == 0 &&
 		oldFileSessions > 0
 	preservedOnly := stats.Synced == 0 &&
@@ -2999,15 +3038,38 @@ func shouldAbortResyncSwap(
 		stats.Failed == 0 &&
 		stats.cwdFilteredSessions > 0 &&
 		stats.filesOK == stats.cwdFilteredFiles+stats.parserExcludedFiles
-	return stats.Aborted ||
-		emptyDiscovery ||
-		(stats.Synced == 0 &&
-			stats.TotalSessions > 0 &&
-			!preservedOnly &&
-			!deferredOnly &&
-			!excludedOnly &&
-			!cwdFilteredOnly) ||
-		(stats.Failed > 0 && stats.Failed > stats.filesOK)
+	switch {
+	case stats.Aborted:
+		if stats.abortCause != "" {
+			return "sync pass aborted: " + stats.abortCause
+		}
+		return "sync pass aborted"
+	case emptyDiscovery:
+		return fmt.Sprintf(
+			"discovered no session files, but the archive holds %d",
+			oldFileSessions,
+		)
+	case stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		!preservedOnly &&
+		!deferredOnly &&
+		!excludedOnly &&
+		!cwdFilteredOnly:
+		reason := fmt.Sprintf(
+			"wrote no sessions from %d discovered (%d failed, %d deferred)",
+			stats.TotalSessions, stats.Failed, stats.Deferred,
+		)
+		if sample := stats.retryCauseSample(); sample != "" {
+			reason += "; retry causes: " + sample
+		}
+		return reason
+	case stats.Failed > 0 && stats.Failed > stats.filesOK:
+		return fmt.Sprintf(
+			"%d files failed, more than the %d that parsed",
+			stats.Failed, stats.filesOK,
+		)
+	}
+	return ""
 }
 
 func (e *Engine) ResyncAll(
@@ -3090,7 +3152,8 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	ops rebuildOperations,
 ) (stats SyncStats, retErr error) {
 	if err := ctx.Err(); err != nil {
-		stats = SyncStats{Aborted: true, Warnings: []string{"resync aborted: 0 synced, 0 failed"}}
+		cause := "canceled: " + err.Error()
+		stats = SyncStats{Aborted: true, Warnings: []string{"resync aborted: 0 synced, 0 failed: " + cause}, abortCause: cause}
 		e.mu.Lock()
 		e.lastSyncStats = stats
 		e.mu.Unlock()
@@ -3599,6 +3662,9 @@ func (e *Engine) resyncBuildLocked(
 	localStats := stats
 	if stats.Deferred > 0 {
 		warning := fmt.Sprintf("resync: %d sessions need retry; newly imported forks without their parent may include copied parent history and usage", stats.Deferred)
+		if sample := stats.retryCauseSample(); sample != "" {
+			warning += "; causes: " + sample
+		}
 		log.Print(warning)
 		stats.Warnings = append(stats.Warnings, warning)
 	}
@@ -3606,10 +3672,11 @@ func (e *Engine) resyncBuildLocked(
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
-		stats.Aborted = true
+		cause := passAbortCause(ctx, stats)
+		stats.abort(cause)
 		stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-			"resync aborted: %d synced, %d failed",
-			stats.Synced, stats.Failed,
+			"resync aborted: %d synced, %d failed: %s",
+			stats.Synced, stats.Failed, cause,
 		))
 		e.mu.Lock()
 		e.lastSyncStats = stats
@@ -3654,13 +3721,14 @@ func (e *Engine) resyncBuildLocked(
 		e.failures.Merge(&contributorEngine.failures)
 		contributorEngine.phaseStats.Log("resync contributor " + contributor.Name)
 		phase := phaseSnapshot(contributor.Name, &contributorEngine.phaseStats)
-		contributorSafetyAbort := shouldAbortResyncSwap(
+		contributorSafetyReason := resyncSwapAbortReason(
 			contributorStats,
 			contributorOldFileSessions[contributorIndex],
 			0,
 		)
+		contributorSafetyAbort := contributorSafetyReason != ""
 		if contributorSafetyAbort {
-			contributorStats.Aborted = true
+			contributorStats.abort("safety check: " + contributorSafetyReason)
 		}
 		mergeSyncStats(&stats, contributorStats)
 		pendingTombstoned += stats.Tombstoned
@@ -3696,11 +3764,13 @@ func (e *Engine) resyncBuildLocked(
 			newDB.Close()
 			removeTempDB(tempPath)
 			restoreSkipCache()
+			cause := contributorAbortCause(
+				ctx, contributorErr, contributorStats, stats, contributorSafetyReason,
+			)
+			// The contributor's outcome replaces any cause merged from its stats.
 			stats.Aborted = true
-			stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-				"resync aborted: contributor %q did not complete",
-				contributor.Name,
-			))
+			stats.abortCause = fmt.Sprintf("contributor %q did not complete: %s", contributor.Name, cause)
+			stats.Warnings = append(stats.Warnings, "resync aborted: "+stats.abortCause)
 			e.mu.Lock()
 			e.lastSyncStats = stats
 			e.mu.Unlock()
@@ -3745,30 +3815,35 @@ func (e *Engine) resyncBuildLocked(
 		}
 	}
 
-	localSafetyAbort := false
+	swapAbortReason := ""
 	if len(opts.Contributors) > 0 ||
 		len(opts.UnavailableContributorIDPrefixes) > 0 {
 		// Evaluate local safety after contributors so a contributor's own
 		// cancellation or failure remains the reported abort reason. Trash
 		// copied from the old archive cannot make an empty local pass safe.
-		localSafetyAbort = shouldAbortResyncSwap(
+		if reason := resyncSwapAbortReason(
 			localStats, localOldFileSessions, 0,
-		)
+		); reason != "" {
+			swapAbortReason = "local sources: " + reason
+		}
 	}
-	abortSwap := localSafetyAbort ||
-		shouldAbortResyncSwap(stats, rebuildOldFileSessions, trashedCopied)
-	if abortSwap {
+	if swapAbortReason == "" {
+		swapAbortReason = resyncSwapAbortReason(stats, rebuildOldFileSessions, trashedCopied)
+	}
+	if swapAbortReason != "" {
+		cause := "safety check: " + swapAbortReason
 		log.Printf(
-			"resync: aborting swap, %d synced / %d failed / %d total",
-			stats.Synced, stats.Failed, stats.TotalSessions,
+			"resync: aborting swap, %d synced / %d failed / %d total: %s",
+			stats.Synced, stats.Failed, stats.TotalSessions, cause,
 		)
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
 		stats.Aborted = true
+		stats.abortCause = cause
 		stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-			"resync aborted: %d synced, %d failed",
-			stats.Synced, stats.Failed,
+			"resync aborted: %d synced, %d failed: %s",
+			stats.Synced, stats.Failed, cause,
 		))
 
 		e.mu.Lock()
@@ -6058,6 +6133,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		cursor = page[len(page)-1].Cursor()
 	}
 	retErr = errors.Join(retErr, e.finishCodexParentInventoryBatch(ctx, &stats))
+	stats.logRetrySummary("sync")
 	// Pending linking depends only on committed archive rows. Unrelated source
 	// failures must not suppress it; full reconciliation without pending work
 	// still requires a completed pass. Grouped callers consume this eligibility
@@ -6112,14 +6188,15 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			retryRoots = slices.Compact(retryRoots)
 		}
 		incomplete := &incompleteReconciliationError{
-			failures:  failures,
-			deferred:  stats.Deferred,
-			roots:     retryRoots,
-			paths:     append([]string(nil), stats.deferredRetryPaths...),
-			overflow:  stats.deferredRetryOverflow,
-			completed: completedScopes,
-			cause:     discoveryErr,
-			deferOnly: failures == 0 && retErr == nil && discoveryErr == nil && stats.Failed == 0 && !stats.Aborted,
+			failures:    failures,
+			deferred:    stats.Deferred,
+			roots:       retryRoots,
+			paths:       append([]string(nil), stats.deferredRetryPaths...),
+			overflow:    stats.deferredRetryOverflow,
+			completed:   completedScopes,
+			cause:       discoveryErr,
+			deferOnly:   failures == 0 && retErr == nil && discoveryErr == nil && stats.Failed == 0 && !stats.Aborted,
+			retryCauses: stats.retryCauseSample(),
 		}
 		if retErr == nil {
 			retErr = incomplete
@@ -6192,12 +6269,13 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 	slices.Sort(retryRoots)
 	retryRoots = slices.Compact(retryRoots)
 	return deleted, &incompleteReconciliationError{
-		failures: incomplete.failures,
-		deferred: incomplete.deferred,
-		roots:    retryRoots,
-		paths:    append([]string(nil), incomplete.paths...),
-		overflow: incomplete.overflow,
-		cause:    errors.Join(incomplete, err),
+		failures:    incomplete.failures,
+		deferred:    incomplete.deferred,
+		roots:       retryRoots,
+		paths:       append([]string(nil), incomplete.paths...),
+		overflow:    incomplete.overflow,
+		cause:       errors.Join(incomplete, err),
+		retryCauses: incomplete.retryCauses,
 	}
 }
 
@@ -6762,14 +6840,20 @@ type incompleteReconciliationError struct {
 	completed []reconciliationProviderScope
 	cause     error
 	deferOnly bool
+	// retryCauses is a bounded sample of why results need retry.
+	retryCauses string
 }
 
 func (e *incompleteReconciliationError) Error() string {
 	if e.failures == 0 {
-		return fmt.Sprintf(
+		msg := fmt.Sprintf(
 			"watch root reconciliation deferred: %d provider results need retry",
 			e.deferred,
 		)
+		if e.retryCauses != "" {
+			msg += ": " + e.retryCauses
+		}
+		return msg
 	}
 	return fmt.Sprintf(
 		"watch root reconciliation incomplete: %d provider discoveries failed",
@@ -7420,6 +7504,7 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.TitlesUpdated += src.TitlesUpdated
 	dst.LinksUpdated += src.LinksUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
+	dst.mergeCauses(src)
 	if !dst.deferredRetryOverflow {
 		deferred := dst.Deferred
 		for _, path := range src.deferredRetryPaths {
@@ -8360,7 +8445,7 @@ func (e *Engine) syncAllLocked(
 	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
 	if e.sourceSyncErr != nil && e.archiveStore == nil {
-		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}}
+		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}, abortCause: e.sourceSyncErr.Error()}
 	}
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
@@ -8368,11 +8453,11 @@ func (e *Engine) syncAllLocked(
 	e.invalidateNativeTitleCache(nil)
 	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, nil)
 	if err != nil {
-		return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
 	defer func() {
 		if err := closeProviderCache(); err != nil {
-			stats.Aborted = true
+			stats.abort(err.Error())
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
@@ -8524,6 +8609,7 @@ func (e *Engine) syncAllLocked(
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
 	}
+	stats.logRetrySummary("sync")
 	stats.providerFailures = providerFailures
 	for range providerFailures {
 		stats.RecordFailed()
@@ -11024,6 +11110,10 @@ func (e *Engine) collectAndBatchWithOptions(
 		for range r.deferredCount {
 			stats.recordDeferred(r.path)
 		}
+		for _, cause := range r.retryCauses {
+			cause.sessionID = applyIDPrefixToID(e.idPrefix, cause.sessionID)
+			stats.recordRetryCause(cause)
+		}
 		proofWithheld := r.sourceProofWithheld(false)
 		if proofWithheld {
 			if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
@@ -11326,9 +11416,10 @@ func (e *Engine) collectAndBatchWithOptions(
 					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
 					stored, err := savedHistory(ctx, store, id)
 					if err != nil {
-						log.Printf("resync: read deferred session %s: %v", id, err)
+						cause := fmt.Sprintf("read saved history of deferred session %s: %v", id, err)
+						log.Printf("sync: %s", cause)
 						stats.RecordFailed()
-						stats.Aborted = true
+						stats.abort(cause)
 						continue
 					}
 					if stored == nil {
@@ -11340,9 +11431,10 @@ func (e *Engine) collectAndBatchWithOptions(
 						}
 					} else if stored.DataVersion >= db.CurrentDataVersion() {
 						if err := e.db.SetSessionDataVersion(ctx, id, max(db.CurrentDataVersion()-1, 0)); err != nil {
-							log.Printf("sync: mark deferred session %s for retry: %v", id, err)
+							cause := fmt.Sprintf("mark deferred session %s for retry: %v", id, err)
+							log.Printf("sync: %s", cause)
 							stats.RecordFailed()
-							stats.Aborted = true
+							stats.abort(cause)
 						}
 					}
 				}
@@ -11926,6 +12018,9 @@ type processResult struct {
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
 	deferredCount   int
+	// retryCauses names each result held for retry and why, for logs and
+	// the pass summary.
+	retryCauses []retryCause
 	// suppressPresenceSweep marks a source result that must not authorize
 	// presence or tombstone reconciliation, including clean unsupported skips.
 	suppressPresenceSweep bool
@@ -13260,7 +13355,7 @@ func (e *Engine) processProviderFile(
 			cacheKey = providerProcessCacheKey(file, source, fingerprint, providerSemantics)
 		}
 	}
-	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome) && len(admission.retryIDs) == 0
+	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome) && len(admission.retries) == 0
 	providerWideFailureCount := len(outcome.SourceErrors)
 	if !outcome.ResultSetComplete {
 		providerWideFailureCount++
@@ -13483,7 +13578,9 @@ func (e *Engine) processProviderFile(
 	// appending on top of stale state. Match the legacy process arm,
 	// which stamped inode/device from the source file stat.
 	e.stampProviderFileIdentity(provider, source, res.results)
-	for _, id := range admission.retryIDs {
+	res.retryCauses = admission.retries
+	for _, retry := range admission.retries {
+		id := retry.sessionID
 		if res.retrySessionIDs == nil {
 			res.retrySessionIDs = make(map[string]bool)
 		}
@@ -22013,6 +22110,9 @@ func (e *Engine) processAndWriteSessionFile(
 		if file.Agent == parser.AgentClaude {
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
 		}
+	}
+	for _, cause := range res.retryCauses {
+		log.Printf("sync: session needs retry: %s", cause)
 	}
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||

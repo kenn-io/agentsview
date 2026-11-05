@@ -71,7 +71,7 @@ func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
 		{
 			name:       "rebuild aborts",
 			missingSrc: true,
-			wantErr:    "resync-build: aborted",
+			wantErr:    "resync-build: aborted (safety check: discovered no session files, but the archive holds 1)",
 		},
 		{name: "worker cannot start", spawnFails: true, wantErrIs: errWorkerSpawn},
 	} {

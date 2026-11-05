@@ -550,9 +550,15 @@ func (e *Engine) parseMaterializedS3Source(
 	providerFailureCount := providerWideFailureCount
 	retrySessionIDs := make(map[string]bool)
 	deferredCount := 0
+	var retryCauses []retryCause
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			retrySessionIDs[result.Result.Session.ID] = true
+			retryCauses = append(retryCauses, retryCause{
+				sessionID: result.Result.Session.ID,
+				path:      file.Path,
+				reason:    result.RetryReason,
+			})
 			if isCodexFormatAgent(file.Agent) {
 				deferredCount++
 			} else {
@@ -577,6 +583,7 @@ func (e *Engine) parseMaterializedS3Source(
 		providerWideFailureCount: providerWideFailureCount,
 		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
 		deferredCount:            deferredCount,
+		retryCauses:              retryCauses,
 	}
 	for i := range res.results {
 		res.results[i].Session.File.Path = file.Path

@@ -247,8 +247,12 @@ func runSyncWorkerStartup(
 		}
 		result = workerResultFromStats(ctx, stats)
 		result.Tombstoned = tombstoned
-		if auditErr != nil && result.Status == "ok" {
-			result.Status = "failed"
+		if auditErr != nil {
+			if result.Status == "ok" {
+				result.Status = "failed"
+			}
+			// The reconciliation error names the cause more precisely than
+			// the stats summary.
 			result.Error = auditErr.Error()
 		}
 	default:
@@ -257,13 +261,14 @@ func runSyncWorkerStartup(
 	}
 	if mode == "startup" && result.Deferred > 0 && result.Failed == 0 && result.DiscoveryComplete && ctx.Err() == nil {
 		result.Status = "ok"
+		result.Error = ""
 	}
 
 	result.Stats.LinksPending = engine.PendingSubagentLinks()
 	result.LinkStateKnown = true
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
-		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
+		return fmt.Errorf("sync worker %s: %s", mode, workerResultDetail(result))
 	}
 	return nil
 }
@@ -308,14 +313,14 @@ func runSyncWorkerResyncBuild(
 		if buildErr != nil {
 			return fmt.Errorf("sync worker %s: %w", mode, buildErr)
 		}
-		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
+		return fmt.Errorf("sync worker %s: %s", mode, workerResultDetail(result))
 	}
 	return nil
 }
 
 // resyncBuildResultFromStats maps a resync build outcome to a terminal result.
 // Unlike a live sync pass, a completed build tolerates a minority of permanent
-// parse failures: shouldAbortResyncSwap already folded that judgment into
+// parse failures: resyncSwapAbortReason already folded that judgment into
 // stats.Aborted, so Failed alone must not fail the pass and make the daemon
 // discard an otherwise valid replacement of a stale-version archive.
 //
@@ -348,8 +353,10 @@ func resyncBuildResultFromStats(
 	case stats.Aborted:
 		result.Status = "aborted"
 		result.DiscoveryComplete = false
+		result.Error = stats.AbortCause()
 	case !result.DiscoveryComplete:
 		result.Status = "failed"
+		result.Error = "discovery incomplete: " + stats.IncompleteCause()
 	default:
 		result.Status = "ok"
 	}
@@ -395,9 +402,12 @@ func workerResultFromStats(
 		result.DiscoveryComplete = false
 		if ctx.Err() != nil {
 			result.Error = ctx.Err().Error()
+		} else {
+			result.Error = stats.AbortCause()
 		}
 	case !stats.ProcessingComplete() || !result.DiscoveryComplete:
 		result.Status = "failed"
+		result.Error = stats.IncompleteCause()
 	default:
 		result.Status = "ok"
 	}
