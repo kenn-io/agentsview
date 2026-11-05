@@ -601,7 +601,7 @@ describe("SessionsStore", () => {
       );
       await sessions.hydrateVisibleSessions(["row"]);
       vi.mocked(api.renameSession).mockResolvedValueOnce(
-        makeSession({ id: "row", display_name: "New name" }),
+        makeSession({ id: "row", display_name: "New name", first_message: "Title" }),
       );
       await sessions.renameSession("row", "New name");
 
@@ -2837,6 +2837,35 @@ describe("SessionsStore", () => {
   });
 
   describe("renameSession", () => {
+    it("updates the selected session's token totals from the rename response", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "row", total_output_tokens: 10, peak_context_tokens: 20 }),
+      );
+      await sessions.load();
+      await sessions.navigateToSession("row");
+      api.renameSession.mockResolvedValueOnce(
+        makeSession({
+          id: "row",
+          display_name: "Renamed",
+          total_output_tokens: 100,
+          peak_context_tokens: 200,
+          has_total_output_tokens: true,
+          has_peak_context_tokens: true,
+        }),
+      );
+
+      await sessions.renameSession("row", "Renamed");
+
+      expect(sessions.activeSession).toMatchObject({
+        display_name: "Renamed",
+        total_output_tokens: 100,
+        peak_context_tokens: 200,
+        has_total_output_tokens: true,
+        has_peak_context_tokens: true,
+      });
+    });
+
     it("keeps an indexed teammate in its group when the rename response omits classification", async () => {
       mockSidebarIndex([
         makeSkinnyRow({ id: "main" }),

@@ -1652,6 +1652,8 @@ class SessionsStore {
       { id },
       { display_name: displayName },
     );
+    const detail = this.details.get(id);
+    if (detail) this.details.set(id, { ...detail, ...updated });
     const idx = this.sessions.findIndex((s) => s.id === id);
     if (idx !== -1) {
       const merged = {
