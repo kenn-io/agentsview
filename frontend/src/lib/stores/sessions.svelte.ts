@@ -1871,21 +1871,28 @@ function indexFields(row: SessionGroupInput) {
 }
 
 function sameSessionFields(a: Session, b: Session): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as Array<keyof Session>);
-  for (const key of keys) {
-    if (!sameField(a[key], b[key])) return false;
+  for (const key in a) {
+    if (Object.hasOwn(a, key) && !sameField(a[key as keyof Session], b[key as keyof Session]))
+      return false;
+  }
+  for (const key in b) {
+    if (
+      Object.hasOwn(b, key) &&
+      !Object.prototype.propertyIsEnumerable.call(a, key) &&
+      !sameField(a[key as keyof Session], b[key as keyof Session])
+    )
+      return false;
   }
   return true;
 }
 
 function sameField(a: unknown, b: unknown): boolean {
-  return (
-    a === b ||
-    (Array.isArray(a) &&
-      Array.isArray(b) &&
-      a.length === b.length &&
-      a.every((value, i) => value === b[i]))
-  );
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (i in a && a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function maxString(a: string | null, b: string | null): string | null {

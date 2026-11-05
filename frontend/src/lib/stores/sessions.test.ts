@@ -779,6 +779,16 @@ describe("SessionsStore", () => {
         ended_at: "2026-01-02T00:00:00Z",
         first_message: "New title",
       });
+
+      const previous = sessions.sessions;
+      mockSidebarIndex([
+        { ...rows[0]!, source_machines: ["host-b"] },
+        { ...rows[1]!, ended_at: "2026-01-02T00:00:00Z" },
+      ]);
+      await sessions.load();
+      expect(sessions.sessions[0]).not.toBe(previous[0]);
+      expect(sessions.sessions[0]?.source_machines).toEqual(["host-b"]);
+      expect(sessions.sessions[1]).toBe(previous[1]);
     });
 
     it("publishes each staggered title without rebuilding groups", async () => {
