@@ -263,8 +263,14 @@
     text-indent: -2ch;
   }
 
+  /* Each segment is its own inline box, so lines still break between
+     segments; a single segment wider than the column wraps inside its
+     box instead of running out of the panel. */
   .provider-path-seg {
-    white-space: nowrap;
+    display: inline-block;
+    max-width: 100%;
+    text-indent: 0;
+    overflow-wrap: anywhere;
   }
 
   .provider-not-configured {
@@ -293,11 +299,36 @@
     min-width: 0;
   }
 
+  .provider-home > .provider-path {
+    flex: 1 1 auto;
+  }
+
+  /* Phones: like the other settings rows, the label column goes away.
+     The name and switch share the header line and the details take the
+     row's full width. */
+  @media (max-width: 640px) {
+    .provider-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .provider-details {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* The Add button moves under the field when a long translated label
+     leaves the field too little room beside it. */
   .provider-home-add {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     max-width: 420px;
+  }
+
+  .provider-home-add > :global(.kit-text-input) {
+    flex: 1 1 180px;
+    min-width: 0;
   }
 
   .provider-homes-hint {
