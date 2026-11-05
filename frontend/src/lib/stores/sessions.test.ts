@@ -593,6 +593,38 @@ describe("SessionsStore", () => {
       });
     });
 
+    it("updates index facts when selecting a previously hydrated row", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "parent" }), makeSkinnyRow({ id: "child" })]);
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({
+          id: "child",
+          first_message: "Title",
+          message_count: 12,
+          user_message_count: 4,
+          parent_session_id: "parent",
+          parent_session_ids: ["parent"],
+          relationship_type: "subagent",
+        }),
+      );
+      await sessions.hydrateVisibleSessions(["child"]);
+      expect(sessions.groupedSessions).toHaveLength(2);
+
+      await sessions.navigateToSession("child");
+
+      expect(sessions.activeSession).toMatchObject({
+        first_message: "Title",
+        message_count: 12,
+        user_message_count: 4,
+        parent_session_id: "parent",
+        parent_session_ids: ["parent"],
+        relationship_type: "subagent",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+    });
+
     it("ignores pending hydration after an index rejects a filter", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
       await sessions.load();
