@@ -578,24 +578,44 @@ describe("SessionsStore", () => {
       const request = Promise.withResolvers<Session>();
       api.getSession.mockReturnValueOnce(request.promise);
       const navigation = sessions.navigateToSession("row");
-      vi.mocked(SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId).mockResolvedValue({ session_id: "row", project: "assigned", original_project: "proj", created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" });
-      vi.mocked(SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId).mockResolvedValue({ session_id: "row", project: "restored" });
+      vi.mocked(
+        SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).mockResolvedValue({
+        session_id: "row",
+        project: "assigned",
+        original_project: "proj",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      });
+      vi.mocked(
+        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).mockResolvedValue({ session_id: "row", project: "restored" });
       api.getSidebarSessionIndex.mockRejectedValue(new Error("network error"));
       await sessions.assignSessionProject("row", "assigned");
       expect(sessions.groupedSessions[0]?.project).toBe("assigned");
       await sessions.clearSessionProjectAssignment("row");
       request.resolve(makeSession({ id: "row", project: "old", first_message: "Title" }));
       await navigation;
-      expect(sessions.activeSession).toMatchObject({ project: "restored", project_assigned: false, first_message: "Title" });
-      expect(SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId).toHaveBeenCalledWith({ sessionId: "row" }, { project: "assigned" });
-      expect(SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId).toHaveBeenCalledWith({ sessionId: "row" });
+      expect(sessions.activeSession).toMatchObject({
+        project: "restored",
+        project_assigned: false,
+        first_message: "Title",
+      });
+      expect(
+        SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).toHaveBeenCalledWith({ sessionId: "row" }, { project: "assigned" });
+      expect(
+        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).toHaveBeenCalledWith({ sessionId: "row" });
     });
 
     it("starts a fresh hydration on cancellation and re-entry", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
       await sessions.load();
       const old = Promise.withResolvers<Session>();
-      api.getSession.mockReturnValueOnce(old.promise).mockResolvedValueOnce(makeSession({ id: "row", first_message: "Current title" }));
+      api.getSession
+        .mockReturnValueOnce(old.promise)
+        .mockResolvedValueOnce(makeSession({ id: "row", first_message: "Current title" }));
       const first = sessions.hydrateVisibleSessions(["row"]);
       sessions.cancelRouteReads();
       await sessions.navigateToSession("row");
@@ -614,11 +634,16 @@ describe("SessionsStore", () => {
       expect(sessions.groupedSessions).toHaveLength(2);
       mockSidebarIndex([root, { ...child, parent_session_id: "root" }]);
       await sessions.load();
-      expect(sessions.groupedSessions.map((g) => g.sessions.map((s) => s.id))).toEqual([["root", "child"]]);
+      expect(sessions.groupedSessions.map((g) => g.sessions.map((s) => s.id))).toEqual([
+        ["root", "child"],
+      ]);
       mockSidebarIndex([root, { ...child, is_teammate: true }]);
       await sessions.load();
       expect(sessions.groupedSessions).toHaveLength(1);
-      expect(sessions.sessions[1]).toMatchObject({ parent_session_id: undefined, is_teammate: true });
+      expect(sessions.sessions[1]).toMatchObject({
+        parent_session_id: undefined,
+        is_teammate: true,
+      });
       mockSidebarIndex([root, { ...child, is_teammate: true, project: "other" }]);
       await sessions.load();
       expect(sessions.groupedSessions.map((g) => g.project)).toEqual(["proj", "other"]);
@@ -654,15 +679,18 @@ describe("SessionsStore", () => {
       await sessions.hydrateVisibleSessions(["second"]);
       const original = sessions.sessions;
       const grouped = sessions.groupedSessions;
-      mockSidebarIndex(
-        JSON.parse(JSON.stringify(rows)),
-      );
+      mockSidebarIndex(JSON.parse(JSON.stringify(rows)));
       await sessions.load();
       expect(sessions.sessions).toBe(original);
       expect(sessions.groupedSessions).toBe(grouped);
-      api.getSession.mockResolvedValueOnce(makeSession({ id: "second", first_message: "New title" }));
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "second", first_message: "New title" }),
+      );
       await sessions.hydrateVisibleSessions(["second"]);
-      expect(sessions.view(sessions.byId.get("second")!)).toMatchObject({ first_message: "New title", health_score_basis: ["retained"] });
+      expect(sessions.view(sessions.byId.get("second")!)).toMatchObject({
+        first_message: "New title",
+        health_score_basis: ["retained"],
+      });
 
       mockSidebarIndex([rows[0]!, { ...rows[1]!, ended_at: "2026-01-02T00:00:00Z" }]);
       await sessions.load();
@@ -680,14 +708,16 @@ describe("SessionsStore", () => {
       await sessions.load();
       const fast = Promise.withResolvers<Session>();
       const slow = Promise.withResolvers<Session>();
-      api.getSession.mockImplementation((id) => id === "fast" ? fast.promise : slow.promise);
+      api.getSession.mockImplementation((id) => (id === "fast" ? fast.promise : slow.promise));
       const grouped = sessions.groupedSessions;
       let publications = 0;
       const cleanup = toStore(() => sessions.groupedSessions).subscribe(() => publications++);
       try {
         const hydrate = sessions.hydrateVisibleSessions(["fast", "slow"]);
         fast.resolve(makeSession({ id: "fast", first_message: "First title" }));
-        await vi.waitFor(() => expect(sessions.view(sessions.byId.get("fast")!).first_message).toBe("First title"));
+        await vi.waitFor(() =>
+          expect(sessions.view(sessions.byId.get("fast")!).first_message).toBe("First title"),
+        );
         expect(sessions.view(sessions.byId.get("slow")!).first_message).toBeNull();
         expect(sessions.groupedSessions).toBe(grouped);
         slow.resolve(makeSession({ id: "slow", first_message: "Second title" }));
@@ -712,10 +742,16 @@ describe("SessionsStore", () => {
         makeSession({ id: "row", display_name: name ?? undefined }),
       );
       await sessions.renameSession("row", name);
-      request.resolve(makeSession({ id: "row", display_name: "Original", first_message: "Loaded title" }));
+      request.resolve(
+        makeSession({ id: "row", display_name: "Original", first_message: "Loaded title" }),
+      );
       await hydrate;
       expect(sessions.view(sessions.byId.get("row")!).display_name).toBe(name ?? undefined);
-      expect(sessions.activeSession).toMatchObject({ display_name: name ?? undefined, first_message: "Loaded title", is_index_only: false });
+      expect(sessions.activeSession).toMatchObject({
+        display_name: name ?? undefined,
+        first_message: "Loaded title",
+        is_index_only: false,
+      });
     });
 
     it("selects an index-only row before a larger batch finishes", async () => {
@@ -743,7 +779,9 @@ describe("SessionsStore", () => {
       );
       const pending = sessions.hydrateVisibleSessions(["active", "slow"]);
       await sessions.hydrateVisibleSessions(["active"]);
-      vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({ id: "active", first_message: "New title" }));
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "active", first_message: "New title" }),
+      );
       await sessions.refreshActiveSession();
       expect(sessions.activeSession?.first_message).toBe("New title");
       slowAgain.resolve(makeSession({ id: "slow" }));
@@ -1011,17 +1049,19 @@ describe("SessionsStore", () => {
       await sessions.navigateToSession("offpage");
       expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
 
-      vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({
-        id: "offpage",
-        message_count: 12,
-        user_message_count: 4,
-        ended_at: "2026-01-01T12:00:00Z",
-        termination_status: "awaiting_user",
-        transcript_revision: "rev-2",
-        parent_session_id: "listed",
-        parent_session_ids: ["listed"],
-        relationship_type: "subagent",
-      }));
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "offpage",
+          message_count: 12,
+          user_message_count: 4,
+          ended_at: "2026-01-01T12:00:00Z",
+          termination_status: "awaiting_user",
+          transcript_revision: "rev-2",
+          parent_session_id: "listed",
+          parent_session_ids: ["listed"],
+          relationship_type: "subagent",
+        }),
+      );
       await sessions.refreshActiveSession();
       expect(sessions.activeSession).toMatchObject({
         message_count: 12,

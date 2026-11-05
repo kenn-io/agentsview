@@ -381,7 +381,9 @@ class SessionsStore {
     if (!id) return undefined;
     const row = this.byId.get(id);
     const detail = this.details.get(id);
-    return row && (detail ? !detail.is_index_only : !row.is_index_only) ? this.view(row) : undefined;
+    return row && (detail ? !detail.is_index_only : !row.is_index_only)
+      ? this.view(row)
+      : undefined;
   });
 
   private groups = $derived(groupSessions(this.sessions));
@@ -401,8 +403,12 @@ class SessionsStore {
       if (sameSessionFields(previous, row)) return previous;
       return {
         ...row,
-        parent_session_ids: sameField(previous.parent_session_ids, row.parent_session_ids) ? previous.parent_session_ids : row.parent_session_ids,
-        source_machines: sameField(previous.source_machines, row.source_machines) ? previous.source_machines : row.source_machines,
+        parent_session_ids: sameField(previous.parent_session_ids, row.parent_session_ids)
+          ? previous.parent_session_ids
+          : row.parent_session_ids,
+        source_machines: sameField(previous.source_machines, row.source_machines)
+          ? previous.source_machines
+          : row.source_machines,
       };
     });
     if (next.length !== this.sessions.length || next.some((row, i) => row !== this.sessions[i])) {
@@ -411,7 +417,7 @@ class SessionsStore {
   }
 
   private replaceAt(index: number, row: Session) {
-    this.sessions = this.sessions.map((current, i) => i === index ? row : current);
+    this.sessions = this.sessions.map((current, i) => (i === index ? row : current));
   }
 
   private updateActiveIndex(session: Session) {
@@ -1868,8 +1874,12 @@ function sameSessionFields(a: Session, b: Session): boolean {
 }
 
 function sameField(a: unknown, b: unknown): boolean {
-  return a === b || (
-    Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => value === b[i])
+  return (
+    a === b ||
+    (Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, i) => value === b[i]))
   );
 }
 function maxString(a: string | null, b: string | null): string | null {
