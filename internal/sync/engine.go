@@ -11312,10 +11312,11 @@ func (e *Engine) collectAndBatchWithOptions(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseAll()
 		} else {
-			// An unresolved fork cannot authoritatively replace saved history.
-			// Leave an existing row for orphan copy, but allow a new fork's
-			// fallback transcript to remain visible and marked for retry.
-			if isCodexFormatAgent(r.agent) && r.deferredCount > 0 {
+			// An unresolved fork or low-fidelity Antigravity CLI parse cannot
+			// authoritatively replace saved history. New sessions may still
+			// publish fallback content and remain marked for retry.
+			if (isCodexFormatAgent(r.agent) && r.deferredCount > 0) ||
+				(r.agent == parser.AgentAntigravityCLI && len(r.retrySessionIDs) > 0) {
 				var store db.Store = e.db
 				if e.archiveStore != nil {
 					store = e.archiveStore
@@ -21988,9 +21989,9 @@ func (e *Engine) processAndWriteSessionFile(
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
-		// Match the batch path: a fallback parse cannot replace saved history
-		// until its replay parent is available.
-		if isCodexFormatAgent(file.Agent) && res.needsRetryForSession(pr.Session.ID) {
+		// Match the batch path: these fallback parses cannot replace saved
+		// history until the higher-fidelity source is available.
+		if (isCodexFormatAgent(file.Agent) || file.Agent == parser.AgentAntigravityCLI) && res.needsRetryForSession(pr.Session.ID) {
 			stored, readErr := e.db.GetSessionFull(ctx, resultIDs[i])
 			if readErr != nil {
 				return false, sessionsChanged, fmt.Errorf("read deferred session %s: %w", resultIDs[i], readErr)

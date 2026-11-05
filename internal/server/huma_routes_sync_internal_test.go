@@ -1988,6 +1988,38 @@ func TestHumaSyncRemotesStreamsLocalProgress(t *testing.T) {
 	assertOnlySessionFirstMessageContains(t, f.db, "remote progress")
 }
 
+func TestHumaSyncRemotesCompletesRebuildWithDeferredFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	f := newSyncRouteFixture(t,
+		withDisabledAgents(nil, map[parser.AgentType][]string{parser.AgentCodex: {root}}),
+		withRemoteHosts(config.RemoteHost{Host: "alpha", URL: "https://alpha.example.test", Token: "remote-token"}),
+	)
+	stubPrepareHTTPRebuild(t, func(context.Context, []remotesync.RemoteSync) (preparedHTTPRebuild, error) {
+		return &fakePreparedHTTPRebuild{}, nil
+	})
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync/remotes", remoteSyncRequest{
+		Full: true, IncludeLocal: true, Hosts: []config.RemoteHost{{Host: "alpha"}},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var response remoteSyncResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Empty(t, response.Error)
+	assert.Empty(t, response.Failures)
+	messages, err := f.db.GetAllMessages(t.Context(), "codex:"+child)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child answer", messages[0].Content)
+}
+
 func TestHumaSyncRemotesStreamsRemoteProgress(t *testing.T) {
 	var mu stdlibsync.Mutex
 	var paths []string

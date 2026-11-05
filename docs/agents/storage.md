@@ -80,6 +80,11 @@ child history or count parent usage twice. Live updates for unresolved forks
 need durable provenance and crash-safe retry and recovery; the current rebuild
 keeps the existing history rather than guessing that boundary.
 
+When an Antigravity CLI source yields a retryable low-fidelity transcript,
+sync and rebuild preserve any saved history and leave it stale for retry. A new
+session can use the fallback, but later fallback changes are held until a
+high-fidelity parse succeeds. A rebuild can still install other healthy data.
+
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives

@@ -724,7 +724,7 @@ func (s *Server) runRemoteSyncRequest(
 				},
 			)
 			localStats = &stats
-			if err == nil && !stats.Aborted {
+			if err == nil && !stats.Aborted && !stats.RebuildOrProcessingComplete() {
 				err = requireProcessingComplete(stats)
 			}
 			return remotesync.SyncStats{}, err
