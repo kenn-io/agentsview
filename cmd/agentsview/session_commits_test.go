@@ -27,42 +27,37 @@ func TestSessionCommits(t *testing.T) {
 	}))
 	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:s-commit"}}}))
 	require.NoError(t, d.Close())
-	for _, format := range []string{"json", "human"} {
-		t.Run(format, func(t *testing.T) {
-			args := []string{"session", "commits", "s-commit"}
-			if format == "json" {
-				args = append(args, "--format", "json")
+	t.Run("json", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit", "--format", "json")
+		require.NoError(t, err)
+		got := decodeCLIJSON[db.SessionCommitList](t, out)
+		require.Len(t, got.Commits, 2)
+		var exact *db.CommitLink
+		for i := range got.Commits {
+			if got.Commits[i].Source == "transcript" {
+				exact = &got.Commits[i]
 			}
-			out, err := executeCommand(newRootCommand(), args...)
-			require.NoError(t, err)
-			if format == "json" {
-				got := decodeCLIJSON[db.SessionCommitList](t, out)
-				require.Len(t, got.Commits, 2)
-				var exact *db.CommitLink
-				for i := range got.Commits {
-					if got.Commits[i].Source == "transcript" {
-						exact = &got.Commits[i]
-					}
-				}
-				require.NotNil(t, exact)
-				assert.Equal(t, "abc1234", exact.SHA)
-				assert.Equal(t, "s-commit", exact.SessionID)
-				// JSON preserves the full prompt; human output sanitizes and truncates it.
-				assert.Equal(t, &db.CommitTurn{Ordinal: 1, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, exact.Turn)
-				return
-			}
-			assert.Contains(t, out, "trailer")
-			assert.Contains(t, out, "Editor commit")
-			assert.Contains(t, out, "SOURCE")
-			assert.Contains(t, out, "transcript")
-			assert.Regexp(t, `s-commit\s+2\s+1\s+exact-call`, out)
-			assert.Contains(t, out, "abc1234")
-			assert.Contains(t, out, "Fix parser")
-			assert.Contains(t, out, "1: Fix parser ")
-			assert.Contains(t, out, "(heuristic)")
-			assert.Contains(t, out, "…")
-			assert.NotContains(t, out, "END")
-			assert.NotContains(t, out, "\x1b")
-		})
-	}
+		}
+		require.NotNil(t, exact)
+		assert.Equal(t, "abc1234", exact.SHA)
+		assert.Equal(t, "s-commit", exact.SessionID)
+		// JSON preserves the full prompt; human output sanitizes and truncates it.
+		assert.Equal(t, &db.CommitTurn{Ordinal: 1, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, exact.Turn)
+	})
+	t.Run("human", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit")
+		require.NoError(t, err)
+		assert.Contains(t, out, "trailer")
+		assert.Contains(t, out, "Editor commit")
+		assert.Contains(t, out, "SOURCE")
+		assert.Contains(t, out, "transcript")
+		assert.Regexp(t, `s-commit\s+2\s+1\s+exact-call`, out)
+		assert.Contains(t, out, "abc1234")
+		assert.Contains(t, out, "Fix parser")
+		assert.Contains(t, out, "1: Fix parser ")
+		assert.Contains(t, out, "(heuristic)")
+		assert.Contains(t, out, "…")
+		assert.NotContains(t, out, "END")
+		assert.NotContains(t, out, "\x1b")
+	})
 }

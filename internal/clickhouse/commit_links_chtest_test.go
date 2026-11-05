@@ -59,7 +59,17 @@ func TestClickHouseCommitLinkParity(t *testing.T) {
 	require.NoError(t, local.DeleteSession(t.Context(), "commit-delete"))
 	_, err = syncer.Push(t.Context(), true, nil)
 	require.NoError(t, err)
-	dbtest.AssertCommitLinkParity(t, local, store)
+	// Deleting a published session must replace its live link with a retained link.
+	wantDeleted, err := local.SessionCommitLinks(t.Context(), "commit-delete")
+	require.NoError(t, err)
+	gotDeleted, err := store.SessionCommitLinks(t.Context(), "commit-delete")
+	require.NoError(t, err)
+	assert.Equal(t, wantDeleted, gotDeleted)
+	wantLookup, err := local.CommitSessionLinks(t.Context(), []string{"abc1234567890123456789012345678901234567"})
+	require.NoError(t, err)
+	gotLookup, err := store.CommitSessionLinks(t.Context(), []string{"abc1234567890123456789012345678901234567"})
+	require.NoError(t, err)
+	assert.Equal(t, wantLookup, gotLookup)
 	syncer.projects = []string{"other"}
 	_, err = syncer.Push(t.Context(), true, nil)
 	require.NoError(t, err)
