@@ -362,7 +362,10 @@ func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 			t.Cleanup(ingestion.Stop)
 			ingestion.Suspend()
 			ingestion.applying.Wait()
-			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
+			ts := serveIngestionArchive(t, cfg, database, engine, ingestion,
+				server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)))),
+				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, server.LocalSyncRunner(newForegroundResyncRunner(t.Context(), cfg, engine, database)))))),
+			)
 			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1"+tc.route, nil)
 			require.NoError(t, err)
 			request.Header.Set("Origin", ts.URL)
@@ -372,7 +375,7 @@ func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
 			require.NoError(t, response.Body.Close())
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-			assert.True(t, ingestion.Active(), "archive write routes resume collection through shared middleware")
+			assert.True(t, ingestion.Active(), "archive write routes resume collection")
 			assert.False(t, ingestion.Pending())
 		})
 	}
