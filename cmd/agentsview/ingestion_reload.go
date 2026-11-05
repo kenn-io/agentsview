@@ -41,15 +41,17 @@ type daemonIngestion struct {
 	// under it, so the last one to run applies the latest settings.
 	applyMu sync.Mutex
 	// mu guards the fields below.
-	mu           sync.Mutex
-	watchers     *ingestionWatchers
-	dispatchOpen bool
-	stopLive     func()
-	stopped      bool
-	applying     sync.WaitGroup
-	pending      bool
-	catchup      chan struct{}
-	liveEnabled  bool
+	mu              sync.Mutex
+	watchers        *ingestionWatchers
+	dispatchOpen    bool
+	stopLive        func()
+	stopped         bool
+	applying        sync.WaitGroup
+	pending         bool
+	suspendedAt     time.Time
+	catchup         chan struct{}
+	catchupDeadline time.Time
+	liveEnabled     bool
 }
 
 // ingestionWatchers is one generation of change detection for a fixed
@@ -165,6 +167,7 @@ func (d *daemonIngestion) Suspend() {
 		return
 	}
 	d.pending = true
+	d.suspendedAt = time.Now()
 	watchers, stopLive := d.watchers, d.stopLive
 	d.watchers, d.stopLive = nil, nil
 	d.applying.Go(func() {
@@ -175,10 +178,8 @@ func (d *daemonIngestion) Suspend() {
 	})
 }
 
-// EnsureFresh shares one catch-up; each reader owns only its bounded wait.
+// EnsureFresh shares one catch-up and its wait deadline across readers.
 func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
-	waitCtx, cancel := context.WithTimeout(ctx, ingestionWaitBudget)
-	defer cancel()
 	finish, ok := d.idleTracker.BeginWork()
 	if !ok {
 		return false
@@ -195,12 +196,16 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 	if started {
 		done = make(chan struct{})
 		d.catchup = done
+		d.catchupDeadline = time.Now().Add(ingestionWaitBudget)
 		d.applying.Go(func() { d.resume(done, finish) })
 	}
+	deadline := d.catchupDeadline
 	d.mu.Unlock()
 	if !started {
 		finish()
 	}
+	waitCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	select {
 	case <-waitCtx.Done():
 		return false
@@ -230,24 +235,27 @@ func (d *daemonIngestion) restoreCollection() error {
 func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.clearPendingLocked()
 	d.catchup = nil
 	close(done)
 }
 
-func (d *daemonIngestion) clearPendingLocked() {
-	d.pending = false
-}
-
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
 	return func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		d.mu.Lock()
+		if d.pending && d.catchup == nil && !d.stopped {
+			done := make(chan struct{})
+			d.catchup = done
+			d.catchupDeadline = time.Now().Add(ingestionWaitBudget)
+			defer d.finishCatchup(done)
+		}
+		d.mu.Unlock()
 		if err := d.restoreCollection(); err != nil {
 			return agentsync.SyncStats{}, err
 		}
 		stats, err := runner(ctx, progress)
 		if err == nil {
 			d.mu.Lock()
-			d.clearPendingLocked()
+			d.pending = false
 			d.mu.Unlock()
 		}
 		return stats, err
@@ -256,9 +264,12 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
+	d.mu.Lock()
+	since := d.suspendedAt.Add(-quickSyncMargin)
+	d.mu.Unlock()
 	err := d.restoreCollection()
 	if err == nil {
-		stats := d.engine.SyncAll(d.ctx, nil)
+		stats := d.engine.SyncAllSince(d.ctx, since, nil)
 		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}
@@ -269,6 +280,9 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	if err != nil {
 		log.Printf("idle catch-up incomplete: %v", err)
 	}
+	d.mu.Lock()
+	d.pending = false
+	d.mu.Unlock()
 	d.finishCatchup(done)
 }
 

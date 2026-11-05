@@ -172,8 +172,13 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			writeReloadGeminiSession(t, root, "overnight")
 			if mode == "automatic" {
 				path := filepath.Join(root, "tmp", "project", "chats", "session-overnight.json")
-				older := time.Now().Add(-time.Hour)
+				// Coarse mtimes just before suspension still fall within the margin.
+				older := time.Now().Add(-5 * time.Second)
 				require.NoError(t, os.Chtimes(path, older, older))
+				writeReloadGeminiSession(t, root, "old")
+				oldPath := filepath.Join(root, "tmp", "project", "chats", "session-old.json")
+				oldTime := time.Now().Add(-time.Hour)
+				require.NoError(t, os.Chtimes(oldPath, oldTime, oldTime))
 				assert.Never(t, func() bool { return sessionImported(t, database, "gemini:overnight") }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
 			}
 			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -221,15 +226,21 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
 			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
 			require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
+			start := time.Now()
+			headers, _ = searchIngestionArchive(t, ts.URL, "overnight")
+			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
+			assert.Less(t, time.Since(start), time.Second, "later readers return immediately after the shared catch-up budget expires")
 			canceled, stop := context.WithCancel(t.Context())
 			stop()
 			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
 			releaseOnce()
 			<-finished
+			require.Eventually(t, func() bool { return !ingestion.Pending() }, 5*time.Second, time.Millisecond)
 			require.True(t, ingestion.EnsureFresh(t.Context()))
 			headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
 			assert.Contains(t, freshBody, "hello from overnight")
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+			assert.False(t, sessionImported(t, database, "gemini:old"), "wake skips files older than suspension and its margin")
 		})
 	}
 }

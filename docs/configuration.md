@@ -260,8 +260,11 @@ zoom_level = 120
 or an open event stream, local serve stops watching session files and pauses its
 local sync timers, S3 imports, and attachment imports. Remote-host polling,
 Codex Cloud capture, replica push, and raw uploads keep their own schedules.
-The next archive request waits up to two seconds for catch-up;
-slower catch-up continues in the background with a stale-results warning.
+The next archive request starts catch-up for files changed since collection
+paused, with a ten-second margin for coarse file timestamps. Requests share a
+two-second wait budget from the start of catch-up. After that, reads return
+immediately with a stale-results warning while catch-up continues in the
+background.
 Every client request except `/api/ping` counts as activity. Version and sync-status
 probes report readiness without starting catch-up.
 Desktop health probes keep the daemon alive without restarting sync.

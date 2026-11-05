@@ -131,11 +131,17 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 		return result, workerErr
 	})
 	defer restore()
+	var endpoint string
 	runner := server.LocalSyncRunner(func(ctx context.Context, _ func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		headers, _ := searchIngestionArchive(t, endpoint, "hello")
+		assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
+		assert.True(t, ingestion.Pending(), "the foreground pass has yet to complete")
+		assert.Zero(t, lists.Load(), "a concurrent reader shares the foreground pass instead of starting discovery")
 		stats, _, err := runForegroundWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, nil)
 		return stats, err
 	})
 	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, runner))))
+	endpoint = ts.URL
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
 	require.NoError(t, err)
 	request.Header.Set("Origin", ts.URL)
