@@ -129,9 +129,7 @@ describe("HourOfWeekHeatmap", () => {
     const howCells = Array.from(document.querySelectorAll<SVGRectElement>(".how-cell"));
     // Rows run Sunday first, so Monday is the second row of 24 cells.
     const monday = howCells.slice(24, 32).map((cell) => cell.getAttribute("fill"));
-    const calendarFills = Array.from(
-      calendarHost.querySelectorAll<SVGRectElement>(".heatmap-cell"),
-    )
+    const calendarFills = Array.from(calendarHost.querySelectorAll<SVGRectElement>(".heatmap-cell"))
       .slice(-5)
       .map((cell) => cell.getAttribute("fill"));
 

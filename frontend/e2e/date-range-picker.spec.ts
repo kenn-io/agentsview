@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 for (const theme of ["light", "dark"] as const) {
-  test(`date presets hang from the mode control as a narrower tray in ${theme}`, async ({ page }) => {
+  test(`date presets hang from the mode control as a narrower tray in ${theme}`, async ({
+    page,
+  }) => {
     await page.addInitScript((t) => localStorage.setItem("theme", t), theme);
     await page.goto("/usage");
     await page.locator(".kit-date-range-picker__trigger").first().click();
