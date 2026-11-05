@@ -147,7 +147,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// happens to survive a full backstop tick. The revisit is bounded — it
 	// only reloads done sessions written to since their coverage stamp.
 	// Single-goroutine state, no locking needed.
-	pendingFull := true
+	pendingFull, recheck := true, false
 
 	for {
 		select {
@@ -156,12 +156,12 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.stop:
 			return
 		case <-s.dirty:
+			recheck = false
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			onBattery := s.onBattery != nil && s.onBattery()
-			mgr := s.mgr
-			if onBattery {
-				mgr = s.onBatteryMgr
+			mgr, onBattery := s.passManager()
+			if recheck && onBattery {
+				break // Only waiting for AC; nothing new is owed.
 			}
 			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: pendingFull})
@@ -183,8 +183,8 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			startupDone()
 			// Only clear a carried full pass once it both started and
 			// succeeded; a started-but-failed pass never completed the
-			// top-up it carried.
-			if err == nil && !onBattery {
+			// top-up it carried. A battery pass rechecks for AC below.
+			if recheck = onBattery; !onBattery && err == nil {
 				pendingFull = false
 			}
 		case <-tickC:
@@ -193,11 +193,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			onBattery := s.onBattery != nil && s.onBattery()
-			mgr := s.mgr
-			if onBattery {
-				mgr = s.onBatteryMgr
-			}
+			mgr, onBattery := s.passManager()
 			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: full})
 			if !ok {
@@ -208,6 +204,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
+				recheck = recheck || onBattery
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the
@@ -216,7 +213,19 @@ func (s *extractScheduler) Run(ctx context.Context) {
 				pendingFull = onBattery || !started || err != nil
 			}
 		}
+		if recheck {
+			resetTimer(debounceTimer, batteryRecheckInterval)
+		}
 	}
+}
+
+// passManager returns the battery reconciler while on battery power, and the
+// real manager otherwise.
+func (s *extractScheduler) passManager() (extractPassManager, bool) {
+	if s.onBattery != nil && s.onBattery() {
+		return s.onBatteryMgr, true
+	}
+	return s.mgr, false
 }
 
 // tryPassWithLease runs one TryPass under an idle-tracker work lease, so a

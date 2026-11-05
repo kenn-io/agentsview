@@ -483,6 +483,28 @@ func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) 
 	})
 }
 
+func TestExtractSchedulerBatteryResumesWithoutSync(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr, reconciler := &fakePassManager{}, &fakePassManager{}
+		var battery atomic.Bool
+		battery.Store(true)
+		s := newExtractScheduler(mgr, 30*time.Second, time.Hour, 0, nil)
+		s.onBattery, s.onBatteryMgr = battery.Load, reconciler
+		go s.Run(t.Context())
+		defer s.Stop()
+		s.Notify()
+		synctest.Sleep(31 * time.Second)
+		synctest.Wait()
+		require.Zero(t, mgr.callCount())
+		require.Equal(t, 1, reconciler.callCount())
+		battery.Store(false)
+		synctest.Sleep(2 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot(),
+			"AC must resume deferred extraction without another sync or hourly tick")
+	})
+}
+
 func TestExtractSchedulerPeriodicPassPreservesSyncDebounce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		mgr := &fakePassManager{}

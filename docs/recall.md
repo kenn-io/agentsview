@@ -248,8 +248,8 @@ passes, and a periodic backstop revisits sessions whose transcripts changed
 after extraction. Entries produced this way are stored `unreviewed_auto` — they
 remain outside trusted Recall until promoted.
 
-On battery, scheduled model passes wait until AC power returns, resuming at
-the next sync, periodic pass, or daemon start. Retraction of entries from trashed,
+On battery, scheduled model passes wait and resume within about a minute of AC
+power, or at the next daemon start if it exited while waiting. Retraction of entries from trashed,
 automated, or secret-bearing sessions continues on battery.
 
 ```toml
