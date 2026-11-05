@@ -184,8 +184,8 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			startupDone()
 			// Only clear a carried full pass once it both started and
-			// succeeded; a started-but-failed pass never completed the
-			// top-up it carried. A battery pass rechecks for AC below.
+			// succeeded. A battery pass arms an AC recheck, the timer's
+			// only job until Notify or a started AC pass clears it.
 			if recheck = onBattery; !onBattery && err == nil {
 				pendingFull = false
 			}
@@ -206,7 +206,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
-				recheck = recheck || onBattery
+				recheck = onBattery || recheck && !debounceTimer.Stop()
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the

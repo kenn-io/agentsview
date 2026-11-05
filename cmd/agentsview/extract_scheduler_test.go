@@ -501,6 +501,33 @@ func TestExtractSchedulerBatteryResumesWithoutSync(t *testing.T) {
 	})
 }
 
+func TestExtractSchedulerPeriodicACPassConsumesBatteryRecheck(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr, reconciler := &fakePassManager{}, &fakePassManager{}
+		var battery atomic.Bool
+		battery.Store(true)
+		s := newExtractScheduler(mgr, 30*time.Second, 2*time.Minute, 0, nil)
+		s.onBattery, s.onBatteryMgr = battery.Load, reconciler
+		var notified atomic.Int32
+		s.onPassFinished = func() { notified.Add(1) }
+		go s.Run(t.Context())
+		defer s.Stop()
+		synctest.Sleep(100 * time.Second)
+		synctest.Wait()
+		require.Zero(t, mgr.callCount())
+		require.Equal(t, 1, reconciler.callCount())
+		battery.Store(false)
+		synctest.Sleep(21 * time.Second)
+		synctest.Wait()
+		require.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
+		synctest.Sleep(time.Minute)
+		synctest.Wait()
+		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot(),
+			"a completed periodic pass must consume its power retry")
+		assert.EqualValues(t, 2, notified.Load(), "completed work must notify Recall only once")
+	})
+}
+
 func TestExtractSchedulerPeriodicPassPreservesSyncDebounce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		mgr := &fakePassManager{}
