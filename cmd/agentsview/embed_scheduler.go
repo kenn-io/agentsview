@@ -185,6 +185,9 @@ func (s *embedScheduler) run(
 	// deferred work was a backstop, so its replay is a full reconciliation.
 	_, markerErr := os.Stat(s.batteryDeferredPath)
 	pendingBackstop := s.batteryDeferredPath != "" && markerErr == nil
+	if pendingBackstop {
+		s.Notify()
+	}
 	var pendingRelease func()
 	var buildErrorRetries int
 	defer func() {
@@ -826,9 +829,9 @@ func setupVectorServing(
 		),
 		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
 	}
-	scheduler.batteryDeferredPath = path + ".battery-deferred"
-	if _, err := os.Stat(scheduler.batteryDeferredPath); err == nil && (cfg.Vector.Embed.RunAfterSyncEnabled() || backstop > 0) {
-		scheduler.Notify()
+	if cfg.Vector.Embed.RunAfterSyncEnabled() || backstop > 0 {
+		// Only automatic builds replay a battery marker; manual builds leave it on disk.
+		scheduler.batteryDeferredPath = path + ".battery-deferred"
 	}
 	if cfg.Vector.Embed.RunAfterSyncEnabled() {
 		// A permanent delete must reach the message mirror's journal refresh without waiting for a sync.

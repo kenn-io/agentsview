@@ -1999,8 +1999,9 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 				cfg := vectorTestConfig(dataDir)
 				cfg.Vector.Embed.Recall = false
+				marker := cfg.Vector.ResolvedDBPath(cfg.DataDir) + ".battery-deferred"
 				if tc.deferred {
-					require.NoError(t, os.WriteFile(cfg.Vector.ResolvedDBPath(cfg.DataDir)+".battery-deferred", nil, 0o600))
+					require.NoError(t, os.WriteFile(marker, nil, 0o600))
 				}
 				cfg.Vector.Embed.RunAfterSync = new(tc.runAfterSync)
 				cfg.Vector.Embed.BackstopInterval = tc.backstop
@@ -2019,9 +2020,9 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 					want = []vector.BuildRequest{{Backstop: true}}
 				}
 				if tc.deferred && !tc.wantBuild {
-					assert.FileExists(t, vs.Scheduler.batteryDeferredPath)
+					assert.FileExists(t, marker)
 				} else {
-					assert.NoFileExists(t, vs.Scheduler.batteryDeferredPath)
+					assert.NoFileExists(t, marker)
 				}
 				assert.Equal(t, want, mgr.callsSnapshot(),
 					"startup must catch up an unchanged archive without another sync notification")
