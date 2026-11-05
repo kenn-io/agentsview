@@ -45,7 +45,6 @@ type daemonIngestion struct {
 	stopped      bool
 	applying     sync.WaitGroup
 	pending      bool
-	quietSince   time.Time
 	resumed      chan struct{}
 	catchup      chan struct{}
 	liveEnabled  bool
@@ -155,7 +154,7 @@ func (d *daemonIngestion) Pending() bool {
 	return d.pending
 }
 
-// Suspend records the catch-up cutoff before releasing collection resources.
+// Suspend marks the archive pending before releasing collection resources.
 func (d *daemonIngestion) Suspend() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -164,7 +163,6 @@ func (d *daemonIngestion) Suspend() {
 	}
 	if !d.pending {
 		d.pending = true
-		d.quietSince = time.Now()
 		d.resumed = make(chan struct{})
 	}
 	watchers, stopLive := d.watchers, d.stopLive
@@ -240,13 +238,14 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	if watchers != nil {
 		d.installWatchersLocked(watchers, d.liveEnabled)
 	}
-	since := d.quietSince.Add(-quickSyncMargin)
 	d.mu.Unlock()
 	d.applyMu.Unlock()
 	defer finish()
 	complete := false
 	if !stopped {
-		stats := d.engine.SyncAllSince(d.ctx, since, func(agentsync.Progress) {})
+		// Stopping collection also discards older queued retries. Reconcile all
+		// sources through the incremental cache before reporting freshness.
+		stats := d.engine.SyncAll(d.ctx, func(agentsync.Progress) {})
 		complete = stats.ProcessingComplete()
 		if !complete {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)

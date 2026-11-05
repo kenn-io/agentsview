@@ -335,3 +335,25 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	ingestion.OpenWatcherDispatch()
 	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }
+
+func TestDaemonIngestionWakeReconcilesOlderQueuedRetry(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	writeReloadGeminiSession(t, root, "before")
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	writeReloadGeminiSession(t, root, "older-retry")
+	path := filepath.Join(root, "tmp", "project", "chats", "session-older-retry.json")
+	older := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(path, older, older))
+	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{path}})
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	require.False(t, sessionImported(t, database, "gemini:older-retry"))
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up must include the retry queued before the quiet cutoff")
+}
