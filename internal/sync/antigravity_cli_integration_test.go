@@ -1005,4 +1005,6 @@ func TestAntigravityCLIRebuildInstallsWhenOnlyFallbackIsPreserved(t *testing.T) 
 	assert.False(t, stats.Aborted)
 	assert.True(t, stats.ArchiveRebuilt)
 	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
+		"the preserved session must stay marked for retry")
 }

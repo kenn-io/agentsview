@@ -85,7 +85,9 @@ When an Antigravity CLI source yields a retryable low-fidelity transcript,
 sync and rebuild preserve any saved history and leave it stale for retry. A new
 session can use the fallback, but later fallback changes are held until a
 high-fidelity parse succeeds. A rebuild still installs, even when these
-preserved sessions are its only work.
+preserved sessions are its only work. The sync still reports them as failures,
+so the request returns an error and attached archive sources do not drain until
+a high-fidelity parse succeeds.
 
 A daemon startup whose only unfinished work is queued fork retries still counts
 as complete for draining attached archive sources.

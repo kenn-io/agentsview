@@ -261,6 +261,9 @@ func TestMissingParentForkImportsOverPlaceholderRows(t *testing.T) {
 					})
 					require.NoError(t, err)
 				}
+				placeholder, err := database.GetSession(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, placeholder, "the seed must create a row without messages")
 				require.Empty(t, messageContents(t, database, id))
 				engine := NewEngine(t.Context(), database, EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
