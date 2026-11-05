@@ -2495,6 +2495,12 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			detailLookups: 1, wantStatusChecks: 1,
 		},
 		{
+			name: "idle catch-up pending", id: "absent",
+			statusBody: `{"sync_pending":true,"archive_stale":false,"startup_pending":false,"stats":{}}`,
+			wantErr:    "not yet available", wantCode: tokenUseExitErr,
+			detailLookups: 1, wantStatusChecks: 1,
+		},
+		{
 			name: "archive rebuild pending", id: "absent",
 			statusBody: `{"archive_stale":true,"startup_pending":false,"stats":{}}`,
 			wantErr:    "not yet available", wantCode: tokenUseExitErr,

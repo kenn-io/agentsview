@@ -5489,11 +5489,6 @@ func storedSourcePathHintQuery(
 	agent string,
 	scopes []StoredSourcePathHintScope,
 ) (string, []any) {
-	query, args := storedSourcePathHintSelects(agent, scopes)
-	return `SELECT file_path FROM (` + query + `) ORDER BY file_path`, args
-}
-
-func storedSourcePathHintSelects(agent string, scopes []StoredSourcePathHintScope) (string, []any) {
 	selects := make([]string, 0, len(scopes)*3)
 	var args []any
 	appendSelect := func(predicate string, values ...any) {
@@ -5522,7 +5517,9 @@ func storedSourcePathHintSelects(agent string, scopes []StoredSourcePathHintScop
 	if len(selects) == 0 {
 		return `SELECT file_path FROM sessions WHERE 0`, nil
 	}
-	return strings.Join(selects, " UNION ALL "), args
+	query := `SELECT file_path FROM (` + strings.Join(selects, " UNION ALL ") + `)
+		ORDER BY file_path`
+	return query, args
 }
 
 func cleanStoredSourcePathHint(path string) string {

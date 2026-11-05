@@ -421,7 +421,7 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
-	listS3Objects = func(_ context.Context, _ string) ([]S3Object, error) {
+	listS3Objects = func(string) ([]S3Object, error) {
 		return []S3Object{{
 			URI: "s3://bucket/devbox/raw/codex/2026/08/01/" +
 				"rollout-2026-08-01T18-07-03-" + uuid + ".jsonl",

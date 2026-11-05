@@ -981,7 +981,7 @@ func (s *Server) Handler() http.Handler {
 				ServeHTTP(w, r)
 		})
 	}
-	h = s.idle.Wrap(h)
+	h = s.idle.Wrap(h, s.basePath)
 	return h
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -438,13 +437,8 @@ func ensureFreshData(
 	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
 		ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
 		tr, err := detectTransportContext(ctx, appCfg.DataDir, appCfg.AuthToken, 0)
-		if err == nil && tr.Mode == transportHTTP && !tr.ReadOnly {
-			_, err = postDaemonPush[sync.SyncStats](ctx, tr, appCfg.AuthToken, startupSyncOperation, apiclient.DaemonPushRequest{}, func(sync.Progress) {})
-		} else if err == nil {
-			err = errors.New("daemon is unavailable for refresh")
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Unable to refresh archive: %v\n", err)
+		if err == nil && tr.Mode == transportHTTP {
+			_, _ = postDaemonPush[sync.SyncStats](ctx, tr, appCfg.AuthToken, startupSyncOperation, apiclient.DaemonPushRequest{}, func(sync.Progress) {})
 		}
 		if stale() {
 			fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)

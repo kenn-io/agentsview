@@ -88,7 +88,6 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 // terminal CLI transcripts.
 func icodemateProviderCapabilities() Capabilities {
 	caps := openCodeFormatProviderCapabilities()
-	caps.Sync.PartialDiscovery = true
 	caps.Source.MultiSessionSource = CapabilitySupported
 	caps.Source.ExcludedSessions = CapabilitySupported
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
@@ -142,7 +141,10 @@ func (p *icodemateProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 		return nil, err
 	}
 	cliSources, err := p.cli.Discover(ctx)
-	return append(opencodeSources, cliSources...), err
+	if err != nil {
+		return nil, err
+	}
+	return append(opencodeSources, cliSources...), nil
 }
 
 func (p *icodemateProvider) DiscoverEach(

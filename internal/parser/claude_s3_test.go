@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 
 	sessionMtime := time.Unix(100, 0)
 	sidecarMtime := time.Unix(200, 0)
-	listS3Objects = func(_ context.Context, root string) ([]S3Object, error) {
+	listS3Objects = func(root string) ([]S3Object, error) {
 		require.Equal(t, "s3://bucket/laptop/raw/claude", root)
 		return []S3Object{
 			{
@@ -36,8 +35,7 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 		}, nil
 	}
 
-	got, err := ClaudeProjectSessionFiles(t.Context(), "s3://bucket/laptop/raw/claude")
-	require.NoError(t, err)
+	got := ClaudeProjectSessionFiles("s3://bucket/laptop/raw/claude")
 	require.Len(t, got, 1)
 	assert.Equal(t,
 		"s3://bucket/laptop/raw/claude/proj/session.jsonl",
@@ -54,7 +52,7 @@ func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {
 	t.Cleanup(func() { listS3Objects = oldList })
 
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(_ context.Context, root string) ([]S3Object, error) {
+	listS3Objects = func(root string) ([]S3Object, error) {
 		require.Equal(t, "s3://bucket/laptop/raw/claude", root)
 		return []S3Object{
 			{
@@ -72,8 +70,7 @@ func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {
 		}, nil
 	}
 
-	got, err := ClaudeProjectSessionFiles(t.Context(), "s3://bucket/laptop/raw/claude")
-	require.NoError(t, err)
+	got := ClaudeProjectSessionFiles("s3://bucket/laptop/raw/claude")
 
 	require.Len(t, got, 1)
 	assert.Equal(
@@ -153,7 +150,7 @@ func TestClaudeSubagentTranscriptPathsS3(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			listed := false
-			listS3Objects = func(_ context.Context, prefix string) ([]S3Object, error) {
+			listS3Objects = func(prefix string) ([]S3Object, error) {
 				listed = true
 				require.NotNil(t, tt.list,
 					"unexpected S3 listing for %s", tt.path)

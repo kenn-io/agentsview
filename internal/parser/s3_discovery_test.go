@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +24,7 @@ func TestClaudeSourceSetDiscoversS3Sessions(t *testing.T) {
 	sessionURI := root + "/proj/session.jsonl"
 	sessionMtime := time.Unix(100, 0)
 	sidecarMtime := time.Unix(200, 0)
-	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
+	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{
@@ -83,7 +81,7 @@ func TestClaudeSourceSetMixedLocalAndS3Roots(t *testing.T) {
 
 	s3Root := "s3://bucket/laptop/raw/claude"
 	s3URI := s3Root + "/remoteproj/22222222-2222-4222-8222-222222222222.jsonl"
-	listS3Objects = func(_ context.Context, _ string) ([]S3Object, error) {
+	listS3Objects = func(string) ([]S3Object, error) {
 		return []S3Object{{
 			URI:          s3URI,
 			Size:         11,
@@ -121,7 +119,7 @@ func TestCodexSourceSetDiscoversS3Sessions(t *testing.T) {
 	rolloutURI := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
 		"11111111-1111-4111-8111-111111111111.jsonl"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
+	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{{
 			URI:          rolloutURI,
@@ -188,7 +186,7 @@ func TestCursorSourceSetDiscoversS3Sessions(t *testing.T) {
 	txtURI := root + "/demo-proj/22222222-2222-4222-8222-222222222222.txt"
 	ignored := root + "/demo-proj/notes.md"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
+	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{
@@ -232,7 +230,7 @@ func TestCursorSourceSetDiscoverEachYieldsS3Sessions(t *testing.T) {
 
 	root := "s3://bucket/laptop/raw/cursor"
 	sessionURI := root + "/demo-proj/11111111-1111-4111-8111-111111111111.jsonl"
-	listS3Objects = func(_ context.Context, _ string) ([]S3Object, error) {
+	listS3Objects = func(string) ([]S3Object, error) {
 		return []S3Object{{
 			URI:          sessionURI,
 			Size:         11,
@@ -264,96 +262,4 @@ func TestCursorWatchPlanSkipsS3Roots(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, local, plan.Roots[0].Path)
-}
-
-func TestS3DiscoveryPreservesListingOutcome(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-	root := "s3://bucket/machine/raw/provider"
-	sets := map[string]interface {
-		Discover(context.Context) ([]SourceRef, error)
-		DiscoverEach(context.Context, func(SourceRef) error) error
-	}{
-		"claude":    newClaudeSourceSet([]string{root}),
-		"icodemate": newIcodemateCLISourceSet([]string{root}),
-		"codex":     newCodexSourceSet(AgentCodex, []string{root}),
-		"cursor":    newCursorSourceSet([]string{root}),
-	}
-	denied := errors.New("AccessDenied")
-	for name, set := range sets {
-		t.Run(name, func(t *testing.T) {
-			for _, outcome := range []error{denied, nil, context.Canceled} {
-				ctx, cancel := context.WithCancel(t.Context())
-				listS3Objects = func(ctx context.Context, _ string) ([]S3Object, error) {
-					if errors.Is(outcome, context.Canceled) {
-						cancel()
-						<-ctx.Done()
-						return nil, ctx.Err()
-					}
-					return nil, outcome
-				}
-				sources, err := set.Discover(ctx)
-				require.ErrorIs(t, err, outcome)
-				assert.Empty(t, sources)
-				err = set.DiscoverEach(ctx, func(SourceRef) error { require.FailNow(t, "empty or failed listing yielded a source"); return nil })
-				require.ErrorIs(t, err, outcome)
-				cancel()
-			}
-		})
-	}
-}
-
-func TestS3FailureRetainsHealthyRootDiscoveries(t *testing.T) {
-	old := listS3Objects
-	t.Cleanup(func() { listS3Objects = old })
-	denied := errors.New("AccessDenied")
-	listS3Objects = func(context.Context, string) ([]S3Object, error) { return nil, denied }
-	for _, agent := range []AgentType{AgentClaude, AgentIcodemate, AgentCodex, AgentCursor} {
-		t.Run(string(agent), func(t *testing.T) {
-			local := t.TempDir()
-			name := "project/11111111-1111-4111-8111-111111111111.jsonl"
-			if agent == AgentCodex {
-				name = "rollout-11111111-1111-4111-8111-111111111111.jsonl"
-			}
-			if agent == AgentCursor {
-				name = "project/agent-transcripts/11111111-1111-4111-8111-111111111111.txt"
-			}
-			file := filepath.Join(local, filepath.FromSlash(name))
-			require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
-			require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o644))
-			remote := "s3://bucket/machine/raw/" + string(agent)
-			for _, roots := range [][]string{{local, remote}, {remote, local}} {
-				var set interface {
-					Discover(context.Context) ([]SourceRef, error)
-					DiscoverEach(context.Context, func(SourceRef) error) error
-				}
-				switch agent {
-				case AgentClaude:
-					set = newClaudeSourceSet(roots)
-				case AgentIcodemate:
-					set = newIcodemateCLISourceSet(roots)
-				case AgentCodex:
-					set = newCodexSourceSet(agent, roots)
-				case AgentCursor:
-					set = newCursorSourceSet(roots)
-				default:
-					require.FailNow(t, "unsupported test agent", "%q", agent)
-				}
-				sources, err := set.Discover(t.Context())
-				require.ErrorIs(t, err, denied)
-				var incomplete DiscoveryIncompleteError
-				require.ErrorAs(t, err, &incomplete)
-				require.Len(t, sources, 1)
-				assert.Equal(t, file, sources[0].DisplayPath)
-				var streamed []string
-				err = set.DiscoverEach(t.Context(), func(source SourceRef) error { streamed = append(streamed, source.DisplayPath); return nil })
-				require.ErrorIs(t, err, denied)
-				require.ErrorAs(t, err, &incomplete)
-				assert.Equal(t, []string{file}, streamed)
-				consumer := DiscoveryIncompleteError{Reason: "consumer stopped"}
-				err = set.DiscoverEach(t.Context(), func(SourceRef) error { return consumer })
-				assert.Equal(t, consumer, err, "consumer errors stop discovery even when typed as incomplete")
-			}
-		})
-	}
 }

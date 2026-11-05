@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"slices"
 	"sort"
 	"strings"
@@ -42,7 +41,7 @@ func StatClaudeS3Session(uri string) (S3Object, error) {
 		return S3Object{}, err
 	}
 	return foldClaudeS3SidecarMetadata(obj, func(root string) []S3Object {
-		objects, err := listS3Objects(context.Background(), root)
+		objects, err := listS3Objects(root)
 		if err != nil {
 			return nil
 		}
@@ -112,7 +111,7 @@ func claudeS3SubagentTranscriptPaths(sessionPath string) []string {
 		}
 		prefix = before + "/subagents"
 	}
-	objects, err := listS3Objects(context.Background(), prefix)
+	objects, err := listS3Objects(prefix)
 	if err != nil {
 		return nil
 	}

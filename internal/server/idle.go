@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,12 +43,12 @@ func (t *IdleTracker) SetSyncIdle(timeout time.Duration, suspend func()) {
 	t.syncTimeout, t.onSyncIdle = timeout, suspend
 }
 
-func (t *IdleTracker) Wrap(next http.Handler) http.Handler {
+func (t *IdleTracker) Wrap(next http.Handler, basePath string) http.Handler {
 	if t == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		syncActivity := r.URL.Path != "/api/ping"
+		syncActivity := strings.TrimPrefix(r.URL.Path, basePath) != "/api/ping"
 		if !t.beginExternal(syncActivity) {
 			http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 			return

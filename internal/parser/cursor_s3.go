@@ -42,22 +42,20 @@ func discoverCursorS3ByRoot(
 	ctx context.Context, roots []string,
 ) (map[string][]DiscoveredFile, error) {
 	var candidates []cursorS3Transcript
-	err := discoverRoots(ctx, roots, func(root string) error {
+	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !isS3URI(root) {
-			return nil
+			continue
 		}
-		files, err := s3PrefixScan(ctx, root, cursorS3Scanner())
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
+		for _, file := range s3PrefixScan(root, cursorS3Scanner()) {
 			candidates = append(candidates, cursorS3Transcript{
 				root: root,
 				file: file,
 			})
 		}
-		return nil
-	})
+	}
 
 	byRoot := make(map[string][]DiscoveredFile)
 	for _, transcript := range preferCursorS3Transcripts(roots, candidates) {
@@ -65,7 +63,7 @@ func discoverCursorS3ByRoot(
 			byRoot[transcript.root], transcript.file,
 		)
 	}
-	return byRoot, err
+	return byRoot, nil
 }
 
 // keepCursorS3Session accepts the documented harvest layout

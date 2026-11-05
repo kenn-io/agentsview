@@ -261,10 +261,10 @@ local sync timers, S3 imports, and attachment imports. Remote-host polling,
 Codex Cloud capture, replica push, and raw uploads keep their own schedules.
 The next archive request waits up to two seconds for catch-up;
 slower catch-up continues in the background with a stale-results warning.
-Archive responses carry `X-Agentsview-Archive-Stale: true` until every paused
-source catches up. Failed imports and unavailable roots with archived sessions
-keep the warning while local watching resumes. Recovery retries automatically
-with backoff, up to two minutes between attempts.
+Archive responses carry `X-Agentsview-Archive-Stale: true` until local catch-up
+completes. A failed local catch-up keeps the warning and retries on the next
+request. Remote roots and attached sources resume their existing 15-minute
+schedule. Desktop health probes keep the daemon alive without restarting sync.
 Set it to `"0"` to keep syncing while idle. Restart the server after changing it.
 
 | Field                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |

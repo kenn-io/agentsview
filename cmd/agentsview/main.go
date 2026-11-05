@@ -503,11 +503,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
-		ingestion.catchupImports = func(catchupCtx context.Context) error {
-			remoteErr := runRemoteSourceSyncPass(catchupCtx, engine, remoteSourceSyncRoots(ingestion.Config()))
-			_, attachmentErr := attachedSources.Drain(catchupCtx, nil)
-			return errors.Join(remoteErr, attachmentErr)
-		}
+
 		ingestion.StartLiveActivity()
 		if idleTracker != nil {
 			idleTracker.SetSyncIdle(cfg.SyncIdleAfter, ingestion.Suspend)
@@ -3232,9 +3228,7 @@ func startPeriodicSync(
 			// availability changes.
 			current := ingestion.Config()
 			runScheduledSyncPass(localCtx, engine, scheduledReconcileTargets(current))
-			if err := runRemoteSourceSyncPass(localCtx, engine, remoteSourceSyncRoots(current)); err != nil {
-				log.Print(err)
-			}
+			runRemoteSourceSyncPass(localCtx, engine, remoteSourceSyncRoots(current))
 			if _, err := attachedSources.DrainScheduled(localCtx); err != nil && ctx.Err() == nil {
 				log.Printf("archive sources: %v", err)
 			}

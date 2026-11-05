@@ -125,7 +125,7 @@ func parseS3URI(uri string) (bucket, key string) {
 
 // listS3 lists every object under an s3://bucket/prefix, returning each
 // object's full s3:// URI plus source metadata.
-func listS3(ctx context.Context, uri string) ([]S3Object, error) {
+func listS3(uri string) ([]S3Object, error) {
 	cl, err := s3Client()
 	if err != nil {
 		return nil, err
@@ -135,7 +135,7 @@ func listS3(ctx context.Context, uri string) ([]S3Object, error) {
 		prefix = strings.TrimSuffix(prefix, "/") + "/"
 	}
 	var out []S3Object
-	for o := range cl.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+	for o := range cl.ListObjects(context.Background(), bucket, minio.ListObjectsOptions{
 		Prefix:    prefix,
 		Recursive: true,
 	}) {
@@ -352,13 +352,10 @@ type S3SessionScanner struct {
 // s3PrefixScan is the shared S3 discovery body for the
 // .../<machine>/raw/<provider> layout. Providers reuse it by supplying an
 // S3SessionScanner with their own Keep/Project predicates.
-func s3PrefixScan(ctx context.Context, root string, scan S3SessionScanner) ([]DiscoveredFile, error) {
-	objects, err := listS3Objects(ctx, root)
+func s3PrefixScan(root string, scan S3SessionScanner) []DiscoveredFile {
+	objects, err := listS3Objects(root)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, incompleteDiscoveryError(scan.Agent, "list "+root, err)
+		return nil
 	}
 	machine := s3MachineFromRoot(root, string(scan.Agent))
 	var out []DiscoveredFile
@@ -393,7 +390,7 @@ func s3PrefixScan(ctx context.Context, root string, scan S3SessionScanner) ([]Di
 			TranscriptMtime:   obj.LastModified.UnixNano(),
 		})
 	}
-	return out, nil
+	return out
 }
 
 func s3URIWithLast(parts []string, last string) string {

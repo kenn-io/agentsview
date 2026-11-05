@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/kit/stacktest"
 )
 
@@ -77,7 +79,7 @@ func serveWrappedNoContent(
 	rec := httptest.NewRecorder()
 	tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+	}), "").ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	return rec
 }
 
@@ -119,7 +121,7 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 			close(entered)
 			<-release
 			w.WriteHeader(http.StatusNoContent)
-		})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		}), "").ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 		requestDone <- rec
 	}()
 
@@ -236,7 +238,7 @@ func TestIdleTrackerSyncSuspensionRepeatsAndKeepsSSEActive(t *testing.T) {
 			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			go func() {
 				defer close(done)
-				tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release })).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
+				tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release }), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
 			}()
 			<-entered
 			time.Sleep(2 * time.Minute)
@@ -259,7 +261,26 @@ func TestIdleTrackerDesktopProbesPermitSyncIdle(t *testing.T) {
 		go tracker.Run(ctx)
 		for range 24 {
 			time.Sleep(30 * time.Second)
-			tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/ping", nil))
+			tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/ping", nil))
+		}
+		synctest.Wait()
+		require.Equal(t, 1, suspensions)
+	})
+}
+
+func TestIdleSyncIgnoresBasePathPing(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		tracker := NewIdleTracker(0, func() {})
+		suspensions := 0
+		tracker.SetSyncIdle(time.Minute, func() { suspensions++ })
+		handler := New(config.Config{Host: "127.0.0.1", Port: 8080}, database, nil, WithIdleTracker(tracker), WithBasePath("/archive")).Handler()
+		go tracker.Run(ctx)
+		for range 6 {
+			time.Sleep(30 * time.Second)
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/archive/api/ping", nil))
 		}
 		synctest.Wait()
 		require.Equal(t, 1, suspensions)

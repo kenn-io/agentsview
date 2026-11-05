@@ -1256,8 +1256,8 @@ without waiting for startup ingestion. The CLI requests this with
 `POST /api/v1/sessions/sync`. If refresh is refused or fails, the command
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
 A missing daemon ID returns a retry error while
-`GET /api/v1/sync/status` reports `startup_pending` or `archive_stale`. Once
-both are clear, it returns exit 2. Scheduled ingestion owns retries.
+`GET /api/v1/sync/status` reports `startup_pending`, `archive_stale`, or `sync_pending`. Once
+all three are clear, it returns exit 2. Scheduled ingestion owns retries.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP

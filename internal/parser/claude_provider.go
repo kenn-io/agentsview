@@ -519,7 +519,7 @@ type claudeLayoutSpec struct {
 	dirLabel      string
 	debounceScope string
 	watchGlobs    []string
-	listFiles     func(context.Context, string) ([]DiscoveredFile, error)
+	listFiles     func(string) []DiscoveredFile
 	// sidecarSources includes persisted tool-result companions in watch
 	// coverage, changed-path mapping, and source fingerprints. The Claude
 	// provider keeps this off: its stored fingerprints hash only the
@@ -556,27 +556,34 @@ func newClaudeLayoutSourceSet(
 func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	err := discoverRoots(ctx, s.roots, func(root string) error {
-		files, err := s.spec.listFiles(ctx, root)
-		if err != nil {
-			return err
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		for _, file := range files {
+		for _, file := range s.spec.listFiles(root) {
 			source, ok := s.discoveredSourceRef(root, file)
 			if !ok {
 				continue
 			}
 			addJSONLSource(source, &sources, seen)
 		}
-		return nil
-	})
+	}
 	sortJSONLSources(sources)
-	return sources, err
+	return sources, nil
 }
 
-func (s claudeSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	yield = discoveryConsumer(yield)
-	return discoverRoots(ctx, s.roots, func(root string) error { return s.discoverEachRoot(ctx, root, yield) })
+func (s claudeSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s claudeSourceSet) discoverEachRoot(
@@ -585,11 +592,7 @@ func (s claudeSourceSet) discoverEachRoot(
 	yield func(SourceRef) error,
 ) error {
 	if strings.HasPrefix(root, "s3://") {
-		files, err := s.spec.listFiles(ctx, root)
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
+		for _, file := range s.spec.listFiles(root) {
 			source, ok := s.discoveredSourceRef(root, file)
 			if ok {
 				if err := yield(source); err != nil {
@@ -1027,7 +1030,6 @@ func claudeProviderCapabilities() Capabilities {
 			StopReason:           CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,

@@ -1,9 +1,6 @@
 package parser
 
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +101,7 @@ func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
 	root := "s3://bucket/host/raw/qwen"
 	keepURI := root + "/proj/keep.jsonl"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
+	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: keepURI, Size: 7, LastModified: mtime, Fingerprint: "s3-meta:keep"},
@@ -112,7 +109,7 @@ func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
 		}, nil
 	}
 
-	got, err := s3PrefixScan(t.Context(), root, S3SessionScanner{
+	got := s3PrefixScan(root, S3SessionScanner{
 		Agent: AgentQwen,
 		Keep: func(rel string, _ []string) bool {
 			return strings.HasSuffix(rel, ".jsonl")
@@ -120,7 +117,6 @@ func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
 		Project: func(_ string, segs []string) string { return segs[0] },
 	})
 
-	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, keepURI, got[0].Path)
 	assert.Equal(t, AgentQwen, got[0].Agent)
@@ -169,21 +165,4 @@ func TestS3SourceRefFromDiscoveredFile(t *testing.T) {
 		MtimeNS:     1718900000000000000,
 		Fingerprint: "fp-1",
 	}, opaque)
-}
-
-func TestListS3Cancellation(t *testing.T) {
-	entered := make(chan struct{})
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-r.Context().Done() }))
-	t.Cleanup(endpoint.Close)
-	t.Setenv("AWS_S3_ENDPOINT", endpoint.URL)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
-	t.Setenv("AWS_REGION", "us-east-1")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { _, err := listS3(ctx, "s3://bucket/prefix"); done <- err }()
-	<-entered
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
 }

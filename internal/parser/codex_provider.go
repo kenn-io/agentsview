@@ -915,9 +915,18 @@ func (s codexSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return s.discover(ctx, func(string) bool { return true })
 }
 
-func (s codexSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	yield = discoveryConsumer(yield)
-	return discoverRoots(ctx, s.roots, func(root string) error { return s.discoverEachRoot(ctx, root, yield) })
+func (s codexSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s codexSourceSet) discoverEachRoot(
@@ -929,11 +938,7 @@ func (s codexSourceSet) discoverEachRoot(
 		if !s.ownsCodexSidecars() {
 			return nil
 		}
-		files, err := s3PrefixScan(ctx, root, codexS3Scanner())
-		if err != nil {
-			return err
-		}
-		for _, file := range codexS3PreferredFiles(files) {
+		for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
 			if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 				return err
 			}
@@ -968,9 +973,12 @@ func (s codexSourceSet) discover(
 ) ([]SourceRef, error) {
 	var sources []SourceRef
 	byKey := make(map[string]SourceRef)
-	err := discoverRoots(ctx, s.roots, func(root string) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !includeRoot(root) {
-			return nil
+			continue
 		}
 		if strings.HasPrefix(root, "s3://") {
 			// s3:// roots have no local layout to walk: enumerate the objects
@@ -980,20 +988,16 @@ func (s codexSourceSet) discover(
 			// layout) does not apply here; only a compressed object beside its
 			// plain one is folded into it.
 			if !s.ownsCodexSidecars() {
-				return nil
+				continue
 			}
-			files, err := s3PrefixScan(ctx, root, codexS3Scanner())
-			if err != nil {
-				return err
-			}
-			for _, file := range codexS3PreferredFiles(files) {
+			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
 				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue
 				}
 				byKey[source.Key] = source
 			}
-			return nil
+			continue
 		}
 		for _, path := range s.discoverSessionPaths(root) {
 			source, ok := s.sourceRef(root, path, true)
@@ -1009,13 +1013,12 @@ func (s codexSourceSet) discover(
 			}
 			byKey[source.Key] = source
 		}
-		return nil
-	})
+	}
 	for _, source := range byKey {
 		sources = append(sources, source)
 	}
 	sortJSONLSources(sources)
-	return sources, err
+	return sources, nil
 }
 
 // discoverSessionPaths finds all Codex JSONL session file paths under
@@ -1576,7 +1579,6 @@ func codexProviderCapabilities() Capabilities {
 			Model:                CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
