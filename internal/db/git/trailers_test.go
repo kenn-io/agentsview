@@ -56,6 +56,21 @@ func TestCommitTrailersSHA256(t *testing.T) {
 	assert.Len(t, commits[0].SHA, 64)
 }
 
+func TestCommitTrailersControlCharacterSubject(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	subject := "Editor\x1f field\x1d record\x1e trailer"
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", subject+"\n\nAgent-Session: claude:editor")
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: codex:thread")
+	commits, err := ScanCommitTrailers(t.Context(), repo)
+	require.NoError(t, err)
+	require.Len(t, commits, 2)
+	assert.Equal(t, "Later", commits[0].Subject)
+	assert.Equal(t, []string{"codex:thread"}, commits[0].Sessions)
+	assert.Equal(t, subject, commits[1].Subject)
+	assert.Equal(t, []string{"claude:editor"}, commits[1].Sessions)
+}
+
 func TestCommitTrailersParsing(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initRepo(t)

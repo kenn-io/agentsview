@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,6 +132,39 @@ func TestReconcileCommitTrailersNewCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 2)
 	assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
+}
+
+func TestCommitTrailersSkipPartialSync(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		scoped bool
+		since  time.Time
+	}{
+		{name: "recent files", since: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)},
+		{name: "selected roots", scoped: true},
+		{name: "recent files in selected roots", scoped: true, since: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			database, engine, repo, first, runGit := commitTrailerFixture(t)
+			runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
+			second := runGit(repo, "rev-parse", "HEAD")
+			if tt.scoped {
+				engine.SyncRootsSince(t.Context(), engine.ReconciliationRootsForAgent("claude"), tt.since, nil)
+			} else {
+				engine.SyncAllSince(t.Context(), tt.since, nil)
+			}
+			list, err := database.SessionCommitLinks(t.Context(), "editor-session")
+			require.NoError(t, err)
+			require.Len(t, list.Commits, 1)
+			assert.Equal(t, first, list.Commits[0].SHA)
+
+			engine.SyncAll(t.Context(), nil)
+			list, err = database.SessionCommitLinks(t.Context(), "editor-session")
+			require.NoError(t, err)
+			require.Len(t, list.Commits, 2)
+			assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
+		})
+	}
 }
 
 func TestReconcileCommitTrailersLateRepository(t *testing.T) {
