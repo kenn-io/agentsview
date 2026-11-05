@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,67 @@ func TestReconcileCommitTrailersUsageOnly(t *testing.T) {
 	engine.ReconcileCommitTrailers(t.Context())
 
 	assert.Empty(t, engine.trailerScanAttempts, "usage-only archives must skip repository scans")
+}
+
+func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		includeRepo  bool
+		otherCwd     string
+		wantSessions []string
+	}{
+		{name: "excluded repository", wantSessions: []string{}},
+		{name: "excluded owner", includeRepo: true, otherCwd: "outside", wantSessions: []string{"allowed"}},
+		{name: "owner without cwd", includeRepo: true, wantSessions: []string{"allowed"}},
+		{name: "allowed owners", includeRepo: true, otherCwd: "allowed", wantSessions: []string{"allowed", "codex:other"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			testutil.IsolateGit(t)
+			database := openTestDB(t)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			repo := filepath.Join(root, "repo")
+			allowed := filepath.Join(root, "allowed")
+			require.NoError(t, os.Mkdir(repo, 0o700))
+			require.NoError(t, os.Mkdir(allowed, 0o700))
+			for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:allowed\nAgent-Session: codex:other"}} {
+				cmd := exec.CommandContext(t.Context(), "git", args...)
+				cmd.Dir = repo
+				out, err := cmd.CombinedOutput()
+				require.NoError(t, err, "%s", out)
+			}
+			otherCwd := ""
+			if tt.otherCwd != "" {
+				otherCwd = filepath.Join(root, tt.otherCwd)
+			}
+			for _, session := range []db.Session{
+				{ID: "discovery", Agent: "claude", Machine: "local", Cwd: repo},
+				{ID: "allowed", Agent: "claude", Machine: "local", Cwd: allowed},
+				{ID: "codex:other", Agent: "codex", Machine: "local", Cwd: otherCwd},
+			} {
+				require.NoError(t, database.UpsertSession(t.Context(), session))
+			}
+			prefixes := []string{allowed}
+			if tt.includeRepo {
+				prefixes = append(prefixes, repo)
+			}
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", IncludeCwdPrefixes: prefixes})
+			t.Cleanup(engine.Close)
+
+			engine.ReconcileCommitTrailers(t.Context())
+
+			for _, id := range []string{"allowed", "codex:other"} {
+				list, err := database.SessionCommitLinks(t.Context(), id)
+				require.NoError(t, err)
+				if slices.Contains(tt.wantSessions, id) {
+					require.Len(t, list.Commits, 1)
+					assert.Equal(t, "trailer", list.Commits[0].Source)
+				} else {
+					assert.Empty(t, list.Commits)
+				}
+			}
+		})
+	}
 }
 
 func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {

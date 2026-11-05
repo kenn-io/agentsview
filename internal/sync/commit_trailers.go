@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	gitlog "go.kenn.io/agentsview/internal/db/git"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ReconcileCommitTrailers discovers editor commits independently of source writes.
@@ -37,6 +39,9 @@ func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget t
 	}
 	paths := map[string]string{}
 	for _, r := range repositories {
+		if !e.cwdFilter.allows(r.Cwd) {
+			continue
+		}
 		identity := e.cachedProjectIdentity(r.Machine, e.survivingTrailerCwd(r.Machine, r.Cwd))
 		if identity.gitDir == "" {
 			continue
@@ -105,6 +110,26 @@ func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path str
 	commits, err := gitlog.ScanCommitTrailers(ctx, path)
 	if err != nil {
 		return 0, err
+	}
+	if !e.cwdFilter.empty() {
+		for i := range commits {
+			allowed := commits[i].Sessions[:0]
+			for _, value := range commits[i].Sessions {
+				agent, id, ok := strings.Cut(value, ":")
+				def, known := parser.AgentByPrefix(strings.TrimPrefix(agent+":", "claude:"))
+				if !ok || !known {
+					continue
+				}
+				session, err := e.db.GetSession(ctx, def.IDPrefix+id)
+				if err != nil {
+					return 0, err
+				}
+				if session != nil && e.cwdFilter.allows(session.Cwd) {
+					allowed = append(allowed, value)
+				}
+			}
+			commits[i].Sessions = allowed
+		}
 	}
 	return e.db.StoreTrailerCommitLinks(ctx, repo, commits)
 }

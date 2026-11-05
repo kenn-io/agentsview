@@ -1616,6 +1616,8 @@ disappeared, another session must still resolve to its repository to read new
 commits. Stored rows survive checkout removal and archive rebuilds under policies
 that keep trailer links; rows for commits no longer reachable are kept.
 
+Known limitation: the protected-path guard doesn't follow a repository's `config.worktree` or config includes.
+
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed, excluding
 remote `HEAD` aliases; other sources, such as tags and stash, leave it empty.
