@@ -24,6 +24,12 @@
     }
   });
 
+  // Path segments that each end with their separator, so a long path
+  // wraps only after "/" or "\\" and never inside a directory name.
+  function pathSegments(path: string): string[] {
+    return path.split(/(?<=[/\\])/);
+  }
+
   function providerEnabled(id: string): boolean {
     return !pendingDisabledAgents.includes(id);
   }
@@ -108,7 +114,8 @@
             </span>
           {:else}
             {#each provider.dirs as dir}
-              <code class="provider-path">{dir}</code>
+              <code class="provider-path">{#each pathSegments(dir) as seg, i (i)}<span
+                    class="provider-path-seg">{seg}</span><wbr />{/each}</code>
             {/each}
           {/if}
         </div>
@@ -119,7 +126,8 @@
             </span>
             {#each provider.homes as home (home)}
               <div class="provider-home">
-                <code class="provider-path">{home}</code>
+                <code class="provider-path">{#each pathSegments(home) as seg, i (i)}<span
+                      class="provider-path-seg">{seg}</span><wbr />{/each}</code>
                 <IconButton
                   size="sm"
                   disabled={busy()}
@@ -242,8 +250,14 @@
     line-height: 1.35;
   }
 
+  /* Wrap only between segments (after a separator); each segment,
+     including names with spaces, stays on one line. */
   .provider-path {
-    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+
+  .provider-path-seg {
+    white-space: nowrap;
   }
 
   .provider-not-configured {

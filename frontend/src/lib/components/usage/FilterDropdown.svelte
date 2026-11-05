@@ -135,6 +135,7 @@
   });
 </script>
 
+<div class="filter-chip-dropdown">
 <FilterDropdown
   label={buttonLabel}
   active={filteredCount > 0 || selectedLabel !== ""}
@@ -148,3 +149,12 @@
   selectAllLabel={m.usage_filter_select_all()}
   deselectAllLabel={m.usage_filter_deselect_all()}
 />
+</div>
+
+<style>
+  /* Same chip height as the Typeahead filter chips (shared/FilterChip). */
+  .filter-chip-dropdown {
+    display: contents;
+    --kit-control-height: var(--filter-chip-height);
+  }
+</style>

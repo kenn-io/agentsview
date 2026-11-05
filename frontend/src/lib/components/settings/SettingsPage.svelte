@@ -258,6 +258,9 @@
     flex: 1 1 auto;
     min-height: 0;
     width: 100%;
+    /* Buttons (panel and footer) use the same 12px text as the segmented
+       options and inputs beside them. */
+    --kit-control-font-size: 12px;
   }
 
   .settings-standalone {
@@ -319,6 +322,11 @@
 
   .settings-page :global(.kit-settings .kit-settings__footer) {
     padding-block: var(--space-3);
+  }
+
+  /* The footer action sits on the same 28px control height as the panel. */
+  .settings-page :global(.kit-settings__footer) {
+    --kit-control-height: 28px;
   }
 
   /* One row grid for every panel: a label column, then the control.

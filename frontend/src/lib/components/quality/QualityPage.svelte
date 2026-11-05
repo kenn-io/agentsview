@@ -29,6 +29,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   import { Card, Typeahead } from "@kenn-io/kit-ui";
   import StatCard from "../analytics/StatCard.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import FilterChip from "../shared/FilterChip.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
@@ -108,7 +109,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       {
         name: "",
         label: m.insights_page_all_agents(),
-        displayLabel: m.insights_page_all_agents(),
+        displayLabel: m.filter_dropdown_all(),
         count: 0,
       },
       ...opts,
@@ -590,24 +591,30 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     />
 
     <div class="filter-group">
-      <ProjectTypeahead
-        projects={sessions.projects}
-        value={analytics.project}
-        onselect={handleProjectChange}
-      />
-      <Typeahead
-        options={agentOptions}
-        value={analytics.agent}
-        fallbackLabel={analytics.agent
-          ? agentLabel(analytics.agent)
-          : m.insights_page_all_agents()}
-        placeholder={m.insights_page_filter_agents()}
-        title={m.insights_page_filter_by_agent()}
-        emptyLabel={m.insights_page_no_matching_agents()}
-        onselect={handleAgentChange}
-      />
-      <label class="toolbar-scope">
-        <span>{m.insights_page_session_scope()}</span>
+      <FilterChip active={analytics.project !== ""}>
+        <ProjectTypeahead
+          projects={sessions.projects}
+          value={analytics.project}
+          onselect={handleProjectChange}
+          triggerPrefix={`${m.analytics_col_project()}:`}
+          allLabel={m.filter_dropdown_all()}
+        />
+      </FilterChip>
+      <FilterChip active={analytics.agent !== ""}>
+        <Typeahead
+          options={agentOptions}
+          value={analytics.agent}
+          fallbackLabel={analytics.agent
+            ? agentLabel(analytics.agent)
+            : m.filter_dropdown_all()}
+          placeholder={m.insights_page_filter_agents()}
+          title={m.insights_page_filter_by_agent()}
+          emptyLabel={m.insights_page_no_matching_agents()}
+          triggerPrefix={`${m.analytics_col_agent()}:`}
+          onselect={handleAgentChange}
+        />
+      </FilterChip>
+      <FilterChip>
         <Typeahead
           options={scopeOptions}
           value={analytics.automatedScope}
@@ -615,9 +622,10 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           placeholder={m.insights_page_filter_scopes()}
           title={m.insights_page_filter_by_scope()}
           emptyLabel={m.insights_page_no_matching_scopes()}
+          triggerPrefix={`${m.insights_page_session_scope()}:`}
           onselect={handleAutomatedScopeChange}
         />
-      </label>
+      </FilterChip>
     </div>
 
     <RefreshControl
@@ -973,50 +981,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
-    flex: 1 1 560px;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 720px;
-  }
-
-  .toolbar-scope {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 220px;
-    min-width: 220px;
-  }
-
-  .toolbar-scope span {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  .filter-group :global(.kit-typeahead),
-  .toolbar-scope :global(.kit-typeahead) {
-    min-width: 0;
-    max-width: none;
-    width: 100%;
-  }
-
-  /* The kit-ui Typeahead list pins to the trigger width, so size the
-     trigger itself (the old --typeahead-list-min-width knob is retired). */
-  .filter-group > :global(.kit-typeahead:first-child) {
-    flex: 0 1 220px;
-    min-width: 180px;
-    max-width: 260px;
-  }
-
-  .filter-group > :global(.kit-typeahead:nth-child(2)) {
-    flex: 0 0 120px;
-  }
-
-  .toolbar-scope :global(.kit-typeahead) {
-    flex: 0 0 128px;
-    width: 128px;
   }
 
   .content {
@@ -1101,10 +1067,13 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     text-underline-offset: 2px;
   }
 
+  /* Same size and weight as the analytics card titles on the other
+     analytics pages; the eyebrow above carries the section emphasis. */
   .section-heading h2 {
     margin-top: 2px;
-    font-size: 18px;
-    line-height: 1.2;
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold, 600);
+    line-height: 1.3;
     color: var(--text-primary);
   }
 
@@ -1237,7 +1206,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .pattern-head h3 {
-    font-size: 14px;
+    font-size: var(--font-size-md);
     margin-bottom: 3px;
   }
 
@@ -1486,7 +1455,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   .evidence-head h3 {
     margin-top: 2px;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: var(--font-size-md);
   }
 
   .evidence-state {

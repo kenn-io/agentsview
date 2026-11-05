@@ -445,7 +445,7 @@
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--overlay-shadow);
     display: flex;
     flex-direction: column;
     overflow: hidden;

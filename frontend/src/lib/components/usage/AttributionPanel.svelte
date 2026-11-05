@@ -587,14 +587,14 @@
     color: var(--text-primary);
   }
 
-  /* List view: a bounded table so each name, bar, share, and total read
-     as one row instead of spreading across the full panel width. */
+  /* List view: a full-width table with fixed columns. Only the bar
+     flexes, so the name, share, and total keep a stable rhythm while the
+     row spans the card. */
   .list-view {
     display: grid;
-    grid-template-columns: 18px 12px minmax(0, 15rem) minmax(96px, 1fr) auto auto;
-    column-gap: 10px;
+    grid-template-columns: 18px 12px minmax(0, 15rem) minmax(96px, 1fr) 56px 88px;
+    column-gap: 12px;
     row-gap: 2px;
-    max-width: 880px;
   }
 
   .list-row {
@@ -650,7 +650,6 @@
   }
 
   .list-pct {
-    min-width: 44px;
     text-align: right;
     font-size: 11px;
     font-variant-numeric: tabular-nums;
@@ -659,13 +658,12 @@
   }
 
   .list-cost {
-    min-width: 64px;
     text-align: right;
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     font-weight: 500;
     font-family: var(--font-mono);
-    color: var(--accent-blue);
+    color: var(--text-primary);
   }
 
   .empty {

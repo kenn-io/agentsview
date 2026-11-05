@@ -19,6 +19,7 @@
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import FilterChip from "../shared/FilterChip.svelte";
   import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
@@ -178,7 +179,7 @@
     {
       name: "",
       label: m.activity_all_agents(),
-      displayLabel: m.activity_all_agents(),
+      displayLabel: m.filter_dropdown_all(),
     },
     ...activity.agents.map((agent) => ({
       name: agent.name,
@@ -200,7 +201,7 @@
       {
         name: "",
         label: m.activity_all_machines(),
-        displayLabel: m.activity_all_machines(),
+        displayLabel: m.filter_dropdown_all(),
       },
       ...activity.machines.map((machine) => {
         const label = sessions.machineLabel(machine);
@@ -219,7 +220,7 @@
     {
       name: "all",
       label: m.activity_all_sessions(),
-      displayLabel: m.activity_all_sessions(),
+      displayLabel: m.filter_dropdown_all(),
     },
     {
       name: "interactive",
@@ -423,47 +424,54 @@
       onSelect={applyRange}
     />
 
-    <ProjectTypeahead
-      projects={activity.projects}
-      value={activity.project}
-      onselect={onProjectSelect}
-    />
+    <FilterChip active={activity.project !== ""}>
+      <ProjectTypeahead
+        projects={activity.projects}
+        value={activity.project}
+        onselect={onProjectSelect}
+        triggerPrefix={`${m.analytics_col_project()}:`}
+        allLabel={m.filter_dropdown_all()}
+      />
+    </FilterChip>
 
-    <div class="toolbar-typeahead">
+    <FilterChip active={activity.agent !== ""}>
       <Typeahead
         options={agentOptions}
         value={activity.agent}
-        fallbackLabel={m.activity_all_agents()}
+        fallbackLabel={m.filter_dropdown_all()}
         placeholder={m.activity_filter_agents_placeholder()}
         title={m.activity_filter_by_agent()}
         emptyLabel={m.activity_no_matching_agents()}
+        triggerPrefix={`${m.analytics_col_agent()}:`}
         onselect={onAgentChange}
       />
-    </div>
+    </FilterChip>
 
-    <div class="toolbar-typeahead">
+    <FilterChip active={activity.machine !== ""}>
       <Typeahead
         options={machineOptions}
         value={activity.machine}
-        fallbackLabel={activity.machine || m.activity_all_machines()}
+        fallbackLabel={activity.machine || m.filter_dropdown_all()}
         placeholder={m.activity_filter_machines_placeholder()}
         title={m.activity_filter_by_machine()}
         emptyLabel={m.activity_no_matching_machines()}
+        triggerPrefix={`${m.sidebar_filters_machine()}:`}
         onselect={onMachineChange}
       />
-    </div>
+    </FilterChip>
 
-    <div class="toolbar-typeahead compact">
+    <FilterChip active={activity.automation !== "all"}>
       <Typeahead
         options={automationOptions}
         value={activity.automation}
-        fallbackLabel={m.activity_all_sessions()}
+        fallbackLabel={m.filter_dropdown_all()}
         placeholder={m.activity_filter_automation_placeholder()}
         title={m.activity_filter_by_automation()}
         emptyLabel={m.activity_no_automation_filters()}
+        triggerPrefix={`${m.analytics_col_sessions()}:`}
         onselect={onAutomationChange}
       />
-    </div>
+    </FilterChip>
 
     <div class="activity-refresh" aria-live="polite">
       <RefreshControl
@@ -569,16 +577,6 @@
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-muted);
     flex-shrink: 0;
-  }
-
-  .toolbar-typeahead {
-    --typeahead-min-width: 132px;
-    --typeahead-max-width: 184px;
-  }
-
-  .toolbar-typeahead.compact {
-    --typeahead-min-width: 118px;
-    --typeahead-max-width: 150px;
   }
 
   /* The control reserves its own text widths (see shared/RefreshControl),

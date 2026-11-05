@@ -87,7 +87,6 @@
       yDomain={[0, null]}
       yNice
       padding={{ top: 28, right: 12, bottom: 34, left: 52 }}
-      height={300}
       class="chart"
       role="img"
       aria-label={normalized
@@ -148,9 +147,13 @@
 </div>
 
 <style>
+  /* Grows to fill the chart panel; the chart measures this box. Below
+     the two-column breakpoint the page sets a fixed height instead. */
   .chart-wrap {
     position: relative;
+    flex: 1 1 auto;
     width: 100%;
+    height: var(--trends-chart-height, auto);
     min-height: 300px;
     border: 1px solid var(--border-default);
     border-radius: 8px;
@@ -160,8 +163,10 @@
 
   .chart-wrap :global(.chart) {
     display: block;
+    position: absolute;
+    inset: 0;
     width: 100%;
-    height: 300px;
+    height: 100%;
   }
 
   .y-title {
@@ -184,7 +189,8 @@
   }
 
   .empty {
-    height: 300px;
+    height: 100%;
+    min-height: 300px;
     display: grid;
     place-items: center;
   }
