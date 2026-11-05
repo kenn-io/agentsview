@@ -3,9 +3,12 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"log"
 	"maps"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
@@ -42,10 +45,22 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	}
 	// Resolved full parses are authoritative unless an earlier retry retained
 	// history. In that common case, never hydrate archived tool payloads.
-	needsHistory := !info.Resolved || (previous != nil && previous.PreserveHistory)
+	retainMessages := !info.Resolved || (previous != nil && previous.PreserveHistory)
+	retainedEvents, err := reader.GetUsageEvents(ctx, priorID)
+	if err != nil {
+		return c, nil, nil, err
+	}
+	needsHistory := retainMessages
+	for _, event := range retainedEvents {
+		needsHistory = needsHistory || event.MessageOrdinal != nil
+	}
+	loadHistory := store.GetAllMessages
+	if staged != nil {
+		loadHistory = reader.GetCodexForkMessageMetadata
+	}
 	var prior []db.Message
 	if needsHistory {
-		prior, err = store.GetAllMessages(ctx, priorID)
+		prior, err = loadHistory(ctx, priorID)
 		if err != nil {
 			return c, nil, nil, err
 		}
@@ -61,11 +76,15 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			if c.Session.ParentSessionID == nil || id != *c.Session.ParentSessionID || reader.GetSessionDataVersion(ctx, id) >= 40 {
 				continue
 			}
-			prior, err = store.GetAllMessages(ctx, id)
+			prior, err = loadHistory(ctx, id)
 			if err != nil {
 				return c, nil, nil, err
 			}
 			priorID = id
+			retainedEvents, err = reader.GetUsageEvents(ctx, priorID)
+			if err != nil {
+				return c, nil, nil, err
+			}
 			previous, err = reader.GetCodexForkState(ctx, priorID)
 			if err != nil {
 				return c, nil, nil, err
@@ -99,6 +118,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		message    db.Message
 		provenance db.CodexForkMessage
 		source     int
+		stagedKeys []string
 	}
 	incoming := make([]entry, 0, len(c.Messages))
 	// Saved membership can be more complete than the currently readable
@@ -121,7 +141,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			m.ContextTokens, m.OutputTokens = 0, 0
 			m.HasContextTokens, m.HasOutputTokens = false, false
 		}
-		incoming = append(incoming, entry{m, db.CodexForkMessage{Origin: origin, Provisional: provisional, PendingUsage: pendingUsage}, i})
+		incoming = append(incoming, entry{message: m, provenance: db.CodexForkMessage{Origin: origin, Provisional: provisional, PendingUsage: pendingUsage}, source: i})
 	}
 
 	// Occurrence queues preserve repeated identical messages. Legacy rows lack
@@ -187,60 +207,80 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				}
 			}
 		}
+		if staged != nil && len(m.ToolCalls) > 0 {
+			loaded, err := store.GetMessages(ctx, priorID, m.Ordinal, 1, true)
+			if err != nil {
+				return c, nil, nil, err
+			}
+			if len(loaded) != 1 || loaded[0].Ordinal != m.Ordinal {
+				return c, nil, nil, errors.New("archived fork message changed during reconciliation")
+			}
+			m.ToolCalls = loaded[0].ToolCalls
+		}
 		if match >= 0 {
 			current := &incoming[match]
-			previousUsage := m
-			if old.PendingUsage != nil {
-				usage := old.PendingUsage
-				previousUsage.TokenUsage, previousUsage.ContextTokens, previousUsage.OutputTokens = usage.TokenUsage, usage.ContextTokens, usage.OutputTokens
-				previousUsage.HasContextTokens, previousUsage.HasOutputTokens = usage.HasContextTokens, usage.HasOutputTokens
-			}
-			if current.provenance.Provisional {
-				usage := current.provenance.PendingUsage
-				if len(usage.TokenUsage) == 0 && !usage.HasContextTokens && !usage.HasOutputTokens {
-					current.provenance.PendingUsage = &db.CodexForkUsage{TokenUsage: previousUsage.TokenUsage, ContextTokens: previousUsage.ContextTokens, OutputTokens: previousUsage.OutputTokens, HasContextTokens: previousUsage.HasContextTokens, HasOutputTokens: previousUsage.HasOutputTokens}
+			if retainMessages {
+				previousUsage := m
+				if old.PendingUsage != nil {
+					usage := old.PendingUsage
+					previousUsage.TokenUsage, previousUsage.ContextTokens, previousUsage.OutputTokens = usage.TokenUsage, usage.ContextTokens, usage.OutputTokens
+					previousUsage.HasContextTokens, previousUsage.HasOutputTokens = usage.HasContextTokens, usage.HasOutputTokens
 				}
-			} else if len(current.message.TokenUsage) == 0 && !current.message.HasContextTokens && !current.message.HasOutputTokens {
-				current.message.TokenUsage, current.message.ContextTokens, current.message.OutputTokens = previousUsage.TokenUsage, previousUsage.ContextTokens, previousUsage.OutputTokens
-				current.message.HasContextTokens, current.message.HasOutputTokens = previousUsage.HasContextTokens, previousUsage.HasOutputTokens
-				if len(previousUsage.TokenUsage) > 0 || previousUsage.HasContextTokens || previousUsage.HasOutputTokens {
-					state.PreserveHistory = true
-				}
-			}
-			// Results are updates, not a completeness count. Equal-sized partial
-			// snapshots can carry different events for the same archived call.
-			for j := range current.message.ToolCalls {
-				if j >= len(m.ToolCalls) {
-					break
-				}
-				call, saved := &current.message.ToolCalls[j], m.ToolCalls[j]
-				// The message key already compared call inputs after the current
-				// storage projection, which may deliberately omit arguments.
-				if call.ToolUseID != saved.ToolUseID || len(saved.ResultEvents) == 0 {
-					continue
-				}
-				if staged != nil {
-					call.ResultEvents, err = staged.forkResultEvents(ctx, sourceToolKeys[current.source][j])
-					if err != nil {
-						return c, nil, nil, err
+				if current.provenance.Provisional {
+					usage := current.provenance.PendingUsage
+					if len(usage.TokenUsage) == 0 && !usage.HasContextTokens && !usage.HasOutputTokens {
+						current.provenance.PendingUsage = &db.CodexForkUsage{TokenUsage: previousUsage.TokenUsage, ContextTokens: previousUsage.ContextTokens, OutputTokens: previousUsage.OutputTokens, HasContextTokens: previousUsage.HasContextTokens, HasOutputTokens: previousUsage.HasOutputTokens}
+					}
+				} else if len(current.message.TokenUsage) == 0 && !current.message.HasContextTokens && !current.message.HasOutputTokens {
+					current.message.TokenUsage, current.message.ContextTokens, current.message.OutputTokens = previousUsage.TokenUsage, previousUsage.ContextTokens, previousUsage.OutputTokens
+					current.message.HasContextTokens, current.message.HasOutputTokens = previousUsage.HasContextTokens, previousUsage.HasOutputTokens
+					if len(previousUsage.TokenUsage) > 0 || previousUsage.HasContextTokens || previousUsage.HasOutputTokens {
+						state.PreserveHistory = true
 					}
 				}
-				var retained bool
-				call.ResultEvents, retained = mergeCodexForkResultEvents(saved.ResultEvents, call.ResultEvents)
-				if retained {
-					state.PreserveHistory = true
-				}
-				if staged != nil || retained {
-					sourceToolKeys[current.source][j] = ""
-					if !e.blockedResultCategories[call.Category] && !e.db.ArchiveContent().OmitsToolContent() {
-						call.ResultContent, err = ingest.SummarizeToolResultEventsContext(ctx, call.ResultEvents)
+				// Results are updates, not a completeness count. Equal-sized partial
+				// snapshots can carry different events for the same archived call.
+				for j := range current.message.ToolCalls {
+					if j >= len(m.ToolCalls) {
+						break
+					}
+					call, saved := &current.message.ToolCalls[j], m.ToolCalls[j]
+					if call.SubagentSessionID == "" && saved.SubagentSessionID != "" {
+						call.SubagentSessionID = saved.SubagentSessionID
+						state.PreserveHistory = true
+					}
+					// The message key already compared call inputs after the current
+					// storage projection, which may deliberately omit arguments.
+					if call.ToolUseID != saved.ToolUseID || len(saved.ResultEvents) == 0 {
+						continue
+					}
+					if staged != nil {
+						call.ResultEvents, err = staged.forkResultEvents(ctx, sourceToolKeys[current.source][j])
 						if err != nil {
 							return c, nil, nil, err
 						}
-						call.ResultContentLength = len(call.ResultContent)
-					} else {
-						call.ResultContent = ""
-						call.ResultContentLength = codexForkResultSummaryLength(call.ResultEvents)
+					}
+					var retained bool
+					call.ResultEvents, retained = mergeCodexForkResultEvents(saved.ResultEvents, call.ResultEvents)
+					if retained {
+						state.PreserveHistory = true
+					}
+					if staged != nil || retained {
+						if !e.blockedResultCategories[call.Category] && !e.db.ArchiveContent().OmitsToolContent() {
+							call.ResultContent, err = ingest.SummarizeToolResultEventsContext(ctx, call.ResultEvents)
+							if err != nil {
+								return c, nil, nil, err
+							}
+							call.ResultContentLength = len(call.ResultContent)
+						} else {
+							call.ResultContent = ""
+							call.ResultContentLength = codexForkResultSummaryLength(call.ResultEvents)
+						}
+					}
+					if staged != nil {
+						if err := staged.stageForkCall(ctx, sourceToolKeys[current.source][j], call); err != nil {
+							return c, nil, nil, err
+						}
 					}
 				}
 			}
@@ -253,6 +293,9 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				next++
 			}
 			priorOrdinals[m.Ordinal] = sourceOrdinals[current.source]
+			continue
+		}
+		if !retainMessages {
 			continue
 		}
 		// Remove only records positively identified as inherited replay. Source
@@ -279,7 +322,17 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		}
 		state.PreserveHistory = true
 		priorOrdinals[m.Ordinal] = len(merged)
-		merged = append(merged, entry{m, old, -1})
+		var savedKeys []string
+		if staged != nil {
+			for j := range m.ToolCalls {
+				key := fmt.Sprintf("fork:%d:%d", m.Ordinal, j)
+				if err := staged.stageForkCall(ctx, key, &m.ToolCalls[j]); err != nil {
+					return c, nil, nil, err
+				}
+				savedKeys = append(savedKeys, key)
+			}
+		}
+		merged = append(merged, entry{message: m, provenance: old, source: -1, stagedKeys: savedKeys})
 	}
 	for i, item := range incoming {
 		if !used[i] {
@@ -313,6 +366,8 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			occurrences[call.ToolUseID]++
 			if item.source >= 0 && sourceToolKeys[item.source][j] != "" {
 				toolKeys[final] = sourceToolKeys[item.source][j]
+			} else if item.source < 0 && len(item.stagedKeys) > j {
+				toolKeys[final] = item.stagedKeys[j]
 			}
 		}
 	}
@@ -321,20 +376,6 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		if m.Role == "user" && !m.IsSystem && m.SourceSubtype != parser.SourceSubtypeToolResult && strings.TrimSpace(m.Content) != "" {
 			c.Session.FirstMessage = new(stringutil.TruncateRunes(strings.TrimSpace(strings.ReplaceAll(m.Content, "\n", " ")), 300, "..."))
 			break
-		}
-	}
-	if state.PreserveHistory {
-		archived, err := store.GetSession(ctx, priorID)
-		if err != nil {
-			return c, nil, nil, err
-		}
-		if archived != nil {
-			if archived.StartedAt != nil && (c.Session.StartedAt == nil || *archived.StartedAt < *c.Session.StartedAt) {
-				c.Session.StartedAt = archived.StartedAt
-			}
-			if archived.EndedAt != nil && (c.Session.EndedAt == nil || *archived.EndedAt > *c.Session.EndedAt) {
-				c.Session.EndedAt = archived.EndedAt
-			}
 		}
 	}
 	// The session totals must describe retained rows, never the unfiltered
@@ -349,12 +390,8 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	}
 	// Non-source usage, such as imported historical usage-only rows, is archive
 	// history too. Codex message usage above must not erase it during a retry.
-	if needsHistory && len(c.Parsed.UsageEvents) == 0 {
-		events, err := reader.GetUsageEvents(ctx, priorID)
-		if err != nil {
-			return c, nil, nil, err
-		}
-		for _, event := range events {
+	if len(c.Parsed.UsageEvents) == 0 {
+		for _, event := range retainedEvents {
 			if event.MessageOrdinal != nil {
 				ordinal, retained := priorOrdinals[*event.MessageOrdinal]
 				if !retained {
@@ -370,17 +407,40 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			})
 			state.PreserveHistory = true
 		}
-		total, hasOutput, peak, hasContext, err := ingest.UsageEventTokenTotalsContext(ctx, c.Parsed.UsageEvents, true)
+	}
+	if state.PreserveHistory {
+		archived, err := store.GetSession(ctx, priorID)
 		if err != nil {
 			return c, nil, nil, err
 		}
-		if !c.Session.HasTotalOutputTokens {
-			c.Session.TotalOutputTokens, c.Session.HasTotalOutputTokens = total, hasOutput
-		}
-		if !c.Session.HasPeakContextTokens {
-			c.Session.PeakContextTokens, c.Session.HasPeakContextTokens = peak, hasContext
+		if archived != nil {
+			for _, bound := range []struct {
+				saved    *string
+				current  **string
+				earliest bool
+			}{
+				{archived.StartedAt, &c.Session.StartedAt, true},
+				{archived.EndedAt, &c.Session.EndedAt, false},
+			} {
+				if bound.saved == nil {
+					continue
+				}
+				savedTime, err := time.Parse(time.RFC3339Nano, *bound.saved)
+				if err != nil {
+					continue
+				}
+				if *bound.current == nil {
+					*bound.current = bound.saved
+					continue
+				}
+				currentTime, err := time.Parse(time.RFC3339Nano, **bound.current)
+				if err != nil || (bound.earliest && savedTime.Before(currentTime)) || (!bound.earliest && savedTime.After(currentTime)) {
+					*bound.current = bound.saved
+				}
+			}
 		}
 	}
+
 	return c, state, toolKeys, nil
 }
 
@@ -397,33 +457,37 @@ func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolR
 		}
 		return identity{event.AgentID, event.Status, string(digest)}
 	}
-	currentByKey := make(map[identity]db.ToolResultEvent, len(current))
-	for _, event := range current {
-		currentByKey[key(event)] = event
+	currentByKey := make(map[identity]int, len(current))
+	for i, event := range current {
+		currentByKey[key(event)] = i
 	}
 	merged := make([]db.ToolResultEvent, 0, len(saved)+len(current))
 	seen := make(map[identity]bool)
 	retained := false
-	for _, event := range saved {
+	appendEvent := func(event db.ToolResultEvent) {
 		id := key(event)
-		if updated, ok := currentByKey[id]; ok {
-			event = updated
-		} else {
-			retained = true
-		}
 		if !seen[id] {
 			seen[id] = true
 			event.EventIndex = len(merged)
 			merged = append(merged, event)
 		}
 	}
-	for _, event := range current {
-		id := key(event)
-		if !seen[id] {
-			seen[id] = true
-			event.EventIndex = len(merged)
-			merged = append(merged, event)
+	next := 0
+	for _, event := range saved {
+		if anchor, ok := currentByKey[key(event)]; ok {
+			// Restored source events before a shared event precede that anchor.
+			// Current order and metadata resolve conflicting old observations.
+			for next <= anchor {
+				appendEvent(current[next])
+				next++
+			}
+		} else {
+			retained = true
+			appendEvent(event)
 		}
+	}
+	for ; next < len(current); next++ {
+		appendEvent(current[next])
 	}
 	return merged, retained
 }
@@ -433,6 +497,7 @@ func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolR
 func codexForkResultSummaryLength(events []db.ToolResultEvent) int {
 	latest := make(map[string]int)
 	anonymous := 0
+	hasAnonymous := false
 	for _, event := range events {
 		if event.SummaryParticipates != nil {
 			if !*event.SummaryParticipates {
@@ -443,6 +508,7 @@ func codexForkResultSummaryLength(events []db.ToolResultEvent) int {
 		}
 		agent := strings.TrimSpace(event.AgentID)
 		if agent == "" {
+			hasAnonymous = true
 			anonymous = event.ContentLength
 		} else {
 			latest[agent] = event.ContentLength
@@ -458,7 +524,7 @@ func codexForkResultSummaryLength(events []db.ToolResultEvent) int {
 			total += len(agent) + 2
 		}
 	}
-	if anonymous > 0 {
+	if hasAnonymous {
 		total += 2 + anonymous
 	}
 	return total

@@ -794,6 +794,13 @@ fixtures retain this field; missing identities remain source-local.
   usage ownership and ordinals, and provenance after archive policy projection.
   These shortened-source fixtures exercise AgentsView's preservation policy;
   they do not establish that Codex rewrites a rollout in that shape.
+  `TestCodexForkRetainsSpawnLinkWithoutOutput` covers the spawn output's link
+  metadata without result events. `TestCodexForkStagedRetryKeepsPayloadsInScratch`
+  checks the staged retry's bounded payload representation. Result-order and
+  summary-participation fixtures cover restored prefixes and sanitized empty
+  updates. The accounting fixtures exercise independently imported usage accepted
+  by `ApplyArtifactImportedSession`; current native Codex rollouts still provide
+  message usage rather than these archive event rows.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

@@ -83,6 +83,16 @@ tool results obey the current category and archive-content policies. Retained
 messages keep their activity bounds and supply the child preview; retained usage
 events follow the final child identity and message ordinals. Restored metadata
 continues to survive full parses until it returns in the source itself.
+Staged retries load archived message and call metadata separately, then reconcile
+and spool result bodies one archived message at a time. Restored source events
+keep their order around shared events. Raw summary participation remains distinct
+from sanitized text, so a cleared result cannot revive older output. Spawn links
+also survive when their output records disappear.
+
+Independently imported usage events survive resolved refreshes and rebuilds.
+Their non-summary usage adds to message totals, and context uses the highest
+measurement from either source. Retained history keeps chronological activity
+bounds even when its only remaining rows are usage events.
 
 If the parent never appears, available messages continue updating across retries,
 restarts, and rebuilds. Usage for unverified messages remains unavailable. If the

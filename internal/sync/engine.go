@@ -19041,6 +19041,21 @@ func (e *Engine) prepareSessionNormalizedContext(
 	}
 	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
 	if forkState != nil {
+		// Totals describe the sanitized message and independent event rows that
+		// will be committed. Session-summary events are not additive usage.
+		if err := ingest.ApplySessionTokenTotalsFromMessagesContext(ctx, &prepared.Session, prepared.Messages); err != nil {
+			return preparedSessionWrite{}, sessionWritePreserved, err
+		}
+		for _, event := range prepared.UsageEvents {
+			if event.Source == "session" {
+				continue
+			}
+			prepared.Session.TotalOutputTokens += event.OutputTokens
+			prepared.Session.HasTotalOutputTokens = prepared.Session.HasTotalOutputTokens || event.OutputTokens > 0
+			contextTokens := event.InputTokens + event.CacheCreationInputTokens + event.CacheReadInputTokens
+			prepared.Session.PeakContextTokens = max(prepared.Session.PeakContextTokens, contextTokens)
+			prepared.Session.HasPeakContextTokens = prepared.Session.HasPeakContextTokens || contextTokens > 0
+		}
 		for _, m := range prepared.Messages {
 			digest, keyErr := db.CodexForkMessageKey(m)
 			if keyErr != nil {

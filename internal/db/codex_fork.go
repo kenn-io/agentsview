@@ -72,6 +72,36 @@ func (db *DB) HasCodexForkSource(ctx context.Context, agent, path string) (bool,
 	return found, err
 }
 
+// GetCodexForkMessageMetadata omits result bodies. Staged fork reconciliation
+// reads archived results one message at a time and spools them back to scratch.
+func (db *DB) GetCodexForkMessageMetadata(ctx context.Context, sessionID string) ([]Message, error) {
+	rows, err := db.getReader().QueryContext(ctx, `SELECT `+selectMessageCols+`
+ FROM messages WHERE session_id=? ORDER BY ordinal`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	ids := make([]int64, len(messages))
+	positions := make(map[int64]int, len(messages))
+	for i, m := range messages {
+		ids[i], positions[m.ID] = m.ID, i
+	}
+	for start := 0; start < len(ids); start += attachToolCallBatchSize {
+		if err := attachToolCallsBatch(ctx, db.getReader(), messages, positions,
+			ids[start:min(start+attachToolCallBatchSize, len(ids))], false); err != nil {
+			return nil, err
+		}
+	}
+	return messages, nil
+}
+
 func writeCodexForkStateTx(ctx context.Context, tx *sql.Tx, id string, state *CodexForkState) error {
 	if state == nil {
 		return nil
