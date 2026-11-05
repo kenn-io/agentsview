@@ -1193,7 +1193,7 @@
   "recent_edits_count": "편집 {count}건",
   "recent_edits_truncated": "전체 {total}건 중 최근 {shown}건 표시",
   "recent_edits_load_more": "더 보기",
-  "recent_edits_refresh": "새로고침",
+  "recent_edits_refresh": "목록 다시 불러오기",
   "recent_edits_search_placeholder": "파일 경로로 필터링",
   "recent_edits_clear_search": "파일 경로 검색 지우기",
   "activity_insight_waiting_server": "서버 버전을 기다리는 중",

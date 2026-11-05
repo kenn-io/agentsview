@@ -719,6 +719,16 @@
     flex-shrink: 0;
     letter-spacing: 0.02em;
     text-transform: uppercase;
+    position: relative;
+  }
+
+  /* The filter popover spans the sidebar at any width, inset 8px from
+     both edges, so no clipped row text shows beside it. */
+  .session-list-header :global(.filter-dropdown) {
+    top: 100%;
+    left: 8px;
+    right: 8px;
+    width: auto;
   }
 
   .session-count {
@@ -729,7 +739,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    position: relative;
   }
 
   .loading-indicator {

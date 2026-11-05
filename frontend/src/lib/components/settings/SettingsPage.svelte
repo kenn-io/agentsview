@@ -383,7 +383,7 @@
 
   /* Disabled and read-only controls stay legible: full opacity with muted
      ink (above 3:1 in both themes) instead of halving their contrast. */
-  .settings-page :global(.kit-settings__panel button:disabled),
+  .settings-page :global(.kit-settings__panel button:disabled:not(.kit-button--solid.kit-button--info)),
   .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled),
   .settings-page :global(.kit-settings__panel .kit-toggle--disabled),
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
@@ -399,9 +399,10 @@
     color: var(--text-muted);
   }
 
-  /* Every disabled button, primary and destructive included, reads as the
-     same neutral outline: no fill, muted ink, not a pale accent. */
-  .settings-page :global(.kit-settings__panel .kit-button:disabled) {
+  /* Every other disabled button, destructive included, reads as the same
+     neutral outline. A disabled primary keeps its muted accent cue from
+     app.css so the main action is still identifiable. */
+  .settings-page :global(.kit-settings__panel .kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
     background: transparent;
     border-color: var(--border-default);
     box-shadow: none;

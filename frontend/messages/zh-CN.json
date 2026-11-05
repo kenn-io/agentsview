@@ -1191,7 +1191,7 @@
   "recent_edits_count": "{count} 次编辑",
   "recent_edits_truncated": "显示最新 {shown}（共 {total} 条）",
   "recent_edits_load_more": "加载更多",
-  "recent_edits_refresh": "刷新",
+  "recent_edits_refresh": "重新加载列表",
   "recent_edits_search_placeholder": "按文件路径筛选",
   "recent_edits_clear_search": "清除文件路径搜索",
   "activity_insight_waiting_server": "正在等待服务器版本",

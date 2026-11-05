@@ -1191,7 +1191,7 @@
   "recent_edits_count": "{count} 次編輯",
   "recent_edits_truncated": "顯示最新 {shown}（共 {total} 條）",
   "recent_edits_load_more": "載入更多",
-  "recent_edits_refresh": "重新整理",
+  "recent_edits_refresh": "重新載入清單",
   "recent_edits_search_placeholder": "按檔案路徑篩選",
   "recent_edits_clear_search": "清除檔案路徑搜尋",
   "activity_insight_waiting_server": "正在等待伺服器版本",

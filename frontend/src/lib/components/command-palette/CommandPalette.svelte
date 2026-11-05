@@ -477,10 +477,21 @@
     color: var(--text-muted);
   }
 
+  /* Rows vary in height, so the list cannot always end on a whole row.
+     A short fade marks the cut row as "more below"; the matching bottom
+     padding lets the real last row scroll fully clear of the fade, and
+     scroll-padding keeps keyboard selection out of it. */
   .palette-results {
+    --palette-fade: 28px;
     overflow-y: auto;
     flex: 1;
-    padding: 4px 0;
+    padding: 4px 0 var(--palette-fade);
+    scroll-padding-bottom: var(--palette-fade);
+    mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - var(--palette-fade)),
+      transparent
+    );
   }
 
   .palette-controls {

@@ -79,12 +79,12 @@
 
 <style>
   /* The band spans the pane, but the field and its buttons sit on the
-     transcript's 960px reading column (MessageList .virtual-row). An active
+     transcript's shared reading column (MessageList .virtual-row). An active
      find reserves a 12px gutter for the overview rail, which shifts that
      column (SessionFindView .has-find). */
   .session-find {
     --find-rail: 0px;
-    --find-side: max(12px, calc((100% - 960px - var(--find-rail)) / 2));
+    --find-side: max(12px, calc((100% - var(--reading-column) - var(--find-rail)) / 2));
     flex: 0 0 auto;
     min-width: 0;
   }

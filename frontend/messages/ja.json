@@ -1251,7 +1251,7 @@
   "recent_edits_count": "{count} 件の編集",
   "recent_edits_truncated": "{total} 件中最新の {shown} 件を表示しています",
   "recent_edits_load_more": "さらにロードする",
-  "recent_edits_refresh": "リフレッシュ",
+  "recent_edits_refresh": "一覧を再読み込み",
   "recent_edits_search_placeholder": "ファイルパスでフィルタリングする",
   "recent_edits_clear_search": "ファイルパス検索のクリア",
   "activity_insight_waiting_server": "サーバーのバージョンを待っています",

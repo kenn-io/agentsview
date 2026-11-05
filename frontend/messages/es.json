@@ -1276,7 +1276,7 @@
   ],
   "recent_edits_truncated": "mostrando las {shown} más recientes de {total}",
   "recent_edits_load_more": "Cargar más",
-  "recent_edits_refresh": "Actualizar",
+  "recent_edits_refresh": "Recargar lista",
   "recent_edits_search_placeholder": "Filtrar por ruta de archivo",
   "recent_edits_clear_search": "Limpiar la búsqueda por ruta de archivo",
   "activity_insight_waiting_server": "Esperando la versión del servidor",

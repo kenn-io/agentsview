@@ -60,11 +60,11 @@
 </section>
 
 <style>
-  /* Results sit on the transcript's 960px reading column, shifted like the
+  /* Results sit on the transcript's shared reading column, shifted like the
      find bar when the overview rail reserves its 12px gutter. */
   .find-results {
     --find-rail: 0px;
-    --find-side: max(12px, calc((100% - 960px - var(--find-rail)) / 2));
+    --find-side: max(12px, calc((100% - var(--reading-column) - var(--find-rail)) / 2));
     flex: 0 0 auto;
     min-width: 0;
     padding-inline: var(--find-side) calc(var(--find-side) + var(--find-rail));

@@ -50,6 +50,15 @@
     color: var(--text-secondary);
   }
 
+  /* In light theme the inset fill sits too close to the page and the muted
+     border is lighter than the fill, so the notice vanished. A surface fill
+     with the default border reads as a quiet framed note on the page and
+     inside cards alike. */
+  :global(:root:not(.dark)) .state-notice {
+    border-color: var(--border-default);
+    background: var(--bg-surface);
+  }
+
   .state-notice__icon {
     display: inline-flex;
     flex-shrink: 0;

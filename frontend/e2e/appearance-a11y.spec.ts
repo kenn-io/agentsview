@@ -39,12 +39,22 @@ function contrastRatio(
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/** Parses a computed color: rgb()/rgba(), or the color(srgb r g b) form
+ * Chromium reports for color-mix() results, with channels in 0..1. */
 function parseRgb(value: string): [number, number, number] {
-  const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (!match) {
-    throw new Error(`Expected rgb() color, got ${value}`);
+  const rgb = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (rgb) {
+    return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
   }
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const srgb = value.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/);
+  if (srgb) {
+    return [
+      Math.round(Number(srgb[1]) * 255),
+      Math.round(Number(srgb[2]) * 255),
+      Math.round(Number(srgb[3]) * 255),
+    ];
+  }
+  throw new Error(`Expected rgb() or color(srgb) color, got ${value}`);
 }
 
 async function elementColors(locator: Locator): Promise<{
@@ -279,8 +289,9 @@ test.describe("Appearance accessibility", () => {
 
     // Measure a real kit-ui primary/solid Button (the Import modal's
     // confirm action) rather than a synthetic element, so a kit-ui Button
-    // styling regression fails this test. Computed color/background still
-    // reflect the tone tokens while the button is disabled.
+    // styling regression fails this test. The button is disabled here, so
+    // this measures the disabled-primary treatment: accent-tinted ink on a
+    // faint accent wash must stay readable.
     await page.getByRole("button", { name: "More actions" }).click();
     await page.getByRole("menuitem", { name: "Import conversations" }).click();
     const solidButton = page.locator(".kit-button--solid.kit-button--info");

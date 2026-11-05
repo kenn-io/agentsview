@@ -384,8 +384,8 @@
     max-height: clamp(10rem, 34vh, 24rem);
     min-width: 0;
     overflow: auto;
-    /* Content sits on the transcript's 960px reading column. */
-    padding: 10px max(12px, calc((100% - 960px) / 2)) var(--space-5);
+    /* Content sits on the transcript's shared reading column. */
+    padding: 10px max(12px, calc((100% - var(--reading-column)) / 2)) var(--space-5);
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-default);
     color: var(--text-primary);

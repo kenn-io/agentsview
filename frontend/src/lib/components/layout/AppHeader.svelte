@@ -410,8 +410,20 @@
     width: 100%;
   }
 
+  /* Fixed-height rows, and a list height rounded down to a whole number
+     of them, so the last visible project is never cut in half. The
+     panel's own cap is 50vh; 4px covers its padding. */
+  .project-picker {
+    --project-row: 27px;
+  }
+
   .project-picker :global(.kit-typeahead__option) {
+    height: var(--project-row);
     font-size: 12.5px;
+  }
+
+  .project-picker :global(.kit-typeahead__body) {
+    max-height: round(down, calc(50vh - 4px), var(--project-row));
   }
 
   /* FitStages' sizing contract: the host is sized by the flexible search

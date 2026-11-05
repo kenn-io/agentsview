@@ -1266,7 +1266,7 @@
   "recent_edits_count": "{count} düzəliş",
   "recent_edits_truncated": "Cəmi {total} düzəlişdən son {shown} düzəliş göstərilir",
   "recent_edits_load_more": "Daha çox yüklə",
-  "recent_edits_refresh": "Yenilə",
+  "recent_edits_refresh": "Siyahını yenidən yüklə",
   "recent_edits_search_placeholder": "Fayl yoluna görə süz",
   "recent_edits_clear_search": "Fayl yolu axtarışını təmizlə",
   "activity_insight_waiting_server": "Server versiyası gözlənilir",

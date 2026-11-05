@@ -1068,17 +1068,10 @@
 
   /* One reading column for every layout: cards, tool rows, and their
      timestamps share both edges. The find bar, SignalPanel, and
-     ToolSequencesPanel align their content to the same 960px column. */
+     ToolSequencesPanel align their content to the same shared column. */
   .virtual-row > :global(*) {
-    max-width: 960px;
+    max-width: var(--reading-column);
     margin-inline: auto;
-  }
-
-  /* The wide column gives commands and diffs room; prose keeps a
-     comfortable line length inside it. 76ch is about 100 characters of
-     body text in the UI font. */
-  .virtual-row :global(.text-content.markdown) {
-    max-width: 76ch;
   }
 
   .virtual-row.selected > :global(*) {

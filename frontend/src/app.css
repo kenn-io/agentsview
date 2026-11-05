@@ -174,6 +174,10 @@
  * background token (--user-bg and so on) on the root element.
  */
 :root {
+  /* The transcript reading column. Cards, prose, tool rows, the find bar,
+     and the session panels share both of its edges. Prose fills the card,
+     so this width also sets the line length (about 110 characters). */
+  --reading-column: 880px;
   --role-user-accent: var(--accent-blue);
   --role-user-accent-foreground: var(--accent-blue-foreground);
   /* Labels mix the role color toward the text color, the same recipe
@@ -311,6 +315,13 @@ body {
   outline-offset: 1px;
 }
 
+/* A dialog surface takes focus only so keyboard focus starts inside it; it
+   is not a control. Keep its neutral modal border instead of a focus ring.
+   Controls inside the dialog keep theirs. */
+.kit-modal-panel[tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
 /* Button reset */
 button {
   font: inherit;
@@ -323,6 +334,17 @@ button {
 button:disabled {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
+}
+
+/* A disabled primary action stays identifiable next to the secondary
+   button beside it: full opacity, accent-tinted ink and edge on a faint
+   accent wash, instead of a pale fill or a plain neutral outline. */
+:root .kit-button--solid.kit-button--info:disabled {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent-blue) 6%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-blue) 38%, var(--border-default));
+  color: color-mix(in srgb, var(--accent-blue) 55%, var(--text-muted));
+  box-shadow: none;
 }
 
 /* Input reset */

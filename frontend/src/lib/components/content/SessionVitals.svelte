@@ -538,10 +538,11 @@
                 <XIcon size="10" strokeWidth="2.4" aria-hidden="true" />
               </span>
             </button>
-          {:else}
-            <span class="v-meta">{m.session_vitals_completed_turns_hint()}</span>
           {/if}
         </header>
+        {#if !categoryFilter}
+          <p class="v-hint">{m.session_vitals_completed_turns_hint()}</p>
+        {/if}
         {#each timing.by_category as cat (cat.category)}
           {@const isActive = categoryFilter === cat.category}
           {@const isDimmed = categoryFilter !== null && !isActive}
@@ -853,6 +854,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* A section hint gets its own line under the heading and wraps, so the
+     whole instruction stays readable in the narrow panel. */
+  .v-hint {
+    margin: -4px 0 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.4;
   }
   .v-meta.live {
     color: var(--running-fg);
