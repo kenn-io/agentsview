@@ -20,17 +20,7 @@ describe("highlighting worker", () => {
   });
 
   it("starts no worker for code over the line limit", async () => {
-    const worker = {
-      onmessage: null as ((event: MessageEvent) => void) | null,
-      postMessage: vi.fn(({ id }: { id: number }) => {
-        queueMicrotask(() =>
-          worker.onmessage!(new MessageEvent("message", { data: { id, html: null } })),
-        );
-      }),
-    };
-    const Worker = vi.fn(function () {
-      return worker;
-    });
+    const Worker = vi.fn();
     vi.stubGlobal("Worker", Worker);
     vi.resetModules();
     const { highlightToHtml } = await import("./syntax-highlight.js");
@@ -38,7 +28,6 @@ describe("highlighting worker", () => {
     const code = "x\n".repeat(800) + "x";
     await expect(highlightToHtml(code, "typescript")).resolves.toBeNull();
     expect(Worker).not.toHaveBeenCalled();
-    expect(worker.postMessage).not.toHaveBeenCalled();
   });
 
   it("posts code to the worker and returns its reply", async () => {
