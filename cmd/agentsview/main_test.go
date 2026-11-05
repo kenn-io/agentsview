@@ -1038,7 +1038,9 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 	first := receive()
 	require.NoError(t, os.WriteFile(path, []byte("second\n"), 0o600))
 	gap := receive().Sub(first)
-	assert.GreaterOrEqual(t, gap, 900*time.Millisecond)
+	// Callback timestamps follow dispatch; allow scheduling delay before the first timestamp.
+	const dispatchJitter = 250 * time.Millisecond
+	assert.GreaterOrEqual(t, gap, cfg.SyncInterval-dispatchJitter)
 	assert.Less(t, gap, 4*time.Second)
 }
 

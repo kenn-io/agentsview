@@ -39,8 +39,8 @@ type archivePushWatch struct {
 }
 
 func (w archivePushWatch) run(ctx context.Context) error {
-	if w.appCfg.SyncInterval < 0 {
-		return fmt.Errorf("invalid sync_interval: %s", w.appCfg.SyncInterval)
+	if err := w.appCfg.ValidateSyncInterval(); err != nil {
+		return err
 	}
 	lane := &archiveSyncLane{
 		label:    w.label,
