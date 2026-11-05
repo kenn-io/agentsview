@@ -135,7 +135,8 @@
     color: var(--text-secondary);
   }
 
-  :global(.stat-card.context) .card-label,
+  /* Sublabels sit one step below labels on every tier; context cards are
+     quieter through their smaller value, not a muted label. */
   .card-sub {
     color: var(--text-muted);
   }

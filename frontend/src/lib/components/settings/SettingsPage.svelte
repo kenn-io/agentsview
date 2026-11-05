@@ -301,10 +301,27 @@
       width: 236px;
     }
 
-    /* Room at the end of the vertical nav so the last item scrolls clear
-       of the status bar. Narrow widths show a horizontal strip instead. */
-    .settings-page :global(.kit-settings__nav) {
-      padding-bottom: var(--space-8);
+    /* Tight vertical rhythm so every category, Remote access included,
+       fits a 900px-tall window without scrolling the nav. The small end
+       padding keeps the last item clear of the status bar when a shorter
+       window does scroll. Narrow widths show a horizontal strip instead. */
+    .settings-page :global(.kit-settings .kit-settings__sidebar) {
+      padding-block: var(--space-5);
+      gap: var(--space-4);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__nav) {
+      gap: 1px;
+      padding-bottom: var(--space-4);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__nav-item) {
+      padding-block: var(--space-2);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__group-title) {
+      padding-top: var(--space-3);
+      padding-bottom: var(--space-1);
     }
   }
 
@@ -312,7 +329,7 @@
   .settings-page :global(.kit-settings__nav-summary) {
     font-size: 11px;
     font-weight: 400;
-    line-height: 1.3;
+    line-height: 1.25;
     color: var(--text-muted);
   }
 
@@ -397,15 +414,16 @@
     min-height: calc(var(--kit-control-height) - 4px);
   }
 
-  /* Disabled and read-only controls stay legible: full opacity with muted
-     ink (above 3:1 in both themes) instead of halving their contrast. */
+  /* Disabled and read-only controls share app.css's disabled ink: clearly
+     fainter than enabled controls, without the uneven look of opacity. */
   .settings-page :global(.kit-settings__panel button:disabled:not(.kit-button--solid.kit-button--info)),
   .settings-page :global(.kit-settings__footer .kit-button:disabled:not(.kit-button--solid.kit-button--info)),
   .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled),
   .settings-page :global(.kit-settings__panel .kit-toggle--disabled),
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
     opacity: 1;
-    color: var(--text-muted);
+    color: var(--disabled-ink);
+    cursor: not-allowed;
   }
 
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
@@ -416,21 +434,20 @@
     color: var(--text-muted);
   }
 
-  /* Every other disabled button, destructive and footer included, reads as
-     the same neutral outline. A disabled primary keeps its muted accent cue
-     from app.css so the main action is still identifiable. */
+  /* Every other disabled button, destructive and footer included, matches
+     the disabled primary in app.css: faint edge, no fill, disabled ink. */
   .settings-page :global(.kit-settings__panel .kit-button:disabled:not(.kit-button--solid.kit-button--info)),
   .settings-page :global(.kit-settings__footer .kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
     background: transparent;
-    border-color: var(--border-default);
+    border-color: var(--disabled-edge);
     box-shadow: none;
-    color: var(--text-muted);
+    color: var(--disabled-ink);
   }
 
   /* The selected segment of a disabled control keeps its raised fill and
      edge, and stronger ink than its unselected neighbors. */
   .settings-page :global(.kit-settings__panel .kit-segmented__btn.active:disabled) {
-    color: var(--text-secondary);
+    color: var(--text-muted);
   }
 
   /* A disabled switch keeps its on/off state readable. */
