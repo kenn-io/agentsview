@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aws/smithy-go"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"go.kenn.io/kit/atomicfile"
 )
 
@@ -274,8 +274,9 @@ func localS3ClaudeToolResultPath(
 }
 
 func isMissingS3Object(err error) bool {
-	resp, hasResp := errors.AsType[smithy.APIError](err)
-	return hasResp && (resp.ErrorCode() == "NoSuchKey" || resp.ErrorCode() == "NotFound")
+	_, noSuchKey := errors.AsType[*types.NoSuchKey](err)
+	_, notFound := errors.AsType[*types.NotFound](err)
+	return noSuchKey || notFound
 }
 
 func s3ClaudeToolResultRel(original string) (string, bool) {

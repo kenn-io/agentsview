@@ -10,17 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/smithy-go"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 func missingS3ObjectError() error {
-	return &smithy.GenericAPIError{
-		Code:    "NoSuchKey",
-		Message: "not found",
-	}
+	return &types.NoSuchKey{Message: new("not found")}
 }
 
 func TestIsMissingS3Object(t *testing.T) {
