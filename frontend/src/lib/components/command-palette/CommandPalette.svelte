@@ -504,6 +504,29 @@
     border-bottom: 1px solid var(--border-default);
   }
 
+  /* The project filter takes the date filter's field chrome (white
+     surface, default edge, primary ink, same height), so the two filters
+     read as the same kind of enabled control. kit-ui's grey raised
+     trigger made the project filter look unavailable beside it. */
+  .palette-controls {
+    --typeahead-control-height: 28px;
+    --typeahead-control-font-size: var(--font-size-sm);
+  }
+
+  .palette-controls :global(.kit-typeahead__trigger:not(:disabled)) {
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+  }
+
+  .palette-controls :global(.kit-typeahead__trigger:not(:disabled):not(:focus)) {
+    border-color: var(--border-default);
+  }
+
+  .palette-controls :global(.kit-typeahead__trigger:not(:disabled):hover) {
+    background: var(--bg-surface-hover);
+  }
+
   .palette-section-label {
     padding: 6px 14px 4px;
     font-size: 10px;
