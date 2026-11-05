@@ -352,10 +352,12 @@
   }
 
   /* Project names sit in a fixed muted column and truncate before the
-     path does. */
+     path does. The trailing padding keeps a clear gutter before the mono
+     path, so a hash tail never reads as part of the file name. */
   .re-project {
     display: flex;
-    width: 180px;
+    width: 240px;
+    padding-right: 16px;
     font-size: 12px;
     color: var(--text-muted);
     flex-shrink: 0;
@@ -395,6 +397,13 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* A wider gap between the two right-aligned columns, so "Edits" and
+     "Last edit" read as two headers, not one label. */
+  .re-time {
+    min-width: 72px;
+    margin-left: 20px;
+  }
+
   /* Phones: the project moves above the path so the file name keeps the
      row's width, and count and time take only what they need. */
   @media (max-width: 520px) {
@@ -422,6 +431,7 @@
     .re-project {
       grid-area: project;
       width: auto;
+      padding-right: 0;
       min-width: 0;
     }
 
@@ -438,6 +448,7 @@
     .re-time {
       grid-area: time;
       min-width: 0;
+      margin-left: 0;
     }
   }
 

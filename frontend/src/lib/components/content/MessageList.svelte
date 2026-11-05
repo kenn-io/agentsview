@@ -1163,8 +1163,10 @@
   }
 
   /* ── Stream layout ── */
+  /* Rows touch, but the first prompt keeps the same space under the
+     header as Default (list 4px + row 5px). */
   .layout-stream {
-    padding: 0;
+    padding: 9px 0 0;
   }
 
   .layout-stream .virtual-row {
@@ -1187,7 +1189,7 @@
   .layout-stream :global(.message.is-user) {
     background: color-mix(
       in srgb,
-      var(--role-user-accent) 5%,
+      var(--role-user-accent) 9%,
       transparent
     ) !important;
   }
