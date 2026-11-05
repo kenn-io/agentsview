@@ -107,6 +107,7 @@ func seedUsageSession(
 // pgReadStoreStub records how the patched openPGReadStore was exercised.
 type pgReadStoreStub struct {
 	Opened        bool
+	OpenCount     int
 	CleanupCalled bool
 	PG            config.PGConfig
 }
@@ -123,6 +124,7 @@ func stubPGReadStore(t *testing.T, store db.Store) *pgReadStoreStub {
 		_ context.Context, _ config.Config, pgCfg config.PGConfig,
 	) (db.Store, func(), error) {
 		stub.Opened = true
+		stub.OpenCount++
 		stub.PG = pgCfg
 		return store, func() { stub.CleanupCalled = true }, nil
 	}

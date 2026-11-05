@@ -141,7 +141,7 @@ func TestSplitWhyPath(t *testing.T) {
 }
 
 func TestWhyRecordedPrompts(t *testing.T) {
-	testutil.IsolateGitEnv(t)
+	testutil.IsolateGit(t)
 	_, err := exec.LookPath("git")
 	require.NoError(t, err)
 	repo := initGitRepoOnBranch(t, "main")

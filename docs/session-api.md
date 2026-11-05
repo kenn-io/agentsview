@@ -963,6 +963,46 @@ error. The process exits 0 after completing the results, including per-session
 failures. Backend setup or output failures exit 1. The existing
 `session usage <id>` output and process exit codes remain unchanged.
 
+### `agentsview session diagnose`
+
+`agentsview session diagnose <id> --json` reports archived usage and evidence
+for investigating an expensive task. It uses the same pricing and linked
+subagent accounting and source refresh as `session usage`. Pass `--no-sync`
+to read archived usage without refreshing source transcripts. If refresh fails,
+human output warns that it is incomplete, and JSON sets
+`usage.refresh_incomplete`. Pass `--own-only` to exclude subagent usage; child
+links remain listed. Human output is the default; `--pg` and `--server` select
+the same read transports as other session commands.
+Missing sessions and read failures return exit 1.
+
+The versioned JSON includes the usage breakdown, totals of its normalized
+uncached input, cache-read, cache-write and output rows, context observations,
+compaction ordinals and inferred counts, the ten largest recorded tool-result
+lengths, and runs of
+three or more consecutive calls with identical recorded arguments. Tool and
+context evidence covers the named session only; child links are shown when
+recorded. Retry candidates use the same recorded-argument comparison as the
+`tool_retry_count` signal. Empty or placeholder arguments can form candidates;
+they do not prove that a provider retried a request. These observations can be
+incomplete: usage rows are not always requests, request counts and provider
+cache-miss reasons are unavailable, and result lengths are not billed tokens.
+Cost is reported or estimated according to the existing usage contract; no
+causal savings or invoice total is inferred. The report omits transcript content
+and tool arguments. Context, compaction, and tool evidence comes from a paged
+scan of all archived messages. Human output shows the latest ten context
+observations; JSON includes every observation. Usage is a separate read and can
+reflect a different archive revision if ingestion runs concurrently. Message
+pages share no snapshot, so a transcript rewritten during the scan can mix
+revisions; run the command again after the rewrite for a stable result.
+`schema_version` versions the output shape, not the archive snapshot.
+
+Compactions follow ingestion's detection rules. Explicit boundary markers appear
+in `compaction_ordinals`. When there are no explicit markers,
+`inferred_compaction_count` counts drops greater than 30% between successive
+reported assistant context measurements, including across message pages. Missing
+measurements are skipped. Explicit markers take precedence and leave the
+inferred count at zero.
+
 ### `agentsview session usage`
 
 Per-session token usage and cost estimate. Output shape is stable for the fields
@@ -1511,17 +1551,18 @@ session. `POST /api/v1/commits/sessions` accepts `{"shas": ["abc1234"]}` and
 returns `{"commits": [{"sha": "abc1234", "links": [...]}]}` in request order.
 Send 1 to 200 hexadecimal SHAs or prefixes of 7 to 64 characters. Queries ignore
 case. Unknown SHAs have empty `links`. Invalid SHAs or array lengths return
-HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer these lookups after
-a push with a version that stores commit links. Hosted PostgreSQL returns HTTP
-501.
+HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer transcript and
+trailer link lookups after a push with a version that stores commit links.
+Hosted PostgreSQL returns HTTP 501.
 
 Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 `repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
-and `source: "transcript"`. `committed_at` is the tool call's message time. The
-SHA is exactly as Git printed it, usually a short prefix. Full SHAs match stored
-prefixes. `turn` contains the preceding nonempty, non-system user prompt's
-`ordinal` and `text`, limited to 2,000 UTF-8 bytes. It is omitted when the
-archive has no preceding user prompt.
+and `source`. For `source: "transcript"`, `committed_at` is the tool call's
+message time. The SHA is exactly as Git printed it, usually a short prefix. Full
+SHAs match stored prefixes. `turn` contains `heuristic: false` and the `ordinal`
+and `text` of the last nonempty, non-system user prompt before the commit call.
+Tool-result messages are excluded. Text is limited to 2,000 UTF-8 bytes. The
+turn is omitted when no eligible prompt exists.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link
@@ -1529,21 +1570,72 @@ carries `ambiguous: true` when the matched SHAs cannot all describe one commit.
 The same SHA recorded by several sessions, or a short SHA and its full SHA,
 remains unambiguous.
 
-Sessions permanently deleted before this release have no links because their
-stored tool calls are already gone.
+Sessions permanently deleted before this release have no transcript links
+because their stored tool calls are already gone.
 
-Links require a `git commit` invocation, allowing Git global options, or a
-helper's `["git", "commit", ...]` argument list, and Git's commit summary in
-the call's stored output. Codex output received through a later `write_stdin`
-poll links to the original commit call when its process ID matches. Polls with
-no originating commit call produce no links. Each session records a SHA once,
-at its first matching call.
+Transcript links require a `git commit` invocation, allowing Git global options,
+and Git's commit summary with a SHA of 7 to 64 characters in the call's stored
+output. Quiet commits and summaries with shorter SHAs have no link. Older Codex
+commands stored as argument arrays are unsupported. Codex output received
+through a later `write_stdin` poll links to the original commit call when its
+process ID matches. Polls with no originating commit call produce no links.
+Code-mode scripts with exactly one tool call and a fixed command literal can
+link commits, including output without a process ID. Command literals containing
+`${` have no links. A single-call `write_stdin` script can poll an earlier
+commit execution without an output process ID. Scripts with several tool calls
+cannot start new commit links because their output and working directories
+cannot be assigned to one execution. Their polls need output process IDs
+matching an earlier commit call. Each session records a SHA once, at its first
+matching call. Decorated log lines are excluded. A custom log format that prints
+one bare ref in the same shape as a commit summary can still create a link when
+the call also invokes `git commit`; this is a known limitation.
 
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
-directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative
-paths join onto the base using the transcript's path style; `~` paths stay
-literal. A later `cd` is ignored. A call that commits in two repositories
-records the first directory for both commits.
+directory. The last `cd` before the first commit invocation adjusts that base,
+and `git -C` overrides it. Relative paths join onto the base using the
+transcript's path style; `~` paths stay literal. A `cd` after that invocation is
+ignored. A single shell execution that commits in two repositories records the
+first directory for both commits.
 
-Archives using `archive_content = "transcripts"` or `"usage"` retain no commit
-links because they omit tool output.
+Archives using `archive_content = "transcripts"` keep trailer links but no
+transcript links; `"usage"` archives keep neither.
+
+### Git trailer links
+
+Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
+`source: "trailer"`, a full SHA, Git's author time, and a repository path.
+Claude IDs omit the `claude:` prefix in the archive; other agents use their
+registered prefix. Matching uses the exact archive ID. Sessions imported from
+other hosts as `host~<archive-id>` do not receive trailer links from the original
+session ID. Unknown agents and invalid trailer values are ignored.
+Every matching line in the commit message counts, including lines in squash
+commit bodies. Inline mentions don't create links. Merge commits count.
+
+`agentsview sync` scans repositories used by local sessions. Under
+`agentsview serve`, editor commits appear at the next scheduled pass, within 15
+minutes. Each pass rereads every repository's history, including fetched older
+branches. Only checkouts a local session ran in are read. If a checkout has
+disappeared, another session must still resolve to its repository to read new
+commits. Stored rows survive checkout removal and archive rebuilds under policies
+that keep trailer links; rows for commits no longer reachable are kept.
+
+Known limitation: the protected-path guard doesn't follow a repository's `config.worktree` or config includes.
+
+Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
+Git's traversal source with `refs/heads/` or `refs/remotes/` removed, excluding
+remote `HEAD` aliases; other sources, such as tags and stash, leave it empty.
+Their `committed_at` is the Git author time in UTC. Their `message_ordinal`
+is the last message ordinal at or before commit time within the preceding five
+minutes, or `-1` when none exists. Messages of any role can satisfy this bound.
+
+The suggested `turn` is the last real user prompt in transcript order with a
+usable timestamp at or before commit time and an ordinal at or before
+`message_ordinal`. It carries `heuristic: true`; no recent message or eligible
+prompt means no turn. A squash commit made hours after the session went quiet
+therefore has no suggested turn. Rebased commits use their preserved author
+time. This time rule adapts
+[Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
+A transcript link for the same session takes precedence when its SHA is a
+prefix of the trailer SHA, including a full SHA match. Git prints a short SHA
+that uniquely identifies the commit when it is made. Other sessions' trailer
+links remain visible.

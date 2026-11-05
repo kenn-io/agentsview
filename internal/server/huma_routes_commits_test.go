@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestCommitLinksRoutes(t *testing.T) {
@@ -41,8 +42,16 @@ func TestCommitLinksRoutes(t *testing.T) {
 
 func TestCommitLinksRoutesUnavailable(t *testing.T) {
 	te := setup(t)
+	store := readOnlyTestStore{Store: te.db}
+	backend := service.NewReadOnlyBackend(store)
+	commits, err := backend.SessionCommits(t.Context(), "s1")
+	require.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
+	assert.Nil(t, commits)
+	matches, err := backend.CommitSessions(t.Context(), []string{"abc1234"})
+	require.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
+	assert.Nil(t, matches)
 	cfg := config.Config{Host: "127.0.0.1"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, readOnlyTestStore{Store: te.db}, nil).Handler())
+	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	w := te.get(t, "/api/v1/sessions/s1/commits")
 	assert.Equal(t, http.StatusNotImplemented, w.Code, w.Body.String())
 	w = te.post(t, "/api/v1/commits/sessions", `{"shas":["abc1234"]}`)

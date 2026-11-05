@@ -1,8 +1,20 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-03
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
+
+## Start from help
+
+On `main` (unreleased), `agentsview --help` includes a numbered workflow for
+syncing sources, finding sessions, reading transcripts, and checking usage.
+It explains session IDs, backend selection, output streams, exit codes, and
+environment variables. Run `agentsview source list --json` for the provider
+catalog, built-in source locations, and environment override names. It does not
+resolve configured directory arrays. Run `agentsview openapi` for the API schema.
+
+Use `agentsview session --help` for common backend and output flags. Core
+commands include examples and describe their limits.
 
 ## Recover from CLI errors
 
@@ -2022,6 +2034,7 @@ agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
+agentsview session diagnose <id> --format json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
 agentsview session usage-batch <id>...   # ordered usage results for several sessions
@@ -2029,18 +2042,30 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-`agentsview session commits <id>` lists commits recorded by a session. Use
-`--format json` for structured output. The table shows the session, exact message
-ordinal, call index, tool-use ID, call time, recorded SHA, branch, subject, and
-preceding user turn, shortened to 100 terminal columns. Trashed or permanently
-deleted sessions carry `missing: true` and omit the turn. See
+`agentsview session commits <id>` lists transcript and Git trailer commits
+linked to a session. The `SOURCE` column distinguishes `transcript` from
+`commit message`. JSON keeps `source: "trailer"` for commit message links. Use
+`--format json` for structured output. The table shows the session, exact message ordinal,
+call time, source, recorded SHA, branch, subject, and user turn, shortened to
+100 terminal columns. Transcript links use the last real prompt before the
+commit call. Trailer links use the last real prompt at or before Git's author
+time and mark the turn as estimated. They require a session message within the
+five minutes before that time; an idle session has no suggested turn. The prompt
+can be older than five minutes when later messages keep the session active.
+Trashed or permanently deleted sessions carry `missing: true` and omit the turn. See
 [commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
-retention and lookup limits. Links use stored Git summaries, including Codex
-poll results paired with the original call. Calls spanning
-repositories use the first directory; only a leading `cd` adjusts it. Archives
-retaining only transcripts or usage have no links, and hosted PostgreSQL returns
-HTTP 501.
-Sessions permanently deleted before this release have no links.
+retention and lookup limits. Transcript links require stored Git summaries with SHAs of 7
+to 64 characters. Quiet commits have no transcript link. Links include Codex
+poll results paired with the original call. Calls spanning repositories use the
+first directory; the last `cd` before the first commit invocation adjusts it.
+Archives retaining only transcripts keep trailer links; usage-only archives have
+no links. Hosted PostgreSQL returns HTTP 501. Sessions permanently deleted
+before this release have no transcript links. JSON output keeps `call_index`.
+Code-mode scripts with exactly one tool call and a fixed command literal can
+link commits, including output without a process ID. Command literals containing
+`${` have no links. A single-call `write_stdin` script can poll an earlier
+commit execution. Scripts with several tool calls cannot start new commit links;
+their polls need output process IDs matching an earlier commit call.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and

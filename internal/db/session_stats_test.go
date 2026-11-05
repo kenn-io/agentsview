@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // itoa is a thin alias for strconv.Itoa kept short so seedModelMessages'
@@ -2609,21 +2610,7 @@ func TestGetSessionStats_Adoption_NoClaude(t *testing.T) {
 // require the binary.
 func skipIfNoGit(t *testing.T) {
 	t.Helper()
-	// Keep Git fixture commands and production reads inside test-owned state.
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "GIT_") {
-			t.Setenv(key, "")
-			require.NoError(t, os.Unsetenv(key))
-		}
-	}
-	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
-	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not available on PATH: %v", err)
-	}
+	testutil.IsolateGit(t)
 }
 
 // statsRunGit executes a git subcommand inside repo and fails the test

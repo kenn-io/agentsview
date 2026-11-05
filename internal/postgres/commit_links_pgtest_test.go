@@ -94,6 +94,10 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
+	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+	})
 	_, err = pg.ExecContext(ctx, `UPDATE messages SET content='different revision' WHERE session_id='commit-live' AND ordinal=0`)
 	require.NoError(t, err)
 	links, err := store.SessionCommitLinks(ctx, "commit-live")
@@ -110,7 +114,17 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, local.DeleteSession(ctx, "commit-delete"))
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
-	dbtest.AssertCommitLinkParity(t, local, store)
+	// Deleting a published session must replace its live link with a retained link.
+	wantDeleted, err := local.SessionCommitLinks(ctx, "commit-delete")
+	require.NoError(t, err)
+	gotDeleted, err := store.SessionCommitLinks(ctx, "commit-delete")
+	require.NoError(t, err)
+	assert.Equal(t, wantDeleted, gotDeleted)
+	wantLookup, err := local.CommitSessionLinks(ctx, []string{"abc1234567890123456789012345678901234567"})
+	require.NoError(t, err)
+	gotLookup, err := store.CommitSessionLinks(ctx, []string{"abc1234567890123456789012345678901234567"})
+	require.NoError(t, err)
+	assert.Equal(t, wantLookup, gotLookup)
 	// Refresh retained metadata, including an already retained row.
 	_, err = pg.ExecContext(ctx, `UPDATE commit_links SET subject='stale' WHERE session_id='commit-delete'`)
 	require.NoError(t, err)
@@ -126,6 +140,13 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NotNil(t, links.Commits[0].Turn)
 	assert.False(t, links.Commits[0].Missing)
 	assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
+}
+
+func TestPGCommitLinksBeforeUpgradePush(t *testing.T) {
+	syncer, _, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_links_old_test")
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	_, err = pg.ExecContext(ctx, `DROP TABLE commit_links`)
 	require.NoError(t, err)
 	_, err = store.SessionCommitLinks(ctx, "commit-live")

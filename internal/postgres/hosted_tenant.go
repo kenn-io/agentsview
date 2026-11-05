@@ -59,6 +59,12 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = checkHostedBinding(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = checkDataVersionCompat(ctx, tx); err != nil {
+			return err
+		}
+		if err = installAutomationAuditSchemaPG(ctx, tx); err != nil {
+			return err
+		}
 		if err = installHostedCoreUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
@@ -72,9 +78,6 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 			return err
 		}
 		if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
-			return err
-		}
-		if err = checkDataVersionCompat(ctx, tx); err != nil {
 			return err
 		}
 		if err = createHostedContentSearchIndexes(ctx, tx); err != nil {
@@ -105,6 +108,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	if err = checkDataVersionCompat(ctx, tx); err != nil {
+		return err
+	}
+	if err = installAutomationAuditSchemaPG(ctx, tx); err != nil {
 		return err
 	}
 	if err = createHostedContentSearchIndexes(ctx, tx); err != nil {

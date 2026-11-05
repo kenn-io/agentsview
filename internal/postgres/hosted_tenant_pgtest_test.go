@@ -485,30 +485,25 @@ func TestHostedTenantProvisioningUsesOneConnection(t *testing.T) {
 	require.NoError(t, EnsureHostedTenant(ctx, pg, schema, "tenant-a"))
 }
 
-func TestHostedTenantUpgradeInstallsCommitLinksBeforeCatalogCheck(t *testing.T) {
-	f := newHostedFixture(t, "tenant-a")
-	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE commit_links`)
-	require.NoError(t, err)
-
-	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
-}
-
-func TestHostedTenantUpgradeInstallsFrictionTablesBeforeCatalogCheck(t *testing.T) {
-	f := newHostedFixture(t, "tenant-a")
-	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE friction_findings`)
-	require.NoError(t, err)
-
-	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-	for _, relation := range []string{
-		"friction_findings",
-		"idx_friction_findings_session",
+func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
+	for _, tt := range []struct{ table, index string }{
+		{"friction_findings", "idx_friction_findings_session"},
+		{"commit_links", "idx_commit_links_sha"},
 	} {
-		var exists bool
-		require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, f.schema, relation).Scan(&exists))
-		assert.True(t, exists, relation)
+		t.Run(tt.table, func(t *testing.T) {
+			f := newHostedFixture(t, "tenant-a")
+			_, err := f.admin.ExecContext(t.Context(), `DROP TABLE `+tt.table)
+			require.NoError(t, err)
+
+			require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+			for _, relation := range []string{tt.table, tt.index} {
+				var exists bool
+				require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, f.schema, relation).Scan(&exists))
+				assert.True(t, exists, relation)
+			}
+			require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+		})
 	}
-	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }
 
 func TestHostedTenantConcurrentProvisioning(t *testing.T) {
@@ -641,4 +636,15 @@ func TestHostedTenantRejectsIncompleteSearchPath(t *testing.T) {
 	require.NoError(t, err)
 	defer unpinned.Close()
 	assert.Error(t, CheckHostedTenant(t.Context(), unpinned, f.schema, f.tenant), "schema-only path leaves temporary relations implicitly first")
+}
+
+func TestHostedTenantUpgradeInstallsAutomationTracking(t *testing.T) {
+	f := newHostedFixture(t, "tenant-a")
+	_, err := f.admin.ExecContext(t.Context(), `DROP TRIGGER trg_sessions_automation_audit ON sessions;
+ DROP INDEX idx_sessions_automation_audit; ALTER TABLE sessions DROP COLUMN automation_audit_hash`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	current, err := automationAuditSchemaCurrentPG(t.Context(), f.admin)
+	require.NoError(t, err)
+	assert.True(t, current)
 }

@@ -104,6 +104,7 @@ func (s *Sync) PushWithOptions(
 	s.fullRun = nil
 	switch {
 	case err == nil:
+		err = s.replaceRetainedCommitLinks(ctx)
 	case run != nil:
 		// Keep what the run committed since its last checkpoint. The push
 		// may have failed because ctx ended, so save without it, but within
@@ -2286,7 +2287,7 @@ func (s *Sync) reconcilePGMissingSessions(
 	if err != nil {
 		return err
 	}
-	return s.replaceRetainedCommitLinks(ctx)
+	return nil
 }
 
 func (s *Sync) reconcilePGProjectScopeMoves(

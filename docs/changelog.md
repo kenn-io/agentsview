@@ -16,6 +16,12 @@ The latest release is
   Git blame and archived commit links without calling a model. Add `--json` for
   scripts.
 
+- Find editor commits through `Agent-Session` trailers in local Git history.
+  Session commit lookups show the source and suggest the last prompt at or
+  before the commit time, marked as estimated, when the session has a message
+  within the preceding five minutes. Idle sessions have no suggested turn.
+  Trailer links survive transcript rewrites and checkout removal.
+
 - Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
   replicas after pushing the archive. Deleted sessions remain visible as missing
   records when the replica has project evidence for them. Hosted PostgreSQL
@@ -24,11 +30,20 @@ The latest release is
 - Find the session and prompt behind a Git commit through the session API, or
   list a session's commits with `agentsview session commits <id>`. Links come
   from stored Git summaries, including Codex output received through later
-  polls. Repository paths follow the first directory in each call
-  and only a leading `cd`.
+  polls. Summaries need SHAs of 7 to 64 characters; quiet commits have no link.
+  The prompt is the last user turn before the commit call. Repository paths
+  follow the first commit invocation in each call, using the last `cd` before
+  it and any `git -C` options.
   Transcript-only and usage-only archives retain no links. Deleted sessions
   remain visible as missing records. Sessions permanently deleted before this
   release have no links.
+
+- Investigate an expensive archived session with `session diagnose <id>`. The
+  report combines usage, context growth, compactions, large tool results, retry
+  candidates, and child links. Use `--format json` for scripts or `--pg` to read
+  a PostgreSQL archive. Transcript text and tool arguments stay out of the
+  report.
+
 - Assistants searching your history through MCP can now ask for sessions that
   covered several ideas at once, such as an auth change and its retry policy,
   even when they came up in different parts of the conversation. Pass two to

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
 
 func TestSessionCommits(t *testing.T) {
@@ -17,36 +18,36 @@ func TestSessionCommits(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"},
-		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{
-			{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`},
-			{SessionID: "s-commit", CallIndex: 1, ToolName: "Bash", Category: "Bash", ToolUseID: "exact-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}},
+		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END", Timestamp: "2026-10-30T10:09:00Z"},
+		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{
+			{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", ToolUseID: "exact-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}},
 		}},
 	}))
+	_, err = d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:s-commit"}}})
+	require.NoError(t, err)
 	require.NoError(t, d.Close())
-	for _, format := range []string{"json", "human"} {
-		t.Run(format, func(t *testing.T) {
-			args := []string{"session", "commits", "s-commit"}
-			if format == "json" {
-				args = append(args, "--format", "json")
-			}
-			out, err := executeCommand(newRootCommand(), args...)
-			require.NoError(t, err)
-			if format == "json" {
-				got := decodeCLIJSON[db.SessionCommitList](t, out)
-				require.Len(t, got.Commits, 1)
-				assert.Equal(t, "abc1234", got.Commits[0].SHA)
-				assert.Equal(t, "s-commit", got.Commits[0].SessionID)
-				assert.Equal(t, &db.CommitTurn{Ordinal: 0, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, got.Commits[0].Turn)
-				return
-			}
-			assert.Regexp(t, `s-commit\s+1\s+1\s+exact-call`, out)
-			assert.Contains(t, out, "abc1234")
-			assert.Contains(t, out, "Fix parser")
-			assert.Contains(t, out, "0: Fix parser ")
-			assert.Contains(t, out, "…")
-			assert.NotContains(t, out, "END")
-			assert.NotContains(t, out, "\x1b")
-		})
-	}
+	t.Run("json", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit", "--format", "json")
+		require.NoError(t, err)
+		got := decodeCLIJSON[db.SessionCommitList](t, out)
+		require.Len(t, got.Commits, 2)
+		// JSON preserves the full prompt; human output sanitizes and truncates it.
+		for _, commit := range got.Commits {
+			require.NotNil(t, commit.Turn)
+			assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", commit.Turn.Text)
+		}
+	})
+	t.Run("human", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit")
+		require.NoError(t, err)
+		assert.Contains(t, out, "commit message")
+		assert.Contains(t, out, "Editor commit")
+		assert.Regexp(t, `SESSION\s+ORDINAL\s+TIME\s+SOURCE\s+SHA\s+BRANCH\s+SUBJECT\s+USER TURN`, out)
+		assert.Regexp(t, `s-commit\s+1\s+transcript\s+abc1234\s+main\s+Fix parser`, out)
+		assert.Contains(t, out, "0: Fix parser ")
+		assert.Contains(t, out, "(estimated)")
+		assert.Contains(t, out, "…")
+		assert.NotContains(t, out, "END")
+		assert.NotContains(t, out, "\x1b")
+	})
 }

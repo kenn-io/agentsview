@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
 
 func SeedCommitLinks(t *testing.T, d *db.DB) {
@@ -23,12 +24,22 @@ func SeedCommitLinks(t *testing.T, d *db.DB) {
 			{SessionID: id, Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}}},
 		}))
 	}
+	SeedSession(t, d, "commit-trailer", "commit-project")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "commit-trailer", []db.Message{{SessionID: "commit-trailer", Ordinal: 0, Role: "user", Content: "Save the editor change", Timestamp: "2026-01-01T00:00:00Z"}}))
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Editor change", CommittedAt: "2026-01-01T00:01:00Z"}})
+	require.NoError(t, err)
 	require.NoError(t, d.SoftDeleteSession(t.Context(), "commit-trash"))
+	SeedSession(t, d, "commit-order", "commit-project")
+	_, err = d.StoreTrailerCommitLinks(t.Context(), "order-repo", []gitlog.TrailerCommit{
+		{SHA: strings.Repeat("e", 40), Sessions: []string{"claude:commit-order"}, Subject: "First", CommittedAt: "2026-01-01T00:01:00Z"},
+		{SHA: strings.Repeat("d", 40), Sessions: []string{"claude:commit-order"}, Subject: "Second", CommittedAt: "2026-01-01T00:02:00Z"},
+	})
+	require.NoError(t, err)
 }
 
 func AssertCommitLinkParity(t *testing.T, local *db.DB, store db.CommitLinkReader) {
 	t.Helper()
-	queries := []string{"ABC1234567890123456789012345678901234567", "abc1234", "abc123456", "deadbee", strings.Repeat("a", 64)}
+	queries := []string{"ABC1234567890123456789012345678901234567", "abc1234", "abc123456", "deadbee", strings.Repeat("b", 40), strings.Repeat("c", 40), strings.Repeat("a", 64)}
 	want, err := local.CommitSessionLinks(t.Context(), queries)
 	require.NoError(t, err)
 	got, err := store.CommitSessionLinks(t.Context(), queries)
@@ -36,12 +47,18 @@ func AssertCommitLinkParity(t *testing.T, local *db.DB, store db.CommitLinkReade
 	assert.Equal(t, want, got)
 	require.NotEmpty(t, got.Commits[0].Links)
 	assert.Equal(t, "Save the change", got.Commits[0].Links[0].Subject)
-	for _, id := range []string{"commit-live", "commit-trash", "commit-delete", "unknown"} {
+	for _, id := range []string{"commit-live", "commit-trash", "commit-delete", "commit-trailer", "commit-order", "unknown"} {
 		want, err := local.SessionCommitLinks(t.Context(), id)
 		require.NoError(t, err)
 		got, err := store.SessionCommitLinks(t.Context(), id)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
+		if id == "commit-order" {
+			require.Len(t, want.Commits, 2)
+			require.Len(t, got.Commits, 2)
+			assert.Equal(t, "First", want.Commits[0].Subject)
+			assert.Equal(t, "Second", want.Commits[1].Subject)
+		}
 		if id == "commit-live" {
 			require.Len(t, got.Commits, 1)
 			require.NotNil(t, got.Commits[0].Turn)
@@ -77,16 +94,7 @@ func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.
 	} {
 		t.Run(step.name, func(t *testing.T) {
 			push(step.projects, step.exclude)
-			links, err := reader().SessionCommitLinks(t.Context(), "commit-delete")
-			require.NoError(t, err)
-			if !step.want {
-				assert.Empty(t, links.Commits)
-				return
-			}
-			require.Len(t, links.Commits, 1)
-			assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
-			assert.True(t, links.Commits[0].Missing)
-			assert.Nil(t, links.Commits[0].Turn)
+			AssertRetainedCommitLink(t, reader(), step.want)
 		})
 	}
 	// Move after the last publication, then delete without another live push.
@@ -106,4 +114,34 @@ func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.
 	require.Len(t, links.Commits, 1)
 	assert.True(t, links.Commits[0].Missing)
 	assert.Equal(t, "Save the change", links.Commits[0].Subject)
+}
+
+// AssertTrailerIncrementalPush checks changes without rewriting the transcript.
+func AssertTrailerIncrementalPush(t *testing.T, local *db.DB, reader func() db.CommitLinkReader, push func()) {
+	t.Helper()
+	_, err := local.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{
+		{SHA: strings.Repeat("c", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Amended editor change", CommittedAt: "2026-01-01T00:01:00Z"},
+	})
+	require.NoError(t, err)
+	push()
+	links, err := reader().SessionCommitLinks(t.Context(), "commit-trailer")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 2)
+	assert.ElementsMatch(t, []string{strings.Repeat("b", 40), strings.Repeat("c", 40)}, []string{links.Commits[0].SHA, links.Commits[1].SHA})
+	AssertCommitLinkParity(t, local, reader())
+}
+
+// AssertRetainedCommitLink checks the deleted fixture's visibility and evidence.
+func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want bool) {
+	t.Helper()
+	links, err := reader.SessionCommitLinks(t.Context(), "commit-delete")
+	require.NoError(t, err)
+	if !want {
+		assert.Empty(t, links.Commits)
+		return
+	}
+	require.Len(t, links.Commits, 1)
+	assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
+	assert.True(t, links.Commits[0].Missing)
+	assert.Nil(t, links.Commits[0].Turn)
 }

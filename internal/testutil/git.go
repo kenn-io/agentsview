@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// IsolateGitEnv confines Git fixture commands and reads to test-owned state.
-func IsolateGitEnv(t *testing.T) {
+// IsolateGit confines fixture commands and Git reads to test-owned state.
+func IsolateGit(t *testing.T) {
 	t.Helper()
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
@@ -29,4 +30,7 @@ func IsolateGitEnv(t *testing.T) {
 	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available on PATH: %v", err)
+	}
 }

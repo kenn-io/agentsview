@@ -16,10 +16,7 @@ import (
 // of failing the package.
 func skipIfNoGit(t *testing.T) {
 	t.Helper()
-	testutil.IsolateGitEnv(t)
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not available on PATH: %v", err)
-	}
+	testutil.IsolateGit(t)
 }
 
 // gitRun executes a git subcommand inside repo and fails the test on error.

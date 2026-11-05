@@ -17,7 +17,7 @@ func readCommitLinks(ctx context.Context, q CommitLinkQuerier, where string, arg
 	rows, err := q.QueryContext(ctx, `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
  (COALESCE(s.id,'')='' OR s.deleted_at IS NOT NULL),l.turn_ordinal,l.turn_text
  FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
- WHERE (l.retained OR COALESCE(s.id,'')<>'') AND (`+where+`) ORDER BY l.session_id,l.message_ordinal,l.call_index,l.sha`, args...)
+ WHERE (l.retained OR COALESCE(s.id,'')<>'') AND (`+where+`) ORDER BY l.session_id,l.message_ordinal,l.committed_at,l.call_index,l.sha`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -31,8 +31,12 @@ func readCommitLinks(ctx context.Context, q CommitLinkQuerier, where string, arg
 			return nil, err
 		}
 		l.Source = "transcript"
+		// Trailer links have no transcript tool call.
+		if l.CallIndex == -1 {
+			l.Source = "trailer"
+		}
 		if !l.Missing && ordinal.Valid {
-			l.Turn = &db.CommitTurn{Ordinal: int(ordinal.Int64), Text: text}
+			l.Turn = &db.CommitTurn{Heuristic: l.Source == "trailer", Ordinal: int(ordinal.Int64), Text: text}
 		}
 		links = append(links, l)
 	}

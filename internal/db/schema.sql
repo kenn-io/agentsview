@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_hash   TEXT,
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
+    usage_generation TEXT,
     parent_session_id TEXT,
     parser_parent_session_id TEXT,
     parser_relationship_type TEXT,
@@ -1726,3 +1727,16 @@ BEFORE DELETE ON sessions
 BEGIN
     UPDATE commit_links SET project=OLD.project WHERE session_id=OLD.id;
 END;
+
+-- Git trailer evidence survives transcript rewrites and checkout removal.
+CREATE TABLE IF NOT EXISTS commit_trailers (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (session_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_trailers_sha ON commit_trailers(sha);

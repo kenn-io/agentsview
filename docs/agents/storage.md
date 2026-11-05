@@ -665,16 +665,23 @@ of a few seconds is expected and intended. Do not reintroduce a whole-snapshot
 recheck against the archive: validating a snapshot against a source that changes
 one session at a time livelocks the request.
 
-Refills still extract complete session histories, but compare facts in bounded
-batches against one read-only cache snapshot and spool only changed or new
-rows. Comparison requires the expected install revision; installation checks
-that revision again. Complete per-session fact counts remove obsolete tails,
-and identity invalidation compares the complete cache before and after install.
-Each fact kind uses its own fixed index range, so a token-message append keeps
-activity and event rows at their existing positions.
-Existing mixed sessions move their activity and event rows once, on their next
-refill.
-This reduces temporary writes; it does not make source extraction incremental.
+Refills retain token-message histories when the archive generation proves the
+existing messages unchanged, the install revision matches, and no activity-only
+facts or usage events exist. They seek past the saved message ordinal and
+normalize only appended messages. Message triggers maintain
+`sessions.usage_generation`. Edits and deletes rotate the generation. A
+backdated fact timestamp, an appended activity-only fact, an edit, a deletion,
+or a usage event falls back to complete extraction. Claude suffix replacement
+and late Codex usage updates also use complete extraction.
+
+Full extractions compare facts in bounded batches against one read-only cache
+snapshot and spool only changed or new rows. Comparison requires the expected
+install revision; installation checks that revision again. Complete per-session
+fact counts remove obsolete tails, and identity invalidation compares the
+complete cache before and after install. Each fact kind uses its own fixed index
+range, so a token-message append keeps activity and event rows at their existing
+positions. Existing mixed sessions move their activity and event rows once, on
+their next refill.
 
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but

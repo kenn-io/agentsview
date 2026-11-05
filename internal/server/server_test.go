@@ -41,6 +41,7 @@ import (
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // Timestamp constants for test data.
@@ -5530,35 +5531,35 @@ func TestFindAvailablePortSkipsOccupied(t *testing.T) {
 	}
 }
 
-func TestFindAvailablePortWildcardSkipsIPv4OccupiedPort(t *testing.T) {
+func TestFindAvailablePortWildcardSkipsOccupiedPort(t *testing.T) {
 	// A dual-stack wildcard listen can succeed on IPv6 while an unrelated
 	// process still owns the port on IPv4 (observed on macOS), so wildcard
 	// availability must check the IPv4 wildcard address on its own.
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
-	require.NoError(t, err, "bind IPv4 wildcard")
-	defer ln.Close()
+	testutil.RequireWildcardListen(t)
+	for _, tt := range []struct {
+		name    string
+		network string
+		address string
+	}{
+		{name: "IPv4", network: "tcp4", address: "0.0.0.0:0"},
+		{name: "IPv6", network: "tcp6", address: "[::]:0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ln, err := (&net.ListenConfig{}).Listen(t.Context(), tt.network, tt.address)
+			if err != nil && tt.network == "tcp6" {
+				t.Skipf("IPv6 unavailable: %v", err)
+			}
+			require.NoError(t, err, "bind %s wildcard", tt.name)
+			defer ln.Close()
 
-	occupied := ln.Addr().(*net.TCPAddr).Port
+			occupied := ln.Addr().(*net.TCPAddr).Port
 
-	got, err := server.FindAvailablePort(t.Context(), "0.0.0.0", occupied)
-	require.NoError(t, err)
-	assert.NotEqual(t, occupied, got,
-		"wildcard port selection must skip an IPv4-occupied port")
-}
-
-func TestFindAvailablePortWildcardSkipsIPv6OccupiedPort(t *testing.T) {
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::]:0")
-	if err != nil {
-		t.Skipf("IPv6 unavailable: %v", err)
+			got, err := server.FindAvailablePort(t.Context(), "0.0.0.0", occupied)
+			require.NoError(t, err)
+			assert.NotEqual(t, occupied, got,
+				"wildcard port selection must skip an %s-occupied port", tt.name)
+		})
 	}
-	defer ln.Close()
-
-	occupied := ln.Addr().(*net.TCPAddr).Port
-
-	got, err := server.FindAvailablePort(t.Context(), "0.0.0.0", occupied)
-	require.NoError(t, err)
-	assert.NotEqual(t, occupied, got,
-		"wildcard port selection must skip an IPv6-occupied port")
 }
 
 func TestFindAvailablePortZeroReturnsAssignedPort(t *testing.T) {

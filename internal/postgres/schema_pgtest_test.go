@@ -481,7 +481,9 @@ func TestPromptEvidenceMigrationPreservesSessions(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 	// Reproduce the previously shipped schema, which has no policy marker.
-	_, err = pg.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN prompt_evidence_discarded`)
+	_, err = pg.ExecContext(t.Context(), `DROP TRIGGER trg_sessions_automation_audit ON sessions;
+ DROP INDEX idx_sessions_automation_audit; ALTER TABLE sessions DROP COLUMN automation_audit_hash;
+ ALTER TABLE sessions DROP COLUMN prompt_evidence_discarded`)
 	require.NoError(t, err)
 	_, err = pg.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, first_message) VALUES ('full-session', 'machine', 'project', 'claude', 'Explain this code')`)
 	require.NoError(t, err)
