@@ -422,6 +422,48 @@ func TestConcurrentUsageReadsSeeCommitsAfterWriterHandoff(t *testing.T) {
 	}
 }
 
+func TestConcurrentUsageReadsShareDuringWriterBarrier(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "session", "project", "2026-08-10T09:00:00Z", 0, 10)
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	_, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	key := usageFlightKeyForTest(t, database, filter)
+	require.NoError(t, database.CloseWriter())
+
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	var prepares atomic.Int32
+	database.usageWindowObserver.beforePrepare = func(context.Context) {
+		prepares.Add(1)
+		<-release
+	}
+	type result struct {
+		daily DailyUsageResult
+		err   error
+	}
+	done := make(chan result, 2)
+	for range 2 {
+		go func() {
+			daily, err := database.GetDailyUsage(t.Context(), filter)
+			done <- result{daily, err}
+		}()
+	}
+	// Both reads must reach preparation while rebuild keeps the writer closed.
+	require.Eventually(t, func() bool {
+		return database.usageWindows.Waiters(key) == 2 || prepares.Load() == 2
+	}, 10*time.Second, time.Millisecond)
+	unblock()
+	for range 2 {
+		got := <-done
+		require.NoError(t, got.err)
+		assert.Equal(t, 10, got.daily.Totals.InputTokens)
+	}
+	assert.Equal(t, int32(1), prepares.Load())
+}
+
 func TestUsageReadCloseConnectionsReleasesArchive(t *testing.T) {
 	for _, writerBarrier := range []bool{false, true} {
 		name := "direct"

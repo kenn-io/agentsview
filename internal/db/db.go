@@ -5643,7 +5643,6 @@ func (db *DB) CloseWriter() error {
 	db.stopWALCheckpointLoop()
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.usageVersion.reset(true)
 	db.connMu.Lock()
 	old := db.writer.Swap(nil)
 	db.writerClosed.Store(true)

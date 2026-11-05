@@ -115,7 +115,7 @@ func (db *DB) usageWindowVersion(ctx context.Context) (string, error) {
 		return "", sql.ErrConnDone
 	}
 	if version.conn == nil {
-		pool, err := sql.Open("sqlite3", makeDSN(db.path, true))
+		pool, err := sql.Open(sqliteArchiveDriverName, makeDSN(db.path, true))
 		if err != nil {
 			return "", err
 		}
