@@ -394,9 +394,15 @@
     z-index: 1;
   }
 
+  /* Counts, costs, and times share one tabular sans, so neighboring
+     numeric columns do not switch typefaces. */
   .col-num {
     text-align: right;
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .col-window {
+    font-variant-numeric: tabular-nums;
   }
 
   tbody td {
@@ -429,7 +435,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--accent-blue);
+    /* Titles are the row's name, not the loudest column: primary ink at
+       rest, link color and underline on hover or focus. */
+    color: var(--text-primary);
     text-decoration: none;
   }
 
@@ -450,7 +458,9 @@
     --badge-color: var(--accent-violet);
   }
 
-  .session-link:hover {
+  .session-link:hover,
+  .session-link:focus-visible {
+    color: var(--accent-blue);
     text-decoration: underline;
   }
 

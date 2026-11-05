@@ -25,7 +25,6 @@ export { default as DatabaseBackupIcon } from "@lucide/svelte/icons/database-bac
 export { default as DatabaseIcon } from "@lucide/svelte/icons/database";
 export { default as DownloadIcon } from "@lucide/svelte/icons/download";
 export { default as EllipsisIcon } from "@lucide/svelte/icons/ellipsis";
-export { default as EllipsisVerticalIcon } from "@lucide/svelte/icons/ellipsis-vertical";
 export { default as ExternalLinkIcon } from "@lucide/svelte/icons/external-link";
 export { default as FileCheckIcon } from "@lucide/svelte/icons/file-check";
 export { default as FileDownIcon } from "@lucide/svelte/icons/file-down";

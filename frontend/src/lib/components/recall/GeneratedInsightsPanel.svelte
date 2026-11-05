@@ -606,6 +606,19 @@
     border-color: var(--accent-blue);
   }
 
+  /* Light: the grey inset fill made editable fields look like the
+     disabled Generate button beside them. Enabled fields take the white
+     surface and the default edge, so only the unavailable control is grey. */
+  :global(:root:not(.dark)) .scope-grid {
+    --bg-raised: var(--bg-surface);
+  }
+
+  :global(:root:not(.dark)) .scope-grid :global(.kit-typeahead__trigger:not(:disabled):not(:focus)),
+  :global(:root:not(.dark)) .date-field :global(.kit-date-range-picker__trigger:not(.open)),
+  :global(:root:not(.dark)) .focus-field textarea:not(:focus) {
+    border-color: var(--border-default);
+  }
+
   .focus-field {
     grid-column: span 2;
   }

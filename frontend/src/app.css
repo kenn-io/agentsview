@@ -44,6 +44,11 @@
      hard to tell apart in light theme; Usage paints teal a step lighter
      and bluer (oklch 0.68 0.11 200). */
   --usage-series-teal: #20acb3; /* kit-ui-check-ignore: app token definition */
+  /* Light amber (#d97706) is within a few degrees of hue of orange, and the
+     treemap deepens both to the same brown; Usage paints amber as a darker
+     mustard gold (oklch 0.64 0.13 96), apart from orange in hue and
+     lightness, so neighbouring tiles and areas stay distinct. */
+  --usage-series-amber: #a48b08; /* kit-ui-check-ignore: app token definition */
   /* Deliberate override: kit-ui's light --text-muted (#878ea0) is about
      3.3:1 on white, too faint for the metadata agentsview leans on. This
      value is 6.1:1 on the surface, 5.6:1 on the page background, and 5.2:1
@@ -131,6 +136,7 @@
 :root.dark {
   --accent-teal: #2dd4bf; /* kit-ui-check-ignore: app token definition */
   --usage-series-teal: var(--accent-teal); /* kit-ui-check-ignore: app token definition */
+  --usage-series-amber: var(--accent-amber); /* kit-ui-check-ignore: app token definition */
   --accent-rose: #fb7185; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
   --accent-black: #b0b0b0; /* kit-ui-check-ignore: app token definition */
@@ -273,11 +279,67 @@
     0 1px 2px rgba(0, 0, 0, 0.35); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
 }
 
+/* Date presets read as one segmented control, like the Relative /
+   Calendar / Custom tabs above them: a single inset track with flat
+   options, so the raised chosen preset is the only lifted shape. Separate
+   filled pills made the chosen one look like just another chip. */
+:root .kit-date-range-picker__pills {
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+:root .kit-date-range-picker__pills .kit-date-range-picker__pill {
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-weight: 400;
+}
+
+:root .kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active):hover {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+:root.dark .kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active) {
+  color: var(--text-muted);
+}
+
+:root.dark .kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active):hover {
+  color: var(--text-primary);
+}
+
 :root .kit-date-range-picker__pills .kit-date-range-picker__pill.active {
   background: var(--selected-strong-bg);
   color: var(--text-primary);
   font-weight: var(--selected-strong-weight);
   box-shadow: var(--selected-strong-edge);
+}
+
+/* An unclean ending is a warning, not an error. kit-ui paints it red;
+   the warning orange keeps it apart from the amber stale dot and from
+   real failures. Used by the sidebar, Top sessions rows, and its pill. */
+:root .kit-status-dot.kit-status-dot--unclean {
+  background: var(--accent-orange);
+}
+
+/* Page toolbars' refresh belongs to its "Updated ..." status: a smaller
+   quiet glyph set tight against the text, so it reads as part of that
+   label and not as a second copy of the top bar's Refresh button. */
+:root .kit-refresh-control {
+  gap: 2px;
+}
+
+:root .kit-refresh-control .kit-refresh-control__btn {
+  width: 22px;
+  height: 22px;
+  color: var(--text-muted);
+}
+
+:root .kit-refresh-control .kit-refresh-control__btn svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* Card edges. In light the surface sits close to the page color, so
@@ -525,15 +587,16 @@ button:disabled {
 
 /* One disabled look for secondary actions: faded muted ink, a faint edge,
    and no fill, so a disabled control never reads as a clickable outline
-   button. Dark needs a larger share of muted ink for the label to stay
-   readable on the near-black surface. */
+   button. Dark takes a larger share of muted ink so the label stays
+   readable on the near-black surface, but still a clear step below the
+   secondary ink of enabled buttons. */
 :root {
   --disabled-ink: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
   --disabled-edge: var(--border-muted);
 }
 
 :root.dark {
-  --disabled-ink: color-mix(in srgb, var(--text-muted) 78%, var(--bg-surface));
+  --disabled-ink: color-mix(in srgb, var(--text-muted) 68%, var(--bg-surface));
 }
 
 /* A disabled primary (Save token, Connect on a read-only server) keeps a

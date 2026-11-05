@@ -32,10 +32,14 @@ const MUTED = "var(--text-muted)";
 
 // Calmed light teal and green land at the same lightness only about 20
 // degrees of hue apart, so Usage paints teal from its own token
-// (--usage-series-teal in app.css), set apart in hue and lightness. A
-// resolver that does not know the token keeps the shared teal.
+// (--usage-series-teal in app.css), set apart in hue and lightness. Light
+// amber and orange sit only a few degrees apart and both turn brown once
+// the treemap deepens them for white labels, so Usage paints amber as a
+// yellower gold (--usage-series-amber). A resolver that does not know a
+// token keeps the shared color.
 const USAGE_SERIES_TOKENS: Readonly<Record<string, string>> = {
   "var(--accent-teal)": "var(--usage-series-teal)",
+  "var(--accent-amber)": "var(--usage-series-amber)",
 };
 
 function resolveUsageColor(color: string, resolveColor?: (color: string) => string): string {
