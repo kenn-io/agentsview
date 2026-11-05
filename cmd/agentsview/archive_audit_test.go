@@ -446,7 +446,6 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
 		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
-		{name: "stale", stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {

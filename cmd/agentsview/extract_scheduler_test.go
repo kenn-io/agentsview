@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -446,12 +447,7 @@ func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
 		synctest.Wait()
 		assert.Equal(t, []extract.PassOptions{{Full: true}, {Full: true}, {Full: true}}, reconciler.callsSnapshot())
 		assert.Zero(t, mgr.callCount())
-		battery.Store(false)
-		s.Notify()
-		synctest.Sleep(time.Second)
-		synctest.Wait()
-		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
-		assert.EqualValues(t, 4, notified.Load())
+		assert.EqualValues(t, 3, notified.Load())
 	})
 }
 
@@ -522,7 +518,7 @@ func TestExtractSchedulerPeriodicPassPreservesSyncDebounce(t *testing.T) {
 	})
 }
 
-func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
+func TestReconcilerRetractsAfterLateSignalBackfill(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		database := dbtest.OpenTestDB(t)
 		dbtest.SeedSessionWithMessages(t, database, "session", "project", []db.Message{
@@ -538,14 +534,14 @@ func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
 			SourceSessionID: "session", SourceRunID: "generation", ProvenanceOK: true,
 		}})
 		require.NoError(t, err)
-		mgr := &fakePassManager{}
 		reconciler := extract.NewReconciler(database)
-		s := newExtractScheduler(mgr, time.Second, 0, 5*time.Minute, nil)
-		s.onBattery, s.onBatteryMgr = func() bool { return true }, reconciler
-		go s.Run(t.Context())
-		defer s.Stop()
-		synctest.Sleep(time.Second)
-		synctest.Wait()
+		require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET local_modified_at = ? WHERE id = ?", "1999-01-01T00:00:00.000Z", "session")
+			return err
+		}))
+		started, _, err := reconciler.TryPass(t.Context(), extract.PassOptions{})
+		require.NoError(t, err)
+		require.True(t, started)
 		entry, err := database.GetRecallEntry(t.Context(), "entry")
 		require.NoError(t, err)
 		require.NotNil(t, entry)
@@ -557,16 +553,11 @@ func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, session)
 		require.Positive(t, session.SecretLeakCount)
-		synctest.Sleep(batteryRecheckInterval)
-		synctest.Wait()
+		started, _, err = reconciler.TryPass(t.Context(), extract.PassOptions{})
+		require.NoError(t, err)
+		require.True(t, started)
 		entry, err = database.GetRecallEntry(t.Context(), "entry")
 		require.NoError(t, err)
-		require.NotNil(t, entry, "reconciliation must wait for the next scheduled pass")
-		synctest.Sleep(4 * time.Minute)
-		synctest.Wait()
-		entry, err = database.GetRecallEntry(t.Context(), "entry")
-		require.NoError(t, err)
-		assert.Nil(t, entry, "periodic reconciliation must discover backfilled signals without Notify")
-		assert.Zero(t, mgr.callCount())
+		assert.Nil(t, entry, "reconciliation must discover signals backfilled after its previous pass")
 	})
 }

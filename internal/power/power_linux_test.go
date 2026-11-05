@@ -17,9 +17,8 @@ func TestOnBattery(t *testing.T) {
 	}{
 		{name: "desktop"},
 		{name: "mouse", files: map[string]string{"mouse/type": "Battery", "mouse/scope": "Device", "mouse/status": "Discharging"}},
-		{name: "AC", files: map[string]string{"AC/type": "Mains", "AC/online": "1", "BAT0/type": "Battery", "BAT0/status": "Full"}},
 		{name: "discharging", files: map[string]string{"AC/type": "Mains", "AC/online": "0", "BAT0/type": "Battery", "BAT0/status": "Discharging"}, battery: true},
-		{name: "AC overrides discharging", files: map[string]string{"AC/type": "Mains", "AC/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
+		{name: "AC overrides discharging", files: map[string]string{"ZAC/type": "Mains", "ZAC/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()

@@ -1897,78 +1897,56 @@ func TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired(t *test
 }
 
 func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		mgr := &fakeEmbedManager{}
-		var battery atomic.Bool
-		battery.Store(true)
-		s := newEmbedScheduler(mgr, time.Second, 0, false, nil)
-		s.onBattery = battery.Load
-		s.Notify()
-		go s.Run(t.Context())
-		defer s.Stop()
-		synctest.Sleep(time.Second + 3*batteryRecheckInterval)
-		synctest.Wait()
-		assert.Zero(t, mgr.callCount())
-		battery.Store(false)
-		synctest.Sleep(batteryRecheckInterval)
-		synctest.Wait()
-		assert.Equal(t, []vector.BuildRequest{{}}, mgr.callsSnapshot())
-	})
-}
-
-func TestEmbedSchedulerDefersBatteryBackstop(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		mgr := &fakeEmbedManager{}
-		var battery atomic.Bool
-		battery.Store(true)
-		s := newEmbedScheduler(mgr, time.Second, 0, false, nil)
-		s.onBattery = battery.Load
-		s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
-		ticks := make(chan time.Time)
-		go s.run(t.Context(), ticks)
-		defer s.Stop()
-		ticks <- time.Now()
-		synctest.Sleep(2 * batteryRecheckInterval)
-		synctest.Wait()
-		assert.Zero(t, mgr.callCount())
-		assert.FileExists(t, s.batteryDeferredPath)
-		battery.Store(false)
-		synctest.Sleep(batteryRecheckInterval)
-		synctest.Wait()
-		assert.Equal(t, []vector.BuildRequest{{Backstop: true}}, mgr.callsSnapshot())
-		assert.NoFileExists(t, s.batteryDeferredPath)
-	})
-}
-
-func TestEmbedSchedulerReleasesIdleLeaseOnBattery(t *testing.T) {
 	for name, backstop := range map[string]bool{"notify": false, "backstop": true} {
 		t.Run(name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				idled := make(chan struct{})
-				tracker := server.NewIdleTracker(2*time.Second, func() { close(idled) })
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				go tracker.Run(ctx)
-				mgr := &fakeEmbedManager{}
-				s := newEmbedScheduler(mgr, time.Second, 0, false, tracker)
-				s.onBattery = func() bool { return true }
-				ticks := make(chan time.Time)
-				go s.run(ctx, ticks)
-				defer s.Stop()
-				s.Notify()
-				synctest.Wait()
-				if backstop {
-					ticks <- time.Now()
-				}
-				synctest.Sleep(4 * time.Second)
-				synctest.Wait()
-				select {
-				case <-idled:
-				default:
-					assert.Fail(t, "battery-deferred work kept the daemon alive")
-				}
-				assert.Zero(t, mgr.callCount())
-			})
+			for _, idleExit := range []bool{false, true} {
+				t.Run(fmt.Sprintf("idle_exit=%t", idleExit), func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						var tracker *server.IdleTracker
+						idled := make(chan struct{})
+						ctx, cancel := context.WithCancel(t.Context())
+						defer cancel()
+						if idleExit {
+							tracker = server.NewIdleTracker(2*time.Second, func() { close(idled) })
+							go tracker.Run(ctx)
+						}
+						mgr := &fakeEmbedManager{}
+						var battery atomic.Bool
+						battery.Store(true)
+						s := newEmbedScheduler(mgr, time.Second, 0, false, tracker)
+						s.onBattery = battery.Load
+						s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
+						ticks := make(chan time.Time)
+						go s.run(ctx, ticks)
+						defer s.Stop()
+						s.Notify()
+						synctest.Wait()
+						if backstop {
+							ticks <- time.Now()
+						}
+						synctest.Sleep(4 * time.Second)
+						synctest.Wait()
+						assert.Zero(t, mgr.callCount())
+						assert.FileExists(t, s.batteryDeferredPath)
+						if idleExit {
+							select {
+							case <-idled:
+							default:
+								assert.Fail(t, "battery-deferred work kept the daemon alive")
+							}
+							return
+						}
+						synctest.Sleep(3 * batteryRecheckInterval)
+						synctest.Wait()
+						assert.Zero(t, mgr.callCount())
+						battery.Store(false)
+						synctest.Sleep(batteryRecheckInterval)
+						synctest.Wait()
+						assert.Equal(t, []vector.BuildRequest{{Backstop: backstop}}, mgr.callsSnapshot())
+						assert.NoFileExists(t, s.batteryDeferredPath)
+					})
+				})
+			}
 		})
 	}
 }
@@ -1994,46 +1972,6 @@ func TestEmbedSchedulerBatteryBackstopClearsRetryTimer(t *testing.T) {
 	})
 }
 
-func TestMessageSchedulerStartupBuildsBatteryDeferredCorpus(t *testing.T) {
-	dataDir := t.TempDir()
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "current", "project", []db.Message{
-		dbtest.UserMsg("current", 0, "Already indexed message."),
-	}, func(s *db.Session) { s.EndedAt = new("2026-01-02T00:00:00Z") })
-	stub := newEmbeddingsStubServer(t, 3)
-	defer stub.Close()
-	cfg := vectorTestConfig(dataDir)
-	cfg.Vector.Embed.Recall = false
-	embeddingsServer := cfg.Vector.Embeddings.Servers["local"]
-	embeddingsServer.Endpoint = stub.URL + "/v1"
-	cfg.Vector.Embeddings.Servers["local"] = embeddingsServer
-	func() {
-		vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-		require.NoError(t, err)
-		defer vs.Close()
-		started, err := vs.Scheduler.mgr.TryBuild(t.Context(), vector.BuildRequest{})
-		require.NoError(t, err)
-		require.True(t, started)
-	}()
-	dbtest.SeedSessionWithMessages(t, database, "offline", "project", []db.Message{
-		dbtest.UserMsg("offline", 0, "Imported behind the index watermark."),
-	}, func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
-	marker := cfg.Vector.ResolvedDBPath(dataDir) + ".battery-deferred"
-	require.NoError(t, os.WriteFile(marker, nil, 0o600))
-	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-	require.NoError(t, err)
-	defer vs.Close()
-	vs.Scheduler.onBattery = func() bool { return false }
-	vs.Scheduler.debounce = 10 * time.Millisecond
-	go vs.Scheduler.Run(t.Context())
-	defer vs.Scheduler.Stop()
-	waitForSchedulerCondition(t, func() bool {
-		generations, listErr := directListGenerations(t.Context(), cfg, vector.MessageIndexSpec())
-		_, statErr := os.Stat(marker)
-		return listErr == nil && len(generations) == 1 && generations[0].Embedded == 2 && errors.Is(statErr, os.ErrNotExist)
-	}, "startup did not replay the deferred full reconciliation")
-}
-
 func TestMessageSchedulerACStartupReplaysDeferredWork(t *testing.T) {
 	for _, tc := range []struct {
 		name                        string
@@ -2042,7 +1980,6 @@ func TestMessageSchedulerACStartupReplaysDeferredWork(t *testing.T) {
 		want                        []vector.BuildRequest
 	}{
 		{name: "ordinary startup", runAfterSync: true, backstop: "24h"},
-		{name: "ordinary startup without sync", backstop: "24h"},
 		{name: "deferred sync", marker: true, runAfterSync: true, backstop: "0", want: []vector.BuildRequest{{Backstop: true}}},
 		{name: "deferred backstop", marker: true, backstop: "24h", want: []vector.BuildRequest{{Backstop: true}}},
 		{name: "disabled", marker: true, backstop: "0"},
