@@ -3,6 +3,7 @@ import {
   KNOWN_AGENTS,
   agentColor,
   agentForeground,
+  agentInk,
   agentLabel,
   entrypointBadge,
 } from "./agents.js";
@@ -107,6 +108,19 @@ describe("agentForeground", () => {
     expect(agentForeground("codex")).toBe("var(--accent-green-foreground)");
     expect(agentForeground("opencode")).toBe("var(--accent-purple-foreground)");
     expect(agentForeground("opencodereview")).toBe("var(--accent-indigo-foreground)");
+  });
+});
+
+describe("agentInk", () => {
+  it("writes agent names in their accent's ink, falling back to the accent", () => {
+    expect(agentInk("vibe")).toBe("var(--accent-orange-ink, var(--accent-orange))");
+    expect(agentInk("copilot")).toBe("var(--accent-amber-ink, var(--accent-amber))");
+    expect(agentInk("cursor")).toBe("var(--accent-black-ink, var(--accent-black))");
+  });
+
+  it("uses the blue ink for unknown agents", () => {
+    expect(agentInk("unknown")).toBe("var(--accent-blue-ink, var(--accent-blue))");
+    expect(agentInk("")).toBe("var(--accent-blue-ink, var(--accent-blue))");
   });
 });
 

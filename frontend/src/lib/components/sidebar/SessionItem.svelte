@@ -12,7 +12,7 @@
   import { starred } from "../../stores/starred.svelte.js";
   import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import { sessionMachineDisplay } from "../../utils/machines.js";
-  import { agentColor as getAgentColor, agentLabel, entrypointBadge } from "../../utils/agents.js";
+  import { agentInk as getAgentInk, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
     normalizeMessagePreview,
     previewMessage,
@@ -98,9 +98,7 @@
     return false;
   });
 
-  let agentColor = $derived(
-    getAgentColor(session.agent),
-  );
+  let agentInk = $derived(getAgentInk(session.agent));
 
   const machineDisplay = $derived(sessionMachineDisplay(session, sessions.machineLabels));
   let showMachine = $derived(!compact && machineDisplay.ids.some((id) => id !== "local"));
@@ -543,7 +541,7 @@
                      the tooltip rather than on the row. -->
                 <span
                   class="agent-tag"
-                  style:--agent-color={agentColor}
+                  style:--agent-ink={agentInk}
                   title={entrypointBadge(session.entrypoint)
                     ? `${agentLabel(session.agent, session.agent_label)} · ${entrypointBadge(session.entrypoint)}`
                     : agentLabel(session.agent, session.agent_label)}
@@ -906,8 +904,9 @@
     font-size: 10.5px;
     font-weight: 500;
     /* A touch of the text color keeps small colored capitals legible on
-       both light and dark surfaces without adding color. */
-    color: color-mix(in srgb, var(--agent-color, var(--text-muted)) 82%, var(--text-primary));
+       both light and dark surfaces without adding color; the ink token
+       darkens light accents too faint for text. */
+    color: color-mix(in srgb, var(--agent-ink, var(--text-muted)) 82%, var(--text-primary));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

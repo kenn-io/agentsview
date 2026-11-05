@@ -17,7 +17,7 @@
     truncate,
     sanitizeSnippet, highlightTerms,
   } from "../../utils/format.js";
-  import { agentColor, agentLabel } from "../../utils/agents.js";
+  import { agentInk, agentLabel } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -404,7 +404,7 @@
                   </span>
                 {/if}
               </span>
-              <span class="item-agent" style:--agent-color={agentColor(result.agent)}>{agentLabel(result.agent)}</span>
+              <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
               <span class="item-meta">
                 {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
               </span>
@@ -436,7 +436,7 @@
                 ? truncate(preview, 60)
                 : session.project}</span>
             </span>
-            <span class="item-agent" style:--agent-color={agentColor(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
+            <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
             <span class="item-meta">
               {formatRelativeTime(session.ended_at ?? session.started_at)}
             </span>
@@ -601,7 +601,7 @@
     padding-top: 2px;
     font-size: 12px;
     font-weight: 500;
-    color: color-mix(in srgb, var(--agent-color, var(--text-muted)) 82%, var(--text-primary));
+    color: color-mix(in srgb, var(--agent-ink, var(--text-muted)) 82%, var(--text-primary));
     white-space: nowrap;
   }
 

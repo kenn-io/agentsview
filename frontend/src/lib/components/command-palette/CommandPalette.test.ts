@@ -193,7 +193,7 @@ describe("CommandPalette", () => {
     mockSessions.sessions = [makeSession("s1", "cursor"), makeSession("s2", "unknown")];
   });
 
-  it("names each recent session's agent in its agentColor, including fallback", async () => {
+  it("names each recent session's agent in its agent ink, including fallback", async () => {
     const component = mount(CommandPalette, {
       target: document.body,
     });
@@ -203,9 +203,13 @@ describe("CommandPalette", () => {
     const agents = Array.from(document.querySelectorAll<HTMLElement>(".item-agent"));
     expect(agents).toHaveLength(2);
     expect(agents[0]?.textContent).toBe("Cursor");
-    expect(agents[0]?.getAttribute("style")).toContain("var(--accent-black)");
+    expect(agents[0]?.getAttribute("style")).toContain(
+      "--agent-ink: var(--accent-black-ink, var(--accent-black))",
+    );
     expect(agents[1]?.textContent).toBe("Unknown");
-    expect(agents[1]?.getAttribute("style")).toContain("var(--accent-blue)");
+    expect(agents[1]?.getAttribute("style")).toContain(
+      "--agent-ink: var(--accent-blue-ink, var(--accent-blue))",
+    );
 
     unmount(component);
   });

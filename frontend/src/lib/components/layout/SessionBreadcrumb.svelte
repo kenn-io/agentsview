@@ -36,7 +36,7 @@
   } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import {
-    agentColor,
+    agentInk,
     agentLabel,
     entrypointBadge,
   } from "../../utils/agents.js";
@@ -1287,7 +1287,7 @@
     <span class="breadcrumb-meta">
       <span
         class="agent-badge"
-        style:--agent-color={agentColor(session.agent)}
+        style:--agent-ink={agentInk(session.agent)}
       >{agentLabel(session.agent, session.agent_label)}</span>
       {#if entrypointBadge(session.entrypoint)}
         <span class="agent-badge entrypoint-badge">{entrypointBadge(session.entrypoint)}</span>
@@ -1612,7 +1612,7 @@
     font-size: 12px;
     font-weight: 600;
     line-height: 16px;
-    color: color-mix(in srgb, var(--agent-color, var(--text-muted)) 82%, var(--text-primary));
+    color: color-mix(in srgb, var(--agent-ink, var(--text-muted)) 82%, var(--text-primary));
     flex-shrink: 0;
   }
 
