@@ -115,12 +115,13 @@ func (db *DB) GetSessionStats(
 	for _, r := range rows {
 		sessionIDs = append(sessionIDs, r.id)
 	}
+	slices.Sort(sessionIDs)
 	sessionIDsAll := make([]string, 0, len(rowsWithSubagents))
 	for _, r := range rowsWithSubagents {
 		sessionIDsAll = append(sessionIDsAll, r.id)
 	}
 	accum, err := populateVelocityAccumulator(
-		ctx, db, slices.Sorted(slices.Values(sessionIDs)), tz,
+		ctx, db, sessionIDs, tz,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("populating velocity accumulator: %w", err)

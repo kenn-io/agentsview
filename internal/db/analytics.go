@@ -5453,17 +5453,10 @@ func (db *DB) GetAnalyticsTopSessions(
 	}
 	defer release()
 
-	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
-	broad, err := db.topSessionsWindowIsBroad(ctx, f, dateCol)
-	if err != nil {
-		return TopSessionsResponse{}, err
-	}
-	if broad {
-		// Keep the ranking index walk for windows too large to sort cheaply.
-		dateCol = "+" + dateCol
-	}
+	// Unary + preserves the ranking index walk instead of sorting by date.
+	dateCol := "+COALESCE(NULLIF(started_at, ''), created_at)"
 	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
-		return db.getAnalyticsTopSessionsGo(ctx, f, metric, dateCol)
+		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
 	}
 	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "sessions.id", true)
 
@@ -5530,27 +5523,12 @@ func (db *DB) GetAnalyticsTopSessions(
 	return resp, nil
 }
 
-// topSessionsWindowIsBroad reports whether the window holds most of the
-// 1,000 highest-ranked sessions, so a ranking index walk finds its rows
-// quickly. A dense short window outside that sample sorts its own rows.
-func (db *DB) topSessionsWindowIsBroad(
-	ctx context.Context, f AnalyticsFilter, dateCol string,
-) (bool, error) {
-	from, to := f.utcRange()
-	var broad bool
-	err := db.getReader().QueryRowContext(ctx, `SELECT 2 * TOTAL(d BETWEEN ? AND ?) > COUNT(*)
-		FROM (SELECT `+dateCol+` AS d FROM sessions ORDER BY message_count DESC LIMIT 1000)`,
-		from, to).Scan(&broad)
-	if err != nil {
-		return false, fmt.Errorf("probing top sessions date window: %w", err)
-	}
-	return broad, nil
-}
-
 func (db *DB) getAnalyticsTopSessionsGo(
-	ctx context.Context, f AnalyticsFilter, metric, dateCol string,
+	ctx context.Context, f AnalyticsFilter, metric string,
 ) (TopSessionsResponse, error) {
 	loc := f.location()
+	// Unary + preserves the ranking index walk instead of sorting by date.
+	dateCol := "+COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)
 
 	var timeIDs map[string]bool

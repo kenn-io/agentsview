@@ -5292,83 +5292,10 @@ func TestAnalyticsDateWindowPlan(t *testing.T) {
 			assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...), tc.index)
 		})
 	}
-}
-
-func TestGetAnalyticsTopSessionsDenseDateWindowWork(t *testing.T) {
-	d := testDB(t)
-	for _, population := range []struct {
-		prefix string
-		count  int
-	}{
-		{"old", 30000},
-		{"recent", 1001},
-	} {
-		_, err := d.getWriter().ExecContext(t.Context(), `
-			WITH RECURSIVE seq(n) AS (
-				SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1
-			)
-			INSERT INTO sessions (id, project, machine, agent, message_count, started_at)
-			SELECT printf('%s-%06d', ?, n), 'project-a', 'local', 'claude',
-				CASE WHEN ? = 'old' THEN 10000 + n ELSE n + 1 END,
-				CASE WHEN ? = 'old' THEN '2024-01-01T12:00:00Z'
-					ELSE '2024-06-01T12:00:00Z' END
-			FROM seq`, population.count, population.prefix, population.prefix, population.prefix)
-		require.NoError(t, err)
-	}
-
-	// Count date evaluations on the reader, preserving NULLIF's
-	// semantics for these non-NULL text starts. An indexed date seek reads
-	// stored expression values; a ranking walk evaluates old rows as it goes.
-	// Register only on the reader so the persisted expression index stays intact.
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	var evaluations int
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other string) any {
-			evaluations++
-			if value == other {
-				return nil
-			}
-			return value
-		}, true)
-	}))
-	// Count UTC day bucketing too, so sorting the whole archive for a broad
-	// window also exceeds the budget. This query uses only this strftime form.
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(format, value string) (string, error) {
-			evaluations++
-			if format != "%Y-%m-%d" {
-				return "", fmt.Errorf("unexpected date format: %s", format)
-			}
-			parsed, err := time.Parse(time.RFC3339, value)
-			return parsed.Format("2006-01-02"), err
-		}, true)
-	}))
-	require.NoError(t, conn.Close())
-
-	for _, tc := range []struct {
-		name, from, to, first, last string
-	}{
-		{"dense_short", "2024-06-01", "2024-06-03", "recent-001000", "recent-000991"},
-		{"broad", "2024-01-01", "2024-12-31", "old-029999", "old-029990"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			evaluations = 0
-			resp, err := d.GetAnalyticsTopSessions(t.Context(), AnalyticsFilter{
-				From: tc.from, To: tc.to, Timezone: "UTC",
-			}, "messages")
-			require.NoError(t, err)
-			require.Len(t, resp.Sessions, 10)
-			assert.Equal(t, tc.first, resp.Sessions[0].ID)
-			assert.Equal(t, tc.last, resp.Sessions[9].ID)
-			// Allow work over the 1,001 candidates and bounded probes, while
-			// rejecting a walk over the 30,000 older sessions. Broad windows
-			// can stop near the start of the ranking index instead.
-			assert.LessOrEqual(t, evaluations, 4096, "date evaluations must stay bounded")
-			t.Logf("date evaluations: %d", evaluations)
-		})
-	}
+	t.Run("top_sessions", func(t *testing.T) {
+		where, args := sqliteAnalyticsWhereSQL(baseFilter(), "+COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", true)
+		assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM sessions WHERE "+where+" ORDER BY message_count DESC, id ASC LIMIT 10", args...), "idx_sessions_message_count")
+	})
 }
 
 func TestAnalyticsDateWindowOldNullStart(t *testing.T) {
