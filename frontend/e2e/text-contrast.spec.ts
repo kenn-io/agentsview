@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { placeholderColor, renderedContrast, useTheme } from "./helpers/contrast";
 import { SessionsPage } from "./pages/sessions-page";
+import { KNOWN_AGENTS, agentColor, agentLabel } from "../src/lib/utils/agents";
 
 const THEMES = [
   ["light", false],
@@ -26,6 +27,56 @@ async function withHealthGrade(page: Page, grade: string) {
         : body;
     await route.fulfill({ response, json });
   });
+}
+
+// One built-in agent per distinct agent color, so every agent color is
+// checked even though the fixture only records a few agents.
+const AGENT_PER_COLOR = [
+  ...KNOWN_AGENTS.reduce((byColor, agent) => {
+    const color = agentColor(agent.name);
+    if (!byColor.has(color)) byColor.set(color, agent.name);
+    return byColor;
+  }, new Map<string, string>()).values(),
+];
+
+// The fixture lists about a dozen sessions and the palette shows ten, so
+// the colors are checked a batch at a time, one page load per batch.
+function agentBatches(size = 8) {
+  const batches: string[][] = [];
+  for (let i = 0; i < AGENT_PER_COLOR.length; i += size) {
+    batches.push(AGENT_PER_COLOR.slice(i, i + size));
+  }
+  return batches;
+}
+
+// Rewrites listed and fetched sessions so they cycle through `agents`, in
+// the order the sessions are first listed.
+async function withAgents(page: Page, agents: string[]) {
+  const assigned = new Map<string, string>();
+  const agentFor = (id: string) => {
+    if (!assigned.has(id)) assigned.set(id, agents[assigned.size % agents.length]!);
+    return assigned.get(id)!;
+  };
+  const patch = (session: Record<string, unknown>) => ({
+    ...session,
+    agent: agentFor(String(session.id)),
+    agent_label: null,
+  });
+  await page.route(/\/api\/v1\/sessions(\/[^/?]+)?(\?.*)?$/, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    const json = Array.isArray(body?.sessions)
+      ? { ...body, sessions: body.sessions.map(patch) }
+      : body && typeof body === "object" && "agent" in body
+        ? patch(body)
+        : body;
+    await route.fulfill({ response, json });
+  });
+}
+
+// Row fills fade on hover and selection; measure the settled fill.
+async function withoutTransitions(page: Page) {
+  await page.addStyleTag({ content: "*, *::before { transition: none !important; }" });
 }
 
 for (const [mode, highContrast] of THEMES) {
@@ -171,6 +222,85 @@ for (const [mode, highContrast] of THEMES) {
       });
       const contrast = await renderedContrast(chart, { foreground: other });
       expect(contrast.ratio, JSON.stringify(contrast)).toBeGreaterThanOrEqual(3);
+    });
+
+    test("agent names stay readable in the sidebar and session header", async ({ page }) => {
+      const header = page.locator(".session-breadcrumb .agent-badge:not(.entrypoint-badge)");
+      const seen = new Set<string>();
+      for (const agents of agentBatches()) {
+        await page.unrouteAll({ behavior: "wait" });
+        await withAgents(page, agents);
+        const sp = new SessionsPage(page);
+        await sp.goto();
+        await withoutTransitions(page);
+        const count = await sp.sessionItems.count();
+        for (let i = 0; i < count; i++) {
+          const row = sp.sessionItems.nth(i);
+          const name = row.locator(".agent-tag");
+          if ((await name.count()) === 0) continue;
+          const label = (await name.textContent())!;
+          if (seen.has(label)) continue;
+          seen.add(label);
+          await page.mouse.move(0, 0);
+          const resting = await renderedContrast(name);
+          await row.hover();
+          const hovered = await renderedContrast(name);
+          await row.click();
+          await expect(row).toHaveClass(/\bactive\b/);
+          const selected = await renderedContrast(name);
+          for (const [state, contrast] of Object.entries({ resting, hovered, selected })) {
+            expect(
+              contrast.ratio,
+              `sidebar ${label} ${state} ${JSON.stringify(contrast)}`,
+            ).toBeGreaterThanOrEqual(4.5);
+          }
+          await expect(header).toHaveText(label);
+          const inHeader = await renderedContrast(header);
+          expect(
+            inHeader.ratio,
+            `header ${label} ${JSON.stringify(inHeader)}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      expect([...seen].sort()).toEqual(AGENT_PER_COLOR.map((agent) => agentLabel(agent)).sort());
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    });
+
+    test("agent names stay readable in the search palette", async ({ page }) => {
+      const seen = new Set<string>();
+      for (const agents of agentBatches()) {
+        await page.unrouteAll({ behavior: "wait" });
+        await withAgents(page, agents);
+        const sp = new SessionsPage(page);
+        await sp.goto();
+        await withoutTransitions(page);
+        await page.keyboard.press("ControlOrMeta+k");
+        const items = page.locator(".palette-item");
+        await expect(items.first()).toBeVisible();
+        const count = await items.count();
+        for (let i = 0; i < count; i++) {
+          const name = items.nth(i).locator(".item-agent");
+          const label = (await name.textContent())!;
+          seen.add(label);
+          if (i > 0) {
+            const resting = await renderedContrast(name);
+            expect(
+              resting.ratio,
+              `palette ${label} resting ${JSON.stringify(resting)}`,
+            ).toBeGreaterThanOrEqual(4.5);
+          }
+          await items.nth(i).hover();
+          await expect(items.nth(i)).toHaveClass(/\bselected\b/);
+          const selected = await renderedContrast(name);
+          expect(
+            selected.ratio,
+            `palette ${label} selected ${JSON.stringify(selected)}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+        await page.keyboard.press("Escape");
+      }
+      expect([...seen].sort()).toEqual(AGENT_PER_COLOR.map((agent) => agentLabel(agent)).sort());
+      await page.unrouteAll({ behavior: "ignoreErrors" });
     });
 
     for (const grade of ["A", "B", "C", "F"]) {

@@ -86,6 +86,29 @@
   --accent-lime-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-cyan-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-violet-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  /* Agent-name inks: the shade an agent's name is written in (agentInk()
+     in utils/agents.ts). Names mix 82% ink into the text color and sit on
+     surfaces down to the selected sidebar row, a blue tint over the hover
+     fill. Several light accents fall to about 2.7:1 there, so each of those
+     keeps its OKLCH hue and chroma and lowers its lightness until the name
+     reaches 4.6:1 on that row. Accents that already clear it are their own
+     ink. Dark theme names use the accents unchanged (see :root.dark). */
+  --accent-blue-ink: var(--accent-blue);
+  --accent-purple-ink: var(--accent-purple);
+  --accent-red-ink: var(--accent-red);
+  --accent-rose-ink: var(--accent-rose);
+  --accent-black-ink: var(--accent-black);
+  --accent-violet-ink: var(--accent-violet);
+  --accent-amber-ink: #b05f00; /* kit-ui-check-ignore: app token definition */
+  --accent-green-ink: #02845c; /* kit-ui-check-ignore: app token definition */
+  --accent-teal-ink: #028277; /* kit-ui-check-ignore: app token definition */
+  --accent-coral-ink: #db3529; /* kit-ui-check-ignore: app token definition */
+  --accent-indigo-ink: #5f62ec; /* kit-ui-check-ignore: app token definition */
+  --accent-orange-ink: #aa6203; /* kit-ui-check-ignore: app token definition */
+  --accent-sky-ink: #027ab8; /* kit-ui-check-ignore: app token definition */
+  --accent-pink-ink: #d42f85; /* kit-ui-check-ignore: app token definition */
+  --accent-lime-ink: #4e8103; /* kit-ui-check-ignore: app token definition */
+  --accent-cyan-ink: #017e9b; /* kit-ui-check-ignore: app token definition */
   /* Tool-category color map (see internal/parser/taxonomy.go for normalized values) */
   --cat-read: #4a7ba8; /* Read, Grep, Glob */ /* kit-ui-check-ignore: app token definition */
   --cat-edit: #5a8b3a; /* Edit, Write */ /* kit-ui-check-ignore: app token definition */
@@ -165,6 +188,16 @@
   --accent-lime-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-cyan-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-violet-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-amber-ink: var(--accent-amber);
+  --accent-green-ink: var(--accent-green);
+  --accent-teal-ink: var(--accent-teal);
+  --accent-coral-ink: var(--accent-coral);
+  --accent-indigo-ink: var(--accent-indigo);
+  --accent-orange-ink: var(--accent-orange);
+  --accent-sky-ink: var(--accent-sky);
+  --accent-pink-ink: var(--accent-pink);
+  --accent-lime-ink: var(--accent-lime);
+  --accent-cyan-ink: var(--accent-cyan);
   /* Same series hues stepped for the dark surface, not an automatic flip;
      validated as a set against the dark surface. */
   --chart-series-1: #3987e5; /* kit-ui-check-ignore: app token definition */
