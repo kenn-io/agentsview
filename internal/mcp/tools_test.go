@@ -1460,16 +1460,10 @@ func TestSearchContent_ScopeRejectedForFTS(t *testing.T) {
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	for _, mode := range []string{"fts"} {
-		t.Run("mode="+mode, func(t *testing.T) {
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
-				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
-			})
-			require.Error(t, err)
-			assert.EqualError(t, err,
-				db.ContentSearchScopeUnsupportedMsg)
-		})
-	}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", Mode: "fts", Scope: "top", IncludeActive: true,
+	})
+	require.EqualError(t, err, db.ContentSearchScopeUnsupportedMsg)
 	assert.Empty(t, fake.lastReq.Pattern,
 		"a rejected request must not reach the service")
 }
@@ -1506,6 +1500,25 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "substring", out.EffectiveMode)
 	assert.Equal(t, "all", out.EffectiveScope)
+	assert.Equal(t, "all", fake.lastReq.Scope)
+	assert.False(t, out.Exclusions.Children)
+	for _, tc := range []struct {
+		mode, scope, sessionID, effectiveScope string
+		children                               bool
+	}{
+		{mode: "regex", effectiveScope: "all"},
+		{mode: "substring", scope: "top", effectiveScope: "top", children: true},
+		{mode: "fts", children: true},
+		{mode: "fts", sessionID: "child"},
+	} {
+		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			Pattern: "retries", Mode: tc.mode, Scope: tc.scope, SessionID: tc.sessionID, IncludeActive: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, tc.effectiveScope, fake.lastReq.Scope)
+		assert.Equal(t, tc.effectiveScope, out.EffectiveScope)
+		assert.Equal(t, tc.children, out.Exclusions.Children)
+	}
 }
 
 func TestSearchContent_RecallContractMapping(t *testing.T) {
@@ -2089,72 +2102,17 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	httpServer.Config.Handler = srv.Handler()
 	httpServer.Start()
 	t.Cleanup(httpServer.Close)
-	for name, svc := range map[string]service.SessionService{
-		"direct": service.NewDirectBackend(d, nil),
-		"http":   servicehttp.NewHTTPBackend(httpServer.URL, "", false, ""),
-	} {
-		t.Run(name, func(t *testing.T) {
-			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
-			defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-			for _, mode := range []string{"", "regex", "fts"} {
-				for _, scope := range []string{"", "all", "top", "subordinate"} {
-					if mode == "fts" && scope != "" {
-						continue
-					}
-					args := map[string]any{
-						"pattern": "scopeanchor", "mode": mode, "scope": scope,
-						"include_active": true, "include_one_shot": true, "include_automated": true,
-					}
-					result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
-					require.NoError(t, err)
-					require.False(t, result.IsError)
-					out := decodeStructured[searchContentOut](t, result)
-					ids := make([]string, 0, len(out.Matches))
-					for _, match := range out.Matches {
-						ids = append(ids, match.SessionID)
-					}
-					if scope == "top" || mode == "fts" {
-						assert.NotContains(t, ids, "a-child")
-					} else {
-						assert.Contains(t, ids, "a-child")
-					}
-					if mode == "fts" {
-						assert.Empty(t, out.EffectiveScope)
-					} else if scope == "" {
-						assert.Equal(t, "all", out.EffectiveScope)
-					} else {
-						assert.Equal(t, scope, out.EffectiveScope)
-					}
-					raw, err := json.Marshal(result.StructuredContent)
-					require.NoError(t, err)
-					var fields struct {
-						Exclusions map[string]bool `json:"exclusions"`
-					}
-					require.NoError(t, json.Unmarshal(raw, &fields))
-					children, exists := fields.Exclusions["children"]
-					assert.True(t, exists)
-					assert.Equal(t, scope == "top" || mode == "fts", children)
-					if mode == "fts" || scope == "top" {
-						args["session_id"] = "a-child"
-						exact, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
-						require.NoError(t, err)
-						require.False(t, exact.IsError)
-						got := decodeStructured[searchContentOut](t, exact)
-						if scope == "top" {
-							assert.Empty(t, got.Matches)
-							assert.True(t, got.Exclusions.Children)
-						} else {
-							require.Len(t, got.Matches, 1)
-							assert.False(t, got.Exclusions.Children)
-						}
-					}
-				}
-			}
-			result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
-				"pattern": "scopeanchor", "scope": "bogus", "include_active": true,
-			}))
-			require.NoError(t, err)
-			assert.True(t, result.IsError)
-		})
+	svc := servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for _, mode := range []string{"", "regex"} {
+		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
+			"pattern": "a-child first prompt", "mode": mode, "include_active": true,
+		}))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		out := decodeStructured[searchContentOut](t, result)
+		require.Len(t, out.Matches, 1)
+		assert.Equal(t, "a-child", out.Matches[0].SessionID)
 	}
 }

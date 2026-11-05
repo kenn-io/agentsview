@@ -1305,7 +1305,9 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 		(session_id, tool_call_message_ordinal, tool_use_id, source, status,
 		 content, content_length, timestamp, event_index)
 		VALUES ('evorph', 7, 'tux', 'stdout', 'success',
-		 'ORPHHIT event content', 21, '2026-05-20T12:00:00Z', 0)`)
+		 'ORPHHIT event content', 21, '2026-05-20T12:00:00Z', 0),
+		 ('boss', 7, 'top-orphan', 'stdout', 'success',
+		 'TOPORPH', 7, '2026-05-20T12:00:00Z', 0)`)
 	require.NoError(t, err, "insert orphan event")
 
 	seedUnitSession(t, d, "evrun", nil, []Message{
@@ -1339,18 +1341,18 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 	assert.Equal(t, "boss", m.ParentSessionID, "ParentSessionID from sessions join")
 
 	for _, mode := range []string{"substring", "regex"} {
-		for _, scope := range []string{"all", "subordinate", "top"} {
-			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-				Pattern: "ORPHHIT", Mode: mode, Scope: scope, Sources: []string{"tool_result"}, Limit: 1,
-			})
-			require.NoError(t, err)
-			if scope == "top" {
-				assert.Empty(t, page.Matches)
-			} else {
-				require.Len(t, page.Matches, 1)
-				assert.Equal(t, "evorph", page.Matches[0].SessionID)
-			}
-		}
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "ORPHHIT", Mode: mode, Scope: "subordinate", Sources: []string{"tool_result"}, Limit: 1,
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "evorph", page.Matches[0].SessionID)
+		page, err = d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "TOPORPH", Mode: mode, Scope: "top", Sources: []string{"tool_result"}, Limit: 1,
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "boss", page.Matches[0].SessionID)
 	}
 
 	ev, err := d.SearchContent(t.Context(), ContentSearchFilter{

@@ -25,10 +25,11 @@ func SeedLexicalScope(t *testing.T, d *db.DB) {
 	} {
 		SeedSession(t, d, tc.id, "lexical-scope", func(s *db.Session) {
 			s.UserMessageCount = 2
+			s.MessageCount = 4
 			if tc.oneShot {
 				s.UserMessageCount = 1
+				s.MessageCount = 3
 			}
-			s.MessageCount = 3
 			s.StartedAt = new("2024-06-15T10:00:00Z")
 			s.EndedAt = new("2024-06-15T11:00:00Z")
 			s.RelationshipType = tc.relationship
@@ -36,8 +37,8 @@ func SeedLexicalScope(t *testing.T, d *db.DB) {
 				s.ParentSessionID = new("e-parent")
 			}
 		})
-		require.NoError(t, d.ReplaceSessionMessages(t.Context(), tc.id, []db.Message{
-			{SessionID: tc.id, Ordinal: 0, Role: "user", Content: "prompt"},
+		messages := []db.Message{
+			{SessionID: tc.id, Ordinal: 0, Role: "user", Content: tc.id + " first prompt"},
 			{
 				SessionID: tc.id, Ordinal: 1, Role: "assistant", IsSidechain: tc.sidechain,
 				Content: "scopeanchor", DialogueText: new("scopeanchor"), ThinkingText: "scopeanchor", HasThinking: true, HasToolUse: true,
@@ -49,7 +50,11 @@ func SeedLexicalScope(t *testing.T, d *db.DB) {
 					ToolUseID: "event", Source: "test", Status: "completed", Content: "eventanchor", ContentLength: len("eventanchor"),
 				}}}},
 			},
-		}))
+		}
+		if !tc.oneShot {
+			messages = append(messages, db.Message{SessionID: tc.id, Ordinal: 3, Role: "user", Content: "follow-up prompt"})
+		}
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), tc.id, messages))
 	}
 }
 
