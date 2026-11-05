@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -33,6 +34,8 @@ type daemonIngestion struct {
 	load func() (config.Config, error)
 
 	cfg atomic.Pointer[config.Config]
+	// attached drains configured archive sources during an idle catch-up.
+	attached atomic.Pointer[archivesource.Manager]
 
 	// applyMu serializes reloads. Each reload reads the saved configuration
 	// under it, so the last one to run applies the latest settings.
@@ -154,11 +157,12 @@ func (d *daemonIngestion) Pending() bool {
 	return d.pending
 }
 
-// Suspend marks the archive pending before releasing collection resources.
+// Suspend marks the archive pending before releasing collection resources;
+// an in-flight catch-up keeps them.
 func (d *daemonIngestion) Suspend() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.stopped || d.watchers == nil {
+	if d.stopped || d.watchers == nil || d.catchup != nil {
 		return
 	}
 	if !d.pending {
@@ -286,20 +290,53 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
 	err := d.restoreCollection()
 	if err == nil {
-		roots, unwatched, symlinks, persistent := collectWatchRoots(d.Config())
-		obligations := watchPollingObligations(roots, nil, unwatched, persistent)
-		obligations = append(obligations, symlinkPollingObligations(symlinks)...)
-		polling := make([]pollingObligation, 0, len(obligations))
-		for _, obligation := range obligations {
-			polling = append(polling, syncObligationToPoller(obligation))
-		}
-		groups, _ := availableUnwatchedPollScopes(polling)
-		err = pollUnwatchedScopesOnce(d.ctx, d.engine, groups)
+		err = d.catchUpSources(d.Config())
 	}
 	if err != nil {
 		log.Printf("idle catch-up incomplete: %v", err)
 	}
 	d.finishCatchup(done, err == nil && d.ctx.Err() == nil)
+}
+
+// attachSources configures the archive sources an idle catch-up drains.
+func (d *daemonIngestion) attachSources(cfg config.Config) (*archivesource.Manager, error) {
+	attached, err := archivesource.NewManager(d.ctx, cfg, d.database, d.engine, d.FlushPending)
+	if err == nil {
+		d.attached.Store(attached)
+	}
+	return attached, err
+}
+
+// catchUpSources syncs what changed while collection was released: local
+// scopes the watcher only learns about by polling, then the scheduled passes.
+func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
+	roots, unwatched, symlinks, persistent := collectWatchRoots(cfg)
+	obligations := watchPollingObligations(roots, nil, unwatched, persistent)
+	obligations = append(obligations, symlinkPollingObligations(symlinks)...)
+	polling := make([]pollingObligation, 0, len(obligations))
+	for _, obligation := range obligations {
+		polling = append(polling, syncObligationToPoller(obligation))
+	}
+	groups, _ := availableUnwatchedPollScopes(polling)
+	if err := pollUnwatchedScopesOnce(d.ctx, d.engine, groups); err != nil {
+		return err
+	}
+	return d.catchUpScheduledSources(cfg)
+}
+
+// catchUpScheduledSources runs the remote and attached-source passes the
+// scheduled tick skips while collection is released.
+func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
+	if remote := remoteSourceSyncRoots(cfg); len(remote) > 0 {
+		if stats := d.engine.SyncRootsSince(d.ctx, remote, time.Time{}, nil); !stats.ProcessingComplete() {
+			return errors.New("remote source sync incomplete")
+		}
+	}
+	if attached := d.attached.Load(); attached != nil {
+		_, err := attached.DrainScheduled(d.ctx)
+		return err
+	}
+	return nil
 }
 
 // Reload reads the saved configuration and applies it in the background. It

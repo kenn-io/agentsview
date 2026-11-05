@@ -213,6 +213,10 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			tracker := server.NewIdleTracker(0, func() {})
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, func() (config.Config, error) { return saved, nil })
 			t.Cleanup(ingestion.Stop)
+			if mode == "automatic" {
+				tracker.SetSyncIdle(100*time.Millisecond, ingestion.Suspend) //nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
+				go tracker.Run(t.Context())
+			}
 			ingestion.Suspend()
 			ingestion.applying.Wait()
 			writeReloadGeminiSession(t, root, "overnight")
@@ -297,6 +301,9 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			assert.Contains(t, freshBody, "hello from "+query)
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 			require.True(t, <-active)
+			if mode == "automatic" {
+				require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond, "collection suspends again after background catch-up")
+			}
 		})
 	}
 }
@@ -436,7 +443,7 @@ func TestDaemonIngestionWakeReconcilesOlderQueuedRetry(t *testing.T) {
 	}
 }
 
-func TestDaemonIngestionWakeLeavesRemoteImportsScheduled(t *testing.T) {
+func TestDaemonIngestionWakeKeepsLocalResultsDuringRemoteFailure(t *testing.T) {
 	for _, local := range []bool{true, false} {
 		t.Run(fmt.Sprintf("local=%v", local), func(t *testing.T) {
 			var requests atomic.Int32
@@ -473,7 +480,7 @@ func TestDaemonIngestionWakeLeavesRemoteImportsScheduled(t *testing.T) {
 				assert.Contains(t, body, "hello from morning")
 			}
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			assert.Zero(t, requests.Load(), "idle wake leaves S3 imports on their scheduled pass")
+			assert.Positive(t, requests.Load(), "idle wake also attempts the paused remote imports")
 			assert.False(t, ingestion.Pending())
 		})
 	}

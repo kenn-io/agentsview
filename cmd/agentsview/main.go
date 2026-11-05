@@ -414,7 +414,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if opts.ReloadConfig != nil {
 			reloadIngestion = ingestion.Reload
 		}
-		attachedSources, err = archivesource.NewManager(ctx, cfg, database, engine, ingestion.FlushPending)
+		attachedSources, err = ingestion.attachSources(cfg)
 		if err != nil {
 			fatal("configuring archive sources: %v", err)
 		}
