@@ -93,6 +93,41 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 		"one call over a large limit folds the whole membership")
 	assert.Equal(t, container+"#a", page[0].Path)
 	assert.Equal(t, container+"#c", page[1].Path)
+
+	for _, limit := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			d := testDB(t)
+			wantPaths := []string{container + "#a", container + "#b", container + "#c", container + "#d", container + "#e", container + "#f", container + "#g"}
+			// Every possible page end has duplicates. The last row supplies
+			// the minimum version, after the newest-mtime hash is selected.
+			for _, path := range wantPaths {
+				seedVirtualMemberRow(t, d, path+"-old", path, 100, 5, "old-hash")
+				seedVirtualMemberRow(t, d, path+"-new", path, 200, 5, "new-hash")
+				seedVirtualMemberRow(t, d, path+"-tie", path, 200, 2, "tie-hash")
+			}
+
+			var gotPaths []string
+			after := ""
+			for range len(wantPaths) + 1 {
+				page, done, err := d.ListVirtualContainerMemberFreshnessPage(t.Context(), container, "", after, limit)
+				require.NoError(t, err)
+				require.LessOrEqual(t, len(page), limit)
+				for _, row := range page {
+					gotPaths = append(gotPaths, row.Path)
+					assert.Equal(t, int64(200), row.MTimeNS, row.Path)
+					assert.Equal(t, "new-hash", row.Hash, row.Path)
+					assert.Equal(t, 2, row.DataVersion, row.Path)
+				}
+				if done {
+					assert.Equal(t, wantPaths, gotPaths)
+					return
+				}
+				require.Len(t, page, limit)
+				after = page[len(page)-1].Path
+			}
+			require.FailNow(t, "paging did not report exhaustion")
+		})
+	}
 }
 
 func TestVirtualContainerMemberFreshnessStreamingPlan(t *testing.T) {
@@ -111,7 +146,7 @@ func TestVirtualContainerMemberFreshnessGrowth(t *testing.T) {
 		t.Skip("measures full container scans at two sizes")
 	}
 	var medians []time.Duration
-	for _, count := range []int{500, 5000} {
+	for _, count := range []int{5000, 50000} {
 		d := testDB(t)
 		const container = "/data/opencode.db"
 		_, err := d.getWriter().Exec(t.Context(), `
@@ -146,8 +181,10 @@ func TestVirtualContainerMemberFreshnessGrowth(t *testing.T) {
 		medians = append(medians, elapsed[len(elapsed)/2])
 	}
 	ratio := float64(medians[1]) / float64(medians[0])
-	t.Logf("500 members: %s; 5000 members: %s; growth ratio: %.2fx", medians[0], medians[1], ratio)
-	assert.LessOrEqual(t, ratio, 15.0, "10x membership must remain near linear")
+	t.Logf("5000 members: %s; 50000 members: %s; growth ratio: %.2fx", medians[0], medians[1], ratio)
+	// Leave room for CI noise around linear growth while rejecting the
+	// roughly 100x growth of rescanning the remaining container on each page.
+	assert.LessOrEqual(t, ratio, 30.0, "10x membership must remain near linear")
 }
 
 // TestListVirtualContainerMemberFreshnessPageMarksTrashedAndExcluded pins the
