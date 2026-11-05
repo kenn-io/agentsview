@@ -136,14 +136,11 @@ type serveOptions struct {
 }
 
 // serveMemoryLimitBytes is the default Go soft memory limit for the
-// long-running serve daemon. Full parses of multi-megabyte transcripts
-// otherwise balloon the heap to several hundred megabytes; the pages
-// are freed afterwards but macOS keeps them in the process RSS
-// indefinitely, so the daemon's reported memory ratchets to the
-// largest transient since startup. A soft limit makes the GC hold the
-// heap near the cap during those bursts instead. CGO memory (SQLite)
-// is outside the limit, so total RSS settles somewhat above it.
-const serveMemoryLimitBytes = 256 << 20
+// long-running serve daemon. It provides a backstop above twice the live
+// heap of the largest measured requests, so GOGC paces collection during
+// them. The sync scavengers return transient parse memory to the OS.
+// CGO memory (SQLite) is outside the limit.
+const serveMemoryLimitBytes = 1 << 30
 
 // applyServeMemoryLimit installs the default soft memory limit unless
 // the operator already set one via GOMEMLIMIT. Only the serve daemon
