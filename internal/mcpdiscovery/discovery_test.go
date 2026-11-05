@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/daemon"
+
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestListUnknownIdentityWithoutLocalPID(t *testing.T) {
@@ -52,17 +54,21 @@ func TestListUnknownIdentityWithoutLocalPID(t *testing.T) {
 
 func TestPublishedURLConnectsToListener(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		network string
-		address string
-		host    string
+		name     string
+		network  string
+		address  string
+		host     string
+		wildcard bool
 	}{
-		{"IPv4 wildcard", "tcp4", "0.0.0.0:0", "127.0.0.1"},
-		{"IPv6 wildcard", "tcp6", "[::]:0", "::1"},
-		{"IPv4 loopback", "tcp4", "127.0.0.1:0", "127.0.0.1"},
-		{"IPv6 loopback", "tcp6", "[::1]:0", "::1"},
+		{"IPv4 wildcard", "tcp4", "0.0.0.0:0", "127.0.0.1", true},
+		{"IPv6 wildcard", "tcp6", "[::]:0", "::1", true},
+		{"IPv4 loopback", "tcp4", "127.0.0.1:0", "127.0.0.1", false},
+		{"IPv6 loopback", "tcp6", "[::1]:0", "::1", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.wildcard {
+				testutil.RequireWildcardListen(t)
+			}
 			listener, err := (&net.ListenConfig{}).Listen(t.Context(), tc.network, tc.address)
 			if err != nil && tc.network == "tcp6" {
 				t.Skipf("IPv6 listener unavailable: %v", err)

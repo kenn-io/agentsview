@@ -17,6 +17,15 @@ import (
 func newExportConversationsCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use: "conversations", Short: "Export stored conversation text and changes",
+		Long: "Export stored conversation changes and retrieve message text in bounded, revision-checked chunks. " +
+			"First walk changes, which lists message IDs and revisions without exporting their text. " +
+			"Use cursor to continue an unfinished walk, or checkpoint only after a walk completes. " +
+			"Then request message chunks using the returned session ID, message ID, revision, and database ID; keep the same text mode. " +
+			"These commands emit their own JSON documents without --json. " +
+			"Exit 4: archive reconciliation required. Exit 5: message revision changed.",
+		Example: "  agentsview export conversations changes --text-mode stored --limit 100\n" +
+			"  agentsview export conversations changes --text-mode stored --limit 100 --cursor <cursor>\n" +
+			"  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536",
 		Args: cobra.NoArgs, SilenceUsage: true,
 	}
 	command.AddCommand(newConversationChangesCommand(), newConversationMessageCommand())
@@ -27,6 +36,12 @@ func newConversationChangesCommand() *cobra.Command {
 	var options db.ConversationExportOptions
 	command := &cobra.Command{
 		Use: "changes", Short: "List changed messages without exporting their text",
+		Long: "List changed messages without their text. " +
+			"Continue a partial walk with the returned cursor; after the walk finishes, retain its checkpoint for the next changes walk. " +
+			"--cursor and --checkpoint are mutually exclusive. " +
+			"Keep the text mode consistent with later message retrieval, and preserve reconciliation errors when the archive generation changes.",
+		Example: "  agentsview export conversations changes --text-mode stored --limit 100\n" +
+			"  agentsview export conversations changes --text-mode stored --limit 100 --checkpoint <checkpoint>",
 		Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if options.Checkpoint != "" && options.Cursor != "" {
@@ -53,7 +68,11 @@ func newConversationMessageCommand() *cobra.Command {
 	var options db.ConversationMessageOptions
 	command := &cobra.Command{
 		Use: "message SESSION_ID MESSAGE_ID", Short: "Read a bounded chunk of one message revision",
-		Args: cobra.ExactArgs(2), SilenceUsage: true,
+		Long: "Read one bounded chunk of the exact message revision named by a changes result. " +
+			"Supply its session ID, message ID, --revision, and --database-id, using the same --text-mode. " +
+			"A changed revision or archive generation requires handling the export error before retrying.",
+		Example: "  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536",
+		Args:    cobra.ExactArgs(2), SilenceUsage: true,
 		RunE: func(command *cobra.Command, args []string) error {
 			if options.Revision == "" || options.DatabaseID == "" {
 				return errors.New("--revision and --database-id are required; use the values from conversations changes")

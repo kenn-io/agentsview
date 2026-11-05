@@ -1,8 +1,20 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-03
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
+
+## Start from help
+
+On `main` (unreleased), `agentsview --help` includes a numbered workflow for
+syncing sources, finding sessions, reading transcripts, and checking usage.
+It explains session IDs, backend selection, output streams, exit codes, and
+environment variables. Run `agentsview source list --json` for the provider
+catalog, built-in source locations, and environment override names. It does not
+resolve configured directory arrays. Run `agentsview openapi` for the API schema.
+
+Use `agentsview session --help` for common backend and output flags. Core
+commands include examples and describe their limits.
 
 ## Recover from CLI errors
 
@@ -1993,6 +2005,7 @@ agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
+agentsview session diagnose <id> --format json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
 agentsview session usage-batch <id>...   # ordered usage results for several sessions

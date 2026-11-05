@@ -642,3 +642,14 @@ func TestHostedTenantRejectsIncompleteSearchPath(t *testing.T) {
 	defer unpinned.Close()
 	assert.Error(t, CheckHostedTenant(t.Context(), unpinned, f.schema, f.tenant), "schema-only path leaves temporary relations implicitly first")
 }
+
+func TestHostedTenantUpgradeInstallsAutomationTracking(t *testing.T) {
+	f := newHostedFixture(t, "tenant-a")
+	_, err := f.admin.ExecContext(t.Context(), `DROP TRIGGER trg_sessions_automation_audit ON sessions;
+ DROP INDEX idx_sessions_automation_audit; ALTER TABLE sessions DROP COLUMN automation_audit_hash`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	current, err := automationAuditSchemaCurrentPG(t.Context(), f.admin)
+	require.NoError(t, err)
+	assert.True(t, current)
+}

@@ -153,6 +153,14 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   distinct from byte limits. Both helpers assume valid UTF-8 and do not
   sanitize malformed input.
 - Do not use emojis in code or output.
+- Tests must bind loopback (`127.0.0.1:0` or `[::1]:0`, or `httptest`, which
+  already does). A wildcard listen (`0.0.0.0`, `[::]`, bare `:0`) makes the
+  host firewall prompt for the test binary, and because `go test` relinks it
+  into a fresh temporary directory every run, the prompt returns every run.
+  A test that genuinely needs wildcard bind semantics must call
+  `internal/testutil.RequireWildcardListen(t)` first, which skips it on local
+  Windows runs unless `CI=true`. `AGENTSVIEW_TEST_WILDCARD_LISTEN=1`
+  enables these tests; `0` skips them on every platform.
 - Format Markdown with `mdformat --wrap 80` when `mdformat` and
   `mdformat-tables` are available.
 

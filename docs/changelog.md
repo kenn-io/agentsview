@@ -28,6 +28,13 @@ The latest release is
   Transcript-only and usage-only archives retain no links. Deleted sessions
   remain visible as missing records. Sessions permanently deleted before this
   release have no links.
+
+- Investigate an expensive archived session with `session diagnose <id>`. The
+  report combines usage, context growth, compactions, large tool results, retry
+  candidates, and child links. Use `--format json` for scripts or `--pg` to read
+  a PostgreSQL archive. Transcript text and tool arguments stay out of the
+  report.
+
 - Assistants searching your history through MCP can now ask for sessions that
   covered several ideas at once, such as an auth change and its retry policy,
   even when they came up in different parts of the conversation. Pass two to

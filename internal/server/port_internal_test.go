@@ -6,9 +6,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) {
+	testutil.RequireWildcardListen(t)
 	occupiedListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
 	require.NoError(t, err, "bind IPv4 wildcard")
 	defer occupiedListener.Close()
