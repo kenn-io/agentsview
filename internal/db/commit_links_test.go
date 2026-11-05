@@ -459,6 +459,22 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	}
 }
 
+func TestCommitLinksTurnSkipsLegacySystemContext(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")
+	messages[1].IsSystem = false
+	messages[1].Content = "<goal_context>Continue the current task</goal_context>"
+	insertMessages(t, d, messages...)
+
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	require.NotNil(t, got.Commits[0].Turn)
+	assert.Equal(t, 0, got.Commits[0].Turn.Ordinal)
+	assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+}
+
 func TestCommitLinksPromptLimit(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
