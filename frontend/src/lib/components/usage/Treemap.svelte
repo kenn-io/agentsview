@@ -259,12 +259,14 @@
     fill: var(--tile-ink, white);
   }
 
-  .treemap-container :global(.tile:not(.patterned) .tile-value) {
-    fill-opacity: 0.92;
-    font-variant-numeric: tabular-nums;
+  /* tilePaint() darkens a tile only until opaque ink reaches 4.5:1, so
+     every solid-tile line stays opaque; weight and face set the order. */
+  .treemap-container :global(.tile:not(.patterned) .tile-value),
+  .treemap-container :global(.tile:not(.patterned) .tile-meta) {
+    fill-opacity: 1;
   }
 
-  .treemap-container :global(.tile:not(.patterned) .tile-meta) {
-    fill-opacity: 0.9;
+  .treemap-container :global(.tile:not(.patterned) .tile-value) {
+    font-variant-numeric: tabular-nums;
   }
 </style>

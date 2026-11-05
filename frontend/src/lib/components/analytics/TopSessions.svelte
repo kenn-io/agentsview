@@ -245,6 +245,12 @@
     background: color-mix(in srgb, var(--accent-orange) 16%, transparent);
   }
 
+  /* Light orange needs a larger primary share for the 11px count to stay
+     above 4.5:1 on the tinted pill, resting and hovered. */
+  :global(:root:not(.dark)) .status-count-pill {
+    color: color-mix(in srgb, var(--accent-orange) 55%, var(--text-primary));
+  }
+
   .metric-toggle {
     display: flex;
     gap: 2px;
