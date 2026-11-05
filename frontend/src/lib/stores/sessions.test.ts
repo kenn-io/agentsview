@@ -4024,48 +4024,33 @@ describe("SessionsStore live refresh", () => {
     spy.mockRestore();
   });
 
-  it("leaves hidden tabs quiet until a visible safety-net refresh", async () => {
-    vi.useFakeTimers();
-    const { events } = await import("./events.svelte.js");
-    const subscription = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
-    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-    const sessions = createSessionsStore();
-    const detach = sessions.attachSidebar();
-    try {
-      await sessions.load();
-      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-      visibility.mockReturnValue(false);
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
-    } finally {
-      detach();
-      visibility.mockRestore();
-      subscription.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("refetches on the 5-minute safety-net interval", async () => {
-    vi.useFakeTimers();
-    const { events } = await import("./events.svelte.js");
-    const spy = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
-
-    const sessions = createSessionsStore();
-    const detach = sessions.attachSidebar();
-    await sessions.load();
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-
-    // Advance exactly one interval — avoids the runAllTimers infinite
-    // loop that recurring setInterval plus a promise-resolving
-    // listSessions mock would produce.
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
-
-    detach();
-    spy.mockRestore();
-    vi.useRealTimers();
-  });
+  it.each([false, true])(
+    "refetches on the safety-net interval after becoming visible, initially hidden=%s",
+    async (hidden) => {
+      vi.useFakeTimers();
+      const { events } = await import("./events.svelte.js");
+      const subscription = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
+      const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(hidden);
+      const sessions = createSessionsStore();
+      const detach = sessions.attachSidebar();
+      try {
+        await sessions.load();
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+        if (hidden) {
+          await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+          expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+          visibility.mockReturnValue(false);
+        }
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      } finally {
+        detach();
+        visibility.mockRestore();
+        subscription.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("refreshes active child sessions on the 5-minute safety-net interval", async () => {
     vi.useFakeTimers();

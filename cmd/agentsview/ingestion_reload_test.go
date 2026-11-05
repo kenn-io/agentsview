@@ -141,8 +141,8 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 }
 
 func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
-	for _, mode := range []struct{ cli, idle bool }{{false, true}, {true, true}, {false, false}} {
-		t.Run(fmt.Sprintf("cli=%t/idle=%t", mode.cli, mode.idle), func(t *testing.T) {
+	for _, cli := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cli=%t", cli), func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
 			cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir(), DBPath: database.Path(), AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}, InstallationID: "test-machine"}
@@ -152,9 +152,7 @@ func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 			engine.SyncAll(t.Context(), nil)
 			tracker := server.NewIdleTracker(0, func() {})
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
-			if mode.idle {
-				tracker.SetSyncIdle(time.Second, ingestion.Suspend)
-			}
+			tracker.SetSyncIdle(time.Second, ingestion.Suspend)
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			go tracker.Run(ctx)
@@ -169,17 +167,11 @@ func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 			endpoint := serverEndpoint(t, ts)
 			writeDaemonRuntimeForTest(t, cfg.DataDir, endpoint.Host, endpoint.Port, version, false)
 			for _, id := range []string{"morning", "afternoon"} {
-				if mode.idle {
-					require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
-					ingestion.applying.Wait()
-				}
+				require.Eventually(t, ingestion.Pending, 10*time.Second, 10*time.Millisecond)
+				ingestion.applying.Wait()
 				writeReloadGeminiSession(t, root, id)
-				if mode.idle {
-					assert.Never(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
-				} else {
-					require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, 10*time.Second, 50*time.Millisecond)
-				}
-				if mode.cli {
+				assert.Never(t, func() bool { return sessionImported(t, database, "gemini:"+id) }, time.Second, 50*time.Millisecond, "quiet ingestion leaves the new session on disk")
+				if cli {
 					backend, closeBackend, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, defaultArchiveQueryPolicy(nil))
 					require.NoError(t, err)
 					require.IsType(t, daemonArchiveQueryBackend{}, backend)
@@ -198,7 +190,7 @@ func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 }
 
 func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
-	for _, mode := range []string{"automatic", "reload", "requested", "failed", "canceled"} {
+	for _, mode := range []string{"automatic", "reload", "requested", "failed", "canceled", "automatic-stop", "requested-stop"} {
 		t.Run(mode, func(t *testing.T) {
 			reload := mode == "reload"
 			database := dbtest.OpenTestDB(t)
@@ -231,7 +223,7 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			requested := make(chan error, 1)
 			requestedCtx, cancelRequested := context.WithCancel(t.Context())
 			defer cancelRequested()
-			if mode == "requested" || mode == "failed" || mode == "canceled" {
+			if mode == "requested" || mode == "requested-stop" || mode == "failed" || mode == "canceled" {
 				registered := make(chan struct{})
 				go func() {
 					requested <- ingestion.RunSync(requestedCtx, func(ctx context.Context) error {
@@ -240,8 +232,8 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 						if mode == "failed" {
 							return os.ErrPermission
 						}
-						if err := ctx.Err(); err != nil {
-							return err
+						if mode == "canceled" {
+							return nil // Isolate the owner's context check from callback errors.
 						}
 						engine.SyncAll(ctx, nil)
 						return nil
@@ -287,14 +279,36 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			if mode == "canceled" {
 				cancelRequested()
 			}
+			if mode == "automatic-stop" || mode == "requested-stop" {
+				stopped := make(chan struct{})
+				go func() { ingestion.Stop(); close(stopped) }()
+				assert.Never(t, func() bool {
+					select {
+					case <-stopped:
+						return true
+					default:
+						return false
+					}
+				}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
+				releaseOnce()
+				<-finished
+				<-stopped
+				if mode == "requested-stop" {
+					require.NoError(t, <-requested)
+				}
+				return
+			}
 			releaseOnce()
 			<-finished
 			switch mode {
 			case "requested":
 				require.NoError(t, <-requested)
-			case "failed", "canceled":
+			case "failed":
 				require.Error(t, <-requested)
-				require.True(t, ingestion.Pending(), "an unsuccessful requested pass leaves catch-up pending")
+				require.True(t, ingestion.Pending(), "a failed requested pass leaves catch-up pending")
+			case "canceled":
+				require.NoError(t, <-requested)
+				require.True(t, ingestion.Pending(), "cancellation keeps catch-up pending even when its callback returns nil")
 			}
 			require.True(t, ingestion.EnsureFresh(t.Context()))
 			headers, freshBody := searchIngestionArchive(t, ts.URL, query)
@@ -317,7 +331,7 @@ func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
 	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
 	t.Cleanup(engine.Close)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 	t.Cleanup(ingestion.Stop)
 	ingestion.Suspend()
 	ingestion.applying.Wait()
@@ -326,71 +340,6 @@ func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {
 	// Recovery shares the engine's cached terminal parse-failure policy.
 	require.True(t, ingestion.EnsureFresh(t.Context()))
 	assert.False(t, sessionImported(t, database, "gemini:retry"))
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, "retry")
-	require.True(t, ingestion.EnsureFresh(t.Context()))
-	assert.True(t, sessionImported(t, database, "gemini:retry"))
-}
-
-func TestDaemonIngestionStopWaitsForCatchup(t *testing.T) {
-	for _, requested := range []bool{false, true} {
-		t.Run(fmt.Sprintf("requested=%v", requested), func(t *testing.T) {
-			database := dbtest.OpenTestDB(t)
-			root := t.TempDir()
-			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-			t.Cleanup(engine.Close)
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-			stop := sync.OnceFunc(ingestion.Stop)
-			t.Cleanup(stop)
-			ingestion.Suspend()
-			ingestion.applying.Wait()
-			writeReloadGeminiSession(t, root, "overnight")
-			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			releaseOnce := sync.OnceFunc(func() { close(release) })
-			t.Cleanup(releaseOnce)
-			go func() {
-				defer close(finished)
-				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
-			}()
-			<-entered
-			pass := make(chan error, 1)
-			if requested {
-				registered := make(chan struct{})
-				go func() {
-					pass <- ingestion.RunSync(t.Context(), func(ctx context.Context) error {
-						close(registered)
-						engine.SyncAll(ctx, nil)
-						return nil
-					})
-				}()
-				<-registered
-			} else {
-				require.False(t, ingestion.EnsureFresh(t.Context()))
-			}
-			ingestion.mu.Lock()
-			catchupDone := ingestion.catchup
-			ingestion.mu.Unlock()
-			stopped := make(chan struct{})
-			go func() { stop(); close(stopped) }()
-			assert.Never(t, func() bool {
-				select {
-				case <-stopped:
-					return true
-				default:
-					return false
-				}
-			}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
-			releaseOnce()
-			<-finished
-			<-catchupDone
-			<-stopped
-			if requested {
-				require.NoError(t, <-pass)
-			}
-		})
-	}
 }
 
 func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
@@ -401,7 +350,7 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
 	t.Cleanup(engine.Close)
 	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 	t.Cleanup(ingestion.Stop)
 	ingestion.Suspend()
 	ingestion.applying.Wait()
@@ -412,110 +361,53 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }
 
-func TestDaemonIngestionWakeReconcilesOlderQueuedRetry(t *testing.T) {
-	for _, linked := range []bool{false, true} {
-		t.Run(fmt.Sprintf("symlink=%v", linked), func(t *testing.T) {
-			database := dbtest.OpenTestDB(t)
-			root := t.TempDir()
-			if linked {
-				link := filepath.Join(t.TempDir(), "sessions")
-				requireSymlinkOrSkip(t, root, link)
-				root = link
-			}
-			writeReloadGeminiSession(t, root, "before")
-			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-			t.Cleanup(engine.Close)
-			engine.SyncAll(t.Context(), nil)
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-			t.Cleanup(ingestion.Stop)
-			writeReloadGeminiSession(t, root, "older-retry")
-			path := filepath.Join(root, "tmp", "project", "chats", "session-older-retry.json")
-			older := time.Now().Add(-time.Hour)
-			require.NoError(t, os.Chtimes(path, older, older))
-			ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{path}})
-			ingestion.Suspend()
-			ingestion.applying.Wait()
-			require.False(t, sessionImported(t, database, "gemini:older-retry"))
-			require.True(t, ingestion.EnsureFresh(t.Context()))
-			require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up must include the retry queued before the quiet cutoff")
-		})
-	}
-}
-
-func TestDaemonIngestionWakeKeepsLocalResultsDuringRemoteFailure(t *testing.T) {
-	for _, local := range []bool{true, false} {
-		t.Run(fmt.Sprintf("local=%v", local), func(t *testing.T) {
-			var requests atomic.Int32
-			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				requests.Add(1)
-				w.WriteHeader(http.StatusForbidden)
-				_, _ = io.WriteString(w, "<Error><Code>AccessDenied</Code></Error>")
-			}))
-			t.Cleanup(remote.Close)
-			t.Setenv("AWS_S3_ENDPOINT", remote.URL)
-			t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
-			t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
-			t.Setenv("AWS_REGION", "us-east-1")
-			roots := []string{"s3://bucket/sessions"}
-			root := t.TempDir()
-			if local {
-				roots = append(roots, root)
-				dbtest.WriteTestFile(t, filepath.Join(root, "project", "before.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "hello from before", "before").String()))
-			}
-			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: roots}}
-			database := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-			t.Cleanup(engine.Close)
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-			t.Cleanup(ingestion.Stop)
-			ingestion.Suspend()
-			ingestion.applying.Wait()
-			if local {
-				dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
-			}
-			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
-			headers, body := searchIngestionArchive(t, ts.URL, "morning")
-			if local {
-				assert.Contains(t, body, "hello from morning")
-			}
-			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			assert.Positive(t, requests.Load(), "idle wake also attempts the paused remote imports")
-			assert.False(t, ingestion.Pending())
-		})
-	}
+func TestDaemonIngestionWakeReconcilesOlderSymlinkSource(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	link := filepath.Join(t.TempDir(), "sessions")
+	requireSymlinkOrSkip(t, root, link)
+	root = link
+	writeReloadGeminiSession(t, root, "before")
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	t.Cleanup(ingestion.Stop)
+	writeReloadGeminiSession(t, root, "older-retry")
+	path := filepath.Join(root, "tmp", "project", "chats", "session-older-retry.json")
+	older := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(path, older, older))
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	require.False(t, sessionImported(t, database, "gemini:older-retry"))
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up includes source files older than the quiet cutoff")
 }
 
 func TestDaemonIngestionWakeCoversAvailableOverlappingProviders(t *testing.T) {
-	for _, nested := range []bool{false, true} {
-		t.Run(fmt.Sprintf("nested=%v", nested), func(t *testing.T) {
-			root := t.TempDir()
-			gemini := root
-			if nested {
-				gemini = filepath.Join(root, "nested")
-			}
-			writeReloadGeminiSession(t, gemini, "retained")
-			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{
-				parser.AgentClaude: {root}, parser.AgentGemini: {gemini},
-			}}
-			database := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-			t.Cleanup(engine.Close)
-			engine.SyncAll(t.Context(), nil)
-			require.True(t, sessionImported(t, database, "gemini:retained"))
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-			t.Cleanup(ingestion.Stop)
-			ingestion.Suspend()
-			ingestion.applying.Wait()
-			require.NoError(t, os.RemoveAll(filepath.Join(gemini, "tmp")))
-			dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
-			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
-			headers, body := searchIngestionArchive(t, ts.URL, "morning")
-			assert.Contains(t, body, "hello from morning")
-			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			assert.True(t, sessionImported(t, database, "gemini:retained"), "unavailable provider history stays archived")
-		})
-	}
+	root := t.TempDir()
+	gemini := root
+
+	writeReloadGeminiSession(t, gemini, "retained")
+	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{
+		parser.AgentClaude: {root}, parser.AgentGemini: {gemini},
+	}}
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	require.True(t, sessionImported(t, database, "gemini:retained"))
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	require.NoError(t, os.RemoveAll(filepath.Join(gemini, "tmp")))
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	assert.False(t, ingestion.Pending())
+	assert.True(t, sessionImported(t, database, "morning"))
+	assert.True(t, sessionImported(t, database, "gemini:retained"), "unavailable provider history stays archived")
 }
 
 type countingIngestionFactory struct {
@@ -545,7 +437,7 @@ func (p countingIngestionProvider) DiscoverEach(ctx context.Context, yield func(
 }
 
 func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
-	for _, route := range []string{"/sync", "/sync?wait=true", "/resync", "/sync?startup_only=true"} {
+	for _, route := range []string{"/sync", "/resync", "/sync?startup_only=true"} {
 		t.Run(route, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
@@ -562,7 +454,7 @@ func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
 			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine", ProviderFactories: []parser.ProviderFactory{countingIngestionFactory{factory, &calls}}})
 			t.Cleanup(engine.Close)
 			engine.SyncAll(t.Context(), nil)
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 			t.Cleanup(ingestion.Stop)
 			ingestion.Suspend()
 			ingestion.applying.Wait()

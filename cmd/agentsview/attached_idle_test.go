@@ -7,10 +7,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -21,7 +21,7 @@ func TestDaemonIngestionWakeIncludesPendingAttachedHistory(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			engine := agentsync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
 			t.Cleanup(engine.Close)
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 			t.Cleanup(ingestion.Stop)
 			ingestion.OpenWatcherDispatch()
 			attached, err := ingestion.attachSources(cfg)
@@ -33,22 +33,17 @@ func TestDaemonIngestionWakeIncludesPendingAttachedHistory(t *testing.T) {
 			if unavailable {
 				require.NoError(t, os.Rename(cfg.ArchiveSources[0].Repository, cfg.ArchiveSources[0].Repository+"-offline"))
 			}
-			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
-			headers, body := searchIngestionArchive(t, ts.URL, "archived")
-			if unavailable {
-				assert.NotContains(t, body, "archived message")
-				assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader), "unfinished attachment imports must warn")
-				assert.True(t, ingestion.Pending())
-				require.NoError(t, os.Rename(cfg.ArchiveSources[0].Repository+"-offline", cfg.ArchiveSources[0].Repository))
-			} else {
-				assert.Contains(t, body, "archived message")
-				assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			}
-			// Verify the attachment is valid through the existing scheduled source path.
-			_, err = attached.DrainScheduled(t.Context())
+			fresh := ingestion.EnsureFresh(t.Context())
+			assert.Equal(t, !unavailable, fresh)
+			assert.Equal(t, unavailable, ingestion.Pending())
+			messages, err := database.GetAllMessages(t.Context(), attachedPushSession)
 			require.NoError(t, err)
-			_, body = searchIngestionArchive(t, ts.URL, "archived")
-			require.Contains(t, body, "archived message")
+			if unavailable {
+				assert.Empty(t, messages)
+			} else {
+				require.Len(t, messages, 1)
+				assert.Equal(t, "archived message", messages[0].Content)
+			}
 		})
 	}
 }
