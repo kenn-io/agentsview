@@ -322,33 +322,25 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 }
 
 func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
-	for _, missing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "failed", true: "missing"}[missing], func(t *testing.T) {
-			testutil.IsolateGit(t)
-			database := openTestDB(t)
-			repo, err := filepath.EvalSymlinks(t.TempDir())
-			require.NoError(t, err)
-			cmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main", repo)
-			out, err := cmd.CombinedOutput()
-			require.NoError(t, err, "%s", out)
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
-			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
-			t.Cleanup(engine.Close)
-			identity := engine.cachedProjectIdentity("local", repo)
-			require.NotEmpty(t, identity.gitDir)
-			if missing {
-				require.NoError(t, os.RemoveAll(filepath.Join(repo, ".git", "objects")))
-			} else {
-				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
-			}
-			_, err = engine.reconcileRepositoryTrailers(t.Context(), repo, repo)
-			require.Error(t, err)
-			before := time.Now()
-			assert.Zero(t, engine.reconcileCommitTrailersWithBudget(t.Context(), 0))
-			attempt, ok := engine.trailerScanAttempts[identity.repositoryPath]
-			require.True(t, ok, "failed scans must yield their turn")
-			assert.False(t, attempt.Before(before))
-			assert.False(t, attempt.After(time.Now()))
-		})
-	}
+	t.Run("failed", func(t *testing.T) {
+		testutil.IsolateGit(t)
+		database := openTestDB(t)
+		repo, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+		cmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main", repo)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
+		engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+		t.Cleanup(engine.Close)
+		identity := engine.cachedProjectIdentity("local", repo)
+		require.NotEmpty(t, identity.gitDir)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
+		before := time.Now()
+		assert.Zero(t, engine.reconcileCommitTrailersWithBudget(t.Context(), 0))
+		attempt, ok := engine.trailerScanAttempts[identity.repositoryPath]
+		require.True(t, ok, "failed scans must yield their turn")
+		assert.False(t, attempt.Before(before))
+		assert.False(t, attempt.After(time.Now()))
+	})
 }

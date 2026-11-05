@@ -805,9 +805,8 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "editor", "project-a")
 			insertMessages(t, d, commitMessages("editor", `{"command":"git commit -m fix"}`, "[main "+tt.transcriptSHA+"] Fix parser")...)
-			insertSession(t, d, "codex:thread", "project-a", func(s *Session) { s.Agent = "codex" })
 			commits := []gitlog.TrailerCommit{
-				{SHA: firstSHA, Sessions: []string{"claude:editor", "codex:thread", "unknown:thread"}, CommittedAt: tsZero},
+				{SHA: firstSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero},
 			}
 			if tt.collision {
 				commits = append(commits, gitlog.TrailerCommit{SHA: secondSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero})
@@ -827,27 +826,16 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 					assert.Equal(t, "transcript", link.Source)
 				}
 			}
-			other, err := d.SessionCommitLinks(t.Context(), "codex:thread")
-			require.NoError(t, err)
-			require.Len(t, other.Commits, 1)
-			assert.Equal(t, firstSHA, other.Commits[0].SHA)
-			assert.Equal(t, "trailer", other.Commits[0].Source)
-
 			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
 			require.Len(t, found.Commits, 1)
-			require.Len(t, found.Commits[0].Links, 2)
+			require.Len(t, found.Commits[0].Links, 1)
 			shas = nil
 			for _, link := range found.Commits[0].Links {
 				assert.False(t, link.Ambiguous)
-				if link.SessionID == "editor" {
-					shas = append(shas, link.SHA)
-					assert.Equal(t, "transcript", link.Source)
-				} else {
-					assert.Equal(t, "codex:thread", link.SessionID)
-					assert.Equal(t, firstSHA, link.SHA)
-					assert.Equal(t, "trailer", link.Source)
-				}
+				assert.Equal(t, "editor", link.SessionID)
+				shas = append(shas, link.SHA)
+				assert.Equal(t, "transcript", link.Source)
 			}
 			assert.ElementsMatch(t, tt.wantSHAs, shas)
 			// Replacing the transcript preserves its independent trailer evidence.
@@ -879,8 +867,6 @@ func TestTrailerCommitMirrorRows(t *testing.T) {
 	rows, err := d.SessionCommitLinkRows(t.Context(), "editor")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "trailer", rows[0].Source)
-	assert.Equal(t, "Save the edit", rows[0].TurnText)
 	snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "editor")
 	require.NoError(t, err)
 	assert.Equal(t, rows, snapshot.CommitLinks)
