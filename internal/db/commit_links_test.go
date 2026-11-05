@@ -131,6 +131,9 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 	}{
 		{"rev parse", "git commit -q -m fix && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
 		{"rev parse CRLF", "git commit -q -m fix && git rev-parse HEAD", "abc1234\r\n", "abc1234", ""},
+		{"double quoted option text", `git commit -q -m "Fix --dry-run handling" && git rev-parse HEAD`, "abc1234\n", "abc1234", ""},
+		{"single quoted option text", "git commit -q -m 'Fix --dry-run handling' && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
+		{"dry run with option text", `git commit -q --dry-run -m "Fix --dry-run handling" && git rev-parse HEAD`, "abc1234\n", "", ""},
 		{"log oneline", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
 		{"log reverse options", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
 		{"commit other repo", "git -C /other commit -q -m fix && git rev-parse HEAD", "abc1234", "", ""},

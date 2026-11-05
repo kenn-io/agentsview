@@ -29,6 +29,7 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+	commitCommandTokenRE      = regexp.MustCompile(commitCommandToken)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitQuietReadbackRE     = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)git\s+commit((?:\s+` + commitCommandToken + `)*?\s+(?:-q|--quiet)(?:\s+` + commitCommandToken + `)*?)\s*&&\s*git\s+(?:rev-parse\s+HEAD|log\s+(?:-1\s+--oneline|--oneline\s+-1))\s*(?:$|&&)`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
@@ -331,7 +332,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		if quiet == nil {
 			continue
 		}
-		for arg := range strings.FieldsSeq(quiet[1]) {
+		for _, arg := range commitCommandTokenRE.FindAllString(quiet[1], -1) {
 			arg = strings.Trim(arg, "\"'")
 			//nolint:gocritic // Git accepts unambiguous prefixes of these option names.
 			if arg == "-z" || arg == "--l" || len(arg) >= 4 && (strings.HasPrefix("--dry-run", arg) || strings.HasPrefix("--short", arg) || strings.HasPrefix("--porcelain", arg) || strings.HasPrefix("--long", arg) || strings.HasPrefix("--null", arg)) {
