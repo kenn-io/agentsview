@@ -95,9 +95,9 @@ func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
 	require.True(t, ingestion.Pending())
 	unblock()
 	<-finished
-	ingestion.applying.Wait()
+	<-attempted
 	require.True(t, sessionImported(t, database, "gemini:overnight"))
-	assert.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond, "catch-up completed after the idle deadline, so collection must stop without needing another request")
+	assert.False(t, ingestion.Active(), "catch-up completed after the idle deadline, so collection must stop without needing another request")
 }
 
 func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
