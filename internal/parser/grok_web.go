@@ -183,8 +183,11 @@ func ParseGrokWebConversation(data []byte) (ParseResult, error) {
 }
 
 // GrokWebPending reports whether Grok is still writing a reply in the
-// conversation: it lists an in-flight response, or the shown branch has a
-// partial one.
+// conversation: it lists an in-flight response, the shown branch has a
+// partial one, or a partial reply with no text yet hangs directly below the
+// end of the shown branch (below the root when no response has text). An
+// empty partial reply on an older branch is a failed regeneration and does
+// not count.
 func GrokWebPending(data []byte) bool {
 	_, body, err := decodeGrokWebConversation(data)
 	if err != nil {
@@ -193,8 +196,40 @@ func GrokWebPending(data []byte) bool {
 	if len(body.Inflight) > 0 {
 		return true
 	}
-	for _, r := range grokWebPath(*body.Responses) {
+	responses := *body.Responses
+	path := grokWebPath(responses)
+	for _, r := range path {
 		if r.Partial {
+			return true
+		}
+	}
+	// grokWebPath leaves out replies without text, so a reply that is still
+	// being generated is found by its parent instead.
+	parentOf := make(map[string]string, len(responses))
+	for _, r := range responses {
+		parentOf[r.ResponseID] = r.ParentResponseID
+	}
+	tip := ""
+	if len(path) > 0 {
+		tip = path[len(path)-1].ResponseID
+	}
+	for _, r := range responses {
+		if !r.Partial || strings.TrimSpace(r.Message) != "" {
+			continue
+		}
+		if len(path) > 0 {
+			if r.ParentResponseID == tip {
+				return true
+			}
+			continue
+		}
+		// No response has text, so the roots are the shown end: the reply
+		// is a root itself or hangs directly below one.
+		parent, known := parentOf[r.ParentResponseID]
+		if !known {
+			return true
+		}
+		if _, known := parentOf[parent]; !known {
 			return true
 		}
 	}

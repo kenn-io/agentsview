@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"encoding/json/v2"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -201,6 +202,9 @@ func TestSyncGrokRefetchesReplyInProgress(t *testing.T) {
 	}{
 		{name: "in-flight response", pending: func(f *grokFake) { f.inflight = []any{map[string]any{"responseId": "r2"}} }},
 		{name: "partial reply", reply: map[string]any{"partial": true}},
+		// Grok has started the reply but written no text yet, and the list
+		// update time never moves.
+		{name: "empty partial reply", reply: map[string]any{"partial": true, "message": ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -210,7 +214,7 @@ func TestSyncGrokRefetchesReplyInProgress(t *testing.T) {
 			fake.responses = []map[string]any{q}
 			if tc.reply != nil {
 				partial := grokSyncResponse("r2", "r1", "assistant", "Ans", at)
-				partial["partial"] = true
+				maps.Copy(partial, tc.reply)
 				fake.responses = append(fake.responses, partial)
 			}
 			if tc.pending != nil {

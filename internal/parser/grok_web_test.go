@@ -170,15 +170,44 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 }
 
 // TestGrokWebPending covers the rule Sync tests cannot isolate: a partial
-// reply on a branch the web app no longer shows does not keep the chat stale.
+// reply on a branch the web app no longer shows does not keep the chat stale,
+// while an empty partial reply under the end of the shown branch does.
 func TestGrokWebPending(t *testing.T) {
 	const at = "2026-10-21T08:00:00Z"
-	old := grokTestResponse("r2", "r1", "assistant", "Old", at)
-	old["partial"] = true
-	data := grokTestConversation(t, "t", "", nil,
-		grokTestResponse("r1", "", "human", "Q", at), old,
-		grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:01:00Z"))
-	assert.False(t, GrokWebPending(data))
+	partial := func(id, parent, message string) map[string]any {
+		r := grokTestResponse(id, parent, "assistant", message, "2026-10-21T08:02:00Z")
+		r["partial"] = true
+		return r
+	}
+	q := grokTestResponse("r1", "", "human", "Q", at)
+	for _, tc := range []struct {
+		name      string
+		responses []map[string]any
+		want      bool
+	}{
+		{"empty partial below the shown tip", []map[string]any{q, partial("r2", "r1", "")}, true},
+		{"empty partial below a completed answer", []map[string]any{
+			q, grokTestResponse("r2", "r1", "assistant", "A", at),
+			grokTestResponse("r3", "r2", "human", "Next", "2026-10-21T08:01:00Z"), partial("r4", "r3", "  "),
+		}, true},
+		{"empty partial in a chat without text", []map[string]any{
+			grokTestResponse("r1", "", "human", "", at), partial("r2", "r1", ""),
+		}, true},
+		{"empty partial on an older branch", []map[string]any{
+			q, partial("r2", "r1", ""),
+			grokTestResponse("r3", "r1", "assistant", "Done", "2026-10-21T08:01:00Z"),
+		}, false},
+		{"completed reply", []map[string]any{q, grokTestResponse("r2", "r1", "assistant", "Done", at)}, false},
+		{"empty reply that is not partial", []map[string]any{q, grokTestResponse("r2", "r1", "assistant", "", at)}, false},
+		{"partial reply with text on an older branch", []map[string]any{
+			q, partial("r2", "r1", "Old"),
+			grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:03:00Z"),
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, GrokWebPending(grokTestConversation(t, "t", "", nil, tc.responses...)))
+		})
+	}
 }
 
 // TestGrokWebPathLongChat guards the linear branch walk: a quadratic walk
