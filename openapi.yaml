@@ -8320,7 +8320,11 @@ components:
           type: boolean
         stats:
           $ref: "#/components/schemas/SyncSyncStats"
+        sync_pending:
+          description: Local ingestion is catching up after an idle period
+          type: boolean
       required:
+        - sync_pending
         - archive_stale
         - startup_pending
         - last_sync

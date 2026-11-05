@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -437,4 +438,45 @@ func TestArchiveSourcePushWatchPublishesWritesBeforeLinkFailure(t *testing.T) {
 	lane.syncAll(t.Context())
 	require.NoError(t, backend.database.Reader().QueryRow(t.Context(), `SELECT pending_count FROM archive_attachments`).Scan(&pending))
 	assert.Zero(t, pending, "the next periodic sync must complete the pending source")
+}
+
+func TestDaemonReplicaWatchWakesSuspendedIngestionBeforeCopy(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := syncpkg.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.OpenWatcherDispatch()
+	copied := make(chan []db.Message, 4)
+	probe := &archiveSourcePushProbe{seen: make(chan []db.Message, 4), inspect: func(ctx context.Context, database *db.DB) {
+		messages, err := database.GetAllMessages(ctx, "push-idle")
+		require.NoError(t, err)
+		copied <- messages
+	}}
+	ts := httptest.NewUnstartedServer(nil)
+	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+	srv := server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion), server.WithReplicas(archiveSourcePushReplica{Replica: postgres.Backend{}, probe: probe}))
+	ts.Config.Handler = srv.Handler()
+	ts.Start()
+	t.Cleanup(ts.Close)
+	endpoint := serverEndpoint(t, ts)
+	writeDaemonRuntimeForTest(t, cfg.DataDir, endpoint.Host, endpoint.Port, version, false)
+	backend := newDaemonArchiveWriteBackendForTest(cfg, ts.URL)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- backend.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: "postgres://user:pass@host/db"}}, ReplicaPushConfig{}, nil, nil, 20*time.Millisecond, time.Hour)
+	}()
+	t.Cleanup(func() { cancel(); require.NoError(t, receiveArchiveTest(t, done)) })
+	assert.Empty(t, receiveArchiveTest(t, copied))
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	dbtest.WriteTestFile(t, filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "project", "push-idle.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "written while idle", "push-idle").String()))
+	messages := receiveArchiveTest(t, copied)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "written while idle", messages[0].Content)
+	assert.False(t, ingestion.Pending())
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -441,6 +442,23 @@ func ensureFreshData(
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(origLog)
 
+	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
+		ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
+		tr, err := detectTransportContext(ctx, appCfg.DataDir, appCfg.AuthToken, 0)
+		if err == nil && tr.Mode == transportHTTP && !tr.ReadOnly {
+			_, err = postDaemonPush[sync.SyncStats](ctx, tr, appCfg.AuthToken, startupSyncOperation, apiclient.DaemonPushRequest{}, func(sync.Progress) {})
+		} else if err == nil {
+			err = errors.New("daemon is unreachable")
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to refresh archive: %v\n", err)
+		}
+		if stale() {
+			fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
+		}
+		return
+	}
+
 	if database.NeedsResync() {
 		engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
@@ -460,14 +478,6 @@ func ensureFreshData(
 		stats := engine.ResyncAll(ctx, progress.Print)
 		progress.Finish()
 		printSyncSummaryStderr(stats, t)
-		return
-	}
-
-	// Skip on-demand sync only when a writable local daemon is
-	// already keeping the SQLite archive fresh. pg serve daemons
-	// (read-only) do not sync the local DB, so we still want to
-	// run our own sync when only one of those is present.
-	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
 		return
 	}
 

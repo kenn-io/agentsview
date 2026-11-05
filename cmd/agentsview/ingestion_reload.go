@@ -7,11 +7,18 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+)
+
+const (
+	ingestionWaitBudget   = 2 * time.Second
+	ingestionCatchupLimit = 5 * time.Minute
 )
 
 var errIngestionStopped = errors.New("daemon ingestion is shutting down")
@@ -22,6 +29,7 @@ var errIngestionStopped = errors.New("daemon ingestion is shutting down")
 // settings to all of them without restarting the daemon.
 type daemonIngestion struct {
 	ctx         context.Context
+	cancel      context.CancelFunc
 	engine      *agentsync.Engine
 	database    *db.DB
 	idleTracker *server.IdleTracker
@@ -35,12 +43,36 @@ type daemonIngestion struct {
 	// under it, so the last one to run applies the latest settings.
 	applyMu sync.Mutex
 	// mu guards the fields below.
-	mu           sync.Mutex
-	watchers     *ingestionWatchers
-	dispatchOpen bool
-	stopLive     func()
-	stopped      bool
-	applying     sync.WaitGroup
+	mu             sync.Mutex
+	generation     *ingestionGeneration
+	dispatchOpen   bool
+	stopped        bool
+	applying       sync.WaitGroup
+	pending        bool
+	resumed        chan struct{}
+	wake           chan struct{}
+	liveEnabled    bool
+	catchupImports func(context.Context) error
+}
+
+type ingestionGeneration struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	watchers *ingestionWatchers
+	stopLive func()
+	recovery *poller.Scheduler
+	attempt  chan struct{} // guarded by daemonIngestion.mu; nil during retry cooldown
+}
+
+func (g *ingestionGeneration) stop() {
+	g.cancel()
+	if g.stopLive != nil {
+		g.stopLive()
+	}
+	g.watchers.stop()
+	if g.recovery != nil {
+		g.recovery.Wait()
+	}
 }
 
 // ingestionWatchers is one generation of change detection for a fixed
@@ -67,7 +99,9 @@ func newDaemonIngestion(
 	idleTracker *server.IdleTracker,
 	load func() (config.Config, error),
 ) *daemonIngestion {
+	ctx, cancel := context.WithCancel(ctx)
 	d := &daemonIngestion{
+		cancel:      cancel,
 		ctx:         ctx,
 		engine:      engine,
 		database:    database,
@@ -75,7 +109,7 @@ func newDaemonIngestion(
 		load:        load,
 	}
 	d.cfg.Store(&cfg)
-	d.watchers = d.startWatchers(cfg)
+	d.generation = d.newGeneration(cfg)
 	return d
 }
 
@@ -91,39 +125,190 @@ func (d *daemonIngestion) OpenWatcherDispatch() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.dispatchOpen = true
-	d.watchers.openDispatch()
+	if d.generation != nil {
+		d.generation.watchers.openDispatch()
+	}
 }
 
 // QueueWatchRetry hands a batch to the current watcher's retry queue.
 func (d *daemonIngestion) QueueWatchRetry(batch agentsync.WatchBatch) {
 	d.mu.Lock()
-	watchers := d.watchers
+	generation := d.generation
 	d.mu.Unlock()
-	watchers.queueRetry(batch)
+	if generation != nil {
+		generation.watchers.queueRetry(batch)
+	}
 }
 
 // FlushPending acknowledges fresh work from the current watcher generation.
 func (d *daemonIngestion) FlushPending(ctx context.Context) error {
 	d.mu.Lock()
-	watchers, stopped := d.watchers, d.stopped
+	generation, stopped := d.generation, d.stopped
 	d.mu.Unlock()
 	if stopped {
 		return errIngestionStopped
 	}
-	return watchers.flushPending(ctx)
+	if generation == nil {
+		return nil
+	}
+	return generation.watchers.flushPending(ctx)
 }
 
 // StartLiveActivity starts polling live agent processes for the current
 // provider set. Reloads restart it with the new set.
 func (d *daemonIngestion) StartLiveActivity() {
+	d.applyMu.Lock()
+	defer d.applyMu.Unlock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.stopped || d.stopLive != nil {
+	d.liveEnabled = true
+	if g := d.generation; g != nil && !d.stopped && g.stopLive == nil {
+		g.stopLive = startLiveActivityPoller(g.ctx, d.Config(), d.database, d.engine, d.idleTracker)
+	}
+}
+
+// ActiveContext admits scheduled work to the current collection generation.
+func (d *daemonIngestion) ActiveContext() context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.generation == nil || d.stopped {
+		return nil
+	}
+	return d.generation.ctx
+}
+
+func (d *daemonIngestion) Pending() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pending
+}
+
+// Suspend marks the obligation before the idle tracker admits another request.
+// Joining canceled workers happens asynchronously so requests keep their budget.
+func (d *daemonIngestion) Suspend() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stopped || d.generation == nil {
 		return
 	}
-	d.stopLive = startLiveActivityPoller(
-		d.ctx, d.Config(), d.database, d.engine, d.idleTracker,
-	)
+	d.pending = true
+	d.resumed = make(chan struct{})
+	old := d.generation
+	old.cancel()
+	d.generation = nil
+	d.applying.Go(func() { d.stopGeneration(old) })
+}
+
+// WaitActive preserves audit deadlines while ingestion is suspended.
+func (d *daemonIngestion) WaitActive(ctx context.Context) bool {
+	d.mu.Lock()
+	paused, resumed := d.generation == nil, d.resumed
+	d.mu.Unlock()
+	if !paused {
+		return ctx.Err() == nil
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-resumed:
+		return true
+	}
+}
+
+// EnsureFresh joins one owner-bound catch-up. A caller owns only its wait.
+func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
+	waitCtx, cancel := context.WithTimeout(ctx, ingestionWaitBudget)
+	defer cancel()
+	d.mu.Lock()
+	if !d.pending || d.stopped {
+		fresh := !d.pending && !d.stopped
+		d.mu.Unlock()
+		return fresh
+	}
+	var done chan struct{}
+	if d.generation != nil {
+		done = d.generation.attempt
+	} else {
+		if d.wake == nil {
+			d.wake = make(chan struct{})
+			d.applying.Go(d.resume)
+		}
+		done = d.wake
+	}
+	d.mu.Unlock()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-waitCtx.Done():
+		return false
+	case <-done:
+		return !d.Pending()
+	}
+}
+
+func (d *daemonIngestion) resume() {
+	d.applyMu.Lock()
+	defer d.applyMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	done := d.wake
+	d.wake = nil
+	if d.stopped {
+		close(done)
+		return
+	}
+	g := d.newGeneration(d.Config())
+	g.attempt = done
+	d.installGeneration(g)
+}
+
+func (d *daemonIngestion) recover(g *ingestionGeneration) error {
+	d.applyMu.Lock()
+	defer d.applyMu.Unlock()
+	d.mu.Lock()
+	if d.stopped || d.generation != g || !d.pending {
+		d.mu.Unlock()
+		return nil
+	}
+	if g.attempt == nil {
+		g.attempt = make(chan struct{})
+	}
+	done := g.attempt
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		close(done)
+		g.attempt = nil
+		d.mu.Unlock()
+	}()
+	finish, ok := d.idleTracker.BeginWork()
+	if !ok {
+		return context.Canceled
+	}
+	defer finish()
+	ctx, cancel := context.WithTimeout(g.ctx, ingestionCatchupLimit)
+	defer cancel()
+	scope := probeWatchRecoveryScope(d.Config())
+	err := syncWatchBatch(ctx, d.engine, agentsync.WatchBatch{FullSync: true}, func() watchRecoveryScope { return scope })
+	g.watchers.openDispatch()
+	err = errors.Join(err, g.watchers.flushPending(ctx))
+	if d.catchupImports != nil {
+		err = errors.Join(err, d.catchupImports(ctx))
+	}
+	found, lookupErr := d.engine.HasActiveSessionSourceInRoots(ctx, scope.deferred)
+	if found {
+		lookupErr = errors.Join(lookupErr, errors.New("archived session source is unavailable"))
+	}
+	err = errors.Join(err, lookupErr, ctx.Err())
+	if err == nil {
+		d.mu.Lock()
+		if d.generation == g && !d.stopped {
+			d.pending = false
+		}
+		d.mu.Unlock()
+	}
+	return err
 }
 
 // Reload reads the saved configuration and applies it in the background. It
@@ -144,28 +329,41 @@ func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 	return cfg, nil
 }
 
-// Stop waits for in-flight reloads, then stops watchers, polling, and live
-// activity polling.
+func (d *daemonIngestion) stopGeneration(g *ingestionGeneration) {
+	g.stop()
+	d.mu.Lock()
+	if g.attempt != nil {
+		close(g.attempt)
+		g.attempt = nil
+	}
+	d.mu.Unlock()
+}
+
+// Stop cancels and joins every owned generation and reload.
 func (d *daemonIngestion) Stop() {
 	d.mu.Lock()
 	d.stopped = true
+	d.cancel()
+	old := d.generation
+	d.generation = nil
 	d.mu.Unlock()
 	d.applying.Wait()
-	d.mu.Lock()
-	watchers, stopLive := d.watchers, d.stopLive
-	d.stopLive = nil
-	d.mu.Unlock()
-	if stopLive != nil {
-		stopLive()
+	if old != nil {
+		d.stopGeneration(old)
 	}
-	watchers.stop()
 }
 
 // applySaved switches the engine, watchers, and polling to the saved
 // configuration.
 func (d *daemonIngestion) applySaved() {
 	d.applyMu.Lock()
-	defer d.applyMu.Unlock()
+	var old *ingestionGeneration
+	defer func() {
+		d.applyMu.Unlock()
+		if old != nil {
+			d.stopGeneration(old)
+		}
+	}()
 	if d.ctx.Err() != nil {
 		return
 	}
@@ -179,41 +377,50 @@ func (d *daemonIngestion) applySaved() {
 	if reflect.DeepEqual(engineSourceConfig(prev), engineSourceConfig(next)) {
 		return
 	}
-	// Register the replacement watcher before the engine switches, so once
-	// the engine reports a new root, every later change under it is seen.
-	// Registration can take tens of milliseconds, and a session written in
-	// that gap would otherwise wait for the next full sync. The watcher only
-	// collects until dispatch opens below, so its first batch is still
-	// handled by the new provider set. It also starts before the old watcher
-	// stops, so no change falls between them; a change seen by both is
-	// synced twice, which is harmless.
-	watchers := d.startWatchers(next)
-	d.engine.ReconfigureSources(engineSourceConfig(next))
 	d.mu.Lock()
-	old := d.watchers
-	d.watchers = watchers
-	if d.dispatchOpen {
-		watchers.openDispatch()
+	defer d.mu.Unlock()
+	if !d.stopped && d.generation != nil {
+		// Collect before switching providers so new roots cannot lose writes.
+		g := d.newGeneration(next)
+		d.engine.ReconfigureSources(engineSourceConfig(next))
+		old = d.generation
+		old.cancel()
+		d.installGeneration(g)
+	} else {
+		d.engine.ReconfigureSources(engineSourceConfig(next))
 	}
-	oldLive := d.stopLive
-	if oldLive != nil {
-		d.stopLive = startLiveActivityPoller(
-			d.ctx, next, d.database, d.engine, d.idleTracker,
-		)
-	}
-	d.mu.Unlock()
-	old.stop()
-	if oldLive != nil {
-		oldLive()
-	}
-	log.Printf("applied session provider settings: disabled=%v",
-		next.DisabledAgents)
+	log.Printf("applied session provider settings: disabled=%v", next.DisabledAgents)
 }
 
-func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
-	poller := newUnwatchedPollCoordinator(d.ctx, d.engine, d.idleTracker)
+func (d *daemonIngestion) newGeneration(cfg config.Config) *ingestionGeneration {
+	ctx, cancel := context.WithCancel(d.ctx)
+	return &ingestionGeneration{ctx: ctx, cancel: cancel, watchers: d.startWatchers(ctx, cfg)}
+}
+
+// installGeneration runs under mu and applyMu, before any recovery I/O.
+func (d *daemonIngestion) installGeneration(g *ingestionGeneration) {
+	waking := d.generation == nil
+	d.generation = g
+	if d.liveEnabled {
+		g.stopLive = startLiveActivityPoller(g.ctx, d.Config(), d.database, d.engine, d.idleTracker)
+	}
+	if d.pending {
+		g.recovery = poller.Start(g.ctx, poller.Job{
+			Name: "idle-catchup", Interval: unwatchedPollInterval, RunAtStart: true,
+			Run: func(context.Context) error { return d.recover(g) },
+		})
+	} else if d.dispatchOpen {
+		g.watchers.openDispatch()
+	}
+	if waking {
+		close(d.resumed)
+	}
+}
+
+func (d *daemonIngestion) startWatchers(ctx context.Context, cfg config.Config) *ingestionWatchers {
+	poller := newUnwatchedPollCoordinator(ctx, d.engine, d.idleTracker)
 	stopWatcher, openDispatch, _, queueRetry, flushPending := startFileWatcher(
-		cfg, d.engine, d.syncWatchBatch,
+		cfg, d.engine, func(_ context.Context, batch agentsync.WatchBatch) error { return d.syncWatchBatch(ctx, batch) },
 		agentsync.WatcherOptions{
 			OnCoverageDegraded: func(degradedRoots []string) error {
 				scopes := make([]pollingScope, 0, len(degradedRoots))
@@ -240,7 +447,7 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 }
 
 func (d *daemonIngestion) syncWatchBatch(
-	_ context.Context, batch agentsync.WatchBatch,
+	ctx context.Context, batch agentsync.WatchBatch,
 ) error {
 	done, ok := d.idleTracker.BeginWork()
 	if !ok {
@@ -249,7 +456,7 @@ func (d *daemonIngestion) syncWatchBatch(
 	defer done()
 	// The serve ctx reaches watcher-driven syncs so SIGTERM can interrupt
 	// database reconciliation before Stop waits for it.
-	return syncWatchBatch(d.ctx, d.engine, batch, func() watchRecoveryScope {
+	return syncWatchBatch(ctx, d.engine, batch, func() watchRecoveryScope {
 		return probeWatchRecoveryScope(d.Config())
 	})
 }

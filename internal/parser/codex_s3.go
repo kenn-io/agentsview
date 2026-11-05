@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"path"
@@ -82,7 +83,7 @@ func FindCodexS3ParentSessionURIs(
 	if !ok {
 		return nil
 	}
-	objects, err := listS3Objects(root)
+	objects, err := listS3Objects(context.Background(), root)
 	if err != nil {
 		return nil
 	}

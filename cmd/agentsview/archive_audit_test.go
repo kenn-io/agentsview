@@ -469,7 +469,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil)
+					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil, nil)
 				}()
 				assert.Equal(t, tc.want, <-attempts)
 				cancel()

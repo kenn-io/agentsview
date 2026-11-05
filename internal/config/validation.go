@@ -46,6 +46,12 @@ func (c *Config) validateSections() error {
 		// The public URL joins the allowed origins, so one bad value is one warning.
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
 		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
+		{ScopeServer, "sync_idle_after", func() error {
+			if c.SyncIdleAfter < 0 {
+				return fmt.Errorf("invalid sync_idle_after: %s", c.SyncIdleAfter)
+			}
+			return nil
+		}},
 		{ScopeVector, "[vector]", c.Vector.Validate},
 		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
 		{ScopeInsights, "[insights]", c.Insights.Validate},

@@ -113,6 +113,13 @@ export async function orvalRequest<T extends Response = Response>(
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
   });
+  if (
+    (response.ok || response.status === 404) &&
+    response.headers.get("X-Agentsview-Archive-Stale") === "true" &&
+    typeof window !== "undefined"
+  ) {
+    window.dispatchEvent(new Event("agentsview:archive-stale"));
+  }
   if (response.ok) return response as T;
 
   const body = await response.text().catch(() => "");

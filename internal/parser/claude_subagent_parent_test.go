@@ -218,7 +218,9 @@ func TestClaudeSubagentUnderTwoParentsJoinsOneSession(t *testing.T) {
 	// subagents folder, which rules out "the folder is not walked" as the
 	// explanation.
 	found := map[string]bool{}
-	for _, file := range ClaudeProjectSessionFiles(projects) {
+	files, err := ClaudeProjectSessionFiles(t.Context(), projects)
+	require.NoError(t, err)
+	for _, file := range files {
 		found[file.Path] = true
 	}
 	assert.True(t, found[firstPath],

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 	t.Cleanup(func() { listS3Objects = oldList })
 
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(root string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, root string) ([]S3Object, error) {
 		require.Equal(t, "s3://bucket/root/codex", root)
 		return []S3Object{
 			{
@@ -34,7 +35,8 @@ func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 		}, nil
 	}
 
-	got := s3PrefixScan("s3://bucket/root/codex", codexS3Scanner())
+	got, err := s3PrefixScan(t.Context(), "s3://bucket/root/codex", codexS3Scanner())
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "s3://bucket/root/codex/2026/06/24/rollout-2026-06-24T00-00-00-good.jsonl", got[0].Path)
 	assert.Equal(t, int64(11), got[0].SourceSize)
@@ -53,7 +55,7 @@ func TestDiscoverCodexS3KeepsSessionIndexMetadataSeparate(t *testing.T) {
 	rolloutURI := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
 		"11111111-1111-4111-8111-111111111111.jsonl"
 	rolloutMtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{{
 			URI:          rolloutURI,
@@ -67,7 +69,8 @@ func TestDiscoverCodexS3KeepsSessionIndexMetadataSeparate(t *testing.T) {
 		return S3Object{}, nil
 	}
 
-	got := s3PrefixScan(root, codexS3Scanner())
+	got, err := s3PrefixScan(t.Context(), root, codexS3Scanner())
+	require.NoError(t, err)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, rolloutURI, got[0].Path)
@@ -222,7 +225,7 @@ func TestFindCodexS3ParentSessionURIs(t *testing.T) {
 			oldList := listS3Objects
 			t.Cleanup(func() { listS3Objects = oldList })
 			listed := false
-			listS3Objects = func(got string) ([]S3Object, error) {
+			listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 				listed = true
 				wantRoot := tt.wantRoot
 				if wantRoot == "" {

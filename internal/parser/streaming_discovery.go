@@ -69,6 +69,39 @@ func discoveryYieldCause(err error) (error, bool) {
 	return yieldErr.cause, true
 }
 
+// discoverRoots retains partial results while cancellation and consumer errors stop immediately.
+func discoverRoots(ctx context.Context, roots []string, visit func(string) error) error {
+	var incomplete error
+	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := visit(root)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if cause, ok := discoveryYieldCause(err); ok {
+			return cause
+		}
+		if err != nil {
+			if _, ok := errors.AsType[DiscoveryIncompleteError](err); !ok {
+				return err
+			}
+			incomplete = errors.Join(incomplete, err)
+		}
+	}
+	return incomplete
+}
+
+func discoveryConsumer(yield func(SourceRef) error) func(SourceRef) error {
+	return func(source SourceRef) error {
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
+	}
+}
+
 type discoveryTraversalLimits struct {
 	maxDirs  int
 	maxFiles int

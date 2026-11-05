@@ -8,7 +8,7 @@ import (
 )
 
 // IdleTracker tracks external client activity and internal write work for a
-// daemon that should self-reap after a quiet period.
+// server that suspends local ingestion and optionally exits after a quiet period.
 type IdleTracker struct {
 	mu             sync.Mutex
 	timeout        time.Duration
@@ -18,6 +18,9 @@ type IdleTracker struct {
 	activeWork     int
 	draining       bool
 	notify         chan struct{}
+	syncTimeout    time.Duration
+	onSyncIdle     func()
+	syncIdle       bool
 }
 
 func NewIdleTracker(timeout time.Duration, onIdle func()) *IdleTracker {
@@ -27,6 +30,14 @@ func NewIdleTracker(timeout time.Duration, onIdle func()) *IdleTracker {
 		lastExternal: time.Now(),
 		notify:       make(chan struct{}, 1),
 	}
+}
+
+// SetSyncIdle installs a repeatable suspension callback. It marks ingestion
+// pending synchronously; resource teardown must run outside this callback.
+func (t *IdleTracker) SetSyncIdle(timeout time.Duration, suspend func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.syncTimeout, t.onSyncIdle = timeout, suspend
 }
 
 func (t *IdleTracker) Wrap(next http.Handler) http.Handler {
@@ -43,8 +54,7 @@ func (t *IdleTracker) Wrap(next http.Handler) http.Handler {
 	})
 }
 
-// BeginWork is nil-safe so foreground serve mode can share the same call sites
-// as background daemons without enabling idle reaping.
+// BeginWork keeps the server alive while internal work finishes.
 func (t *IdleTracker) BeginWork() (func(), bool) {
 	if t == nil {
 		return func() {}, true
@@ -64,6 +74,9 @@ func (t *IdleTracker) BeginWork() (func(), bool) {
 			t.mu.Lock()
 			if t.activeWork > 0 {
 				t.activeWork--
+				if t.activeWork == 0 {
+					t.syncIdle = false
+				}
 			}
 			t.mu.Unlock()
 			t.signal()
@@ -89,6 +102,7 @@ func (t *IdleTracker) Touch() {
 	}
 	t.mu.Lock()
 	if !t.draining {
+		t.syncIdle = false
 		t.lastExternal = time.Now()
 	}
 	t.mu.Unlock()
@@ -96,7 +110,7 @@ func (t *IdleTracker) Touch() {
 }
 
 func (t *IdleTracker) Run(ctx context.Context) {
-	if t == nil || t.timeout <= 0 {
+	if t == nil {
 		return
 	}
 	for {
@@ -127,6 +141,7 @@ func (t *IdleTracker) beginExternal() bool {
 	if t.draining {
 		return false
 	}
+	t.syncIdle = false
 	t.lastExternal = time.Now()
 	t.activeExternal++
 	return true
@@ -137,6 +152,7 @@ func (t *IdleTracker) endExternal() {
 	if t.activeExternal > 0 {
 		t.activeExternal--
 	}
+	t.syncIdle = false
 	t.lastExternal = time.Now()
 	t.mu.Unlock()
 	t.signal()
@@ -148,16 +164,28 @@ func (t *IdleTracker) nextWait() (time.Duration, bool) {
 	if t.draining {
 		return 0, true
 	}
-	if t.activeExternal > 0 || t.activeWork > 0 {
-		return t.timeout, false
+	wait := time.Hour
+	if t.activeExternal == 0 && t.activeWork == 0 {
+		if t.syncTimeout > 0 && !t.syncIdle {
+			remaining := t.syncTimeout - time.Since(t.lastExternal)
+			if remaining <= 0 {
+				t.syncIdle = true
+				t.onSyncIdle()
+			} else {
+				wait = min(wait, remaining)
+			}
+		}
+		if t.timeout > 0 && t.activeWork == 0 {
+			remaining := t.timeout - time.Since(t.lastExternal)
+			if remaining <= 0 {
+				t.draining = true
+				go t.onIdle()
+				return 0, true
+			}
+			wait = min(wait, remaining)
+		}
 	}
-	remaining := t.timeout - time.Since(t.lastExternal)
-	if remaining > 0 {
-		return remaining, false
-	}
-	t.draining = true
-	go t.onIdle()
-	return 0, true
+	return wait, false
 }
 
 func (t *IdleTracker) signal() {

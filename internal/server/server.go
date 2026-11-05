@@ -159,8 +159,9 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath string
-	idle     *IdleTracker
+	basePath           string
+	idle               *IdleTracker
+	ingestionFreshness IngestionFreshness
 
 	// sessionMutationNotify, when set, is called after a route changes a
 	// session's lifecycle (trash, restore, permanent delete), so consumers
@@ -623,6 +624,17 @@ func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
 	}
 }
 
+// IngestionFreshness tracks the local archive catch-up obligation.
+type IngestionFreshness interface {
+	EnsureFresh(context.Context) bool
+	Pending() bool
+}
+
+// WithIngestionFreshness waits for local ingestion before archive operations.
+func WithIngestionFreshness(f IngestionFreshness) Option {
+	return func(s *Server) { s.ingestionFreshness = f }
+}
+
 func WithIdleTracker(t *IdleTracker) Option {
 	return func(s *Server) { s.idle = t }
 }
@@ -985,10 +997,14 @@ func archiveFreshnessProbe(path string) bool {
 func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if !archiveFreshnessProbe(r.URL.Path) && s.archiveStale() {
+			pending := false
+			if !archiveFreshnessProbe(r.URL.Path) && s.ingestionFreshness != nil {
+				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
+			}
+			if !archiveFreshnessProbe(r.URL.Path) && (s.archiveStale() || pending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
 				// Session sync returns its stale-archive conflict through the route.
-				if archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {
+				if s.archiveStale() && archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {
 					if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
 						response := writerClosedResponse(w.Header().Add, true)
 						writeError(w, response.Status, response.Message)

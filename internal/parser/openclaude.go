@@ -36,6 +36,7 @@ func newOpenClaudeProviderFactory(def AgentDef) ProviderFactory {
 
 func openClaudeProviderCapabilities() Capabilities {
 	return Capabilities{
+		Sync: ProviderSyncSemantics{PartialDiscovery: true},
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
 			StreamingDiscovery:   CapabilitySupported,
@@ -74,34 +75,27 @@ func newOpenClaudeSourceSet(roots []string) openClaudeSourceSet {
 func (s openClaudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	err := discoverRoots(ctx, s.roots, func(root string) error {
+		files, err := ClaudeProjectSessionFiles(ctx, root)
+		if err != nil {
+			return err
 		}
-		for _, file := range ClaudeProjectSessionFiles(root) {
+		for _, file := range files {
 			source, ok := s.discoveredSourceRef(root, file)
 			if !ok {
 				continue
 			}
 			addJSONLSource(source, &sources, seen)
 		}
-	}
+		return nil
+	})
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, err
 }
 
-func (s openClaudeSourceSet) DiscoverEach(
-	ctx context.Context, yield func(SourceRef) error,
-) error {
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := s.streamLocalRoot(ctx, root, yield); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s openClaudeSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	yield = discoveryConsumer(yield)
+	return discoverRoots(ctx, s.roots, func(root string) error { return s.streamLocalRoot(ctx, root, yield) })
 }
 
 // streamLocalRoot enumerates one local projects root. Project directories

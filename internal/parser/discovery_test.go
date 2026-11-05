@@ -135,7 +135,8 @@ func TestDiscoverClaudeProjects(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := ClaudeProjectSessionFiles(dir)
+			files, err := ClaudeProjectSessionFiles(t.Context(), dir)
+			require.NoError(t, err)
 
 			assertDiscoveredFiles(t, files, tt.wantFiles, AgentClaude)
 
@@ -150,7 +151,8 @@ func TestDiscoverClaudeProjects(t *testing.T) {
 
 	t.Run("Nonexistent", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "does-not-exist")
-		files := ClaudeProjectSessionFiles(dir)
+		files, err := ClaudeProjectSessionFiles(t.Context(), dir)
+		require.NoError(t, err)
 		assert.Nil(t, files, "expected nil")
 	})
 }

@@ -27,7 +27,9 @@ func TestProjectSessionCandidatesKeepNestedSubagentsAndProviderLabels(t *testing
 				{map[string]struct{}{"agent-child": {}}, []string{paths[3]}},
 			} {
 				var got []string
-				for _, file := range ProjectJSONLSessionCandidates(root, agent, tc.ids) {
+				files, err := ProjectJSONLSessionCandidates(t.Context(), root, agent, tc.ids)
+				require.NoError(t, err)
+				for _, file := range files {
 					assert.Equal(t, agent, file.Agent)
 					rel, err := filepath.Rel(root, file.Path)
 					require.NoError(t, err)

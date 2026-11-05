@@ -50,3 +50,14 @@ func activeSessionSourceBounds(path string) (lower, upper string) {
 	upperBytes[len(upperBytes)-1] = separator + 1
 	return lower, string(upperBytes)
 }
+
+// HasActiveSessionSourceInScope includes exact paths and optionally virtual members.
+func (db *DB) HasActiveSessionSourceInScope(ctx context.Context, agent string, scope StoredSourcePathHintScope) (bool, error) {
+	query, args := storedSourcePathHintSelects(agent, []StoredSourcePathHintScope{scope})
+	var one int
+	err := db.getReader().QueryRow(ctx, `SELECT 1 FROM (`+query+`) LIMIT 1`, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}

@@ -214,6 +214,13 @@ func TestRunRemoteSourceSyncPassSyncsConfiguredRemoteRoots(t *testing.T) {
 		"the pass must cover the full remote scope; unchanged objects skip on fingerprints")
 }
 
+func TestRunRemoteSourceSyncPassReportsIncompleteProcessing(t *testing.T) {
+	for _, stats := range []agentsync.SyncStats{{Failed: 1}, {Deferred: 1}, {Aborted: true}} {
+		engine := &fakeRemoteSourceSyncEngine{stats: stats}
+		require.Error(t, runRemoteSourceSyncPass(t.Context(), engine, []string{"s3://bucket/machine/raw/claude"}))
+	}
+}
+
 func TestRunScheduledSyncPassCallsPerAgent(t *testing.T) {
 	engine := &fakeScheduledEngine{}
 	runScheduledSyncPass(t.Context(), engine, nil)

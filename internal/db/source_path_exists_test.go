@@ -114,3 +114,28 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 		})
 	}
 }
+
+func TestHasActiveSessionSourceInScope(t *testing.T) {
+	database := testDB(t)
+	base := filepath.Join(t.TempDir(), "archive%_用户")
+	for _, path := range []string{filepath.Join(base, "exact.jsonl"), filepath.Join(base, "container.db") + "#member", filepath.Join(base, "directory", "session.jsonl")} {
+		insertSession(t, database, path, "project", func(s *Session) { s.Agent = "freebuff"; s.FilePath = &path })
+	}
+	for _, tc := range []struct {
+		name, path    string
+		virtual, want bool
+	}{
+		{"exact", filepath.Join(base, "exact.jsonl"), false, true},
+		{"directory", filepath.Join(base, "directory"), false, true},
+		{"virtual excluded", filepath.Join(base, "container.db"), false, false},
+		{"virtual included", filepath.Join(base, "container.db"), true, true},
+		{"sibling", base + "-sibling", true, false},
+		{"unused", filepath.Join(base, "unused"), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := database.HasActiveSessionSourceInScope(t.Context(), "freebuff", StoredSourcePathHintScope{Path: tc.path, IncludeVirtualMembers: tc.virtual})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

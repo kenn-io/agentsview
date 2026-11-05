@@ -96,6 +96,57 @@ function mockResyncFailure(error: Error): void {
   });
 }
 
+describe("hidden status polling", () => {
+  it("leaves a hidden tab quiet and polls again when visible", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const load = vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    try {
+      sync.startPolling();
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(load).not.toHaveBeenCalled();
+      visibility.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      sync.stopPolling();
+      visibility.mockRestore();
+      load.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("idle catch-up", () => {
+  it("refreshes results when catch-up finishes without advancing last_sync", async () => {
+    const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
+    const notify = vi.spyOn(sync, "notifySyncComplete");
+    (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
+    api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
+    api.getSyncStatus.mockResolvedValue({
+      sync_pending: true,
+      archive_stale: false,
+      last_sync: "",
+      stats: null,
+    });
+    await sync.loadStatus();
+    expect(sync.syncPending).toBe(true);
+    expect(sync.archiveStale).toBe(false);
+    api.getSyncStatus.mockResolvedValue({
+      sync_pending: false,
+      archive_stale: false,
+      last_sync: "",
+      stats: null,
+    });
+    await sync.loadStatus();
+    expect(sync.syncPending).toBe(false);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledOnce();
+    refresh.mockRestore();
+    notify.mockRestore();
+  });
+});
+
 describe("session watch visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -22,6 +22,7 @@ describe("StatusBar", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-08T05:00:00Z"));
     sync.archiveStale = false;
+    sync.syncPending = false;
     sync.syncing = false;
     sync.progress = null;
     sync.lastSync = "2026-04-08T05:00:00Z";
@@ -46,7 +47,35 @@ describe("StatusBar", () => {
     sync.progress = null;
     sync.syncing = false;
     sync.archiveStale = false;
+    sync.syncPending = false;
     sync.lastSyncError = null;
+  });
+
+  it("pauses Codex Cloud polling while hidden and resumes when visible", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    expect(getCodexCloudStatus).not.toHaveBeenCalled();
+    visibility.mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getCodexCloudStatus).toHaveBeenCalledOnce();
+    await unmount(component);
+    visibility.mockRestore();
+  });
+
+  it("shows pending results until catch-up completes without offering a rebuild", async () => {
+    sync.syncPending = true;
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).toContain("synced");
+    expect(document.querySelector(".archive-rebuild")).toBeNull();
+    sync.syncPending = false;
+    await tick();
+    expect(document.body.textContent).not.toContain("Archive results may be stale.");
+    expect(document.body.textContent).toContain("synced");
+    await unmount(component);
   });
 
   it("shows stale results guidance until the archive is current", async () => {

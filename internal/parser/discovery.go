@@ -501,8 +501,8 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 // set (full-sync discovery) and the engine's duplicate-candidate
 // expansion. The name carries no legacy entrypoint verb so the
 // provider can call it without shimming a Discover* free function.
-func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
-	return projectJSONLSessionFiles(projectsDir, AgentClaude, claudeS3Scanner, nil)
+func ClaudeProjectSessionFiles(ctx context.Context, projectsDir string) ([]DiscoveredFile, error) {
+	return projectJSONLSessionFiles(ctx, projectsDir, AgentClaude, claudeS3Scanner, nil)
 }
 
 // IcodemateCLIProjectSessionFiles enumerates a terminal CLI projects root in
@@ -510,21 +510,21 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 // discovered transcript with AgentIcodemate and scanning s3:// roots against
 // the icodemate provider segment (.../raw/icodemate) so machine metadata and
 // source labeling match the owning agent instead of Claude's.
-func IcodemateCLIProjectSessionFiles(projectsDir string) []DiscoveredFile {
-	return projectJSONLSessionFiles(projectsDir, AgentIcodemate, icodemateCLIS3Scanner, nil)
+func IcodemateCLIProjectSessionFiles(ctx context.Context, projectsDir string) ([]DiscoveredFile, error) {
+	return projectJSONLSessionFiles(ctx, projectsDir, AgentIcodemate, icodemateCLIS3Scanner, nil)
 }
 
 // ProjectJSONLSessionCandidates finds only the requested Claude-layout filename
 // stems. Root transcripts need one exact probe per project and ID; subagents
 // still require traversal because workflow directories do not encode their ID.
 func ProjectJSONLSessionCandidates(
-	root string, agent AgentType, ids map[string]struct{},
-) []DiscoveredFile {
+	ctx context.Context, root string, agent AgentType, ids map[string]struct{},
+) ([]DiscoveredFile, error) {
 	scanner := claudeS3Scanner
 	if agent == AgentIcodemate {
 		scanner = icodemateCLIS3Scanner
 	}
-	return projectJSONLSessionFiles(root, agent, scanner, ids)
+	return projectJSONLSessionFiles(ctx, root, agent, scanner, ids)
 }
 
 // projectJSONLSessionFiles walks one Claude-layout projects root
@@ -534,17 +534,18 @@ func ProjectJSONLSessionCandidates(
 // Transient read errors on individual projects are skipped: a project
 // directory echoed by a concurrent watch may disappear mid-walk.
 func projectJSONLSessionFiles(
+	ctx context.Context,
 	projectsDir string,
 	agent AgentType,
 	scanner func() S3SessionScanner,
 	wanted map[string]struct{},
-) []DiscoveredFile {
+) ([]DiscoveredFile, error) {
 	if strings.HasPrefix(projectsDir, "s3://") {
-		return s3PrefixScan(projectsDir, scanner())
+		return s3PrefixScan(ctx, projectsDir, scanner())
 	}
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
-		return nil
+		return nil, nil //nolint:nilerr // Unavailable local roots retain the existing optional-discovery behavior.
 	}
 
 	nested := wanted == nil
@@ -642,7 +643,7 @@ func projectJSONLSessionFiles(
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	return files
+	return files, nil
 }
 
 // ClaudeSubagentTranscriptPaths returns candidate subagent transcripts to

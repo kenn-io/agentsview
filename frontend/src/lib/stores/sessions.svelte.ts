@@ -1695,6 +1695,7 @@ class SessionsStore {
       this.handleLiveRefreshEvent(event);
     });
     this.safetyNetTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       void this.load();
       this.refreshActiveChildSessions();
       this.bumpActiveSessionUsageVersion();

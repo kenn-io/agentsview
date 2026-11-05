@@ -2866,7 +2866,11 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 			if agent == parser.AgentClaude && e.claudeProjectSessionFiles != nil {
 				candidates = e.claudeProjectSessionFiles(root)
 			} else {
-				candidates = parser.ProjectJSONLSessionCandidates(root, agent, ids)
+				var err error
+				candidates, err = parser.ProjectJSONLSessionCandidates(ctx, root, agent, ids)
+				if err != nil {
+					return nil, err
+				}
 			}
 			for _, candidate := range candidates {
 				if err := ctx.Err(); err != nil {
@@ -3301,7 +3305,7 @@ func (e *Engine) resyncBuildLocked(
 				)
 			}
 		}
-		disabledStorage := storageAgentsForDisabledProviders(e.sources().preserveAgents)
+		disabledStorage := storageAgentsForProviders(e.sources().preserveAgents)
 		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
 		// rows are preserved rather than rediscovered and must leave the
 		// protected count with the container rows.
@@ -4509,7 +4513,7 @@ func countIcodemateContainerRootSessions(ctx context.Context,
 	return count
 }
 
-func storageAgentsForDisabledProviders(
+func storageAgentsForProviders(
 	disabledProviders []parser.AgentType,
 ) []parser.AgentType {
 	agents := append([]parser.AgentType(nil), disabledProviders...)
@@ -4560,7 +4564,7 @@ func protectedFileSessionCount(ctx context.Context,
 			database, agent, machine, idPrefix, scoped,
 		)
 	}
-	storageAgents := storageAgentsForDisabledProviders(preserveAgents)
+	storageAgents := storageAgentsForProviders(preserveAgents)
 	if slices.Contains(storageAgents, parser.AgentIcodemate) {
 		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
 		// rows are preserved rather than rediscovered: subtract every
@@ -5369,12 +5373,24 @@ func (e *Engine) syncAll(
 // Freebuff shares the Codebuff provider, so when checking Codebuff,
 // also check Freebuff to catch rename events for Freebuff-only directories.
 func (e *Engine) HasActiveSessionSourceBelow(ctx context.Context, agent, path string) (bool, error) {
-	found, err := e.db.HasActiveSessionSourceBelow(ctx, agent, path)
-	if err != nil || found {
-		return found, err
+	for _, label := range storageAgentsForProviders([]parser.AgentType{parser.AgentType(agent)}) {
+		found, err := e.db.HasActiveSessionSourceBelow(ctx, string(label), path)
+		if found || err != nil {
+			return found, err
+		}
 	}
-	if agent == string(parser.AgentCodebuff) {
-		return e.db.HasActiveSessionSourceBelow(ctx, string(parser.AgentFreebuff), path)
+	return false, nil
+}
+
+// HasActiveSessionSourceInRoots checks only deferred scopes, stopping at the first archived source.
+func (e *Engine) HasActiveSessionSourceInRoots(ctx context.Context, roots map[string]struct{}) (bool, error) {
+	for _, agent := range storageAgentsForProviders(slices.Collect(maps.Keys(e.sources().agentDirs))) {
+		for root := range roots {
+			found, err := e.db.HasActiveSessionSourceInScope(ctx, string(agent), db.StoredSourcePathHintScope{Path: root, IncludeVirtualMembers: true})
+			if found || err != nil {
+				return found, err
+			}
+		}
 	}
 	return false, nil
 }

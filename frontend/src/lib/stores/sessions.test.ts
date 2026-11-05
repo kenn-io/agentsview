@@ -4024,6 +4024,28 @@ describe("SessionsStore live refresh", () => {
     spy.mockRestore();
   });
 
+  it("leaves hidden tabs quiet until a visible safety-net refresh", async () => {
+    vi.useFakeTimers();
+    const { events } = await import("./events.svelte.js");
+    const subscription = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    try {
+      await sessions.load();
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      visibility.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+    } finally {
+      detach();
+      visibility.mockRestore();
+      subscription.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("refetches on the 5-minute safety-net interval", async () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");

@@ -49,6 +49,15 @@ export function commitsDisagree(a: string | undefined, b: string | undefined): b
 
 class SyncStore {
   archiveStale: boolean = $state(false);
+  syncPending: boolean = $state(false);
+
+  constructor() {
+    if (typeof window !== "undefined") {
+      window.addEventListener("agentsview:archive-stale", () => {
+        this.syncPending = true;
+      });
+    }
+  }
   syncing: boolean = $state(false);
   // Message from the last sync or resync that failed, cleared when one
   // succeeds. The header Sync button has no other place to report it.
@@ -155,6 +164,8 @@ class SyncStore {
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats ?? null;
       this.archiveStale = status.archive_stale === true;
+      const catchupCompleted = this.syncPending && status.sync_pending !== true;
+      this.syncPending = status.sync_pending === true;
       const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
       if (statusProgress) {
@@ -177,7 +188,7 @@ class SyncStore {
       } else if (statusProgressCompleted) {
         await this.loadStats();
         this.notifySyncComplete();
-      } else if (changed && !isInitial) {
+      } else if ((changed || catchupCompleted) && !isInitial) {
         await this.loadStats();
         this.notifySyncComplete();
       } else if (shouldRetryStats) {
@@ -192,7 +203,10 @@ class SyncStore {
 
   startPolling() {
     this.stopPolling();
-    this.pollTimer = setInterval(() => this.loadStatus(), POLL_INTERVAL_MS);
+    this.pollTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void this.loadStatus();
+    }, POLL_INTERVAL_MS);
   }
 
   stopPolling() {

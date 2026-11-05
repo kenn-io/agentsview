@@ -308,7 +308,7 @@ func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
 	sessionURI := root + "/proj/session.jsonl"
 	sessionMtime := time.Unix(100, 0)
 	sidecarMtime := time.Unix(200, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{

@@ -1,10 +1,18 @@
 package sync
 
 import (
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,4 +115,70 @@ func TestDiscoverProviderSourcesThreadsS3TranscriptMetadata(t *testing.T) {
 	require.Len(t, files, 1)
 	assert.Equal(t, int64(2048), files[0].TranscriptSize)
 	assert.Equal(t, int64(1779012020000)*1_000_000, files[0].TranscriptMtime)
+}
+
+func TestS3FailedRootKeepsLocalImports(t *testing.T) {
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>Access denied</Message></Error>`)
+	}))
+	t.Cleanup(s3.Close)
+	t.Setenv("AWS_S3_ENDPOINT", s3.URL)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+	t.Setenv("AWS_REGION", "us-east-1")
+	const id = "11111111-1111-4111-8111-111111111111"
+	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentIcodemate, parser.AgentCodex, parser.AgentCursor} {
+		for _, remoteFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/remote-first=%t", agent, remoteFirst), func(t *testing.T) {
+				root := t.TempDir()
+				name := "project/" + id + ".jsonl"
+				content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "healthy local transcript", id).String()
+				storedID := id
+				if agent == parser.AgentCodex {
+					name = "rollout-" + id + ".jsonl"
+					storedID = "codex:" + id
+					content = testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/demo", "codex").AddCodexMessage("2026-01-01T00:00:01Z", "user", "healthy local transcript").String()
+				}
+				if agent == parser.AgentIcodemate {
+					storedID = "icodemate:" + id
+				}
+				if agent == parser.AgentCursor {
+					name = "project/agent-transcripts/" + id + ".txt"
+					storedID = "cursor:" + id
+					content = "user:\nhealthy local transcript\nassistant:\nHello.\n"
+				}
+				file := filepath.Join(root, filepath.FromSlash(name))
+				require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+				require.NoError(t, os.WriteFile(file, []byte(content), 0o644))
+				remote := "s3://bucket/machine/raw/" + string(agent)
+				roots := []string{root, remote}
+				if remoteFirst {
+					roots = []string{remote, root}
+				}
+				database := openTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: roots}, Machine: "local"})
+				t.Cleanup(engine.Close)
+				stats := engine.SyncAll(t.Context(), nil)
+				assert.False(t, stats.ProcessingComplete(), "failed S3 discovery stays incomplete")
+				session, err := database.GetSessionFull(t.Context(), storedID)
+				require.NoError(t, err)
+				require.NotNil(t, session, "healthy local discovery survives the remote error")
+				assert.Equal(t, file, derefString(session.FilePath))
+			})
+		}
+	}
+}
+
+func TestDeferredSourceLookupIncludesFreebuff(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "archive.db") + "#member"
+	dbtest.SeedSession(t, database, "freebuff:member", "project", func(s *db.Session) { s.Agent = "freebuff"; s.FilePath = &path })
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodebuff: {root}}})
+	t.Cleanup(engine.Close)
+	found, err := engine.HasActiveSessionSourceInRoots(t.Context(), map[string]struct{}{filepath.Join(root, "archive.db"): {}})
+	require.NoError(t, err)
+	assert.True(t, found)
 }

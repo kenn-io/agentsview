@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -111,7 +112,7 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 	otherURI := root + "/demo-proj/other.txt"
 	junkURI := root + "/demo-proj/logs/trace.txt"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: txtURI, Size: 7, LastModified: mtime, Fingerprint: "s3-meta:txt"},
@@ -167,7 +168,7 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 				firstURI = root + "/" + projects[0] + "/11111111-1111-4111-8111-111111111111.txt"
 				secondURI = root + "/" + projects[1] + "/11111111-1111-4111-8111-111111111111.txt"
 			}
-			listS3Objects = func(got string) ([]S3Object, error) {
+			listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 				require.Contains(t, roots, got)
 				objects := []S3Object{
 					{URI: secondURI, LastModified: time.Unix(200, 0)},
@@ -220,7 +221,7 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 			{URI: desktopURI, LastModified: time.Unix(300, 0)},
 		},
 	}
-	listS3Objects = func(root string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, root string) ([]S3Object, error) {
 		objects, ok := objectsByRoot[root]
 		require.True(t, ok, "unexpected S3 root %q", root)
 		return objects, nil
@@ -258,7 +259,7 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 	localURI := root + "/" + encoded + "/agent-transcripts/sess.jsonl"
 	subagentURI := root + "/" + encoded + "/agent-transcripts/sess/subagents/child.jsonl"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: harvestURI, Size: 11, LastModified: mtime},
@@ -291,7 +292,7 @@ func TestCursorS3DiscoverPrefersNestedOverFlat(t *testing.T) {
 	flatURI := root + "/" + project + "/agent-transcripts/sess.jsonl"
 	nestedURI := root + "/" + project + "/agent-transcripts/sess/sess.jsonl"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: flatURI, Size: 11, LastModified: mtime},
@@ -317,7 +318,7 @@ func TestCursorS3DiscoverPrefersFlatOverSubagentStem(t *testing.T) {
 	subagentURI := root + "/" + project + "/agent-transcripts/aaa/subagents/sess.jsonl"
 	flatURI := root + "/" + project + "/agent-transcripts/sess.jsonl"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: subagentURI, Size: 11, LastModified: mtime},
@@ -360,7 +361,7 @@ func TestCursorS3DiscoverPrefersTopLevelTextOverSubagentJSONL(t *testing.T) {
 	subagentURI := root + "/" + project + "/agent-transcripts/aaa/subagents/sess.jsonl"
 	flatTxtURI := root + "/" + project + "/agent-transcripts/sess.txt"
 	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
+	listS3Objects = func(_ context.Context, got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: subagentURI, Size: 11, LastModified: mtime},

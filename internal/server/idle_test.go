@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -214,4 +215,36 @@ func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {
 
 	rec := serveWrappedNoContent(t, tracker)
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestIdleTrackerSyncSuspensionRepeatsAndKeepsSSEActive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		tracker := NewIdleTracker(0, func() { require.FailNow(t, "foreground serve must remain running") })
+		suspended := make(chan struct{}, 4)
+		tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
+		finish := requireBeginWork(t, tracker)
+		defer finish()
+		go tracker.Run(ctx)
+		time.Sleep(time.Minute)
+		require.Empty(t, suspended, "active work keeps ingestion installed")
+		finish()
+		synctest.Wait()
+		<-suspended
+		for range 2 {
+			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(done)
+				tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release })).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
+			}()
+			<-entered
+			time.Sleep(2 * time.Minute)
+			assert.Empty(t, suspended, "an open event stream keeps local sync active")
+			close(release)
+			<-done
+			time.Sleep(time.Minute)
+			<-suspended
+		}
+	})
 }
