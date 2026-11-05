@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -172,4 +173,86 @@ func TestMusePersonalArchiveReplacementAndIndexPolling(t *testing.T) {
 	found, err := database.Search(ctx, db.SearchFilter{Query: "original"})
 	require.NoError(t, err)
 	assert.Empty(t, found.Results)
+}
+
+func TestMusePersonalPartialDiscoverySyncsHealthySourcesWithoutTombstones(t *testing.T) {
+	root, existingPath := musePersonalSyncFile(t, musePersonalSyncItem(0, `{"type":"message","role":"user","text":"existing"}`))
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	ctx := t.Context()
+	require.Zero(t, engine.SyncAll(ctx, nil).Failed)
+	existingID := "muse-personal:" + musePersonalSyncID
+	before, err := database.GetSessionFull(ctx, existingID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NoError(t, os.Remove(existingPath))
+
+	sessionsDir := filepath.Dir(existingPath)
+	incompleteID := "00000000-2222-4333-8444-555555555555"
+	require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, incompleteID+".jsonl"), []byte(`{"type":"session_header"`), 0o600))
+	healthyID := "99999999-2222-4333-8444-555555555555"
+	healthyHeader := strings.ReplaceAll(musePersonalSyncHeader, musePersonalSyncID, healthyID)
+	healthyPath := filepath.Join(sessionsDir, healthyID+".jsonl")
+	require.NoError(t, os.WriteFile(healthyPath, []byte(healthyHeader+musePersonalSyncItem(0, `{"type":"message","role":"user","text":"healthy"}`)), 0o600))
+
+	stats := engine.SyncAll(ctx, nil)
+	assert.Positive(t, stats.Failed, "partial discovery must report the unfinished header")
+	existingAfter, err := database.GetSessionFull(ctx, existingID)
+	require.NoError(t, err)
+	require.NotNil(t, existingAfter, "partial discovery must not tombstone a previously archived session")
+	healthy, err := database.GetSessionFull(ctx, "muse-personal:"+healthyID)
+	require.NoError(t, err)
+	require.NotNil(t, healthy, "healthy sources after an incomplete header must still sync")
+}
+
+func TestMusePersonalSyncAllSinceIncludesIndexOnlyChanges(t *testing.T) {
+	root, transcript := musePersonalSyncFile(t, musePersonalSyncItem(0, `{"type":"message","role":"user","text":"indexed"}`))
+	index := filepath.Join(filepath.Dir(transcript), "sessions.json")
+	indexText := `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z"}]}`
+	require.NoError(t, os.WriteFile(index, []byte(indexText), 0o600))
+	old := time.Now().Add(-24 * time.Hour)
+	require.NoError(t, os.Chtimes(transcript, old, old))
+	require.NoError(t, os.Chtimes(index, old, old))
+	require.NoError(t, os.Chtimes(filepath.Dir(transcript), old, old))
+
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	ctx := t.Context()
+	require.Zero(t, engine.SyncAll(ctx, nil).Failed)
+	id := "muse-personal:" + musePersonalSyncID
+	initialMtime, err := musePersonalCompositeMtime(transcript)
+	require.NoError(t, err)
+	cutoff := time.Unix(0, initialMtime+1)
+
+	info, err := os.Stat(index)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(index, []byte(strings.ReplaceAll(indexText, "16:00:00", "17:00:00")), 0o600))
+	require.NoError(t, os.Chtimes(index, info.ModTime(), info.ModTime()))
+	indexInfo, err := os.Stat(index)
+	require.NoError(t, err)
+	changeTime, ok := fileChangeTime(index, indexInfo)
+	if !ok {
+		t.Skip("platform does not expose file change time")
+	}
+	assert.GreaterOrEqual(t, changeTime, cutoff.UnixNano())
+	require.Zero(t, engine.SyncAllSince(ctx, cutoff, nil).Failed)
+	session, err := database.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session.EndedAt)
+	assert.Equal(t, "2026-10-05T17:00:00Z", *session.EndedAt)
+
+	updatedMtime, err := musePersonalCompositeMtime(transcript)
+	require.NoError(t, err)
+	removeCutoff := time.Unix(0, updatedMtime+1)
+	require.NoError(t, os.Remove(index))
+	dirInfo, err := os.Stat(filepath.Dir(transcript))
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, dirInfo.ModTime().UnixNano(), removeCutoff.UnixNano())
+	require.Zero(t, engine.SyncAllSince(ctx, removeCutoff, nil).Failed)
+	session, err = database.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session.EndedAt)
+	assert.Equal(t, "2026-10-05T15:04:06Z", *session.EndedAt)
 }

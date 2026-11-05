@@ -96,26 +96,58 @@ func musePersonalDiscoverEach(ctx context.Context, root string, yield func(singl
 	if isS3URI(root) {
 		return nil
 	}
-	return streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
+	var incomplete error
+	err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
 		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return err
 		}
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "agent-") || !musePersonalUUID(strings.TrimPrefix(entry.Name(), "agent-")) {
 			return nil
 		}
-		return musePersonalScanSessions(ctx, root, filepath.Join(root, entry.Name(), "sessions"), yield)
+		dir := filepath.Join(root, entry.Name(), "sessions")
+		err := musePersonalScanSessions(ctx, root, dir, func(match singleFileMatch) error {
+			if err := yield(match); err != nil {
+				return discoveryYieldError{cause: err}
+			}
+			return nil
+		})
+		if err != nil {
+			if _, ok := discoveryYieldCause(err); ok {
+				return err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			incomplete = errors.Join(incomplete, err)
+		}
+		return nil
 	})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err != nil {
+		if cause, ok := discoveryYieldCause(err); ok {
+			return cause
+		}
+		incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+			AgentMusePersonal, "read agents directory "+root, err,
+		))
+	}
+	return incomplete
 }
 
 func musePersonalScanSessions(ctx context.Context, root, dir string, yield func(singleFileMatch) error) error {
 	safe, err := musePersonalSessionsDir(root, dir)
 	if err != nil {
-		return err
+		return incompleteDiscoveryError(
+			AgentMusePersonal, "inspect sessions directory "+dir, err,
+		)
 	}
 	if !safe {
 		return nil
 	}
-	return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+	var incomplete error
+	err = streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return err
 		}
@@ -124,13 +156,33 @@ func musePersonalScanSessions(ctx context.Context, root, dir string, yield func(
 		}
 		match, ok, err := musePersonalInspectPath(root, filepath.Join(dir, entry.Name()), false)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+				AgentMusePersonal, "inspect transcript "+filepath.Join(dir, entry.Name()), err,
+			))
+			return nil
 		}
 		if ok {
-			return yield(match)
+			if err := yield(match); err != nil {
+				return discoveryYieldError{cause: err}
+			}
 		}
 		return nil
 	})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err != nil {
+		if cause, ok := discoveryYieldCause(err); ok {
+			return discoveryYieldError{cause: cause}
+		}
+		incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+			AgentMusePersonal, "read sessions directory "+dir, err,
+		))
+	}
+	return incomplete
 }
 
 func musePersonalFindFile(ctx context.Context, root, id string) (singleFileMatch, bool) {
@@ -230,7 +282,7 @@ func musePersonalProviderCapabilities() Capabilities {
 	source.CompositeFingerprint = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
 	source.MultiFileStatHash = CapabilitySupported
-	return Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany}, Source: source, Content: ContentCapabilities{FirstMessage: CapabilitySupported, Thinking: CapabilitySupported, ToolCalls: CapabilitySupported, ToolResults: CapabilitySupported, ToolResultEvents: CapabilitySupported, MalformedLineCount: CapabilitySupported, TruncationStatus: CapabilitySupported}, Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true}}
+	return Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany}, Source: source, Content: ContentCapabilities{FirstMessage: CapabilitySupported, Thinking: CapabilitySupported, ToolCalls: CapabilitySupported, ToolResults: CapabilitySupported, ToolResultEvents: CapabilitySupported, MalformedLineCount: CapabilitySupported, TruncationStatus: CapabilitySupported}, Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true, PartialDiscovery: true}}
 }
 
 func (s musePersonalSourceSet) sourceRef(root string, match singleFileMatch) SourceRef {
@@ -240,10 +292,18 @@ func (s musePersonalSourceSet) sourceRef(root string, match singleFileMatch) Sou
 }
 
 func (s musePersonalSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectDiscoveredSources(ctx, s.DiscoverEach)
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	err := s.DiscoverEach(ctx, func(source SourceRef) error {
+		addJSONLSource(source, &sources, seen)
+		return nil
+	})
+	sortJSONLSources(sources)
+	return sources, err
 }
 
 func (s musePersonalSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	var incomplete error
 	for i, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -257,13 +317,22 @@ func (s musePersonalSourceSet) DiscoverEach(ctx context.Context, yield func(Sour
 					return nil
 				}
 			}
-			return yield(s.sourceRef(root, match))
+			if err := yield(s.sourceRef(root, match)); err != nil {
+				return discoveryYieldError{cause: err}
+			}
+			return nil
 		})
 		if err != nil {
-			return err
+			if cause, ok := discoveryYieldCause(err); ok {
+				return cause
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			incomplete = errors.Join(incomplete, err)
 		}
 	}
-	return nil
+	return incomplete
 }
 
 func (s musePersonalSourceSet) FindSource(ctx context.Context, req FindSourceRequest) (SourceRef, bool, error) {
@@ -286,6 +355,7 @@ func (s musePersonalSourceSet) FindSource(ctx context.Context, req FindSourceReq
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
+	var incomplete error
 	for _, root := range s.roots {
 		var found singleFileMatch
 		err := musePersonalDiscoverEach(ctx, root, func(match singleFileMatch) error {
@@ -294,14 +364,17 @@ func (s musePersonalSourceSet) FindSource(ctx context.Context, req FindSourceReq
 			}
 			return nil
 		})
-		if err != nil {
-			return SourceRef{}, false, err
+		if ctx.Err() != nil {
+			return SourceRef{}, false, ctx.Err()
 		}
 		if found.Path != "" {
 			return s.sourceRef(root, found), true, nil
 		}
+		if err != nil {
+			incomplete = errors.Join(incomplete, err)
+		}
 	}
-	return SourceRef{}, false, nil
+	return SourceRef{}, false, incomplete
 }
 
 func musePersonalSessionsDir(root, dir string) (bool, error) {
