@@ -52,7 +52,7 @@ func newGitTrailerFixture(t *testing.T) *gitTrailerFixture {
 	require.NoError(t, os.WriteFile(f.bin, []byte("#!/bin/sh\nexec "+shellquote.POSIX(exe)+" -test.run=^TestGitTrailerCLIProcess$ -- \"$@\"\n"), 0o755))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "GIT_") || strings.HasPrefix(key, "AGENTSVIEW_") || key == "CLAUDE_CODE_SESSION_ID" || key == "CODEX_THREAD_ID" || key == "CODEX_SESSION_ID" {
+		if strings.HasPrefix(key, "GIT_") || strings.HasPrefix(key, "AGENTSVIEW_") || slices.Contains(sessionEnvKeys, key) {
 			continue
 		}
 		f.env = append(f.env, entry)
@@ -70,6 +70,12 @@ func newGitTrailerFixture(t *testing.T) *gitTrailerFixture {
 	f.git(t, "config", "user.email", "example@example.com")
 	f.git(t, "config", "commit.gpgsign", "false")
 	return f
+}
+
+// sessionEnvKeys keeps the developer's own agent session out of fixture commits.
+var sessionEnvKeys = []string{
+	"CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CURSOR_CONVERSATION_ID",
+	"OPENCODE_SESSION_ID", "PI_SESSION_ID", "OMPCODE", "QWEN_CODE_SESSION_ID", "AGENT_SESSION_ID", "HERMES_SESSION_ID",
 }
 
 func (f *gitTrailerFixture) setenv(key, value string) {

@@ -70,15 +70,31 @@ can still commit when Git retains comments, but gets no trailer.
 AgentsView must be on `PATH`. A missing or failing binary, or a missing,
 invalid, or ambiguous session, leaves the commit message unchanged.
 
-Discovery uses `CLAUDE_CODE_SESSION_ID` for Claude and `CODEX_THREAD_ID` for
-Codex, falling back to `CODEX_SESSION_ID` only when `CODEX_THREAD_ID` is unset
-or empty. Native IDs must be UUIDs. When both Claude and Codex variables are
-set, the hook leaves the message unchanged and prints a warning. Set both
-`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this ambiguity
-or override discovery. Other agent names accept lowercase letters, digits, and
-hyphens, up to 32 characters, starting with a letter or digit. Their IDs accept
-letters, digits, dots, underscores, and hyphens, up to 128 characters, starting
-with a letter or digit.
+Discovery reads the session variable each supported harness sets for the
+commands its agent runs:
+
+| Agent | Variable |
+| --- | --- |
+| Claude Code | `CLAUDE_CODE_SESSION_ID` |
+| Codex | `CODEX_THREAD_ID`, or `CODEX_SESSION_ID` when that is unset or empty |
+| Cursor CLI | `CURSOR_CONVERSATION_ID` |
+| OpenCode 2.0.19 and later | `OPENCODE_SESSION_ID` |
+| Pi | `PI_SESSION_ID` |
+| Oh My Pi | `PI_SESSION_ID` with `OMPCODE=1` |
+| Qwen Code | `QWEN_CODE_SESSION_ID` |
+| Goose | `AGENT_SESSION_ID`, only in Goose's `YYYYMMDD_N` form |
+| Hermes | `HERMES_SESSION_ID` |
+
+Claude and Codex IDs must be UUIDs. Commits from unlisted harnesses get no
+trailer unless you set the override pair. When an agent runs inside another
+agent's shell, such as Pi started from Claude Code, both variables are set. The
+hook then leaves the message unchanged and prints a warning. Set both
+`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this
+ambiguity or override discovery.
+Override agent names accept lowercase letters, digits, and hyphens, up to 32
+characters, starting with a letter or digit. IDs for agents other than Claude
+and Codex accept letters, digits, dots, underscores, and hyphens, up to 128
+characters, starting with a letter or digit.
 
 Installation writes both hooks into the directory Git uses. Rerunning it
 succeeds without changing byte-identical hooks; a different existing hook needs
