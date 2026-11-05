@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -35,7 +36,7 @@ func init() {
 			}
 			defer db.Close()
 			var length int
-			err = db.QueryRow("SELECT length(zeroblob(65536))").Scan(&length) //nolint:noctx // The child owns its lifetime and exits directly.
+			err = db.QueryRowContext(context.Background(), "SELECT length(zeroblob(65536))").Scan(&length)
 			ready <- err
 			<-release
 		})
