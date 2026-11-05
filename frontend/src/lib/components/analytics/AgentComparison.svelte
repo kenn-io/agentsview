@@ -186,8 +186,8 @@
 
   .table-header {
     border-bottom: 1px solid var(--border-muted);
-    font-size: 10.5px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     font-weight: 500;
   }
 

@@ -233,14 +233,14 @@
   .treemap-container :global(.tile-meta) {
     fill: white;
     fill-opacity: 0.7;
-    font-size: 9px;
+    font-size: 11px;
     font-family: var(--font-sans);
     pointer-events: none;
   }
 
   .treemap-container :global(.tile-label-sm) {
     fill: white;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     font-family: var(--font-sans);
     pointer-events: none;

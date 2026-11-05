@@ -139,7 +139,7 @@
     flex-shrink: 0;
     width: 18px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     font-family: var(--font-mono);
@@ -166,7 +166,7 @@
 
   .agent-pill {
     flex-shrink: 0;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 500;
     padding: 1px 5px;
     border-radius: 8px;
@@ -175,8 +175,8 @@
   }
 
   .session-project {
-    font-size: 9px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -184,7 +184,7 @@
 
   .session-tokens {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
     min-width: 36px;

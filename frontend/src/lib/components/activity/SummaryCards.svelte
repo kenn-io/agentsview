@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
-  import { Card } from "@kenn-io/kit-ui";
+  import StatCard from "../analytics/StatCard.svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { formatMoney } from "../../money.js";
@@ -64,6 +64,7 @@
     value: string;
     sub?: string;
     featured?: boolean;
+    context?: boolean;
   }
 
   const cards = $derived.by((): SummaryCard[] => {
@@ -94,10 +95,12 @@
       {
         label: m.activity_projects(),
         value: formatCount(t.distinct_projects),
+        context: true,
       },
       {
         label: m.activity_models(),
         value: formatCount(t.distinct_models),
+        context: true,
       },
       {
         label: m.activity_total_cost(),
@@ -109,17 +112,13 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <Card
-      level="default"
-      padding="none"
-      class={card.featured ? "card featured" : "card"}
-    >
-      <span class="card-value">{card.value}</span>
-      <span class="card-label">{card.label}</span>
-      {#if card.sub}
-        <span class="card-sub">{card.sub}</span>
-      {/if}
-    </Card>
+    <StatCard
+      value={card.value}
+      label={card.label}
+      sub={card.sub ?? ""}
+      tier={card.featured ? "lead" : card.context ? "context" : "standard"}
+      featured={card.featured}
+    />
   {/each}
 </div>
 
@@ -128,44 +127,5 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-  }
-
-  .summary-cards :global(.card) {
-    flex: 1;
-    min-width: 110px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .summary-cards :global(.card > .kit-card__body) {
-    display: contents;
-  }
-
-  /* The lead card gets the neutral selected surface used by Usage's
-     totals, not an accent outline that reads as a clickable choice. */
-  .summary-cards :global(.card.featured) {
-    background: var(--selected-bg);
-    box-shadow: var(--selected-edge);
-  }
-
-  .card-value {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.2;
-  }
-
-  .card-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-
-  .card-sub {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 2px;
   }
 </style>

@@ -142,7 +142,7 @@
     flex-shrink: 0;
     min-width: 48px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
