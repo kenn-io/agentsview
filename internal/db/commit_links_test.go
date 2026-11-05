@@ -896,20 +896,6 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 	}
 }
 
-func TestTrailerCommitMirrorRows(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "editor", "project-a")
-	insertMessages(t, d, userMsg("editor", 0, "Save the edit"))
-	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
-	require.NoError(t, err)
-	rows, err := d.SessionCommitLinkRows(t.Context(), "editor")
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "editor")
-	require.NoError(t, err)
-	assert.Equal(t, rows, snapshot.CommitLinks)
-}
-
 func TestTrailerCommitUpsert(t *testing.T) {
 	for _, tt := range []struct {
 		name                       string
@@ -957,48 +943,63 @@ func TestTrailerCommitUpsert(t *testing.T) {
 	}
 }
 
-func TestTrailerCommitStoredAfterPurgeIsNotRetained(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "editor", "project-a")
-	require.NoError(t, d.DeleteSession(t.Context(), "editor"))
-	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
-	require.NoError(t, err)
-	links, err := d.SessionCommitLinks(t.Context(), "editor")
-	require.NoError(t, err)
-	assert.Empty(t, links.Commits)
-	matches, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
-	require.NoError(t, err)
-	require.Len(t, matches.Commits, 1)
-	assert.Empty(t, matches.Commits[0].Links)
-	rows, err := d.RetainedCommitLinkRows(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, rows, "a trailer without project evidence cannot be scoped for publication")
-}
-
 func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
-	const id = "editor"
-	d := testDB(t)
-	insertSession(t, d, id, "project-a")
-	insertMessages(t, d, userMsg(id, 0, "Save the edit"))
-	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
-	require.NoError(t, err)
-	session, err := d.GetSession(t.Context(), id)
-	require.NoError(t, err)
-	session.Project = "project-b"
-	require.NoError(t, d.UpsertSession(t.Context(), *session))
-	require.NoError(t, d.DeleteSession(t.Context(), id))
-	for _, archive := range []*DB{d, testDB(t)} {
-		if archive != d {
-			require.NoError(t, archive.CopyExcludedSessionsFrom(t.Context(), d.Path()))
-			require.NoError(t, archive.CopyCommitTrailersFrom(t.Context(), d.Path()))
-		}
-		rows, err := archive.RetainedCommitLinkRows(t.Context())
-		require.NoError(t, err)
-		require.Len(t, rows, 1)
-		assert.Equal(t, "project-b", rows[0].Project)
-		assert.Equal(t, "trailer", rows[0].Source)
-		assert.True(t, rows[0].Missing)
-		assert.Nil(t, rows[0].TurnOrdinal)
-		assert.Empty(t, rows[0].TurnText)
+	for _, tt := range []struct {
+		name       string
+		storeAfter bool
+	}{
+		{name: "stored before purge"},
+		{name: "stored after purge", storeAfter: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const id = "editor"
+			d := testDB(t)
+			insertSession(t, d, id, "project-a")
+			if tt.storeAfter {
+				require.NoError(t, d.DeleteSession(t.Context(), id))
+			} else {
+				insertMessages(t, d, userMsg(id, 0, "Save the edit"))
+			}
+			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
+			require.NoError(t, err)
+			if tt.storeAfter {
+				links, err := d.SessionCommitLinks(t.Context(), id)
+				require.NoError(t, err)
+				assert.Empty(t, links.Commits)
+				matches, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
+				require.NoError(t, err)
+				require.Len(t, matches.Commits, 1)
+				assert.Empty(t, matches.Commits[0].Links)
+				rows, err := d.RetainedCommitLinkRows(t.Context())
+				require.NoError(t, err)
+				assert.Empty(t, rows, "a trailer without project evidence cannot be scoped for publication")
+				return
+			}
+			rows, err := d.SessionCommitLinkRows(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, rows, snapshot.CommitLinks)
+			session, err := d.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			session.Project = "project-b"
+			require.NoError(t, d.UpsertSession(t.Context(), *session))
+			require.NoError(t, d.DeleteSession(t.Context(), id))
+			for _, archive := range []*DB{d, testDB(t)} {
+				if archive != d {
+					require.NoError(t, archive.CopyExcludedSessionsFrom(t.Context(), d.Path()))
+					require.NoError(t, archive.CopyCommitTrailersFrom(t.Context(), d.Path()))
+				}
+				rows, err := archive.RetainedCommitLinkRows(t.Context())
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				assert.Equal(t, "project-b", rows[0].Project)
+				assert.Equal(t, "trailer", rows[0].Source)
+				assert.True(t, rows[0].Missing)
+				assert.Nil(t, rows[0].TurnOrdinal)
+				assert.Empty(t, rows[0].TurnText)
+			}
+		})
 	}
 }

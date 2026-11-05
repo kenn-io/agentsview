@@ -20,23 +20,25 @@ import (
 	"go.kenn.io/agentsview/internal/testutil"
 )
 
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com", "GIT_AUTHOR_DATE=2026-10-30T10:10:00Z", "GIT_COMMITTER_DATE=2026-10-30T10:10:00Z")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	return strings.TrimSpace(string(out))
+}
+
 func commitTrailerFixture(t *testing.T) (*db.DB, *Engine, string, string, func(string, ...string) string) {
 	t.Helper()
 	testutil.IsolateGit(t)
 	database := openTestDB(t)
 	root := t.TempDir()
 	repo := t.TempDir()
-	runGit := func(dir string, args ...string) string {
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com", "GIT_AUTHOR_DATE=2026-10-30T10:10:00Z", "GIT_COMMITTER_DATE=2026-10-30T10:10:00Z")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
-		return strings.TrimSpace(string(out))
-	}
-	runGit(repo, "init", "-q", "-b", "main")
-	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:editor-session")
-	first := runGit(repo, "rev-parse", "HEAD")
+	runGit(t, repo, "init", "-q", "-b", "main")
+	runGit(t, repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:editor-session")
+	first := runGit(t, repo, "rev-parse", "HEAD")
 	project := filepath.Join(root, "project-a")
 	require.NoError(t, os.MkdirAll(project, 0o700))
 	record := map[string]any{"type": "user", "sessionId": "editor-session", "cwd": repo, "timestamp": "2026-10-30T10:00:00Z", "message": map[string]any{"role": "user", "content": "Tidy docs"}}
@@ -46,7 +48,9 @@ func commitTrailerFixture(t *testing.T) (*db.DB, *Engine, string, string, func(s
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}})
 	t.Cleanup(engine.Close)
 	engine.SyncAll(t.Context(), nil)
-	return database, engine, repo, first, runGit
+	return database, engine, repo, first, func(dir string, args ...string) string {
+		return runGit(t, dir, args...)
+	}
 }
 
 func TestResyncAbortsOnCommitTrailerCopyFailure(t *testing.T) {
@@ -132,21 +136,11 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 			require.NoError(t, os.Mkdir(repo, 0o700))
 			require.NoError(t, os.Mkdir(allowed, 0o700))
 			for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:allowed\nAgent-Session: codex:other"}} {
-				cmd := exec.CommandContext(t.Context(), "git", args...)
-				cmd.Dir = repo
-				out, err := cmd.CombinedOutput()
-				require.NoError(t, err, "%s", out)
+				runGit(t, repo, args...)
 			}
 			otherCwd := ""
 			if tt.otherCwd != "" {
 				otherCwd = filepath.Join(root, tt.otherCwd)
-			}
-			for _, session := range []db.Session{
-				{ID: "discovery", Agent: "claude", Machine: "local", Cwd: repo},
-				{ID: "allowed", Agent: "claude", Machine: "local", Cwd: allowed},
-				{ID: "codex:other", Agent: "codex", Machine: "local", Cwd: otherCwd},
-			} {
-				require.NoError(t, database.UpsertSession(t.Context(), session))
 			}
 			prefixes := []string{allowed}
 			if tt.includeRepo {
@@ -154,6 +148,26 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", IncludeCwdPrefixes: prefixes})
 			t.Cleanup(engine.Close)
+			if tt.name == "allowed owners" {
+				// Scan an existing checkout before discovering another session's repository.
+				initial := filepath.Join(allowed, "initial")
+				require.NoError(t, os.Mkdir(initial, 0o700))
+				runGit(t, initial, "init", "-q", "-b", "main")
+				runGit(t, initial, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Initial\n\nAgent-Session: claude:initial")
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "initial", Agent: "claude", Machine: "local", Cwd: initial}))
+				engine.ReconcileCommitTrailers(t.Context())
+				list, err := database.SessionCommitLinks(t.Context(), "initial")
+				require.NoError(t, err)
+				require.Len(t, list.Commits, 1)
+			}
+			sha := runGit(t, repo, "rev-parse", "HEAD")
+			for _, session := range []db.Session{
+				{ID: "discovery", Agent: "claude", Machine: "local", Cwd: repo},
+				{ID: "allowed", Agent: "claude", Machine: "local", Cwd: allowed},
+				{ID: "codex:other", Agent: "codex", Machine: "local", Cwd: otherCwd},
+			} {
+				require.NoError(t, database.UpsertSession(t.Context(), session))
+			}
 
 			engine.ReconcileCommitTrailers(t.Context())
 
@@ -163,6 +177,8 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 				if slices.Contains(tt.wantSessions, id) {
 					require.Len(t, list.Commits, 1)
 					assert.Equal(t, "trailer", list.Commits[0].Source)
+					assert.Equal(t, sha, list.Commits[0].SHA)
+					assert.Equal(t, repo, list.Commits[0].Repository)
 				} else {
 					assert.Empty(t, list.Commits)
 				}
@@ -191,21 +207,13 @@ func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 			home := t.TempDir()
 			repo := filepath.Join(home, "src", "repo")
 			require.NoError(t, os.MkdirAll(repo, 0o700))
-			runGit := func(args ...string) string {
-				t.Helper()
-				cmd := exec.CommandContext(t.Context(), "git", args...)
-				cmd.Dir = repo
-				out, err := cmd.CombinedOutput()
-				require.NoError(t, err, "%s", out)
-				return strings.TrimSpace(string(out))
-			}
-			runGit("init", "-q", "-b", "main")
-			runGit("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session=claude:editor")
-			sha := runGit("rev-parse", "HEAD")
+			runGit(t, repo, "init", "-q", "-b", "main")
+			runGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session=claude:editor")
+			sha := runGit(t, repo, "rev-parse", "HEAD")
 			cwd := repo
 			if tt.linked {
 				cwd = filepath.Join(home, "src", "worktree")
-				runGit("worktree", "add", "-q", "-b", "linked", cwd)
+				runGit(t, repo, "worktree", "add", "-q", "-b", "linked", cwd)
 			}
 			config := filepath.Join(repo, ".git", "config")
 			if tt.commondir {
@@ -306,34 +314,13 @@ func TestReconcileCommitTrailersNewCommit(t *testing.T) {
 	}
 }
 
-func TestReconcileCommitTrailersLateRepository(t *testing.T) {
-	database, engine, _, _, runGit := commitTrailerFixture(t)
-	// Discover a new session checkout after the initial reconciliation.
-	late, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-	runGit(late, "init", "-q", "-b", "main")
-	runGit(late, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Older\n\nAgent-Session: codex:older")
-	sha := runGit(late, "rev-parse", "HEAD")
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:older", Agent: "codex", Project: "project-a", Machine: "local", Cwd: late}))
-	engine.ReconcileCommitTrailers(t.Context())
-	list, err := database.SessionCommitLinks(t.Context(), "codex:older")
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 1)
-	assert.Equal(t, "trailer", list.Commits[0].Source)
-	assert.Equal(t, sha, list.Commits[0].SHA)
-	assert.Equal(t, late, list.Commits[0].Repository)
-}
-
 func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	testutil.IsolateGit(t)
 	database := openTestDB(t)
 	repo, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Scratch\n\nAgent-Session: codex:removed"}} {
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = repo
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
+		runGit(t, repo, args...)
 	}
 	cwd := filepath.Join(repo, "temporary", "nested")
 	require.NoError(t, os.MkdirAll(cwd, 0o700))
@@ -359,10 +346,7 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 	for _, repo := range []string{first, later} {
 		require.NoError(t, os.Mkdir(repo, 0o700))
 		for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", filepath.Base(repo) + "\n\nAgent-Session: claude:fair"}} {
-			cmd := exec.CommandContext(t.Context(), "git", args...)
-			cmd.Dir = repo
-			out, err := cmd.CombinedOutput()
-			require.NoError(t, err, "%s", out)
+			runGit(t, repo, args...)
 		}
 		require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: filepath.Base(repo), Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
 	}
@@ -384,25 +368,21 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 }
 
 func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
-	t.Run("failed", func(t *testing.T) {
-		testutil.IsolateGit(t)
-		database := openTestDB(t)
-		repo, err := filepath.EvalSymlinks(t.TempDir())
-		require.NoError(t, err)
-		cmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main", repo)
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
-		require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
-		engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
-		t.Cleanup(engine.Close)
-		identity := engine.cachedProjectIdentity("local", repo)
-		require.NotEmpty(t, identity.gitDir)
-		require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
-		before := time.Now()
-		assert.Zero(t, engine.reconcileCommitTrailersWithBudget(t.Context(), 0))
-		attempt, ok := engine.trailerScanAttempts[identity.repositoryPath]
-		require.True(t, ok, "failed scans must yield their turn")
-		assert.False(t, attempt.Before(before))
-		assert.False(t, attempt.After(time.Now()))
-	})
+	testutil.IsolateGit(t)
+	database := openTestDB(t)
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	runGit(t, repo, "init", "-q", "-b", "main")
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	identity := engine.cachedProjectIdentity("local", repo)
+	require.NotEmpty(t, identity.gitDir)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
+	before := time.Now()
+	assert.Zero(t, engine.reconcileCommitTrailersWithBudget(t.Context(), 0))
+	attempt, ok := engine.trailerScanAttempts[identity.repositoryPath]
+	require.True(t, ok, "failed scans must yield their turn")
+	assert.False(t, attempt.Before(before))
+	assert.False(t, attempt.After(time.Now()))
 }

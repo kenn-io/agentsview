@@ -11,19 +11,21 @@ import (
 
 func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 	for _, tt := range []struct {
-		name, trailer, agent, owner string
+		name, agent, owner string
+		trailers           []string
 	}{
-		{"freebuff", "freebuff:project-a:123", "freebuff", "freebuff:project-a:123"},
-		{"codebuff", "codebuff:project-a:123", "codebuff", "codebuff:project-a:123"},
-		{"native colon", "codex:session:page", "codex", "codex:session:page"},
-		{"claude native colon", "claude:session:page", "claude", "session:page"},
+		{"freebuff", "freebuff", "freebuff:project-a:123", []string{"freebuff:project-a:123"}},
+		{"codebuff", "codebuff", "codebuff:project-a:123", []string{"codebuff:project-a:123"}},
+		{"native colon", "codex", "codex:session:page", []string{"codex:session:page"}},
+		{"claude native colon", "claude", "session:page", []string{"claude:session:page"}},
+		{"duplicate owner identities", "codex", "codex:abc", []string{"claude:codex:abc", "codex:abc"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, tt.owner, "project-a", func(s *Session) { s.Agent = tt.agent })
 			sha := strings.Repeat("a", 40)
 			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-				SHA: sha, Sessions: []string{tt.trailer}, CommittedAt: tsZero,
+				SHA: sha, Sessions: tt.trailers, CommittedAt: tsZero,
 			}})
 			require.NoError(t, err)
 			found, err := d.CommitSessionLinks(t.Context(), []string{sha})
@@ -39,21 +41,6 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 			assert.Equal(t, "trailer", list.Commits[0].Source)
 		})
 	}
-}
-
-func TestTrailerCommitLinksDuplicateOwnerIdentities(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "codex:abc", "project-a", func(s *Session) { s.Agent = "codex" })
-	sha := strings.Repeat("a", 40)
-	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-		SHA: sha, Sessions: []string{"claude:codex:abc", "codex:abc"}, CommittedAt: tsZero,
-	}})
-	require.NoError(t, err)
-	found, err := d.CommitSessionLinks(t.Context(), []string{sha})
-	require.NoError(t, err)
-	require.Len(t, found.Commits, 1)
-	require.Len(t, found.Commits[0].Links, 1)
-	assert.Equal(t, "codex:abc", found.Commits[0].Links[0].SessionID)
 }
 
 func TestTrailerCommitLinksMissingOwner(t *testing.T) {

@@ -32,14 +32,21 @@ func TestSessionCommits(t *testing.T) {
 		require.NoError(t, err)
 		got := decodeCLIJSON[db.SessionCommitList](t, out)
 		require.Len(t, got.Commits, 2)
+		var transcript, trailer []db.CommitLink
 		for _, commit := range got.Commits {
-			if commit.Source == "transcript" {
-				assert.Equal(t, "exact-call", commit.ToolUseID)
+			switch commit.Source {
+			case "transcript":
+				transcript = append(transcript, commit)
+			case "trailer":
+				trailer = append(trailer, commit)
 			}
-			require.NotNil(t, commit.Turn)
-			// JSON preserves the full prompt; human output sanitizes and truncates it.
-			assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", commit.Turn.Text)
 		}
+		require.Len(t, transcript, 1)
+		assert.Equal(t, "exact-call", transcript[0].ToolUseID)
+		require.Len(t, trailer, 1)
+		require.NotNil(t, transcript[0].Turn)
+		// JSON preserves the full prompt; human output sanitizes and truncates it.
+		assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", transcript[0].Turn.Text)
 	})
 	t.Run("human", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit")
