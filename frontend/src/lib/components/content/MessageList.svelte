@@ -1057,7 +1057,7 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 8px 0;
+    padding: 4px 0 8px;
     overflow-anchor: none;
   }
 
@@ -1176,15 +1176,10 @@
     padding: 16px 24px;
   }
 
-  /* Stream hides the role header, so pattern mode keeps the patterned bar
-     as the role marker. */
-  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message:not(.is-user)) {
-    border-left: none;
-  }
-
-  /* The prompt keeps a thin accent rule, as in Default, so it is easy to
-     find in a stream of unlabeled prose. */
-  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message.is-user) {
+  /* Stream hides the role header, so the role rail is the only role
+     marker: both roles keep the same thin rule as every other layout, and
+     pattern mode keeps its patterned bars. */
+  :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message) {
     border-left-width: 2px;
     border-left-style: solid;
   }
@@ -1264,6 +1259,19 @@
      from that edge, over their own row background. */
   .layout-skim .virtual-row > :global(:not(.message) .tool-header) {
     padding-inline-start: calc(var(--role-assistant-bar-width) + 16px);
+  }
+
+  /* Skim is read by scanning tool names down the left, so they carry the
+     tool color and weight and share a minimum width: commands start on a
+     common edge and the names read as their own column. */
+  .layout-skim :global(.tool-label) {
+    min-width: 4.5em;
+    color: var(--role-tool-accent);
+    font-weight: 600;
+  }
+
+  :global(:root:not(.dark)) .layout-skim :global(.tool-label) {
+    color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary));
   }
 
   .layout-skim :global(.tool-meta),

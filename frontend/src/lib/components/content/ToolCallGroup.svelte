@@ -160,6 +160,12 @@
        with other card padding override it in MessageList. */
     padding: 6px 16px;
   }
+  /* Light theme: the same warm wash as ToolBlock, so the group reads as one
+     tool unit on the near-white page. */
+  :global(:root:not(.dark):not(.high-contrast)) .tool-group {
+    background: color-mix(in srgb, var(--role-tool-accent) 6%, var(--tool-bg));
+  }
+  :global(:root:not(.dark)) .tool-icon { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
   .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
   .tool-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
   .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }

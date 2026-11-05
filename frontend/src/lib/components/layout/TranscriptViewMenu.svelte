@@ -117,12 +117,16 @@
           <span class="view-trigger-sizer" aria-hidden="true">{labelFor(layout.name(), inFocus)}</span>
         {/each}
       {/each}
-      <span class="view-trigger-text">{triggerText}</span>
+      <!-- The dot and chevron follow the visible label instead of the
+           widest one, so the reserved width reads as quiet space. -->
+      <span class="view-trigger-current">
+        <span class="view-trigger-text">{triggerText}</span>
+        <!-- Always laid out, so showing it does not change the trigger's
+             width. -->
+        <span class="view-filter-dot" class:shown={filtered} aria-hidden="true"></span>
+        <ChevronDownIcon size="12" strokeWidth="2" aria-hidden="true" />
+      </span>
     </span>
-    <!-- Always laid out, so showing it does not change the trigger's
-         width. -->
-    <span class="view-filter-dot" class:shown={filtered} aria-hidden="true"></span>
-    <ChevronDownIcon size="12" strokeWidth="2" aria-hidden="true" />
   </MenuTrigger>
   <MenuContent ariaLabel={m.header_view_menu_label()} class="view-menu">
     <div class="view-heading" role="presentation">{m.header_view_layout_heading()}</div>
@@ -207,6 +211,16 @@
     background: var(--bg-surface-hover);
   }
 
+  /* A ghost control at rest: no fill or frame, secondary ink, so the
+     reserved width does not read as a heavy field. Hover and the open menu
+     keep kit-ui's frame. The selector outranks kit-ui's resting rule. */
+  :global(.kit-menu__trigger.view-trigger:not(:hover):not([aria-expanded="true"])) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--text-secondary);
+  }
+
   :global(.view-trigger) {
     justify-content: flex-start;
   }
@@ -221,16 +235,35 @@
   }
 
   .view-trigger-sizer,
-  .view-trigger-text {
+  .view-trigger-current {
     grid-area: 1 / 1;
     min-width: 0;
+  }
+
+  .view-trigger-sizer,
+  .view-trigger-text {
+    min-width: 0;
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     text-align: left;
   }
 
+  /* Each sizer reserves the dot and chevron that follow the label: two 6px
+     gaps, the 6px dot, and the 12px chevron. */
   .view-trigger-sizer {
     visibility: hidden;
+    padding-right: 30px;
+  }
+
+  .view-trigger-current {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .view-trigger-current :global(svg) {
+    color: var(--text-muted);
   }
 
   :global(.view-trigger) :global(svg) {

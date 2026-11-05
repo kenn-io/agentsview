@@ -117,11 +117,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let accentForeground = $derived(isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
   let roleInk = $derived(isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
   let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
-  // Assistant turns are the bulk of a transcript, so their rail steps back;
-  // the user turn keeps the full-strength rail as the anchor.
-  let railColor = $derived(isUser
-    ? "var(--role-user-accent)"
-    : "color-mix(in srgb, var(--role-assistant-accent) 70%, transparent)");
+  // Every layout draws the role rail at full strength, so the user/assistant
+  // distinction reads the same in Default, Compact, Stream, and Skim.
+  let railColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
   let pinFailed = $state(false);
@@ -362,11 +360,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     background: var(--bg-tertiary); white-space: nowrap; flex-shrink: 0; opacity: 0.8;
   }
   .turn-summary {
-    font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums;
-    /* Plain text like the other metadata; only slow and running turns get
-       a fill. */
-    padding: 1px 0; border-radius: var(--radius-sm); border: 1px solid transparent;
-    background: transparent;
+    font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+    /* The turn's duration and call count are one unit, so a hairline outline
+       sets them apart from the token count and date around them. Only slow
+       and running turns get a fill. */
+    padding: 0 6px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-muted);
+    background: transparent; line-height: 18px;
     white-space: nowrap; flex-shrink: 0;
   }
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }

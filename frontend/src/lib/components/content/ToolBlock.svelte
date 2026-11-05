@@ -331,6 +331,12 @@
     margin: 0;
   }
   .tool-block.in-group { margin: 0; border-left: none; border-radius: 0; }
+  /* Light theme: a low-chroma warm wash over the tool surface, so tool rows
+     group apart from white prose cards and the near-white page. It mixes in
+     the tool accent, so a custom tool color carries through. */
+  :global(:root:not(.dark):not(.high-contrast)) .tool-block {
+    background: color-mix(in srgb, var(--role-tool-accent) 6%, var(--tool-bg));
+  }
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
   .tool-header {
@@ -342,7 +348,10 @@
   .tool-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
-  .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
+  .tool-label { font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
+  /* Light theme: the shared tool ink is an olive near 4.2:1 on the tool
+     wash; a deeper amber keeps the name warm and above 4.5:1. */
+  :global(:root:not(.dark)) .tool-label { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
   .summary-path { color: var(--text-primary); }
   .stat-add { color: color-mix(in srgb, var(--accent-green) 75%, var(--text-primary)); }
   .stat-del { color: color-mix(in srgb, var(--accent-red) 75%, var(--text-primary)); }
@@ -374,11 +383,9 @@
   .show-more-btn:hover { background: var(--bg-surface-hover); }
   .tool-content { padding: 8px 14px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); line-height: 1.5; overflow-x: auto; border-top: 1px solid var(--border-muted); }
   .tool-command { background: var(--code-bg); color: var(--code-text); }
+  /* The echoed command is a dark code block with syntax colors in both
+     themes; the highlighter's palette is built for that surface. */
   .tool-command code { font-family: inherit; }
-  /* The command highlighter's palette is built for a dark surface. In the
-     light theme the command sits on the tool surface in plain ink instead. */
-  :global(:root:not(.dark)) .tool-command { background: color-mix(in srgb, var(--text-primary) 3%, var(--tool-bg)); color: var(--text-primary); }
-  :global(:root:not(.dark)) .tool-command code :global(span) { color: inherit !important; font-style: normal !important; }
   .output-header {
     display: flex; align-items: center; gap: 6px; padding: 5px 10px; width: 100%; text-align: left;
     font-size: 12px; color: var(--text-secondary); min-width: 0; transition: background 0.1s; user-select: text; flex: 1 1 auto;

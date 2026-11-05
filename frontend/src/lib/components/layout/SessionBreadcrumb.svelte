@@ -1591,24 +1591,16 @@
     flex-shrink: 1;
   }
 
-  /* The agent reads as the sidebar's dot and label, not a filled pill. */
+  /* The agent name is set in its agent color, the same mix the sidebar
+     uses, so it is the one colored word in the strip. */
   .agent-badge {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 16px;
-    color: var(--text-secondary);
+    color: color-mix(in srgb, var(--agent-color, var(--text-muted)) 82%, var(--text-primary));
     flex-shrink: 0;
-  }
-
-  .agent-badge:not(.entrypoint-badge)::before {
-    content: "";
-    width: 7px;
-    height: 7px;
-    border-radius: 2px;
-    background: var(--agent-color, var(--text-muted));
   }
 
   /* The entrypoint qualifies the agent; keep it neutral so the agent
@@ -2250,10 +2242,21 @@
       flex-wrap: wrap;
       height: auto;
       min-height: 0;
-      padding-top: 4px;
-      padding-bottom: 4px;
-      row-gap: 2px;
+      padding-top: 3px;
+      padding-bottom: 3px;
+      row-gap: 0;
       align-content: center;
+    }
+
+    /* The metadata row's chips share one 16px line, so the second row
+       costs 18px instead of 20px. */
+    .token-badge,
+    .cost-badge,
+    .usage-breakdown-trigger,
+    .model-badge,
+    .session-id,
+    .grade-badge {
+      line-height: 16px;
     }
 
     .row-break {
