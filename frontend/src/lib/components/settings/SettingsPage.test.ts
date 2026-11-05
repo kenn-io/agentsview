@@ -7,7 +7,6 @@ import SettingsPage from "./SettingsPage.svelte";
 import { SettingsService } from "../../api/generated/index";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
-import { router } from "../../stores/router.svelte.js";
 import { initI18n, LOCALE_STORAGE_KEY, setLocale } from "../../i18n/index.js";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
@@ -82,15 +81,13 @@ describe("SettingsPage", () => {
     }
   });
 
-  it("renders browser-local settings with the Data-mode worktree pointer", async () => {
+  it("renders browser-local settings without a worktree mappings panel", async () => {
     let resolveSettings!: (value: unknown) => void;
     settingsService.getApiV1Settings.mockReturnValue(
       new Promise((resolve) => {
         resolveSettings = resolve;
       }),
     );
-    const navigate = vi.spyOn(router, "navigate").mockReturnValue(true);
-
     const component = mount(SettingsPage, {
       target: document.body,
     });
@@ -114,21 +111,16 @@ describe("SettingsPage", () => {
 
     expect(document.body.textContent).toContain("Date ranges");
     expect(document.body.textContent).toContain("Link date ranges across pages");
-    // The mapping manager moved to Data; Settings keeps only a pointer.
-    expect(document.body.textContent).toContain("Worktree mappings");
-    expect(document.body.textContent).toContain("Project classification rules have moved to Data.");
+    // Classification rules live on the Data page; Settings has no panel for them.
+    const navLabels = Array.from(
+      document.body.querySelectorAll(".kit-settings__nav button"),
+    ).map((button) => button.textContent ?? "");
+    expect(navLabels.some((label) => label.includes("Date ranges"))).toBe(true);
+    expect(navLabels.some((label) => label.includes("Worktree mappings"))).toBe(false);
+    expect(document.body.textContent).not.toContain("Open Data › Rules");
     expect(document.body.textContent).not.toContain("available in local mode only");
 
-    const pointer = Array.from(document.body.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Open Data › Rules"),
-    );
-    expect(pointer).toBeTruthy();
-    pointer!.click();
-    await tick();
-    expect(navigate).toHaveBeenCalledWith("data", { view: "rules" });
-
     unmount(component);
-    navigate.mockRestore();
   });
 
   it("persists the selected interface language for reload", async () => {
@@ -204,7 +196,7 @@ describe("SettingsPage", () => {
 
     // Every destination carries an icon so the list scans by shape.
     const navItems = Array.from(nav!.querySelectorAll<HTMLElement>(".kit-settings__nav-item"));
-    expect(navItems).toHaveLength(11);
+    expect(navItems).toHaveLength(10);
     for (const item of navItems) {
       expect(item.querySelector(".kit-settings__nav-icon svg"), item.textContent ?? "").not.toBeNull();
     }
@@ -294,7 +286,7 @@ describe("SettingsPage", () => {
     restoredSearch.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
 
-    expect(restoredNav.querySelectorAll("button")).toHaveLength(11);
+    expect(restoredNav.querySelectorAll("button")).toHaveLength(10);
     expect(
       document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
     ).toBe(false);
