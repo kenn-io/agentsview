@@ -1703,16 +1703,23 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts visible panel requests on teardown", async () => {
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
+    const response = Promise.withResolvers<UsageSummaryResponse>();
+    usageServiceMocks.getApiV1UsageSummary
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce(usageSummary(7));
     const { usage } = await loadStore();
 
-    void usage.fetchSummary();
+    const interrupted = usage.fetchSummary();
     await Promise.resolve();
     usage.cancelInFlightReads();
 
     expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal?.aborted).toBe(
       true,
     );
+    await usage.fetchSummary();
+    response.resolve(usageSummary(1));
+    await interrupted;
+    expect(usage.summary?.totals.totalCost).toEqual(testMoney(7));
   });
 
   it("reuses summary params for top sessions during full refresh", async () => {
@@ -3180,8 +3187,8 @@ describe("UsageStore project zoom", () => {
     expect(usage.zoomRows).toEqual([]);
   });
 
-  it.each(["a metric change", "a same-range refresh"])(
-    "keeps zoom rows through %s, even when it fails",
+  it.each(["a metric change", "a same-range refresh", "a cancelled read"])(
+    "keeps zoom rows through %s",
     async (event) => {
       const { usage } = await loadStore();
       usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
@@ -3203,12 +3210,18 @@ describe("UsageStore project zoom", () => {
       expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(2);
       expect(usage.zoomRows).toEqual([group(1)]);
       expect(usage.loading.zoom).toBe(false);
+      if (event === "a cancelled read") {
+        usage.cancelInFlightReads();
+        expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[1]?.signal?.aborted).toBe(true);
+      }
       reject(new Error("zoom failed"));
       await refreshed;
       await vi.waitFor(() => expect(usage.querying.zoom).toBe(false));
       expect(usage.zoomRows).toEqual([group(1)]);
       expect(usage.errors.zoom).toBeNull();
-      expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
+      if (event === "a cancelled read") expect(warn).not.toHaveBeenCalled();
+      else
+        expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
       warn.mockRestore();
       usage.cancelInFlightReads();
     },
