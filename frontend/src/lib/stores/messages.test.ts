@@ -177,6 +177,24 @@ describe("MessagesStore", () => {
     expect(api.getMessages).toHaveBeenCalledTimes(2);
   });
 
+  it("folds ready into one large-session download while metadata is in flight", async () => {
+    const ready = createDeferred<void>();
+    const metadata = createDeferred<Session>();
+    api.getSession.mockReturnValueOnce(metadata.promise).mockResolvedValue(makeSession("s1", 1001));
+    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+
+    const load = messages.loadSession("s1", ready.promise);
+    expect(api.getSession).toHaveBeenCalledTimes(1);
+    ready.resolve();
+    const reload = messages.reload();
+    expect(api.getMessages).not.toHaveBeenCalled();
+    metadata.resolve(makeSession("s1", 1001));
+    await Promise.all([load, reload]);
+
+    expect(api.getMessages).toHaveBeenCalledTimes(1);
+    expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+  });
+
   it.each([20, 1000])(
     "reads %i-message sessions before ready and keeps the ready reload",
     async (count) => {
@@ -218,19 +236,19 @@ describe("MessagesStore", () => {
   });
 
   it("keeps catch-up reloads once the initial read starts", async () => {
-    const metadata = createDeferred<Session>();
+    const firstRead = createDeferred<MessagesResponse>();
     const started = createDeferred<void>();
-    api.getSession
+    api.getSession.mockResolvedValue(makeSession("s1", 1));
+    api.getMessages
       .mockImplementationOnce(() => {
         started.resolve();
-        return metadata.promise;
+        return firstRead.promise;
       })
-      .mockResolvedValue(makeSession("s1", 1));
-    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+      .mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
     const load = messages.loadSession("s1", Promise.resolve());
     await started.promise;
     const reload = messages.reload();
-    metadata.resolve(makeSession("s1", 1));
+    firstRead.resolve(makeMessagesResponse([makeMessage(0)]));
     await Promise.all([load, reload]);
     expect(api.getMessages).toHaveBeenCalledTimes(2);
   });

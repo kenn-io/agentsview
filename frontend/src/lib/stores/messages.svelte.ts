@@ -140,6 +140,7 @@ export class MessagesStore {
     const generation = ++this.loadGeneration;
     const ac = new AbortController();
     this.abortController = ac;
+    if (ready) this.watchGate = generation;
 
     // Taken before the metadata read, so a reload that starts while it is in flight outranks this load.
     const ticket = ++this.loadTicket;
@@ -162,10 +163,9 @@ export class MessagesStore {
       }
 
       if (ready && countHint !== null && countHint > MESSAGE_PAGE_SIZE) {
-        this.watchGate = generation;
         await ready;
-        if (this.watchGate === generation) this.watchGate = null;
       }
+      if (this.watchGate === generation) this.watchGate = null;
 
       const landed =
         countHint !== null && countHint > FULL_SESSION_MESSAGE_THRESHOLD
