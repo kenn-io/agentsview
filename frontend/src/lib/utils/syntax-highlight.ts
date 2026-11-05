@@ -79,19 +79,13 @@ function resolveLanguage(lang: string): string | null {
 }
 
 export async function highlightInline(code: string, lang: string): Promise<string | null> {
-  const resolved = resolveLanguage(lang);
-  if (resolved === null) return null;
-
-  // Guard against large blocks that would stall the main thread.
-  if (code.length > HIGHLIGHT_MAX_BYTES) return null;
   const lineEndings = code.match(/\r\n|\r|\n/g) ?? [];
-  if (lineEndings.length + 1 > HIGHLIGHT_MAX_LINES) return null;
 
   try {
     const hl = await getHighlighter();
 
     const html = hl.codeToHtml(code.replace(/\r\n?/g, "\n"), {
-      lang: resolved,
+      lang,
       theme: "catppuccin-mocha",
       structure: "inline",
     });
@@ -137,8 +131,11 @@ function failWorker() {
  * Line endings remain text nodes so copying and search retain source offsets.
  */
 export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
-  if (resolveLanguage(lang) === null || code.length > HIGHLIGHT_MAX_BYTES) return null;
-  if (workerFailed || typeof Worker === "undefined") return highlightInline(code, lang);
+  const resolved = resolveLanguage(lang);
+  if (resolved === null || code.length > HIGHLIGHT_MAX_BYTES) return null;
+  // Reject large blocks before starting either highlighting runtime.
+  if ((code.match(/\r\n|\r|\n/g)?.length ?? 0) + 1 > HIGHLIGHT_MAX_LINES) return null;
+  if (workerFailed || typeof Worker === "undefined") return highlightInline(code, resolved);
 
   if (worker === null) {
     try {
@@ -153,13 +150,13 @@ export async function highlightToHtml(code: string, lang: string): Promise<strin
       worker.onmessageerror = failWorker;
     } catch {
       failWorker();
-      return highlightInline(code, lang);
+      return highlightInline(code, resolved);
     }
   }
 
   return new Promise((resolve) => {
     const id = nextId++;
-    pending.set(id, { code, lang, resolve });
-    worker!.postMessage({ id, code, lang });
+    pending.set(id, { code, lang: resolved, resolve });
+    worker!.postMessage({ id, code, lang: resolved });
   });
 }

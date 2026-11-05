@@ -19,6 +19,28 @@ describe("highlighting worker", () => {
     vi.resetModules();
   });
 
+  it("starts no worker for code over the line limit", async () => {
+    const worker = {
+      onmessage: null as ((event: MessageEvent) => void) | null,
+      postMessage: vi.fn(({ id }: { id: number }) => {
+        queueMicrotask(() =>
+          worker.onmessage!(new MessageEvent("message", { data: { id, html: null } })),
+        );
+      }),
+    };
+    const Worker = vi.fn(function () {
+      return worker;
+    });
+    vi.stubGlobal("Worker", Worker);
+    vi.resetModules();
+    const { highlightToHtml } = await import("./syntax-highlight.js");
+
+    const code = "x\n".repeat(800) + "x";
+    await expect(highlightToHtml(code, "typescript")).resolves.toBeNull();
+    expect(Worker).not.toHaveBeenCalled();
+    expect(worker.postMessage).not.toHaveBeenCalled();
+  });
+
   it("posts code to the worker and returns its reply", async () => {
     const worker = {
       onmessage: null as ((event: MessageEvent) => void) | null,
@@ -37,7 +59,7 @@ describe("highlighting worker", () => {
     vi.resetModules();
     const { highlightToHtml } = await import("./syntax-highlight.js");
 
-    await expect(highlightToHtml("const x = 1;", "typescript")).resolves.toBe("worker result");
+    await expect(highlightToHtml("const x = 1;", "ts")).resolves.toBe("worker result");
     expect(worker.postMessage).toHaveBeenCalledWith({
       id: expect.any(Number),
       code: "const x = 1;",
