@@ -176,6 +176,29 @@ describe("MessagesStore", () => {
     expect(api.getMessages).toHaveBeenCalledTimes(2);
   });
 
+  it("recovers from a transient first read after the watch becomes ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const ready = createDeferred<void>();
+      api.getSession.mockResolvedValue(makeSession("s1", 1));
+      api.getMessages
+        .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+        .mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+
+      const load = messages.loadSession("s1", ready.promise);
+      expect(api.getMessages).not.toHaveBeenCalled();
+      // The watch settles readiness and invokes its reload callback in the same turn.
+      ready.resolve();
+      const reload = messages.reload();
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.all([load, reload]);
+
+      expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps catch-up reloads once the initial read starts", async () => {
     const metadata = createDeferred<Session>();
     const started = createDeferred<void>();
