@@ -76,16 +76,21 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	nameProject += nameProjectDates.String()
 	project += projectDates.String()
 	args = append(args, dateBuilder.Args()...)
-	args = append(args, namePattern, namePattern, namePattern, namePattern)
+	args = append(args, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
 	}
 	args = append(args, dateBuilder.Args()...)
+	args = append(args, namePattern, namePattern)
 	orderBy := "match_priority ASC, match_pos ASC, session_ended_at DESC, session_id ASC"
 	if f.Sort == "recency" {
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
 	args = append(args, f.Limit+1, f.Cursor)
+	// The name branch scopes its embeddable-message and msg_matches checks
+	// to name_candidates. Unscoped, ClickHouse runs the system-prefix regex
+	// over every message and recomputes the inlined msg_matches CTE over the
+	// whole table.
 	rows, err := s.queryContext(ctx, `
 		WITH msg_ranked AS (
 			SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
@@ -112,6 +117,13 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			FROM msg_ranked
 			WHERE rn = 1
 		),
+		name_candidates AS (
+			SELECT s.id AS id FROM sessions s
+			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ?
+				OR s.first_message ILIKE ?)
+				AND s.deleted_at IS NULL
+				`+nameProject+`
+		),
 		name_matches AS (
 			SELECT s.id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
@@ -126,15 +138,16 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				END AS snippet,
 				1.0 AS rank, 2 AS match_priority, toUInt64(0) AS match_pos
 			FROM sessions s
-			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ?
-				OR s.first_message ILIKE ?)
-				AND s.deleted_at IS NULL
+			WHERE s.id IN (SELECT id FROM name_candidates)
 				AND s.id IN (
 					SELECT mx.session_id FROM messages mx
-					WHERE `+embeddableMessagePredicate("mx")+`
+					WHERE mx.session_id IN (SELECT id FROM name_candidates)
+						AND `+embeddableMessagePredicate("mx")+`
 				)
-				AND s.id NOT IN (SELECT session_id FROM msg_matches)
-				`+nameProject+`
+				AND s.id NOT IN (
+					SELECT session_id FROM msg_matches
+					WHERE session_id IN (SELECT id FROM name_candidates)
+				)
 		)
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal, snippet, rank
