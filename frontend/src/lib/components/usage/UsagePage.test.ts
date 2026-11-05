@@ -201,28 +201,53 @@ describe("UsagePage refresh behavior", () => {
     interrupted.resolve(usageSummaryWithUnsupported());
     await flushEffects();
     expect(usage.summary?.totals.inputTokens).toBe(42);
-    const interruptedZoom = Promise.withResolvers<[]>();
+    const rows = [
+      {
+        agent: "claude",
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(1),
+        displayName: "",
+        groupKey: "group-a",
+        groupLabel: "Digest",
+        inputTokens: 1,
+        outputTokens: 0,
+        project: "project-a",
+        sessionId: "",
+        startedAt: "2024-06-01",
+        totalTokens: 1,
+      },
+    ];
+    const interruptedZoom = Promise.withResolvers<typeof rows>();
     const ranking = vi.mocked(UsageService.getApiV1UsageTopSessions);
+    ranking.mockImplementation((params) =>
+      Promise.resolve(params?.group_by === "group" ? rows : []),
+    );
+    usage.toggles.attribution.view = "list";
+    usage.setOpenProject("project-a");
+    await flushEffects();
+    expect(document.querySelector(".attribution-panel")?.textContent).toContain("Digest");
     ranking.mockImplementation((params) =>
       params?.group_by === "group" ? interruptedZoom.promise : Promise.resolve([]),
     );
-    usage.setOpenProject("project-a");
-    await flushEffects();
-    const zoomSignal = ranking.mock.calls.find(([params]) => params?.group_by === "group")?.[1]
-      ?.signal;
+    await vi.advanceTimersByTimeAsync(300_000);
+    const zoomSignal = ranking.mock.calls
+      .filter(([params]) => params?.group_by === "group")
+      .at(-1)?.[1]?.signal;
     await setHidden(true);
     expect(zoomSignal?.aborted).toBe(true);
-    ranking.mockResolvedValue([]);
     await setHidden(false);
     await flushEffects();
+    expect(document.querySelector(".attribution-panel")?.textContent).toContain("Digest");
     expect(
       ranking.mock.calls
         .filter(([params]) => params?.group_by === "group")
         .map(([params]) => params?.project_key),
-    ).toEqual(["project-a", "project-a"]);
+    ).toEqual(["project-a", "project-a", "project-a"]);
     expect(usage.zoomedProject?.key).toBe("project-a");
-    expect(usage.zoomRows).toEqual([]);
-    interruptedZoom.resolve([]);
+    interruptedZoom.resolve(rows);
+    await flushEffects();
+    expect(usage.zoomRows).toEqual(rows);
   });
 
   it("coalesces overdue refreshes and stops on teardown", async () => {

@@ -1630,7 +1630,6 @@ class UsageStore {
     this.loading.pairwise = false;
     this.loading.topSessions = false;
     this.loading.zoom = false;
-    this.zoomRows = null;
   }
 
   private markRefreshComplete(startedAt: number): void {
