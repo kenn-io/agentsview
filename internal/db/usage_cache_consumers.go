@@ -51,6 +51,7 @@ type usagePreparedWindow struct {
 // usageWindowObserver provides deterministic synchronization for tests.
 type usageWindowObserver struct {
 	beforePrepare func(context.Context)
+	afterRead     func(journaled bool)
 }
 
 // SetUsageWindowPrepareForTest observes preparations. Call before starting reads.
@@ -233,6 +234,9 @@ func (db *DB) queryUsageRollups(
 			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
 			timings.logIfSlow(started)
+			if observe := db.usageCache.usageWindowObserver.afterRead; observe != nil {
+				observe(prepared.journaled)
+			}
 			return snapshot, facts, resolver, nil
 		}
 		release()

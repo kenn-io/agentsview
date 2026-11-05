@@ -137,20 +137,14 @@ func (db *DB) loadSessionJournalChanges(
 			description, afterRevision, throughRevision,
 		)
 	}
-	return loadSessionJournalChanges(ctx, db.getReader(), table, description, afterRevision, &throughRevision)
+	return loadSessionJournalChanges(ctx, db.getReader(), table, description, afterRevision, throughRevision)
 }
 
-// A nil upper bound reads every latest change after the saved revision in the
-// caller's snapshot. A session re-changed later must still be refreshed.
-func loadSessionJournalChanges(ctx context.Context, q sessionExportQuerier, table, description string, afterRevision int64, throughRevision *int64) ([]string, error) {
-	where := "WHERE c.revision > ?"
-	args := []any{afterRevision}
-	if throughRevision != nil {
-		if afterRevision == *throughRevision {
-			return nil, nil
-		}
-		where, args = sessionDeletionPublicationChangeWhere("c", afterRevision, *throughRevision, nil, nil)
+func loadSessionJournalChanges(ctx context.Context, q sessionExportQuerier, table, description string, afterRevision, throughRevision int64) ([]string, error) {
+	if afterRevision == throughRevision {
+		return nil, nil
 	}
+	where, args := sessionDeletionPublicationChangeWhere("c", afterRevision, throughRevision, nil, nil)
 	rows, err := q.QueryContext(ctx, `
 		SELECT c.session_id
 		FROM `+table+` c

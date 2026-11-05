@@ -52,6 +52,7 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 }
 
 func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, report func(string)) (usagePreparedWindow, bool, error) {
+	started := time.Now()
 	databaseID, err := db.GetDatabaseID(ctx)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
@@ -62,59 +63,86 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	defer release()
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
-	// Window discovery and missing-install discovery share the same cache view.
-	tx, err := cache.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	zone, lost, window, err := cache.captureUsageZoneWindow(ctx, identity, filter)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	zone, err := readUsageZoneCoverage(ctx, tx, identity.Key)
-	if err != nil {
-		return usagePreparedWindow{}, false, err
-	}
-	fallback := func() (usagePreparedWindow, bool, error) {
+	fallback := func() error {
 		// The pass belongs to the archive and StopUsageCacheBackfill joins it.
 		if db.isUsageBackfillEnabled() {
-			err = db.startUsageCacheBackfill(context.Background(), false)
+			return db.startUsageCacheBackfill(context.Background(), false)
 		}
-		return usagePreparedWindow{}, false, err
+		return nil
 	}
 	if !zone.revision.Valid || zone.foreignPricing {
-		_ = tx.Rollback()
 		if zone.id == 0 {
 			_, err = cache.db.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(timezone_key,timezone_name,interval_fingerprint,last_requested_at) VALUES(?,?,?,?) ON CONFLICT(timezone_key) DO NOTHING`, identity.Key, identity.Name, identity.IntervalFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
 			if err != nil {
 				return usagePreparedWindow{}, false, err
 			}
 		}
-		return fallback()
+		return usagePreparedWindow{}, false, fallback()
 	}
-	low := zone.revision.Int64
-	lost, err := usageSessionsWithoutRollup(ctx, tx, zone.id, -1)
+	snapshot, refresh, refreshIDs, trusted, err := db.captureJournaledUsageWindow(ctx, filter, kind, cursor, databaseID, zone, lost, window)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
+	}
+	if !trusted {
+		return usagePreparedWindow{snapshot: snapshot}, false, fallback()
+	}
+	captureDuration := time.Since(started)
+	installs, timings, err := cache.refreshJournaledUsageWindow(ctx, &snapshot, refresh, refreshIDs, report)
+	if err != nil {
+		return usagePreparedWindow{}, false, err
+	}
+	timings.capture = captureDuration
+	timings.candidates = len(snapshot.Sessions)
+	err = cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity)
+	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, installSeq: zone.installSeq}, true, err
+}
+
+func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity usageTimezoneIdentity, filter UsageFilter) (usageZoneCoverage, []string, []string, error) {
+	// Window discovery and missing-install discovery share the same cache view.
+	var zone usageZoneCoverage
+	tx, err := cache.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return zone, nil, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	zone, err = readUsageZoneCoverage(ctx, tx, identity.Key)
+	if err != nil {
+		return zone, nil, nil, err
+	}
+	if !zone.revision.Valid || zone.foreignPricing {
+		return zone, nil, nil, nil
+	}
+	lost, err := usageSessionsWithoutRollup(ctx, tx, zone.id, -1)
+	if err != nil {
+		return zone, nil, nil, err
 	}
 	window, err := usageRollupWindowSessions(ctx, tx, zone.id, filter)
 	if err != nil {
-		return usagePreparedWindow{}, false, err
+		return zone, nil, nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return usagePreparedWindow{}, false, err
+		return zone, nil, nil, err
 	}
+	return zone, lost, window, nil
+}
+
+func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, databaseID string, zone usageZoneCoverage, lost, window []string) (usageQuerySnapshot, usageQuerySnapshot, []string, bool, error) {
 	var refresh usageQuerySnapshot
 	refreshIDs := make([]string, 0)
-	var catalog string
 	trusted := false
 	snapshot, err := db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 		if snapshot.DatabaseID != databaseID {
 			return errUsageCacheSourceChanged
 		}
-		catalog = snapshot.PricingIdentity
-		trusted = low <= snapshot.ChangeRevision && catalog == zone.pricing
+		trusted = zone.revision.Int64 <= snapshot.ChangeRevision && snapshot.PricingIdentity == zone.pricing
 		if !trusted {
 			return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 		}
-		changes, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", low, nil)
+		changes, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", zone.revision.Int64, snapshot.ChangeRevision)
 		if err != nil {
 			return err
 		}
@@ -157,13 +185,10 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		}
 		return nil
 	})
-	if err != nil {
-		return usagePreparedWindow{}, false, err
-	}
-	if !trusted {
-		_, _, err := fallback()
-		return usagePreparedWindow{snapshot: snapshot}, false, err
-	}
+	return snapshot, refresh, refreshIDs, trusted, err
+}
+
+func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapshot *usageQuerySnapshot, refresh usageQuerySnapshot, refreshIDs []string, report func(string)) (map[string]usageRollupInstall, usageRollupRequestTimings, error) {
 	// Deleted IDs must still reach Ensure, which removes their cached facts.
 	versions := make(map[string]usageSourceVersion, len(refresh.Versions))
 	for _, version := range refresh.Versions {
@@ -179,24 +204,27 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	refresh.CursorHighWater = snapshot.CursorHighWater
 	var installs map[string]usageRollupInstall
+	var timings usageRollupRequestTimings
 	if len(refreshIDs) > 0 || refresh.CursorHighWater > 0 {
 		report("Checking the usage cache for this report")
+		started := time.Now()
 		fills, err := cache.fill.Ensure(ctx, refresh.Versions, refresh.CursorHighWater)
 		if err != nil {
-			return usagePreparedWindow{}, false, err
+			return nil, timings, err
 		}
+		timings.fill = time.Since(started)
 		snapshot.dropDeleted(maps.Clone(fills))
 		refresh.dropDeleted(fills)
-		built, _, err := cache.rollup.Ensure(ctx, refresh, fills, export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest))
+		built, metrics, err := cache.rollup.Ensure(ctx, refresh, fills, export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest))
 		if err != nil {
-			return usagePreparedWindow{}, false, err
+			return nil, timings, err
 		}
+		timings.rollup = metrics
 		if install, ok := built[usageRollupCursorSessionID]; ok {
 			installs = map[string]usageRollupInstall{usageRollupCursorSessionID: install}
 		}
 	}
-	err = cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, catalog)
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, journaled: true, installSeq: zone.installSeq}, true, err
+	return installs, timings, nil
 }
 
 func usageSessionsWithoutRollup(ctx context.Context, q sessionExportQuerier, timezoneID int64, limit int) ([]string, error) {

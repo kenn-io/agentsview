@@ -3,8 +3,10 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,13 +135,19 @@ func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) 
 }
 
 func TestUsageJournaledFreshness(t *testing.T) {
-	for _, name := range []string{"append", "soft delete", "hard delete", "restore", "start date", "message date", "agent", "price", "second handle"} {
+	for _, name := range []string{"append", "soft delete", "hard delete", "restore", "start date", "message date", "agent", "price", "price with filter", "second handle"} {
 		t.Run(name, func(t *testing.T) {
 			database := testDB(t)
 			seedJournaledUsage(t, database, "session")
 			filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC"}
 			if name == "agent" {
 				filter.Agent = "claude"
+			}
+			if name == "price with filter" {
+				filter.Agent = "codex"
+				seedJournaledUsage(t, database, "excluded")
+				_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='excluded'`)
+				require.NoError(t, err)
 			}
 			require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}}}))
 			if name == "start date" {
@@ -168,7 +176,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 			case "agent":
 				_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='session'`)
 				require.NoError(t, err)
-			case "price":
+			case "price", "price with filter":
 				require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 			case "second handle":
 				other, err := OpenIsolatedContext(t.Context(), database.Path())
@@ -177,6 +185,11 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				require.NoError(t, other.Close())
 			}
 			assertJournaledUsageLegacy(t, database, filter)
+			if name == "price with filter" {
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.EqualValues(t, 200, got.Totals.TotalCost.Microdollars)
+			}
 		})
 	}
 }
@@ -231,6 +244,58 @@ func TestUsageJournaledLostAndDeleted(t *testing.T) {
 	var remaining int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_cached_sessions WHERE session_id='deleted'`).Scan(&remaining))
 	assert.Zero(t, remaining)
+}
+
+func TestUsageJournaledRestoreBeforePendingDelete(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+	versions, revision, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+	require.NoError(t, err)
+	require.Empty(t, versions)
+
+	other, err := OpenIsolatedContext(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	_, err = other.RestoreSession(t.Context(), "session")
+	require.NoError(t, err)
+	got, err := other.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 100, got.Totals.InputTokens)
+	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
+	require.NoError(t, err)
+	require.Greater(t, zone.revision.Int64, revision)
+	// Resume the deletion batch after its archive recheck, once the other
+	// handle has restored the session and advanced coverage past the restore.
+	require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+	for range 2 {
+		got, err = database.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, 100, got.Totals.InputTokens)
+	}
+}
+
+func TestUsageJournaledRefreshDiagnostics(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
+	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
+	require.NoError(t, err)
+	require.True(t, prepared.journaled)
+	assert.Positive(t, prepared.timings.capture)
+	assert.Positive(t, prepared.timings.fill)
+	assert.Positive(t, prepared.timings.rollup.BuildDuration)
+	assert.Positive(t, prepared.timings.rollup.InstallDuration)
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	prepared.timings.logIfSlow(time.Now().Add(-usageRollupSlowRequestThreshold))
+	assert.Contains(t, output.String(), "1 candidate sessions; built 1 daily rows")
 }
 
 func TestUsageJournaledPartialRefresh(t *testing.T) {
@@ -413,9 +478,11 @@ func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
                 FROM usage_daily_rollups d JOIN usage_rollup_installs i ON i.id=d.rollup_install_id
                 WHERE i.session_id='session' AND i.timezone_id=?`, zone.id).Scan(&capturedCost))
 			assert.EqualValues(t, 100, capturedCost)
+			current, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+			require.NoError(t, err)
 			_, ok, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
 			require.NoError(t, err)
-			assert.Equal(t, revert, ok, "only the reverted catalog can use the journaled result")
+			assert.Equal(t, snapshot.PricingIdentity == current.PricingIdentity, ok, "catalog timestamps also contribute to the digest")
 			require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 			assertJournaledUsageLegacy(t, database, filter)
 			got, err := database.GetDailyUsage(t.Context(), filter)
@@ -630,6 +697,50 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 }
 
 func TestUsageJournaledConcurrentWriter(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC", SkipSessionCounts: true}
+	cache := warmJournaledUsage(t, database, filter)
+	other, err := OpenIsolatedContext(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	var journaled atomic.Int64
+	database.usageCache.usageWindowObserver.afterRead = func(fast bool) {
+		if fast {
+			journaled.Add(1)
+		}
+	}
+	writes, results, done := make(chan int), make(chan error), make(chan struct{})
+	go func() {
+		defer close(done)
+		for ordinal := range writes {
+			err := other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}})
+			if err == nil {
+				// Exercise the daemon's normal notification fill and rollup
+				// refresh while the foreground request prepares and reads.
+				cache.fill.processNotificationBatch(map[string]bool{"session": true}, false)
+			}
+			results <- err
+		}
+	}()
+	t.Cleanup(func() { close(writes); <-done })
+	for ordinal := 1; ordinal <= 100; ordinal++ {
+		writes <- ordinal
+		got, err := database.GetDailyUsage(t.Context(), filter)
+		writeErr := <-results
+		require.NoError(t, err)
+		require.NoError(t, writeErr)
+		assert.GreaterOrEqual(t, got.Totals.InputTokens, 99+ordinal)
+		assert.LessOrEqual(t, got.Totals.InputTokens, 100+ordinal)
+	}
+	t.Logf("journaled reads during notifications: %d/100", journaled.Load())
+	assert.GreaterOrEqual(t, journaled.Load(), int64(80), "routine writes should keep most reads journaled")
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 200, got.Totals.InputTokens)
+}
+
+func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")
 	for i := range 29 {

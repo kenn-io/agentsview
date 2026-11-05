@@ -1799,7 +1799,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 				deleted = append(deleted, id)
 			}
 			if len(deleted) > 0 {
-				if err := c.deleteNotificationSessions(deleted); err != nil &&
+				if err := c.deleteNotificationSessions(deleted, revision); err != nil &&
 					c.ctx.Err() == nil {
 					log.Printf("usage cache notification delete: %v", err)
 				}
@@ -1815,7 +1815,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 	}
 }
 
-func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
+func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision int64) error {
 	conn, err := c.cache.db.Conn(c.ctx)
 	if err != nil {
 		return err
@@ -1856,6 +1856,12 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
 	// irreducible can finalize again.
 	sharers, err := invalidateUsageDedupSharers(c.ctx, conn, removed, excluded)
 	if err != nil {
+		return err
+	}
+	// A restore can be installed by another process after the archive recheck.
+	// Replay from that recheck even though deleting cached facts removes the
+	// missing-install invalidation along with them.
+	if _, err := conn.ExecContext(c.ctx, `UPDATE usage_rollup_timezones SET change_revision=MIN(change_revision, ?)`, revision); err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(c.ctx, `COMMIT`); err != nil {

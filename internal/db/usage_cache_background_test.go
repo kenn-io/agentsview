@@ -372,7 +372,7 @@ func TestUsageCacheBackfillContinuesWhenSessionIsDeletedDuringRollup(t *testing.
 		deleteErr := database.DeleteSession(t.Context(), "deleted-during-rollup")
 		if deleteErr == nil {
 			deleteErr = cache.fill.deleteNotificationSessions(
-				[]string{"deleted-during-rollup"})
+				[]string{"deleted-during-rollup"}, snapshot.ChangeRevision)
 		}
 		deleted <- deleteErr
 	}

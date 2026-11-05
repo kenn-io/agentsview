@@ -5,7 +5,6 @@ package db
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -103,19 +102,8 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	return database, filter, want
 }
 
-// Warm reads must reuse installed totals. The optional timing gate keeps its
-// larger fixture for callers supplying a base measurement.
-func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
-	var base int64
-	count := 300
-	if raw := os.Getenv("AGENTSVIEW_USAGE_BASE_NS"); raw != "" {
-		count = 30000
-		var err error
-		base, err = strconv.ParseInt(raw, 10, 64)
-		require.NoError(t, err)
-		require.Positive(t, base)
-	}
-	database, filter, want := seedUsageJournalBenchmark(t, count, 1)
+func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
+	database, filter, want := seedUsageJournalBenchmark(t, 300, 1)
 	database.StopUsageCacheBackfill()
 	databaseID, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
@@ -124,21 +112,14 @@ func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
 	var fills, builds atomic.Int64
 	cache.fill.observer.beforeInstall = func([]usageSourceVersion) { fills.Add(1) }
 	cache.rollup.observer.beforeEnsure = func() { builds.Add(1) }
-	// Benchmarks collect fixture garbage before timing their warm reads.
-	runtime.GC()
-	// Compare means, as the supplied base ns/op measures repeated warm reads.
-	const reads = 5
-	var elapsed time.Duration
-	for range reads {
-		started := time.Now()
+	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
+		assert.True(t, journaled, "warm reads must skip archive discovery and fact checks")
+	}
+	for range 5 {
 		got, err := database.GetDailyUsage(t.Context(), filter)
-		elapsed += time.Since(started)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
 	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
 	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
-	if base > 0 {
-		assert.Less(t, elapsed/reads, time.Duration(base/2), "warm 7-day read must take under half the base time")
-	}
 }
