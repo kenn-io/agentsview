@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"maps"
 	"slices"
@@ -41,12 +42,20 @@ func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key stri
 
 // A request only advances an existing claim. A completed archive pass can
 // establish one. The compare-and-set makes concurrent claim losers harmless.
-func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimezoneIdentity, zone usageZoneCoverage, revision int64, catalog string) error {
+func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimezoneIdentity, zone usageZoneCoverage, revision int64, catalog string, installs map[string]usageRollupInstall) error {
 	if zone.revision.Valid && zone.revision.Int64 == revision &&
 		zone.installRevision == zone.installSeq && zone.pricing == catalog {
 		return nil
 	}
-	_, err := cache.db.ExecContext(ctx, `
+	ids := make([]int64, 0, len(installs))
+	for _, install := range installs {
+		ids = append(ids, install.ID)
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	_, err = cache.db.ExecContext(ctx, `
 		-- A completed pass can establish this timezone's first claim.
 		INSERT INTO usage_rollup_timezones (
 			timezone_key, timezone_name, interval_fingerprint, last_requested_at,
@@ -62,6 +71,9 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 			SELECT 1 FROM usage_rollup_installs WHERE timezone_id = (
 				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
 			AND install_revision >= ? AND source_pricing <> ?)
+		-- A delayed deletion must not erase refreshed usage before this claim.
+		AND (SELECT COUNT(*) FROM usage_rollup_installs
+			WHERE id IN (SELECT value FROM json_each(?))) = ?
 		-- Advance an existing claim with the captured revision, sequence, and catalog.
 		ON CONFLICT(timezone_key) DO UPDATE SET
 			change_revision = excluded.change_revision,
@@ -71,7 +83,7 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 		WHERE usage_rollup_timezones.change_revision IS ?
 			AND usage_rollup_timezones.change_install_revision = ?`,
 		identity.Key, identity.Name, identity.IntervalFingerprint, revision, identity.Key, zone.installSeq, revision, zone.installSeq, catalog,
-		identity.Key, zone.installSeq, catalog, zone.revision, zone.installRevision)
+		identity.Key, zone.installSeq, catalog, string(encoded), len(ids), zone.revision, zone.installRevision)
 	return err
 }
 
@@ -138,7 +150,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	timings.capture = captureDuration
 	timings.candidates = len(snapshot.Sessions)
-	err = cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity)
+	err = cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs)
 	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, installSeq: zone.installSeq}, true, err
 }
 
@@ -261,9 +273,7 @@ func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapsh
 			return nil, timings, err
 		}
 		timings.rollup = metrics
-		if install, ok := built[usageRollupCursorSessionID]; ok {
-			installs = map[string]usageRollupInstall{usageRollupCursorSessionID: install}
-		}
+		installs = built
 	}
 	return installs, timings, nil
 }

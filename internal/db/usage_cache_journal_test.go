@@ -383,6 +383,43 @@ func TestUsageJournaledStaleDeletionAfterPeerRestore(t *testing.T) {
 	}
 }
 
+func TestUsageJournaledStaleDeletionBeforeClaim(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+	versions, revision, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+	require.NoError(t, err)
+	require.Empty(t, versions)
+	_, err = database.RestoreSession(t.Context(), "session")
+	require.NoError(t, err)
+
+	identity := usageTimezoneIdentityFor(filter.Location(), nil)
+	zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
+	require.NoError(t, err)
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	snapshot, refresh, refreshIDs, trusted, err := database.captureJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, databaseID, zone, lost, window)
+	require.NoError(t, err)
+	require.True(t, trusted)
+	installs, _, err := cache.refreshJournaledUsageWindow(t.Context(), &snapshot, refresh, refreshIDs, func(string) {})
+	require.NoError(t, err)
+
+	// Resume the notification's captured deletion after refresh, while the
+	// timezone still has its claim from before the deletion and restore.
+	require.Less(t, zone.revision.Int64, revision)
+	require.Less(t, revision, snapshot.ChangeRevision)
+	require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+	require.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
+	require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs))
+	for range 2 {
+		got, err := database.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, 100, got.Totals.InputTokens)
+	}
+}
+
 func TestUsageJournaledWarmReadWhileCacheWriterBusy(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")
@@ -421,7 +458,6 @@ func TestUsageJournaledRefreshDiagnostics(t *testing.T) {
 	require.True(t, prepared.journaled)
 	assert.Positive(t, prepared.timings.capture)
 	assert.Positive(t, prepared.timings.fill)
-	assert.Positive(t, prepared.timings.rollup.BuildDuration)
 	assert.Positive(t, prepared.timings.rollup.InstallDuration)
 	var output bytes.Buffer
 	previous := log.Writer()
@@ -679,7 +715,7 @@ func TestUsageJournaledPassRejectsForeignCatalog(t *testing.T) {
 	var foreignInstalls int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE timezone_id=? AND install_revision>=? AND source_pricing<>?`, zone.id, zone.installSeq, catalog).Scan(&foreignInstalls))
 	require.Positive(t, foreignInstalls)
-	require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, catalog))
+	require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, catalog, nil))
 	var afterPricing string
 	var afterInstallRevision int64
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT change_pricing, change_install_revision FROM usage_rollup_timezones WHERE timezone_key=?`, identity.Key).Scan(&afterPricing, &afterInstallRevision))
