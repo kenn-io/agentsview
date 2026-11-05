@@ -1353,6 +1353,9 @@ fixtures retain this field; missing identities remain source-local.
   Reverified 2026-11-05 with the `single_poll_mixed` cases in the same test:
   a poll combined with unrelated work also requires an execution ID on each
   output block. Unidentified blocks contribute no links.
+  Reverified 2026-11-05 with `TestCommitLinksReusedProcessID`: a new commit
+  execution replaces the owner of a reused process ID after a batch poll,
+  preserving the new call's repository and prompt.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)

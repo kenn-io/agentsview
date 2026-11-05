@@ -29,7 +29,7 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
@@ -278,7 +278,9 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		pollIDs := commitPollIDs(call.input, call.toolName)
 		if isCommit {
 			for _, process := range running {
-				pending[process] = cmp.Or(pending[process], call)
+				if !slices.Contains(pollIDs, process) {
+					pending[process] = call
+				}
 			}
 		} else if len(pollIDs) == 0 {
 			continue

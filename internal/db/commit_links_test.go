@@ -505,6 +505,78 @@ func TestCommitLinksDedupAndRepeats(t *testing.T) {
 	assert.Equal(t, "Other fix", got.Commits[1].Subject)
 }
 
+func TestCommitLinksReusedProcessID(t *testing.T) {
+	for _, completion := range []string{
+		`{"session_id":7,"output":"[main abc1234] First\n"}`,
+		`[{"type":"input_text","text":"{\"session_id\":7,\"output\":\"[main abc1234] First\\n\"}"}]`,
+	} {
+		t.Run(completion, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			messages := commitMessages("s1", "", "")[:2]
+			for i, call := range []struct{ tool, id, input, result string }{
+				{"exec_command", "first", `{"cmd":"git commit -m first","workdir":"/first"}`, `{"session_id":7,"output":""}`},
+				{"exec", "batch-poll", `text(await tools.write_stdin({session_id:7})); text(await tools.write_stdin({session_id:8}))`, completion},
+				{"exec_command", "second", `{"cmd":"git commit -m second","workdir":"/second"}`, `{"session_id":7,"output":""}`},
+				{"write_stdin", "final-poll", `{"session_id":7}`, "[main def5678] Second\n"},
+			} {
+				if i == 2 {
+					messages = append(messages, userMsg("s1", len(messages), "Record the second fix"))
+				}
+				message := commitMessages("s1", call.input, call.result)[2]
+				message.Ordinal = len(messages)
+				message.ToolCalls[0].ToolName = call.tool
+				message.ToolCalls[0].ToolUseID = call.id
+				messages = append(messages, message)
+			}
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 2)
+			link := got.Commits[1]
+			assert.Equal(t, "def5678", link.SHA)
+			assert.Equal(t, "second", link.ToolUseID)
+			assert.Equal(t, 5, link.MessageOrdinal)
+			assert.Equal(t, "/second", link.Repository)
+			require.NotNil(t, link.Turn)
+			assert.Equal(t, "Record the second fix", link.Turn.Text)
+		})
+	}
+}
+
+func TestCommitLinksSummaryRef(t *testing.T) {
+	for _, tt := range []struct {
+		ref  string
+		want bool
+	}{
+		{"main", true},
+		{"feature/parser", true},
+		{"detached HEAD", true},
+		{"HEAD -> x, origin/x", false},
+		{"tag: v1", false},
+		{"feature[old]", false},
+		{"feature~1", false},
+		{"feature^", false},
+		{"feature?", false},
+		{"feature*", false},
+		{`feature\old`, false},
+	} {
+		t.Run(tt.ref, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix; git log --format=custom -1"}`, "["+tt.ref+" abc1234] Fix parser\n")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			if tt.want {
+				require.Len(t, got.Commits, 1)
+				assert.Equal(t, tt.ref, got.Commits[0].Branch)
+			} else {
+				assert.Empty(t, got.Commits)
+			}
+		})
+	}
+}
+
 func TestCommitLinksNativePollOwnership(t *testing.T) {
 	call := func(tool, id, input, result string) Message {
 		// Code-mode shell results carry JSON inside input_text blocks.
