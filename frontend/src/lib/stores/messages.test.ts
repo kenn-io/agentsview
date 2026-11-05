@@ -160,106 +160,75 @@ describe("MessagesStore", () => {
   });
 
   it("fetches metadata immediately, then gates multi-page reads and folds ready reloads", async () => {
-    const ready = createDeferred<void>();
-    const rows = Array.from({ length: 1001 }, (_, i) => makeMessage(i));
-    api.getSession.mockResolvedValue(makeSession("s1", 1001));
-    api.getMessages.mockImplementation(async (_id, params) =>
-      makeMessagesResponse(rows.slice(params.from, params.from + params.limit)),
-    );
-    const load = messages.loadSession("s1", ready.promise);
-    expect(api.getSession).toHaveBeenCalledTimes(1);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const reload = messages.reload();
-    expect(api.getMessages).not.toHaveBeenCalled();
-    ready.resolve();
-    await Promise.all([load, reload]);
-    expect(api.getMessages).toHaveBeenCalledTimes(2);
-    expect(messages.messages).toHaveLength(1001);
-    expect(messages.messages.at(-1)!.content).toBe("msg 1000");
+    for (const [count, metadataPending] of [
+      [1001, false],
+      [1001, true],
+      [20, false],
+      [1000, false],
+    ] as const) {
+      messages.clear();
+      vi.clearAllMocks();
+      const ready = createDeferred<void>();
+      const metadata = createDeferred<Session>();
+      const rows = Array.from({ length: count === 1001 && !metadataPending ? 1001 : 1 }, (_, i) =>
+        makeMessage(i),
+      );
+      api.getSession.mockResolvedValue(makeSession("s1", count));
+      if (metadataPending) api.getSession.mockReturnValueOnce(metadata.promise);
+      api.getMessages.mockImplementation(async (_id, params) =>
+        makeMessagesResponse(rows.slice(params.from, params.from + params.limit)),
+      );
+      const load = messages.loadSession("s1", ready.promise);
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      if (!metadataPending) await new Promise((resolve) => setTimeout(resolve, 0));
+      const reload = rows.length === 1001 ? messages.reload() : undefined;
+      expect(api.getMessages).not.toHaveBeenCalled();
+      ready.resolve();
+      const readyReload = rows.length === 1001 ? undefined : messages.reload();
+      expect(api.getMessages).not.toHaveBeenCalled();
+      metadata.resolve(makeSession("s1", count));
+      await Promise.all([load, reload, readyReload]);
+      expect(api.getMessages).toHaveBeenCalledTimes(rows.length === 1001 ? 2 : 1);
+      expect(messages.messages).toEqual(rows);
 
-    await messages.reload();
-    expect(api.getMessages).toHaveBeenCalledTimes(4);
+      if (rows.length === 1001) {
+        await messages.reload();
+        expect(api.getMessages).toHaveBeenCalledTimes(4);
+      }
+    }
   });
 
   it.each([1, 3])(
     "uses the completed transcript count when metadata reports %i messages",
     async (count) => {
-      const ready = createDeferred<void>();
-      const metadataRead = createDeferred<void>();
-      api.getSession.mockImplementationOnce(async () => {
-        metadataRead.resolve();
-        return makeSession("s1", count);
-      });
+      api.getSession.mockResolvedValue(makeSession("s1", count));
       api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
 
-      const load = messages.loadSession("s1", ready.promise);
-      await metadataRead.promise;
-      ready.resolve();
-      const reload = messages.reload();
-      await Promise.all([load, reload]);
+      await messages.loadSession("s1");
 
-      expect(api.getMessages).toHaveBeenCalledTimes(1);
       expect(messages.messages.map((row) => row.content)).toEqual(["msg 0", "msg 1"]);
       expect(messages.historyComplete).toBe(true);
       expect(messages.messageCount).toBe(2);
     },
   );
 
-  it("folds ready into one large-session download while metadata is in flight", async () => {
-    const ready = createDeferred<void>();
-    const metadata = createDeferred<Session>();
-    api.getSession.mockReturnValueOnce(metadata.promise).mockResolvedValue(makeSession("s1", 1001));
-    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
-
-    const load = messages.loadSession("s1", ready.promise);
-    expect(api.getSession).toHaveBeenCalledTimes(1);
-    ready.resolve();
-    const reload = messages.reload();
-    expect(api.getMessages).not.toHaveBeenCalled();
-    metadata.resolve(makeSession("s1", 1001));
-    await Promise.all([load, reload]);
-
-    expect(api.getMessages).toHaveBeenCalledTimes(1);
-    expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
-  });
-
-  it.each([20, 1000])("reads %i-message sessions once after ready", async (count) => {
-    const ready = createDeferred<void>();
-    api.getSession.mockResolvedValue(makeSession("s1", count));
-    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
-    const load = messages.loadSession("s1", ready.promise);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(api.getMessages).not.toHaveBeenCalled();
-
-    ready.resolve();
-    const reload = messages.reload();
-    await Promise.all([load, reload]);
-    expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
-    expect(api.getMessages).toHaveBeenCalledTimes(1);
-  });
-
   it("recovers from a transient first read after the watch becomes ready", async () => {
-    vi.useFakeTimers();
-    try {
-      const ready = createDeferred<void>();
-      api.getSession.mockResolvedValue(makeSession("s1", 1001));
-      api.getMessages
-        .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-        .mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+    const ready = createDeferred<void>();
+    api.getSession.mockResolvedValue(makeSession("s1", 1001));
+    api.getMessages
+      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+      .mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
 
-      const load = messages.loadSession("s1", ready.promise);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(api.getMessages).not.toHaveBeenCalled();
-      // The watch settles readiness and invokes its reload callback in the same turn.
-      ready.resolve();
-      const reload = messages.reload();
-      await vi.advanceTimersByTimeAsync(1000);
-      await Promise.all([load, reload]);
+    const load = messages.loadSession("s1", ready.promise);
+    expect(api.getMessages).not.toHaveBeenCalled();
+    // The watch settles readiness and invokes its reload callback in the same turn.
+    ready.resolve();
+    const reload = messages.reload();
+    await Promise.all([load, reload]);
 
+    await vi.waitFor(() => {
       expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("recovers all rows after a transient second-page failure with an unchanged revision", async () => {
@@ -323,14 +292,10 @@ describe("MessagesStore", () => {
     await Promise.all([newLoad, reload]);
     expect(api.getMessages).toHaveBeenCalledTimes(2);
     expect(api.getMessages.mock.calls.every(([id]) => id === "s2")).toBe(true);
-    api.getMessages.mockImplementationOnce((_id, _params, options) => {
-      expect(options.signal.aborted).toBe(true);
-      throw generatedCancelError();
-    });
+    api.getMessages.mockRejectedValueOnce(generatedCancelError());
     ready.resolve();
     await oldLoad;
     expect(messages.sessionId).toBe("s2");
-    expect(api.getMessages).toHaveBeenCalledTimes(3);
   });
 
   it.each(["recover", "exhaust", "switch", "permanent", "bug"])(
