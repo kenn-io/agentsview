@@ -853,13 +853,8 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 }
 
 func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	if f.Scope != "" {
-		if !db.ContentSearchModeSupportsScope(f.Mode) {
-			return db.ContentSearchPage{}, &db.SearchInputError{Msg: db.ContentSearchScopeUnsupportedMsg}
-		}
-		if err := db.ValidateContentSearchScope(f.Scope); err != nil {
-			return db.ContentSearchPage{}, err
-		}
+	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+		return db.ContentSearchPage{}, err
 	}
 	if f.Limit <= 0 || f.Limit > db.MaxContentSearchLimit {
 		f.Limit = db.DefaultContentSearchLimit

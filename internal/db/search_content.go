@@ -292,13 +292,8 @@ func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 func (db *DB) SearchContent(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	if f.Scope != "" {
-		if !ContentSearchModeSupportsScope(f.Mode) {
-			return ContentSearchPage{}, &SearchInputError{Msg: ContentSearchScopeUnsupportedMsg}
-		}
-		if err := ValidateContentSearchScope(f.Scope); err != nil {
-			return ContentSearchPage{}, err
-		}
+	if err := ValidateContentSearchScope(f.Scope); err != nil {
+		return ContentSearchPage{}, err
 	}
 	if f.Limit <= 0 || f.Limit > MaxContentSearchLimit {
 		f.Limit = DefaultContentSearchLimit
@@ -1318,7 +1313,7 @@ func ValidateContentSearchScope(scope string) error {
 // LexicalAnchorScopeSQL filters anchors before pagination. The anchor may
 // be absent for orphan result events, which inherit only session lineage.
 func LexicalAnchorScopeSQL(f ContentSearchFilter, sessionAlias, anchorAlias string, dialect QueryDialect) string {
-	if f.Scope != "top" && f.Scope != "subordinate" || !ContentSearchModeSupportsScope(f.Mode) {
+	if f.Scope != "top" && f.Scope != "subordinate" {
 		return dialect.TrueLiteral()
 	}
 	predicate := "(" + SubordinateSessionSQL(sessionAlias) + " OR COALESCE(" + anchorAlias + ".is_sidechain, " + dialect.FalseLiteral() + "))"
