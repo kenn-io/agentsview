@@ -588,11 +588,13 @@
     grid-area: query;
   }
 
-  /* A content-height chart beside the terms column instead of one
-     stretched to the footer, which exaggerated every spike. It still
-     grows with a long term table. */
+  /* The chart fills the window down to a bottom margin of about 60px
+     above the status bar (the 300px offset covers the header, toolbar,
+     title and chart options), between 380px and a 600px cap so a tall
+     window does not stretch every spike. It still grows with a long
+     term table. */
   .chart-panel {
-    --trends-chart-height: 380px;
+    --trends-chart-height: clamp(380px, calc(100vh - 300px), 600px);
     grid-area: chart;
     align-self: stretch;
     display: flex;

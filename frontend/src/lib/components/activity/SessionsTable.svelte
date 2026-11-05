@@ -420,7 +420,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 240px;
+    min-width: 0;
   }
 
   .session-link {

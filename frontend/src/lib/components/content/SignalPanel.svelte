@@ -179,8 +179,13 @@
     font-size: 20px;
     font-weight: 800;
   }
+  /* The numeric score is the grade's partner; the basis chips and
+     penalties stay subordinate. */
   .score-text {
-    color: var(--text-secondary);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
   .outcome {
     display: inline-flex;
