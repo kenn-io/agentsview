@@ -343,7 +343,7 @@
           <!-- Placeholder rows shaped like results keep the palette at a
                result-list size instead of a large empty box. -->
           <div class="palette-loading" role="status" aria-busy="true">
-            <span class="palette-loading-label">{m.command_palette_searching()}</span>
+            <span class="kit-sr-only">{m.command_palette_searching()}</span>
             {#each SKELETON_ROWS as row, i (i)}
               <div class="skeleton-row" aria-hidden="true">
                 <span class="skeleton-body">
@@ -642,22 +642,13 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Same padding and gaps as .palette-item, so rows land where results
-     will. The label stays for screen readers only; the rows carry the
+  /* Laid out like .palette-item, so rows land about where results will.
+     "Searching..." stays for screen readers only; the rows carry the
      state visually. */
-  .palette-loading-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .skeleton-row {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
+    gap: var(--space-5);
     padding: 9px 14px;
   }
 
@@ -666,7 +657,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--space-4);
   }
 
   .skeleton-bar {
