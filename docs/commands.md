@@ -2023,9 +2023,9 @@ the turn. See
 retention and lookup limits. Links require stored Git summaries with SHAs of 7
 to 64 characters. Quiet commits have no link. Links include Codex poll results
 paired with the original call. Calls spanning repositories use the first
-directory; only a leading `cd` adjusts it. Archives retaining only transcripts
-or usage have no links, and hosted PostgreSQL returns HTTP 501. Sessions
-permanently deleted before this release have no links.
+directory; the last `cd` before the first commit invocation adjusts it. Archives
+retaining only transcripts or usage have no links, and hosted PostgreSQL returns
+HTTP 501. Sessions permanently deleted before this release have no links.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and

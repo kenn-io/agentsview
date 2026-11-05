@@ -150,7 +150,12 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	}{
 		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
 		{"tilde", "/work", "cd ~/x && git commit -m fix", "~/x"},
-		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/work"},
+		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/elsewhere"},
+		{"nonleading relative cd", "/work", "git add . && cd repo && git commit -m fix", "/work/repo"},
+		{"last cd before commit", "/work", "cd /first && cd /repo && git commit -m fix && cd /later", "/repo"},
+		{"cd after commit", "/work", "git commit -m fix && cd /later", "/work"},
+		{"cd after semicolon", "/work", "git add .; cd '/my repo'; git commit -m fix", "/my repo"},
+		{"cd after newline", "/work", "git add .\ncd /repo\ngit commit -m fix", "/repo"},
 		{"quoted directory", "/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"},
 		{"quoted operators", "/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"},
 		{"directory after global options", "/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"},

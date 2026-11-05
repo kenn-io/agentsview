@@ -1583,10 +1583,11 @@ commit-and-poll calls require an output process ID tied to a commit call. Each
 session records a SHA once, at its first matching call.
 
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
-directory. A leading `cd` adjusts that base, and `git -C` overrides it. Relative
-paths join onto the base using the transcript's path style; `~` paths stay
-literal. A later `cd` is ignored. A call that commits in two repositories
-records the first directory for both commits.
+directory. The last `cd` before the first commit invocation adjusts that base,
+and `git -C` overrides it. Relative paths join onto the base using the
+transcript's path style; `~` paths stay literal. A `cd` after that invocation is
+ignored. A call that commits in two repositories records the first directory
+for both commits.
 
 Archives using `archive_content = "transcripts"` or `"usage"` retain no commit
 links because they omit tool output.
