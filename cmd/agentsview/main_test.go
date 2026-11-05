@@ -1009,7 +1009,9 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 }
 
 func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
-	projects := t.TempDir()
+	projects := filepath.Join(t.TempDir(), "projects")
+	project := filepath.Join(projects, "project-a")
+	require.NoError(t, os.MkdirAll(project, 0o700))
 	cfg := config.Config{
 		SyncInterval: time.Second,
 		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
@@ -1033,7 +1035,7 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 			return time.Time{}
 		}
 	}
-	path := filepath.Join(projects, "active.jsonl")
+	path := filepath.Join(project, "active.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
 	first := receive()
 	require.NoError(t, os.WriteFile(path, []byte("second\n"), 0o600))
