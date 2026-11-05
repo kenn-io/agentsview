@@ -130,27 +130,31 @@ describe("formatCount", () => {
 
   it.each([
     [0, "0"],
-    [950, "950"],
-    [1405, "1,405"],
-    [3672, "3,672"],
     [2.5, "2.5"],
-    [9999, "9,999"],
-    [10_000, "10K"],
+    [516, "516"],
+    [999, "999"],
+    [1_000, "1.0K"],
+    [1_405, "1.4K"],
+    [7_900, "7.9K"],
+    [9_999, "10.0K"],
+    [18_033, "18.0K"],
     [145_600, "145.6K"],
+    [1_045_975, "1.0M"],
     [89_800_000, "89.8M"],
-    [13_144_700_000, "13.1B"],
-    [33_200_000_000, "33.2B"],
-    [-1405, "-1,405"],
+    [32_600_000_000, "32.6B"],
+    [-1_405, "-1.4K"],
     [-1_234_567, "-1.2M"],
   ])("formats %d as %s in English", (value, expected) => {
     setLocale("en");
     expect(formatCount(value)).toBe(expected);
   });
 
-  it("follows the active locale for grouping and compact units", () => {
+  it("follows the active locale for decimals and compact units", () => {
     setLocale("fr");
-    expect(formatCount(9999)).toBe("9\u202f999");
-    expect(formatCount(145_600)).toBe("145,6\u00a0k");
+    expect(formatCount(2.5)).toBe("2,5");
+    expect(formatCount(999)).toBe("999");
+    expect(formatCount(1_405)).toBe("1,4\u00a0k");
+    expect(formatCount(18_033)).toBe("18,0\u00a0k");
     expect(formatCount(13_144_700_000)).toBe("13,1\u00a0Md");
   });
 });
@@ -161,13 +165,13 @@ describe("formatTokenUsage", () => {
   });
 
   it("formats both reported token metrics", () => {
-    expect(formatTokenUsage(2400, true, 180, true)).toBe("2,400 ctx / 180 out");
-    expect(formatTokenUsage(145_600, true, 12_000, true)).toBe("145.6K ctx / 12K out");
+    expect(formatTokenUsage(2400, true, 180, true)).toBe("2.4K ctx / 180 out");
+    expect(formatTokenUsage(145_600, true, 12_000, true)).toBe("145.6K ctx / 12.0K out");
   });
 
   it("renders an explicit placeholder for missing token metrics", () => {
     expect(formatTokenUsage(0, false, 180, true)).toBe("— ctx / 180 out");
-    expect(formatTokenUsage(2400, true, 0, false)).toBe("2,400 ctx / — out");
+    expect(formatTokenUsage(2400, true, 0, false)).toBe("2.4K ctx / — out");
   });
 });
 

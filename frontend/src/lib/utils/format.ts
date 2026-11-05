@@ -7,7 +7,7 @@ export { formatMoney as formatCost } from "../money.js";
 export { formatNumber } from "@kenn-io/kit-ui/utils/format";
 export { truncate } from "@kenn-io/kit-ui/utils/time";
 
-const COMPACT_COUNT_THRESHOLD = 10_000;
+const COMPACT_COUNT_THRESHOLD = 1_000;
 
 interface CountFormatters {
   standard: Intl.NumberFormat;
@@ -17,9 +17,10 @@ interface CountFormatters {
 const countFormatters = new Map<string, CountFormatters>();
 
 /**
- * The app's one format for counts and token totals, in the active locale.
- * Below 10,000 the full grouped number ("3,672"); from 10,000 the compact
- * form with at most one decimal ("145.6K", "13.1B").
+ * The app's one format for counts and token totals. Below 1,000 the plain
+ * number ("516"); from 1,000 the compact form with exactly one decimal
+ * ("7.9K", "18.0K", "1.0M", "32.6B"), so a column of counts lines up and
+ * never mixes full and compact forms. Locale-aware.
  */
 export function formatCount(value: number): string {
   const locale = getLocale();
@@ -29,6 +30,7 @@ export function formatCount(value: number): string {
       standard: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
       compact: new Intl.NumberFormat(locale, {
         notation: "compact",
+        minimumFractionDigits: 1,
         maximumFractionDigits: 1,
       }),
     };

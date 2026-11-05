@@ -270,7 +270,7 @@ describe("UsageSummaryCards", () => {
 
     usage.setSelectedTokenTypes(["output"]);
     await tick();
-    expect(document.querySelector(".featured .card-value")?.textContent?.trim()).toBe("20M");
+    expect(document.querySelector(".featured .card-value")?.textContent?.trim()).toBe("20.0M");
     expect(cardValue("Total Input")).toBe("7.9B");
   });
 
@@ -301,7 +301,7 @@ describe("UsageSummaryCards", () => {
       target: document.body,
     });
     await tick();
-    expect(cardValue("Total Input")).toBe("1,515");
+    expect(cardValue("Total Input")).toBe("1.5K");
 
     usage.setTimeRange("2026-07-02", "2026-07-03");
     usage.cancelInFlightReads();
