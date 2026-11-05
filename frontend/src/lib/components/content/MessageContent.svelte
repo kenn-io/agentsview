@@ -74,7 +74,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (!s) return "user";
     const all = sessions.sessions;
     if (sessionAncestryMatches(s, all, (ancestor) => ancestor.relationship_type === "subagent")) return "subagent";
-    if (sessionAncestryMatches(s, all, (ancestor) => (ancestor.first_message ?? "").includes("<teammate-message"))) return "teammate";
+    if (sessionAncestryMatches(s, all, (ancestor) => (sessions.view(ancestor).first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
   let roleLabel = $derived.by(() => {
