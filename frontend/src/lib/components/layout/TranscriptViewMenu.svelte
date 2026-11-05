@@ -48,11 +48,9 @@
   );
   const filtered = $derived(ui.hasBlockFilters);
   const focused = $derived(ui.transcriptMode === "focused");
-  const triggerText = $derived(
-    focused
-      ? m.header_view_trigger_focused({ layout: layoutName })
-      : m.header_view_trigger({ layout: layoutName }),
-  );
+  const labelFor = (layout: string) =>
+    focused ? m.header_view_trigger_focused({ layout }) : m.header_view_trigger({ layout });
+  const triggerText = $derived(labelFor(layoutName));
 </script>
 
 <!-- A schematic of each layout: role header bars, message blocks, and tool
@@ -106,9 +104,16 @@
       : m.header_view_trigger_label({ layout: layoutName })}
   >
     <LayoutListIcon size="14" strokeWidth="1.75" aria-hidden="true" />
-    <!-- The text may be cut short; the tooltip and accessible name carry
-         it in full. -->
-    <span class="view-trigger-text">{triggerText}</span>
+    <!-- Hidden copies of the label for every layout share one grid cell
+         with the visible label, so the trigger is as wide as its widest
+         layout label in the current language and mode. Switching layouts
+         does not move its neighbors. -->
+    <span class="view-trigger-label-box">
+      {#each LAYOUTS as layout (layout.id)}
+        <span class="view-trigger-sizer" aria-hidden="true">{labelFor(layout.name())}</span>
+      {/each}
+      <span class="view-trigger-text">{triggerText}</span>
+    </span>
     <!-- Always laid out, so showing it does not change the trigger's
          width. -->
     <span class="view-filter-dot" class:shown={filtered} aria-hidden="true"></span>
@@ -194,20 +199,30 @@
     background: var(--bg-surface-hover);
   }
 
-  /* A fixed width keeps neighbors from shifting when the layout, content
-     mode, or language changes the label. Labels that do not fit end in an
-     ellipsis. A narrow pane may still shrink the trigger. */
   :global(.view-trigger) {
-    width: 216px;
     justify-content: flex-start;
   }
 
-  .view-trigger-text {
+  /* Only a pane too narrow for the full label shrinks the trigger; the
+     label then ends in an ellipsis, and the tooltip and accessible name
+     still carry it in full. */
+  .view-trigger-label-box {
+    display: grid;
     flex: 1;
+    min-width: 0;
+  }
+
+  .view-trigger-sizer,
+  .view-trigger-text {
+    grid-area: 1 / 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     text-align: left;
+  }
+
+  .view-trigger-sizer {
+    visibility: hidden;
   }
 
   :global(.view-trigger) :global(svg) {

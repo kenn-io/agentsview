@@ -27,7 +27,7 @@
   }
 </script>
 
-<section id="session-find-results" class="find-results" aria-label={m.session_find_results_title()}>
+<section id="session-find-results" class="find-results" class:has-find={inSessionSearch.isActive} aria-label={m.session_find_results_title()}>
   <h2>{m.session_find_results_title()}</h2>
   {#if rows.length}
     <VirtualList items={rows} estimateHeight={68} overscan={4} height="min(36vh, 320px)"
@@ -60,13 +60,23 @@
 </section>
 
 <style>
-  .find-results { flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--border-muted); }
-  h2 { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--text-secondary); }
-  .result-group { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 12px; font-size: 11px; color: var(--text-muted); }
+  /* Results sit on the transcript's 960px reading column, shifted like the
+     find bar when the overview rail reserves its 12px gutter. */
+  .find-results {
+    --find-rail: 0px;
+    --find-side: max(12px, calc((100% - 960px - var(--find-rail)) / 2));
+    flex: 0 0 auto;
+    min-width: 0;
+    padding-inline: var(--find-side) calc(var(--find-side) + var(--find-rail));
+    border-bottom: 1px solid var(--border-muted);
+  }
+  .find-results.has-find { --find-rail: 12px; }
+  h2 { margin: 0; padding: 6px 0; font-size: 12px; color: var(--text-secondary); }
+  .result-group { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; font-size: 11px; color: var(--text-muted); }
   .result-count { margin-inline-start: auto; }
   :global(.find-result-button) { width: 100%; text-align: start; justify-content: flex-start; }
   .result-snippet { display: flex; flex-direction: column; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
   .result-tool { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
   b { color: var(--accent-blue); font-weight: 700; }
-  .result-scope { margin: 0; padding: 4px 12px 8px; font-size: 11px; color: var(--text-muted); }
+  .result-scope { margin: 0; padding: 4px 0 8px; font-size: 11px; color: var(--text-muted); }
 </style>
