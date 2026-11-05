@@ -16,7 +16,9 @@ import (
 func (e *Engine) ReconcileCommitTrailers(ctx context.Context) {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
-	e.reconcileCommitTrailersLocked(ctx)
+	if e.reconcileCommitTrailersLocked(ctx) > 0 {
+		e.emit("sessions")
+	}
 }
 
 func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) int {

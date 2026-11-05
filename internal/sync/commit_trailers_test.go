@@ -87,6 +87,8 @@ func TestResyncDiscoversCommitTrailersForOrphanedSession(t *testing.T) {
 	stats := engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
 	require.Equal(t, 1, stats.OrphanedCopied)
+	assert.Equal(t, 1, stats.LinksUpdated)
+	assert.Equal(t, 1, engine.LastSyncStats().LinksUpdated)
 
 	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
 	require.NoError(t, err)
@@ -176,9 +178,15 @@ func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 
 func TestReconcileCommitTrailersNewCommit(t *testing.T) {
 	database, engine, repo, first, runGit := commitTrailerFixture(t)
+	emitter := &fakeEmitter{}
+	engine.emitter = emitter
+	engine.ReconcileCommitTrailers(t.Context())
+	assert.Empty(t, emitter.got())
+
 	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
 	second := runGit(repo, "rev-parse", "HEAD")
 	engine.ReconcileCommitTrailers(t.Context())
+	assert.Equal(t, []string{"sessions"}, emitter.got())
 	found, err := database.CommitSessionLinks(t.Context(), []string{second[:7]})
 	require.NoError(t, err)
 	require.Len(t, found.Commits[0].Links, 1)
@@ -187,6 +195,9 @@ func TestReconcileCommitTrailersNewCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 2)
 	assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
+
+	engine.ReconcileCommitTrailers(t.Context())
+	assert.Equal(t, []string{"sessions"}, emitter.got())
 }
 
 func TestCommitTrailersHistoryOnlySyncChangesArchive(t *testing.T) {

@@ -3926,7 +3926,7 @@ func (e *Engine) resyncBuildLocked(
 
 	// Scan once every session and its cwd have been restored.
 	e.db = newDB
-	stats.RecordLinksUpdated(e.reconcileCommitTrailersLocked(ctx))
+	pendingLinksUpdated += e.reconcileCommitTrailersLocked(ctx)
 	e.db = origDB
 
 	// Re-link subagent sessions after orphan copy so copied
