@@ -331,6 +331,12 @@ describe("UsagePage refresh behavior", () => {
       await flushEffects();
 
       if (state === "returning") await setHidden(false);
+      if (state !== "hidden") {
+        document
+          .querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')!
+          .click();
+        await flushEffects();
+      }
       expect(requests).toHaveBeenCalledTimes(0);
       metadata.resolve({
         machines: ["id-a"],

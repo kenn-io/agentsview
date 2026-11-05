@@ -63,7 +63,10 @@
   let pendingRefresh = false;
 
   function refreshUsage(): void {
-    if (document.hidden || !urlInitRan || !urlWritebackReady || sessions.machineFilterPending) {
+    if (
+      document.hidden || !urlInitRan || !urlWritebackReady ||
+      sessions.machineFilterPending
+    ) {
       pendingRefresh = true;
       return;
     }
@@ -77,7 +80,9 @@
         pendingRefresh = true;
         usage.cancelInFlightReads();
       }
-    } else if (pendingRefresh) refreshUsage();
+    } else if (pendingRefresh) {
+      refreshUsage();
+    }
   }
 
   const chartStyleMaps = $derived(
