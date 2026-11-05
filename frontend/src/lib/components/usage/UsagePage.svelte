@@ -106,6 +106,7 @@
     return usageChartStyleMaps(usage.colorSummary, settings.chartPalette, {
       resolveColor: resolveRootColor,
       calm: !ui.highContrast,
+      dark: ui.theme === "dark",
     });
   });
 

@@ -16,7 +16,7 @@ test.describe("Usage page", () => {
     });
     await expect(page.locator(".chart-container")).toBeVisible();
     await expect(
-      page.locator(".chart-container").getByRole("figure", { name: "Cost Over Time" }),
+      page.locator(".chart-container").getByRole("figure", { name: "Cost over time" }),
     ).toBeVisible();
   });
 

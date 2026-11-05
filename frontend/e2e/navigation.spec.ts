@@ -169,7 +169,7 @@ test.describe("Navigation", () => {
     await expect(page.getByText("Previous user prompt")).toBeVisible();
 
     const shortcutsModal = page.getByRole("dialog", {
-      name: "Keyboard Shortcuts",
+      name: "Keyboard shortcuts",
     });
     for (const width of [1280, 768, 400]) {
       await page.setViewportSize({ width, height: 800 });
