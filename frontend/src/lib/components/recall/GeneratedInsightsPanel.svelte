@@ -626,6 +626,13 @@
     align-self: end;
   }
 
+  /* Light: the half-opacity fade left the disabled label nearly invisible
+     on white. Full opacity with muted ink still reads as disabled. */
+  :global(:root:not(.dark) .scope-grid .generate-action:disabled) {
+    opacity: 1;
+    color: color-mix(in srgb, var(--text-muted) 72%, var(--bg-surface));
+  }
+
   :global(.archive-state) {
     display: flex;
     flex-direction: column;
