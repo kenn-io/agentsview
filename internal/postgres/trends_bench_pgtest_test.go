@@ -19,7 +19,7 @@ import (
 func BenchmarkPGTrendsTerms(b *testing.B) {
 	const schema = "agentsview_trends_bench"
 	pgURL := testPGURL(b)
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(b.Context(), pgURL, schema, true)
 	require.NoError(b, err)
 	b.Cleanup(func() { _ = pg.Close() })
 	ctx := b.Context()
@@ -56,7 +56,7 @@ func BenchmarkPGTrendsTerms(b *testing.B) {
 	_, err = pg.ExecContext(ctx, `ANALYZE sessions, messages`)
 	require.NoError(b, err)
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(b.Context(), pgURL, schema, true)
 	require.NoError(b, err)
 	b.Cleanup(func() { _ = store.Close() })
 	terms, err := db.ParseTrendTerms([]string{"seam"})

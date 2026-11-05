@@ -18,7 +18,7 @@ func TestStoreGetTrendsTermsDateWindowEdges(t *testing.T) {
 	dbtest.SeedTrendsWindow(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(ctx, pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertTrendsWindow(t, store)
