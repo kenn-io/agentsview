@@ -3,9 +3,10 @@
 
   /**
    * One KPI card for every analytics summary row: value above label, an
-   * optional one-line sublabel, and three value sizes. `lead` is the one or
-   * two figures a row is about, `standard` the supporting metrics, and
-   * `context` the plain counts (projects, models, days) that read quieter.
+   * optional sublabel (one line, or wrapping when `subLines` is 2), and three
+   * value sizes. `lead` is the one or two figures a row is about,
+   * `standard` the supporting metrics, and `context` the plain counts
+   * (projects, models, days) that read quieter.
    */
   type Tier = "lead" | "standard" | "context";
 
@@ -15,6 +16,7 @@
     sub = "",
     tier = "standard",
     featured = false,
+    subLines = 1,
     error = false,
     class: className = "",
   }: {
@@ -23,6 +25,11 @@
     sub?: string;
     tier?: Tier;
     featured?: boolean;
+    /** 2 lets a long breakdown wrap instead of truncating. The card
+     * reserves two lines whether or not the text needs them, so the
+     * row's height does not change when the breakdown does; very narrow
+     * cards wrap further rather than hide part of it. */
+    subLines?: 1 | 2;
     error?: boolean;
     class?: string;
   } = $props();
@@ -33,6 +40,7 @@
       "stat-card",
       tier,
       featured ? "featured" : "",
+      subLines === 2 ? "sub-two-lines" : "",
       className,
     ]
       .filter(Boolean)
@@ -61,6 +69,11 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+  }
+
+  /* Room for a second sublabel line (14px). */
+  :global(.kit-card.stat-card.sub-two-lines) {
+    min-height: 78px;
   }
 
   :global(.stat-card > .kit-card__body) {
@@ -109,6 +122,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Breakdowns such as "95 interactive / 79 subagents / 683 automated"
+     wrap instead of hiding their last part. */
+  :global(.stat-card.sub-two-lines) .card-sub {
+    white-space: normal;
   }
 
   .card-label {

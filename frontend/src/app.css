@@ -218,9 +218,9 @@
 }
 
 /* One selected-state vocabulary for segmented choices across the app:
- * a neutral raised fill with primary ink. Accent blue is kept for focus,
- * links, and live state. kit-ui's segmented active surface is nearly the
- * track color in dark mode, so it gets the same edge here. */
+ * a neutral raised fill with primary ink and a neutral 1px edge in both
+ * themes. Accent blue is kept for focus, links, and live state, so a
+ * selected option never reads as a focus ring. */
 :root {
   --selected-bg: var(--bg-surface);
   --selected-edge: inset 0 0 0 1px var(--border-default);
@@ -229,7 +229,6 @@
 }
 
 :root.dark {
-  --selected-edge: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 25%, var(--border-default));
   --selected-bg: var(--bg-surface-hover);
   --selected-list-bg: var(--bg-surface-hover);
 }
