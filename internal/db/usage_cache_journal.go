@@ -46,28 +46,28 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 		zone.installRevision == zone.installSeq && zone.pricing == catalog {
 		return nil
 	}
-	// Cap coverage at the oldest source revision installed since capture, so
-	// a delayed build cannot make the claim newer than its stored facts.
-	// WHERE NOT EXISTS refuses a claim if those installs used another catalog.
-	// ON CONFLICT advances only the claim we captured; a concurrent winner's
-	// revision or install boundary makes this compare-and-set a no-op.
 	_, err := cache.db.ExecContext(ctx, `
+		-- A completed pass can establish this timezone's first claim.
 		INSERT INTO usage_rollup_timezones (
 			timezone_key, timezone_name, interval_fingerprint, last_requested_at,
 			change_revision, change_install_revision, change_pricing)
+		-- Cap coverage at the oldest source revision installed since capture.
 		SELECT ?, ?, ?, '', MIN(?, COALESCE((
 			SELECT MIN(source_change_revision) FROM usage_rollup_installs
 			WHERE timezone_id = (
 				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
 			AND install_revision >= ?), ?)), ?, ?
+		-- Refuse a claim when any install since capture used another catalog.
 		WHERE NOT EXISTS (
 			SELECT 1 FROM usage_rollup_installs WHERE timezone_id = (
 				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
 			AND install_revision >= ? AND source_pricing <> ?)
+		-- Advance an existing claim with the captured revision, sequence, and catalog.
 		ON CONFLICT(timezone_key) DO UPDATE SET
 			change_revision = excluded.change_revision,
 			change_install_revision = excluded.change_install_revision,
 			change_pricing = excluded.change_pricing
+		-- Update only the claim observed before preparation; concurrent winners keep theirs.
 		WHERE usage_rollup_timezones.change_revision IS ?
 			AND usage_rollup_timezones.change_install_revision = ?`,
 		identity.Key, identity.Name, identity.IntervalFingerprint, revision, identity.Key, zone.installSeq, revision, zone.installSeq, catalog,

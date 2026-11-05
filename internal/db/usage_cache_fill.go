@@ -384,8 +384,9 @@ func isUsageCacheBusy(err error) bool {
 }
 
 type usageFactSpool struct {
-	db   *sql.DB
-	path string
+	db             *sql.DB
+	path           string
+	changeRevision int64
 }
 
 func newUsageFactSpool(ctx context.Context) (*usageFactSpool, error) {
@@ -499,10 +500,10 @@ func (c *usageFillCoordinator) extractSessions(
 	if databaseID != c.cache.databaseID {
 		return nil, nil, fmt.Errorf("%w during session fill", errUsageCacheSourceChanged)
 	}
-	ids := make([]string, 0, len(versions))
-	for _, version := range versions {
-		ids = append(ids, version.SessionID)
+	if spool.changeRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change"); err != nil {
+		return nil, nil, err
 	}
+	ids := usageSourceVersionIDs(versions)
 	extracted, err := loadUsageSourceVersions(ctx, tx, ids)
 	if err != nil {
 		return nil, nil, err
@@ -1038,15 +1039,8 @@ func (c *usageFillCoordinator) installSpoolBatch(
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, sessionID := range eligibleDeleted {
-		for _, query := range []string{
-			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
-			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
-		} {
-			if _, err := conn.ExecContext(ctx, query, sessionID); err != nil {
-				return nil, nil, err
-			}
-		}
+	if err := deleteUsageCachedSessions(ctx, conn, eligibleDeleted, spool.changeRevision); err != nil {
+		return nil, nil, err
 	}
 	stableResults, err := installSpoolSessions(ctx, conn, eligibleStable)
 	if err != nil {

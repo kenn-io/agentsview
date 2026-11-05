@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,26 +99,4 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	require.Equal(tb, count*60, want.Totals.OutputTokens)
 	require.Equal(tb, int64(count*420), want.Totals.TotalCost.Microdollars)
 	return database, filter, want
-}
-
-func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
-	database, filter, want := seedUsageJournalBenchmark(t, 300, 1)
-	database.StopUsageCacheBackfill()
-	databaseID, err := database.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	cache, err := database.usageCache.Generation(t.Context(), databaseID)
-	require.NoError(t, err)
-	var fills, builds atomic.Int64
-	cache.fill.observer.beforeInstall = func([]usageSourceVersion) { fills.Add(1) }
-	cache.rollup.observer.beforeEnsure = func() { builds.Add(1) }
-	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
-		assert.True(t, journaled, "warm reads must skip archive discovery and fact checks")
-	}
-	for range 5 {
-		got, err := database.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-	}
-	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
-	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
 }
