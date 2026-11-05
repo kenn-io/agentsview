@@ -86,7 +86,7 @@ func (cache *usageCache) usageRollupQuery(
 		return usageFactsResult{}, err
 	}
 	result, err := readUsageDailyRollups(
-		ctx, conn, timezoneID, snapshot, filter)
+		ctx, conn, timezoneID, snapshot, filter, false)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -197,9 +197,13 @@ func verifyUsageRollupInstall(
 
 func readUsageDailyRollups(
 	ctx context.Context, conn *sql.Conn, timezoneID int64,
-	snapshot usageQuerySnapshot, filter UsageFilter,
+	snapshot usageQuerySnapshot, filter UsageFilter, authoritativeOnly bool,
 ) (usageFactsResult, error) {
 	from, to := usageRollupDateBounds(snapshot)
+	restriction := ""
+	if authoritativeOnly {
+		restriction = " AND i.has_authoritative=1"
+	}
 	rows, err := conn.QueryContext(ctx, `SELECT i.session_id, r.local_date,
 		r.reported_model, r.provider_id, r.priced_model, r.matched_pattern, r.rate_ok,
 		r.pricing_timestamp,
@@ -212,7 +216,7 @@ func readUsageDailyRollups(
 		FROM usage_daily_rollups r
 		JOIN usage_rollup_installs i ON i.id = r.rollup_install_id
 		WHERE i.timezone_id = ? AND (? = '' OR r.local_date >= ?)
-		  AND (? = '' OR r.local_date <= ?)
+		  AND (? = '' OR r.local_date <= ?)`+restriction+`
 		ORDER BY r.local_date, i.session_id, r.reported_model,
 			r.provider_id, r.band_threshold`,
 		timezoneID, from, from, to, to)

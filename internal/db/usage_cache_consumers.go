@@ -46,6 +46,7 @@ type usagePreparedWindow struct {
 	snapshot   usageQuerySnapshot
 	installs   map[string]usageRollupInstall
 	journaled  bool
+	kind       usageQueryKind
 	installSeq int64
 	timings    usageRollupRequestTimings
 }
@@ -264,6 +265,8 @@ func (db *DB) queryUsageRollups(
 			var matching map[string]UsageSessionInfo
 			matching, queryErr = cache.usageRollupActivityQuery(ctx, snapshot, filter, prepared.installs)
 			facts.MatchingSessions = matching
+		} else if kind == usageQueryKindDayTotals && prepared.journaled {
+			facts, queryErr = cache.usageDayTotalsQuery(ctx, prepared, filter, resolver)
 		} else {
 			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver)
 		}

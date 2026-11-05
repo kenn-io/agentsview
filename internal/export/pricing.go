@@ -761,6 +761,28 @@ func (r *PricingResolver) RecordResolvedReported(
 	rec.reported = true
 }
 
+// RecordResolvedCounts records provenance for pre-aggregated usage rows.
+func (r *PricingResolver) RecordResolvedCounts(reportedModel, pricedModel string, lookup PricingLookup, reported, requests, aggregates int, band *int) {
+	if r == nil || reportedModel == "" || pricedModel == "" || reported+requests+aggregates == 0 {
+		return
+	}
+	rec := r.record(reportedModel, pricedModel, lookup)
+	rec.reported = rec.reported || reported > 0
+	rec.computed = rec.computed || requests+aggregates > 0
+	if !lookup.OK {
+		return
+	}
+	rec.aggregateRowCount += aggregates
+	if band == nil {
+		rec.baseRequestCount += requests
+	} else if requests > 0 {
+		if rec.bandRequestCounts == nil {
+			rec.bandRequestCounts = make(map[int]int)
+		}
+		rec.bandRequestCounts[*band] += requests
+	}
+}
+
 // RecordUnattributedReported records an authoritative aggregate cost that
 // cannot be assigned to a model without inventing an allocation.
 func (r *PricingResolver) RecordUnattributedReported() {

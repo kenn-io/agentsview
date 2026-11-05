@@ -91,6 +91,10 @@ type usageExceptionRow struct {
 
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
+	Project, Machine, GitBranch string
+	IsAutomated                 bool
+	UserMessageCount            int
+	HasAuthoritative            bool
 	// PricingInputs encodes the lookups Daily used; PricingHash is their identity.
 	PricingInputs, PricingHash string
 	Source                     usageSourceVersion
@@ -540,9 +544,18 @@ func buildUsageRollupSessions(
 		if err != nil {
 			return nil, err
 		}
+		hasAuthoritative := false
+		for _, fact := range sessionFacts {
+			if fact.Fact.CostSource == CopilotReportedCostSource && fact.Fact.ReportedCostMicrodollars != nil {
+				hasAuthoritative = true
+			}
+		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			PricingInputs: pricingInputs, PricingHash: pricingHash,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch,
+			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
+			HasAuthoritative: hasAuthoritative,
+			PricingInputs:    pricingInputs, PricingHash: pricingHash,
 			Source: versions[id], FactRevision: fills[id].InstallRevision,
 			Daily: daily, Activity: usageRollupActivityContributions(id, sessionFacts),
 			Exceptions: usageRollupExceptionRows(exceptions),

@@ -700,9 +700,13 @@ The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does
 not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints additionally bake the exact
-session `agent` and `started_at`, because those fields affect deduplication and
-day bucketing. All other session metadata and filters come from the archive read
-snapshot. Do not widen or narrow this live/baked boundary implicitly.
+session `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`is_automated`, and `user_message_count`. Those fields determine deduplication,
+day bucketing, and the filter dimensions of stored day totals. Journaled changes
+rebuild the session's rows and totals. Warm daily reads filter totals in SQL and
+read per-session rows for authoritative costs and dedup exceptions. Termination
+and `active_since` filters still use the archive snapshot. Do not widen or
+narrow this live/baked boundary implicitly.
 
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search

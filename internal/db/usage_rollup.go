@@ -531,7 +531,7 @@ func readUsageRollupInstalls(
 	query := `SELECT i.id, i.session_id,
 		i.fact_install_revision, i.install_revision, i.cached_at,
 		i.source_sync_marker, i.source_transcript_rev, i.usage_event_fingerprint,
-		i.baked_agent, i.baked_started_at, i.pricing_inputs, i.pricing_hash
+		i.baked_agent, i.baked_started_at, i.project, i.machine, i.git_branch, i.is_automated, i.user_message_count, i.pricing_inputs, i.pricing_hash
 		FROM usage_rollup_timezones tz JOIN usage_rollup_installs i
 		  ON i.timezone_id = tz.id WHERE tz.timezone_key = ?`
 	args := []any{identity.Key}
@@ -558,22 +558,23 @@ func readUsageRollupInstalls(
 	defer rows.Close()
 	installs := make(map[string]usageRollupInstall)
 	sources := make(map[string]usageSourceVersion)
-	baked := make(map[string][2]string)
+	baked := make(map[string]usageBakedSession)
 	pricingInputs := make(map[string]string)
 	for rows.Next() {
 		var item usageRollupInstall
 		var source usageSourceVersion
-		var agent, startedAt, installedInputs string
+		var installed usageBakedSession
+		var installedInputs string
 		if err := rows.Scan(&item.ID, &item.SessionID, &item.FactRevision,
 			&item.InstallRevision, &item.CachedAt, &source.SyncMarker,
 			&source.TranscriptRevision, &source.UsageEventFingerprint,
-			&agent, &startedAt, &installedInputs, &item.PricingHash); err != nil {
+			&installed.Agent, &installed.StartedAt, &installed.Project, &installed.Machine, &installed.GitBranch, &installed.IsAutomated, &installed.UserMessageCount, &installedInputs, &item.PricingHash); err != nil {
 			_ = rows.Close()
 			return nil, nil, err
 		}
 		source.SessionID = item.SessionID
 		installs[item.SessionID], sources[item.SessionID] = item, source
-		baked[item.SessionID] = [2]string{agent, startedAt}
+		baked[item.SessionID] = installed
 		pricingInputs[item.SessionID] = installedInputs
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
@@ -596,7 +597,7 @@ func readUsageRollupInstalls(
 		}
 		if !ok || item.FactRevision != fill.InstallRevision ||
 			!sources[version.SessionID].Equal(fill.source) ||
-			baked[version.SessionID] != [2]string{session.Agent, session.StartedAt} {
+			baked[version.SessionID] != bakedUsageSession(session) {
 			stale[version.SessionID] = true
 			continue
 		}
@@ -727,23 +728,23 @@ func installUsageRollupBuilds(
 			}
 			_, err = conn.ExecContext(ctx, `UPDATE usage_rollup_installs SET
 				source_sync_marker=?, source_transcript_rev=?, usage_event_fingerprint=?,
-				fact_install_revision=?, baked_agent=?, baked_started_at=?,
+				fact_install_revision=?, baked_agent=?, baked_started_at=?, project=?, machine=?, git_branch=?, is_automated=?, user_message_count=?, has_authoritative=?,
 				pricing_inputs=?, pricing_hash=?, install_revision=?, cached_at=?, source_change_revision=?, source_pricing=?
 				WHERE id=?`,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
-				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
+				build.Agent, build.StartedAt, build.Project, build.Machine, build.GitBranch, build.IsAutomated, build.UserMessageCount, build.HasAuthoritative, build.PricingInputs, build.PricingHash,
 				nextRevision, now, build.ChangeRevision, build.SourcePricing, installID)
 		} else {
 			result, insertErr := conn.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
 				timezone_id, session_id, source_sync_marker, source_transcript_rev,
 				usage_event_fingerprint, fact_install_revision, baked_agent,
-				baked_started_at, pricing_inputs, pricing_hash, install_revision,
+				baked_started_at, project, machine, git_branch, is_automated, user_message_count, has_authoritative, pricing_inputs, pricing_hash, install_revision,
 				cached_at, source_change_revision, source_pricing
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
-				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
+				build.Agent, build.StartedAt, build.Project, build.Machine, build.GitBranch, build.IsAutomated, build.UserMessageCount, build.HasAuthoritative, build.PricingInputs, build.PricingHash,
 				nextRevision, now, build.ChangeRevision, build.SourcePricing)
 			if insertErr != nil {
 				return insertErr
@@ -881,6 +882,11 @@ func usageRollupCallKey(
 		session := sessions[version.SessionID]
 		writeUsageHashString(digest, session.Agent)
 		writeUsageHashString(digest, session.StartedAt)
+		writeUsageHashString(digest, session.Project)
+		writeUsageHashString(digest, session.Machine)
+		writeUsageHashString(digest, session.GitBranch)
+		writeUsageHashBool(digest, session.IsAutomated)
+		writeUsageHashInt64(digest, int64(session.UserMessageCount))
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }
@@ -902,4 +908,15 @@ func writeUsageHashBool(digest hash.Hash, value bool) {
 	} else {
 		writeUsageHashInt64(digest, 0)
 	}
+}
+
+// usageBakedSession is the archive metadata that determines installed rows and totals.
+type usageBakedSession struct {
+	Agent, StartedAt, Project, Machine, GitBranch string
+	IsAutomated                                   bool
+	UserMessageCount                              int
+}
+
+func bakedUsageSession(session usageQuerySession) usageBakedSession {
+	return usageBakedSession{session.Agent, session.StartedAt, session.Project, session.Machine, session.GitBranch, session.IsAutomated, session.UserMessageCount}
 }
