@@ -526,6 +526,7 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  AND (l.source='transcript' OR julianday(m.timestamp)<=julianday(l.committed_at)) AND ` + commitUserPrompt + `
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id))
+ -- Trailers first stored after session deletion stay hidden because no project survives to scope them.
  AND (s.id IS NOT NULL OR l.source<>'trailer' OR l.project<>'') AND `
 
 // StoreTrailerCommitLinks adds or updates one repository's trailer evidence.
