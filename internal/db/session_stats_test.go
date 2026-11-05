@@ -87,6 +87,54 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	require.False(t, byID["human"], "human.isAutomated")
 }
 
+func Test_loadSessionsInWindow_DateIndexWindow(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "old", userMsgs: 5, startedAt: "2023-01-01T12:00:00Z",
+	})
+
+	// Observe date evaluations on the actual loader query. An indexed empty
+	// window skips the old row; a scan evaluates its date predicate.
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	var evaluations int
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other string) any {
+			evaluations++
+			if value == other {
+				return nil
+			}
+			return value
+		}, true)
+	}))
+	require.NoError(t, conn.Close())
+
+	from := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		days    int
+		indexed bool
+	}{
+		{"2-day", 2, true},
+		{"90-day", 90, true},
+		{"91-day", 91, false},
+		{"year", 365, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evaluations = 0
+			rows, err := d.loadSessionsInWindow(t.Context(), StatsFilter{}, from, from.AddDate(0, 0, tc.days), false)
+			require.NoError(t, err)
+			assert.Empty(t, rows)
+			if tc.indexed {
+				assert.Zero(t, evaluations, "short windows should seek the date index")
+			} else {
+				assert.Positive(t, evaluations, "wide windows should keep the scan plan")
+			}
+		})
+	}
+}
+
 // insertSessionFixture inserts a sessionFixture via the standard
 // UpsertSession path so triggers and defaults stay authoritative.
 // Defaults mirror insertSession in db_test.go (machine=local,
