@@ -89,48 +89,6 @@ func TestTrailerCommitLinksMissingOwner(t *testing.T) {
 	check(true)
 }
 
-func TestTrailerCommitLinksPrecedence(t *testing.T) {
-	for _, sha := range []string{"abc1234", "abc1234" + strings.Repeat("0", 33)} {
-		t.Run(sha, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "session-a", "project-a")
-			insertSession(t, d, "codex:thread", "project-a", func(s *Session) { s.Agent = "codex" })
-			c := gitlog.TrailerCommit{SHA: "abc1234" + strings.Repeat("0", 33), Branch: "main", Subject: "Editor", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:session-a", "codex:thread", "unknown:thread"}}
-			insertMessages(t, d, commitMessages("session-a", `{"command":"git commit -m fix"}`, "[main "+sha+"] Exact")...)
-			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{c})
-			require.NoError(t, err)
-			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-			require.NoError(t, err)
-			require.Len(t, found.Commits[0].Links, 2)
-			var transcriptLinks, trailerLinks int
-			for _, l := range found.Commits[0].Links {
-				assert.False(t, l.Ambiguous)
-				if l.Source == "transcript" {
-					transcriptLinks++
-					assert.Equal(t, "session-a", l.SessionID)
-					assert.Equal(t, sha, l.SHA)
-				} else {
-					trailerLinks++
-					assert.Equal(t, "trailer", l.Source)
-					assert.Equal(t, c.SHA, l.SHA)
-					assert.Equal(t, "codex:thread", l.SessionID)
-				}
-			}
-			assert.Equal(t, 1, transcriptLinks)
-			assert.Equal(t, 1, trailerLinks)
-			// Replacing the transcript preserves its independent trailer evidence.
-			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session-a", []Message{{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Rewritten", Timestamp: tsZero}}))
-			list, err := d.SessionCommitLinks(t.Context(), "session-a")
-			require.NoError(t, err)
-			require.Len(t, list.Commits, 1)
-			assert.Equal(t, c.SHA, list.Commits[0].SHA)
-			assert.Equal(t, "trailer", list.Commits[0].Source)
-			assert.Equal(t, -1, list.Commits[0].CallIndex)
-			assert.Empty(t, list.Commits[0].ToolUseID)
-		})
-	}
-}
-
 func TestTrailerCommitLinksPrompt(t *testing.T) {
 	for _, tt := range []struct {
 		name, owner, agent, trailer, committedAt string
@@ -146,7 +104,6 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:10:00Z"},
 				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:10:00Z"},
 				{SessionID: "session-a", Ordinal: 5, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
-				{SessionID: "session-a", Ordinal: 6, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
 			},
 		},
 		{

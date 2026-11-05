@@ -805,9 +805,9 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "editor", "project-a")
 			insertMessages(t, d, commitMessages("editor", `{"command":"git commit -m fix"}`, "[main "+tt.transcriptSHA+"] Fix parser")...)
-			insertSession(t, d, "other", "project-a")
+			insertSession(t, d, "codex:thread", "project-a", func(s *Session) { s.Agent = "codex" })
 			commits := []gitlog.TrailerCommit{
-				{SHA: firstSHA, Sessions: []string{"claude:editor", "claude:other"}, CommittedAt: tsZero},
+				{SHA: firstSHA, Sessions: []string{"claude:editor", "codex:thread", "unknown:thread"}, CommittedAt: tsZero},
 			}
 			if tt.collision {
 				commits = append(commits, gitlog.TrailerCommit{SHA: secondSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero})
@@ -827,7 +827,7 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 					assert.Equal(t, "transcript", link.Source)
 				}
 			}
-			other, err := d.SessionCommitLinks(t.Context(), "other")
+			other, err := d.SessionCommitLinks(t.Context(), "codex:thread")
 			require.NoError(t, err)
 			require.Len(t, other.Commits, 1)
 			assert.Equal(t, firstSHA, other.Commits[0].SHA)
@@ -836,14 +836,36 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
 			require.Len(t, found.Commits, 1)
+			require.Len(t, found.Commits[0].Links, 2)
 			shas = nil
 			for _, link := range found.Commits[0].Links {
+				assert.False(t, link.Ambiguous)
 				if link.SessionID == "editor" {
 					shas = append(shas, link.SHA)
-					assert.False(t, link.Ambiguous)
+					assert.Equal(t, "transcript", link.Source)
+				} else {
+					assert.Equal(t, "codex:thread", link.SessionID)
+					assert.Equal(t, firstSHA, link.SHA)
+					assert.Equal(t, "trailer", link.Source)
 				}
 			}
 			assert.ElementsMatch(t, tt.wantSHAs, shas)
+			// Replacing the transcript preserves its independent trailer evidence.
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "editor", []Message{{SessionID: "editor", Ordinal: 0, Role: "user", Content: "Rewritten", Timestamp: tsZero}}))
+			session, err = d.SessionCommitLinks(t.Context(), "editor")
+			require.NoError(t, err)
+			wantTrailers := []string{firstSHA}
+			if tt.collision {
+				wantTrailers = append(wantTrailers, secondSHA)
+			}
+			shas = nil
+			for _, link := range session.Commits {
+				shas = append(shas, link.SHA)
+				assert.Equal(t, "trailer", link.Source)
+				assert.Equal(t, -1, link.CallIndex)
+				assert.Empty(t, link.ToolUseID)
+			}
+			assert.ElementsMatch(t, wantTrailers, shas)
 		})
 	}
 }

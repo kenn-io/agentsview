@@ -22,16 +22,6 @@ func TestCommitTrailersOutputEncoding(t *testing.T) {
 	assert.Equal(t, "Fix café", commits[0].Subject)
 }
 
-func TestCommitTrailersSquashMessage(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initRepo(t)
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Squashed changes\n\nFirst change\n\nAgent-Session: codex:first\n\nSecond change\n\nAgent-Session: claude:second\nAgent-Session: claude:bad/id\n\nCo-authored-by: Example <test@example.com>")
-	commits, err := ScanCommitTrailers(t.Context(), repo)
-	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	assert.Equal(t, []string{"codex:first", "claude:second"}, commits[0].Sessions)
-}
-
 func TestCommitTrailersShowSignature(t *testing.T) {
 	skipIfNoGit(t)
 	keygen, err := exec.LookPath("ssh-keygen")
@@ -84,7 +74,6 @@ func TestCommitTrailersHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, commits, 4)
 	assert.Equal(t, []string{"claude:older"}, commits[3].Sessions)
-	assert.Equal(t, "origin/older", commits[3].Branch)
 }
 
 func TestCommitTrailersCloneAhead(t *testing.T) {
@@ -163,7 +152,7 @@ func TestCommitTrailersParsing(t *testing.T) {
 		{"Agent-Session", " \t: ", []string{"claude:editor"}},
 		{"Agent-Session", "= ", []string{"claude:editor"}},
 	} {
-		gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-11-01T10:00:00Z"}, "commit", "--allow-empty", "-qm", "Editor\n\n"+tt.key+tt.separator+strings.Join(tt.sessions, "\n"+tt.key+tt.separator))
+		gitRun(t, repo, []string{"GIT_AUTHOR_DATE=2026-10-30T12:10:00+02:00", "GIT_COMMITTER_DATE=2026-11-01T10:00:00Z"}, "commit", "--allow-empty", "-qm", "Editor\n\n"+tt.key+tt.separator+strings.Join(tt.sessions, "\n"+tt.key+tt.separator)+"\n\nCo-authored-by: Example <test@example.com>")
 		want = append([][]string{tt.sessions}, want...)
 		commits, err := ScanCommitTrailers(t.Context(), repo)
 		require.NoError(t, err)

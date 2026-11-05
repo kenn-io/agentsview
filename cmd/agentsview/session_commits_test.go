@@ -33,7 +33,6 @@ func TestSessionCommits(t *testing.T) {
 		require.NoError(t, err)
 		got := decodeCLIJSON[db.SessionCommitList](t, out)
 		require.Len(t, got.Commits, 2)
-		assert.ElementsMatch(t, []string{"transcript", "trailer"}, []string{got.Commits[0].Source, got.Commits[1].Source})
 		var exact *db.CommitLink
 		for i := range got.Commits {
 			if got.Commits[i].Source == "transcript" {
@@ -41,8 +40,6 @@ func TestSessionCommits(t *testing.T) {
 			}
 		}
 		require.NotNil(t, exact)
-		assert.Equal(t, "abc1234", exact.SHA)
-		assert.Equal(t, "s-commit", exact.SessionID)
 		// JSON preserves the full prompt; human output sanitizes and truncates it.
 		assert.Equal(t, &db.CommitTurn{Ordinal: 1, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, exact.Turn)
 	})

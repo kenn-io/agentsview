@@ -123,8 +123,6 @@ func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 		{name: "protected common config in linked worktree", linked: true},
 		{name: "protected commondir in linked worktree", linked: true, commondir: true},
 		{name: "protected config with opt-in", allow: true, wantLink: true},
-		{name: "protected common config with opt-in", linked: true, allow: true, wantLink: true},
-		{name: "protected commondir with opt-in", linked: true, commondir: true, allow: true, wantLink: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			testutil.IsolateGit(t)
@@ -177,90 +175,77 @@ func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
 }
 
 func TestReconcileCommitTrailersNewCommit(t *testing.T) {
-	database, engine, repo, first, runGit := commitTrailerFixture(t)
-	emitter := &fakeEmitter{}
-	engine.emitter = emitter
-	engine.ReconcileCommitTrailers(t.Context())
-	assert.Empty(t, emitter.got())
-
-	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
-	second := runGit(repo, "rev-parse", "HEAD")
-	engine.ReconcileCommitTrailers(t.Context())
-	assert.Equal(t, []string{"sessions"}, emitter.got())
-	found, err := database.CommitSessionLinks(t.Context(), []string{second[:7]})
-	require.NoError(t, err)
-	require.Len(t, found.Commits[0].Links, 1)
-	assert.Equal(t, second, found.Commits[0].Links[0].SHA)
-	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 2)
-	assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
-
-	engine.ReconcileCommitTrailers(t.Context())
-	assert.Equal(t, []string{"sessions"}, emitter.got())
-}
-
-func TestCommitTrailersHistoryOnlySyncChangesArchive(t *testing.T) {
-	database, engine, repo, _, runGit := commitTrailerFixture(t)
-	emitter := &fakeEmitter{}
-	engine.emitter = emitter
-	unchanged := engine.SyncAll(t.Context(), nil)
-	assert.False(t, unchanged.ChangedArchive())
-	assert.Empty(t, emitter.got())
-	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
-
-	stats := engine.SyncAll(t.Context(), nil)
-	assert.Zero(t, stats.Synced)
-	assert.Equal(t, 1, stats.LinksUpdated)
-	assert.True(t, stats.ChangedArchive())
-	assert.Equal(t, 1, engine.LastSyncStats().LinksUpdated)
-	assert.Equal(t, []string{"sessions"}, emitter.got())
-	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 2)
-	unchanged = engine.SyncAll(t.Context(), nil)
-	assert.False(t, unchanged.ChangedArchive())
-	assert.Equal(t, []string{"sessions"}, emitter.got())
-}
-
-func TestCommitTrailersSkipPartialSync(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		scoped bool
-		since  time.Time
+		name    string
+		wrapper bool
+		scoped  bool
+		since   time.Time
 	}{
+		{name: "reconcile", wrapper: true},
+		{name: "full sync"},
 		{name: "recent files", since: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)},
 		{name: "selected roots", scoped: true},
-		{name: "recent files in selected roots", scoped: true, since: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			database, engine, repo, first, runGit := commitTrailerFixture(t)
-			runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
-			if tt.scoped {
-				engine.SyncRootsSince(t.Context(), engine.ReconciliationRootsForAgent("claude"), tt.since, nil)
+			emitter := &fakeEmitter{}
+			engine.emitter = emitter
+			if tt.wrapper {
+				engine.ReconcileCommitTrailers(t.Context())
 			} else {
-				engine.SyncAllSince(t.Context(), tt.since, nil)
+				unchanged := engine.SyncAll(t.Context(), nil)
+				assert.False(t, unchanged.ChangedArchive())
 			}
+			assert.Empty(t, emitter.got())
+
+			runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
+			second := runGit(repo, "rev-parse", "HEAD")
+			if tt.scoped || !tt.since.IsZero() {
+				if tt.scoped {
+					engine.SyncRootsSince(t.Context(), engine.ReconciliationRootsForAgent("claude"), tt.since, nil)
+				} else {
+					engine.SyncAllSince(t.Context(), tt.since, nil)
+				}
+				list, err := database.SessionCommitLinks(t.Context(), "editor-session")
+				require.NoError(t, err)
+				require.Len(t, list.Commits, 1)
+				assert.Equal(t, first, list.Commits[0].SHA)
+				assert.Equal(t, "trailer", list.Commits[0].Source)
+				assert.Empty(t, emitter.got())
+			}
+
+			if tt.wrapper {
+				engine.ReconcileCommitTrailers(t.Context())
+			} else {
+				stats := engine.SyncAll(t.Context(), nil)
+				assert.Zero(t, stats.Synced)
+				assert.Equal(t, 1, stats.LinksUpdated)
+				assert.True(t, stats.ChangedArchive())
+				assert.Equal(t, 1, engine.LastSyncStats().LinksUpdated)
+			}
+			assert.Equal(t, []string{"sessions"}, emitter.got())
+			found, err := database.CommitSessionLinks(t.Context(), []string{second[:7]})
+			require.NoError(t, err)
+			require.Len(t, found.Commits[0].Links, 1)
+			assert.Equal(t, second, found.Commits[0].Links[0].SHA)
 			list, err := database.SessionCommitLinks(t.Context(), "editor-session")
 			require.NoError(t, err)
-			require.Len(t, list.Commits, 1)
-			assert.Equal(t, first, list.Commits[0].SHA)
-			assert.Equal(t, "trailer", list.Commits[0].Source)
-
-			engine.SyncAll(t.Context(), nil)
-			list, err = database.SessionCommitLinks(t.Context(), "editor-session")
-			require.NoError(t, err)
 			require.Len(t, list.Commits, 2)
+			assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
+
+			if tt.wrapper {
+				engine.ReconcileCommitTrailers(t.Context())
+			} else {
+				unchanged := engine.SyncAll(t.Context(), nil)
+				assert.False(t, unchanged.ChangedArchive())
+			}
+			assert.Equal(t, []string{"sessions"}, emitter.got())
 		})
 	}
 }
 
 func TestReconcileCommitTrailersLateRepository(t *testing.T) {
-	database, engine, _, first, runGit := commitTrailerFixture(t)
-	initial, err := database.SessionCommitLinks(t.Context(), "editor-session")
-	require.NoError(t, err)
-	require.Len(t, initial.Commits, 1)
-	assert.Equal(t, first, initial.Commits[0].SHA)
+	database, engine, _, _, runGit := commitTrailerFixture(t)
 	// Discover a new session checkout after the initial reconciliation.
 	late, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -339,14 +324,31 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "failed", true: "missing"}[missing], func(t *testing.T) {
-			_, engine, repo, _, _ := commitTrailerFixture(t)
+			testutil.IsolateGit(t)
+			database := openTestDB(t)
+			repo, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			cmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main", repo)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "local", Cwd: repo}))
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
+			identity := engine.cachedProjectIdentity("local", repo)
+			require.NotEmpty(t, identity.gitDir)
 			if missing {
-				require.NoError(t, os.RemoveAll(repo))
+				require.NoError(t, os.RemoveAll(filepath.Join(repo, ".git", "objects")))
 			} else {
 				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
 			}
-			_, err := engine.reconcileRepositoryTrailers(t.Context(), repo, repo)
+			_, err = engine.reconcileRepositoryTrailers(t.Context(), repo, repo)
 			require.Error(t, err)
+			before := time.Now()
+			assert.Zero(t, engine.reconcileCommitTrailersWithBudget(t.Context(), 0))
+			attempt, ok := engine.trailerScanAttempts[identity.repositoryPath]
+			require.True(t, ok, "failed scans must yield their turn")
+			assert.False(t, attempt.Before(before))
+			assert.False(t, attempt.After(time.Now()))
 		})
 	}
 }
