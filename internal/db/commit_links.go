@@ -319,16 +319,16 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				links = append(links, link)
 			}
 		}
-		if !isCommit || len(pollIDs) != 0 || summaryMatched {
+		if (!isCommit || len(pollIDs) != 0) && !singlePoll || summaryMatched {
 			continue
 		}
-		quiet := commitQuietReadbackRE.FindStringSubmatch(command)
+		quiet := commitQuietReadbackRE.FindStringSubmatch(signals.CommandText(cmp.Or(singleOwner, call).input))
 		if quiet == nil {
 			continue
 		}
 		for arg := range strings.FieldsSeq(quiet[1]) {
-			switch arg {
-			case "--dry-run", "--short", "--porcelain", "--long", "-z", "--null":
+			//nolint:gocritic // Git accepts unambiguous prefixes of these option names.
+			if arg == "-z" || arg == "--l" || len(arg) >= 4 && (strings.HasPrefix("--dry-run", arg) || strings.HasPrefix("--short", arg) || strings.HasPrefix("--porcelain", arg) || strings.HasPrefix("--long", arg) || strings.HasPrefix("--null", arg)) {
 				quiet = nil
 			}
 		}
@@ -343,7 +343,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				sha, subject, _ := strings.Cut(line, " ")
 				if commitSHARE.MatchString(sha) {
 					quietSHA, quietSubject = sha, subject
-					quietOwner = cmp.Or(pending[output.process], call)
+					quietOwner = cmp.Or(pending[output.process], singleOwner, call)
 					quietCount++
 				}
 			}

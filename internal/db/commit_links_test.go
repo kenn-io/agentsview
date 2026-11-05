@@ -214,6 +214,59 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 	})
 }
 
+func TestCommitLinksQuietDryRunPrefixes(t *testing.T) {
+	for _, option := range []string{"--dr", "--dry", "--dry-", "--dry-r", "--dry-ru", "--dry-run", "--sh", "--sho", "--shor", "--short", "--po", "--por", "--porc", "--porce", "--porcel", "--porcela", "--porcelai", "--porcelain", "--l", "--lo", "--lon", "--long", "--nu", "--nul", "--null"} {
+		t.Run(option, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			input, err := json.Marshal(map[string]string{"command": "git commit -q " + option + " && git rev-parse HEAD"})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), "abc1234\n")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, got.Commits)
+		})
+	}
+}
+
+func TestCommitLinksQuietReadbackAfterPoll(t *testing.T) {
+	for _, tt := range []struct{ name, command, output, sha string }{
+		{"rev parse", "git commit -q -m fix && git rev-parse HEAD", "abc1234\n", "abc1234"},
+		{"log", "git commit -q -m fix && git log --oneline -1", "abc1234 Fix parser\n", "abc1234"},
+		{"dry run", "git commit -q --dry && git rev-parse HEAD", "abc1234\n", ""},
+		{"multiple shas", "git commit -q -m fix && git rev-parse HEAD", "abc1234\ndef5678\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			input, err := json.Marshal(map[string]string{"cmd": tt.command, "workdir": "/repo"})
+			require.NoError(t, err)
+			messages := commitMessages("s1", string(input), `{"session_id":7,"output":""}`)
+			messages[2].ToolCalls[0].ToolName = "exec_command"
+			insertMessages(t, d, messages...)
+			before, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, before.Commits)
+			poll := commitMessages("s1", `{"session_id":7}`, tt.output)[2]
+			poll.Ordinal = 3
+			poll.ToolCalls[0].ToolName = "write_stdin"
+			poll.ToolCalls[0].ToolUseID = "poll"
+			insertMessages(t, d, poll)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			if tt.sha == "" {
+				assert.Empty(t, got.Commits)
+				return
+			}
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.sha, got.Commits[0].SHA)
+			assert.Equal(t, "/repo", got.Commits[0].Repository)
+			assert.Equal(t, "commit-call", got.Commits[0].ToolUseID)
+			assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
+		})
+	}
+}
+
 func TestReviewRepeatedGitC(t *testing.T) {
 	skipIfNoGit(t)
 	base := t.TempDir()
