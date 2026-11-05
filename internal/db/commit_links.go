@@ -553,7 +553,7 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
- AND ` + commitUserPrompt + `
+ AND (l.source='transcript' OR julianday(m.timestamp)<=julianday(l.committed_at)) AND ` + commitUserPrompt + `
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
@@ -864,7 +864,7 @@ func (d *DB) RetainedCommitLinkRows(ctx context.Context) ([]CommitLinkRow, error
 
 func sessionCommitLinkRows(ctx context.Context, q messageRowsQuerier, owners, where string, args ...any) ([]CommitLinkRow, error) {
 	args = append([]any{owners}, args...)
-	rows, err := q.QueryContext(ctx, commitLinkSelect+where+" ORDER BY l.session_id,l.message_ordinal,l.call_index,l.sha", args...)
+	rows, err := q.QueryContext(ctx, commitLinkSelect+where+" ORDER BY l.session_id,l.message_ordinal,julianday(l.committed_at),l.call_index,l.sha", args...)
 	if err != nil {
 		return nil, err
 	}
