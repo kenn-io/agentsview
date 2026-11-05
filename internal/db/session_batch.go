@@ -551,6 +551,16 @@ func (db *DB) writeOneSessionBatchTx(
 				return 0, err
 			}
 			msgs = nil
+			// A caller that replaces the session while keeping a trashed
+			// copy still needs the pins as they are now. Snapshot only: the
+			// rows survive, so nothing is deleted or restored here.
+			if pinSnapshot != nil {
+				snapshot, err := savePinsTx(queries, write.Session.ID, write.Messages)
+				if err != nil {
+					return 0, err
+				}
+				*pinSnapshot = snapshot
+			}
 		}
 	} else {
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
