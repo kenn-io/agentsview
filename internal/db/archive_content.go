@@ -518,6 +518,9 @@ func applyArchiveContentToCopiedSessionsTx(
 	if err != nil {
 		return err
 	}
+	if err := refreshCopiedCodexForkDigestsTx(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
 	if active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx}); err != nil || !active {
 		return err
 	}

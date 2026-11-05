@@ -63,23 +63,95 @@ transaction or a pinned reader can push the WAL past it (249 MiB was observed).
 Before closing the replacement, the build runs a checked truncate checkpoint.
 The swap installs only the main file, so a failed checkpoint or close aborts it.
 
-When a Codex fork's replay parent is unavailable, a rebuild preserves an
-existing child and schedules it for retry. New messages and usage in that child
-remain absent from the archive until the parent and child source can be read
-and the source is reparsed. If the parent never returns, that delay is
-indefinite. A child with no saved messages is imported with its fallback
-transcript, even when a placeholder row exists, such as one created by a Recall
-import. That transcript may include copied parent messages and usage, and later
-appends are likewise held until recovery. The rebuild warns about the possible
-copied usage.
+Codex forks keep accepting available messages when their replay parent is
+unavailable. Each full fork write records parent turn membership and per-message
+source origins in `codex_fork_state`, in the same transaction as the transcript
+and usage. Rebuilds copy this provenance with retained orphan sessions. Forks use
+full parses so optional parser checkpoints cannot leave provenance behind.
 
-The stale parser version does not distinguish a previously resolved child from
-a fallback. Parser checkpoints are optional, do not persist the replay gate,
-and are not copied with orphaned sessions. Treating a stale row as a fallback
-or resuming it without proven source and content state can overwrite archived
-child history or count parent usage twice. Live updates for unresolved forks
-need durable provenance and crash-safe retry and recovery; the current rebuild
-keeps the existing history rather than guessing that boundary.
+A fork whose parent was read previously uses that saved evidence to remove the
+inherited prefix and keep child usage accurate. Without that evidence, the
+fallback transcript stays visible and may include copied parent messages. Sync
+warns about this uncertainty and withholds unverified token usage. The original
+token metadata stays in local provenance for later reconciliation. Saved messages
+and tool results absent from a shortened source remain archived. Retained
+historical usage events also survive.
+
+Reconciliation matches storage-normalized message content and consumes each
+occurrence once, including when a TraeX record emits several messages. Restored
+tool results obey the current category and archive-content policies. Retained
+messages keep their activity bounds and supply the child preview; retained usage
+events follow the final child identity and message ordinals. Restored metadata
+continues to survive full parses until it returns in the source itself.
+Codex forks with archived tool calls use staging even when the source shrinks
+below the size threshold. They load message and call metadata separately, then
+reconcile and spool result bodies one archived message at a time. Restored source
+events keep their order around shared events. Raw summary participation remains distinct
+from sanitized text, so a cleared result cannot revive older output. Spawn links
+also survive when their output records disappear.
+Summary-only saved results keep their text and lengths when the source still
+contains the call but omits its output. Blocked results retain their permitted
+length metadata across repeated staged writes, including imported events whose
+raw summary participation is unknown. Local provenance records imported events
+observed contributing readable text, so an update from one agent retains other
+agents' length contributions. Each hint includes its archived event position,
+agent, source, status, timestamp, and length. Artifact message replacements clear
+these hints in the same transaction, since even unchanged event metadata cannot
+prove that replacement content contributes. Other fork provenance survives.
+Raw nullable metadata stays unchanged.
+Blank unknown content establishes no participation. Archived calls without provider
+IDs use occurrence keys to publish their staged summaries, events, findings, and
+failure signals.
+Archive copies retain existing raw result digests and participation flags;
+absent fields remain unknown. Returning native output can therefore match its
+saved event after a preservation rebuild.
+
+Each saved message keeps its original ordered turn-context prefix, including
+turns that emitted no message. Prefixes share storage across snapshots and only
+referenced prefixes survive a write. Replay classification uses that source
+evidence rather than merged archive order. Pre-turn replay leaves the transcript
+and preview when the parent returns. Known source occurrences claim their
+matches before legacy rows. A matching shortened snapshot keeps the saved
+context when it contains every incoming turn in order; changed contexts use the
+current source. Retained context evidence keeps history preservation enabled
+across resolved refreshes until the source supplies it again. One reconciliation
+shares context-containment results for common prefixes.
+Content matches also preserve whether a record appeared before or inside a turn.
+A missing turn ID alone cannot identify pre-turn replay as an idless child.
+Saved prefixes claim matching content before less specific occurrence matches,
+so identical idless parent and child messages keep their separate usage.
+A returning longer prefix must keep the nearest named turn to claim saved
+usage. A different boundary keeps the occurrences separate until ownership can
+be established; identical content and timestamps alone cannot transfer usage.
+When fewer identical legacy occurrences return, their ownership remains unknown:
+keep those rows and their uncounted usage separately instead of assigning parent
+usage to a child. Repeating the same source does not add more occurrences.
+
+Independently imported usage events survive resolved refreshes and rebuilds.
+Their non-summary usage adds to message totals, and context uses the highest
+measurement from either source. Retained history keeps chronological activity
+bounds even when its only remaining rows are usage events.
+Ordinal-only usage reconciliation reads message metadata without result bodies.
+Matched usage references do not require archived result payloads. If a source
+omits a referenced message, retain that message and load its results one message
+at a time. Restored usage also follows source entries emitted before their
+archived counterpart is reconciled.
+
+Archived result events without recorded raw digests remain separate occurrences.
+Sanitized or blocked display text cannot establish provider identity, including
+during image projection. Returning source events with real digests still
+deduplicate across retries; unknown
+historical occurrences remain alongside them when their identity cannot be
+proved.
+
+If the parent never appears, available messages continue updating across retries,
+restarts, and rebuilds. Usage for unverified messages remains unavailable. If the
+parent later appears, reconciliation removes only confirmed inherited turns and
+restores child usage, including retained child messages absent from the current
+source. Rows without source evidence stay preserved, with unverifiable usage withheld
+until returning source records establish its ownership. The stale parser version
+continues to request a parent lookup until the source can be parsed with its
+parent. A successful rebuild still installs while those retries remain queued.
 
 When an Antigravity CLI source yields a retryable low-fidelity transcript,
 sync and rebuild preserve any saved history and leave it stale for retry. A new

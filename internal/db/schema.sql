@@ -1714,3 +1714,9 @@ CREATE TABLE IF NOT EXISTS archive_session_provenance (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_session_source
     ON archive_session_provenance(archive_id,device_id,root_id,source_key);
+
+-- Local replay evidence commits with fork messages and survives archive rebuilds.
+CREATE TABLE IF NOT EXISTS codex_fork_state (
+ session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+ state_json TEXT NOT NULL
+);

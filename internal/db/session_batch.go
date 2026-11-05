@@ -15,6 +15,9 @@ import (
 // complete message set to store, the computed signal values,
 // and the data version to stamp after messages are written.
 type SessionBatchWrite struct {
+	CodexForkState *CodexForkState
+	// StagedToolKeys maps final occurrence keys back to the parsed scratch keys.
+	StagedToolKeys    map[string]string
 	ArchiveProvenance *ArchiveSessionProvenance
 	Session           Session
 	Messages          []Message
@@ -920,6 +923,9 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 		); err != nil {
 			return err
 		}
+	}
+	if err := writeCodexForkStateTx(ctx, tx, write.Session.ID, write.CodexForkState); err != nil {
+		return err
 	}
 	if err := replaceSessionUsageEventsTx(
 		queries, write.Session.ID, write.UsageEvents, false,
