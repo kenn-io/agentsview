@@ -24,7 +24,8 @@ The latest release is
 - Find the session and prompt behind a Git commit through the session API, or
   list a session's commits with `agentsview session commits <id>`. Links come
   from stored Git summaries, including Codex output received through later
-  polls. Repository paths follow the first directory in each call
+  polls, and from quiet commits followed by a supported SHA readback.
+  Repository paths follow the first directory in each call
   and only a leading `cd`.
   Transcript-only and usage-only archives retain no links. Deleted sessions
   remain visible as missing records. Sessions permanently deleted before this

@@ -1574,7 +1574,11 @@ because their stored tool calls are already gone.
 
 Transcript links require a `git commit` invocation, allowing Git global options,
 or a helper's `["git", "commit", ...]` argument list, and Git's commit summary
-in the call's stored output. Codex output received through a later `write_stdin`
+in the call's stored output. A quiet commit also links when it is followed by
+`&& git rev-parse HEAD` or `&& git log --oneline -1` (also accepting the
+reversed log options), and the call's output has exactly one SHA line. Its
+branch is empty. This readback excludes dry runs and Git global options.
+Codex output received through a later `write_stdin`
 poll links to the original commit call when its process ID matches. Polls with
 no originating commit call produce no links. Each session records a SHA once,
 at its first matching call.

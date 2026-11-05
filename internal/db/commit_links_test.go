@@ -14,10 +14,14 @@ import (
 )
 
 func commitMessages(id, input, result string) []Message {
+	var events []ToolResultEvent
+	if result != "" {
+		events = []ToolResultEvent{{Source: "tool_result", Content: result}}
+	}
 	return []Message{
 		userMsg(id, 0, "Record the parser fix"),
 		{SessionID: id, Ordinal: 1, Role: "user", IsSystem: true, Content: "system context"},
-		{SessionID: id, Ordinal: 2, Role: "assistant", Timestamp: tsZero, HasToolUse: true, ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: input, ResultContent: result, ResultEvents: []ToolResultEvent{{Source: "tool_result", Content: result}}}}},
+		{SessionID: id, Ordinal: 2, Role: "assistant", Timestamp: tsZero, HasToolUse: true, ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: input, ResultContent: result, ResultEvents: events}}},
 	}
 }
 
@@ -44,18 +48,25 @@ func TestCommitLinksLateResult(t *testing.T) {
 	assert.False(t, link.Ambiguous)
 }
 
-func TestCommitLinksNoCandidatesSkipsRefreshWrites(t *testing.T) {
+func TestCommitLinksNonCommitCandidatesSkipResultReadsAndRefreshWrites(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
 	poll := commitMessages("s1", `{"session_id":7,"chars":""}`, "unrelated output")[2]
 	poll.ToolCalls[0].ToolName = "write_stdin"
 	insertMessages(t, d, poll)
+	insertSession(t, d, "candidate", "project-a")
+	insertMessages(t, d, commitMessages("candidate", `{"command":"git log -p --grep=commit"}`, "[main abc1234] Example commit")[2])
 	conn, err := d.getWriter().Conn(t.Context())
 	require.NoError(t, err)
 	defer conn.Close()
-	// Reject refresh writes at the SQLite boundary, even when no rows exist.
+	// Reject result reads and refresh writes for calls that cannot create commit links.
+	var resultReads []string
 	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && ((table == "tool_calls" && column == "result_content") || (table == "tool_result_events" && column == "content")) {
+				resultReads = append(resultReads, table+"."+column)
+				return sqlite3.SQLITE_DENY
+			}
 			if op == sqlite3.SQLITE_DELETE && table == "commit_links" {
 				return sqlite3.SQLITE_DENY
 			}
@@ -73,6 +84,8 @@ func TestCommitLinksNoCandidatesSkipsRefreshWrites(t *testing.T) {
 	require.NoError(t, err)
 	defer tx.Rollback()
 	require.NoError(t, refreshSessionCommitLinksTx(tx, "s1"))
+	require.NoError(t, refreshSessionCommitLinksTx(tx, "candidate"))
+	assert.Empty(t, resultReads, "non-commit calls must be rejected before reading results")
 }
 
 func TestCommitLinksParsing(t *testing.T) {
@@ -96,7 +109,10 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"cherry-pick", "[main abc1234] Fix parser", []string{"git cherry-pick abc1234"}, 0},
 		{"multiple", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", []string{"git commit -m one; git commit -m two"}, 2},
 		{"global option", "[main abc1234] Fix parser", []string{`git -c user.name=Example --no-pager commit -m fix`, `git -c 'user.name=Example User' commit -m fix`}, 1},
+		{"flag-only global options", "[main abc1234] Fix parser", []string{"git --no-advice commit -m fix", "git -p commit -m fix", "git -P commit -m fix"}, 1},
 		{"output delta", `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
+		{"retained string session ID", `{"session_id":"shell-7","state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
+		{"retained integer session ID", `{"session_id":7,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, command := range tt.commands {
@@ -118,6 +134,90 @@ func TestCommitLinksParsing(t *testing.T) {
 	}
 }
 
+func TestCommitLinksQuietReadback(t *testing.T) {
+	for _, tt := range []struct {
+		name, command, output, sha, subject string
+	}{
+		{"rev parse", "git commit -q -m fix && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
+		{"log oneline", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
+		{"log reverse options", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
+		{"commit other repo", "git -C /other commit -q -m fix && git rev-parse HEAD", "abc1234", "", ""},
+		{"readback other repo", "git commit -q -m fix && git -C /other rev-parse HEAD", "abc1234", "", ""},
+		{"no verify", "git commit -n -q -m fix && git rev-parse HEAD", "abc1234", "abc1234", ""},
+		{"fallback", "git commit -q || true && git rev-parse HEAD", "abc1234", "", ""},
+		{"printed", "echo 'git commit -q && git rev-parse HEAD'", "abc1234", "", ""},
+		{"quoted", "printf '%s' \"git commit -q && git rev-parse HEAD\"", "abc1234", "", ""},
+		{"multiple shas", "git commit -q && git rev-parse HEAD", "abc1234\ndef5678 Other", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), tt.output)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			if tt.sha == "" {
+				assert.Empty(t, got.Commits)
+				return
+			}
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.sha, got.Commits[0].SHA)
+			assert.Equal(t, tt.subject, got.Commits[0].Subject)
+			assert.Empty(t, got.Commits[0].Branch)
+			assert.Equal(t, "/work", got.Commits[0].Repository)
+		})
+	}
+	t.Run("summary takes precedence", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "s1", "project-a")
+		insertMessages(t, d, commitMessages("s1", `{"command":"git commit -q && git rev-parse HEAD"}`, "[main abc1234] Fix parser\ndef5678")...)
+		got, err := d.SessionCommitLinks(t.Context(), "s1")
+		require.NoError(t, err)
+		require.Len(t, got.Commits, 1)
+		assert.Equal(t, "abc1234", got.Commits[0].SHA)
+		assert.Equal(t, "main", got.Commits[0].Branch)
+	})
+}
+
+func TestCommitLinksQuietDryRunPrefixes(t *testing.T) {
+	for _, option := range []string{"-z", "--dr", "--dry", "--dry-", "--dry-r", "--dry-ru", "--dry-run", "--sh", "--sho", "--shor", "--short", "--po", "--por", "--porc", "--porce", "--porcel", "--porcela", "--porcelai", "--porcelain", "--l", "--lo", "--lon", "--long", "--nu", "--nul", "--null"} {
+		t.Run(option, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			input, err := json.Marshal(map[string]string{"command": "git commit -q " + option + " && git rev-parse HEAD"})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), "abc1234\n")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, got.Commits)
+		})
+	}
+}
+
+func TestCommitLinksQuietReadbackAfterPoll(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+	messages := commitMessages("s1", `{"cmd":"git commit -q -m fix && git rev-parse HEAD","workdir":"/repo"}`, `{"session_id":7,"output":""}`)
+	messages[2].ToolCalls[0].ToolName = "exec_command"
+	insertMessages(t, d, messages...)
+	before, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Empty(t, before.Commits)
+	poll := commitMessages("s1", `{"session_id":7}`, "abc1234\n")[2]
+	poll.Ordinal = 3
+	poll.ToolCalls[0].ToolName = "write_stdin"
+	poll.ToolCalls[0].ToolUseID = "poll"
+	insertMessages(t, d, poll)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.Equal(t, "/repo", got.Commits[0].Repository)
+	assert.Equal(t, "commit-call", got.Commits[0].ToolUseID)
+	assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
+}
+
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	type repositoryCase struct{ cwd, command, repository string }
 	for _, tt := range []struct {
@@ -130,6 +230,9 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"quoted directory", []repositoryCase{{"/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"}}},
 		{"quoted operators", []repositoryCase{{"/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"}}},
 		{"directory after global options", []repositoryCase{{"/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"}}},
+		{"successive directories with global options", []repositoryCase{{"/work", `git -C root -c 'user.name=-C decoy' --no-pager -C 'child repo' commit -m fix`, "/work/root/child repo"}}},
+		{"absolute directory resets previous directory", []repositoryCase{{"/work", `git -C root -C /repo -C child commit -m fix`, "/repo/child"}}},
+		{"separate git invocations", []repositoryCase{{"/work", `git -C /other add . && git -C root -C child commit -m fix`, "/work/root/child"}}},
 		{"directory text in message", []repositoryCase{{"/work", `git commit -m "Document git -C /other commit"`, "/work"}}},
 		{"relative directory", []repositoryCase{{"/work", "cd sub && git -C child commit -m fix", "/work/sub/child"}}},
 		{"global directory option", []repositoryCase{{"/work", `git --git-dir=/repo/.git commit -m fix`, "/work"}}},
@@ -167,8 +270,7 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"Codex JavaScript directory text in subject", "/repo", []callResult{{`text(await tools.exec_command({cmd:"git commit -m \"Document cwd: '/wrong'\"",workdir:"/repo"}))`, "[main abc1234] Document cwd: '/wrong'"}}},
 		{"Codex JavaScript leading cd", "/repo", []callResult{{`text(await tools.exec_command({cmd:"cd /repo && git commit -m fix"}))`, "[main abc1234] Fix parser"}}},
 		{"Codex JavaScript escaped command", "/my repo", []callResult{{`text(await tools.exec_command({cmd:"cd \"/my repo\" && git commit -m fix",workdir:"/work"}))`, "[main abc1234] Fix parser"}}},
-		{"JSON workdir", "/repo", []callResult{{`{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"}, {`{"cmd":"git commit -m \"Document cwd: '/wrong'\"","workdir":"/repo"}`, "[main abc1234] Document cwd: '/wrong'"}, {`{"cmd":"git commit -m \"Document workdir: '/wrong'\"","cwd":"/repo"}`, "[main abc1234] Document workdir: '/wrong'"}}},
-		{"JSON without directory ignores cwd in message", "/work", []callResult{{`{"cmd":"git commit -m \"Document cwd: '/wrong'\""}`, "[main abc1234] Document cwd: '/wrong'"}, {`{"cmd":"git commit -m \"Document workdir: '/wrong'\""}`, "[main abc1234] Document workdir: '/wrong'"}}},
+		{"JSON workdir", "/repo", []callResult{{`{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"}}},
 		{"JSON cwd", "/work/sub", []callResult{{`{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser"}}},
 		{"JavaScript cwd", "/repo", []callResult{{`text(await tools.exec_command({cmd:'git commit -m fix',cwd:'/repo'}))`, `{"output":"[main abc1234] Fix parser\n"}`}}},
 	} {
@@ -185,13 +287,6 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, got.Commits, 1)
 				assert.Equal(t, tt.repository, got.Commits[0].Repository)
-				lookup, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-				require.NoError(t, err)
-				require.Len(t, lookup.Commits, 1)
-				require.Len(t, lookup.Commits[0].Links, 1)
-				assert.Equal(t, "s1", lookup.Commits[0].Links[0].SessionID)
-				assert.Equal(t, "abc1234", lookup.Commits[0].Links[0].SHA)
-				assert.Equal(t, tt.repository, lookup.Commits[0].Links[0].Repository)
 			}
 		})
 	}
@@ -464,53 +559,40 @@ func TestCommitLinksPromptLimit(t *testing.T) {
 
 func TestCommitLinksWritePolicy(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		policy     config.ArchiveContent
-		nativePoll bool
+		name   string
+		policy config.ArchiveContent
 	}{
-		{"full", config.ArchiveContentFull, false},
-		{"transcripts", config.ArchiveContentTranscripts, false},
-		{"usage", config.ArchiveContentUsage, false},
-		{"transcripts native poll", config.ArchiveContentTranscripts, true},
+		{"full", config.ArchiveContentFull},
+		{"transcripts", config.ArchiveContentTranscripts},
+		{"usage", config.ArchiveContentUsage},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
 			messages := commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")
-			if tt.nativePoll {
-				messages = commitMessages("s1", `{"cmd":"git commit -m fix"}`, `{"session_id":7,"output":""}`)
-				messages[2].ToolCalls[0].ToolName = "exec_command"
-				poll := commitMessages("s1", `{"session_id":7,"chars":""}`, `{"output":"[main abc1234] Fix parser\n"}`)[2]
-				poll.Ordinal = 3
-				poll.ToolCalls[0].ToolName = "write_stdin"
-				poll.ToolCalls[0].ToolUseID = "poll"
-				messages = append(messages, poll)
-			}
 			insertMessages(t, d, messages...)
 			before, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, before.Commits, 1)
 			d.SetArchiveContent(tt.policy)
-			if !tt.nativePoll {
-				insertSession(t, d, "s2", "project-a")
-				insertMessages(t, d, commitMessages("s2", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
-				initial, err := d.SessionCommitLinks(t.Context(), "s2")
-				require.NoError(t, err)
-				if tt.policy == config.ArchiveContentFull {
-					require.Len(t, initial.Commits, 1)
-				} else {
-					assert.Empty(t, initial.Commits)
-				}
-				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s2"}, CommittedAt: tsZero}}))
-				trailers, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("b", 40)})
-				require.NoError(t, err)
-				require.Len(t, trailers.Commits, 1)
-				if tt.policy.UsageOnly() {
-					assert.Empty(t, trailers.Commits[0].Links)
-				} else {
-					require.Len(t, trailers.Commits[0].Links, 1)
-					assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
-				}
+			insertSession(t, d, "s2", "project-a")
+			insertMessages(t, d, commitMessages("s2", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			initial, err := d.SessionCommitLinks(t.Context(), "s2")
+			require.NoError(t, err)
+			if tt.policy == config.ArchiveContentFull {
+				require.Len(t, initial.Commits, 1)
+			} else {
+				assert.Empty(t, initial.Commits)
+			}
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s2"}, CommittedAt: tsZero}}))
+			trailers, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("b", 40)})
+			require.NoError(t, err)
+			require.Len(t, trailers.Commits, 1)
+			if tt.policy.UsageOnly() {
+				assert.Empty(t, trailers.Commits[0].Links)
+			} else {
+				require.Len(t, trailers.Commits[0].Links, 1)
+				assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
 			}
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", messages))
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
@@ -693,17 +775,15 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 			},
 		})
 	}
-	for _, cellID := range []string{"7", "g26:48"} {
-		cases = append(cases, ownershipCase{
-			name: "cell wait " + cellID,
-			messages: []Message{
-				call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, "Script running with cell ID "+cellID),
-				call("wait", "poll", `{"cell_id":"`+cellID+`"}`, "Script running with cell ID "+cellID),
-				call("wait", "poll", `{"cell_id":"`+cellID+`"}`, "[main abc1234] Fix parser"),
-			},
-			want: []ownedCommit{{"abc1234", "commit-call", "/repo", "Record the parser fix", tsZero, 2}},
-		})
-	}
+	cases = append(cases, ownershipCase{
+		name: "cell wait g26:48",
+		messages: []Message{
+			call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, "Script running with cell ID g26:48"),
+			call("wait", "poll", `{"cell_id":"g26:48"}`, "Script running with cell ID g26:48"),
+			call("wait", "poll", `{"cell_id":"g26:48"}`, "[main abc1234] Fix parser"),
+		},
+		want: []ownedCommit{{"abc1234", "commit-call", "/repo", "Record the parser fix", tsZero, 2}},
+	})
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)

@@ -24,7 +24,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v1"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -32,13 +32,14 @@ var (
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitQuietReadbackRE     = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)git\s+commit((?:\s+` + commitCommandToken + `)*?\s+(?:-q|--quiet)(?:\s+` + commitCommandToken + `)*?)\s*&&\s*git\s+(?:rev-parse\s+HEAD|log\s+(?:-1\s+--oneline|--oneline\s+-1))\s*(?:$|&&)`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
-	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitCellRE              = regexp.MustCompile(`(?m)^Script running with cell ID (\S+)\r?$`)
@@ -83,7 +84,7 @@ type CommitSessionList struct {
 	Commits []CommitSessionMatch `json:"commits"`
 }
 
-// commitRepository records the first directory described by a call.
+// commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
 		dir = strings.Trim(dir, "\"'")
@@ -159,8 +160,10 @@ func commitRepository(input, cwd string) string {
 	if match := commitCDRE.FindStringSubmatch(command); match != nil {
 		cwd = resolve(cwd, match[1])
 	}
-	if match := commitGitDirRE.FindStringSubmatch(commitInvocationRE.FindString(command)); match != nil {
-		cwd = resolve(cwd, match[1])
+	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
+		if strings.HasPrefix(option, "-C") {
+			cwd = resolve(cwd, strings.TrimSpace(option[2:]))
+		}
 	}
 	return cwd
 }
@@ -178,9 +181,9 @@ type commitOutput struct {
 // callOutput decodes shell results and all their running process or cell IDs.
 func callOutput(result string) ([]commitOutput, []string) {
 	var payload struct {
-		Output      *string `json:"output"`
-		OutputDelta *string `json:"output_delta"`
-		SessionID   int64   `json:"session_id"`
+		Output      *string        `json:"output"`
+		OutputDelta *string        `json:"output_delta"`
+		SessionID   jsontext.Value `json:"session_id"`
 	}
 	if json.Unmarshal([]byte(result), &payload) == nil {
 		output := payload.Output
@@ -190,8 +193,13 @@ func callOutput(result string) ([]commitOutput, []string) {
 		if output != nil {
 			var running []string
 			process := ""
-			if payload.SessionID != 0 {
-				process = strconv.FormatInt(payload.SessionID, 10)
+			if err := json.Unmarshal(payload.SessionID, &process); err != nil {
+				var id int64
+				if json.Unmarshal(payload.SessionID, &id) == nil && id != 0 {
+					process = strconv.FormatInt(id, 10)
+				}
+			}
+			if process != "" {
 				running = append(running, process)
 			}
 			return []commitOutput{{text: *output, process: process}}, running
@@ -286,6 +294,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				pending[process] = singleOwner
 			}
 		}
+		summaryMatched := false
 		for _, output := range outputs {
 			owner := cmp.Or(pending[output.process], call)
 			if singlePoll {
@@ -302,6 +311,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				owner = original
 			}
 			for _, match := range commitSummaryRE.FindAllStringSubmatch(output.text, -1) {
+				summaryMatched = true
 				if seen[match[2]] {
 					continue
 				}
@@ -311,6 +321,42 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				link.Repository = commitRepository(owner.input, cwd)
 				links = append(links, link)
 			}
+		}
+		if (!isCommit || len(pollIDs) != 0) && !singlePoll || summaryMatched {
+			continue
+		}
+		quiet := commitQuietReadbackRE.FindStringSubmatch(signals.CommandText(cmp.Or(singleOwner, call).input))
+		if quiet == nil {
+			continue
+		}
+		for arg := range strings.FieldsSeq(quiet[1]) {
+			//nolint:gocritic // Git accepts unambiguous prefixes of these option names.
+			if arg == "-z" || arg == "--l" || len(arg) >= 4 && (strings.HasPrefix("--dry-run", arg) || strings.HasPrefix("--short", arg) || strings.HasPrefix("--porcelain", arg) || strings.HasPrefix("--long", arg) || strings.HasPrefix("--null", arg)) {
+				quiet = nil
+			}
+		}
+		if quiet == nil {
+			continue
+		}
+		var quietSHA, quietSubject string
+		var quietOwner commitCall
+		quietCount := 0
+		for _, output := range outputs {
+			for line := range strings.SplitSeq(output.text, "\n") {
+				sha, subject, _ := strings.Cut(line, " ")
+				if commitSHARE.MatchString(sha) {
+					quietSHA, quietSubject = sha, subject
+					quietOwner = cmp.Or(pending[output.process], singleOwner, call)
+					quietCount++
+				}
+			}
+		}
+		if quietCount == 1 && !seen[quietSHA] {
+			seen[quietSHA] = true
+			link := quietOwner.CommitLink
+			link.SHA, link.Branch, link.Subject = quietSHA, "", quietSubject
+			link.Repository = commitRepository(quietOwner.input, cwd)
+			links = append(links, link)
 		}
 	}
 	return links
@@ -338,8 +384,33 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		}
 		return rows.Err()
 	}
-	if err := load(`t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%'`); err != nil {
+	rows, err := tx.Query(`SELECT id, input_json FROM tool_calls
+ WHERE session_id=? AND (category='Bash' OR tool_name='wait')
+ AND input_json LIKE '%git%' AND input_json LIKE '%commit%'`, sessionID)
+	if err != nil {
 		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id, input string
+		if err := rows.Scan(&id, &input); err != nil {
+			return err
+		}
+		if invokesGitCommit(signals.CommandText(input)) {
+			ids = append(ids, id)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for chunk := range slices.Chunk(ids, maxSQLVars-1) {
+		placeholders, args := InPlaceholders(chunk)
+		if err := load(`t.id IN `+placeholders, args...); err != nil {
+			return err
+		}
 	}
 	if len(calls) == 0 {
 		var stored bool
@@ -365,8 +436,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		rows, err := tx.Query(`SELECT id, input_json, tool_name FROM tool_calls
  WHERE session_id=? AND input_json IS NOT NULL
  AND ((category='Bash' AND (tool_name='write_stdin' OR (tool_name='exec' AND input_json LIKE '%write_stdin%')))
- OR (tool_name='wait' AND input_json LIKE '%cell_id%'))
- AND NOT (input_json LIKE '%git%' AND input_json LIKE '%commit%')`, sessionID)
+ OR (tool_name='wait' AND input_json LIKE '%cell_id%'))`, sessionID)
 		if err != nil {
 			return err
 		}
@@ -376,6 +446,9 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			var id, input, tool string
 			if err := rows.Scan(&id, &input, &tool); err != nil {
 				return err
+			}
+			if invokesGitCommit(signals.CommandText(input)) {
+				continue
 			}
 			for _, process := range commitPollIDs(input, tool) {
 				if running[process] {
@@ -396,14 +469,14 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 					return err
 				}
 			}
-			slices.SortFunc(calls, func(a, b commitCall) int {
-				if order := cmp.Compare(a.MessageOrdinal, b.MessageOrdinal); order != 0 {
-					return order
-				}
-				return cmp.Compare(a.CallIndex, b.CallIndex)
-			})
 		}
 	}
+	slices.SortFunc(calls, func(a, b commitCall) int {
+		if order := cmp.Compare(a.MessageOrdinal, b.MessageOrdinal); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.CallIndex, b.CallIndex)
+	})
 	if _, err := tx.Exec(`DELETE FROM commit_links WHERE session_id=?`, sessionID); err != nil {
 		return err
 	}
