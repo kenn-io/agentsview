@@ -143,6 +143,7 @@ describe("SearchStore", () => {
     const status = vi.spyOn(SyncService, "getApiV1SyncStatus");
     const initialStatus = {
       last_sync: "2026-07-01T00:00:00Z",
+      sync_pending: false,
       archive_stale: false,
       startup_pending: false,
       stats: { total_sessions: 0, synced: 0, skipped: 0, failed: 0 },
