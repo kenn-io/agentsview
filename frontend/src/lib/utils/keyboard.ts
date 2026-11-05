@@ -167,9 +167,11 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       // The palette handles Escape after its nested popovers have had a
       // chance to claim it at document level.
       if (ui.activeModal === "commandPalette") return;
-      // An open menu claims Escape for itself (kit-ui dismisses it at
-      // document level); closing the session too would lose context.
-      if (document.querySelector('[role="menu"]')) return;
+      // An open kit-ui menu claims Escape for itself (it dismisses at
+      // document level); closing the session too would lose context. Match
+      // only kit-ui's own menu element: transcript HTML keeps role
+      // attributes, so a bare [role="menu"] can come from session content.
+      if (document.querySelector('.kit-menu__content[role="menu"]')) return;
       handleEscape();
       return;
     }

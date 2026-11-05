@@ -16,6 +16,7 @@
     TriangleAlertIcon,
   } from "../../icons.js";
   import { onDestroy, onMount, untrack } from "svelte";
+  import { MediaQuery } from "svelte/reactivity";
   import type { Session } from "../../api/types.js";
   import type {
     DbCaptureCoverageView,
@@ -928,6 +929,49 @@
     }
   }
 
+  // Above phone width the header is two rows: the title with its actions,
+  // then the session metadata. From 1100px the transcript controls join
+  // the title row; below that they start the metadata row. The markup
+  // follows these rows directly (instead of CSS order) so keyboard focus
+  // moves through the header in the order it reads. Keep the widths in
+  // step with the media queries in the style block.
+  const twoRowQuery = new MediaQuery("min-width: 641px");
+  const wideQuery = new MediaQuery("min-width: 1100px");
+  const twoRowHeader = $derived(twoRowQuery.current);
+  const wideHeader = $derived(wideQuery.current);
+
+  const PANE_GAP = 8;
+
+  // The transcript pane clips overflow, and side panels can make it
+  // narrower than a usage menu. Keep each menu inside the pane: as wide as
+  // it fits, right-aligned to its trigger when there is room, otherwise
+  // shifted left until it fits.
+  function keepInsidePane(menu: HTMLElement) {
+    const place = () => {
+      const anchor = menu.parentElement;
+      const pane = menu.closest(".session-breadcrumb");
+      if (!anchor || !pane) return;
+      menu.style.removeProperty("left");
+      menu.style.removeProperty("right");
+      menu.style.removeProperty("max-width");
+      // Phones pin the menu to the viewport instead.
+      if (getComputedStyle(menu).position !== "absolute") return;
+      const bounds = pane.getBoundingClientRect();
+      const trigger = anchor.getBoundingClientRect();
+      menu.style.maxWidth = `${Math.max(0, bounds.width - PANE_GAP * 2)}px`;
+      const width = menu.getBoundingClientRect().width;
+      const left = Math.max(
+        bounds.left + PANE_GAP,
+        Math.min(trigger.right - width, bounds.right - PANE_GAP - width),
+      );
+      menu.style.left = `${left - trigger.left}px`;
+      menu.style.right = "auto";
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }
+
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as Node;
     // Close actions menu
@@ -950,6 +994,227 @@
   onkeydown={handleKeydown}
   onclick={handleClickOutside}
 />
+
+<!-- The session's action groups render in one of two places so the
+     document (and Tab) order always follows the visual rows; see
+     twoRowHeader. -->
+{#snippet openGroup()}
+    {#if showDropdown}
+      <span class="open-group">
+        <button
+          class="resume-btn"
+          class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
+          class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
+          onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
+          title={canLaunch
+            ? m.session_breadcrumb_resume_session_in_terminal()
+            : m.session_breadcrumb_session_actions()}
+          aria-label={canLaunch
+            ? m.session_breadcrumb_resume_session()
+            : m.session_breadcrumb_session_actions()}
+        >
+          {#if openFeedback}
+            {#if openFeedbackKind === "error"}
+              <TriangleAlertIcon size="11" strokeWidth="2.2" aria-hidden="true" />
+            {:else}
+              <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+            {/if}
+            {openFeedback}
+          {:else}
+            {canLaunch
+              ? m.session_breadcrumb_resume()
+              : m.session_breadcrumb_open()}
+            <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
+          {/if}
+        </button>
+        {#if showOpenMenu}
+          <div class="open-menu">
+            {#if canLaunch}
+              {#each terminalOpeners as opener, i (opener.id)}
+                <button
+                  class="open-menu-item"
+                  onclick={() => handleResumeIn(opener)}
+                >
+                  <span class="open-menu-num">{i + 1}</span>
+                  <span class="open-menu-name">{opener.name}</span>
+                </button>
+              {/each}
+              <button class="open-menu-item" onclick={handleResumeDefault}>
+                <span class="open-menu-num">
+                  <SquareTerminalIcon size="10" strokeWidth="2" aria-hidden="true" />
+                </span>
+                <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
+              </button>
+              {#if codexLink}
+                <div class="open-menu-divider"></div>
+                <a
+                  class="open-menu-item"
+                  data-testid="codex-desktop-link"
+                  href={codexLink}
+                  title={m.session_breadcrumb_open_in_codex_desktop()}
+                >
+                  <span class="open-menu-num">
+                    <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  </span>
+                  <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
+                </a>
+              {/if}
+              {#if claudeLink}
+                <div class="open-menu-divider"></div>
+                <a
+                  class="open-menu-item"
+                  data-testid="claude-code-link"
+                  href={claudeLink}
+                  title={m.session_breadcrumb_open_in_claude_code()}
+                >
+                  <span class="open-menu-num">
+                    <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  </span>
+                  <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
+                </a>
+              {/if}
+            {/if}
+            {#if canCopyCommand}
+              {#if canLaunch}<div class="open-menu-divider"></div>{/if}
+              <button class="open-menu-item" onclick={handleCopyResumeCommand}>
+                <span class="open-menu-num">
+                  <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
+                </span>
+                <span class="open-menu-name">{m.session_breadcrumb_copy_command()}</span>
+              </button>
+            {/if}
+            {#if isLocal}
+            <button class="open-menu-item" onclick={handleCopyFilePath}>
+              <span class="open-menu-num">
+                <FileTextIcon size="10" strokeWidth="2" aria-hidden="true" />
+              </span>
+              <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
+            </button>
+            {#if editorOpeners.length > 0 || fileOpeners.length > 0}
+              <div class="open-menu-divider"></div>
+              <div class="open-menu-section">{m.session_breadcrumb_open_in()}</div>
+              {#each editorOpeners as opener (opener.id)}
+                <button
+                  class="open-menu-item"
+                  onclick={() => handleOpenIn(opener)}
+                >
+                  <span class="open-menu-num">
+                    <CodeIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  </span>
+                  <span class="open-menu-name">{opener.name}</span>
+                </button>
+              {/each}
+              {#each fileOpeners as opener (opener.id)}
+                <button
+                  class="open-menu-item"
+                  onclick={() => handleOpenIn(opener)}
+                >
+                  <span class="open-menu-num">
+                    <FolderIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  </span>
+                  <span class="open-menu-name">{opener.name}</span>
+                </button>
+              {/each}
+            {/if}
+            {/if}
+            {#if canLaunch && claudeDesktopOpener}
+              <div class="open-menu-divider"></div>
+              <button
+                class="open-menu-item"
+                onclick={() => handleResumeIn(claudeDesktopOpener)}
+              >
+                <span class="open-menu-num">
+                  <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                </span>
+                <span class="open-menu-name">Claude Desktop</span>
+              </button>
+            {/if}
+          </div>
+        {/if}
+      </span>
+    {/if}
+{/snippet}
+
+{#snippet sessionActions()}
+    <div class="actions-wrapper">
+      <button
+        class="link-btn"
+        class:link-btn--copied={copiedLinkId === session?.id}
+        title={m.session_breadcrumb_copy_link_to_session()}
+        onclick={copySessionLink}
+        aria-label={m.session_breadcrumb_copy_link_to_session()}
+      >
+        {#if copiedLinkId === session?.id}
+          <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
+        {:else}
+          <LinkIcon size="13" strokeWidth="2" aria-hidden="true" />
+        {/if}
+      </button>
+      <button
+        class="minimap-btn"
+        class:minimap-btn--active={ui.vitalsOpen}
+        title={ui.vitalsOpen
+          ? m.session_breadcrumb_hide_session_analysis()
+          : m.session_breadcrumb_show_session_analysis()}
+        onclick={() => ui.toggleVitals()}
+        aria-label={ui.vitalsOpen
+          ? m.session_breadcrumb_hide_session_analysis()
+          : m.session_breadcrumb_show_session_analysis()}
+      >
+        <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
+      </button>
+      <button
+        class="insight-btn"
+        title={m.insights_page_agent_analysis()}
+        aria-label={m.insights_page_agent_analysis()}
+        onclick={handleAgentAnalysis}
+      >
+        <LightbulbIcon size="13" strokeWidth="2" aria-hidden="true" />
+      </button>
+      <button
+        class="find-btn"
+        class:find-btn--active={inSessionSearch.isOpen}
+        title={m.session_breadcrumb_find_in_session_shortcut()}
+        onclick={() => inSessionSearch.toggle()}
+        aria-label={m.session_breadcrumb_find_in_session()}
+      >
+        <SearchIcon size="13" strokeWidth="2" aria-hidden="true" />
+      </button>
+      <button
+        class="actions-btn"
+        title={m.session_breadcrumb_session_actions()}
+        aria-label={m.session_breadcrumb_session_actions()}
+        bind:this={menuBtnEl}
+        onclick={toggleMenu}
+      >
+        <EllipsisVerticalIcon size="14" strokeWidth="2.4" aria-hidden="true" />
+      </button>
+      {#if menuOpen}
+        <div class="actions-menu" bind:this={menuEl}>
+          {#if insightGenerationAvailable}
+            <button
+              class="actions-menu-item"
+              onclick={handleToolEffectiveness}
+            >
+              {m.session_breadcrumb_tool_effectiveness()}
+            </button>
+          {/if}
+          <button
+            class="actions-menu-item"
+            onclick={startRename}
+          >
+            {m.session_breadcrumb_rename()}
+          </button>
+          <button
+            class="actions-menu-item danger"
+            onclick={handleDelete}
+          >
+            {m.session_breadcrumb_delete()}
+          </button>
+        </div>
+      {/if}
+    </div>
+{/snippet}
 
 <div class="session-breadcrumb">
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
@@ -989,6 +1254,21 @@
     <span class="breadcrumb-current">
       {session?.display_name ?? session?.project ?? ""}
     </span>
+  {/if}
+  {#if twoRowHeader && wideHeader && !ui.isMobileViewport}
+    <TranscriptControls />
+  {/if}
+  {#if session && twoRowHeader}
+    {@render openGroup()}
+    {@render sessionActions()}
+  {/if}
+  {#if twoRowHeader}
+    <span class="row-break" aria-hidden="true"></span>
+  {/if}
+  <!-- Outside the session check: the transcript controls must stay usable
+       when the session details fail to load but its messages do not. -->
+  {#if !ui.isMobileViewport && !(twoRowHeader && wideHeader)}
+    <TranscriptControls />
   {/if}
   {#if session}
     <span class="breadcrumb-meta">
@@ -1049,142 +1329,8 @@
       >
         {getGradeLabel(session.health_grade)}
       </button>
-      {#if !ui.isMobileViewport}
-        <TranscriptControls />
-      {/if}
-      {#if showDropdown}
-        <span class="open-group">
-          <button
-            class="resume-btn"
-            class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
-            class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
-            onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
-            title={canLaunch
-              ? m.session_breadcrumb_resume_session_in_terminal()
-              : m.session_breadcrumb_session_actions()}
-            aria-label={canLaunch
-              ? m.session_breadcrumb_resume_session()
-              : m.session_breadcrumb_session_actions()}
-          >
-            {#if openFeedback}
-              {#if openFeedbackKind === "error"}
-                <TriangleAlertIcon size="11" strokeWidth="2.2" aria-hidden="true" />
-              {:else}
-                <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
-              {/if}
-              {openFeedback}
-            {:else}
-              {canLaunch
-                ? m.session_breadcrumb_resume()
-                : m.session_breadcrumb_open()}
-              <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
-            {/if}
-          </button>
-          {#if showOpenMenu}
-            <div class="open-menu">
-              {#if canLaunch}
-                {#each terminalOpeners as opener, i (opener.id)}
-                  <button
-                    class="open-menu-item"
-                    onclick={() => handleResumeIn(opener)}
-                  >
-                    <span class="open-menu-num">{i + 1}</span>
-                    <span class="open-menu-name">{opener.name}</span>
-                  </button>
-                {/each}
-                <button class="open-menu-item" onclick={handleResumeDefault}>
-                  <span class="open-menu-num">
-                    <SquareTerminalIcon size="10" strokeWidth="2" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
-                </button>
-                {#if codexLink}
-                  <div class="open-menu-divider"></div>
-                  <a
-                    class="open-menu-item"
-                    data-testid="codex-desktop-link"
-                    href={codexLink}
-                    title={m.session_breadcrumb_open_in_codex_desktop()}
-                  >
-                    <span class="open-menu-num">
-                      <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
-                  </a>
-                {/if}
-                {#if claudeLink}
-                  <div class="open-menu-divider"></div>
-                  <a
-                    class="open-menu-item"
-                    data-testid="claude-code-link"
-                    href={claudeLink}
-                    title={m.session_breadcrumb_open_in_claude_code()}
-                  >
-                    <span class="open-menu-num">
-                      <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
-                  </a>
-                {/if}
-              {/if}
-              {#if canCopyCommand}
-                {#if canLaunch}<div class="open-menu-divider"></div>{/if}
-                <button class="open-menu-item" onclick={handleCopyResumeCommand}>
-                  <span class="open-menu-num">
-                    <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{m.session_breadcrumb_copy_command()}</span>
-                </button>
-              {/if}
-              {#if isLocal}
-              <button class="open-menu-item" onclick={handleCopyFilePath}>
-                <span class="open-menu-num">
-                  <FileTextIcon size="10" strokeWidth="2" aria-hidden="true" />
-                </span>
-                <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
-              </button>
-              {#if editorOpeners.length > 0 || fileOpeners.length > 0}
-                <div class="open-menu-divider"></div>
-                <div class="open-menu-section">{m.session_breadcrumb_open_in()}</div>
-                {#each editorOpeners as opener (opener.id)}
-                  <button
-                    class="open-menu-item"
-                    onclick={() => handleOpenIn(opener)}
-                  >
-                    <span class="open-menu-num">
-                      <CodeIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{opener.name}</span>
-                  </button>
-                {/each}
-                {#each fileOpeners as opener (opener.id)}
-                  <button
-                    class="open-menu-item"
-                    onclick={() => handleOpenIn(opener)}
-                  >
-                    <span class="open-menu-num">
-                      <FolderIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{opener.name}</span>
-                  </button>
-                {/each}
-              {/if}
-              {/if}
-              {#if canLaunch && claudeDesktopOpener}
-                <div class="open-menu-divider"></div>
-                <button
-                  class="open-menu-item"
-                  onclick={() => handleResumeIn(claudeDesktopOpener)}
-                >
-                  <span class="open-menu-num">
-                    <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">Claude Desktop</span>
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </span>
+      {#if !twoRowHeader}
+        {@render openGroup()}
       {/if}
       {#if session.id}
         {@const rawId = sessionDisplayId(session.id)}
@@ -1222,7 +1368,7 @@
             })}
           </summary>
           {#if usageBreakdownOpen}
-            <div class="usage-breakdown-menu">
+            <div class="usage-breakdown-menu" {@attach keepInsidePane}>
               {#if usageBreakdownLoading}
                 <div class="usage-breakdown-status">
                   {m.session_breadcrumb_usage_breakdown_loading()}
@@ -1284,7 +1430,7 @@
           {#if planUsageOpen}
             {@const rootId = planUsageDisplay.countedUnder}
             {@const showFiveHour = planUsageDisplay.groups.some((g) => g.fiveHour)}
-            <div class="usage-breakdown-menu plan-usage-menu">
+            <div class="usage-breakdown-menu plan-usage-menu" {@attach keepInsidePane}>
               {#if rootId}
                 <a
                   class="plan-usage-headline plan-usage-root"
@@ -1357,84 +1503,9 @@
           title={mainModel}
         ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
       {/if}
-      <div class="actions-wrapper">
-        <button
-          class="link-btn"
-          class:link-btn--copied={copiedLinkId === session?.id}
-          title={m.session_breadcrumb_copy_link_to_session()}
-          onclick={copySessionLink}
-          aria-label={m.session_breadcrumb_copy_link_to_session()}
-        >
-          {#if copiedLinkId === session?.id}
-            <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
-          {:else}
-            <LinkIcon size="13" strokeWidth="2" aria-hidden="true" />
-          {/if}
-        </button>
-        <button
-          class="minimap-btn"
-          class:minimap-btn--active={ui.vitalsOpen}
-          title={ui.vitalsOpen
-            ? m.session_breadcrumb_hide_session_analysis()
-            : m.session_breadcrumb_show_session_analysis()}
-          onclick={() => ui.toggleVitals()}
-          aria-label={ui.vitalsOpen
-            ? m.session_breadcrumb_hide_session_analysis()
-            : m.session_breadcrumb_show_session_analysis()}
-        >
-          <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <button
-          class="insight-btn"
-          title={m.insights_page_agent_analysis()}
-          aria-label={m.insights_page_agent_analysis()}
-          onclick={handleAgentAnalysis}
-        >
-          <LightbulbIcon size="13" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <button
-          class="find-btn"
-          class:find-btn--active={inSessionSearch.isOpen}
-          title={m.session_breadcrumb_find_in_session_shortcut()}
-          onclick={() => inSessionSearch.toggle()}
-          aria-label={m.session_breadcrumb_find_in_session()}
-        >
-          <SearchIcon size="13" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <button
-          class="actions-btn"
-          title={m.session_breadcrumb_session_actions()}
-          aria-label={m.session_breadcrumb_session_actions()}
-          bind:this={menuBtnEl}
-          onclick={toggleMenu}
-        >
-          <EllipsisVerticalIcon size="14" strokeWidth="2.4" aria-hidden="true" />
-        </button>
-        {#if menuOpen}
-          <div class="actions-menu" bind:this={menuEl}>
-            {#if insightGenerationAvailable}
-              <button
-                class="actions-menu-item"
-                onclick={handleToolEffectiveness}
-              >
-                {m.session_breadcrumb_tool_effectiveness()}
-              </button>
-            {/if}
-            <button
-              class="actions-menu-item"
-              onclick={startRename}
-            >
-              {m.session_breadcrumb_rename()}
-            </button>
-            <button
-              class="actions-menu-item danger"
-              onclick={handleDelete}
-            >
-              {m.session_breadcrumb_delete()}
-            </button>
-          </div>
-        {/if}
-      </div>
+      {#if !twoRowHeader}
+        {@render sessionActions()}
+      {/if}
     </span>
   {/if}
 </div>
@@ -2155,17 +2226,18 @@
   }
 
   /* Above phone width the strip becomes two lines: the session title with
-     its actions, then the session metadata. The meta wrapper dissolves so
-     its children can sit on either line; order and a full-width break do
-     the placement. Phones keep the single scrolling strip. */
+     its actions, then the session metadata. The markup already lists the
+     items row by row (see twoRowHeader); the meta wrapper dissolves so its
+     children wrap as header items, and .row-break ends the first row.
+     Phones keep the single scrolling strip. */
   /* With a mouse, header controls stay 26px tall so the two-line header
      stays close to a single toolbar's height. Touch keeps 44px targets. */
   @media (min-width: 641px) and (pointer: fine) {
-    .breadcrumb-meta > :global(.transcript-controls) {
+    .session-breadcrumb > :global(.transcript-controls) {
       --kit-control-height: 26px;
     }
 
-    .breadcrumb-meta > :global(.transcript-controls .control-btn) {
+    .session-breadcrumb > :global(.transcript-controls .control-btn) {
       height: 26px;
     }
   }
@@ -2181,19 +2253,22 @@
       align-content: center;
     }
 
-    .session-breadcrumb::after {
-      content: "";
-      order: 2;
+    .row-break {
       flex-basis: 100%;
       height: 0;
     }
 
-    .breadcrumb-meta {
-      display: contents;
+    /* In a very narrow pane the buttons wrap below the View trigger rather
+       than run past the pane's clipped edge. */
+    .session-breadcrumb > :global(.transcript-controls) {
+      flex-wrap: wrap;
+      flex-shrink: 1;
+      min-width: 0;
+      max-width: 100%;
     }
 
-    .breadcrumb-meta > :global(*) {
-      order: 3;
+    .breadcrumb-meta {
+      display: contents;
     }
 
     .breadcrumb-link,
@@ -2208,13 +2283,7 @@
       line-height: 22px;
     }
 
-    .breadcrumb-meta > :global(.transcript-controls),
-    .breadcrumb-meta > .open-group,
-    .breadcrumb-meta > .actions-wrapper {
-      order: 1;
-    }
-
-    .breadcrumb-meta > :global(.transcript-controls) {
+    .session-breadcrumb > :global(.transcript-controls) {
       margin-left: auto;
       margin-right: 6px;
     }
@@ -2230,24 +2299,14 @@
   }
 
   /* Below 1100px the title, transcript controls, and actions do not fit on
-     one row. Keep the title and actions on the first row, and start the
-     second row with the transcript controls, ahead of the metadata. */
+     one row. The title and actions keep the first row, and the transcript
+     controls start the second, ahead of the metadata. */
   @media (min-width: 641px) and (max-width: 1099px) {
-    .breadcrumb-meta > :global(*) {
-      order: 4;
-    }
-
-    .breadcrumb-meta > .open-group,
-    .breadcrumb-meta > .actions-wrapper {
-      order: 1;
-    }
-
-    .breadcrumb-meta > .open-group {
+    .session-breadcrumb > .open-group {
       margin-left: auto;
     }
 
-    .breadcrumb-meta > :global(.transcript-controls) {
-      order: 3;
+    .session-breadcrumb > :global(.transcript-controls) {
       margin-left: 0;
       margin-right: 8px;
     }

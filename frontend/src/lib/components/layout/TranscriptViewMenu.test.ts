@@ -11,6 +11,10 @@ function trigger(): HTMLButtonElement {
   return document.querySelector<HTMLButtonElement>(".view-trigger")!;
 }
 
+function triggerText(): string {
+  return trigger().querySelector(".view-trigger-text")?.textContent ?? "";
+}
+
 async function open(): Promise<void> {
   trigger().click();
   await tick();
@@ -46,10 +50,10 @@ describe("TranscriptViewMenu", () => {
 
   it("names the current layout on the trigger", async () => {
     await tick();
-    expect(trigger().textContent).toContain("View: Default");
+    expect(triggerText()).toBe("View: Default");
     ui.setLayout("skim");
     await tick();
-    expect(trigger().textContent).toContain("View: Skim");
+    expect(triggerText()).toBe("View: Skim");
   });
 
   it("lists every layout with a description and switches layout", async () => {
@@ -57,7 +61,9 @@ describe("TranscriptViewMenu", () => {
     for (const name of ["Default", "Compact", "Stream", "Skim"]) {
       expect(item("menuitemradio", name)).toBeDefined();
     }
-    expect(item("menuitemradio", "Skim").textContent).toContain("One line per message and tool call");
+    expect(item("menuitemradio", "Skim").textContent).toContain(
+      "One line per message and tool call",
+    );
     expect(item("menuitemradio", "Default").getAttribute("aria-checked")).toBe("true");
 
     item("menuitemradio", "Skim").click();
@@ -89,19 +95,34 @@ describe("TranscriptViewMenu", () => {
 
   it("names prompts-only mode on the trigger and marks hidden blocks", async () => {
     await tick();
-    expect(trigger().textContent).not.toContain("Prompts and answers");
+    expect(triggerText()).toBe("View: Default");
+    expect(trigger().getAttribute("aria-label")).toBe("Transcript view: Default");
     ui.setTranscriptMode("focused");
     await tick();
-    expect(trigger().textContent).toContain("View: Default · Prompts and answers");
+    expect(triggerText()).toBe("View: Default · Prompts and answers");
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Transcript view: Default, prompts and answers",
+    );
     expect(trigger().classList.contains("filtered")).toBe(false);
+    expect(trigger().querySelector(".view-filter-dot.shown")).toBeNull();
     ui.toggleBlock("thinking");
     await tick();
     expect(trigger().classList.contains("filtered")).toBe(true);
-    expect(trigger().querySelector(".view-filter-dot")).not.toBeNull();
+    expect(trigger().querySelector(".view-filter-dot.shown")).not.toBeNull();
+  });
+
+  it("names the content mode in the accessible name in other locales", async () => {
+    setLocale("es");
+    ui.setTranscriptMode("focused");
+    await tick();
+    expect(trigger().getAttribute("aria-label")).toContain("solicitudes y respuestas");
   });
 
   it("closes on Escape without closing the open session", async () => {
-    const unregister = registerShortcuts({ navigateMessage: () => {}, navigateUserPrompt: () => {} });
+    const unregister = registerShortcuts({
+      navigateMessage: () => {},
+      navigateUserPrompt: () => {},
+    });
     sessions.activeSessionId = "s1";
     try {
       await open();

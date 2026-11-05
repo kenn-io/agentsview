@@ -59,6 +59,7 @@
   "header_view_trigger": "表示: {layout}",
   "header_view_trigger_focused": "表示: {layout} · プロンプトと回答",
   "header_view_trigger_label": "トランスクリプト表示: {layout}",
+  "header_view_trigger_label_focused": "トランスクリプト表示: {layout}、プロンプトと回答",
   "header_view_trigger_title": "このトランスクリプトのレイアウト、内容、ブロックの種類を選択します",
   "header_view_menu_label": "トランスクリプト表示",
   "header_view_layout_heading": "レイアウト",
