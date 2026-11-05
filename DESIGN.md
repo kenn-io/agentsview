@@ -112,6 +112,10 @@ App-level glue that remains local:
   contract. Dependency updates must pass the zoom menu geometry coverage in
   `frontend/e2e/appearance-a11y.spec.ts`. The date picker retains its current
   scale until kit-ui can size its fixed-width panel for zoom.
+- Resizable tables use kit-ui `VirtualTable` with `TableHeaderCell`. kit-ui
+  reports column widths but does not store them, so pages that offer resizing
+  persist the widths they care about (Recent edits keeps them in
+  `localStorage` through `recentedits/columnWidths.ts`).
 
 Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
 days inclusive of today. `presetRange()` (dateRangeSelector.ts) and
@@ -127,6 +131,8 @@ props or forked styles.
 
 - `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
 - `CodeBlock` forwards `copyLabel` but keeps CopyButton's English "Copied" label.
+- The column resize handle's label ("Resize the {label} column") is hardcoded
+  English; needs a label prop.
 - `TopBar` cannot express "no active tab"; on routes that are not tabs
   (settings), it falls back to the first tab. Until the pin includes a fix,
   `AppHeader.svelte` corrects the result with the temporary
