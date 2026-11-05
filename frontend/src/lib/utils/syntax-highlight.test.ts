@@ -25,35 +25,9 @@ describe("highlighting worker", () => {
     vi.resetModules();
     const { highlightToHtml } = await import("./syntax-highlight.js");
 
-    const code = "x\n".repeat(800) + "x";
+    const code = "x\n".repeat(HIGHLIGHT_MAX_LINES) + "x";
     await expect(highlightToHtml(code, "typescript")).resolves.toBeNull();
     expect(Worker).not.toHaveBeenCalled();
-  });
-
-  it("posts code to the worker and returns its reply", async () => {
-    const worker = {
-      onmessage: null as ((event: MessageEvent) => void) | null,
-      postMessage: vi.fn(({ id }: { id: number }) => {
-        queueMicrotask(() =>
-          worker.onmessage!(new MessageEvent("message", { data: { id, html: "worker result" } })),
-        );
-      }),
-    };
-    vi.stubGlobal(
-      "Worker",
-      vi.fn(function () {
-        return worker;
-      }),
-    );
-    vi.resetModules();
-    const { highlightToHtml } = await import("./syntax-highlight.js");
-
-    await expect(highlightToHtml("const x = 1;", "ts")).resolves.toBe("worker result");
-    expect(worker.postMessage).toHaveBeenCalledWith({
-      id: expect.any(Number),
-      code: "const x = 1;",
-      lang: "typescript",
-    });
   });
 
   it.each(["error", "messageerror"])(
@@ -109,9 +83,12 @@ describe("highlighting worker", () => {
     vi.resetModules();
     const { highlightToHtml } = await import("./syntax-highlight.js");
 
-    const first = highlightToHtml("first", "typescript");
+    const first = highlightToHtml("first", "ts");
     const second = highlightToHtml("second", "typescript");
-    expect(requests).toHaveLength(2);
+    expect(requests).toEqual([
+      { id: expect.any(Number), code: "first", lang: "typescript" },
+      { id: expect.any(Number), code: "second", lang: "typescript" },
+    ]);
     for (const { id, code } of requests.toReversed()) {
       worker.onmessage!(new MessageEvent("message", { data: { id, html: code } }));
     }
