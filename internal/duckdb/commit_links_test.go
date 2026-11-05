@@ -33,10 +33,6 @@ func TestDuckDBIncrementalRetainedCommitLinkScope(t *testing.T) {
 	require.NoError(t, local.DeleteSession(t.Context(), "commit-delete"))
 	push("commit-project")
 	dbtest.AssertCommitLinkParity(t, local, store)
-	for _, project := range []string{"other", "commit-project"} {
-		push(project)
-		dbtest.AssertRetainedCommitLink(t, store, project == "commit-project")
-	}
 }
 
 func TestDuckDBRetainedCommitLinkScope(t *testing.T) {

@@ -1579,15 +1579,20 @@ output. Quiet commits and summaries with shorter SHAs have no link. Older Codex
 commands stored as argument arrays are unsupported. Codex output received
 through a later `write_stdin` poll links to the original commit call when its
 process ID matches. Polls with no originating commit call produce no links.
-Mixed commit-and-poll calls require an output process ID tied to a commit call.
-Each session records a SHA once, at its first matching call.
+Code-mode batches with several tool calls create no new commit links because
+their output and working directories cannot be assigned to one execution. A
+mixed batch can finish a commit started in an earlier call only when the output
+process ID identifies that call. Each session records a SHA once, at its first
+matching call. Decorated log lines are excluded. A custom log format that prints
+one bare ref in the same shape as a commit summary can still create a link when
+the call also invokes `git commit`; this is a known limitation.
 
 Repository paths use the tool's `workdir` or `cwd`, or the session's working
 directory. The last `cd` before the first commit invocation adjusts that base,
 and `git -C` overrides it. Relative paths join onto the base using the
 transcript's path style; `~` paths stay literal. A `cd` after that invocation is
-ignored. A call that commits in two repositories records the first directory
-for both commits.
+ignored. A single shell execution that commits in two repositories records the
+first directory for both commits.
 
 Archives using `archive_content = "transcripts"` keep trailer links but no
 transcript links; `"usage"` archives keep neither.

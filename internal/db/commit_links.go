@@ -31,7 +31,7 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
@@ -152,29 +152,25 @@ func commitRepository(input, cwd string) string {
 }
 
 func commitCommandText(input string) string {
-	command := signals.CommandText(input)
-	if !jsontext.Value(input).IsValid() {
-		var commands []string
-		for _, match := range commitCommandRE.FindAllStringSubmatch(input, -1) {
-			literal := match[1]
-			var decoded strings.Builder
-			for rest := literal[1 : len(literal)-1]; rest != ""; {
-				r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
-				if err != nil {
-					break
-				}
-				decoded.WriteRune(r)
-				rest = tail
-				if rest == "" {
-					commands = append(commands, decoded.String())
-				}
-			}
-		}
-		if len(commands) > 0 {
-			command = strings.Join(commands, "\n")
-		}
+	if jsontext.Value(input).IsValid() {
+		return signals.CommandText(input)
 	}
-	return command
+	// A batch's output and process IDs do not identify which new call owns them.
+	matches := commitCommandRE.FindAllStringSubmatch(input, -1)
+	if len(matches) != 1 || commitPollRE.MatchString(input) {
+		return ""
+	}
+	literal := matches[0][1]
+	var decoded strings.Builder
+	for rest := literal[1 : len(literal)-1]; rest != ""; {
+		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+		if err != nil {
+			return ""
+		}
+		decoded.WriteRune(r)
+		rest = tail
+	}
+	return decoded.String()
 }
 
 type commitCall struct {
@@ -285,7 +281,9 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		pollIDs := commitPollIDs(call.input, call.toolName)
 		if isCommit {
 			for _, process := range running {
-				pending[process] = cmp.Or(pending[process], call)
+				if !slices.Contains(pollIDs, process) {
+					pending[process] = call
+				}
 			}
 		} else if len(pollIDs) == 0 {
 			continue
@@ -294,8 +292,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || strings.Count(call.input, "tools.") == 1)
 		if singlePoll {
 			var ok bool
-			singleOwner, ok = pending[pollIDs[0]]
-			if !ok {
+			if singleOwner, ok = pending[pollIDs[0]]; !ok {
 				continue
 			}
 			delete(pending, pollIDs[0])
@@ -313,11 +310,10 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				if !isCommit && !slices.Contains(pollIDs, pollID) {
 					continue
 				}
-				original, ok := pending[pollID]
-				if !ok {
+				var ok bool
+				if owner, ok = pending[pollID]; !ok {
 					continue
 				}
-				owner = original
 			}
 			for _, match := range commitSummaryRE.FindAllStringSubmatch(output.text, -1) {
 				if seen[match[2]] {
@@ -506,7 +502,7 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 // docs/internal/pando-adaptation.md for attribution and changes.
 const commitUserPrompt = `m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''`
 
-const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?)),
+var commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?)),
  resolved_trailers AS (
  SELECT t.*,o.session_id AS owner_id,
  ROW_NUMBER() OVER (PARTITION BY o.session_id,t.sha ORDER BY t.session_id) AS owner_rank
@@ -526,6 +522,7 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
  AND (l.source='transcript' OR julianday(m.timestamp)<=julianday(l.committed_at)) AND ` + commitUserPrompt + `
+ AND ` + SystemPrefixSQL("m.content", "m.role") + `
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id))
  -- Trailers first stored after session deletion stay hidden because no project survives to scope them.
