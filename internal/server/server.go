@@ -1001,12 +1001,9 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
-			if !probe && s.ingestionFreshness != nil {
-				if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/sync" || r.URL.Path == "/api/v1/resync") {
-					pending = s.ingestionFreshness.Pending()
-				} else {
-					pending = !s.ingestionFreshness.EnsureFresh(r.Context())
-				}
+			if !probe && s.ingestionFreshness != nil &&
+				!(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/sync" || r.URL.Path == "/api/v1/resync")) {
+				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
 			if !probe && (s.archiveStale() || pending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")

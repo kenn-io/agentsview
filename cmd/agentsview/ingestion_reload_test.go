@@ -578,6 +578,7 @@ func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
 				searchIngestionArchive(t, ts.URL, "morning")
 			} else {
 				assert.EqualValues(t, 1, calls.Load(), "the requested pass also satisfies idle catch-up")
+				assert.Empty(t, response.Header.Get(apiclient.ArchiveStaleHeader), "completed sync must report current freshness")
 			}
 			assert.True(t, sessionImported(t, database, "gemini:morning"))
 			assert.False(t, ingestion.Pending())
