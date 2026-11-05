@@ -223,7 +223,7 @@
 
   function needsVisibleHydration(item: DisplayItem): boolean {
     const session = sessionForItem(item);
-    if (!session?.is_index_only) return false;
+    if (!session?.is_index_only || sessions.details.has(session.id)) return false;
     return !session.display_name;
   }
 

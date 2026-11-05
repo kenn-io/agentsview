@@ -6,6 +6,7 @@ import SessionList from "./SessionList.svelte";
 import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
+import { SessionsService } from "../../api/generated/index.js";
 import { starred } from "../../stores/starred.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { m, setLocale } from "../../i18n/index.js";
@@ -331,6 +332,7 @@ describe("SessionList visible hydration", () => {
         return 1;
       });
     sessions.sessions = [];
+    sessions.details.clear();
     sessions.activeSessionId = null;
     sessions.nextCursor = null;
     sessions.loading = false;
@@ -376,6 +378,28 @@ describe("SessionList visible hydration", () => {
       Array.from({ length: expected }, (_, i) => `s${i}`),
       sessions.sidebarIndexVersion,
     );
+  });
+
+  it("paints stored titles immediately after an identical index reload", async () => {
+    const row = { ...makeSession({ id: "reload-row" }), is_teammate: false };
+    vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex").mockResolvedValue({
+      sessions: [row],
+      total: 1,
+    });
+    const getDetail = vi
+      .spyOn(SessionsService, "getApiV1SessionsById")
+      .mockResolvedValueOnce(makeSession({ id: "reload-row", first_message: "Saved title" }))
+      .mockReturnValue(new Promise(() => {}));
+    await sessions.load();
+    await sessions.hydrateVisibleSessions(["reload-row"]);
+    await sessions.load();
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    await tick();
+
+    expect(getDetail).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Saved title");
   });
 
   it("holds first visible index-only rows until initial hydration resolves", async () => {
