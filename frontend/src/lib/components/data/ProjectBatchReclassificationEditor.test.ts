@@ -134,7 +134,7 @@ describe("ProjectBatchReclassificationEditor", () => {
       });
       await flush();
       await fireEvent.click(screen.getByTitle("Project"));
-      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview 20" }));
       await vi.advanceTimersByTimeAsync(300);
       await flush();
       expect(screen.getByText(expected)).toBeTruthy();
@@ -160,7 +160,7 @@ describe("ProjectBatchReclassificationEditor", () => {
     expect(document.body.textContent).toContain("/worktrees/source-gamma");
 
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview 20" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
 
@@ -219,7 +219,7 @@ describe("ProjectBatchReclassificationEditor", () => {
     });
     await flush();
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview 20" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     expect(screen.getByText("3 sessions matched")).toBeTruthy();
@@ -262,7 +262,7 @@ describe("ProjectBatchReclassificationEditor", () => {
       });
       await flush();
       await fireEvent.click(screen.getByTitle("Project"));
-      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview 20" }));
       await vi.advanceTimersByTimeAsync(300);
       expect(screen.getByText("1 session matched")).toBeTruthy();
       if (when === "before save") changed = true;
@@ -318,7 +318,7 @@ describe("ProjectBatchReclassificationEditor", () => {
       });
       await flush();
       await fireEvent.click(screen.getByTitle("Project"));
-      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview 20" }));
       await vi.advanceTimersByTimeAsync(300);
       await fireEvent.click(screen.getByRole("button", { name: "Save 2 corrections" }));
       await flush();
@@ -356,7 +356,7 @@ describe("ProjectBatchReclassificationEditor", () => {
     });
     await flush();
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview 20" }));
     await vi.advanceTimersByTimeAsync(300);
     await fireEvent.click(screen.getByRole("button", { name: "Save 3 corrections" }));
     await flush();

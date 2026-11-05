@@ -1,0 +1,72 @@
+<script lang="ts">
+  import type { Snippet } from "svelte";
+
+  interface Props {
+    /** Short lead phrase, rendered in primary text before the body. */
+    title?: string;
+    /** Explanation text; use `children` instead for markup. */
+    description?: string;
+    /** Optional small neutral glyph, typically a 16px lucide icon. */
+    icon?: Snippet;
+    children?: Snippet;
+    role?: "status" | "note" | "alert";
+    class?: string;
+  }
+
+  let {
+    title = undefined,
+    description = undefined,
+    icon = undefined,
+    children = undefined,
+    role = undefined,
+    class: className = "",
+  }: Props = $props();
+</script>
+
+<!-- One inline block for read-only, unavailable, and empty-with-explanation
+     states on library pages: a muted surface, secondary body text, and an
+     optional neutral icon. It sits at the top of the content area, so every
+     page shows its state in the same place. -->
+<div class="state-notice {className}" {role}>
+  {#if icon}
+    <span class="state-notice__icon" aria-hidden="true">{@render icon()}</span>
+  {/if}
+  <p class="state-notice__body">
+    {#if title}<strong class="state-notice__title">{title}</strong>{/if}
+    {#if description}<span>{description}</span>{/if}
+    {#if children}{@render children()}{/if}
+  </p>
+</div>
+
+<style>
+  .state-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    padding: 10px 12px;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-inset);
+    color: var(--text-secondary);
+  }
+
+  .state-notice__icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    margin-top: 1px;
+    color: var(--text-muted);
+  }
+
+  .state-notice__body {
+    margin: 0;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .state-notice__title {
+    margin-right: 0.35em;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+</style>

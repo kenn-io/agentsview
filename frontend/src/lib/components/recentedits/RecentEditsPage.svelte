@@ -9,6 +9,8 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { formatRelativeTime } from "../../utils/format.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import StateNotice from "../shared/StateNotice.svelte";
   import { LatestRead } from "../../utils/latest-read.js";
 
   interface Edit {
@@ -138,18 +140,18 @@
 </script>
 
 <div class="recent-edits-page">
-  <div class="re-header">
-    <PencilIcon size="18" strokeWidth="2" aria-hidden="true" />
-    <h2>{m.recent_edits_title()}</h2>
-    <button
-      class="re-refresh"
-      onclick={refresh}
-      disabled={loading}
-      title={m.recent_edits_refresh()}
-    >
-      {m.recent_edits_refresh()}
-    </button>
-  </div>
+  <LibraryPageHeader title={m.recent_edits_title()}>
+    {#snippet actions()}
+      <button
+        class="re-refresh"
+        onclick={refresh}
+        disabled={loading}
+        title={m.recent_edits_refresh()}
+      >
+        {m.recent_edits_refresh()}
+      </button>
+    {/snippet}
+  </LibraryPageHeader>
 
   <div class="re-toolbar">
     <ProjectTypeahead
@@ -171,7 +173,11 @@
   {#if loading && files.length === 0}
     <div class="re-loading">{m.recent_edits_loading()}</div>
   {:else if files.length === 0}
-    <div class="re-empty">{m.recent_edits_empty()}</div>
+    <StateNotice class="re-empty" description={m.recent_edits_empty()}>
+      {#snippet icon()}
+        <PencilIcon size="16" strokeWidth="2" />
+      {/snippet}
+    </StateNotice>
   {:else}
     <div class="re-list">
       {#each files as f (key(f))}
@@ -232,22 +238,6 @@
     padding: 28px 24px;
   }
 
-  .re-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: 16px;
-    color: var(--text-muted);
-  }
-
-  .re-header h2 {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-    flex: 1;
-  }
-
   .re-refresh {
     font-size: 11px;
     font-weight: 500;
@@ -287,13 +277,6 @@
     color: var(--text-muted);
     padding: 40px 0;
     font-size: 13px;
-  }
-
-  .re-empty {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 60px 20px;
-    font-size: 14px;
   }
 
   /* One list with hairline rows, not a stack of cards. */

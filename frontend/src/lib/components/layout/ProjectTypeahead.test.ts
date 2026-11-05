@@ -4,6 +4,7 @@ import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, unmount } from "svelte";
 import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
 import { m } from "../../i18n/index.js";
+import { formatCount } from "../../utils/format.js";
 import ProjectTypeahead from "./ProjectTypeahead.svelte";
 
 const projects: ProjectInfo[] = [
@@ -35,7 +36,7 @@ describe("ProjectTypeahead", () => {
     const options = screen.getAllByRole("option");
     expect(options.map((option) => option.textContent?.trim())).toEqual([
       m.shared_all_projects(),
-      "repo-a (2)",
+      expect.stringMatching(/^repo-a\s+2$/),
     ]);
 
     await fireEvent.mouseDown(options[0]!);
@@ -46,6 +47,29 @@ describe("ProjectTypeahead", () => {
     expect(onselect).toHaveBeenLastCalledWith("repo-a");
   });
 
+  it("shows the session count in a trailing lane apart from the project name", async () => {
+    component = mount(ProjectTypeahead, {
+      target: document.body,
+      props: {
+        projects: [{ name: "a-very-long-project-name", session_count: 1234 }],
+        value: "",
+        onselect: vi.fn(),
+        includeAll: false,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button"));
+
+    const option = screen.getByRole("option");
+    // The name lane truncates on its own, so a long name never hides the count.
+    expect(option.querySelector(".kit-typeahead__option-label")?.textContent?.trim()).toBe(
+      "a-very-long-project-name",
+    );
+    expect(option.querySelector(".kit-typeahead__option-meta")?.textContent?.trim()).toBe(
+      formatCount(1234),
+    );
+  });
+
   it("keeps a nonempty external value selected", async () => {
     component = mount(ProjectTypeahead, {
       target: document.body,
@@ -54,7 +78,7 @@ describe("ProjectTypeahead", () => {
 
     await fireEvent.click(screen.getByRole("button"));
 
-    expect(screen.getByRole("option", { name: "repo-a (2)" }).getAttribute("aria-selected")).toBe(
+    expect(screen.getByRole("option", { name: "repo-a 2" }).getAttribute("aria-selected")).toBe(
       "true",
     );
     expect(
@@ -76,7 +100,7 @@ describe("ProjectTypeahead", () => {
     await fireEvent.click(screen.getByRole("button"));
 
     expect(screen.queryByRole("option", { name: m.shared_all_projects() })).toBeNull();
-    expect(screen.getByRole("option", { name: "repo-a (2)" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "repo-a 2" })).toBeTruthy();
   });
 
   it("commits a nonempty custom project alongside partial matches", async () => {
@@ -97,7 +121,7 @@ describe("ProjectTypeahead", () => {
     const input = screen.getByRole("combobox");
     await fireEvent.input(input, { target: { value: "repo" } });
 
-    expect(screen.getByRole("option", { name: "repo-a (2)" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "repo-a 2" })).toBeTruthy();
     const custom = screen.getByRole("option", { name: 'Use project "repo"' });
     await fireEvent.mouseDown(custom);
     expect(onselect).toHaveBeenCalledWith("repo");

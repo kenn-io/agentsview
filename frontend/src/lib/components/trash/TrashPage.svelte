@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { EmptyState } from "@kenn-io/kit-ui";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import StateNotice from "../shared/StateNotice.svelte";
   import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
@@ -84,28 +85,32 @@
 <div class="trash-page">
   <!-- The title stays visible in every state, like the other library
        pages; the count and Empty trash appear only with deleted sessions. -->
-  <div class="trash-header">
-    <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
-    <h2>{m.trash_title()}</h2>
-    {#if !loading && trashedSessions.length > 0}
-      <span class="trash-count">{trashedSessions.length}</span>
-      <button
-        class="empty-all-btn"
-        onclick={emptyAll}
-        disabled={emptying}
-      >
-        {emptying ? m.trash_emptying() : m.trash_empty_trash()}
-      </button>
-    {/if}
-  </div>
+  <LibraryPageHeader title={m.trash_title()}>
+    {#snippet trailing()}
+      {#if !loading && trashedSessions.length > 0}
+        <span class="trash-count">{trashedSessions.length}</span>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if !loading && trashedSessions.length > 0}
+        <button
+          class="empty-all-btn"
+          onclick={emptyAll}
+          disabled={emptying}
+        >
+          {emptying ? m.trash_emptying() : m.trash_empty_trash()}
+        </button>
+      {/if}
+    {/snippet}
+  </LibraryPageHeader>
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
-    <EmptyState title={m.trash_empty()} description={m.trash_empty_desc()}>
+    <StateNotice title={m.trash_empty()} description={m.trash_empty_desc()}>
       {#snippet icon()}
-        <TrashIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+        <TrashIcon size="16" strokeWidth="2" />
       {/snippet}
-    </EmptyState>
+    </StateNotice>
   {:else}
 
     <div class="trash-list">
@@ -155,35 +160,13 @@
     padding: 28px 24px;
   }
 
-  .trash-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: 16px;
-  }
-
-  :global(.trash-icon) {
-    color: var(--text-muted);
-  }
-
-  .trash-header h2 {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-  }
-
   .trash-count {
-    background: var(--text-muted);
-    color: white;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
   }
 
   .empty-all-btn {
-    margin-left: auto;
     font-size: 11px;
     font-weight: 500;
     color: var(--accent-red, #e55);

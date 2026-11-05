@@ -9,6 +9,7 @@
   import { sync } from "../../stores/sync.svelte.js";
   import GeneratedInsightsPanel from "./GeneratedInsightsPanel.svelte";
   import RecallCorpusPanel from "./RecallCorpusPanel.svelte";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
 
   type RecallTab = "corpus" | "generated";
 
@@ -47,20 +48,23 @@
 </script>
 
 <div class="recall-page">
-  <header class="recall-workspace-header">
-    <div>
-      <h1>{m.recall_page_title()}</h1>
-      <p>{m.recall_page_workspace_subtitle()}</p>
-    </div>
-    {#if tabOptions.length > 1}
-      <SegmentedControl
-        options={tabOptions}
-        value={selectedTab}
-        ariaLabel={m.recall_page_tabs_label()}
-        onchange={selectTab}
-      />
-    {/if}
-  </header>
+  <div class="recall-workspace-header">
+    <LibraryPageHeader
+      title={m.recall_page_title()}
+      description={m.recall_page_workspace_subtitle()}
+    >
+      {#snippet actions()}
+        {#if tabOptions.length > 1}
+          <SegmentedControl
+            options={tabOptions}
+            value={selectedTab}
+            ariaLabel={m.recall_page_tabs_label()}
+            onchange={selectTab}
+          />
+        {/if}
+      {/snippet}
+    </LibraryPageHeader>
+  </div>
 
   {#if !backendKnown}
     <p class="workspace-loading">{m.recall_page_loading()}</p>
@@ -80,37 +84,18 @@
   }
 
   .recall-workspace-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
     padding: 28px 24px 0;
-  }
-
-  .recall-workspace-header h1 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 18px;
-    font-weight: 600;
-  }
-
-  .recall-workspace-header p {
-    margin: 0.25rem 0 0;
-    color: var(--text-secondary);
-    font-size: 0.82rem;
   }
 
   .workspace-loading {
     margin: 0;
-    padding: 1.5rem;
+    padding: 0 24px;
     color: var(--text-secondary);
-    font-size: 0.82rem;
+    font-size: 13px;
   }
 
   @media (max-width: 760px) {
     .recall-workspace-header {
-      align-items: stretch;
-      flex-direction: column;
       padding: 1rem 1rem 0;
     }
   }

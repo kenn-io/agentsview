@@ -1258,7 +1258,7 @@
   "data_rules_col_actions": "Actions",
   "data_rules_read_only": "This store is read-only. Manage rules from the writable archive that ingests this machine's sessions.",
   "data_rules_view_project": "Show {project} in the inventory",
-  "recent_edits_title": "Recent Edits",
+  "recent_edits_title": "Recent edits",
   "recent_edits_empty": "No file edits found yet.",
   "recent_edits_loading": "Loading recent edits...",
   "recent_edits_count": [
@@ -2046,7 +2046,7 @@
   "update_instructions": "Run {cmd} on the command line to install.",
   "update_latest": "You're running the latest version ({version}).",
   "update_close_btn": "Close",
-  "pinned_title": "Pinned Messages",
+  "pinned_title": "Pinned messages",
   "pinned_loading": "Loading pins...",
   "pinned_none_for_project": "No pinned messages for this project",
   "pinned_none_for_project_hint": "Try selecting a different project or clear the project filter.",

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
+  import { CopyButton } from "@kenn-io/kit-ui";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import StateNotice from "../shared/StateNotice.svelte";
   import { m } from "../../i18n/index.js";
   import {
     ExternalLinkIcon,
@@ -107,27 +109,31 @@
 </script>
 
 <div class="pinned-page">
-  <div class="pinned-header">
-    <PinIcon size="18" strokeWidth="2" class="pin-icon" aria-hidden="true" />
-    <h2>{m.pinned_title()}</h2>
-    {#if pins.pins.length > 0}
-      <span class="pin-count">{pins.pins.length}</span>
-    {/if}
-  </div>
+  <LibraryPageHeader title={m.pinned_title()}>
+    {#snippet trailing()}
+      {#if pins.pins.length > 0}
+        <span class="pin-count">{pins.pins.length}</span>
+      {/if}
+    {/snippet}
+  </LibraryPageHeader>
 
   {#if pins.loading}
     <div class="loading-state">{m.pinned_loading()}</div>
   {:else if pins.pins.length === 0 && sessions.filters.project}
-    <EmptyState
+    <StateNotice
       title={m.pinned_none_for_project()}
       description={m.pinned_none_for_project_hint()}
-    />
-  {:else if pins.pins.length === 0}
-    <EmptyState title={m.pinned_none()} description={m.pinned_none_hint()}>
+    >
       {#snippet icon()}
-        <PinIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+        <PinIcon size="16" strokeWidth="2" />
       {/snippet}
-    </EmptyState>
+    </StateNotice>
+  {:else if pins.pins.length === 0}
+    <StateNotice title={m.pinned_none()} description={m.pinned_none_hint()}>
+      {#snippet icon()}
+        <PinIcon size="16" strokeWidth="2" />
+      {/snippet}
+    </StateNotice>
   {:else}
     <div class="pin-list">
       {#each pins.pins as pin (`${pin.session_id}:${pin.message_key ?? pin.id}`)}
@@ -222,31 +228,10 @@
     padding: 28px 24px;
   }
 
-  .pinned-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: 16px;
-  }
-
-  :global(.pin-icon) {
-    color: var(--accent-blue);
-  }
-
-  .pinned-header h2 {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-  }
-
   .pin-count {
-    background: var(--accent-blue);
-    color: var(--accent-blue-foreground);
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
   }
 
   .loading-state {
