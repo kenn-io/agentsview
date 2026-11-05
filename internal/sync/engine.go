@@ -574,9 +574,11 @@ type Engine struct {
 	sourceSyncErr  error
 	rebuildSources func(context.Context) (RebuildOptions, error)
 
-	db    *db.DB
-	stat  func(string) (os.FileInfo, error)
-	lstat func(string) (os.FileInfo, error)
+	db *db.DB
+	// Rebuilds swap db temporarily; annotation writes must stay on the live archive.
+	archive *db.DB
+	stat    func(string) (os.FileInfo, error)
+	lstat   func(string) (os.FileInfo, error)
 	// archiveStore is the database holding previously archived
 	// sessions for the preserve guards in prepareSessionWrite.
 	// During a resync/rebuild it points at the original DB while
@@ -1030,6 +1032,7 @@ func NewEngine(ctx context.Context,
 	}
 	e := &Engine{
 		db:                      database,
+		archive:                 database,
 		stat:                    os.Stat,
 		lstat:                   os.Lstat,
 		baseProviderFactories:   providerFactories,
@@ -3098,8 +3101,9 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// Hold the write barrier for the whole in-process build-and-swap window. The
 	// build reads the original while it stays open, and the swap's
 	// CloseConnections runs only after the copies, so without the barrier a
-	// direct write (star/delete/restore) that bypasses syncMu could land in the
-	// original between the copies and the rename and be discarded by the swap.
+	// direct write (star/delete/restore/annotation) that bypasses syncMu could
+	// land in the original between the copies and the rename and be discarded
+	// by the swap.
 	// The barrier rejects such writes with ErrWriterClosed instead. The worker
 	// arm holds this barrier at the daemon layer (runWorkerResyncBuild) and calls
 	// ResyncBuild directly, so it never reaches this method; this arm covers the
@@ -5270,81 +5274,66 @@ func (e *Engine) ApplyWorktreeProjectMappings(
 	return result, err
 }
 
-// AssignSessionProject serializes a one-session project override with parser
-// and watcher writes, then publishes the changed session inventory.
+// AssignSessionProject records a one-session project override under the archive
+// write lock, waiting for a closed writer to reopen, then publishes the inventory.
 func (e *Engine) AssignSessionProject(
 	ctx context.Context,
 	sessionID string,
 	project string,
 ) (db.SessionProjectAssignment, error) {
-	var assignment db.SessionProjectAssignment
-	err := e.RunExclusive(func() error {
-		var err error
-		assignment, err = e.db.AssignSessionProject(ctx, sessionID, project)
-		return err
-	})
-	if err == nil {
-		e.emit("sessions")
-	}
-	return assignment, err
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionProjectAssignment, error) {
+		return e.archive.AssignSessionProject(ctx, sessionID, project)
+	}, func(db.SessionProjectAssignment) bool { return true })
 }
 
-// ClearSessionProjectAssignment serializes removal of a one-session override
-// with parser and watcher writes, then publishes the changed session inventory.
+// ClearSessionProjectAssignment removes a one-session override under the archive
+// write lock, waiting for a closed writer to reopen, then publishes the inventory.
 func (e *Engine) ClearSessionProjectAssignment(
 	ctx context.Context,
 	sessionID string,
 ) (db.ClearedSessionProjectAssignment, error) {
-	var cleared db.ClearedSessionProjectAssignment
-	err := e.RunExclusive(func() error {
-		var err error
-		cleared, err = e.db.ClearSessionProjectAssignment(ctx, sessionID)
-		return err
-	})
-	if err == nil {
-		e.emit("sessions")
-	}
-	return cleared, err
+	return runSessionAnnotationWrite(ctx, e, func() (db.ClearedSessionProjectAssignment, error) {
+		return e.archive.ClearSessionProjectAssignment(ctx, sessionID)
+	}, func(db.ClearedSessionProjectAssignment) bool { return true })
 }
 
-// SetSessionLabels replaces one session's labels, serialized with parser
-// writes, then publishes the session inventory when the labels changed.
+// SetSessionLabels replaces one session's labels under the archive write lock,
+// waiting for a closed writer to reopen, then publishes when the labels changed.
 func (e *Engine) SetSessionLabels(
 	ctx context.Context, sessionID string, labels []string,
 ) (db.SessionLabels, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
-		return e.db.SetSessionLabels(ctx, sessionID, labels)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionLabels, error) {
+		return e.archive.SetSessionLabels(ctx, sessionID, labels)
 	}, sessionLabelsChanged)
 }
 
-// UpdateSessionLabels adds and removes one session's labels, serialized
-// with parser writes, then publishes the session inventory when the labels
-// changed.
+// UpdateSessionLabels adds and removes labels under the archive write lock,
+// waiting for a closed writer to reopen, then publishes when the labels changed.
 func (e *Engine) UpdateSessionLabels(
 	ctx context.Context, sessionID string, add, remove []string,
 ) (db.SessionLabels, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
-		return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionLabels, error) {
+		return e.archive.UpdateSessionLabels(ctx, sessionID, add, remove)
 	}, sessionLabelsChanged)
 }
 
-// SetSessionExternalParent records a launcher-supplied parent link,
-// serialized with parser writes so a concurrent parse cannot interleave
-// with the parent application.
+// SetSessionExternalParent records a launcher-supplied parent link under the
+// archive write lock, waiting for a closed writer to reopen.
 func (e *Engine) SetSessionExternalParent(
 	ctx context.Context, sessionID, parentID string,
 ) (db.SessionExternalParent, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
-		return e.db.SetSessionExternalParent(ctx, sessionID, parentID)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionExternalParent, error) {
+		return e.archive.SetSessionExternalParent(ctx, sessionID, parentID)
 	}, sessionExternalParentChanged)
 }
 
-// ClearSessionExternalParent removes a launcher-supplied parent link.
+// ClearSessionExternalParent removes a launcher-supplied parent link under the
+// archive write lock, waiting for a closed writer to reopen.
 func (e *Engine) ClearSessionExternalParent(
 	ctx context.Context, sessionID string,
 ) (db.SessionExternalParent, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
-		return e.db.ClearSessionExternalParent(ctx, sessionID)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionExternalParent, error) {
+		return e.archive.ClearSessionExternalParent(ctx, sessionID)
 	}, sessionExternalParentChanged)
 }
 
@@ -5354,17 +5343,17 @@ func sessionLabelsChanged(l db.SessionLabels) bool { return l.Changed && l.Sessi
 
 func sessionExternalParentChanged(l db.SessionExternalParent) bool { return l.Changed }
 
-// runSessionAnnotationWrite runs write under the engine's exclusive lock and
-// publishes the session inventory only when changed reports a visible change.
+// runSessionAnnotationWrite waits for the archive writer with the caller's
+// context. The write takes the archive write lock, and a visible change publishes
+// the session inventory.
 func runSessionAnnotationWrite[T any](
-	e *Engine, write func() (T, error), changed func(T) bool,
+	ctx context.Context, e *Engine, write func() (T, error), changed func(T) bool,
 ) (T, error) {
 	var result T
-	err := e.RunExclusive(func() error {
-		var err error
-		result, err = write()
-		return err
-	})
+	if e.refuseWriteInForceParse("runSessionAnnotationWrite") {
+		return result, errors.New("runSessionAnnotationWrite refused on report-only parse-diff engine")
+	}
+	result, err := db.RetryAcrossHandoff(ctx, e.archive, write)
 	if err == nil && changed(result) {
 		e.emit("sessions")
 	}

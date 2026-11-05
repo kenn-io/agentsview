@@ -6860,6 +6860,22 @@ func (db *DB) WaitForWriter(ctx context.Context) error {
 	return nil
 }
 
+// RetryAcrossHandoff retries a write rejected by a closed writer, waiting for
+// the worker handoff to finish or ctx to end before trying again.
+func RetryAcrossHandoff[T any](
+	ctx context.Context, local *DB, write func() (T, error),
+) (T, error) {
+	for {
+		value, err := write()
+		if !errors.Is(err, ErrWriterClosed) {
+			return value, err
+		}
+		if err := local.WaitForWriter(ctx); err != nil {
+			return value, err
+		}
+	}
+}
+
 type writerWaitNoticeKey struct{}
 
 // WithWriterWaitNotice returns a context whose WaitForWriter calls notice when
