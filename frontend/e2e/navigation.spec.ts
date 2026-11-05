@@ -270,3 +270,32 @@ test.describe("Project picker", () => {
     });
   }
 });
+
+for (const width of [320, 375]) {
+  test(`search results keep titles readable and stay inside the palette at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/usage");
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.locator(".palette-input");
+    await expect(input).toBeVisible();
+    await input.fill("synchronous DB read");
+    const items = page.locator(".palette-item", { hasText: "synchronous DB read" });
+    await expect(items.first()).toBeVisible();
+    const rows = await items.evaluateAll((els) =>
+      els.map((row) => {
+        const box = row.getBoundingClientRect();
+        const body = row.querySelector(".item-body")!.getBoundingClientRect();
+        const parts = [...row.children].map((c) => c.getBoundingClientRect());
+        return {
+          bodyShare: body.width / box.width,
+          inside: parts.every((p) => p.left >= box.left - 0.5 && p.right <= box.right + 0.5),
+        };
+      }),
+    );
+    for (const row of rows) {
+      // The title and snippet keep most of the row.
+      expect(row.bodyShare, JSON.stringify(row)).toBeGreaterThanOrEqual(0.6);
+      expect(row.inside, JSON.stringify(row)).toBe(true);
+    }
+  });
+}
