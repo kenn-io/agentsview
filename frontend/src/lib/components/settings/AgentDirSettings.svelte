@@ -101,11 +101,7 @@
           provider: provider.display_name,
         })}
         onchange={(enabled) => setProviderEnabled(provider.id, enabled)}
-      >
-        {providerEnabled(provider.id)
-          ? m.settings_session_providers_enabled()
-          : m.settings_session_providers_disabled()}
-      </Toggle>
+      />
       <div class="provider-details">
         <div class="provider-paths">
           {#if provider.dirs.length === 0}
@@ -196,17 +192,16 @@
     flex-direction: column;
   }
 
-  /* Each provider uses the label-column grid shared by every settings
-     panel: the name sits in the label column and its switch starts the
-     control column on the same header line, so each provider still has one
-     scannable header line. Paths, alternate homes and help text continue in
-     the control column below the switch. */
+  /* Three columns per provider: the name in the label column shared by
+     every settings panel, the switch where the other panels start their
+     controls, then the configuration. The switch column has the same width
+     in every row, so switches and configuration line up across providers. */
   .provider-row {
     display: grid;
-    grid-template-columns: var(--setting-label-width, 222px) minmax(0, 1fr);
-    align-items: center;
+    grid-template-columns: var(--setting-label-width, 222px) auto minmax(0, 1fr);
+    align-items: start;
     column-gap: 12px;
-    row-gap: 4px;
+    row-gap: var(--space-2);
     padding: var(--space-3) 0;
     border-bottom: 1px solid var(--border-muted);
   }
@@ -215,16 +210,12 @@
     padding-top: 0;
   }
 
-  .provider-row > :global(.kit-toggle) {
-    justify-self: start;
-  }
-
   .provider-details {
-    grid-column: 2;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
+    padding-inline-start: var(--space-2);
   }
 
   /* Provider names use the shared field-label size and weight with
@@ -238,11 +229,14 @@
     overflow-wrap: anywhere;
   }
 
+  /* The top padding centers the first path line on the 20px line the
+     name and switch share. */
   .provider-paths {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    padding-top: calc((20px - 11px * 1.4) / 2);
   }
 
   .provider-path,
@@ -304,8 +298,8 @@
   }
 
   /* Phones: like the other settings rows, the label column goes away.
-     The name and switch share the header line and the details take the
-     row's full width. */
+     The name and switch share the header line and the configuration
+     takes the row's full width below them. */
   @media (max-width: 640px) {
     .provider-row {
       grid-template-columns: minmax(0, 1fr) auto;
@@ -313,6 +307,11 @@
 
     .provider-details {
       grid-column: 1 / -1;
+      padding-inline-start: 0;
+    }
+
+    .provider-paths {
+      padding-top: 0;
     }
   }
 
