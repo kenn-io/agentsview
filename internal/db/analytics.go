@@ -359,7 +359,7 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 		end, endErr := time.Parse(time.DateOnly, f.To)
 		if startErr != nil || endErr != nil || end.Sub(start) > 90*24*time.Hour {
 			// Wide windows keep the scan plan instead of fetching rows through the date index.
-			dateCol = "+" + strings.TrimPrefix(dateCol, "+")
+			dateCol = "+" + dateCol
 		}
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
@@ -5459,10 +5459,10 @@ func (db *DB) GetAnalyticsTopSessions(
 	}
 	defer release()
 
-	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
 	}
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "sessions.id", true)
 
 	durationExpr := `ROUND((julianday(ended_at) -

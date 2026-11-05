@@ -5313,6 +5313,55 @@ func TestAnalyticsDateWindowPlan(t *testing.T) {
 	}
 }
 
+func TestGetAnalyticsTopSessionsEmptyDateWindowWork(t *testing.T) {
+	for _, history := range []int{300, 30000} {
+		t.Run(fmt.Sprintf("history_%d", history), func(t *testing.T) {
+			d := testDB(t)
+			_, err := d.getWriter().ExecContext(t.Context(), `
+				WITH RECURSIVE seq(n) AS (
+					SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1
+				)
+				INSERT INTO sessions (id, project, machine, agent, message_count, started_at)
+				SELECT printf('old-%06d', n), 'project-a', 'local', 'claude',
+					n + 1, '2024-01-01T12:00:00Z' FROM seq`, history)
+			require.NoError(t, err)
+
+			// Count date evaluations using NULLIF's semantics for the fixture's
+			// non-NULL text starts. A date-index seek uses stored expression
+			// values; an archive-wide ranking walk evaluates each old row.
+			// Register only on the reader, leaving the stored index intact.
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			var evaluations int
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other string) any {
+					evaluations++
+					if value == other {
+						return nil
+					}
+					return value
+				}, true)
+			}))
+			require.NoError(t, conn.Close())
+
+			for _, timezone := range []string{"UTC", "Asia/Kolkata"} {
+				t.Run(timezone, func(t *testing.T) {
+					evaluations = 0
+					resp, err := d.GetAnalyticsTopSessions(t.Context(), AnalyticsFilter{
+						From: "2024-06-01", To: "2024-06-02", Timezone: timezone,
+					}, "messages")
+					require.NoError(t, err)
+					assert.Equal(t, "messages", resp.Metric)
+					assert.Empty(t, resp.Sessions)
+					assert.LessOrEqual(t, evaluations, 16, "empty-window date evaluations must stay bounded as history grows")
+					t.Logf("date evaluations: %d", evaluations)
+				})
+			}
+		})
+	}
+}
+
 func TestAnalyticsDateWindowOldNullStart(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "old-null", "project-a", func(s *Session) { s.StartedAt = nil })
