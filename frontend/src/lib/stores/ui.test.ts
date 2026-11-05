@@ -675,6 +675,66 @@ describe("UIStore", () => {
     });
   });
 
+  describe("readingWidth", () => {
+    async function freshStore(stored: string | null, tag: string) {
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) => (key === "agentsview-reading-width" ? stored : null)),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+      const mod = await import(/* @vite-ignore */ `./ui.svelte.js?readingWidth-${tag}`);
+      await tick();
+      return { ui: mod.ui as typeof ui, setItem };
+    }
+
+    const original = globalThis.localStorage;
+    afterEach(() => {
+      Object.defineProperty(globalThis, "localStorage", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+      delete document.documentElement.dataset.readingWidth;
+    });
+
+    it("defaults to the shared column with no root override", async () => {
+      const { ui: store } = await freshStore(null, "default");
+      expect(store.readingWidth).toBe("default");
+      expect(document.documentElement.dataset.readingWidth).toBeUndefined();
+    });
+
+    it("restores a saved width and applies it to the root", async () => {
+      const { ui: store } = await freshStore("full", "restore");
+      expect(store.readingWidth).toBe("full");
+      expect(document.documentElement.dataset.readingWidth).toBe("full");
+    });
+
+    it("falls back to the default for an unknown saved width", async () => {
+      const { ui: store } = await freshStore("huge", "invalid");
+      expect(store.readingWidth).toBe("default");
+      expect(document.documentElement.dataset.readingWidth).toBeUndefined();
+    });
+
+    it("saves a chosen width and updates the root", async () => {
+      const { ui: store, setItem } = await freshStore(null, "persist");
+      setItem.mockClear();
+
+      store.setReadingWidth("wider");
+      await tick();
+      expect(setItem).toHaveBeenLastCalledWith("agentsview-reading-width", "wider");
+      expect(document.documentElement.dataset.readingWidth).toBe("wider");
+
+      store.setReadingWidth("default");
+      await tick();
+      expect(setItem).toHaveBeenLastCalledWith("agentsview-reading-width", "default");
+      expect(document.documentElement.dataset.readingWidth).toBeUndefined();
+    });
+  });
+
   describe("transcriptMode", () => {
     beforeEach(() => {
       ui.setTranscriptMode("normal");

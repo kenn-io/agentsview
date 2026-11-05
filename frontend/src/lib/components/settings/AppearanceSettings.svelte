@@ -18,6 +18,7 @@
     ZOOM_STEPS,
     type BlockType,
     type MessageLayout,
+    type ReadingWidth,
   } from "../../stores/ui.svelte.js";
   import {
     isChartPalette,
@@ -56,6 +57,12 @@
     { value: "compact", label: m.appearance_layout_compact() },
     { value: "stream", label: m.appearance_layout_stream() },
     { value: "skim", label: m.appearance_layout_skim() },
+  ]);
+
+  const READING_WIDTH_OPTIONS: { value: ReadingWidth; label: string }[] = $derived([
+    { value: "default", label: m.appearance_reading_width_default() },
+    { value: "wider", label: m.appearance_reading_width_wider() },
+    { value: "full", label: m.appearance_reading_width_full() },
   ]);
 
   const BLOCK_LABELS: Record<BlockType, string> = $derived({
@@ -172,6 +179,16 @@
       value={ui.messageLayout}
       ariaLabel={m.appearance_message_layout()}
       onchange={(value) => ui.setLayout(value as MessageLayout)}
+    />
+  </div>
+
+  <div class="setting-row option-row">
+    <span class="setting-label">{m.appearance_reading_width()}</span>
+    <SegmentedControl
+      options={READING_WIDTH_OPTIONS}
+      value={ui.readingWidth}
+      ariaLabel={m.appearance_reading_width()}
+      onchange={(value) => ui.setReadingWidth(value as ReadingWidth)}
     />
   </div>
 
