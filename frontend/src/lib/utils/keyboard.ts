@@ -162,19 +162,8 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       }
     }
 
-    // Esc — always works
-    if (e.key === "Escape") {
-      // The palette handles Escape after its nested popovers have had a
-      // chance to claim it at document level.
-      if (ui.activeModal === "commandPalette") return;
-      // An open kit-ui menu claims Escape for itself (it dismisses at
-      // document level); closing the session too would lose context. Match
-      // only kit-ui's own menu element: transcript HTML keeps role
-      // attributes, so a bare [role="menu"] can come from session content.
-      if (document.querySelector('.kit-menu__content[role="menu"]')) return;
-      handleEscape();
-      return;
-    }
+    // Esc is handled by escapeHandler on window.
+    if (e.key === "Escape") return;
 
     // All remaining shortcuts are plain single-key — skip if any modifier is held.
     // (Shift is allowed because "?" requires Shift on most layouts.)
@@ -305,12 +294,25 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
     }
   }
 
+  // Escape listens on window so it runs after document-level listeners.
+  // An open kit-ui menu or popover dismisses itself there and calls
+  // preventDefault; that layer, not the session, is what this press closes.
+  function escapeHandler(e: KeyboardEvent) {
+    if (e.key !== "Escape" || ignoreShortcut(e)) return;
+    // The palette handles Escape after its nested popovers have had a
+    // chance to claim it.
+    if (ui.activeModal === "commandPalette") return;
+    handleEscape();
+  }
+
   document.addEventListener("pointerdown", rememberArrowInteraction, true);
   document.addEventListener("focusin", rememberArrowInteraction, true);
   document.addEventListener("keydown", handler);
+  window.addEventListener("keydown", escapeHandler);
   return () => {
     document.removeEventListener("pointerdown", rememberArrowInteraction, true);
     document.removeEventListener("focusin", rememberArrowInteraction, true);
     document.removeEventListener("keydown", handler);
+    window.removeEventListener("keydown", escapeHandler);
   };
 }
