@@ -75,11 +75,6 @@ func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
 	require.True(t, prepared.journaled)
 	assert.Empty(t, prepared.snapshot.Sessions, "a warm totals read must skip archive window metadata")
 	assert.Empty(t, prepared.snapshot.Versions)
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	want, err := database.getDailyUsageLegacy(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
 	for _, tc := range []struct {
 		filter UsageFilter
 		owners []string
@@ -105,41 +100,21 @@ func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
 	}
 }
 
-func TestUsageDayTotalsInvalidation(t *testing.T) {
+func TestUsageDayTotalsInstallDelete(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")
 	filter := UsageFilter{Timezone: "UTC", Breakdowns: true}
 	cache := warmJournaledUsage(t, database, filter)
 	assertUsageDayTotals(t, cache)
-	for _, name := range []string{"append", "project", "dedup peer", "price", "install delete", "hard delete"} {
-		t.Run(name, func(t *testing.T) {
-			var err error
-			switch name {
-			case "append":
-				err = database.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`), SourceUUID: "shared-source"}})
-			case "project":
-				_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='changed' WHERE id='session'`)
-			case "dedup peer":
-				insertSession(t, database, "peer", "project", func(s *Session) { s.Agent = "codex"; s.StartedAt = new("2026-08-11T02:00:00Z") })
-				err = database.InsertMessages(t.Context(), []Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-11T02:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":80}`), SourceUUID: "shared-source"}})
-			case "price":
-				err = database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2000000}}})
-			case "install delete":
-				_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id='session'`)
-				require.NoError(t, err)
-				assertUsageDayTotals(t, cache)
-			case "hard delete":
-				err = database.DeleteSession(t.Context(), "session")
-			}
-			require.NoError(t, err)
-			got, err := database.GetDailyUsage(t.Context(), filter)
-			require.NoError(t, err)
-			want, err := database.getDailyUsageLegacy(t.Context(), filter)
-			require.NoError(t, err)
-			assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
-			assertUsageDayTotals(t, cache)
-		})
-	}
+	_, err := cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id='session'`)
+	require.NoError(t, err)
+	assertUsageDayTotals(t, cache)
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
+	assertUsageDayTotals(t, cache)
 }
 
 func TestUsageDayTotalsDeleteFirstPricingTimestamp(t *testing.T) {

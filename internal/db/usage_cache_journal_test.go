@@ -956,7 +956,7 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
 			readTop()
-			assert.EqualValues(t, 2, prepares.Load(), "totals skip the window metadata that Top sessions still needs")
+			assert.EqualValues(t, 2, prepares.Load(), "totals and Top sessions use separate memo entries")
 		})
 	}
 }

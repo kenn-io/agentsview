@@ -115,8 +115,8 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	return database, filter, want
 }
 
-// Warm reads must reuse installed totals. The optional timing gate keeps its
-// larger fixture for callers supplying a base measurement.
+// Warm daily, Top sessions, and count reads must reuse installed rows. The
+// optional timing gate measures daily reads against a supplied base.
 func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
 	var base int64
 	count := 300
@@ -127,8 +127,14 @@ func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
 		require.NoError(t, err)
 		require.Positive(t, base)
 	}
-	database, filter, want := seedUsageJournalBenchmark(t, count, 1)
+	database, filter, _ := seedUsageJournalBenchmark(t, count, 1)
 	database.StopUsageCacheBackfill()
+	want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
+	require.NoError(t, err)
+	wantCounts, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
+	require.NoError(t, err)
 	databaseID, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), databaseID)
@@ -148,8 +154,14 @@ func TestUsageJournaledWarmSevenDaysUnderHalfBase(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+	gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, wantTop, gotTop)
+	gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantCounts, gotCounts)
 	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
-	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
+	assert.Zero(t, builds.Load(), "warm daily, Top sessions, and count reads must reuse installed rows")
 	if base > 0 {
 		assert.Less(t, elapsed/reads, time.Duration(base/2), "warm 7-day read must take under half the base time")
 	}

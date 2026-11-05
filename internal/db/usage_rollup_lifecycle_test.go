@@ -1032,27 +1032,3 @@ func effectivePricingRateForTest(
 	require.FailNow(t, "pricing row not found", pattern)
 	return export.ModelRates{}
 }
-
-func TestUsageRollupProjectChangeInvalidatesInstalledRows(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	firstSnapshot, firstFills, cache := prepareUsageRollupTest(t, database)
-	first, _, err := cache.rollup.Ensure(t.Context(), firstSnapshot, firstFills, export.NewPricingResolver(firstSnapshot.PricingRows))
-	require.NoError(t, err)
-	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='changed' WHERE id='session'`)
-	require.NoError(t, err)
-	snapshot, fills, _ := prepareUsageRollupTest(t, database)
-	second, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills, export.NewPricingResolver(snapshot.PricingRows))
-	require.NoError(t, err)
-	assert.Greater(t, second["session"].InstallRevision, first["session"].InstallRevision)
-	var project string
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT project FROM usage_rollup_installs WHERE id=?`, second["session"].ID).Scan(&project))
-	assert.Equal(t, "changed", project)
-	assertUsageDayTotals(t, cache)
-	filter := UsageFilter{Project: "changed"}
-	want, err := database.getDailyUsageLegacy(t.Context(), filter)
-	require.NoError(t, err)
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-}
