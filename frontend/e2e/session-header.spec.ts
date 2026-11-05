@@ -90,16 +90,16 @@ test("transcript controls fit a very narrow transcript pane", async ({ page }) =
   expect(view.x + view.width).toBeLessThanOrEqual(pane.x + pane.width);
 });
 
-test("the View trigger shows its full label and keeps its width across layouts", async ({ page }) => {
+test("the View trigger shows its full label and keeps its width across layouts and modes", async ({ page }) => {
   const sp = new SessionsPage(page);
   await sp.goto();
   await sp.selectFirstSession();
   const trigger = page.locator(".session-breadcrumb .view-trigger");
   const label = trigger.locator(".view-trigger-text");
+  const widths = new Set<number>();
   for (const mode of ["Everything", "Prompts and final answers"]) {
     await trigger.click();
     await page.getByRole("menuitemradio", { name: new RegExp(`^${mode}`) }).click();
-    const widths = new Set<number>();
     for (const layout of ["Default", "Compact", "Stream", "Skim"]) {
       await trigger.click();
       await page.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
@@ -109,7 +109,7 @@ test("the View trigger shows its full label and keeps its width across layouts",
       expect(clip, `${mode} / ${layout}`).toBeLessThanOrEqual(0);
       widths.add(Math.round((await trigger.boundingBox())!.width));
     }
-    // Switching layouts does not move the trigger's neighbors.
-    expect([...widths], mode).toHaveLength(1);
   }
+  // Switching layouts or modes does not move the trigger's neighbors.
+  expect([...widths]).toHaveLength(1);
 });

@@ -329,6 +329,14 @@
     --kit-control-height: 28px;
   }
 
+  /* Light theme leaves --bg-raised unset, so kit-ui buttons and select
+     triggers fall back to the gray inset fill and read as disabled. Here
+     enabled controls take the surface fill with their border instead;
+     dark keeps its lighter raised fill. */
+  :global(:root:not(.dark)) .settings-page {
+    --bg-raised: var(--bg-surface);
+  }
+
   /* One row grid for every panel: a label column, then the control.
      Panels keep their own markup; this replaces their per-panel
      space-between rows so controls start on a shared edge everywhere.
@@ -392,6 +400,7 @@
   /* Disabled and read-only controls stay legible: full opacity with muted
      ink (above 3:1 in both themes) instead of halving their contrast. */
   .settings-page :global(.kit-settings__panel button:disabled:not(.kit-button--solid.kit-button--info)),
+  .settings-page :global(.kit-settings__footer .kit-button:disabled:not(.kit-button--solid.kit-button--info)),
   .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled),
   .settings-page :global(.kit-settings__panel .kit-toggle--disabled),
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
@@ -407,10 +416,11 @@
     color: var(--text-muted);
   }
 
-  /* Every other disabled button, destructive included, reads as the same
-     neutral outline. A disabled primary keeps its muted accent cue from
-     app.css so the main action is still identifiable. */
-  .settings-page :global(.kit-settings__panel .kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
+  /* Every other disabled button, destructive and footer included, reads as
+     the same neutral outline. A disabled primary keeps its muted accent cue
+     from app.css so the main action is still identifiable. */
+  .settings-page :global(.kit-settings__panel .kit-button:disabled:not(.kit-button--solid.kit-button--info)),
+  .settings-page :global(.kit-settings__footer .kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
     background: transparent;
     border-color: var(--border-default);
     box-shadow: none;

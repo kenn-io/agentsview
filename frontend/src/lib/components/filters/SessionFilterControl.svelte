@@ -543,6 +543,25 @@
     transform-origin: top right;
   }
 
+  /* The card is usually shorter than its sections, so the clipped edge
+     fades out instead of slicing a row in half. The fade sticks to the
+     card's bottom while there is more below; at the end it sits under the
+     last section, over empty space, and the bottom padding moves into it. */
+  .filter-dropdown {
+    padding-bottom: 0;
+  }
+
+  .filter-dropdown::after {
+    content: "";
+    position: sticky;
+    bottom: 0;
+    display: block;
+    height: 14px;
+    margin-inline: -6px;
+    background: linear-gradient(transparent, var(--bg-surface));
+    pointer-events: none;
+  }
+
   .filter-dropdown.left {
     left: 0;
     right: auto;
@@ -657,10 +676,15 @@
     border-color: var(--accent-blue);
   }
 
+  /* Rows have a fixed height so the list's visible area ends on a whole
+     row: six rows and their gaps, plus bottom padding that shows once the
+     list is scrolled to its end. */
   .agent-select-list {
+    --agent-row: 25px;
     display: flex;
     flex-direction: column;
-    max-height: 180px;
+    max-height: calc(6 * var(--agent-row) + 5px);
+    padding-bottom: 4px;
     overflow-y: auto;
     overflow-x: hidden;
     gap: 1px;
@@ -671,7 +695,9 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    padding: 3px 6px;
+    box-sizing: border-box;
+    height: var(--agent-row);
+    padding: 0 6px;
     font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;
@@ -714,8 +740,8 @@
   }
 
   .agent-dot-mini {
-    width: 5px;
-    height: 5px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     flex-shrink: 0;
   }

@@ -449,7 +449,7 @@
           </div>
           <div>
             <div class="lbl">{m.session_vitals_tool_time()}</div>
-            <div class="val">
+            <div class="val" class:unmeasured={!toolTimeMeasured}>
               {toolTimeMeasured ? formatDuration(timing.tool_duration_ms) : m.session_vitals_not_measured()}
             </div>
           </div>
@@ -561,7 +561,7 @@
                 style="width: {(cat.duration_ms / Math.max(timing.tool_duration_ms, 1)) * 100}%; background: {categoryToken(cat.category)};"
               ></span>
             </span>
-            <span class="agg-val">{measuredCategories.has(cat.category) ? formatDuration(cat.duration_ms) : m.session_vitals_not_measured()}</span>
+            <span class="agg-val" class:unmeasured={!measuredCategories.has(cat.category)}>{measuredCategories.has(cat.category) ? formatDuration(cat.duration_ms) : m.session_vitals_not_measured()}</span>
           </button>
         {/each}
       </section>
@@ -571,8 +571,8 @@
       <section class="v-section">
         <header class="v-h">
           <span>{m.session_vitals_timeline()}</span>
-          <span class="v-meta">{m.session_vitals_click_marks_to_scroll()}</span>
         </header>
+        <p class="v-hint">{m.session_vitals_click_marks_to_scroll()}</p>
 
         <div class="lane-row">
           <span class="lane-label">{m.session_vitals_turns()}</span>
@@ -995,6 +995,14 @@
   }
   .stat-grid .val.slow { color: var(--slow-fg); }
   .stat-grid .val.empty { color: var(--text-muted); }
+  /* "Not measured" is an absence, not a reading: muted sans text, so it
+     does not pass for a value. */
+  .stat-grid .val.unmeasured,
+  .agg-val.unmeasured {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-weight: 400;
+  }
   .stat-grid .val-link {
     background: transparent;
     border: 0;
@@ -1080,8 +1088,9 @@
 
   .activity-hint {
     color: var(--text-muted);
-    font-size: 10px;
-    margin: 0 0 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    margin: -4px 0 8px;
   }
   .activity-totals {
     display: flex;
