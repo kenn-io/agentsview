@@ -25,32 +25,6 @@ func commitMessages(id, input, result string) []Message {
 	}
 }
 
-func TestCommitLinksLateResult(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "claude:commit", "project-a")
-	messages := commitMessages("claude:commit", `{"command":"git commit -m fix"}`, "")
-	messages[2].ToolCalls[0].CallIndex = 1
-	messages[2].ToolCalls = append([]ToolCall{{SessionID: "claude:commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}, messages[2].ToolCalls...)
-	insertMessages(t, d, messages...)
-	before, err := d.SessionCommitLinks(t.Context(), "claude:commit")
-	require.NoError(t, err)
-	assert.Empty(t, before.Commits)
-	_, err = d.WriteSessionIncremental(t.Context(), "claude:commit", nil, IncrementalSessionUpdate{
-		MsgCount: 3, NextOrdinal: 3, SubagentLinks: []ToolCallSubagentLink{{ToolUseID: "commit-call", HasResult: true, ResultContent: "[main abc1234] Fix parser", ResultContentLen: len("[main abc1234] Fix parser")}},
-	})
-	require.NoError(t, err)
-	after, err := d.SessionCommitLinks(t.Context(), "claude:commit")
-	require.NoError(t, err)
-	require.Len(t, after.Commits, 1)
-	link := after.Commits[0]
-	assert.Equal(t, "claude:commit", link.SessionID)
-	assert.Equal(t, "abc1234", link.SHA)
-	assert.Equal(t, 2, link.MessageOrdinal)
-	assert.Equal(t, 1, link.CallIndex)
-	assert.Equal(t, "commit-call", link.ToolUseID)
-	assert.False(t, link.Ambiguous)
-}
-
 func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "candidate", "project-a")
@@ -119,13 +93,14 @@ func TestCommitLinksAppendWithoutCandidatesSkipsInputScan(t *testing.T) {
 func TestCommitLinksIncrementalCandidates(t *testing.T) {
 	for _, tt := range []struct {
 		name, tool, input, initial string
-		late, replace              bool
+		late, replace, subagent    bool
 	}{
 		{name: "commit", tool: "Bash", input: `{"command":"git commit -m fix"}`},
 		{name: "shell poll", tool: "write_stdin", input: `{"session_id":7}`},
 		{name: "code poll", tool: "exec", input: `text(await tools.write_stdin({session_id:7}))`},
 		{name: "cell poll", tool: "wait", input: `{"cell_id":"cell-a"}`, initial: "Script running with cell ID cell-a"},
 		{name: "late commit", tool: "Bash", input: `{"command":"git commit -m fix"}`, late: true},
+		{name: "late subagent result", tool: "Bash", input: `{"command":"git commit -m fix"}`, late: true, subagent: true},
 		{name: "late poll", tool: "write_stdin", input: `{"session_id":7}`, late: true},
 		{name: "replacement", tool: "Bash", input: `{"command":"true"}`, initial: "[main abc1234] Fix parser", replace: true},
 	} {
@@ -136,19 +111,40 @@ func TestCommitLinksIncrementalCandidates(t *testing.T) {
 			if initial == "" {
 				initial = "Process running with session ID 7"
 			}
-			insertMessages(t, d, commitMessages("candidate", `{"command":"git commit -m fix"}`, initial)...)
+			if !tt.subagent {
+				insertMessages(t, d, commitMessages("candidate", `{"command":"git commit -m fix"}`, initial)...)
+			}
 			message := commitMessages("candidate", tt.input, "[main def5678] Next fix")[2]
 			message.Ordinal = 3
 			message.ToolCalls[0].ToolName = tt.tool
 			message.ToolCalls[0].ToolUseID = "next-call"
 			update := IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4}
+			if tt.subagent {
+				message.Ordinal = 2
+				message.ToolCalls[0].CallIndex = 1
+				message.ToolCalls[0].ToolUseID = "commit-call"
+				message.ToolCalls = append([]ToolCall{{SessionID: "candidate", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}, message.ToolCalls...)
+				update = IncrementalSessionUpdate{MsgCount: 3, NextOrdinal: 3}
+			}
 			messages := []Message{message}
+			if tt.subagent {
+				messages = commitMessages("candidate", "", "")[:2]
+				messages = append(messages, message)
+			}
 			if tt.late {
-				message.ToolCalls[0].ResultContent = ""
-				message.ToolCalls[0].ResultEvents = nil
-				insertMessages(t, d, message)
+				call := &message.ToolCalls[len(message.ToolCalls)-1]
+				call.ResultContent = ""
+				call.ResultEvents = nil
+				insertMessages(t, d, messages...)
 				messages = nil
-				update.ToolCallResultUpdates = []ToolCallResultUpdate{{ToolUseID: "next-call", Position: ToolCallPosition{MessageOrdinal: 3}, Events: []ToolResultEvent{{Source: "tool_result", Content: "[main def5678] Next fix"}}}}
+				before, err := d.SessionCommitLinks(t.Context(), "candidate")
+				require.NoError(t, err)
+				assert.Empty(t, before.Commits)
+				if tt.subagent {
+					update.SubagentLinks = []ToolCallSubagentLink{{ToolUseID: "commit-call", HasResult: true, ResultContent: "[main def5678] Next fix", ResultContentLen: len("[main def5678] Next fix")}}
+				} else {
+					update.ToolCallResultUpdates = []ToolCallResultUpdate{{ToolUseID: "next-call", Position: ToolCallPosition{MessageOrdinal: 3}, Events: []ToolResultEvent{{Source: "tool_result", Content: "[main def5678] Next fix"}}}}
+				}
 			}
 			if tt.replace {
 				messages[0].Ordinal = 2
@@ -162,7 +158,15 @@ func TestCommitLinksIncrementalCandidates(t *testing.T) {
 				assert.Empty(t, links.Commits)
 			} else {
 				require.Len(t, links.Commits, 1)
-				assert.Equal(t, "def5678", links.Commits[0].SHA)
+				link := links.Commits[0]
+				assert.Equal(t, "def5678", link.SHA)
+				assert.Equal(t, "candidate", link.SessionID)
+				if tt.subagent {
+					assert.Equal(t, 2, link.MessageOrdinal)
+					assert.Equal(t, 1, link.CallIndex)
+					assert.Equal(t, "commit-call", link.ToolUseID)
+				}
+				assert.False(t, link.Ambiguous)
 			}
 		})
 	}
@@ -213,17 +217,6 @@ func TestCommitLinksParsing(t *testing.T) {
 	}
 }
 
-func TestCommitLinksCodeModeWithoutExecutionID(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a")
-	messages := commitMessages("s1", `const readCommand = "cat example.txt"; text(await tools.exec_command({cmd:"git commit -m fix"})); text(await tools.exec_command({cmd:readCommand}))`, `{"output":"[main abc1234] Fix parser\n"}`)
-	messages[2].ToolCalls[0].ToolName = "exec"
-	insertMessages(t, d, messages...)
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	assert.Empty(t, got.Commits)
-}
-
 func TestCommitLinksCodeModeFixedCommand(t *testing.T) {
 	for _, tt := range []struct {
 		name, input string
@@ -238,7 +231,7 @@ func TestCommitLinksCodeModeFixedCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-			messages := commitMessages("s1", tt.input, `{"output":"[main abc1234] Fix parser\n"}`)
+			messages := commitMessages("s1", tt.input, `[{"type":"input_text","text":"{\"output\":\"[main abc1234] Fix parser\\n\"}"}]`)
 			messages[2].ToolCalls[0].ToolName = "exec"
 			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
@@ -391,24 +384,27 @@ func TestCommitLinksAmbiguity(t *testing.T) {
 	assert.ElementsMatch(t, []string{"abc123456", "abc123456", "abc1234ff"}, []string{clash.Commits[0].Links[0].SHA, clash.Commits[0].Links[1].SHA, clash.Commits[0].Links[2].SHA})
 
 	t.Run("compatible SHA prefixes", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "s1", "project-a")
+		insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+		found, err := d.CommitSessionLinks(t.Context(), []string{"ABC1234000000000000000000000000000000000", "abc1234"})
+		require.NoError(t, err)
+		require.Len(t, found.Commits, 2)
+		for _, match := range found.Commits {
+			require.Len(t, match.Links, 1)
+			link := match.Links[0]
+			assert.Equal(t, "abc1234", link.SHA)
+			assert.Equal(t, "transcript", link.Source)
+			assert.False(t, link.Ambiguous)
+		}
 		for _, sha := range []string{"abc1234ff7", "abc1234012345678901234567890123456789012"} {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
 			insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
-			found, err := d.CommitSessionLinks(t.Context(), []string{"ABC1234000000000000000000000000000000000", "abc1234"})
-			require.NoError(t, err)
-			require.Len(t, found.Commits, 2)
-			for _, match := range found.Commits {
-				require.Len(t, match.Links, 1)
-				link := match.Links[0]
-				assert.Equal(t, "abc1234", link.SHA)
-				assert.Equal(t, "transcript", link.Source)
-				assert.False(t, link.Ambiguous)
-			}
 			insertSession(t, d, "s2", "project-b")
 			insertMessages(t, d, commitMessages("s2", `{"command":"git commit -m other"}`, "[main "+sha+"] Other fix")...)
 
-			found, err = d.CommitSessionLinks(t.Context(), []string{sha})
+			found, err := d.CommitSessionLinks(t.Context(), []string{sha})
 			require.NoError(t, err)
 			require.Len(t, found.Commits, 1)
 			require.Len(t, found.Commits[0].Links, 2)

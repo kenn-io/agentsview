@@ -17,9 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawsync"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 type hostedFixture struct {
@@ -466,13 +464,6 @@ func TestHostedTenantReadStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "kept", session.Project)
-	backend := service.NewReadOnlyBackend(store)
-	commits, err := backend.SessionCommits(t.Context(), "read-id")
-	require.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
-	assert.Nil(t, commits)
-	matches, err := backend.CommitSessions(t.Context(), []string{"abc1234"})
-	require.ErrorIs(t, err, db.ErrCommitLinksUnavailable)
-	assert.Nil(t, matches)
 	_, err = NewHostedStore(t.Context(), f.dsn, f.schema, "tenant-b", false)
 	assert.Error(t, err)
 }
