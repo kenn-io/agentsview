@@ -30,7 +30,7 @@ func ScanCommitTrailers(ctx context.Context, repo string) ([]TrailerCommit, erro
 	runner := gitcmd.New()
 	runner.StdoutLimit = 32 << 20
 	// --all includes HEAD from every worktree, including detached worktrees.
-	args := []string{"log", "--all", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session", "--format=%H%x00%aI%x00%s%x00%S%x00%(trailers:key=Agent-Session,valueonly,separator=%x1e)%x00"}
+	args := []string{"log", "--all", "--source", "-E", "--regexp-ignore-case", "--grep=^Agent-Session", "--format=%H%x00%aI%x00%s%x00%S%x00%(trailers:key=Agent-Session,valueonly,unfold=true,separator=%x0a)%x00"}
 	out, stderr, err := runner.Run(ctx, repo, nil, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git trailer log: %w: %s", err, stderr)
@@ -56,7 +56,8 @@ func ScanCommitTrailers(ctx context.Context, repo string) ([]TrailerCommit, erro
 				c.Branch = branch
 			}
 		}
-		for value := range strings.SplitSeq(record[4], "\x1e") {
+		// Unfolding joins continuation lines, so each line is a whole value.
+		for value := range strings.SplitSeq(record[4], "\n") {
 			agent, id, ok := strings.Cut(value, ":")
 			if ok && trailerAgentRE.MatchString(agent) && trailerIDRE.MatchString(id) {
 				c.Sessions = append(c.Sessions, value)

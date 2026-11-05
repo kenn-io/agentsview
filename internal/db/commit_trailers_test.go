@@ -169,7 +169,7 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 			wantPrompt: true, name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
 			messages: []Message{
 				{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
-				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Within tolerance", Timestamp: "2026-10-30T10:14:00Z"},
+				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
 				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
 				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:14:00Z"},
 				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:14:00Z"},
@@ -178,7 +178,7 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 		{
 			name: "no qualifying prompt", owner: "codex:thread", agent: "codex", trailer: "codex:thread", committedAt: "2026-10-30T10:10:00Z",
 			messages: []Message{
-				{SessionID: "codex:thread", Ordinal: 0, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
+				{SessionID: "codex:thread", Ordinal: 0, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:12:00Z"},
 			},
 		},
 	} {
@@ -200,7 +200,7 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 			require.Len(t, list.Commits, 1)
 			require.NotNil(t, list.Commits[0].Turn)
 			assert.True(t, list.Commits[0].Turn.Heuristic)
-			assert.Equal(t, "Within tolerance", list.Commits[0].Turn.Text)
+			assert.Equal(t, "Before", list.Commits[0].Turn.Text)
 		})
 	}
 }

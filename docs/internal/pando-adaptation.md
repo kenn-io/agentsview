@@ -6,8 +6,7 @@ from Pando at commit `80c8f91f3c445b080d49a95d7600ca6a348e9828`.
 
 ## Kept
 
-The fallback chooses the last user prompt in transcript order at or before
-commit time plus five minutes.
+The fallback chooses the last user prompt in transcript order.
 
 ## Changed
 
@@ -15,6 +14,8 @@ AgentsView reads stored archive messages when a link is requested. It marks the
 chosen turn `heuristic: true` and omits a turn when no eligible prompt has a
 usable timestamp. It excludes system and tool-result messages. It uses only the
 time fallback, without Pando's changed-path matching or live session reads.
+The prompt must be at or before the commit time, without Pando's five-minute
+grace period.
 
 The adapted SQL lives in `internal/db/commit_links.go`.
 

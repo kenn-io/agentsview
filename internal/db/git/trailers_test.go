@@ -71,6 +71,16 @@ func TestCommitTrailersControlCharacterSubject(t *testing.T) {
 	assert.Equal(t, []string{"claude:editor"}, commits[1].Sessions)
 }
 
+func TestCommitTrailersRecordSeparatorValue(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session: claude:first\x1ecodex:second\nAgent-Session: claude:valid")
+	commits, err := ScanCommitTrailers(t.Context(), repo)
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	assert.Equal(t, []string{"claude:valid"}, commits[0].Sessions)
+}
+
 func TestCommitTrailersParsing(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initRepo(t)

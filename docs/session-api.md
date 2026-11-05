@@ -1612,7 +1612,7 @@ Their `committed_at` is the Git author time in UTC. Their `message_ordinal`
 is the suggested prompt's ordinal, or `-1` when no eligible prompt exists.
 
 The suggested `turn` is the last real user prompt in transcript order with a
-usable timestamp at or before commit time plus five minutes. It carries
+usable timestamp at or before commit time. It carries
 `heuristic: true`; no eligible prompt means no turn. This time rule adapts
 [Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
 A transcript link for the same session and a matching SHA prefix takes

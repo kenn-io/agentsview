@@ -12,8 +12,9 @@ The latest release is
 **New features**
 
 - Find editor commits through `Agent-Session` trailers in local Git history.
-  Session commit lookups show the source and mark suggested prompts as
-  heuristic. Trailer links survive transcript rewrites and checkout removal.
+  Session commit lookups show the source and suggest the last prompt at or
+  before the commit time, marked as heuristic. Trailer links survive transcript
+  rewrites and checkout removal.
 
 - Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
   replicas after pushing the archive. Deleted sessions remain visible as missing
