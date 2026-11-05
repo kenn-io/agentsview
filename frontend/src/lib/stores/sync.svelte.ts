@@ -1,7 +1,7 @@
 import type { EventSource } from "eventsource";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
-import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
+import { ApiError, ARCHIVE_STALE_EVENT, isAbortError, isRemoteConnection } from "../api/runtime.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
 import { fileReferences } from "./file-references.svelte.js";
 import { events } from "./events.svelte.js";
@@ -401,3 +401,10 @@ class SyncStore {
 }
 
 export const sync = new SyncStore();
+
+// A stale-marked response warns until the next status poll says otherwise.
+if (typeof window !== "undefined") {
+  window.addEventListener(ARCHIVE_STALE_EVENT, () => {
+    sync.syncPending = true;
+  });
+}
