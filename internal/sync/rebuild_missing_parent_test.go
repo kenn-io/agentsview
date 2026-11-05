@@ -27,14 +27,17 @@ func TestRebuildKeepsHealthyHistoryWhenCodexParentIsMissing(t *testing.T) {
 		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
 		testjsonl.CodexMsgJSON("assistant", "parent answer", timestamp),
+		testjsonl.CodexTokenCountJSON(timestamp, 100, 40, 0),
 	)
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o600))
 	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
 		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
 		testjsonl.CodexMsgJSON("assistant", "parent answer", timestamp),
+		testjsonl.CodexTokenCountJSON(timestamp, 100, 40, 0),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
 		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+		testjsonl.CodexTokenCountJSON(timestamp, 20, 5, 0),
 	)), 0o600))
 	require.NoError(t, os.WriteFile(healthyPath, []byte(testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(healthy, "/work/project", "user", timestamp),
@@ -71,6 +74,20 @@ func TestRebuildKeepsHealthyHistoryWhenCodexParentIsMissing(t *testing.T) {
 	assert.Equal(t, 17, database.GetSessionDataVersion(t.Context(), "codex:"+child))
 	assert.Equal(t, []string{childPath}, retry.Paths)
 	assert.True(t, engine.StartupReconciled())
+	usageBefore, err := database.GetSessionUsage(t.Context(), "codex:"+child, true)
+	require.NoError(t, err)
+	require.NotNil(t, usageBefore)
+	require.Equal(t, 5, usageBefore.TotalOutputTokens)
+	require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+child))
+	usageAfter, err := database.GetSessionUsage(t.Context(), "codex:"+child, true)
+	require.NoError(t, err)
+	require.NotNil(t, usageAfter)
+	assert.Equal(t, 5, usageAfter.TotalOutputTokens)
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	appendFile(t, childPath, testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "later-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "later answer", timestamp),
+	))
 	again := engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 1, again.Deferred)
 	assert.Equal(t, 17, database.GetSessionDataVersion(t.Context(), "codex:"+child))
@@ -78,7 +95,14 @@ func TestRebuildKeepsHealthyHistoryWhenCodexParentIsMissing(t *testing.T) {
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o600))
 	recovered := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, recovered.Deferred)
-	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	assert.Equal(t, []string{"child answer", "later answer"}, messageContents(t, database, "codex:"+child))
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
+	require.NoError(t, os.Remove(parentPath))
+	require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+child))
+	assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
+	assert.Equal(t, []string{"child answer", "later answer"}, messageContents(t, database, "codex:"+child))
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o600))
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Deferred)
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
 }
 
@@ -112,6 +136,13 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			t.Cleanup(engine.Close)
 			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
 			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			appendFile(t, childPath, testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "later-turn", timestamp),
+				testjsonl.CodexMsgJSON("assistant", "later answer", timestamp),
+			))
+			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
+			// Without the parent, the stored history cannot be replaced safely.
+			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
 			require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
@@ -119,8 +150,54 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			)), 0o600))
 			recovered := engine.SyncAll(t.Context(), nil)
 			assert.Zero(t, recovered.Deferred)
-			assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+			assert.Equal(t, []string{"child answer", "later answer"}, messageContents(t, database, "codex:"+child))
 			assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
 		})
 	}
+}
+
+func TestRebuildDeferredFilteredAndExcludedSources(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const child = "22222222-2222-4222-8222-222222222222"
+	const filtered = "33333333-3333-4333-8333-333333333333"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	claudeRoot := t.TempDir()
+	parentPath := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl")
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	filteredPath := filepath.Join(root, "rollout-2026-09-01T12-00-00-"+filtered+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "parent history", timestamp),
+	)), 0o600))
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "retained child", timestamp),
+	)), 0o600))
+	database := openTestDB(t)
+	cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}, parser.AgentClaude: {claudeRoot}}, Machine: "local", IncludeCwdPrefixes: []string{"/work"}, DisableFilesystemProjectDiscovery: true}
+	engine := NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Deferred)
+	count, err := database.FileBackedSessionCount(t.Context())
+	require.NoError(t, err)
+	require.Positive(t, count)
+	require.NoError(t, os.Remove(parentPath))
+	require.NoError(t, os.WriteFile(filteredPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(filtered, "/other/project", "user", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "filtered", timestamp),
+	)), 0o600))
+	usageDir := filepath.Join(claudeRoot, "project")
+	require.NoError(t, os.MkdirAll(usageDir, 0o700))
+	usagePath := filepath.Join(usageDir, "usage-probe.jsonl")
+	usageCmd := "<command-name>/usage</command-name>\n<command-message>usage</command-message>\n<command-args></command-args>"
+	require.NoError(t, os.WriteFile(usagePath, []byte(testjsonl.ClaudeUserJSON(usageCmd, timestamp, "/work/project")+"\n"), 0o600))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "usage-probe", Agent: "claude", Machine: "local", Project: "project", Cwd: "/work/project", FilePath: &usagePath}))
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.True(t, stats.ArchiveRebuilt, "zero-write rebuild should account for deferred, filtered and excluded files: %+v", stats)
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Deferred)
+	assert.Equal(t, []string{"retained child"}, messageContents(t, database, "codex:"+child))
 }

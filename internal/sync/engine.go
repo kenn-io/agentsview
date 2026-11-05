@@ -2971,9 +2971,12 @@ func shouldAbortResyncSwap(
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
 		(oldFileSessions == 0 || trashedCopied > 0)
+	// Deferred Codex files can be mixed with files intentionally filtered or
+	// excluded. Every successful file must still be accounted for.
 	deferredOnly := stats.Synced == 0 && stats.Failed == 0 &&
 		stats.filesOK > 0 && stats.TotalSessions == stats.filesOK &&
-		len(stats.deferredPreservedIDs) == stats.filesOK
+		len(stats.deferredPreservedIDs) > 0 &&
+		len(stats.deferredPreservedIDs)+stats.cwdFilteredFiles+stats.parserExcludedFiles == stats.filesOK
 	excludedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
@@ -21977,6 +21980,23 @@ func (e *Engine) processAndWriteSessionFile(
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
+		// Match the batch path: a fallback parse cannot replace saved history
+		// until its replay parent is available.
+		if isCodexFormatAgent(file.Agent) && res.needsRetryForSession(pr.Session.ID) {
+			stored, readErr := e.db.GetSessionFull(ctx, resultIDs[i])
+			if readErr != nil {
+				return false, sessionsChanged, fmt.Errorf("read deferred session %s: %w", resultIDs[i], readErr)
+			}
+			if stored != nil {
+				if stored.DataVersion >= db.CurrentDataVersion() {
+					if err := e.db.SetSessionDataVersion(ctx, resultIDs[i], max(db.CurrentDataVersion()-1, 0)); err != nil {
+						return false, sessionsChanged, fmt.Errorf("mark deferred session %s for retry: %w", resultIDs[i], err)
+					}
+				}
+				preserved = true
+				continue
+			}
+		}
 		write := pendingWrite{
 			sess:                   pr.Session,
 			msgs:                   pr.Messages,

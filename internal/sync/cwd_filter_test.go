@@ -978,6 +978,16 @@ func TestShouldAbortResyncSwap(t *testing.T) {
 			oldFileSessions: 4,
 		},
 		{
+			name: "deferred and filtered with unaccounted OK file aborts",
+			stats: SyncStats{
+				TotalSessions: 3, filesOK: 3,
+				deferredPreservedIDs: []string{"child"}, cwdFilteredFiles: 1,
+				cwdFilteredSessions: 1, nonContainerDiscovered: 3,
+			},
+			oldFileSessions: 3,
+			want:            true,
+		},
+		{
 			name: "cwd-filtered with unaccounted OK file aborts",
 			stats: SyncStats{
 				TotalSessions: 3, filesOK: 2,

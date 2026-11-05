@@ -452,7 +452,7 @@ func (s *SyncStats) recordDeferred(path string) {
 
 // DeferredRetryBatch retains exact paths when possible and falls back to a
 // full reconciliation when the bounded path list overflowed.
-func (s SyncStats) DeferredRetryBatch() WatchBatch {
+func (s *SyncStats) DeferredRetryBatch() WatchBatch {
 	if s.Deferred == 0 {
 		return WatchBatch{}
 	}
