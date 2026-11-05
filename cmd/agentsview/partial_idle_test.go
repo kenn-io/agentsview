@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -64,8 +65,9 @@ func TestIdleRecoveryImportsAvailableHistory(t *testing.T) {
 				ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 				t.Cleanup(ingestion.Stop)
 				ingestion.OpenWatcherDispatch()
-				attached, err := ingestion.attachSources(cfg)
+				attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, ingestion.FlushPending)
 				require.NoError(t, err)
+				ingestion.attached = attached
 				t.Cleanup(attached.Close)
 				ingestion.Suspend()
 				ingestion.applying.Wait()

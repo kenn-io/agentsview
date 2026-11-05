@@ -83,3 +83,29 @@ func TestClaudeSyncIgnoresToolOutput(t *testing.T) {
 	require.Len(t, messages, 1)
 	assert.Equal(t, "readable history", messages[0].Content)
 }
+
+func TestCursorSyncKeepsReadableChildren(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("fixture needs enforced POSIX directory permissions")
+	}
+	root := t.TempDir()
+	for _, child := range []struct{ parent, id, message string }{{"A", "11111111-1111-4111-8111-111111111111", "morning child-a"}, {"C", "33333333-3333-4333-8333-333333333333", "morning child-c"}} {
+		dbtest.WriteTestFile(t, filepath.Join(root, "project", "agent-transcripts", child.parent, "subagents", child.id+".jsonl"), []byte(`{"role":"user","message":{"content":"`+child.message+`"}}`+"\n"))
+	}
+	blocked := filepath.Join(root, "project", "agent-transcripts", "B", "subagents")
+	require.NoError(t, os.MkdirAll(blocked, 0o755))
+	require.NoError(t, os.Chmod(blocked, 0))
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}}, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.False(t, stats.ProcessingComplete(), "the unreadable transcript scope must remain incomplete")
+	for _, expected := range []struct{ id, message string }{{"cursor:11111111-1111-4111-8111-111111111111", "morning child-a"}, {"cursor:33333333-3333-4333-8333-333333333333", "morning child-c"}} {
+		messages, err := database.GetAllMessages(t.Context(), expected.id)
+		require.NoError(t, err)
+		if assert.Len(t, messages, 1, expected.id) {
+			assert.Equal(t, expected.message, messages[0].Content)
+		}
+	}
+}

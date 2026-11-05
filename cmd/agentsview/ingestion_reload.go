@@ -303,15 +303,6 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	d.finishCatchup(done, err == nil && d.ctx.Err() == nil)
 }
 
-// attachSources configures the archive sources an idle catch-up drains.
-func (d *daemonIngestion) attachSources(cfg config.Config) (*archivesource.Manager, error) {
-	attached, err := archivesource.NewManager(d.ctx, cfg, d.database, d.engine, d.FlushPending)
-	if err == nil {
-		d.attached = attached
-	}
-	return attached, err
-}
-
 // catchUpSources syncs what changed while collection was released: local
 // scopes the watcher only learns about by polling, then the scheduled passes.
 func (d *daemonIngestion) catchUpSources(cfg config.Config) error {

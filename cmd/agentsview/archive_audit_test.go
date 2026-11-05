@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -428,21 +429,25 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 		"a live-run failure must log the backoff line")
 }
 
-// TestStartArchiveAuditSelectsFirstDelay checks that a stale archive schedules
-// its first rebuild worker after an hour, while a current archive waits a day
-// for the routine audit worker.
+// TestStartArchiveAuditSelectsFirstDelay checks that stale archives rebuild
+// after an hour and routine audits wait a day, then defer while on battery.
 func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 	type attempt struct {
 		delay time.Duration
 		mode  string
 	}
 	for _, tc := range []struct {
-		name  string
-		stale bool
-		want  attempt
+		name    string
+		stale   bool
+		battery bool
+		idle    bool
+		want    attempt
 	}{
 		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
-		{name: "stale", stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
+		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
+		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
+		{name: "idle", idle: true, want: attempt{archiveAuditInterval + batteryRecheckInterval, "audit"}},
+		{name: "idle on battery", idle: true, battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -456,6 +461,8 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				started := time.Now()
+				var battery atomic.Bool
+				battery.Store(tc.battery)
 				attempts := make(chan attempt, 1)
 				restore := stubLaunchSyncWorker(t, func(
 					_ context.Context, _ config.Config, request syncWorkerRequest, _ func(workerLine),
@@ -466,11 +473,29 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				defer restore()
 				engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 				defer engine.Close()
+				ingestion := &daemonIngestion{pending: tc.idle, resumed: make(chan struct{})}
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil, nil)
+					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil, ingestion, battery.Load)
 				}()
+				if tc.idle {
+					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
+					synctest.Wait()
+					assert.Empty(t, attempts, "the due audit waits for catch-up")
+					ingestion.finishCatchup(make(chan struct{}), true)
+					synctest.Wait()
+				}
+				if tc.battery && !tc.stale {
+					if tc.idle {
+						synctest.Sleep(batteryRecheckInterval)
+					} else {
+						synctest.Sleep(archiveAuditInterval + 2*batteryRecheckInterval)
+					}
+					synctest.Wait()
+					assert.Empty(t, attempts, "routine audit must wait on battery")
+					battery.Store(false)
+				}
 				assert.Equal(t, tc.want, <-attempts)
 				cancel()
 				<-done

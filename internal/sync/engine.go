@@ -554,6 +554,8 @@ type EngineConfig struct {
 	// startup discovery completed authoritatively. Failed, cancelled, and
 	// aborted attempts leave it eligible for a later successful owner.
 	OnStartupReconciled func(SyncStats, error)
+	// OnRebuildDeferred schedules retry work after a rebuild or startup pass.
+	OnRebuildDeferred func(WatchBatch)
 	// ProgressStallAfter controls when CurrentProgress marks an active pass as
 	// stalled. Zero uses the production default. Tests and embedders may use a
 	// shorter interval without changing the daemon-wide policy.
@@ -572,9 +574,11 @@ type Engine struct {
 	sourceSyncErr  error
 	rebuildSources func(context.Context) (RebuildOptions, error)
 
-	db    *db.DB
-	stat  func(string) (os.FileInfo, error)
-	lstat func(string) (os.FileInfo, error)
+	db *db.DB
+	// Rebuilds swap db temporarily; annotation writes must stay on the live archive.
+	archive *db.DB
+	stat    func(string) (os.FileInfo, error)
+	lstat   func(string) (os.FileInfo, error)
 	// archiveStore is the database holding previously archived
 	// sessions for the preserve guards in prepareSessionWrite.
 	// During a resync/rebuild it points at the original DB while
@@ -690,6 +694,7 @@ type Engine struct {
 	startupReconciledErr    error
 	startupCallbackOnce     gosync.Once
 	onStartupReconciled     func(SyncStats, error)
+	onRebuildDeferred       func(WatchBatch)
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
@@ -1027,6 +1032,7 @@ func NewEngine(ctx context.Context,
 	}
 	e := &Engine{
 		db:                      database,
+		archive:                 database,
 		stat:                    os.Stat,
 		lstat:                   os.Lstat,
 		baseProviderFactories:   providerFactories,
@@ -1070,6 +1076,7 @@ func NewEngine(ctx context.Context,
 		startupReconciledReady:  make(chan struct{}),
 		startupAttemptReady:     make(chan struct{}),
 		onStartupReconciled:     cfg.OnStartupReconciled,
+		onRebuildDeferred:       cfg.OnRebuildDeferred,
 		progressStallAfter:      progressStallAfter,
 		reconciliationSpoolFactory: func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(ctx, path)
@@ -2967,6 +2974,14 @@ func shouldAbortResyncSwap(
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
 		(oldFileSessions == 0 || trashedCopied > 0)
+	// Deferred Codex files and preserved Antigravity CLI fallbacks can be mixed
+	// with files intentionally filtered or excluded. Every successful file must
+	// still be accounted for, and the only failures allowed are the preserved
+	// fallbacks, whose saved rows the orphan copy restores.
+	deferredOnly := stats.Synced == 0 && stats.Failed == stats.preservedRetryFailures &&
+		stats.filesOK > 0 && stats.TotalSessions == stats.filesOK &&
+		len(stats.deferredPreservedIDs) > 0 &&
+		len(stats.deferredPreservedIDs)+stats.cwdFilteredFiles+stats.parserExcludedFiles == stats.filesOK
 	excludedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
@@ -2989,6 +3004,7 @@ func shouldAbortResyncSwap(
 		(stats.Synced == 0 &&
 			stats.TotalSessions > 0 &&
 			!preservedOnly &&
+			!deferredOnly &&
 			!excludedOnly &&
 			!cwdFilteredOnly) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
@@ -3085,8 +3101,9 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// Hold the write barrier for the whole in-process build-and-swap window. The
 	// build reads the original while it stays open, and the swap's
 	// CloseConnections runs only after the copies, so without the barrier a
-	// direct write (star/delete/restore) that bypasses syncMu could land in the
-	// original between the copies and the rename and be discarded by the swap.
+	// direct write (star/delete/restore/annotation) that bypasses syncMu could
+	// land in the original between the copies and the rename and be discarded
+	// by the swap.
 	// The barrier rejects such writes with ErrWriterClosed instead. The worker
 	// arm holds this barrier at the daemon layer (runWorkerResyncBuild) and calls
 	// ResyncBuild directly, so it never reaches this method; this arm covers the
@@ -3203,8 +3220,16 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	if err := e.ResetCachesAfterSwap(ctx); err != nil {
 		log.Printf("resync: reset caches after swap: %v", err)
 	}
+	e.NotifyRebuildDeferred(stats)
 	e.setLastSyncStats(stats)
 	return stats, nil
+}
+
+// NotifyRebuildDeferred hands installed rebuild retry work to the watcher.
+func (e *Engine) NotifyRebuildDeferred(stats SyncStats) {
+	if stats.ArchiveRebuilt && stats.Deferred > 0 && e.onRebuildDeferred != nil {
+		e.onRebuildDeferred(stats.DeferredRetryBatch())
+	}
 }
 
 // resyncBuildLocked builds a complete replacement archive at the temp path from
@@ -3572,7 +3597,12 @@ func (e *Engine) resyncBuildLocked(
 			phaseSnapshot("local", &e.phaseStats))
 	}
 	localStats := stats
-	if localStats.Deferred > 0 || stats.Aborted || ctx.Err() != nil {
+	if stats.Deferred > 0 {
+		warning := fmt.Sprintf("resync: %d sessions need retry; newly imported forks without their parent may include copied parent history and usage", stats.Deferred)
+		log.Print(warning)
+		stats.Warnings = append(stats.Warnings, warning)
+	}
+	if stats.Aborted || ctx.Err() != nil {
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
@@ -3883,6 +3913,33 @@ func (e *Engine) resyncBuildLocked(
 	}
 	stats.OrphanedCopied = len(orphaned)
 	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
+	abortPreserved := func(err error) (SyncStats, error) {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, fmt.Sprintf("resync aborted: %v", err))
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+	var demoteIDs []string
+	for _, id := range stats.deferredPreservedIDs {
+		stored, readErr := newDB.GetSessionFull(ctx, id)
+		if readErr != nil || stored == nil {
+			if readErr == nil {
+				readErr = errors.New("preserved session missing")
+			}
+			return abortPreserved(fmt.Errorf("recover deferred session %s: %w", id, readErr))
+		}
+		if stored.DataVersion >= db.CurrentDataVersion() {
+			demoteIDs = append(demoteIDs, id)
+		}
+	}
+	if err := newDB.SetSessionDataVersionsContext(ctx, demoteIDs, max(db.CurrentDataVersion()-1, 0)); err != nil {
+		return abortPreserved(fmt.Errorf("mark preserved deferred sessions for retry: %w", err))
+	}
 	for id, name := range deferredTitles {
 		if err := newDB.RefreshNativeSessionName(ctx, id, name); err != nil {
 			stats.RecordFailed()
@@ -4661,7 +4718,7 @@ func (e *Engine) SyncThenRun(
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
 	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
-	if err == nil && stats.Deferred == 0 {
+	if err == nil && (stats.Deferred == 0 || stats.ArchiveRebuilt) {
 		// Release while syncMu is still held. A timed fallback that was
 		// already waiting on the mutex can then recheck the gate before it
 		// performs any duplicate startup work.
@@ -4760,7 +4817,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	}()
 	defer e.syncMu.Unlock()
 	defer func() {
-		if retErr == nil && stats.Deferred == 0 {
+		if retErr == nil && (stats.Deferred == 0 || stats.ArchiveRebuilt) {
 			// Match SyncThenRun: successful foreground coordination unblocks
 			// startup backfills while syncMu is still held.
 			e.ReleaseStartupMaintenance()
@@ -4873,6 +4930,12 @@ func (e *Engine) recordStartupReconciled(
 	if ctx.Err() != nil {
 		return
 	}
+	if !e.StartupReconciled() && !stats.ArchiveRebuilt && stats.Deferred > 0 &&
+		err == nil && stats.Failed == 0 && stats.AuthoritativeDiscoveryComplete() && e.onRebuildDeferred != nil {
+		e.onRebuildDeferred(stats.DeferredRetryBatch())
+		stats.deferredRetryScheduled = true
+		e.ReleaseStartupMaintenance()
+	}
 	e.startupAttemptOnce.Do(func() {
 		e.startupReconciledStats = stats
 		if err != nil {
@@ -4882,7 +4945,7 @@ func (e *Engine) recordStartupReconciled(
 				"startup discovery incomplete: %d provider failures",
 				stats.providerFailures,
 			)
-		} else if stats.Deferred > 0 {
+		} else if stats.Deferred > 0 && !stats.ArchiveRebuilt && !stats.deferredRetryScheduled {
 			e.startupReconciledErr = fmt.Errorf(
 				"startup processing incomplete: %d deferred, %d failed",
 				stats.Deferred, stats.Failed,
@@ -4906,7 +4969,7 @@ func startupReconciliationSucceeded(
 	ctx context.Context, stats SyncStats, err error,
 ) bool {
 	return err == nil && ctx.Err() == nil &&
-		stats.AuthoritativeDiscoveryComplete() && stats.Deferred == 0
+		stats.AuthoritativeDiscoveryComplete() && (stats.Deferred == 0 || stats.ArchiveRebuilt || stats.deferredRetryScheduled)
 }
 
 // RecordStartupReconciled acknowledges a startup pass performed out of process
@@ -4993,6 +5056,16 @@ func (stats *SyncStats) AuthoritativeDiscoveryComplete() bool {
 func (stats *SyncStats) ProcessingComplete() bool {
 	return !stats.Aborted && stats.Failed == 0 &&
 		stats.providerFailures == 0 && stats.Deferred == 0
+}
+
+// ProcessingCompleteOrRetrying reports whether a caller can continue after a
+// pass whose only unfinished work is deferred sources already queued for
+// retry: an installed rebuild or a startup pass that scheduled its retries.
+// Deferred sources must still not be acknowledged through ProcessingComplete.
+func (stats *SyncStats) ProcessingCompleteOrRetrying() bool {
+	return stats.ProcessingComplete() ||
+		((stats.ArchiveRebuilt || stats.deferredRetryScheduled) &&
+			stats.Deferred > 0 && stats.Failed == 0 && stats.AuthoritativeDiscoveryComplete())
 }
 
 // RunStartupMaintenance waits for the daemon-launching foreground sync, then
@@ -5201,81 +5274,66 @@ func (e *Engine) ApplyWorktreeProjectMappings(
 	return result, err
 }
 
-// AssignSessionProject serializes a one-session project override with parser
-// and watcher writes, then publishes the changed session inventory.
+// AssignSessionProject records a one-session project override under the archive
+// write lock, waiting for a closed writer to reopen, then publishes the inventory.
 func (e *Engine) AssignSessionProject(
 	ctx context.Context,
 	sessionID string,
 	project string,
 ) (db.SessionProjectAssignment, error) {
-	var assignment db.SessionProjectAssignment
-	err := e.RunExclusive(func() error {
-		var err error
-		assignment, err = e.db.AssignSessionProject(ctx, sessionID, project)
-		return err
-	})
-	if err == nil {
-		e.emit("sessions")
-	}
-	return assignment, err
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionProjectAssignment, error) {
+		return e.archive.AssignSessionProject(ctx, sessionID, project)
+	}, func(db.SessionProjectAssignment) bool { return true })
 }
 
-// ClearSessionProjectAssignment serializes removal of a one-session override
-// with parser and watcher writes, then publishes the changed session inventory.
+// ClearSessionProjectAssignment removes a one-session override under the archive
+// write lock, waiting for a closed writer to reopen, then publishes the inventory.
 func (e *Engine) ClearSessionProjectAssignment(
 	ctx context.Context,
 	sessionID string,
 ) (db.ClearedSessionProjectAssignment, error) {
-	var cleared db.ClearedSessionProjectAssignment
-	err := e.RunExclusive(func() error {
-		var err error
-		cleared, err = e.db.ClearSessionProjectAssignment(ctx, sessionID)
-		return err
-	})
-	if err == nil {
-		e.emit("sessions")
-	}
-	return cleared, err
+	return runSessionAnnotationWrite(ctx, e, func() (db.ClearedSessionProjectAssignment, error) {
+		return e.archive.ClearSessionProjectAssignment(ctx, sessionID)
+	}, func(db.ClearedSessionProjectAssignment) bool { return true })
 }
 
-// SetSessionLabels replaces one session's labels, serialized with parser
-// writes, then publishes the session inventory when the labels changed.
+// SetSessionLabels replaces one session's labels under the archive write lock,
+// waiting for a closed writer to reopen, then publishes when the labels changed.
 func (e *Engine) SetSessionLabels(
 	ctx context.Context, sessionID string, labels []string,
 ) (db.SessionLabels, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
-		return e.db.SetSessionLabels(ctx, sessionID, labels)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionLabels, error) {
+		return e.archive.SetSessionLabels(ctx, sessionID, labels)
 	}, sessionLabelsChanged)
 }
 
-// UpdateSessionLabels adds and removes one session's labels, serialized
-// with parser writes, then publishes the session inventory when the labels
-// changed.
+// UpdateSessionLabels adds and removes labels under the archive write lock,
+// waiting for a closed writer to reopen, then publishes when the labels changed.
 func (e *Engine) UpdateSessionLabels(
 	ctx context.Context, sessionID string, add, remove []string,
 ) (db.SessionLabels, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
-		return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionLabels, error) {
+		return e.archive.UpdateSessionLabels(ctx, sessionID, add, remove)
 	}, sessionLabelsChanged)
 }
 
-// SetSessionExternalParent records a launcher-supplied parent link,
-// serialized with parser writes so a concurrent parse cannot interleave
-// with the parent application.
+// SetSessionExternalParent records a launcher-supplied parent link under the
+// archive write lock, waiting for a closed writer to reopen.
 func (e *Engine) SetSessionExternalParent(
 	ctx context.Context, sessionID, parentID string,
 ) (db.SessionExternalParent, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
-		return e.db.SetSessionExternalParent(ctx, sessionID, parentID)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionExternalParent, error) {
+		return e.archive.SetSessionExternalParent(ctx, sessionID, parentID)
 	}, sessionExternalParentChanged)
 }
 
-// ClearSessionExternalParent removes a launcher-supplied parent link.
+// ClearSessionExternalParent removes a launcher-supplied parent link under the
+// archive write lock, waiting for a closed writer to reopen.
 func (e *Engine) ClearSessionExternalParent(
 	ctx context.Context, sessionID string,
 ) (db.SessionExternalParent, error) {
-	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
-		return e.db.ClearSessionExternalParent(ctx, sessionID)
+	return runSessionAnnotationWrite(ctx, e, func() (db.SessionExternalParent, error) {
+		return e.archive.ClearSessionExternalParent(ctx, sessionID)
 	}, sessionExternalParentChanged)
 }
 
@@ -5285,17 +5343,17 @@ func sessionLabelsChanged(l db.SessionLabels) bool { return l.Changed && l.Sessi
 
 func sessionExternalParentChanged(l db.SessionExternalParent) bool { return l.Changed }
 
-// runSessionAnnotationWrite runs write under the engine's exclusive lock and
-// publishes the session inventory only when changed reports a visible change.
+// runSessionAnnotationWrite waits for the archive writer with the caller's
+// context. The write takes the archive write lock, and a visible change publishes
+// the session inventory.
 func runSessionAnnotationWrite[T any](
-	e *Engine, write func() (T, error), changed func(T) bool,
+	ctx context.Context, e *Engine, write func() (T, error), changed func(T) bool,
 ) (T, error) {
 	var result T
-	err := e.RunExclusive(func() error {
-		var err error
-		result, err = write()
-		return err
-	})
+	if e.refuseWriteInForceParse("runSessionAnnotationWrite") {
+		return result, errors.New("runSessionAnnotationWrite refused on report-only parse-diff engine")
+	}
+	result, err := db.RetryAcrossHandoff(ctx, e.archive, write)
 	if err == nil && changed(result) {
 		e.emit("sessions")
 	}
@@ -6061,6 +6119,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			overflow:  stats.deferredRetryOverflow,
 			completed: completedScopes,
 			cause:     discoveryErr,
+			deferOnly: failures == 0 && retErr == nil && discoveryErr == nil && stats.Failed == 0 && !stats.Aborted,
 		}
 		if retErr == nil {
 			retErr = incomplete
@@ -11249,6 +11308,52 @@ func (e *Engine) collectAndBatchWithOptions(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseAll()
 		} else {
+			// An unresolved fork or low-fidelity Antigravity CLI parse cannot
+			// authoritatively replace saved history. New sessions may still
+			// publish fallback content and remain marked for retry.
+			if (isCodexFormatAgent(r.agent) && r.deferredCount > 0) ||
+				(r.agent == parser.AgentAntigravityCLI && len(r.retrySessionIDs) > 0) {
+				var store db.Store = e.db
+				if e.archiveStore != nil {
+					store = e.archiveStore
+				}
+				kept := allowed[:0]
+				for _, pr := range allowed {
+					if !r.needsRetryForSession(pr.Session.ID) {
+						kept = append(kept, pr)
+						continue
+					}
+					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
+					stored, err := savedHistory(ctx, store, id)
+					if err != nil {
+						log.Printf("resync: read deferred session %s: %v", id, err)
+						stats.RecordFailed()
+						stats.Aborted = true
+						continue
+					}
+					if stored == nil {
+						kept = append(kept, pr)
+					} else if e.archiveStore != nil {
+						stats.deferredPreservedIDs = append(stats.deferredPreservedIDs, id)
+						if r.agent == parser.AgentAntigravityCLI {
+							stats.preservedRetryFailures++
+						}
+					} else if stored.DataVersion >= db.CurrentDataVersion() {
+						if err := e.db.SetSessionDataVersion(ctx, id, max(db.CurrentDataVersion()-1, 0)); err != nil {
+							log.Printf("sync: mark deferred session %s for retry: %v", id, err)
+							stats.RecordFailed()
+							stats.Aborted = true
+						}
+					}
+				}
+				allowed = kept
+				if len(allowed) == 0 {
+					r.releaseAll()
+					progress.SessionsDone++
+					e.reportProgress(onProgress, progress)
+					continue
+				}
+			}
 			sourceNeedsRetry := presenceProofWithheld
 			if resultRetentionBytes > 0 && len(pending) > 0 &&
 				(pendingRetentionBytes >= pendingRetentionLimit ||
@@ -11887,6 +11992,35 @@ func (r *processResult) releaseStaged() {
 		r.stagedGCRelease()
 		r.stagedGCRelease = nil
 	}
+}
+
+// savedHistory returns the stored row for id only when it holds messages or
+// usage events. Placeholder rows, such as a Recall import or a session header
+// written before its content, have nothing for a fallback parse to overwrite.
+func savedHistory(ctx context.Context, store db.Store, id string) (*db.Session, error) {
+	stored, err := store.GetSessionFull(ctx, id)
+	if err != nil || stored == nil {
+		return nil, err
+	}
+	msgs, err := store.GetMessages(ctx, id, 0, 1, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) > 0 {
+		return stored, nil
+	}
+	reader, ok := store.(interface {
+		GetUsageEvents(context.Context, string) ([]db.UsageEvent, error)
+	})
+	if !ok {
+		// Without a way to rule out saved usage, keep the row.
+		return stored, nil
+	}
+	events, err := reader.GetUsageEvents(ctx, id)
+	if err != nil || len(events) == 0 {
+		return nil, err
+	}
+	return stored, nil
 }
 
 func (r *processResult) needsRetryForSession(sessionID string) bool {
@@ -21883,6 +22017,23 @@ func (e *Engine) processAndWriteSessionFile(
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
+		// Match the batch path: these fallback parses cannot replace saved
+		// history until the higher-fidelity source is available.
+		if (isCodexFormatAgent(file.Agent) || file.Agent == parser.AgentAntigravityCLI) && res.needsRetryForSession(pr.Session.ID) {
+			stored, readErr := savedHistory(ctx, e.db, resultIDs[i])
+			if readErr != nil {
+				return false, sessionsChanged, fmt.Errorf("read deferred session %s: %w", resultIDs[i], readErr)
+			}
+			if stored != nil {
+				if stored.DataVersion >= db.CurrentDataVersion() {
+					if err := e.db.SetSessionDataVersion(ctx, resultIDs[i], max(db.CurrentDataVersion()-1, 0)); err != nil {
+						return false, sessionsChanged, fmt.Errorf("mark deferred session %s for retry: %w", resultIDs[i], err)
+					}
+				}
+				preserved = true
+				continue
+			}
+		}
 		write := pendingWrite{
 			sess:                   pr.Session,
 			msgs:                   pr.Messages,

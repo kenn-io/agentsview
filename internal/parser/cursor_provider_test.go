@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1036,4 +1037,40 @@ func TestCursorBrokenCandidateKeepsHealthyHistory(t *testing.T) {
 			assert.Equal(t, 1, calls)
 		})
 	}
+}
+
+func TestCursorUnreadableSubagentsKeepsHealthySiblings(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("fixture needs enforced POSIX directory permissions")
+	}
+	root := t.TempDir()
+	transcripts := filepath.Join(root, "project", "agent-transcripts")
+	childA := cursorProviderWriteJSONLTranscript(t, filepath.Join(transcripts, "a-parent", "subagents"), "a-child.jsonl", "first healthy child")
+	blocked := filepath.Join(transcripts, "b-parent", "subagents")
+	require.NoError(t, os.MkdirAll(blocked, 0o755))
+	require.NoError(t, os.Chmod(blocked, 0))
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+	childC := cursorProviderWriteJSONLTranscript(t, filepath.Join(transcripts, "c-parent", "subagents"), "c-child.jsonl", "last healthy child")
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.ErrorIs(t, err, os.ErrPermission)
+	var paths []string
+	for _, source := range sources {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.ElementsMatch(t, []string{childA, childC}, paths)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	consumerErr := errors.New("consumer stopped")
+	calls := 0
+	err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
+	require.ErrorIs(t, err, consumerErr)
+	assert.Equal(t, 1, calls)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls = 0
+	err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls)
 }

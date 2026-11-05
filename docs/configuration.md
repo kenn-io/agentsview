@@ -251,6 +251,7 @@ require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
 sync_idle_after = "10m"
+sync_interval = "5s"
 chart_palette = "agentsview"
 zoom_level = 120
 ```
@@ -287,6 +288,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
+| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
@@ -2113,7 +2115,8 @@ mechanisms:
 
 1. **File watcher** — uses FSEvents on macOS and fsnotify elsewhere to detect
     file changes. An isolated edit is batched for 500ms; watcher-driven sync
-    start times remain at least five seconds apart. Common dependency and build
+    start times remain at least five seconds apart by default (see
+    [`sync_interval`](#config-file)). Common dependency and build
     folders (`node_modules`, `__pycache__`, `.git`, `vendor`, `dist`, etc.) are
     automatically skipped to reduce noise and overhead. On macOS, FSEvents
     reports a file that its producer keeps open only when the file is created
@@ -2425,8 +2428,9 @@ sudo sysctl fs.inotify.max_user_watches=524288
 
 ## Memory Behavior
 
-The serve daemon bounds its own memory, so no tuning is required. It installs a
-256 MiB Go soft memory limit, and on Linux it also limits glibc to two malloc
+The serve daemon installs a 4 GiB Go soft memory limit as a backstop so large
+requests run with normal GC pacing. Setting `GOMEMLIMIT` lower trades GC time
+for a smaller heap. On Linux it also limits glibc to two malloc
 arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
 off glibc's dynamic adjustment, which otherwise lets a long-running process stop
 trimming until as much as 64 MiB is free, so memory freed by the SQLite driver

@@ -124,12 +124,85 @@ func SecretFindingsSQL(f db.SecretFindingFilter, dateExpr, dateParam, tieBreakCo
 
 func (SessionQueries) SidebarSQL(f db.SessionFilter, dialect db.QueryDialect) (string, []any) {
 	where, args := db.BuildSessionFilterSQL(f, dialect)
-	return `SELECT id, parent_session_id, relationship_type,
+	return "SELECT " + sidebarColumns(dialect, "id") + `
+  FROM sessions WHERE ` + where + `
+  ORDER BY COALESCE(ended_at, started_at, created_at) DESC, id DESC`, args
+}
+
+func sidebarColumns(dialect db.QueryDialect, idColumn string) string {
+	return idColumn + `, parent_session_id, relationship_type,
   project, project_assigned, machine, agent, agent_label, entrypoint, session_kind,
   COALESCE(display_name, session_name) AS display_name,
   started_at, ended_at, created_at, termination_status, message_count,
   user_message_count, transcript_revision, is_automated, ` +
-		dialect.Position("COALESCE(first_message, '')", "'<teammate-message'") + ` > 0
-  FROM sessions WHERE ` + where + `
-  ORDER BY COALESCE(ended_at, started_at, created_at) DESC, id DESC`, args
+		dialect.Position("COALESCE(first_message, '')", "'<teammate-message'") + ` > 0`
+}
+
+// SidebarRootPageSQL selects roots by the newest activity in their visible trees.
+// A count request uses the same tree membership for starred roots.
+func (SessionQueries) SidebarRootPageSQL(f db.SessionFilter, dialect db.QueryDialect, cur db.SessionCursor, count bool) (string, []any) {
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootFilter.Starred = false
+	where, args := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
+	where += " AND " + db.BuildCanonicalRootWhere(dialect, "sessions", f.IncludeOrphans)
+	if count && !f.Starred {
+		return CountSessionsSQL(dialect.SignedAggregate("COUNT(*)"), where), args
+	}
+	query := `WITH RECURSIVE root_candidates AS (
+		SELECT id AS id FROM sessions WHERE ` + where + `
+	), tree AS (
+		SELECT id AS root_id, id AS id FROM root_candidates
+		` + dialect.RecursiveUnionSQL() + `
+		SELECT t.root_id AS root_id, s.id AS id
+		FROM sessions s JOIN tree t ON ` + dialect.ParentRelation("s", "t") + `
+		WHERE ` + db.SessionTreeMemberPredicate(f, dialect, "s") + `
+	)`
+	starredJoin := ""
+	if f.Starred {
+		query += `, eligible_roots AS (
+			SELECT DISTINCT t.root_id AS id FROM tree t
+			JOIN starred_sessions ss ON ss.session_id = t.id
+		)`
+		starredJoin = " JOIN eligible_roots er ON er.id = t.root_id "
+	}
+	if count {
+		return query + " SELECT " + dialect.SignedAggregate("COUNT(*)") + " FROM eligible_roots", args
+	}
+	query += `, root_activity AS (
+		SELECT t.root_id AS id, MAX(COALESCE(s.ended_at, s.started_at, s.created_at)) AS activity
+		FROM tree t ` + starredJoin + ` JOIN sessions s ON s.id = t.id
+		GROUP BY t.root_id
+	) SELECT id, activity FROM root_activity `
+	page := db.NewQueryBuilder(dialect, len(args))
+	if f.Cursor != "" {
+		query += "WHERE (activity, id) < (" + page.CursorTimestamp(cur.EndedAt) + ", " + page.Add(cur.ID) + ") "
+	}
+	query += "ORDER BY activity DESC, id DESC " + page.Limit(f.Limit+1)
+	return query, append(args, page.Args()...)
+}
+
+// SidebarTreePageSQL returns each selected root's complete visible tree.
+func (SessionQueries) SidebarTreePageSQL(f db.SessionFilter, dialect db.QueryDialect, ids []string) (string, []any) {
+	page := db.NewQueryBuilder(dialect, 0)
+	placeholders := make([]string, len(ids))
+	for i, id := range ids {
+		placeholders[i] = page.Add(id)
+	}
+	query := `WITH RECURSIVE tree AS (
+		SELECT id AS root_id, id AS id FROM sessions WHERE id IN (` + strings.Join(placeholders, ", ") + `)
+		` + dialect.RecursiveUnionSQL() + `
+		SELECT t.root_id AS root_id, s.id AS id
+		FROM sessions s JOIN tree t ON ` + dialect.ParentRelation("s", "t") + `
+		WHERE ` + db.SessionTreeMemberPredicate(f, dialect, "s") + `
+	), root_activity AS (
+		SELECT t.root_id AS root_id, MAX(COALESCE(s.ended_at, s.started_at, s.created_at)) AS activity
+		FROM tree t JOIN sessions s ON s.id = t.id
+		GROUP BY t.root_id
+	) SELECT t.root_id, ` + sidebarColumns(dialect, "sessions.id") + `
+	FROM sessions JOIN tree t ON sessions.id = t.id
+	JOIN root_activity ra ON ra.root_id = t.root_id
+	ORDER BY ra.activity DESC, t.root_id DESC,
+		COALESCE(ended_at, started_at, created_at) DESC, sessions.id DESC`
+	return query, page.Args()
 }

@@ -63,6 +63,35 @@ transaction or a pinned reader can push the WAL past it (249 MiB was observed).
 Before closing the replacement, the build runs a checked truncate checkpoint.
 The swap installs only the main file, so a failed checkpoint or close aborts it.
 
+When a Codex fork's replay parent is unavailable, a rebuild preserves an
+existing child and schedules it for retry. New messages and usage in that child
+remain absent from the archive until the parent and child source can be read
+and the source is reparsed. If the parent never returns, that delay is
+indefinite. A child with no saved messages is imported with its fallback
+transcript, even when a placeholder row exists, such as one created by a Recall
+import. That transcript may include copied parent messages and usage, and later
+appends are likewise held until recovery. The rebuild warns about the possible
+copied usage.
+
+The stale parser version does not distinguish a previously resolved child from
+a fallback. Parser checkpoints are optional, do not persist the replay gate,
+and are not copied with orphaned sessions. Treating a stale row as a fallback
+or resuming it without proven source and content state can overwrite archived
+child history or count parent usage twice. Live updates for unresolved forks
+need durable provenance and crash-safe retry and recovery; the current rebuild
+keeps the existing history rather than guessing that boundary.
+
+When an Antigravity CLI source yields a retryable low-fidelity transcript,
+sync and rebuild preserve any saved history and leave it stale for retry. A new
+session can use the fallback, but later fallback changes are held until a
+high-fidelity parse succeeds. A rebuild still installs, even when these
+preserved sessions are its only work. The sync still reports them as failures,
+so the request returns an error and attached archive sources do not drain until
+a high-fidelity parse succeeds.
+
+A daemon startup whose only unfinished work is queued fork retries still counts
+as complete for draining attached archive sources.
+
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives

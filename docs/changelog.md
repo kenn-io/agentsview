@@ -107,6 +107,9 @@ The latest release is
 
 **Improvements**
 
+- Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
+  rows show quickly on large archives.
+
 - Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
   parent links when counting roots and loading child trees, including pages
   filtered by labels or pull requests.
@@ -140,6 +143,9 @@ The latest release is
 
 **Bug fixes**
 
+- Large Usage and Activity pages no longer stall in garbage collection on big
+  archives; peak memory during large requests can be higher, and a lower
+  `GOMEMLIMIT` can reduce it by overriding the 4 GiB default.
 - Codex code-mode `wait` calls now show their script output. The next sync
   restores missing results in previously imported sessions. Subagent waits
   keep their existing behavior.

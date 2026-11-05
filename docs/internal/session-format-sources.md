@@ -774,6 +774,11 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade` cover the link and the
   upgrade, using the shape reported in
   [issue #2468](https://github.com/kenn-io/agentsview/issues/2468).
+  Rechecked the pinned fork writer on 2026-11-05: copied forks retain their
+  inherited prefix. If the parent is unavailable, rebuilds preserve an existing
+  child or retain a new child's full transcript with a retry marker; its usage
+  may include copied parent usage until the parent can be read. Synthetic
+  `TestRebuildMissingParentRemainsRetryableAcrossRestart` covers recovery.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
@@ -2421,6 +2426,11 @@ schemas keep their existing ordering behavior.
   also discarded because the summary boundaries cannot be recovered.
 
 ## Cursor (`cursor`)
+
+- **Discovery rechecked 2026-11-05:** Flat, nested, and subagent layout fixtures
+  preserve readable siblings when another parent directory is inaccessible.
+  The incomplete scan remains an error; transcript identities and extension
+  preference are unchanged.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.

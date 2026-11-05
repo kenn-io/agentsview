@@ -101,7 +101,9 @@ type embedScheduler struct {
 	// carried into every scheduler-driven BuildRequest so scheduled builds
 	// stay config-authoritative rather than drifting from a CLI-only
 	// override (see EmbeddingsBuildOptions.IncludeAutomatedSet).
-	includeAutomated bool
+	includeAutomated    bool
+	onBattery           func() bool
+	batteryDeferredPath string
 
 	dirty chan func()
 	stop  chan struct{}
@@ -179,7 +181,13 @@ func (s *embedScheduler) run(
 	// be silently deferred until the next backstop tick (24h by default)
 	// instead of retrying on the debounce interval. It is read and written only
 	// from this single goroutine, so it needs no synchronization of its own.
-	var pendingBackstop bool
+	// A battery marker left by an earlier daemon does not record whether the
+	// deferred work was a backstop, so its replay is a full reconciliation.
+	_, markerErr := os.Stat(s.batteryDeferredPath)
+	pendingBackstop := s.batteryDeferredPath != "" && markerErr == nil
+	if pendingBackstop {
+		s.Notify()
+	}
 	var pendingRelease func()
 	var buildErrorRetries int
 	defer func() {
@@ -217,6 +225,22 @@ func (s *embedScheduler) run(
 			}
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
+			if s.onBattery != nil && s.onBattery() {
+				if pendingRelease != nil {
+					s.setBatteryDeferred(true)
+					pendingRelease()
+					pendingRelease = nil
+				}
+				resetTimer(debounceTimer, batteryRecheckInterval)
+				continue
+			}
+			if pendingRelease == nil {
+				var ok bool
+				pendingRelease, ok = s.idle.BeginWork()
+				if !ok {
+					continue
+				}
+			}
 			req := vector.BuildRequest{Backstop: pendingBackstop, IncludeAutomated: s.includeAutomated}
 			started, err := s.mgr.TryBuild(ctx, req)
 			if err != nil {
@@ -244,6 +268,7 @@ func (s *embedScheduler) run(
 				resetTimer(debounceTimer, s.debounce)
 				continue
 			}
+			s.setBatteryDeferred(false)
 			if pendingRelease != nil {
 				pendingRelease()
 				pendingRelease = nil
@@ -259,6 +284,16 @@ func (s *embedScheduler) run(
 				// forever. Healthy pending work may still be satisfied by a
 				// backstop before its ordinary debounce expires.
 				pendingBackstop = true
+				continue
+			}
+			if s.onBattery != nil && s.onBattery() {
+				s.setBatteryDeferred(true)
+				if pendingRelease != nil {
+					pendingRelease()
+					pendingRelease = nil
+				}
+				pendingBackstop = true
+				resetTimer(debounceTimer, batteryRecheckInterval)
 				continue
 			}
 			// With no error retry pending, a periodic reconciliation gets a
@@ -287,6 +322,7 @@ func (s *embedScheduler) run(
 				continue
 			}
 
+			s.setBatteryDeferred(false)
 			release()
 			pendingBackstop = false
 			if pendingRelease != nil {
@@ -296,9 +332,25 @@ func (s *embedScheduler) run(
 				// will re-arm the timer when the loop receives it.
 				pendingRelease()
 				pendingRelease = nil
-				stopTimer(debounceTimer)
 			}
+			stopTimer(debounceTimer)
 		}
+	}
+}
+
+// setBatteryDeferred carries paused message work across a daemon exit.
+func (s *embedScheduler) setBatteryDeferred(deferred bool) {
+	if s.batteryDeferredPath == "" {
+		return
+	}
+	var err error
+	if deferred {
+		err = os.WriteFile(s.batteryDeferredPath, nil, 0o600)
+	} else {
+		err = os.Remove(s.batteryDeferredPath)
+	}
+	if err != nil && (deferred || !errors.Is(err, os.ErrNotExist)) {
+		log.Printf("embed scheduler: recording battery-deferred work: %v", err)
 	}
 }
 
@@ -776,6 +828,10 @@ func setupVectorServing(
 			vector.RecallIndexSpec().Name, recallMgr,
 		),
 		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
+	}
+	if cfg.Vector.Embed.RunAfterSyncEnabled() || backstop > 0 {
+		// Only automatic builds replay a battery marker; manual builds leave it on disk.
+		scheduler.batteryDeferredPath = path + ".battery-deferred"
 	}
 	if cfg.Vector.Embed.RunAfterSyncEnabled() {
 		// A permanent delete must reach the message mirror's journal refresh without waiting for a sync.
