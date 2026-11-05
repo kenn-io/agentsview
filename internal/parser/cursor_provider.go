@@ -329,72 +329,82 @@ func (s cursorSourceSet) discoverLocalRootEach(ctx context.Context, root string,
 		}
 		return fmt.Errorf("resolve cursor root %s: %w", root, err)
 	}
+	var incomplete error
 	err = streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
 		if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		dir := filepath.Join(root, project.Name(), "agent-transcripts")
-		resolvedDir, resolveErr := filepath.EvalSymlinks(dir)
-		if errors.Is(resolveErr, os.ErrNotExist) {
-			if _, lstatErr := os.Lstat(dir); errors.Is(lstatErr, os.ErrNotExist) {
-				return nil
-			}
-			return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+		err := s.discoverLocalProjectEach(ctx, root, resolvedRoot, project.Name(), resolutionCache, yield)
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if resolveErr != nil {
-			return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
-		}
-		if !isContainedIn(resolvedDir, resolvedRoot) {
-			return nil
-		}
-		topLevel := make(map[string]struct{})
-		var sessionDirs []string
-		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
-			if !entry.IsDir() {
-				if !IsCursorTranscriptExt(entry.Name()) {
-					return nil
-				}
-				if entry.Type().IsRegular() {
-					name := entry.Name()
-					topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
-				}
-				return s.yieldIfCanonical(
-					root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
-				)
-			}
-			sessionDir := filepath.Join(dir, entry.Name())
-			sessionDirs = append(sessionDirs, sessionDir)
-			base := filepath.Join(sessionDir, entry.Name())
-			path := ""
-			for _, ext := range []string{".jsonl", ".txt"} {
-				// Preserve broken-link errors without letting a symlink
-				// reserve the stem or outrank a regular file.
-				regular, statErr := streamingRegularFileCandidate(base + ext)
-				if statErr != nil {
-					return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
-				}
-				if regular && IsRegularFile(base+ext) {
-					path = base + ext
-					break
-				}
-			}
-			if path == "" {
-				return nil
-			}
-			topLevel[entry.Name()] = struct{}{}
-			return s.yieldIfCanonical(root, path, resolutionCache, yield)
-		})
-		if err != nil {
+		if _, stopped := discoveryYieldCause(err); stopped {
 			return err
 		}
-		return s.streamSubagentTranscripts(
-			ctx, root, sessionDirs, topLevel, resolutionCache, yield,
-		)
+		incomplete = errors.Join(incomplete, err)
+		return nil
+	})
+	return errors.Join(incomplete, err)
+}
+
+func (s cursorSourceSet) discoverLocalProjectEach(ctx context.Context, root, resolvedRoot, project string, resolutionCache cursorResolutionCache, yield func(SourceRef) error) error {
+	dir := filepath.Join(root, project, "agent-transcripts")
+	resolvedDir, resolveErr := filepath.EvalSymlinks(dir)
+	if errors.Is(resolveErr, os.ErrNotExist) {
+		if _, lstatErr := os.Lstat(dir); errors.Is(lstatErr, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+	}
+	if resolveErr != nil {
+		return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+	}
+	if !isContainedIn(resolvedDir, resolvedRoot) {
+		return nil
+	}
+	topLevel := make(map[string]struct{})
+	var sessionDirs []string
+	err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+		if !entry.IsDir() {
+			if !IsCursorTranscriptExt(entry.Name()) {
+				return nil
+			}
+			if entry.Type().IsRegular() {
+				name := entry.Name()
+				topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
+			}
+			return s.yieldIfCanonical(
+				root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
+			)
+		}
+		sessionDir := filepath.Join(dir, entry.Name())
+		sessionDirs = append(sessionDirs, sessionDir)
+		base := filepath.Join(sessionDir, entry.Name())
+		path := ""
+		for _, ext := range []string{".jsonl", ".txt"} {
+			// Preserve broken-link errors without letting a symlink
+			// reserve the stem or outrank a regular file.
+			regular, statErr := streamingRegularFileCandidate(base + ext)
+			if statErr != nil {
+				return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
+			}
+			if regular && IsRegularFile(base+ext) {
+				path = base + ext
+				break
+			}
+		}
+		if path == "" {
+			return nil
+		}
+		topLevel[entry.Name()] = struct{}{}
+		return s.yieldIfCanonical(root, path, resolutionCache, yield)
 	})
 	if err != nil {
 		return err
 	}
-	return nil
+	return s.streamSubagentTranscripts(
+		ctx, root, sessionDirs, topLevel, resolutionCache, yield,
+	)
 }
 
 func (s cursorSourceSet) yieldIfCanonical(

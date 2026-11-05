@@ -159,7 +159,7 @@ describe("SearchStore", () => {
       wire.deliver!({ scope: "sessions" });
       await vi.advanceTimersByTimeAsync(200);
       wire.deliver!({ scope: "sessions" });
-      await vi.advanceTimersByTimeAsync(299);
+      await vi.advanceTimersByTimeAsync(99);
       const query =
         mode === "fulltext" ? searchService.getApiV1Search : searchService.getApiV1SearchContent;
       expect(query).toHaveBeenCalledTimes(1);
@@ -185,6 +185,50 @@ describe("SearchStore", () => {
       unsubscribe();
     },
   );
+
+  it("finishes a slow search and queues one refresh without hiding accepted results", async () => {
+    events.setAvailable(true);
+    const first = deferred<SearchResponse>();
+    const background = deferred<SearchResponse>();
+    const changed = deferred<SearchResponse>();
+    searchService.getApiV1Search
+      .mockReturnValueOnce(first.promise as never)
+      .mockReturnValueOnce(background.promise as never)
+      .mockReturnValueOnce(changed.promise as never);
+    searchStore.search("needle", "alpha");
+    await runDebounce();
+    const firstSignal = searchService.getApiV1Search.mock.calls[0]![1]!.signal!;
+    for (let index = 0; index < 3; index++) {
+      wire.deliver!({ scope: "sessions" });
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(firstSignal.aborted).toBe(false);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+    first.resolve(fullTextResponse("needle"));
+    await flushMicrotasks();
+    expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
+    expect(searchStore.isSearching).toBe(false);
+    await runDebounce();
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
+    expect(searchStore.isSearching).toBe(false);
+    expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
+
+    wire.deliver!({ scope: "sessions" });
+    const backgroundSignal = searchService.getApiV1Search.mock.calls[1]![1]!.signal!;
+    searchStore.search("different", "beta");
+    expect(backgroundSignal.aborted).toBe(true);
+    await runDebounce();
+    background.resolve(fullTextResponse("needle"));
+    changed.resolve(fullTextResponse("different", 0));
+    await flushMicrotasks();
+    await runDebounce();
+    expect(searchStore.results).toEqual([]);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(3);
+    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: "different", project: "beta" }),
+      expect.anything(),
+    );
+  });
 
   it.each([
     [undefined, "fulltext"],
