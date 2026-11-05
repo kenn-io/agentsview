@@ -42,6 +42,11 @@ The latest release is
   `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
   these privileges keep working without the journal.
 
+- Keep personal Claude.ai chats out of a work archive, or the reverse. List the
+  organization UUIDs to import under `[agents.claude-ai] organizations` in
+  `config.toml`, and Claude.ai Sync skips every other organization. See
+  [Choose which organizations Sync imports](/docs/chat-import/#choose-which-organizations-sync-imports).
+
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
