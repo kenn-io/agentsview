@@ -31,8 +31,9 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+	commitProducedSHARE       = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
 	commitCommandTokenRE      = regexp.MustCompile(commitCommandToken)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{4,64})\] ([^\r\n]*)\r?$`)
 	commitQuietReadbackRE     = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)git\s+commit((?:\s+` + commitCommandToken + `)*?\s+(?:-q|--quiet)(?:\s+` + commitCommandToken + `)*?)\s*&&\s*git\s+(?:rev-parse\s+HEAD|log\s+(?:-1\s+--oneline|--oneline\s+-1))\s*(?:$|&&)`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
@@ -153,9 +154,25 @@ func commitRepository(input, cwd string) string {
 }
 
 func commitCommandText(input string) string {
+	var payload struct {
+		Command []string `json:"command"`
+	}
+	if json.Unmarshal([]byte(input), &payload) == nil && len(payload.Command) > 0 {
+		args := payload.Command
+		if len(args) == 3 && slices.Contains([]string{"sh", "bash", "zsh"}, args[0]) && slices.Contains([]string{"-c", "-lc"}, args[1]) {
+			return args[2]
+		}
+		for i, arg := range args {
+			if arg == "" || strings.ContainsAny(arg, " \t\n\r\f\v;&|\"'") {
+				args[i] = strconv.Quote(arg)
+			}
+		}
+		return strings.Join(args, " ")
+	}
 	command := signals.CommandText(input)
 	if !jsontext.Value(input).IsValid() {
-		if match := commitCommandRE.FindStringSubmatch(input); match != nil {
+		var commands []string
+		for _, match := range commitCommandRE.FindAllStringSubmatch(input, -1) {
 			literal := match[1]
 			var decoded strings.Builder
 			for rest := literal[1 : len(literal)-1]; rest != ""; {
@@ -166,9 +183,12 @@ func commitCommandText(input string) string {
 				decoded.WriteRune(r)
 				rest = tail
 				if rest == "" {
-					command = decoded.String()
+					commands = append(commands, decoded.String())
 				}
 			}
+		}
+		if len(commands) > 0 {
+			command = strings.Join(commands, "\n")
 		}
 	}
 	return command
@@ -277,7 +297,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 	seen := map[string]bool{}
 	for _, call := range calls {
 		outputs, running := callOutput(call.result)
-		command := signals.CommandText(call.input)
+		command := commitCommandText(call.input)
 		isCommit := invokesGitCommit(command)
 		pollIDs := commitPollIDs(call.input, call.toolName)
 		if isCommit {
@@ -351,7 +371,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		for _, output := range outputs {
 			for line := range strings.SplitSeq(output.text, "\n") {
 				sha, subject, _ := strings.Cut(strings.TrimSpace(line), " ")
-				if commitSHARE.MatchString(sha) {
+				if commitProducedSHARE.MatchString(sha) {
 					quietSHA, quietSubject = sha, subject
 					quietOwner = cmp.Or(pending[output.process], singleOwner, call)
 					quietCount++
@@ -404,7 +424,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		if err := rows.Scan(&id, &input); err != nil {
 			return err
 		}
-		if invokesGitCommit(signals.CommandText(input)) {
+		if invokesGitCommit(commitCommandText(input)) {
 			ids = append(ids, id)
 		}
 	}
@@ -428,17 +448,18 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			return nil
 		}
 	}
-	running := map[string]bool{}
-	for _, call := range calls {
-		command := signals.CommandText(call.input)
-		if invokesGitCommit(command) {
+	for loaded := 0; loaded < len(calls); {
+		running := map[string]bool{}
+		for _, call := range calls[loaded:] {
 			_, processes := callOutput(call.result)
 			for _, process := range processes {
 				running[process] = true
 			}
 		}
-	}
-	if len(running) > 0 {
+		loaded = len(calls)
+		if len(running) == 0 {
+			break
+		}
 		// Read poll inputs first so unrelated process output is never loaded.
 		rows, err := tx.Query(`SELECT id, input_json, tool_name FROM tool_calls
  WHERE session_id=? AND input_json IS NOT NULL
@@ -448,17 +469,18 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			return err
 		}
 		defer rows.Close()
-		var ids []string
+		var pollIDs []string
 		for rows.Next() {
 			var id, input, tool string
 			if err := rows.Scan(&id, &input, &tool); err != nil {
 				return err
 			}
-			if invokesGitCommit(signals.CommandText(input)) {
+			if slices.Contains(ids, id) {
 				continue
 			}
 			for _, process := range commitPollIDs(input, tool) {
 				if running[process] {
+					pollIDs = append(pollIDs, id)
 					ids = append(ids, id)
 					break
 				}
@@ -469,12 +491,10 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		if err != nil {
 			return err
 		}
-		if len(ids) > 0 {
-			for chunk := range slices.Chunk(ids, maxSQLVars-1) {
-				placeholders, args := InPlaceholders(chunk)
-				if err := load(`t.id IN `+placeholders, args...); err != nil {
-					return err
-				}
+		for chunk := range slices.Chunk(pollIDs, maxSQLVars-1) {
+			placeholders, args := InPlaceholders(chunk)
+			if err := load(`t.id IN `+placeholders, args...); err != nil {
+				return err
 			}
 		}
 	}
@@ -562,7 +582,12 @@ const commitLinkSelect = `WITH trailer_owners AS (` + trailerOwnersSelect + `),
  AND (SELECT count(*) FROM resolved_trailers matching WHERE matching.owner_id=t.owner_id AND matching.owner_rank=1 AND substr(matching.sha,1,length(c.sha))=c.sha)=1)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
- SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
+ SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=CASE WHEN l.source='transcript' THEN COALESCE((
+ SELECT MIN(edited.ordinal) FROM tool_calls t JOIN messages edited ON edited.id=t.message_id
+ WHERE t.session_id=l.session_id AND t.category IN ('Edit','Write')
+ AND edited.ordinal>COALESCE((SELECT MAX(previous.message_ordinal) FROM commit_links previous
+ WHERE previous.session_id=l.session_id AND previous.message_ordinal<l.message_ordinal),-1)
+ AND edited.ordinal<=l.message_ordinal),l.message_ordinal) ELSE l.message_ordinal END
  AND (l.source='transcript' OR julianday(m.timestamp)<=julianday(l.committed_at)) AND ` + commitUserPrompt + `
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `

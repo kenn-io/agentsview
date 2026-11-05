@@ -131,10 +131,12 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 			wantPrompt: true, name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
 			messages: []Message{
 				{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
-				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:05:00Z"},
-				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:08:00Z"},
-				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
-				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
+				{SessionID: "session-a", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []ToolCall{{ToolName: "apply_patch", Category: "Edit"}}, Timestamp: "2026-10-30T10:01:00Z"},
+				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "At author time", Timestamp: "2026-10-30T10:10:00Z"},
+				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:10:00Z"},
+				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:10:00Z"},
+				{SessionID: "session-a", Ordinal: 5, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
+				{SessionID: "session-a", Ordinal: 6, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
 			},
 		},
 		{
@@ -162,7 +164,7 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 			require.Len(t, list.Commits, 1)
 			require.NotNil(t, list.Commits[0].Turn)
 			assert.True(t, list.Commits[0].Turn.Heuristic)
-			assert.Equal(t, "Before", list.Commits[0].Turn.Text)
+			assert.Equal(t, "At author time", list.Commits[0].Turn.Text)
 		})
 	}
 }

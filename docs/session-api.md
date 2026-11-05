@@ -1559,9 +1559,13 @@ Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 `repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
 and `source`. For `source: "transcript"`, `committed_at` is the tool call's
 message time. The SHA is exactly as Git printed it, usually a short prefix. Full
-SHAs match stored prefixes. `turn` contains the preceding nonempty, non-system
-user prompt's `ordinal`, `text`, limited to 2,000 UTF-8 bytes, and
-`heuristic: false`. It is omitted when the archive has no preceding user prompt.
+SHAs match stored prefixes. `turn` contains `heuristic: false` and the `ordinal`
+and `text` of the last nonempty, non-system user prompt before the first Edit or
+Write tool call after the session's previous commit link and at or before this
+commit. Codex patch calls count as Edit calls. If there is no such edit, it uses
+the last user prompt at or before the commit call. Tool-result messages are
+excluded. Text is limited to 2,000 UTF-8 bytes. The turn is omitted when no
+eligible prompt exists.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link
@@ -1623,5 +1627,5 @@ The suggested `turn` is the last real user prompt in transcript order with a
 usable timestamp at or before commit time. It carries
 `heuristic: true`; no eligible prompt means no turn. This time rule adapts
 [Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
-A transcript link for the same session and a matching SHA prefix takes
-precedence over a trailer link. Other sessions' trailer links remain visible.
+A transcript link for the same session takes precedence when its SHA prefix
+matches exactly one trailer SHA. Other sessions' trailer links remain visible.

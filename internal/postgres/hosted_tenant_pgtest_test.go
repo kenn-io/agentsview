@@ -485,18 +485,18 @@ func TestHostedTenantProvisioningUsesOneConnection(t *testing.T) {
 	require.NoError(t, EnsureHostedTenant(ctx, pg, schema, "tenant-a"))
 }
 
-func TestHostedTenantUpgradeInstallsFrictionTablesBeforeCatalogCheck(t *testing.T) {
-	for _, table := range []string{"friction_findings", "commit_links"} {
-		t.Run(table, func(t *testing.T) {
+func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
+	for _, tt := range []struct{ table, index string }{
+		{"friction_findings", "idx_friction_findings_session"},
+		{"commit_links", "idx_commit_links_sha"},
+	} {
+		t.Run(tt.table, func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-a")
-			_, err := f.admin.ExecContext(t.Context(), `DROP TABLE `+table)
+			_, err := f.admin.ExecContext(t.Context(), `DROP TABLE `+tt.table)
 			require.NoError(t, err)
 
 			require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-			for _, relation := range []string{
-				"friction_findings",
-				"idx_friction_findings_session",
-			} {
+			for _, relation := range []string{tt.table, tt.index} {
 				var exists bool
 				require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, f.schema, relation).Scan(&exists))
 				assert.True(t, exists, relation)
