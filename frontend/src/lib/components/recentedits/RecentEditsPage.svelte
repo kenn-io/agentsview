@@ -63,7 +63,7 @@
   );
   // Starting widths for columns nobody resized. The project column takes a
   // quarter of the list up to 220px, and the file column what is left.
-  const DEFAULT_WIDTHS: Record<string, number> = { edits: 72, time: 104 };
+  const DEFAULT_WIDTHS: Record<string, number> = { edits: 84, time: 104 };
   const STACKED_WIDTHS: Record<string, number> = { edits: 52, time: 76 };
   // Widths the user set by dragging or fitting a column edge, kept across
   // visits. Plain: the table owns the live widths once it has sized them.
