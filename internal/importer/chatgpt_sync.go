@@ -169,7 +169,7 @@ func parseChatGPTSyncConversation(detail []byte, id string) (parser.ParseResult,
 	}
 	result, err := parser.ParseChatGPTConversation(detail)
 	if err == nil && result.Session.ID != "" && result.Session.ID != id {
-		err = errors.New("conversation ID differs from requested UUID")
+		err = errors.New("ChatGPT returned a different chat")
 	}
 	return result, err
 }
