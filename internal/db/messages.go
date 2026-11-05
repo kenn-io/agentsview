@@ -2288,7 +2288,10 @@ func replaceSessionMessagesTx(
 // mutated existing session. Touching local_modified_at fires the
 // sync_marker trigger so push targets re-select the session.
 func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
-	return bumpTranscriptRevision(tx, sessionID, true, true)
+	if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
+		return err
+	}
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 // bumpInsertedTranscriptRevisionTx advances the revision for a session
@@ -2296,11 +2299,14 @@ func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 // sync_marker, so skipping the local_modified_at touch avoids a
 // redundant trigger recompute on every bulk-loaded session.
 func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
-	return bumpTranscriptRevision(tx, sessionID, false, true)
+	if err := bumpTranscriptRevision(tx, sessionID, false); err != nil {
+		return err
+	}
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 func bumpTranscriptRevision(
-	tx transactionQueries, sessionID string, touchModified, refreshCommitLinks bool,
+	tx transactionQueries, sessionID string, touchModified bool,
 ) error {
 	// Advancing the revision revokes secret-scan and friction freshness in
 	// the same transaction. The mutated transcript has content those
@@ -2340,9 +2346,6 @@ func bumpTranscriptRevision(
 			"bumping transcript revision for %s: updated %d rows",
 			sessionID, rows,
 		)
-	}
-	if refreshCommitLinks {
-		return refreshSessionCommitLinksTx(tx, sessionID)
 	}
 	return nil
 }

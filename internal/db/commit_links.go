@@ -380,7 +380,10 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 			return err
 		}
 	}
-	return bumpTranscriptRevision(tx, sessionID, true, refresh)
+	if !refresh {
+		return bumpTranscriptRevision(tx, sessionID, true)
+	}
+	return bumpTranscriptRevisionTx(tx, sessionID)
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
