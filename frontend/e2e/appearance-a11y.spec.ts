@@ -364,7 +364,7 @@ test.describe("Appearance accessibility", () => {
   });
 
   test("parallel tool calls carry the tool marker in pattern mode", async ({ page }) => {
-    // The fixture has no tool calls, so give its first assistant message two.
+    // Use a small fixture so the injected calls stay in view without a reload.
     await page.route("**/api/v1/sessions/*/messages*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
@@ -383,9 +383,7 @@ test.describe("Appearance accessibility", () => {
       }
       await route.fulfill({ response, json: body });
     });
-    const sp = new SessionsPage(page);
-    await sp.goto();
-    await sp.selectFirstSession();
+    await page.goto("/sessions/test-session-small-5");
     const rail = page.locator(".parallel-group").first();
     await expect(rail).toBeVisible();
     await expect(rail).toHaveCSS("border-left-style", "solid");
