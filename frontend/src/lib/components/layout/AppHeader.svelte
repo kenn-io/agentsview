@@ -496,8 +496,10 @@
   }
 
   /* kit-ui MenuTrigger renders the overflow button, so scoped
-     .header-btn rules cannot reach it. */
-  :global(.overflow-btn) {
+     .header-btn rules cannot reach it. The :root prefix outranks kit-ui's
+     scoped trigger fill, so the button is a ghost at rest like its icon
+     neighbours instead of a gray, pressed-looking well. */
+  :global(:root .kit-menu__trigger.overflow-btn) {
     border-color: transparent;
     background: transparent;
     box-shadow: none;
@@ -511,8 +513,9 @@
     flex-shrink: 0;
   }
 
-  :global(.overflow-btn:hover),
-  :global(.overflow-btn[aria-expanded="true"]) {
+  :global(:root .kit-menu__trigger.overflow-btn:hover),
+  :global(:root .kit-menu__trigger.overflow-btn[aria-expanded="true"]) {
+    border-color: transparent;
     background: var(--bg-surface-hover);
     color: var(--text-primary);
   }

@@ -435,7 +435,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .compact .role-label { font-size: 11px; }
   .compact .timestamp,
   .compact .message-tokens,
-  .compact .turn-summary { font-size: 10.5px; }
+  .compact .turn-summary { font-size: 11px; }
   .compact .text-content { font-size: 12px; line-height: 1.55; }
 
 </style>

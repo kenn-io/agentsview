@@ -44,23 +44,26 @@
 </g>
 
 <style>
+  /* Faint solid gridlines at each y tick, so values can be read off the
+     lines without hovering; they stay below the series in weight. */
   .large-chart-frame :global(.grid-line) {
     stroke: var(--border-muted);
-    stroke-width: 0.5;
-    stroke-dasharray: 2 2;
-    stroke-opacity: 0.4;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
   }
 
+  /* Tick labels at the 11px floor used for chart text elsewhere. */
   .large-chart-frame :global(.y-label) {
     fill: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: 9px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
   }
 
   .large-chart-frame :global(.x-label) {
     fill: var(--text-muted);
     font-family: var(--font-sans);
-    font-size: 9px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
 </style>

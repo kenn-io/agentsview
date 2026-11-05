@@ -155,7 +155,10 @@
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
-    padding: 6px 10px;
+    /* Same inline padding as a message card, so the header icon, tool rows,
+       and timestamp line up with the role header and prose above. Layouts
+       with other card padding override it in MessageList. */
+    padding: 6px 16px;
   }
   .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
   .tool-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }

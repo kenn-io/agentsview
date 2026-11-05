@@ -305,8 +305,9 @@
     font-size: 12px;
     align-items: flex-start;
   }
-  /* Neutral notice for a backend that has no Friction Log: an inset panel
-     in secondary ink, not the alert card used for failed loads. */
+  /* Neutral notice for a backend that has no Friction Log: the standard
+     analytics card surface and edge in secondary ink, not the alert card
+     used for failed loads. */
   .state-notice {
     display: flex;
     flex-direction: column;
@@ -314,9 +315,9 @@
     gap: 6px;
     max-width: 640px;
     padding: 12px 14px;
-    border: 1px solid var(--border-muted);
+    border: 1px solid var(--card-border);
     border-radius: var(--radius-md);
-    background: var(--bg-inset);
+    background: var(--bg-surface);
     color: var(--text-secondary);
     font-size: 13px;
     line-height: 1.45;

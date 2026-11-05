@@ -57,27 +57,26 @@
     padding: 0;
     overflow: hidden;
   }
+  /* Same header voice as ToolCallGroup's "3 tool calls": a 12px semibold
+     sans label with the count in muted ink beside it. */
   .pg-header {
     display: flex;
-    align-items: center;
-    gap: var(--space-4);
+    align-items: baseline;
+    gap: 6px;
     padding: 3px 10px 3px;
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-family: var(--font-sans);
+    font-size: 12px;
     color: var(--text-muted);
   }
-  .pg-label { color: var(--text-secondary); font-weight: 500; }
+  .pg-label { color: var(--text-secondary); font-weight: 600; }
   .pg-count {
-    background: color-mix(in srgb, var(--text-primary) 6%, transparent);
-    padding: 1px 7px;
-    border-radius: 999px;
-    font-size: 10px;
-    color: var(--text-primary);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
   .pg-spacer { flex: 1; }
   .pg-running {
     color: var(--running-fg);
-    font-size: 10px;
+    font-size: 11px;
     animation: duration-pulse 1.6s ease-in-out infinite;
   }
   .pg-members :global(.tool-block) { margin: 0; border-radius: 0; }

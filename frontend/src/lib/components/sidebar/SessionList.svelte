@@ -619,7 +619,7 @@
               <FolderIcon class="project-icon" size="11" strokeWidth="1.8" aria-hidden="true" />
             {/if}
             <span class="group-name">{item.label}</span>
-            <span class="group-count">{item.count}</span>
+            <span class="group-count">{formatCount(item.count)}</span>
           </button>
         {:else if item.type === "subagent-group" && item.group}
           {@const subKey = `subagent:${item.group.key}`}
@@ -638,7 +638,7 @@
             {/if}
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_subagents()}</span>
-            <span class="sub-group-count">({item.count})</span>
+            <span class="sub-group-count">({formatCount(item.count)})</span>
           </button>
         {:else if item.type === "team-group" && item.group}
           {@const teamKey = `team:${item.group.key}`}
@@ -657,7 +657,7 @@
             {/if}
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_team()}</span>
-            <span class="sub-group-count">({item.count})</span>
+            <span class="sub-group-count">({formatCount(item.count)})</span>
           </button>
         {:else if item.isChild && item.session}
           <SessionItem

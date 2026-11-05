@@ -1067,11 +1067,12 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     text-underline-offset: 2px;
   }
 
-  /* Same size and weight as the analytics card titles on the other
-     analytics pages; the eyebrow above carries the section emphasis. */
+  /* Same size and weight as the analytics section titles on the other
+     analytics pages (Session health), one clear step above the 14px
+     pattern titles and 13px body. */
   .section-heading h2 {
     margin-top: 2px;
-    font-size: var(--font-size-md);
+    font-size: 15px;
     font-weight: var(--font-weight-semibold, 600);
     line-height: 1.3;
     color: var(--text-primary);
@@ -1206,7 +1207,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .pattern-head h3 {
-    font-size: var(--font-size-md);
+    font-size: 14px;
+    font-weight: var(--font-weight-semibold, 600);
     margin-bottom: 3px;
   }
 
@@ -1455,7 +1457,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   .evidence-head h3 {
     margin-top: 2px;
     color: var(--text-primary);
-    font-size: var(--font-size-md);
+    font-size: 14px;
+    font-weight: var(--font-weight-semibold, 600);
   }
 
   .evidence-state {

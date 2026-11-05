@@ -1122,6 +1122,10 @@
     border-radius: 0;
   }
 
+  .layout-compact :global(.tool-group) {
+    padding-inline: 12px;
+  }
+
   .layout-compact :global(.message-header) {
     margin-bottom: 4px;
     gap: 6px;
@@ -1140,12 +1144,13 @@
     font-weight: 700;
   }
 
-  /* Token and turn summaries match the timestamp, below the role label. */
+  /* Token and turn summaries match the timestamp: 11px, the smallest size
+     the transcript uses for text that is read, not just scanned. */
   .layout-compact :global(.timestamp),
   .layout-compact :global(.group-timestamp),
   .layout-compact :global(.message-tokens),
   .layout-compact :global(.turn-summary) {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .layout-compact :global(.text-content) {
@@ -1191,6 +1196,10 @@
 
   .layout-stream :global(.message-header) {
     display: none;
+  }
+
+  .layout-stream :global(.tool-group) {
+    padding-inline: 24px;
   }
 
   .layout-stream :global(.text-content) {

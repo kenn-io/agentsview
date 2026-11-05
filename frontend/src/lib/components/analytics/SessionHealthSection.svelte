@@ -246,10 +246,11 @@
   .health-summary-cards :global(.card) {
     padding: 12px;
   }
+  /* Label one step above the sublabel, the same ladder as StatCard. */
   .card-label {
     display: block;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 4px;
@@ -263,7 +264,7 @@
   .card-sub {
     display: block;
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--text-muted);
   }
   .chart-grid {
     display: grid;

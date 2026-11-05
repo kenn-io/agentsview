@@ -2,6 +2,7 @@
   import { untrack, type Snippet } from "svelte";
   import { TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { formatCount } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
@@ -225,7 +226,7 @@
           ></span>
           <span class="toggle-label" title={m.sidebar_filters_starred_only()}>{m.sidebar_filters_starred_only()}</span>
           {#if starred.count > 0}
-            <span class="starred-count">{starred.count}</span>
+            <span class="starred-count">{formatCount(starred.count)}</span>
           {/if}
         </button>
       </div>
@@ -352,7 +353,7 @@
               {agentLabel(agent.name)}
             </span>
             <span class="agent-select-count">
-              {agent.session_count}
+              {formatCount(agent.session_count)}
             </span>
           </button>
         {:else}
