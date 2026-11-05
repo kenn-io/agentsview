@@ -320,7 +320,7 @@
             class:on={!sessions.filters.agent}
           >
             {#if !sessions.filters.agent}
-              <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+              <CheckIcon size="9" strokeWidth="2.4" aria-hidden="true" />
             {/if}
           </span>
           <span class="agent-select-name">{m.sidebar_filters_all_agents()}</span>
@@ -341,7 +341,7 @@
               class:on={selected}
             >
               {#if selected}
-                <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+                <CheckIcon size="9" strokeWidth="2.4" aria-hidden="true" />
               {/if}
             </span>
             <span
@@ -397,7 +397,7 @@
                 class:on={selected}
               >
                 {#if selected}
-                  <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+                  <CheckIcon size="9" strokeWidth="2.4" aria-hidden="true" />
                 {/if}
               </span>
               <span class="agent-select-name">
@@ -560,26 +560,26 @@
 
   .filter-section + .filter-section {
     border-top: 1px solid var(--border-muted);
-    margin-top: 4px;
-    padding-top: 8px;
+    margin-top: 2px;
+    padding-top: 6px;
   }
 
   .filter-section-label {
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    margin-bottom: 6px;
+    margin-bottom: 2px;
   }
 
   .filter-toggle {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     width: 100%;
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 3px 8px;
+    font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;
     border-radius: 4px;
@@ -609,10 +609,10 @@
   }
 
   .toggle-check {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    border: 1.5px solid var(--border-default);
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1.5px solid var(--text-muted);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
   }
@@ -627,7 +627,7 @@
     height: 24px;
     padding: 0 8px;
     margin-bottom: 4px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-primary);
     background: var(--bg-inset);
     border: 1px solid var(--border-muted);
@@ -656,10 +656,10 @@
   .agent-select-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     width: 100%;
     padding: 3px 8px;
-    font-size: 11px;
+    font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;
     border-radius: 3px;
@@ -682,10 +682,10 @@
   }
 
   .agent-check {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    border: 1.5px solid var(--border-default);
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1.5px solid var(--text-muted);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
     color: var(--agent-foreground, var(--accent-blue-foreground));
@@ -717,7 +717,7 @@
 
   .agent-select-count {
     flex-shrink: 0;
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 500;
     color: var(--text-muted);
     min-width: 14px;
@@ -728,7 +728,7 @@
   .agent-select-empty {
     display: block;
     padding: 6px 8px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted);
     text-align: center;
   }
@@ -744,7 +744,7 @@
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-secondary);
     border: 1px solid var(--border-muted);
     border-radius: 4px;
@@ -770,8 +770,8 @@
     display: block;
     width: 100%;
     padding: 4px 8px;
-    margin-top: 8px;
-    font-size: 10px;
+    margin-top: 6px;
+    font-size: 12px;
     color: var(--text-muted);
     text-align: center;
     border-top: 1px solid var(--border-muted);
@@ -781,7 +781,7 @@
 
   .starred-count {
     margin-left: auto;
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 600;
     color: var(--accent-amber);
     min-width: 14px;
