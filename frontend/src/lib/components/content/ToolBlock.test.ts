@@ -602,6 +602,24 @@ describe("ToolBlock input source and copy", () => {
     await click('button[aria-label="Copy input"]');
     expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith("make build");
   });
+  it("shows the file field and the leading hunk header as one strip", async () => {
+    await render({
+      toolCall: call(
+        "Edit",
+        { file_path: "src/app.go", old_string: "before", new_string: "after" },
+        { category: "Edit" },
+      ),
+    });
+    await click(".tool-header");
+    const strip = document.querySelector(".tool-meta.diff-strip");
+    expect(strip?.textContent).toContain("src/app.go");
+    const hunk = strip?.querySelector(".diff-strip-hunk")?.textContent ?? "";
+    expect(hunk.startsWith("@@")).toBe(true);
+    // The header moves into the strip rather than repeating above the code.
+    expect(text(".diff-view")).not.toContain("@@");
+    expect(text(".diff-view")).toContain("-before");
+    expect(text(".diff-view")).toContain("+after");
+  });
   it("names the file in the header and copies the diff of a per-file change", async () => {
     const diff = "@@ -1 +1 @@\n-old\n+new\n";
     await render({

@@ -157,6 +157,14 @@
     ? m.tool_block_show_all_lines({ count: displayContent.totalLines ?? 0 }) : "");
   let isDiff = $derived(resolvedInput.text.startsWith("--- a/") || resolvedInput.text.startsWith("@@"));
   let diffLines = $derived(isDiff ? resolvedInput.text.split("\n") : []);
+  // The file fields and a leading @@ hunk header share one muted strip.
+  // While in-session search runs, the diff keeps its exact source lines so
+  // match offsets stay true, as meta display values do.
+  let mergeHunk = $derived(
+    !!metaTags && !taskPrompt && !!fallbackContent && !sourceTextForSearch
+      && (diffLines[0]?.startsWith("@@") ?? false),
+  );
+  let bodyDiffLines = $derived(mergeHunk ? diffLines.slice(1) : diffLines);
 
   $effect(() => {
     const source = displayContent.text;
@@ -225,19 +233,19 @@
   {#if showImages}<ToolResultImages sources={imageSources} alt={imageAlt} />{/if}
   {#if !collapsed}
     {#if metaTags}
-      <div class="tool-meta">
+      <div class="tool-meta" class:diff-strip={isDiff && !!fallbackContent && !taskPrompt}>
         {#each metaTags as { label: metaLabel, value, displayValue }, tagIndex}
           <span class="meta-tag"><span class="meta-label">{metaLabel}:</span>
             {#if displayValue && !sourceTextForSearch}<span class="meta-value" title={value}>{displayValue}<span class="kit-sr-only">{value}</span></span>
             {:else}<span {@attach searchBlock(metaKeys[tagIndex])}>{value}</span>{/if}
           </span>
-        {/each}
+        {/each}{#if mergeHunk}<span class="diff-strip-hunk">{diffLines[0]}</span>{/if}
       </div>
     {/if}
     {#if taskPrompt}
       <pre class="tool-content" {@attach searchBlock(inputKey)}>{taskPrompt}</pre>
     {:else if fallbackContent && isDiff}
-      <pre class="diff-view" {@attach searchBlock(inputKey)}>{#each diffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < diffLines.length - 1 ? "\n" : ""}{/each}</pre>
+      <pre class="diff-view" class:after-strip={!!metaTags} {@attach searchBlock(inputKey)}>{#each bodyDiffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < bodyDiffLines.length - 1 ? "\n" : ""}{/each}</pre>
     {:else if displayContent.text}
       {#if isCommand}
         <pre class="tool-content tool-command" {@attach searchBlock(inputKey)}><code>{#if commandHtml !== null}{@html commandHtml}{:else}{displayContent.text}{/if}</code></pre>
@@ -422,11 +430,27 @@
   .result-event-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px 0; }
   .history-content { border-top: 0; margin-top: 0; }
   .diff-view {
-    font-family: var(--font-mono); font-size: 12px; line-height: 1.5; overflow-x: auto;
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; overflow-x: auto;
     border-top: 1px solid var(--border-muted); padding: 4px 0; max-height: 400px; overflow-y: auto;
   }
+  /* The file fields and the first hunk header form one muted strip above
+     the code, instead of a field row and a separate blue hunk band. */
+  .tool-meta.diff-strip {
+    align-items: baseline; padding: 3px 14px;
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border-top-color: var(--border-muted);
+  }
+  .diff-strip-hunk {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+    margin-inline-start: auto; white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .diff-view.after-strip { border-top: none; }
   .diff-line { display: inline-block; min-width: 100%; padding: 0 14px; white-space: pre; }
-  .diff-hunk { color: color-mix(in srgb, var(--accent-blue, #58a6ff) 70%, var(--text-primary)); background: color-mix(in srgb, var(--accent-blue, #58a6ff) 7%, transparent); padding: 2px 14px; margin: 2px 0; }
+  /* Later hunk headers use the same muted strip. */
+  .diff-hunk {
+    color: var(--text-muted); background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    padding: 2px 14px; margin: 2px 0; font-size: 11px;
+  }
   .diff-add {
     color: color-mix(in srgb, var(--accent-green, #3fb950) 70%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-green, #3fb950) 9%, transparent);
@@ -437,9 +461,15 @@
     background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
     box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 60%, transparent);
   }
-  /* Dark: single-digit tints barely separate from the near-black page, so
-     added and removed lines take a stronger wash there. */
-  :global(:root.dark) .diff-add { background: color-mix(in srgb, var(--accent-green, #3fb950) 14%, transparent); }
-  :global(:root.dark) .diff-del { background: color-mix(in srgb, var(--accent-red, #f85149) 13%, transparent); }
+  /* Dark: a quiet wash keeps long runs of changes from glowing; the solid
+     edge carries the add/remove signal. */
+  :global(:root.dark) .diff-add {
+    background: color-mix(in srgb, var(--accent-green, #3fb950) 8%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-green, #3fb950) 75%, transparent);
+  }
+  :global(:root.dark) .diff-del {
+    background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 75%, transparent);
+  }
   .diff-ctx { color: var(--text-muted); }
 </style>
