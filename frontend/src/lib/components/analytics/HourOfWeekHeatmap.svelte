@@ -3,6 +3,11 @@
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { m } from "../../i18n/index.js";
+  import {
+    heatmapLevel,
+    heatmapLevelColor,
+    quartileThresholds,
+  } from "./heatmapRamp.js";
 
   const CELL_GAP = 2;
   const CELL_HEIGHT = 17;
@@ -20,41 +25,6 @@
     { label: "Sat", dayIdx: 5 },
   ];
 
-  const LEVEL_COLORS_LIGHT = [
-    "var(--bg-inset)",
-    "#9be9a8",
-    "#40c463",
-    "#30a14e",
-    "#216e39",
-  ];
-
-  const LEVEL_COLORS_DARK = [
-    "var(--bg-inset)",
-    "#0e4429",
-    "#006d32",
-    "#26a641",
-    "#39d353",
-  ];
-
-  function levelColor(level: number): string {
-    const isDark =
-      document.documentElement.classList.contains("dark");
-    const colors = isDark
-      ? LEVEL_COLORS_DARK
-      : LEVEL_COLORS_LIGHT;
-    return colors[level] ?? colors[0]!;
-  }
-
-  function assignLevel(value: number, max: number): number {
-    if (value <= 0) return 0;
-    if (max <= 0) return 1;
-    const ratio = value / max;
-    if (ratio <= 0.25) return 1;
-    if (ratio <= 0.5) return 2;
-    if (ratio <= 0.75) return 3;
-    return 4;
-  }
-
   let tooltip = $state<{
     x: number;
     y: number;
@@ -66,11 +36,10 @@
     if (!cells || cells.length === 0) return null;
 
     const lookup = new Map<string, number>();
-    let max = 0;
     for (const c of cells) {
       lookup.set(`${c.day_of_week}:${c.hour}`, c.messages);
-      if (c.messages > max) max = c.messages;
     }
+    const thresholds = quartileThresholds(cells.map((c) => c.messages));
 
     const rows: {
       day: string;
@@ -92,7 +61,7 @@
         hours.push({
           hour: h,
           value,
-          level: assignLevel(value, max),
+          level: heatmapLevel(value, thresholds),
         });
       }
       rows.push({
@@ -226,7 +195,7 @@
                 width={cellWidth}
                 height={CELL_HEIGHT}
                 rx={2}
-                fill={levelColor(cell.level)}
+                fill={heatmapLevelColor(cell.level)}
                 class={`how-cell${isDimmed(row.dayIdx, cell.hour) ? " dimmed" : ""}`}
                 role="button"
                 tabindex={0}

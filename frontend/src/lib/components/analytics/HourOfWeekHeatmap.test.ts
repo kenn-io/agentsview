@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi, type MockInstance } from "vite-plu
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import HourOfWeekHeatmap from "./HourOfWeekHeatmap.svelte";
+import Heatmap from "./Heatmap.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 
 const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
@@ -97,5 +98,50 @@ describe("HourOfWeekHeatmap", () => {
     );
 
     unmount(component);
+  });
+
+  it("steps by quartile and shares the calendar heatmap's colors", async () => {
+    // Monday hours 0-7 carry 1..8 messages: quartiles put 1-3 on the first
+    // step, 4-5 on the second, 6-7 on the third and 8 on the top step.
+    analytics.hourOfWeek = {
+      cells: Array.from({ length: 8 }, (_, hour) => ({
+        day_of_week: 0,
+        hour,
+        messages: hour + 1,
+      })),
+    };
+    analytics.heatmap = {
+      metric: "messages",
+      entries_from: "2026-01-05",
+      levels: { l1: 1, l2: 2, l3: 3, l4: 4 },
+      entries: Array.from({ length: 5 }, (_, level) => ({
+        date: `2026-01-0${5 + level}`,
+        value: level,
+        level,
+      })),
+    };
+    const hours = mount(HourOfWeekHeatmap, { target: document.body });
+    const calendarHost = document.createElement("div");
+    document.body.append(calendarHost);
+    const calendar = mount(Heatmap, { target: calendarHost });
+    await tick();
+
+    const howCells = Array.from(document.querySelectorAll<SVGRectElement>(".how-cell"));
+    // Rows run Sunday first, so Monday is the second row of 24 cells.
+    const monday = howCells.slice(24, 32).map((cell) => cell.getAttribute("fill"));
+    const calendarFills = Array.from(
+      calendarHost.querySelectorAll<SVGRectElement>(".heatmap-cell"),
+    )
+      .slice(-5)
+      .map((cell) => cell.getAttribute("fill"));
+
+    expect(new Set(calendarFills).size).toBe(5);
+    const [empty, step1, step2, step3, step4] = calendarFills;
+    expect(monday).toEqual([step1, step1, step1, step2, step2, step3, step3, step4]);
+    expect(howCells[0]!.getAttribute("fill")).toBe(empty);
+
+    unmount(calendar);
+    unmount(hours);
+    analytics.heatmap = null;
   });
 });

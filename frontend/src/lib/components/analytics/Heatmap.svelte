@@ -4,6 +4,7 @@
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
+  import { heatmapLevelColor } from "./heatmapRamp.js";
 
   const MAX_CELL_SIZE = 16;
   const MAX_CELL_GAP = 2;
@@ -12,35 +13,11 @@
   const HEADER_HEIGHT = 16;
   const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
 
-  const LEVEL_COLORS_LIGHT = [
-    "var(--bg-inset)",
-    "#9be9a8",
-    "#40c463",
-    "#30a14e",
-    "#216e39",
-  ];
-
-  const LEVEL_COLORS_DARK = [
-    "var(--bg-inset)",
-    "#0e4429",
-    "#006d32",
-    "#26a641",
-    "#39d353",
-  ];
-
   interface DayCell {
     date: string;
     value: number;
     level: number;
     dayOfWeek: number;
-  }
-
-  function levelColor(level: number): string {
-    const isDark = document.documentElement.classList.contains(
-      "dark",
-    );
-    const colors = isDark ? LEVEL_COLORS_DARK : LEVEL_COLORS_LIGHT;
-    return colors[level] ?? colors[0]!;
   }
 
   function metricLabel(metric: HeatmapMetric): string {
@@ -238,7 +215,7 @@
                 width={cellSize}
                 height={cellSize}
                 rx={2}
-                fill={levelColor(cell.level)}
+                fill={heatmapLevelColor(cell.level)}
                 class={`heatmap-cell${cell.value > 0 || analytics.selectedDate === cell.date ? " clickable" : ""}${analytics.selectedDate === cell.date ? " selected" : ""}`}
                 role="button"
                 tabindex={-1}
