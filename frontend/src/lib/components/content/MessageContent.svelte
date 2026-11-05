@@ -387,8 +387,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .pin-feedback[role="alert"] { animation: none; }
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
   .text-content { font-size: 14px; line-height: 1.7; color: var(--text-primary); word-wrap: break-word; }
-  /* Keep prose near 100 characters per line; tool output and diffs keep the full width. */
-  .text-content.markdown { max-width: 96ch; }
+  /* Prose fills its card; the transcript column sets the line length. */
   .code-fence-block {
     display: flex;
     flex-direction: column;
@@ -438,7 +437,5 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .compact .message-tokens,
   .compact .turn-summary { font-size: 10.5px; }
   .compact .text-content { font-size: 12px; line-height: 1.55; }
-  /* The smaller font gets more characters, so Compact's column is as wide
-     as Default's (96ch at 14px). */
-  .compact .text-content.markdown { max-width: 112ch; }
+
 </style>

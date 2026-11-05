@@ -1066,6 +1066,14 @@
     overflow-anchor: none;
   }
 
+  /* One reading column for every layout: cards, prose, tool rows, and
+     their timestamps share a right edge instead of prose stopping short
+     inside full-width cards. */
+  .virtual-row > :global(*) {
+    max-width: 840px;
+    margin-inline: auto;
+  }
+
   .virtual-row.selected > :global(*) {
     outline: 1px solid color-mix(in srgb, var(--accent-blue) 65%, transparent);
     outline-offset: -1px;
@@ -1132,8 +1140,11 @@
     font-weight: 700;
   }
 
+  /* Token and turn summaries match the timestamp, below the role label. */
   .layout-compact :global(.timestamp),
-  .layout-compact :global(.group-timestamp) {
+  .layout-compact :global(.group-timestamp),
+  .layout-compact :global(.message-tokens),
+  .layout-compact :global(.turn-summary) {
     font-size: 10px;
   }
 
