@@ -113,6 +113,26 @@ func TestArchiveSourceDaemonRemoteSyncIncludesAttachedHistory(t *testing.T) {
 	}
 }
 
+func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {
+	source := archiveSourceCommandFixture(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{source}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, nil)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	runner := withAttachedSources(attached, func(context.Context, func(sync.Progress)) (sync.SyncStats, error) {
+		return sync.SyncStats{ArchiveRebuilt: true, Deferred: 1}, nil
+	})
+	_, err = runner(t.Context(), nil)
+	require.NoError(t, err)
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+}
+
 func TestArchiveSourceNoSyncDaemonManualSync(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
 	remoteDB := dbtest.OpenTestDB(t)

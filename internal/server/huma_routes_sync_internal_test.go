@@ -1663,6 +1663,38 @@ func TestHumaWorkerResyncReportsIncompleteArchiveRebuild(t *testing.T) {
 	assert.Contains(t, body, "the required archive rebuild did not complete")
 }
 
+func TestHumaResyncCompletesWithDeferredCodexFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	f := newSyncRouteFixture(t, withDisabledAgents(nil, map[parser.AgentType][]string{parser.AgentCodex: {root}}))
+	body := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil).Body.String()
+	assert.Contains(t, body, "event: done")
+	assert.NotContains(t, body, "event: error")
+	messages, err := f.db.GetAllMessages(t.Context(), "codex:"+child)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child answer", messages[0].Content)
+}
+
+func TestHumaWorkerResyncCompletesWithDeferredFork(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalResyncRunner(
+		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+			return syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1}, nil
+		},
+	))
+	body := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil).Body.String()
+	assert.Contains(t, body, "event: done")
+	assert.NotContains(t, body, "event: error")
+}
+
 // TestHumaTriggerSyncWorkerBackedRejectsStaleArchive pins the new UX: with the
 // worker-backed runner wired, /sync on a stale archive returns 409 pointing at
 // /resync and never runs the runner, since the worker refuses to swap the
@@ -1698,6 +1730,8 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 		}{
 			{"complete stats", syncpkg.SyncStats{}, errors.New("worker failed"), ""},
 			{"incomplete without worker error", syncpkg.SyncStats{Deferred: 1}, nil, ""},
+			{"rebuild with failed source", syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1, Failed: 1}, nil, ""},
+			{"aborted rebuild", syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1, Aborted: true}, nil, ""},
 			{"busy", syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress, "sync_running"},
 		} {
 			t.Run(path+"/"+tc.name, func(t *testing.T) {

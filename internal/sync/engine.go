@@ -5049,6 +5049,14 @@ func (stats *SyncStats) ProcessingComplete() bool {
 		stats.providerFailures == 0 && stats.Deferred == 0
 }
 
+// RebuildOrProcessingComplete reports whether a request can continue after an
+// installed rebuild. Deferred sources still require retries and must not be
+// acknowledged through ProcessingComplete.
+func (stats *SyncStats) RebuildOrProcessingComplete() bool {
+	return stats.ProcessingComplete() ||
+		(stats.ArchiveRebuilt && stats.Deferred > 0 && stats.Failed == 0 && stats.AuthoritativeDiscoveryComplete())
+}
+
 // RunStartupMaintenance waits for the daemon-launching foreground sync, then
 // runs work under the same mutex used by sync and resync database swaps.
 func (e *Engine) RunStartupMaintenance(

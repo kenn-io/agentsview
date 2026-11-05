@@ -1416,6 +1416,9 @@ func runWorkerResyncBuild(
 		return nil
 	})
 	if doneStats.ArchiveRebuilt {
+		// Only the parent knows the replacement was installed. Return that
+		// fact to foreground callers as well as notifying the watcher.
+		result.Stats = &doneStats
 		engine.NotifyRebuildDeferred(doneStats)
 		engine.FinishStartupReconciled(doneStats)
 	} else if startup {

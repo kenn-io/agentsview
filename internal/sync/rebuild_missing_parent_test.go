@@ -119,8 +119,10 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 				testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
 				testjsonl.CodexMsgJSON("assistant", "replayed answer", timestamp),
+				testjsonl.CodexTokenCountJSON(timestamp, 100, 40, 0),
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
 				testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+				testjsonl.CodexTokenCountJSON(timestamp, 20, 5, 0),
 			)), 0o600))
 			database := openTestDB(t)
 			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: stagedMin}
@@ -130,6 +132,10 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			assert.Equal(t, 1, stats.Deferred)
 			assert.NotEmpty(t, stats.Warnings)
 			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			usage, err := database.GetSessionUsage(t.Context(), "codex:"+child, true)
+			require.NoError(t, err)
+			require.NotNil(t, usage)
+			assert.Equal(t, 45, usage.TotalOutputTokens)
 			assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
 			engine.Close()
 			engine = NewEngine(t.Context(), database, cfg)
@@ -139,9 +145,21 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			appendFile(t, childPath, testjsonl.JoinJSONL(
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "later-turn", timestamp),
 				testjsonl.CodexMsgJSON("assistant", "later answer", timestamp),
+				testjsonl.CodexTokenCountJSON(timestamp, 20, 7, 0),
 			))
 			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
 			// Without the parent, the stored history cannot be replaced safely.
+			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+child))
+			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			usage, err = database.GetSessionUsage(t.Context(), "codex:"+child, true)
+			require.NoError(t, err)
+			require.NotNil(t, usage)
+			assert.Equal(t, 45, usage.TotalOutputTokens)
+			engine.Close()
+			engine = NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
 			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
 			require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
@@ -151,6 +169,10 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			recovered := engine.SyncAll(t.Context(), nil)
 			assert.Zero(t, recovered.Deferred)
 			assert.Equal(t, []string{"child answer", "later answer"}, messageContents(t, database, "codex:"+child))
+			usage, err = database.GetSessionUsage(t.Context(), "codex:"+child, true)
+			require.NoError(t, err)
+			require.NotNil(t, usage)
+			assert.Equal(t, 12, usage.TotalOutputTokens)
 			assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
 		})
 	}

@@ -537,6 +537,7 @@ func TestWorkerRebuildHandsDeferredForkToWatcher(t *testing.T) {
 	require.False(t, spawnFailed)
 	assert.Equal(t, "ok", result.Status)
 	assert.Equal(t, 1, result.Deferred)
+	assert.True(t, statsFromWorkerResult(result).ArchiveRebuilt, "the returned stats must report the installed archive")
 	assert.Equal(t, []string{childPath}, retry.Paths)
 	assert.True(t, engine.StartupReconciled())
 	assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
