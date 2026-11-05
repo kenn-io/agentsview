@@ -57,23 +57,20 @@ func init() {
 	os.Exit(0)
 }
 
-func TestServeMallocArenaCap(t *testing.T) {
+func TestMallocConstructorArenaCap(t *testing.T) {
 	binary, err := os.Executable()
 	require.NoError(t, err)
 	for _, tt := range []struct {
 		name   string
-		args   []string
 		env    []string
 		capped bool
 	}{
-		{name: "serve caps arenas before threads allocate", args: []string{"serve"}, capped: true},
-		{name: "empty arena override counts as unset", args: []string{"serve"}, env: []string{"MALLOC_ARENA_MAX="}, capped: true},
-		{name: "operator arena override wins", args: []string{"serve"}, env: []string{"MALLOC_ARENA_MAX=8"}},
-		{name: "sync-worker caps arenas", args: []string{"sync-worker"}, capped: true},
-		{name: "serve with leading flag caps arenas", args: []string{"--port=9000", "serve"}, capped: true},
+		{name: "constructor caps arenas for every process", capped: true},
+		{name: "empty override counts as unset", env: []string{"MALLOC_ARENA_MAX="}, capped: true},
+		{name: "operator override wins", env: []string{"MALLOC_ARENA_MAX=8"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := exec.CommandContext(t.Context(), binary, tt.args...)
+			cmd := exec.CommandContext(t.Context(), binary)
 			cmd.Env = append([]string{"AVTEST_MALLOC_ARENA_CHILD=1"}, tt.env...)
 			output, err := cmd.CombinedOutput()
 			require.NoError(t, err, "%s", output)
