@@ -55,6 +55,8 @@
   const weekOfLabel = $derived(m.shared_range_week_of({ date: "{date}" }));
 </script>
 
+<!-- The wrapper only scopes the panel styles below; it adds no box. -->
+<div class="app-range-picker">
 <KitRangePicker
   {selection}
   {onSelect}
@@ -88,3 +90,90 @@
   chooseMonthLabel={m.shared_range_choose_month()}
   chooseYearLabel={m.shared_range_choose_year()}
 />
+</div>
+
+<style>
+  .app-range-picker {
+    display: contents;
+  }
+
+  /* Two levels of one choice: the Relative / Calendar / Custom track on
+     top, and the option row for the chosen mode as a narrower tray that
+     hangs from it. The tray shares the track's fill and joins its bottom
+     edge, inset from both ends, so it reads as coming out of the mode
+     control. Its options are smaller and flat; only the chosen mode is a
+     raised pill. */
+  .app-range-picker :global(.kit-date-range-picker__tabs:has(+ .kit-date-range-picker__pills)) {
+    margin-bottom: 0;
+  }
+
+  .app-range-picker :global(.kit-date-range-picker__pills) {
+    --tray-fillet: 6px;
+    position: relative;
+    gap: 2px;
+    margin: 0 var(--space-5);
+    padding: 3px 4px 4px;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    background: var(--bg-inset);
+    box-shadow: var(--shadow-sunken, none);
+  }
+
+  /* Concave corners where the tray meets the track, so it flows out of
+     it instead of sitting under it. */
+  .app-range-picker :global(.kit-date-range-picker__pills::before),
+  .app-range-picker :global(.kit-date-range-picker__pills::after) {
+    content: "";
+    position: absolute;
+    top: 0;
+    width: var(--tray-fillet);
+    height: var(--tray-fillet);
+    pointer-events: none;
+  }
+
+  .app-range-picker :global(.kit-date-range-picker__pills::before) {
+    right: 100%;
+    background: radial-gradient(
+      circle at 0 100%,
+      transparent calc(var(--tray-fillet) - 0.5px),
+      var(--bg-inset) var(--tray-fillet)
+    );
+  }
+
+  .app-range-picker :global(.kit-date-range-picker__pills::after) {
+    left: 100%;
+    background: radial-gradient(
+      circle at 100% 100%,
+      transparent calc(var(--tray-fillet) - 0.5px),
+      var(--bg-inset) var(--tray-fillet)
+    );
+  }
+
+  .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill) {
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 400;
+  }
+
+  .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active):hover),
+  :global(:root.dark) .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active):hover) {
+    background: transparent;
+    color: var(--text-primary);
+  }
+
+  :global(:root.dark) .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active)) {
+    color: var(--text-muted);
+  }
+
+  /* The chosen option is a flat tint with primary ink: clearly picked,
+     but quieter than the raised mode pill above it. */
+  .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill.active) {
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+    box-shadow: none;
+    color: var(--text-primary);
+    font-weight: var(--font-weight-medium, 500);
+  }
+</style>
