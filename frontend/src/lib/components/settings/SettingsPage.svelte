@@ -330,14 +330,14 @@
     }
   }
 
-  /* Descriptions stay clearly below the item names. The app's light muted
-     ink sits close to secondary, so the nav steps it toward the surface;
-     both themes keep about 4.5:1 contrast. */
+  /* Descriptions stay clearly below the item names, which use primary
+     ink at a heavier weight. Muted ink keeps them above 4.5:1 on the
+     selected row's fill as well as the nav surface. */
   .settings-page :global(.kit-settings .kit-settings__nav-summary) {
     font-size: 11px;
     font-weight: 400;
     line-height: 1.2;
-    color: color-mix(in srgb, var(--text-muted) 85%, var(--bg-surface));
+    color: var(--text-muted);
   }
 
   .settings-page :global(.kit-settings__nav-item) {
@@ -489,13 +489,6 @@
 
   :global(:root.dark) .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__knob) {
     background: color-mix(in srgb, var(--text-muted) 70%, var(--bg-surface));
-  }
-
-  /* Placeholders sit a clear step below entered values (which use muted
-     ink), so example text such as "e.g. ~/.claude-work" never reads as a
-     configured value. */
-  .settings-page :global(.kit-settings__panel .kit-text-input__control::placeholder) {
-    color: color-mix(in srgb, var(--text-muted) 68%, var(--bg-surface));
   }
 
   /* Panel titles step up from section headings (13px semibold) and row
