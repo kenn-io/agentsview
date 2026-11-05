@@ -947,29 +947,40 @@
   // it fits, right-aligned to its trigger when there is room, otherwise
   // shifted left until it fits.
   function keepInsidePane(menu: HTMLElement) {
+    const anchor = menu.parentElement;
+    const pane = menu.closest(".session-breadcrumb");
+    if (!anchor || !pane) return;
     const place = () => {
-      const anchor = menu.parentElement;
-      const pane = menu.closest(".session-breadcrumb");
-      if (!anchor || !pane) return;
       menu.style.removeProperty("left");
       menu.style.removeProperty("right");
       menu.style.removeProperty("max-width");
       // Phones pin the menu to the viewport instead.
       if (getComputedStyle(menu).position !== "absolute") return;
+      // Rects are in viewport pixels; interface zoom scales the menu's own
+      // CSS lengths, so measure in viewport pixels and convert back.
+      const zoom = menu.currentCSSZoom || 1;
+      const gap = PANE_GAP * zoom;
       const bounds = pane.getBoundingClientRect();
       const trigger = anchor.getBoundingClientRect();
-      menu.style.maxWidth = `${Math.max(0, bounds.width - PANE_GAP * 2)}px`;
+      menu.style.maxWidth = `${Math.max(0, bounds.width - gap * 2) / zoom}px`;
       const width = menu.getBoundingClientRect().width;
       const left = Math.max(
-        bounds.left + PANE_GAP,
-        Math.min(trigger.right - width, bounds.right - PANE_GAP - width),
+        bounds.left + gap,
+        Math.min(trigger.right - width, bounds.right - gap - width),
       );
-      menu.style.left = `${left - trigger.left}px`;
+      menu.style.left = `${(left - trigger.left) / zoom}px`;
       menu.style.right = "auto";
     };
     place();
+    // Side panels resize the pane without resizing the window.
+    const observer = new ResizeObserver(place);
+    observer.observe(pane);
+    observer.observe(anchor);
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
   }
 
   function handleClickOutside(e: MouseEvent) {
