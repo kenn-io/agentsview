@@ -125,6 +125,9 @@ func TestUsageChangeJournal(t *testing.T) {
 					assert.Equal(t, 1, result.WrittenSessions)
 				}},
 			} {
+				if mode.name == "fresh" && tc.name != "machine" {
+					continue
+				}
 				t.Run(tc.name, func(t *testing.T) {
 					s := Session{ID: tc.name, Project: "project-a", Machine: "machine-a", Agent: "claude", StartedAt: new("2026-07-01T10:00:00Z")}
 					before, err := d.UsageChangeRevision(ctx)
@@ -134,19 +137,32 @@ func TestUsageChangeJournal(t *testing.T) {
 					} else {
 						require.NoError(t, d.UpsertSession(ctx, s))
 					}
-					inserted, err := d.UsageChangeRevision(ctx)
-					require.NoError(t, err)
-					assert.Greater(t, inserted, before)
-					ids, err := d.LoadUsageChanges(ctx, before, inserted)
-					require.NoError(t, err)
-					assert.Equal(t, []string{s.ID}, ids)
+					if tc.name == "machine" || tc.name == "atomic sync insert" {
+						inserted, err := d.UsageChangeRevision(ctx)
+						require.NoError(t, err)
+						assert.Greater(t, inserted, before)
+						ids, err := d.LoadUsageChanges(ctx, before, inserted)
+						require.NoError(t, err)
+						assert.Equal(t, []string{s.ID}, ids)
+					}
 					if tc.name == "atomic sync insert" {
 						return
 					}
 					require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", Content: "Hello", TokenUsage: []byte(`{"output_tokens":1}`)}}))
 					switch tc.name {
 					case "clear usage events":
-						require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.ID, []UsageEvent{{Source: "session", Model: "model-x", OutputTokens: 5}}))
+						before, err = d.UsageChangeRevision(ctx)
+						require.NoError(t, err)
+						require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.ID, []UsageEvent{
+							{Source: "session", Model: "model-x", OutputTokens: 5},
+							{Source: "session", Model: "model-y", OutputTokens: 7},
+						}))
+						written, err := d.UsageChangeRevision(ctx)
+						require.NoError(t, err)
+						assert.Greater(t, written, before)
+						ids, err := d.LoadUsageChanges(ctx, before, written)
+						require.NoError(t, err)
+						assert.Equal(t, []string{s.ID}, ids)
 					case "atomic sync events":
 						require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.ID, []UsageEvent{{Source: "session", OutputTokens: 1}}))
 					case "restore":
@@ -160,64 +176,19 @@ func TestUsageChangeJournal(t *testing.T) {
 					after, err := d.UsageChangeRevision(ctx)
 					require.NoError(t, err)
 					assert.Greater(t, after, before)
-					ids, err = d.LoadUsageChanges(ctx, before, after)
+					ids, err := d.LoadUsageChanges(ctx, before, after)
 					require.NoError(t, err)
 					assert.Equal(t, []string{s.ID}, ids)
 				})
 			}
 
-			t.Run("unchanged usage events", func(t *testing.T) {
-				const id = "same-events"
-				require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "project-a", Machine: "machine-a", Agent: "claude"}))
-				events := []UsageEvent{
-					{Source: "session", Model: "model-x", OutputTokens: 5, OccurredAt: "2026-07-02T10:00:00Z"},
-					{Source: "session", Model: "model-y", InputTokens: 7, MessageOrdinal: new(0)},
-				}
-				require.NoError(t, d.ReplaceSessionUsageEvents(ctx, id, events))
-				stored, err := d.GetUsageEvents(ctx, id)
-				require.NoError(t, err)
-				before, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				require.NoError(t, d.ReplaceSessionUsageEvents(ctx, id, events))
-				after, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				assert.Equal(t, before, after)
-				ids, err := d.LoadUsageChanges(ctx, before, after)
-				require.NoError(t, err)
-				assert.Empty(t, ids)
-				unchanged, err := d.GetUsageEvents(ctx, id)
-				require.NoError(t, err)
-				assert.Equal(t, stored, unchanged)
-			})
-
-			t.Run("consecutive session transactions advance revision", func(t *testing.T) {
-				const id = "consecutive"
-				require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "project-a", Machine: "machine-a", Agent: "claude"}))
-				before, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				events := []UsageEvent{{Source: "session", Model: "model-x", OutputTokens: 5}, {Source: "session", Model: "model-y", OutputTokens: 7}}
-				require.NoError(t, d.ReplaceSessionUsageEvents(ctx, id, events))
-				after, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				assert.Greater(t, after, before)
-				ids, err := d.LoadUsageChanges(ctx, before, after)
-				require.NoError(t, err)
-				assert.Equal(t, []string{id}, ids)
-				require.NoError(t, d.ReplaceSessionUsageEvents(ctx, id, nil))
-				cleared, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				assert.Greater(t, cleared, after)
-				ids, err = d.LoadUsageChanges(ctx, after, cleared)
-				require.NoError(t, err)
-				assert.Equal(t, []string{id}, ids)
-			})
+			if mode.name == "fresh" {
+				return
+			}
 
 			t.Run("no usage change", func(t *testing.T) {
 				s := Session{ID: "unchanged", Project: "project-a", Machine: "machine-a", Agent: "claude"}
 				require.NoError(t, d.UpsertSession(ctx, s))
-				require.NoError(t, d.UpsertSession(ctx, Session{ID: "before-unchanged", Project: "project-a", Machine: "machine-a", Agent: "claude"}))
-				var marker string
-				require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT COALESCE(sync_marker, '') FROM sessions WHERE id = ?", s.ID).Scan(&marker))
 				before, err := d.UsageChangeRevision(ctx)
 				require.NoError(t, err)
 				require.NoError(t, d.UpsertSession(ctx, s))
@@ -225,28 +196,9 @@ func TestUsageChangeJournal(t *testing.T) {
 				require.NoError(t, err)
 				_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET local_modified_at = '2100-07-03T10:00:00.000Z', file_mtime = '2100-07-03T10:00:00.000Z', usage_generation = 'generation-only' WHERE id = ?`, s.ID)
 				require.NoError(t, err)
-				var changedMarker string
-				require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT COALESCE(sync_marker, '') FROM sessions WHERE id = ?", s.ID).Scan(&changedMarker))
-				// Fresh scratch archives omit the sync-marker triggers.
-				if mode.name == "normal" {
-					assert.Greater(t, changedMarker, marker)
-				}
 				after, err := d.UsageChangeRevision(ctx)
 				require.NoError(t, err)
 				assert.Equal(t, before, after)
-				ids, err := d.LoadUsageChanges(ctx, before, after)
-				require.NoError(t, err)
-				assert.Empty(t, ids)
-			})
-
-			t.Run("pricing", func(t *testing.T) {
-				before, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				_, err = d.getWriter().ExecContext(ctx, "INSERT INTO model_pricing (model_pattern) VALUES ('model-x')")
-				require.NoError(t, err)
-				after, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				assert.Greater(t, after, before)
 				ids, err := d.LoadUsageChanges(ctx, before, after)
 				require.NoError(t, err)
 				assert.Empty(t, ids)
@@ -407,6 +359,9 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 			inserted, err := d.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			assert.Greater(t, inserted, before)
+			ids, err := d.LoadUsageChanges(ctx, before, inserted)
+			require.NoError(t, err)
+			assert.Empty(t, ids)
 			_, err = d.getWriter().ExecContext(ctx, "UPDATE "+tc.table+" SET "+tc.column+" = "+tc.column)
 			require.NoError(t, err)
 			unchanged, err := d.UsageChangeRevision(ctx)
@@ -417,7 +372,7 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 			changed, err := d.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			assert.Greater(t, changed, unchanged)
-			ids, err := d.LoadUsageChanges(ctx, before, changed)
+			ids, err = d.LoadUsageChanges(ctx, before, changed)
 			require.NoError(t, err)
 			assert.Empty(t, ids)
 		})

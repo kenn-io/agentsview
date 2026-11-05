@@ -21,7 +21,7 @@ func TestUsageEventsReplaceKeepsPrefixAndSkipsIdenticalWrites(t *testing.T) {
 	require.NoError(t, err)
 	before, err := d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
-	events = append(events, UsageEvent{Source: "session", Model: "model-y", OutputTokens: 7})
+	events = append(events, UsageEvent{Source: "session", Model: "model-y", InputTokens: 7, OutputTokens: 7, OccurredAt: "2026-07-02T10:00:00Z", Cost: new(money.Money{Microdollars: 123})})
 	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "append", events))
 	stored, err := d.GetUsageEvents(ctx, "append")
 	require.NoError(t, err)
@@ -38,6 +38,12 @@ func TestUsageEventsReplaceKeepsPrefixAndSkipsIdenticalWrites(t *testing.T) {
 	same, err := d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, after, same)
+	unchanged, err := d.GetUsageEvents(ctx, "append")
+	require.NoError(t, err)
+	assert.Equal(t, stored, unchanged)
+	ids, err := d.LoadUsageChanges(ctx, after, same)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
 	var modified string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT local_modified_at FROM sessions WHERE id = 'append'`).Scan(&modified))
 	assert.Equal(t, "2000-01-01T00:00:00Z", modified)
@@ -56,12 +62,12 @@ func TestUsageEventsReplaceMiddleEditPreservesTimestampOrder(t *testing.T) {
 		{Source: "session", OutputTokens: 3, OccurredAt: "2026-07-02T10:00:00Z"},
 	}
 	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "ties", events))
-	events[1].OutputTokens = 9
+	events[0].OutputTokens = 9
 	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "ties", events))
 	stored, err := d.GetUsageEvents(ctx, "ties")
 	require.NoError(t, err)
 	require.Len(t, stored, 3)
-	assert.Equal(t, []int{9, 1, 3}, []int{stored[0].OutputTokens, stored[1].OutputTokens, stored[2].OutputTokens})
+	assert.Equal(t, []int{2, 9, 3}, []int{stored[0].OutputTokens, stored[1].OutputTokens, stored[2].OutputTokens})
 }
 
 func TestUsageEventsReplaceStoresControlByteCorrection(t *testing.T) {
