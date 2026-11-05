@@ -357,6 +357,17 @@ func (s cursorSourceSet) discoverLocalProjectEach(ctx context.Context, root, res
 	}
 	topLevel := make(map[string]struct{})
 	var sessionDirs []string
+	var incomplete error
+	emitCandidate := func(path string) error {
+		err := s.yieldIfCanonical(root, path, resolutionCache, yield)
+		if _, stopped := discoveryYieldCause(err); stopped || ctx.Err() != nil {
+			return err
+		}
+		if err != nil {
+			incomplete = errors.Join(incomplete, err)
+		}
+		return nil
+	}
 	err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 		if !entry.IsDir() {
 			if !IsCursorTranscriptExt(entry.Name()) {
@@ -366,9 +377,7 @@ func (s cursorSourceSet) discoverLocalProjectEach(ctx context.Context, root, res
 				name := entry.Name()
 				topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
 			}
-			return s.yieldIfCanonical(
-				root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
-			)
+			return emitCandidate(filepath.Join(dir, entry.Name()))
 		}
 		sessionDir := filepath.Join(dir, entry.Name())
 		sessionDirs = append(sessionDirs, sessionDir)
@@ -379,7 +388,8 @@ func (s cursorSourceSet) discoverLocalProjectEach(ctx context.Context, root, res
 			// reserve the stem or outrank a regular file.
 			regular, statErr := streamingRegularFileCandidate(base + ext)
 			if statErr != nil {
-				return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
+				incomplete = errors.Join(incomplete, fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr))
+				continue
 			}
 			if regular && IsRegularFile(base+ext) {
 				path = base + ext
@@ -390,14 +400,14 @@ func (s cursorSourceSet) discoverLocalProjectEach(ctx context.Context, root, res
 			return nil
 		}
 		topLevel[entry.Name()] = struct{}{}
-		return s.yieldIfCanonical(root, path, resolutionCache, yield)
+		return emitCandidate(path)
 	})
 	if err != nil {
 		return err
 	}
-	return s.streamSubagentTranscripts(
+	return errors.Join(incomplete, s.streamSubagentTranscripts(
 		ctx, root, sessionDirs, topLevel, resolutionCache, yield,
-	)
+	))
 }
 
 func (s cursorSourceSet) yieldIfCanonical(

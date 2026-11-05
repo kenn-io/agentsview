@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -985,6 +986,54 @@ func TestCursorProviderDeduplicatesChildStemAcrossParents(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ok)
 			assert.Equal(t, tt.want, found.DisplayPath)
+		})
+	}
+}
+
+func TestCursorBrokenCandidateKeepsHealthyHistory(t *testing.T) {
+	for _, layout := range []string{"flat", "nested"} {
+		t.Run(layout, func(t *testing.T) {
+			root := t.TempDir()
+			transcripts := filepath.Join(root, "project", "agent-transcripts")
+			dir := transcripts
+			if layout == "nested" {
+				dir = filepath.Join(dir, "broken")
+			}
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.Symlink(filepath.Join(root, "missing"), filepath.Join(dir, "broken.jsonl")))
+			fallback := cursorProviderWriteTranscript(t, dir, "broken.txt", "readable fallback")
+			healthy := cursorProviderWriteJSONLTranscript(t, transcripts, "healthy.jsonl", "healthy transcript")
+			subagent := cursorProviderWriteJSONLTranscript(t, filepath.Join(transcripts, "parent", "subagents"), "child.jsonl", "healthy child")
+			provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			for _, streaming := range []bool{false, true} {
+				var sources []SourceRef
+				var err error
+				if streaming {
+					err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error { sources = append(sources, source); return nil })
+				} else {
+					sources, err = provider.Discover(t.Context())
+				}
+				require.ErrorIs(t, err, os.ErrNotExist)
+				var incomplete DiscoveryIncompleteError
+				require.ErrorAs(t, err, &incomplete)
+				var paths []string
+				for _, source := range sources {
+					paths = append(paths, source.DisplayPath)
+				}
+				assert.ElementsMatch(t, []string{fallback, healthy, subagent}, paths, "streaming=%v", streaming)
+			}
+			consumerErr := errors.New("consumer stopped")
+			calls := 0
+			err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
+			require.ErrorIs(t, err, consumerErr)
+			assert.Equal(t, 1, calls)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			calls = 0
+			err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, 1, calls)
 		})
 	}
 }
