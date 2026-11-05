@@ -38,10 +38,11 @@
   }
   .has-find :global(.message-list-scroll) { padding-inline-end: var(--find-rail); }
   /* While find is open, its field's focus ring is the only blue on screen:
-     the selected card keeps its neutral fill but drops MessageList's blue
-     outline, and a selected card that holds the current match keeps the
-     amber frame from search.css. */
-  .find-open :global(.virtual-row.selected > *) { outline: none; }
+     the selected card trades MessageList's blue outline for a neutral one,
+     so j/k and clicks still show which message is selected, and a
+     selected card that holds the current match keeps the amber frame from
+     search.css. */
+  .find-open :global(.virtual-row.selected > *) { outline-color: var(--text-muted); }
   .find-open :global(.virtual-row.selected > [data-search-current="true"]) {
     outline: 1.5px solid var(--accent-amber);
     outline-offset: -1.5px;

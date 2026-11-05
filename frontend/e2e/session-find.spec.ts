@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { renderedContrast } from "./helpers/contrast";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
 const SESSION_ID = "test-session-xlarge-5500";
@@ -511,4 +512,123 @@ test.describe("In-session find", () => {
     await expect(transcript.locator("[data-search-current]")).toHaveCount(0);
     await expect(transcript).toHaveAttribute("data-messages-session-id", nextId!);
   });
+});
+
+test("tool output controls stay usable beside the raw-output hint in a narrow pane", async ({ page }) => {
+  const { releaseHistory } = await installFixture(page);
+  // Spanish has the longest hint; the analysis panel and sidebar leave the
+  // transcript about 260px at this width.
+  await page.addInitScript(() => {
+    localStorage.setItem("agentsview-locale", "es");
+    localStorage.setItem("agentsview-message-layout", "default");
+    localStorage.setItem("agentsview-session-vitals", "true");
+  });
+  await page.setViewportSize({ width: 770, height: 900 });
+  await openSession(page);
+  const input = await openFind(page);
+  releaseHistory();
+  await expect(page.locator(".search-announcement")).toContainText(String(ALL_MATCHES));
+  // In the narrowest panes the hint may give way entirely, so wait for it
+  // to be rendered rather than visible.
+  const hint = page.locator(".search-output-hint");
+  for (let i = 0; i < ALL_MATCHES && (await hint.count()) === 0; i++) {
+    await input.press("Enter");
+    await expect(page.locator(".search-announcement")).toBeAttached();
+  }
+  await expect(hint).toHaveCount(1);
+  const pane = await page.locator(".message-list-scroll").boundingBox();
+  expect(pane!.width).toBeLessThan(320);
+
+  const layout = await page.locator(".output-header-row", { has: hint }).evaluate((row) => {
+    const rect = (el: Element | null) => el!.getBoundingClientRect();
+    const label = row.querySelector<HTMLElement>(".output-label")!;
+    const parts = [
+      ["label", rect(label)],
+      ["count", rect(row.querySelector(".output-header")!.querySelector(":scope > :nth-child(3)"))],
+      ["hint", rect(row.querySelector(".search-output-hint"))],
+      ["copy", rect(row.querySelector(".output-copy"))],
+    ] as const;
+    const box = rect(row);
+    return {
+      inside: parts.every(([, r]) => r.left >= box.left - 0.5 && r.right <= box.right + 0.5),
+      overlaps: parts.flatMap(([a, ra], i) =>
+        parts.slice(i + 1).filter(([, rb]) => ra.right > rb.left + 0.5 && rb.right > ra.left + 0.5 && ra.width > 0 && rb.width > 0).map(([b]) => `${a}/${b}`),
+      ),
+      labelWhole: label.scrollWidth <= label.clientWidth + 1,
+      hintTitle: row.querySelector(".search-output-hint")!.getAttribute("title"),
+    };
+  });
+  expect(layout.inside, JSON.stringify(layout)).toBe(true);
+  expect(layout.overlaps).toEqual([]);
+  expect(layout.labelWhole).toBe(true);
+  // A shortened hint keeps its full text on hover.
+  expect(layout.hintTitle).toBe("Salida sin procesar durante la búsqueda");
+});
+
+// The analysis panel and sidebar leave the transcript about 260px at 770
+// and about 300px at 810.
+for (const [viewport, minInput] of [[770, 36], [810, 72]] as const) {
+test(`the find field and its buttons stay usable in a narrow pane at ${viewport}px`, async ({ page }) => {
+  const { releaseHistory } = await installFixture(page);
+  await page.addInitScript(() => localStorage.setItem("agentsview-session-vitals", "true"));
+  await page.setViewportSize({ width: viewport, height: 900 });
+  await openSession(page);
+  await openFind(page);
+  releaseHistory();
+  await expect(page.locator(".search-announcement")).toContainText(String(ALL_MATCHES));
+  const pane = await page.locator(".message-list-scroll").boundingBox();
+  expect(pane!.width).toBeLessThan(330);
+
+  const layout = await page.locator(".session-find .find-controls").evaluate((bar) => {
+    const box = bar.getBoundingClientRect();
+    const input = bar.querySelector(".kit-find-bar__input")!.getBoundingClientRect();
+    const buttons = [...bar.querySelectorAll("button")]
+      .map((b) => ({ name: b.getAttribute("aria-label") ?? "", r: b.getBoundingClientRect() }))
+      .filter((b) => b.r.width > 0);
+    const overlaps = buttons.flatMap((a, i) =>
+      buttons.slice(i + 1).filter((b) => a.r.right > b.r.left + 0.5 && b.r.right > a.r.left + 0.5 && a.r.bottom > b.r.top + 0.5 && b.r.bottom > a.r.top + 0.5).map((b) => `${a.name}/${b.name}`),
+    );
+    return {
+      inputWidth: input.width,
+      overlaps,
+      outside: buttons.filter((b) => b.r.left < box.left - 0.5 || b.r.right > box.right + 0.5).map((b) => b.name),
+    };
+  });
+  expect(layout.overlaps).toEqual([]);
+  expect(layout.outside).toEqual([]);
+  // Room to read and edit a short query.
+  expect(layout.inputWidth, JSON.stringify({ ...layout, pane: pane!.width })).toBeGreaterThanOrEqual(minInput);
+});
+}
+
+test("find results share the find field's edge on a wide pane", async ({ page }) => {
+  const { releaseHistory } = await installFixture(page);
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await openSession(page);
+  await openFind(page);
+  releaseHistory();
+  await openResults(page);
+  const field = await page.locator(".session-find .find-field").boundingBox();
+  const heading = await page.getByRole("region", { name: "Search results" }).locator("h2").boundingBox();
+  expect(Math.abs(heading!.x - field!.x)).toBeLessThanOrEqual(1);
+});
+
+test("the selected message stays marked while find is open", async ({ page }) => {
+  const { releaseHistory } = await installFixture(page);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await openSession(page);
+  await openFind(page);
+  releaseHistory();
+  await page.locator(".virtual-row:not(.selected) p").filter({ hasText: /^Message \d+$/ }).first().click();
+  const selected = page.locator(".virtual-row.selected");
+  await expect(selected).toHaveCount(1);
+  const mark = await selected.evaluate((element) => {
+    const card = element.firstElementChild as HTMLElement;
+    const style = getComputedStyle(card);
+    return { style: style.outlineStyle, width: parseFloat(style.outlineWidth), color: style.outlineColor };
+  });
+  expect(mark.style, JSON.stringify(mark)).not.toBe("none");
+  expect(mark.width).toBeGreaterThan(0);
+  const contrast = await renderedContrast(selected, { foreground: mark.color });
+  expect(contrast.ratio, JSON.stringify(contrast)).toBeGreaterThanOrEqual(3);
 });

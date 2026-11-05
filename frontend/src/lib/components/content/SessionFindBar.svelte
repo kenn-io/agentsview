@@ -133,5 +133,18 @@
     background: var(--border-muted);
   }
   .find-input :global(.kit-find-bar__counter) { color: var(--text-secondary); }
+  /* Narrow panes: kit-ui's pinned bar reserves a 72px counter and roomy
+     gaps, which left no room for the query and pushed close over the
+     toggles. Drop the leading icon, size the counter to its text, and
+     tighten gaps and gutters so the query keeps usable width. */
+  .session-find { container-type: inline-size; }
+  @container (max-width: 340px) {
+    .find-controls { padding-inline: 8px calc(8px + var(--find-rail)); }
+    .find-input :global(.kit-find-bar.kit-find-bar--pinned) { gap: 2px; padding-inline: 6px 2px; }
+    .find-input :global(.kit-find-bar .kit-find-bar__icon) { display: none; }
+    .find-input :global(.kit-find-bar .kit-find-bar__counter) { min-width: 0; }
+    .find-input :global(.kit-find-bar .kit-find-bar__nav) { gap: 0; }
+    .find-divider { margin-inline: 1px; }
+  }
   .history-status { display: flex; align-items: center; gap: 8px; padding: 2px calc(var(--find-side) + var(--find-rail)) 6px var(--find-side); font-size: 11px; color: var(--text-muted); }
 </style>

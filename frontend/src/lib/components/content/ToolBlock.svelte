@@ -267,7 +267,7 @@
           {#if outputCollapsed && outputPreviewLine}<span class="tool-preview">{outputPreviewLine}</span>{/if}
         </button>
         {#if !outputCollapsed && sourceTextForSearch}
-          <span class="search-output-hint">{m.session_find_raw_output()}</span>
+          <span class="search-output-hint" title={m.session_find_raw_output()}>{m.session_find_raw_output()}</span>
         {:else if !outputCollapsed}
           <SegmentedControl class="output-mode" options={outputModeOptions} value={outputMode}
             ariaLabel={m.tool_block_output_mode()} onchange={(next) => (outputMode = next as "raw" | "formatted")} />
@@ -321,7 +321,13 @@
 </div>
 
 <style>
-  .search-output-hint { color: var(--text-muted); font-size: 11px; white-space: nowrap; flex: 0 0 auto; margin-inline: auto 8px; }
+  /* The hint gives way first in a narrow pane, so the output label,
+     match count, and copy button keep their room; its title keeps the
+     full text. */
+  .search-output-hint {
+    color: var(--text-muted); font-size: 11px; white-space: nowrap; flex: 0 100 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; margin-inline: auto 8px;
+  }
   .tool-block {
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
