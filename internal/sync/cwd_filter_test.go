@@ -1029,10 +1029,10 @@ func TestShouldAbortResyncSwap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldAbortResyncSwap(
+			got := resyncSwapAbortReason(
 				tt.stats, tt.oldFileSessions, tt.trashedCopied,
 			)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, got != "", "reason: %q", got)
 		})
 	}
 }

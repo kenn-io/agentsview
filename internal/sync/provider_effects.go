@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -83,7 +82,7 @@ type providerResultAdmission struct {
 	kept []parser.ParseResult
 	// emitted holds only Session.ID and Session.File.Path of every admitted result.
 	emitted                []parser.ParseResult
-	retryIDs               []string
+	retries                []retryCause
 	firstHash              string
 	truncationVerifyFailed bool
 	validationErr          error
@@ -111,10 +110,11 @@ func (a *providerResultAdmission) admit(r parser.ParseResultOutcome) error {
 		File: parser.FileInfo{Path: r.Result.Session.File.Path},
 	}})
 	if r.DataVersion == parser.DataVersionNeedsRetry {
-		a.retryIDs = append(a.retryIDs, r.Result.Session.ID)
-		if a.engine.archiveStore != nil {
-			log.Printf("resync: deferred %s: %s", a.file.Path, r.RetryReason)
-		}
+		a.retries = append(a.retries, retryCause{
+			sessionID: r.Result.Session.ID,
+			path:      a.file.Path,
+			reason:    r.RetryReason,
+		})
 	}
 	kept := a.engine.dropUnchangedSharedSQLiteResults(
 		a.ctx, a.file, []parser.ParseResult{r.Result}, a.policy,

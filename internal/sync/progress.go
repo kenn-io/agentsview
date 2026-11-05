@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"fmt"
+	"log"
 	"slices"
+	"strings"
 	gosync "sync"
 	"time"
 )
@@ -127,6 +130,13 @@ type SyncStats struct {
 	// Antigravity CLI fallbacks, whose saved rows a rebuild restores.
 	preservedRetryFailures int
 	deferredRetryScheduled bool
+	// retryCauses keeps the first retryCauseLimit provider results held for
+	// retry this pass; retryCauseCount counts all of them.
+	retryCauses     []retryCause
+	retryCauseCount int
+	// abortCause names the condition that set Aborted when no error or
+	// cancellation reports it.
+	abortCause string
 	// ArchiveRebuilt records a completed full-resync database swap. A rebuild
 	// can preserve/copy durable corpus rows while syncing zero session files,
 	// so downstream refresh consumers cannot infer it from Synced. It is not
@@ -451,6 +461,124 @@ func (s *SyncStats) RecordFailed() {
 func (s *SyncStats) recordDeferred(path string) {
 	s.Deferred++
 	s.retainDeferredRetryPath(path)
+}
+
+// retryCauseLimit bounds the retry causes a pass logs one by one and keeps
+// for its summary. The summary reports the rest as a count.
+const retryCauseLimit = 20
+
+// retryCauseSampleSize bounds the causes quoted in a summary, warning, or
+// error message.
+const retryCauseSampleSize = 5
+
+// retryCause records one provider result held for retry and why.
+type retryCause struct {
+	sessionID string
+	path      string
+	reason    string
+}
+
+func (c retryCause) String() string {
+	reason := c.reason
+	if reason == "" {
+		reason = "no reason given"
+	}
+	if c.sessionID == "" {
+		return fmt.Sprintf("%s: %s", c.path, reason)
+	}
+	return fmt.Sprintf("%s (%s): %s", c.sessionID, c.path, reason)
+}
+
+// recordRetryCause counts a result held for retry and logs it while the pass
+// is under retryCauseLimit.
+func (s *SyncStats) recordRetryCause(c retryCause) {
+	s.retryCauseCount++
+	if len(s.retryCauses) >= retryCauseLimit {
+		return
+	}
+	s.retryCauses = append(s.retryCauses, c)
+	log.Printf("sync: session needs retry: %s", c)
+}
+
+// mergeCauses keeps the first abort cause and the bounded retry causes of a
+// merged pass.
+func (s *SyncStats) mergeCauses(src SyncStats) {
+	if s.abortCause == "" {
+		s.abortCause = src.abortCause
+	}
+	s.retryCauseCount += src.retryCauseCount
+	room := max(retryCauseLimit-len(s.retryCauses), 0)
+	s.retryCauses = append(s.retryCauses, src.retryCauses[:min(room, len(src.retryCauses))]...)
+}
+
+// retryCauseSample lists up to retryCauseSampleSize retry causes and how many
+// more the pass held. It is empty when the pass recorded none.
+func (s *SyncStats) retryCauseSample() string {
+	if s.retryCauseCount == 0 {
+		return ""
+	}
+	shown := s.retryCauses[:min(retryCauseSampleSize, len(s.retryCauses))]
+	parts := make([]string, 0, len(shown)+1)
+	for _, c := range shown {
+		parts = append(parts, c.String())
+	}
+	if more := s.retryCauseCount - len(shown); more > 0 {
+		parts = append(parts, fmt.Sprintf("%d more", more))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// logRetrySummary writes one line per pass that held results for retry.
+func (s *SyncStats) logRetrySummary(prefix string) {
+	if s.retryCauseCount == 0 {
+		return
+	}
+	log.Printf("%s: %s retry: %s", prefix, countNoun(s.retryCauseCount, "session needs", "sessions need"), s.retryCauseSample())
+}
+
+// abort marks the pass aborted and keeps the first cause reported for it.
+func (s *SyncStats) abort(cause string) {
+	s.Aborted = true
+	if s.abortCause == "" {
+		s.abortCause = cause
+	}
+}
+
+// AbortCause names why an aborted pass stopped when neither an error nor
+// cancellation reports it. It is empty when the pass did not record a cause.
+func (s *SyncStats) AbortCause() string {
+	return s.abortCause
+}
+
+// IncompleteCause describes the unfinished work of a pass that completed
+// without an error but did not process every source.
+func (s *SyncStats) IncompleteCause() string {
+	var parts []string
+	if s.Failed > 0 {
+		parts = append(parts, countNoun(s.Failed, "session file", "session files")+" could not be read")
+	}
+	if s.Deferred > 0 {
+		parts = append(parts, countNoun(s.Deferred, "session waits", "sessions wait")+" for a retry")
+	}
+	if s.providerFailures > 0 {
+		parts = append(parts, countNoun(s.providerFailures, "agent", "agents")+" could not list their session files")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "not every session file was read")
+	}
+	cause := strings.Join(parts, ", ")
+	if sample := s.retryCauseSample(); sample != "" {
+		cause += "; why: " + sample
+	}
+	return cause
+}
+
+// countNoun formats a count with the singular or plural form of its noun.
+func countNoun(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // DeferredRetryBatch retains exact paths when possible and falls back to a
