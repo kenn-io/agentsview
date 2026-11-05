@@ -1483,6 +1483,7 @@ type CodexForkInfo struct {
 type CodexMessageOrigin struct {
 	Line   int
 	TurnID string
+	InTurn bool
 }
 
 // ParsedSession holds session metadata extracted from a JSONL file.

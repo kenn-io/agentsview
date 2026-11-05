@@ -3598,7 +3598,7 @@ func (e *Engine) resyncBuildLocked(
 	}
 	localStats := stats
 	if stats.Deferred > 0 {
-		warning := fmt.Sprintf("resync: %d sessions need retry; forks without replay evidence may include copied parent messages; their token usage is withheld until reconciliation", stats.Deferred)
+		warning := fmt.Sprintf("resync: %d sessions need retry", stats.Deferred)
 		log.Print(warning)
 		stats.Warnings = append(stats.Warnings, warning)
 	}
@@ -19022,7 +19022,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 		return preparedSessionWrite{}, sessionWritePreserved, nil
 	}
 	candidate = history.Candidate
-	candidate, forkState, stagedToolKeys, err := e.reconcileCodexFork(ctx, candidate)
+	candidate, forkState, stagedToolKeys, err := e.reconcileCodexFork(ctx, candidate, pw.staged)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
@@ -19042,15 +19042,12 @@ func (e *Engine) prepareSessionNormalizedContext(
 	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
 	if forkState != nil {
 		for _, m := range prepared.Messages {
-			digest, keyErr := codexForkMessageKey(m)
+			digest, keyErr := db.CodexForkMessageKey(m)
 			if keyErr != nil {
 				return preparedSessionWrite{}, sessionWritePreserved, keyErr
 			}
 			forkState.Messages[m.Ordinal].Digest = digest
 		}
-	}
-	if forkState != nil && len(prepared.UsageEvents) == 0 {
-		prepared.UsageEvents = forkState.RetainedUsage
 	}
 
 	if prepared.PlanUsage != nil {

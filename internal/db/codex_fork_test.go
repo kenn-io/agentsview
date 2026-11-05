@@ -2,11 +2,27 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCodexForkStateBeforeProvenanceSchema(t *testing.T) {
+	// A rebuild opens the old archive read-only, before migrations. Model the
+	// shipped schema without the new, optional fork provenance table.
+	old, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "old.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, old.Close()) })
+	_, err = old.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+	d := &DB{}
+	d.reader.Store(old)
+	state, err := d.GetCodexForkState(t.Context(), "codex:child")
+	require.NoError(t, err)
+	assert.Nil(t, state)
+}
 
 func TestCodexForkProvenanceFailureRollsBackContent(t *testing.T) {
 	for _, route := range []string{"batch", "staged"} {

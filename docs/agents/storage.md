@@ -77,6 +77,13 @@ token metadata stays in local provenance for later reconciliation. Saved message
 and tool results absent from a shortened source remain archived. Retained
 historical usage events also survive.
 
+Reconciliation matches storage-normalized message content and consumes each
+occurrence once, including when a TraeX record emits several messages. Restored
+tool results obey the current category and archive-content policies. Retained
+messages keep their activity bounds and supply the child preview; retained usage
+events follow the final child identity and message ordinals. Restored metadata
+continues to survive full parses until it returns in the source itself.
+
 If the parent never appears, available messages continue updating across retries,
 restarts, and rebuilds. Usage for unverified messages remains unavailable. If the
 parent later appears, reconciliation removes only confirmed inherited turns and

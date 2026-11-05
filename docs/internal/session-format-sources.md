@@ -788,6 +788,12 @@ fixtures retain this field; missing identities remain source-local.
   retained tool results and usage, staged publication, and atomic rollback.
   `TestMissingParentForkPreservesLegacySourceHistory` also retains history
   stored under the pre-version-40 source identity.
+  Follow-up synthetic fixtures in `TestCodexForkReview*` verify content-checked
+  occurrence matching, shared TraeX record origins, idless child turns, restored
+  result events, category filtering, retained activity bounds and previews,
+  usage ownership and ordinals, and provenance after archive policy projection.
+  These shortened-source fixtures exercise AgentsView's preservation policy;
+  they do not establish that Codex rewrites a rollout in that shape.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

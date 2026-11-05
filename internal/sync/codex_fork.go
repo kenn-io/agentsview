@@ -3,13 +3,14 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json/v2"
 	"log"
 	"maps"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // Keep local reconciliation metadata out of immutable hosted ingest payloads.
@@ -24,7 +25,7 @@ const codexForkUnresolvedWarning = "Fork parent unavailable. Messages remain vis
 // reconcileCodexFork keeps available content while the replay parent is absent.
 // Source origins and replay evidence commit with the resulting transcript. A
 // restart therefore never mistakes a fallback for previously resolved history.
-func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (ingest.Candidate, *db.CodexForkState, map[string]string, error) {
+func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, staged *codexStagingSink) (ingest.Candidate, *db.CodexForkState, map[string]string, error) {
 	info := c.Parsed.Session.CodexFork
 	if info == nil {
 		return c, nil, nil, nil
@@ -35,11 +36,21 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 		reader = old
 	}
 	priorID := c.Session.ID
-	prior, err := store.GetAllMessages(ctx, priorID)
+	previous, err := reader.GetCodexForkState(ctx, priorID)
 	if err != nil {
 		return c, nil, nil, err
 	}
-	if len(prior) == 0 && c.Session.FilePath != nil {
+	// Resolved full parses are authoritative unless an earlier retry retained
+	// history. In that common case, never hydrate archived tool payloads.
+	needsHistory := !info.Resolved || (previous != nil && previous.PreserveHistory)
+	var prior []db.Message
+	if needsHistory {
+		prior, err = store.GetAllMessages(ctx, priorID)
+		if err != nil {
+			return c, nil, nil, err
+		}
+	}
+	if needsHistory && len(prior) == 0 && c.Session.FilePath != nil {
 		// Before version 40 a child could occupy its parent's ID. The exact
 		// source path, agent and legacy version identify that shipped mapping.
 		ids, err := reader.ListSessionIDsByFilePath(ctx, *c.Session.FilePath, c.Session.Agent)
@@ -55,12 +66,12 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 				return c, nil, nil, err
 			}
 			priorID = id
+			previous, err = reader.GetCodexForkState(ctx, priorID)
+			if err != nil {
+				return c, nil, nil, err
+			}
 			break
 		}
-	}
-	previous, err := reader.GetCodexForkState(ctx, priorID)
-	if err != nil {
-		return c, nil, nil, err
 	}
 	state := &db.CodexForkState{ParentID: info.ParentID, ParentKnown: info.Resolved, ParentTurns: maps.Clone(info.ParentTurns)}
 	if previous != nil && previous.ParentID == info.ParentID && previous.ParentKnown {
@@ -71,11 +82,6 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 		maps.Copy(state.ParentTurns, previous.ParentTurns)
 	}
 
-	// Healthy, resolved sources retain their existing authoritative replacement
-	// semantics. Only a missing-parent interval needs archive history merging.
-	if info.Resolved && (previous == nil || !previous.PreserveHistory) {
-		prior = nil
-	}
 	state.PreserveHistory = !info.Resolved
 
 	// Capture original scratch occurrence identities before replay removal or
@@ -95,11 +101,14 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 		source     int
 	}
 	incoming := make([]entry, 0, len(c.Messages))
+	// Saved membership can be more complete than the currently readable
+	// parent pages. An idless turn_context still opens the child boundary;
+	// distinguish it from pre-turn replay records by explicit turn presence.
 	replaying := state.ParentKnown
 	for i, m := range c.Messages {
 		origin := c.Parsed.Messages[i].CodexOrigin
 		if replaying {
-			if _, inherited := state.ParentTurns[origin.TurnID]; inherited || origin.TurnID == "" {
+			if _, inherited := state.ParentTurns[origin.TurnID]; inherited || (origin.TurnID == "" && !origin.InTurn) {
 				continue
 			}
 			replaying = false
@@ -118,48 +127,59 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 	// Occurrence queues preserve repeated identical messages. Legacy rows lack
 	// source origins; pair them by content, timestamp and tool identities once,
 	// then persist their proven source positions with this write.
-	byOrigin := make(map[parser.CodexMessageOrigin]int)
+	byOrigin := make(map[parser.CodexMessageOrigin][]int)
 	byContent := make(map[[32]byte][]int)
+	contentKeys := make([][32]byte, len(incoming))
 	for i, item := range incoming {
-		byOrigin[item.provenance.Origin] = i
+		byOrigin[item.provenance.Origin] = append(byOrigin[item.provenance.Origin], i)
 		_, projected := e.db.ProjectSessionForStorage(c.Session, []db.Message{item.message})
 		if len(projected) == 0 {
 			continue
 		}
-		key, err := codexForkMessageKey(projected[0])
+		db.SanitizeMessage(&projected[0])
+		key, err := db.CodexForkMessageKey(projected[0])
 		if err != nil {
 			return c, nil, nil, err
 		}
 		byContent[key] = append(byContent[key], i)
+		contentKeys[i] = key
 	}
 	used := make([]bool, len(incoming))
 	merged := make([]entry, 0, len(prior)+len(incoming))
 	next := 0
+	priorOrdinals := make(map[int]int)
+	sourceOrdinals := make(map[int]int)
 	for _, m := range prior {
 		if err := ctx.Err(); err != nil {
 			return c, nil, nil, err
 		}
+		key, err := db.CodexForkMessageKey(m)
+		if err != nil {
+			return c, nil, nil, err
+		}
 		var old db.CodexForkMessage
 		if previous != nil && m.Ordinal < len(previous.Messages) {
-			key, err := codexForkMessageKey(m)
-			if err != nil {
-				return c, nil, nil, err
-			}
 			if key == previous.Messages[m.Ordinal].Digest {
 				old = previous.Messages[m.Ordinal]
 			}
 		}
-		match := -1
-		if old.Origin.Line > 0 {
-			if index, ok := byOrigin[old.Origin]; ok && !used[index] {
-				match = index
-			}
-		}
-		if match < 0 {
-			key, err := codexForkMessageKey(m)
+		_, projected := e.db.ProjectSessionForStorage(c.Session, []db.Message{m})
+		if len(projected) > 0 {
+			key, err = db.CodexForkMessageKey(projected[0])
 			if err != nil {
 				return c, nil, nil, err
 			}
+		}
+		match := -1
+		if old.Origin.Line > 0 {
+			for _, index := range byOrigin[old.Origin] {
+				if !used[index] && key == contentKeys[index] {
+					match = index
+					break
+				}
+			}
+		}
+		if match < 0 {
 			for _, index := range byContent[key] {
 				if !used[index] && (old.Origin.Line == 0 || old.Origin.TurnID == incoming[index].provenance.Origin.TurnID) {
 					match = index
@@ -183,26 +203,56 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 			} else if len(current.message.TokenUsage) == 0 && !current.message.HasContextTokens && !current.message.HasOutputTokens {
 				current.message.TokenUsage, current.message.ContextTokens, current.message.OutputTokens = previousUsage.TokenUsage, previousUsage.ContextTokens, previousUsage.OutputTokens
 				current.message.HasContextTokens, current.message.HasOutputTokens = previousUsage.HasContextTokens, previousUsage.HasOutputTokens
+				if len(previousUsage.TokenUsage) > 0 || previousUsage.HasContextTokens || previousUsage.HasOutputTokens {
+					state.PreserveHistory = true
+				}
 			}
-			// A truncated source can retain a call but lose some or all of its
-			// following output records. Keep the more complete archived results.
+			// Results are updates, not a completeness count. Equal-sized partial
+			// snapshots can carry different events for the same archived call.
 			for j := range current.message.ToolCalls {
 				if j >= len(m.ToolCalls) {
 					break
 				}
 				call, saved := &current.message.ToolCalls[j], m.ToolCalls[j]
-				if call.ToolUseID == saved.ToolUseID && call.InputJSON == saved.InputJSON && len(call.ResultEvents) < len(saved.ResultEvents) {
-					call.ResultEvents, call.ResultContent, call.ResultContentLength = saved.ResultEvents, saved.ResultContent, saved.ResultContentLength
+				// The message key already compared call inputs after the current
+				// storage projection, which may deliberately omit arguments.
+				if call.ToolUseID != saved.ToolUseID || len(saved.ResultEvents) == 0 {
+					continue
+				}
+				if staged != nil {
+					call.ResultEvents, err = staged.forkResultEvents(ctx, sourceToolKeys[current.source][j])
+					if err != nil {
+						return c, nil, nil, err
+					}
+				}
+				var retained bool
+				call.ResultEvents, retained = mergeCodexForkResultEvents(saved.ResultEvents, call.ResultEvents)
+				if retained {
+					state.PreserveHistory = true
+				}
+				if staged != nil || retained {
 					sourceToolKeys[current.source][j] = ""
+					if !e.blockedResultCategories[call.Category] && !e.db.ArchiveContent().OmitsToolContent() {
+						call.ResultContent, err = ingest.SummarizeToolResultEventsContext(ctx, call.ResultEvents)
+						if err != nil {
+							return c, nil, nil, err
+						}
+						call.ResultContentLength = len(call.ResultContent)
+					} else {
+						call.ResultContent = ""
+						call.ResultContentLength = codexForkResultSummaryLength(call.ResultEvents)
+					}
 				}
 			}
 			for next <= match {
 				if !used[next] {
+					sourceOrdinals[incoming[next].source] = len(merged)
 					merged = append(merged, incoming[next])
 					used[next] = true
 				}
 				next++
 			}
+			priorOrdinals[m.Ordinal] = sourceOrdinals[current.source]
 			continue
 		}
 		// Remove only records positively identified as inherited replay. Source
@@ -211,7 +261,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 			if _, inherited := state.ParentTurns[old.Origin.TurnID]; inherited {
 				continue
 			}
-			if old.Provisional && old.Origin.TurnID != "" && old.PendingUsage != nil {
+			if old.Provisional && (old.Origin.TurnID != "" || old.Origin.InTurn) && old.PendingUsage != nil {
 				usage := old.PendingUsage
 				m.TokenUsage, m.ContextTokens, m.OutputTokens = usage.TokenUsage, usage.ContextTokens, usage.OutputTokens
 				m.HasContextTokens, m.HasOutputTokens = usage.HasContextTokens, usage.HasOutputTokens
@@ -228,6 +278,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 			m.ContextTokens, m.OutputTokens, m.HasContextTokens, m.HasOutputTokens = 0, 0, false, false
 		}
 		state.PreserveHistory = true
+		priorOrdinals[m.Ordinal] = len(merged)
 		merged = append(merged, entry{m, old, -1})
 	}
 	for i, item := range incoming {
@@ -242,7 +293,16 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 	for i, item := range merged {
 		m := item.message
 		m.Ordinal, m.SessionID = i, c.Session.ID
-		digest, err := codexForkMessageKey(m)
+		for j := range m.ToolCalls {
+			call := &m.ToolCalls[j]
+			if e.blockedResultCategories[call.Category] {
+				call.ResultContent = ""
+				for k := range call.ResultEvents {
+					call.ResultEvents[k].Content = ""
+				}
+			}
+		}
+		digest, err := db.CodexForkMessageKey(m)
 		if err != nil {
 			return c, nil, nil, err
 		}
@@ -253,6 +313,27 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 			occurrences[call.ToolUseID]++
 			if item.source >= 0 && sourceToolKeys[item.source][j] != "" {
 				toolKeys[final] = sourceToolKeys[item.source][j]
+			}
+		}
+	}
+	c.Session.FirstMessage = nil
+	for _, m := range c.Messages {
+		if m.Role == "user" && !m.IsSystem && m.SourceSubtype != parser.SourceSubtypeToolResult && strings.TrimSpace(m.Content) != "" {
+			c.Session.FirstMessage = new(stringutil.TruncateRunes(strings.TrimSpace(strings.ReplaceAll(m.Content, "\n", " ")), 300, "..."))
+			break
+		}
+	}
+	if state.PreserveHistory {
+		archived, err := store.GetSession(ctx, priorID)
+		if err != nil {
+			return c, nil, nil, err
+		}
+		if archived != nil {
+			if archived.StartedAt != nil && (c.Session.StartedAt == nil || *archived.StartedAt < *c.Session.StartedAt) {
+				c.Session.StartedAt = archived.StartedAt
+			}
+			if archived.EndedAt != nil && (c.Session.EndedAt == nil || *archived.EndedAt > *c.Session.EndedAt) {
+				c.Session.EndedAt = archived.EndedAt
 			}
 		}
 	}
@@ -268,29 +349,117 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate) (in
 	}
 	// Non-source usage, such as imported historical usage-only rows, is archive
 	// history too. Codex message usage above must not erase it during a retry.
-	if len(c.Parsed.UsageEvents) == 0 {
+	if needsHistory && len(c.Parsed.UsageEvents) == 0 {
 		events, err := reader.GetUsageEvents(ctx, priorID)
 		if err != nil {
 			return c, nil, nil, err
 		}
-		// Conversion is intentionally left to the existing normalized writer.
-		state.RetainedUsage = events
+		for _, event := range events {
+			if event.MessageOrdinal != nil {
+				ordinal, retained := priorOrdinals[*event.MessageOrdinal]
+				if !retained {
+					continue
+				}
+				event.MessageOrdinal = new(ordinal)
+			}
+			event.SessionID = c.Session.ID
+			c.Parsed.UsageEvents = append(c.Parsed.UsageEvents, parser.ParsedUsageEvent{
+				SessionID: event.SessionID, MessageOrdinal: event.MessageOrdinal, Source: event.Source, Model: event.Model, ProviderID: event.ProviderID,
+				InputTokens: event.InputTokens, OutputTokens: event.OutputTokens, CacheCreationInputTokens: event.CacheCreationInputTokens, CacheReadInputTokens: event.CacheReadInputTokens,
+				ReasoningTokens: event.ReasoningTokens, Cost: event.Cost, CostStatus: event.CostStatus, CostSource: event.CostSource, OccurredAt: event.OccurredAt, DedupKey: event.DedupKey,
+			})
+			state.PreserveHistory = true
+		}
+		total, hasOutput, peak, hasContext, err := ingest.UsageEventTokenTotalsContext(ctx, c.Parsed.UsageEvents, true)
+		if err != nil {
+			return c, nil, nil, err
+		}
+		if !c.Session.HasTotalOutputTokens {
+			c.Session.TotalOutputTokens, c.Session.HasTotalOutputTokens = total, hasOutput
+		}
+		if !c.Session.HasPeakContextTokens {
+			c.Session.PeakContextTokens, c.Session.HasPeakContextTokens = peak, hasContext
+		}
 	}
 	return c, state, toolKeys, nil
 }
 
-func codexForkMessageKey(m db.Message) ([32]byte, error) {
-	// Legacy archives can lack model, length and rendering metadata. Match
-	// visible content and source timestamp, with occurrence queues for repeats.
-	// Tool identities include inputs, while hydrated output belongs to history.
-	type callKey struct{ Name, ID, Input string }
-	key := struct {
-		Role, Content, Thinking, Timestamp string
-		Calls                              []callKey
-	}{Role: m.Role, Content: m.Content, Thinking: m.ThinkingText, Timestamp: m.Timestamp}
-	for _, call := range m.ToolCalls {
-		key.Calls = append(key.Calls, callKey{call.ToolName, call.ToolUseID, call.InputJSON})
+// Match the provider's result dedup identity, not slice length or event index.
+// Keep archive order and append newly observed updates once. A current copy of
+// an existing event supplies the current content policy and metadata.
+func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolResultEvent, bool) {
+	type identity struct{ agent, status, digest string }
+	key := func(event db.ToolResultEvent) identity {
+		digest := event.RawContentDigest
+		if digest == nil {
+			hash := sha256.Sum256([]byte(event.Content))
+			digest = hash[:]
+		}
+		return identity{event.AgentID, event.Status, string(digest)}
 	}
-	encoded, err := json.Marshal(key)
-	return sha256.Sum256(encoded), err
+	currentByKey := make(map[identity]db.ToolResultEvent, len(current))
+	for _, event := range current {
+		currentByKey[key(event)] = event
+	}
+	merged := make([]db.ToolResultEvent, 0, len(saved)+len(current))
+	seen := make(map[identity]bool)
+	retained := false
+	for _, event := range saved {
+		id := key(event)
+		if updated, ok := currentByKey[id]; ok {
+			event = updated
+		} else {
+			retained = true
+		}
+		if !seen[id] {
+			seen[id] = true
+			event.EventIndex = len(merged)
+			merged = append(merged, event)
+		}
+	}
+	for _, event := range current {
+		id := key(event)
+		if !seen[id] {
+			seen[id] = true
+			event.EventIndex = len(merged)
+			merged = append(merged, event)
+		}
+	}
+	return merged, retained
+}
+
+// Reproduce the canonical latest-per-agent summary's length without restoring
+// blocked text. Participation was recorded before the content was blanked.
+func codexForkResultSummaryLength(events []db.ToolResultEvent) int {
+	latest := make(map[string]int)
+	anonymous := 0
+	for _, event := range events {
+		if event.SummaryParticipates != nil {
+			if !*event.SummaryParticipates {
+				continue
+			}
+		} else if strings.TrimSpace(event.Content) == "" {
+			continue
+		}
+		agent := strings.TrimSpace(event.AgentID)
+		if agent == "" {
+			anonymous = event.ContentLength
+		} else {
+			latest[agent] = event.ContentLength
+		}
+	}
+	if len(latest) == 0 {
+		return anonymous
+	}
+	total := 2 * (len(latest) - 1)
+	for agent, length := range latest {
+		total += length
+		if len(latest) > 1 {
+			total += len(agent) + 2
+		}
+	}
+	if anonymous > 0 {
+		total += 2 + anonymous
+	}
+	return total
 }

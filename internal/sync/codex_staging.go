@@ -800,20 +800,46 @@ func (s *codexStagingSink) Findings(
 	sessionID string,
 	positions map[string]db.StagedToolCallPosition,
 ) []db.SecretFinding {
-	out := make([]db.SecretFinding, len(s.findings))
+	out := make([]db.SecretFinding, 0, len(s.findings))
 	for i, f := range s.findings {
 		f.SessionID = sessionID
 		pos, ok := positions[s.findingPos[i].stageKey]
-		if ok {
-			f.MessageOrdinal = pos.Ordinal
-			callIdx := pos.CallIndex
-			evIdx := s.findingPos[i].eventIndex
-			f.CallIndex = &callIdx
-			f.EventIndex = &evIdx
+		if !ok {
+			continue
 		}
-		out[i] = f
+		f.MessageOrdinal = pos.Ordinal
+		callIdx := pos.CallIndex
+		evIdx := s.findingPos[i].eventIndex
+		f.CallIndex = &callIdx
+		f.EventIndex = &evIdx
+		out = append(out, f)
 	}
 	return out
+}
+
+// forkResultEvents materializes only a call that must merge archived results.
+// Healthy full parses continue publishing directly from scratch.
+func (s *codexStagingSink) forkResultEvents(ctx context.Context, key string) ([]db.ToolResultEvent, error) {
+	rows, err := s.scratch.QueryContext(ctx, `SELECT tool_use_id, agent_id, subagent_session_id,
+ source, status, content, content_length, timestamp, raw_content_digest, summary_participates
+ FROM stage_events WHERE call_key=? ORDER BY seq`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []db.ToolResultEvent
+	for rows.Next() {
+		var event db.ToolResultEvent
+		if err := rows.Scan(&event.ToolUseID, &event.AgentID, &event.SubagentSessionID,
+			&event.Source, &event.Status, &event.Content, &event.ContentLength, &event.Timestamp,
+			&event.RawContentDigest, &event.SummaryParticipates); err != nil {
+			return nil, err
+		}
+		event.SubagentSessionID = applyIDPrefixToID(s.idPrefix, event.SubagentSessionID)
+		event.EventIndex = len(events)
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 // InsertEventsTx inserts the staged result events into tool_result_events

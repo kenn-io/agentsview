@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -31,8 +32,6 @@ type CodexForkMessage struct {
 // CodexForkState is local archive provenance, independent of optional parser
 // checkpoints. ParentKnown also distinguishes a resolved, turnless parent.
 type CodexForkState struct {
-	// RetainedUsage carries normalized historical events only for this write.
-	RetainedUsage   []UsageEvent `json:"-"`
 	ParentID        string
 	ParentKnown     bool
 	PreserveHistory bool
@@ -41,6 +40,15 @@ type CodexForkState struct {
 }
 
 func (db *DB) GetCodexForkState(ctx context.Context, sessionID string) (*CodexForkState, error) {
+	// The rebuild worker reads the original archive without migrating it.
+	var exists bool
+	if err := db.getReader().QueryRow(ctx, `SELECT EXISTS (
+ SELECT 1 FROM sqlite_master WHERE type='table' AND name='codex_fork_state')`).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
 	var encoded string
 	err := db.getReader().QueryRow(ctx, `SELECT state_json FROM codex_fork_state WHERE session_id = ?`, sessionID).Scan(&encoded)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -75,4 +83,66 @@ func writeCodexForkStateTx(ctx context.Context, tx *sql.Tx, id string, state *Co
 	_, err = tx.ExecContext(ctx, `INSERT INTO codex_fork_state(session_id, state_json) VALUES (?, ?)
 	 ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json`, id, string(encoded))
 	return err
+}
+
+// CodexForkMessageKey identifies storage-normalized message content, excluding usage and results.
+func CodexForkMessageKey(m Message) ([32]byte, error) {
+	// Legacy archives can lack model, length and rendering metadata. Match
+	// visible content and source timestamp, with occurrence queues for repeats.
+	// Tool identities include inputs, while hydrated output belongs to history.
+	type callKey struct{ Name, ID, Input string }
+	key := struct {
+		Role, Content, Thinking, Timestamp string
+		Calls                              []callKey
+	}{Role: m.Role, Content: m.Content, Thinking: m.ThinkingText, Timestamp: m.Timestamp}
+	for _, call := range m.ToolCalls {
+		key.Calls = append(key.Calls, callKey{call.ToolName, call.ToolUseID, call.InputJSON})
+	}
+	encoded, err := json.Marshal(key)
+	return sha256.Sum256(encoded), err
+}
+
+func refreshCopiedCodexForkDigestsTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT f.session_id, f.state_json
+ FROM codex_fork_state f JOIN `+tempIDsTable+` copied ON copied.id=f.session_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type savedState struct{ id, encoded string }
+	var saved []savedState
+	for rows.Next() {
+		var s savedState
+		if err := rows.Scan(&s.id, &s.encoded); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		saved = append(saved, s)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, s := range saved {
+		var state CodexForkState
+		if err := json.Unmarshal([]byte(s.encoded), &state); err != nil {
+			return err
+		}
+		messages, err := allMessagesWithQuerier(ctx, tx, s.id, selectMessageCols)
+		if err != nil {
+			return err
+		}
+		for _, m := range messages {
+			if m.Ordinal >= len(state.Messages) {
+				continue
+			}
+			state.Messages[m.Ordinal].Digest, err = CodexForkMessageKey(m)
+			if err != nil {
+				return err
+			}
+		}
+		if err := writeCodexForkStateTx(ctx, tx, s.id, &state); err != nil {
+			return err
+		}
+	}
+	return nil
 }
