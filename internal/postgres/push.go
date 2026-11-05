@@ -1464,7 +1464,8 @@ func (s *Sync) pushBatchAttempt(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
-		if err := s.pushCommitLinks(ctx, tx, sess.ID); err != nil {
+		commitLinksChanged, err := s.pushCommitLinks(ctx, tx, sess.ID)
+		if err != nil {
 			log.Printf("pgsync: commit links %s: %v", sess.ID, err)
 			_ = tx.Rollback()
 			*pushed = (*pushed)[:len(*pushed)-n]
@@ -1492,11 +1493,11 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		// Bump updated_at when messages, secret findings, friction, or
-		// plan usage were rewritten but pushSession was a metadata no-op
+		// Bump updated_at when messages, secret findings, commit links,
+		// friction, or plan usage were rewritten but pushSession was a metadata no-op
 		// (its WHERE clause skips unchanged rows). PG read-mode session
 		// watchers rely on updated_at to surface these changes.
-		if messagesChanged || findingsChanged || frictionChanged || planUsageChanged {
+		if messagesChanged || findingsChanged || commitLinksChanged || frictionChanged || planUsageChanged {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
