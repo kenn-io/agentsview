@@ -2015,19 +2015,18 @@ agentsview session parent <id> <parent>  # record the launching session
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
-`commit message`. JSON keeps `source: "trailer"` for commit message links.
-Use `--format json` for structured output. The table shows the
-session, exact message ordinal, call index, tool-use ID, time, source, recorded
-SHA, branch, subject, and user turn, shortened to 100 terminal columns.
-Transcript links use the last real prompt before the first edit since the
-session's previous commit link. If no edit precedes this commit, they use the
-last real prompt at or before the commit call. Trailer links use the last real
+`commit message`. JSON keeps `source: "trailer"` for commit message links. Use
+`--format json` for structured output. The table shows the session, exact
+message ordinal, call index, tool-use ID, time, source, recorded SHA, branch,
+subject, and user turn, shortened to 100 terminal columns. Transcript links use
+the last real prompt before the commit call. Trailer links use the last real
 prompt at or before Git's author time and mark the turn as heuristic. Trashed or
 permanently deleted sessions carry `missing: true` and omit the turn. See
 [commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
-retention and lookup limits. Links use stored Git summaries, including Codex
-poll results paired with the original call. Calls spanning repositories use the
-first directory; only a leading `cd` adjusts it. Archives retaining only
+retention and lookup limits. Transcript links require stored Git summaries with
+SHAs of 7 to 64 characters. Quiet commits have no transcript link. Links include
+Codex poll results paired with the original call. Calls spanning repositories
+use the first directory; only a leading `cd` adjusts it. Archives retaining only
 transcripts keep trailer links; usage-only archives have no links. Hosted
 PostgreSQL returns HTTP 501. Sessions permanently deleted before this release
 have no transcript links.

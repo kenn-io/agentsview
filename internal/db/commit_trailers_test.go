@@ -97,17 +97,30 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{c}))
 			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
-			require.Len(t, found.Commits[0].Links, 2)
+			wantLinks := 2
+			if sha == "abc1234" {
+				wantLinks = 3
+			}
+			require.Len(t, found.Commits[0].Links, wantLinks)
+			var transcriptLinks, trailerLinks int
 			for _, l := range found.Commits[0].Links {
 				assert.False(t, l.Ambiguous)
-				if l.SessionID == "session-a" {
-					assert.Equal(t, "transcript", l.Source)
+				if l.Source == "transcript" {
+					transcriptLinks++
+					assert.Equal(t, "session-a", l.SessionID)
 					assert.Equal(t, sha, l.SHA)
 				} else {
-					assert.Equal(t, "codex:thread", l.SessionID)
+					trailerLinks++
 					assert.Equal(t, "trailer", l.Source)
+					assert.Equal(t, c.SHA, l.SHA)
+					if l.SessionID != "codex:thread" {
+						assert.Equal(t, "session-a", l.SessionID)
+						assert.Equal(t, "abc1234", sha)
+					}
 				}
 			}
+			assert.Equal(t, 1, transcriptLinks)
+			assert.Equal(t, wantLinks-1, trailerLinks)
 			// Replacing the transcript preserves its independent trailer evidence.
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session-a", []Message{{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Rewritten", Timestamp: tsZero}}))
 			list, err := d.SessionCommitLinks(t.Context(), "session-a")
