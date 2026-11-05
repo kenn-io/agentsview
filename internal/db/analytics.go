@@ -19,6 +19,11 @@ import (
 // within SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999).
 const maxSQLVars = 500
 
+// analyticsDateIndexMaxWindow matches 90 days, the widest short range preset
+// in the UI (frontend/src/lib/components/shared/rangeSelection.ts).
+// Wider windows keep the scan plan to avoid fetching most rows in date-index order.
+const analyticsDateIndexMaxWindow = 90 * 24 * time.Hour
+
 var ErrUnsupportedAnalyticsSignal = errors.New(
 	"unsupported analytics signal",
 )
@@ -357,7 +362,7 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	if includeDate {
 		start, startErr := time.Parse(time.DateOnly, f.From)
 		end, endErr := time.Parse(time.DateOnly, f.To)
-		if startErr != nil || endErr != nil || end.Sub(start) > 90*24*time.Hour {
+		if startErr != nil || endErr != nil || end.Sub(start) > analyticsDateIndexMaxWindow {
 			// Wide windows keep the scan plan instead of fetching rows through the date index.
 			dateCol = "+" + dateCol
 		}

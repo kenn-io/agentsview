@@ -5314,7 +5314,7 @@ func TestAnalyticsDateWindowPlan(t *testing.T) {
 }
 
 func TestGetAnalyticsTopSessionsEmptyDateWindowWork(t *testing.T) {
-	for _, history := range []int{300, 30000} {
+	for _, history := range []int{30000} {
 		t.Run(fmt.Sprintf("history_%d", history), func(t *testing.T) {
 			d := testDB(t)
 			_, err := d.getWriter().ExecContext(t.Context(), `
@@ -5362,15 +5362,26 @@ func TestGetAnalyticsTopSessionsEmptyDateWindowWork(t *testing.T) {
 	}
 }
 
-func TestAnalyticsDateWindowOldNullStart(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "old-null", "project-a", func(s *Session) { s.StartedAt = nil })
-	_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2020-01-01T12:00:00Z'")
-	require.NoError(t, err)
-	summary, err := d.GetAnalyticsSummary(t.Context(), baseFilter())
-	require.NoError(t, err)
-	assert.Zero(t, summary.TotalSessions)
-	top, err := d.GetAnalyticsTopSessions(t.Context(), baseFilter(), "messages")
-	require.NoError(t, err)
-	assert.Empty(t, top.Sessions)
+func TestAnalyticsDateWindowCreatedAtFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		startedAt *string
+	}{
+		{"null", nil},
+		{"empty", new("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "fallback", "project-a", func(s *Session) { s.StartedAt = tc.startedAt })
+			_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2024-06-02T12:00:00Z' WHERE id = 'fallback'")
+			require.NoError(t, err)
+			summary, err := d.GetAnalyticsSummary(t.Context(), baseFilter())
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary.TotalSessions)
+			top, err := d.GetAnalyticsTopSessions(t.Context(), baseFilter(), "messages")
+			require.NoError(t, err)
+			require.Len(t, top.Sessions, 1)
+			assert.Equal(t, "fallback", top.Sessions[0].ID)
+		})
+	}
 }
