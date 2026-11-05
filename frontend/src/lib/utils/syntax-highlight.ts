@@ -78,13 +78,7 @@ function resolveLanguage(lang: string): string | null {
   return PRELOADED_LANGS.includes(resolved) ? resolved : null;
 }
 
-/**
- * Highlight `code` for `lang` using Shiki (catppuccin-mocha, structure: "inline").
- * Returns null for unknown languages, over-threshold content, or any error.
- * Callers insert the result via `{@html}` — Shiki escapes the code text itself.
- * Line endings remain text nodes so copying and search retain source offsets.
- */
-export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
+export async function highlightInline(code: string, lang: string): Promise<string | null> {
   const resolved = resolveLanguage(lang);
   if (resolved === null) return null;
 
@@ -111,4 +105,61 @@ export async function highlightToHtml(code: string, lang: string): Promise<strin
   } catch {
     return null;
   }
+}
+
+let worker: Worker | null = null;
+let workerFailed = false;
+let nextId = 0;
+const pending = new Map<
+  number,
+  {
+    code: string;
+    lang: string;
+    resolve: (html: string | null | PromiseLike<string | null>) => void;
+  }
+>();
+
+function failWorker() {
+  workerFailed = true;
+  worker?.terminate();
+  worker = null;
+  for (const { code, lang, resolve } of pending.values()) {
+    resolve(highlightInline(code, lang));
+  }
+  pending.clear();
+}
+
+/**
+ * Highlight `code` for `lang` using Shiki (catppuccin-mocha, structure: "inline").
+ * Shiki runs in a worker, with inline highlighting if the worker fails.
+ * Returns null for unknown languages, over-threshold content, or any error.
+ * Callers insert the result via `{@html}` — Shiki escapes the code text itself.
+ * Line endings remain text nodes so copying and search retain source offsets.
+ */
+export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
+  if (resolveLanguage(lang) === null || code.length > HIGHLIGHT_MAX_BYTES) return null;
+  if (workerFailed || typeof Worker === "undefined") return highlightInline(code, lang);
+
+  if (worker === null) {
+    try {
+      worker = new Worker(new URL("./syntax-highlight.worker.ts", import.meta.url), {
+        type: "module",
+      });
+      worker.onmessage = ({ data }: MessageEvent<{ id: number; html: string | null }>) => {
+        pending.get(data.id)?.resolve(data.html);
+        pending.delete(data.id);
+      };
+      worker.onerror = failWorker;
+      worker.onmessageerror = failWorker;
+    } catch {
+      failWorker();
+      return highlightInline(code, lang);
+    }
+  }
+
+  return new Promise((resolve) => {
+    const id = nextId++;
+    pending.set(id, { code, lang, resolve });
+    worker!.postMessage({ id, code, lang });
+  });
 }
