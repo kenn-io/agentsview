@@ -91,6 +91,10 @@ func (e *Engine) survivingTrailerCwd(machine, cwd string) string {
 }
 
 func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path string) error {
+	_, commonDir, _ := gitDirectoryContext(path, e.mayProbeLocalPath)
+	if commonDir != "" && !e.mayProbeLocalPath(filepath.Join(commonDir, "config")) {
+		return nil
+	}
 	commits, err := gitlog.ScanCommitTrailers(ctx, path)
 	if err != nil {
 		return err

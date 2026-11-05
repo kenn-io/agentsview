@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -53,6 +54,68 @@ func TestReconcileCommitTrailersEditor(t *testing.T) {
 	l := found.Commits[0].Links[0]
 	assert.Equal(t, first, l.SHA)
 	assert.Equal(t, "trailer", l.Source)
+}
+
+func TestReconcileCommitTrailersProtectedGitConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	for _, tt := range []struct {
+		name          string
+		linked, allow bool
+		wantLink      bool
+	}{
+		{name: "protected config"},
+		{name: "protected common config in linked worktree", linked: true},
+		{name: "protected config with opt-in", allow: true, wantLink: true},
+		{name: "protected common config with opt-in", linked: true, allow: true, wantLink: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			testutil.IsolateGit(t)
+			home := t.TempDir()
+			repo := filepath.Join(home, "src", "repo")
+			require.NoError(t, os.MkdirAll(repo, 0o700))
+			runGit := func(args ...string) string {
+				t.Helper()
+				cmd := exec.CommandContext(t.Context(), "git", args...)
+				cmd.Dir = repo
+				out, err := cmd.CombinedOutput()
+				require.NoError(t, err, "%s", out)
+				return strings.TrimSpace(string(out))
+			}
+			runGit("init", "-q", "-b", "main")
+			runGit("config", "trailer.separators", "=")
+			runGit("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Editor\n\nAgent-Session=claude:editor")
+			sha := runGit("rev-parse", "HEAD")
+			cwd := repo
+			if tt.linked {
+				cwd = filepath.Join(home, "src", "worktree")
+				runGit("worktree", "add", "-q", "-b", "linked", cwd)
+			}
+			config := filepath.Join(repo, ".git", "config")
+			target := filepath.Join(home, "Documents", "config")
+			require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
+			require.NoError(t, os.Rename(config, target))
+			require.NoError(t, os.Symlink(target, config))
+
+			database := openTestDB(t)
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "local", Cwd: cwd}))
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", ScanProtectedPaths: tt.allow})
+			t.Cleanup(engine.Close)
+			engine.goos = "darwin"
+			engine.homeDir = home
+			engine.ReconcileCommitTrailers(t.Context())
+			found, err := database.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, found.Commits, 1)
+			if tt.wantLink {
+				require.Len(t, found.Commits[0].Links, 1)
+				assert.Equal(t, "editor", found.Commits[0].Links[0].SessionID)
+			} else {
+				assert.Empty(t, found.Commits[0].Links)
+			}
+		})
+	}
 }
 
 func TestReconcileCommitTrailersNewCommit(t *testing.T) {
