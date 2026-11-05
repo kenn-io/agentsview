@@ -3,6 +3,7 @@ package power
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -19,13 +20,16 @@ func onBattery() bool {
 			value, _ := os.ReadFile(filepath.Join(powerSupplyRoot, supply.Name(), name))
 			return strings.TrimSpace(string(value))
 		}
+		if read("scope") == "Device" {
+			continue
+		}
 		switch read("type") {
 		case "Mains", "USB":
-			if read("online") == "1" {
+			if online, err := strconv.Atoi(read("online")); err == nil && online > 0 {
 				return false
 			}
 		case "Battery":
-			if read("scope") != "Device" && read("status") == "Discharging" {
+			if read("status") == "Discharging" {
 				discharging = true
 			}
 		}
