@@ -461,6 +461,58 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 	}
 }
 
+// BenchmarkSQLiteActivityReportCandidateSourceModelless covers a transcript
+// whose assistant turns record no model. Each candidate looks back for the
+// latest assistant turn with a model, so a lookup that steps through every
+// earlier message grows with the square of the session length.
+func BenchmarkSQLiteActivityReportCandidateSourceModelless(b *testing.B) {
+	d := testDB(b)
+	const messageCount = 2_000
+	_, err := d.getWriter().Exec(b.Context(), `
+		INSERT INTO sessions(
+			id, project, started_at, ended_at, message_count
+		) VALUES (
+			'bench-modelless', 'bench', '2026-07-01T00:00:00Z',
+			'2026-07-01T00:33:19Z', ?
+		)`, messageCount)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(b.Context(), `
+		WITH RECURSIVE n(i) AS (
+			VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < ?
+		)
+		INSERT INTO messages(
+			session_id, ordinal, role, content, timestamp, model
+		)
+		SELECT 'bench-modelless', i,
+			CASE WHEN i % 2 = 0 THEN 'user' ELSE 'assistant' END,
+			substr(hex(zeroblob(1000)), 1, 1500),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-07-01T00:00:00Z',
+				printf('+%d seconds', i)),
+			''
+		FROM n`, messageCount-1)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(b.Context(), `ANALYZE`)
+	require.NoError(b, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(b, err)
+	source := d.activityReportCandidateSQL([]string{"bench-modelless"}, q)
+	b.ReportAllocs()
+	for b.Loop() {
+		count := 0
+		err := source(b.Context(), func(candidate activity.IntervalCandidate) error {
+			count++
+			if candidate.PriorModel != "unknown" {
+				return fmt.Errorf("prior model %q, want unknown", candidate.PriorModel)
+			}
+			return nil
+		})
+		require.NoError(b, err)
+		require.Equal(b, messageCount-1, count)
+	}
+}
+
 func BenchmarkSQLiteActivityReportArtifacts100K(b *testing.B) {
 	d, _, q := seedSQLiteActivityReportBenchmark(b)
 	b.ReportAllocs()
