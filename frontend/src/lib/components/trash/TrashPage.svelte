@@ -108,7 +108,7 @@
   {:else if trashedSessions.length === 0}
     <StateNotice variant="empty" title={m.trash_empty()} description={m.trash_empty_desc()}>
       {#snippet icon()}
-        <TrashIcon size="16" strokeWidth="2" />
+        <TrashIcon size="24" strokeWidth="1.75" />
       {/snippet}
     </StateNotice>
   {:else}

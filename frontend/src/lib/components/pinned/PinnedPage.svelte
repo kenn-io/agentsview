@@ -125,13 +125,13 @@
       description={m.pinned_none_for_project_hint()}
     >
       {#snippet icon()}
-        <PinIcon size="16" strokeWidth="2" />
+        <PinIcon size="24" strokeWidth="1.75" />
       {/snippet}
     </StateNotice>
   {:else if pins.pins.length === 0}
     <StateNotice variant="empty" title={m.pinned_none()} description={m.pinned_none_hint()}>
       {#snippet icon()}
-        <PinIcon size="16" strokeWidth="2" />
+        <PinIcon size="24" strokeWidth="1.75" />
       {/snippet}
     </StateNotice>
   {:else}

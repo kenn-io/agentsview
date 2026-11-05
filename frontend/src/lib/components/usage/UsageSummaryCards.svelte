@@ -323,12 +323,6 @@
     flex-wrap: wrap;
   }
 
-  /* Context counts form a quieter group; a wider gap before the first
-     one sets them apart. */
-  .summary-cards :global(.card.context:not(.context + .context)) {
-    margin-left: 8px;
-  }
-
   .error-bar {
     display: flex;
     align-items: center;

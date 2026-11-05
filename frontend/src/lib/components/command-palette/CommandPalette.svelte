@@ -652,9 +652,10 @@
   }
 
   .sort-btn.active {
-    background: var(--selected-bg);
-    box-shadow: var(--selected-edge), var(--shadow-sm);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
+    font-weight: 600;
   }
 
   .item-snippet :global(mark) {

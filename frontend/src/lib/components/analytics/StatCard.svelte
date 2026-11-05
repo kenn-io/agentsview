@@ -83,8 +83,20 @@
   /* The featured total keeps the neutral selected surface, not an
      accent outline that reads as a clickable choice. */
   :global(.kit-card.stat-card.featured) {
-    background: var(--selected-bg);
-    box-shadow: var(--selected-edge);
+    background: var(--stat-card-selected-bg);
+    border-color: color-mix(in srgb, var(--text-primary) 24%, var(--bg-surface));
+    box-shadow: none;
+  }
+
+  /* A card is large, so it takes a lighter step than the small selected
+     segments, but light still needs a visible tint: the plain surface
+     matched every neighbouring card. */
+  :global(:root) {
+    --stat-card-selected-bg: color-mix(in srgb, var(--text-primary) 6%, var(--bg-surface));
+  }
+
+  :global(:root.dark) {
+    --stat-card-selected-bg: color-mix(in srgb, var(--text-primary) 9%, var(--bg-surface));
   }
 
   :global(.kit-card.stat-card.context) {

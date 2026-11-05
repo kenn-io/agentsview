@@ -306,31 +306,44 @@
        padding keeps the last item clear of the status bar when a shorter
        window does scroll. Narrow widths show a horizontal strip instead. */
     .settings-page :global(.kit-settings .kit-settings__sidebar) {
-      padding-block: var(--space-5);
+      padding-block: var(--space-4) var(--space-2);
       gap: var(--space-4);
     }
 
+    /* A few pixels between items and between each name and its
+       description separate the entries; the tighter group-title margin and
+       description line height pay for them so the nav still fits. */
     .settings-page :global(.kit-settings .kit-settings__nav) {
-      gap: 1px;
-      padding-bottom: var(--space-4);
+      gap: var(--space-1);
+      padding-bottom: var(--space-2);
     }
 
     .settings-page :global(.kit-settings .kit-settings__nav-item) {
       padding-block: var(--space-2);
     }
 
+    .settings-page :global(.kit-settings .kit-settings__nav-text) {
+      gap: var(--space-2);
+    }
+
     .settings-page :global(.kit-settings .kit-settings__group-title) {
       padding-top: var(--space-3);
       padding-bottom: var(--space-1);
     }
+
+    .settings-page :global(.kit-settings .kit-settings__group-title:not(:first-child)) {
+      margin-top: var(--space-1);
+    }
   }
 
-  /* Descriptions stay one step below the item names. */
-  .settings-page :global(.kit-settings__nav-summary) {
+  /* Descriptions stay clearly below the item names. The app's light muted
+     ink sits close to secondary, so the nav steps it toward the surface;
+     both themes keep about 4.5:1 contrast. */
+  .settings-page :global(.kit-settings .kit-settings__nav-summary) {
     font-size: 11px;
     font-weight: 400;
-    line-height: 1.25;
-    color: var(--text-muted);
+    line-height: 1.2;
+    color: color-mix(in srgb, var(--text-muted) 85%, var(--bg-surface));
   }
 
   .settings-page :global(.kit-settings__nav-item) {
@@ -426,8 +439,13 @@
     cursor: not-allowed;
   }
 
+  /* Inputs keep the surface fill whether or not they are editable; a
+     disabled one shows its state through the faint edge and muted text,
+     the same no-fill disabled look as the buttons, instead of a gray well
+     that made every field on a read-only server look broken. */
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
-    background: var(--bg-inset);
+    background: var(--bg-surface);
+    border-color: var(--disabled-edge);
   }
 
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled .kit-text-input__control) {
@@ -444,10 +462,11 @@
     color: var(--disabled-ink);
   }
 
-  /* The selected segment of a disabled control keeps its raised fill and
-     edge, and stronger ink than its unselected neighbors. */
+  /* The selected segment of a disabled control keeps app.css's selected
+     fill, edge, and weight, and clearly stronger ink than its disabled
+     neighbours, so the current choice reads on a read-only server. */
   .settings-page :global(.kit-settings__panel .kit-segmented__btn.active:disabled) {
-    color: var(--text-muted);
+    color: var(--text-secondary);
   }
 
   /* A disabled switch keeps its on/off state readable. */
