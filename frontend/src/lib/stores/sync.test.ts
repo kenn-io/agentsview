@@ -1038,7 +1038,19 @@ describe("SyncStore.remoteUnreachable", () => {
 describe("idle catch-up completion", () => {
   it("refreshes the current search once after response-reported catch-up completes", async () => {
     sync.syncPending = false;
-    sync.serverVersion = { build_date: "", commit: "abc123", version: "dev", read_only: false };
+    sync.serverVersion = {
+      api_version: 1,
+      build_date: "",
+      commit: "abc123",
+      data_version: 1,
+      friction_available: false,
+      friction_build_allowed: false,
+      insight_generation_available: false,
+      kata_available: false,
+      read_only: false,
+      session_stats_available: false,
+      version: "dev",
+    };
     const refresh = vi.spyOn(searchStore, "refresh").mockImplementation(() => {});
     vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", sync_pending: false });
     try {
