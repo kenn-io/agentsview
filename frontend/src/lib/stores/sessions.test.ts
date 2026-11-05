@@ -593,35 +593,22 @@ describe("SessionsStore", () => {
       });
     });
 
-    it("updates index facts when selecting a previously hydrated row", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "parent" }), makeSkinnyRow({ id: "child" })]);
+    it("keeps a rename made after title hydration when selecting the session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row", display_name: "Old name" })]);
       await sessions.load();
       api.getSession.mockResolvedValueOnce(
-        makeSession({
-          id: "child",
-          first_message: "Title",
-          message_count: 12,
-          user_message_count: 4,
-          parent_session_id: "parent",
-          parent_session_ids: ["parent"],
-          relationship_type: "subagent",
-        }),
+        makeSession({ id: "row", display_name: "Old name", first_message: "Title" }),
       );
-      await sessions.hydrateVisibleSessions(["child"]);
-      expect(sessions.groupedSessions).toHaveLength(2);
+      await sessions.hydrateVisibleSessions(["row"]);
+      vi.mocked(api.renameSession).mockResolvedValueOnce(
+        makeSession({ id: "row", display_name: "New name" }),
+      );
+      await sessions.renameSession("row", "New name");
 
-      await sessions.navigateToSession("child");
+      await sessions.navigateToSession("row");
 
-      expect(sessions.activeSession).toMatchObject({
-        first_message: "Title",
-        message_count: 12,
-        user_message_count: 4,
-        parent_session_id: "parent",
-        parent_session_ids: ["parent"],
-        relationship_type: "subagent",
-      });
-      expect(sessions.groupedSessions).toHaveLength(1);
-      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+      expect(sessions.activeSession?.display_name).toBe("New name");
+      expect(sessions.activeSession?.first_message).toBe("Title");
       expect(api.getSession).toHaveBeenCalledTimes(1);
     });
 

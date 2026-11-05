@@ -1105,10 +1105,8 @@ class SessionsStore {
 
   private async hydrateSelectedIndexOnlySession(id: string) {
     const existing = this.byId.get(id);
-    if (!existing) return;
-    if (existing.is_index_only && !this.details.has(id)) {
-      await this.hydrateVisibleSessions([id]);
-    }
+    if (!existing?.is_index_only || this.details.has(id)) return;
+    await this.hydrateVisibleSessions([id]);
     const detail = this.details.get(id);
     const current = this.byId.get(id);
     if (!detail || !current || this.activeSessionId !== id) return;
