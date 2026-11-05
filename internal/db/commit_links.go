@@ -327,9 +327,9 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 			continue
 		}
 		for arg := range strings.FieldsSeq(quiet[1]) {
-			if arg == "--dry-run" || arg == "-n" {
+			switch arg {
+			case "--dry-run", "--short", "--porcelain", "--long", "-z", "--null":
 				quiet = nil
-				break
 			}
 		}
 		if quiet == nil {
@@ -381,8 +381,33 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		}
 		return rows.Err()
 	}
-	if err := load(`t.input_json LIKE '%git%' AND t.input_json LIKE '%commit%'`); err != nil {
+	rows, err := tx.Query(`SELECT id, input_json FROM tool_calls
+ WHERE session_id=? AND (category='Bash' OR tool_name='wait')
+ AND input_json LIKE '%git%' AND input_json LIKE '%commit%'`, sessionID)
+	if err != nil {
 		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id, input string
+		if err := rows.Scan(&id, &input); err != nil {
+			return err
+		}
+		if invokesGitCommit(signals.CommandText(input)) {
+			ids = append(ids, id)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for chunk := range slices.Chunk(ids, maxSQLVars-1) {
+		placeholders, args := InPlaceholders(chunk)
+		if err := load(`t.id IN `+placeholders, args...); err != nil {
+			return err
+		}
 	}
 	if len(calls) == 0 {
 		var stored bool
@@ -408,8 +433,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		rows, err := tx.Query(`SELECT id, input_json, tool_name FROM tool_calls
  WHERE session_id=? AND input_json IS NOT NULL
  AND ((category='Bash' AND (tool_name='write_stdin' OR (tool_name='exec' AND input_json LIKE '%write_stdin%')))
- OR (tool_name='wait' AND input_json LIKE '%cell_id%'))
- AND NOT (input_json LIKE '%git%' AND input_json LIKE '%commit%')`, sessionID)
+ OR (tool_name='wait' AND input_json LIKE '%cell_id%'))`, sessionID)
 		if err != nil {
 			return err
 		}
@@ -419,6 +443,9 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			var id, input, tool string
 			if err := rows.Scan(&id, &input, &tool); err != nil {
 				return err
+			}
+			if invokesGitCommit(signals.CommandText(input)) {
+				continue
 			}
 			for _, process := range commitPollIDs(input, tool) {
 				if running[process] {
@@ -439,14 +466,14 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 					return err
 				}
 			}
-			slices.SortFunc(calls, func(a, b commitCall) int {
-				if order := cmp.Compare(a.MessageOrdinal, b.MessageOrdinal); order != 0 {
-					return order
-				}
-				return cmp.Compare(a.CallIndex, b.CallIndex)
-			})
 		}
 	}
+	slices.SortFunc(calls, func(a, b commitCall) int {
+		if order := cmp.Compare(a.MessageOrdinal, b.MessageOrdinal); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.CallIndex, b.CallIndex)
+	})
 	if _, err := tx.Exec(`DELETE FROM commit_links WHERE session_id=?`, sessionID); err != nil {
 		return err
 	}

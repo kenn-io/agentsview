@@ -75,6 +75,47 @@ func TestCommitLinksNoCandidatesSkipsRefreshWrites(t *testing.T) {
 	require.NoError(t, refreshSessionCommitLinksTx(tx, "s1"))
 }
 
+func TestCommitLinksNonCommitCandidatesSkipResultReads(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	for i, command := range []string{
+		"git log -p --grep=commit",
+		"grep -n 'git commit' docs/example.md",
+		"git show HEAD:docs/commit.md",
+	} {
+		input, err := json.Marshal(map[string]string{"command": command})
+		require.NoError(t, err)
+		message := commitMessages("s1", string(input), "[main abc1234] Example commit")[2]
+		message.Ordinal = i
+		insertMessages(t, d, message)
+	}
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	var resultReads []string
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && ((table == "tool_calls" && column == "result_content") || (table == "tool_result_events" && column == "content")) {
+				resultReads = append(resultReads, table+"."+column)
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	defer func() {
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+			return nil
+		}))
+	}()
+	tx, err := conn.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, refreshSessionCommitLinksTx(tx, "s1"))
+	assert.Empty(t, resultReads, "non-commit calls must be rejected before reading results")
+}
+
 func TestCommitLinksParsing(t *testing.T) {
 	for _, tt := range []struct {
 		name, result string
@@ -131,7 +172,12 @@ func TestCommitLinksQuietReadback(t *testing.T) {
 		{"commit other repo", "git -C /other commit -q -m fix && git rev-parse HEAD", "abc1234", "", ""},
 		{"readback other repo", "git commit -q -m fix && git -C /other rev-parse HEAD", "abc1234", "", ""},
 		{"dry run", "git commit -q --dry-run && git rev-parse HEAD", "abc1234", "", ""},
-		{"short dry run", "git commit -n -q && git rev-parse HEAD", "abc1234", "", ""},
+		{"no verify", "git commit -n -q -m fix && git rev-parse HEAD", "abc1234", "abc1234", ""},
+		{"short dry run", "git commit --short -q && git rev-parse HEAD", "abc1234", "", ""},
+		{"porcelain dry run", "git commit --porcelain -q && git rev-parse HEAD", "abc1234", "", ""},
+		{"long dry run", "git commit --long -q && git rev-parse HEAD", "abc1234", "", ""},
+		{"nul dry run", "git commit -z -q && git rev-parse HEAD", "abc1234", "", ""},
+		{"null dry run", "git commit --null -q && git rev-parse HEAD", "abc1234", "", ""},
 		{"fallback", "git commit -q || true && git rev-parse HEAD", "abc1234", "", ""},
 		{"printed", "echo 'git commit -q && git rev-parse HEAD'", "abc1234", "", ""},
 		{"quoted", "printf '%s' \"git commit -q && git rev-parse HEAD\"", "abc1234", "", ""},
