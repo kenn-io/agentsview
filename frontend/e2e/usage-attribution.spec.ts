@@ -151,3 +151,38 @@ test.describe("Usage attribution selection", () => {
     await expect(page.locator(".usage-page")).toBeHidden();
   });
 });
+
+test.describe("Usage attribution list on phones", () => {
+  for (const width of [320, 375, 390]) {
+    test(`keeps names readable and totals inside the card at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/usage");
+      const panel = page.locator(".attribution-panel");
+      await expect(panel.locator(".tile").first()).toBeVisible();
+      await panel.getByRole("button", { name: "List", exact: true }).click();
+      const rows = panel.locator(".list-row");
+      await expect(rows.first()).toBeVisible();
+      const layout = await rows.evaluateAll((els) =>
+        els.map((row) => {
+          const box = (selector: string) => row.querySelector(selector)!.getBoundingClientRect();
+          const label = row.querySelector<HTMLElement>(".list-label")!;
+          const view = row.closest(".list-view")!.getBoundingClientRect();
+          return {
+            labelWidth: label.getBoundingClientRect().width,
+            labelFits: label.scrollWidth <= label.clientWidth + 1 || label.clientWidth >= 120,
+            barWidth: box(".list-bar-track").width,
+            costRight: box(".list-cost").right,
+            viewRight: view.right,
+          };
+        }),
+      );
+      for (const row of layout) {
+        // Short fixture names show whole; long ones keep at least 120px.
+        expect(row.labelFits, JSON.stringify(row)).toBe(true);
+        expect(row.labelWidth).toBeGreaterThanOrEqual(60);
+        expect(row.barWidth).toBeGreaterThan(0);
+        expect(row.costRight).toBeLessThanOrEqual(row.viewRight + 0.5);
+      }
+    });
+  }
+});
