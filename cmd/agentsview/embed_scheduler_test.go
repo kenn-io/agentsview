@@ -1965,13 +1965,14 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 
 func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 	for _, tc := range []struct {
-		name                              string
-		deferred, runAfterSync, wantBuild bool
-		backstop                          string
+		name                                              string
+		deferred, runAfterSync, wantBuild, failedBackstop bool
+		backstop                                          string
 	}{
 		{name: "ordinary startup", runAfterSync: true, backstop: "24h"},
 		{name: "deferred sync", deferred: true, runAfterSync: true, backstop: "0", wantBuild: true},
 		{name: "deferred backstop", deferred: true, backstop: "24h", wantBuild: true},
+		{name: "deferred after exhausted backstop", deferred: true, failedBackstop: true, backstop: "24h", wantBuild: true},
 		{name: "automatic builds disabled", deferred: true, backstop: "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1990,13 +1991,29 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 						defer vs.Close()
 						mgr := &fakeEmbedManager{}
 						vs.Scheduler.mgr = mgr
-						vs.Scheduler.onBattery = func() bool { return true }
-						vs.Scheduler.Notify()
-						go vs.Scheduler.Run(t.Context())
+						var battery atomic.Bool
+						battery.Store(!tc.failedBackstop)
+						vs.Scheduler.onBattery = battery.Load
+						ticks := make(chan time.Time)
+						go vs.Scheduler.run(t.Context(), ticks)
 						defer vs.Scheduler.Stop()
+						if tc.failedBackstop {
+							mgr.results = []fakeTryBuildResult{{started: true, err: errors.New("embedding request rejected")}}
+							ticks <- time.Now()
+							synctest.Sleep(embedDebounceInterval + time.Second)
+							synctest.Wait()
+							require.Equal(t, []vector.BuildRequest{{Backstop: true}, {Backstop: true}}, mgr.callsSnapshot())
+							require.NoFileExists(t, vs.Scheduler.batteryDeferredPath)
+							battery.Store(true)
+							ticks <- time.Now()
+						} else {
+							vs.Scheduler.Notify()
+						}
 						synctest.Sleep(embedDebounceInterval + time.Second)
 						synctest.Wait()
-						require.Zero(t, mgr.callCount())
+						if !tc.failedBackstop {
+							require.Zero(t, mgr.callCount())
+						}
 						require.FileExists(t, vs.Scheduler.batteryDeferredPath)
 					}()
 				}

@@ -284,9 +284,7 @@ func (s *embedScheduler) run(
 				continue
 			}
 			if s.onBattery != nil && s.onBattery() {
-				if pendingRelease != nil || !pendingBackstop {
-					s.setBatteryDeferred(true)
-				}
+				s.setBatteryDeferred(true)
 				if pendingRelease != nil {
 					pendingRelease()
 					pendingRelease = nil
