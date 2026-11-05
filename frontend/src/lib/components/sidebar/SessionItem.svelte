@@ -690,11 +690,6 @@
     background: transparent;
   }
 
-  /* A faint divider marks where one three-line item ends. */
-  .session-item:not(.compact) {
-    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border-muted) 40%, transparent);
-  }
-
   .session-item:hover {
     background: var(--bg-surface-hover);
   }
@@ -744,7 +739,7 @@
     border-radius: var(--radius-sm);
     flex-shrink: 0;
     cursor: pointer;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     transition: color 0.1s, background 0.1s;
   }
 
@@ -810,7 +805,8 @@
     flex: 1;
     min-width: 0;
     font-size: 13px;
-    font-weight: 450;
+    /* Regular weight; only the selected row's title goes semibold. */
+    font-weight: 400;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -865,6 +861,8 @@
   .session-project {
     min-width: 0;
     flex: 0 1 auto;
+    /* The project leads line two, one step above the other metadata. */
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -876,7 +874,8 @@
     gap: 6px;
     margin-left: auto;
     min-width: 0;
-    flex-shrink: 1;
+    /* The project gives way first; this group only shrinks past 60%. */
+    flex-shrink: 0;
     max-width: 60%;
   }
 
@@ -895,11 +894,13 @@
   .agent-tag {
     min-width: 0;
     flex-shrink: 1;
-    font-size: 9.5px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
     text-transform: uppercase;
-    color: var(--agent-color, var(--text-muted));
+    /* A touch of the text color keeps small colored capitals legible on
+       both light and dark surfaces without adding color. */
+    color: color-mix(in srgb, var(--agent-color, var(--text-muted)) 82%, var(--text-primary));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -913,10 +914,27 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .session-item:has(.star-btn.starred) .session-name-row .session-time {
+    margin-right: 22px;
+  }
+
+  /* While the star shows on hover, it takes the time's place rather than
+     half-covering it. */
+  .session-item:not(.compact):not(:has(.star-btn.starred)):is(:hover, :focus-within)
+    .session-name-row .session-time {
+    visibility: hidden;
+  }
+
+  /* The running dot sits on the title line, like the expand chevron. */
+  .session-item:not(.compact) > :global(.kit-status-dot) {
+    align-self: flex-start;
+    margin-top: 11px;
+  }
+
   :global(.group-hint-icon) {
     flex-shrink: 0;
     color: var(--text-muted);
-    opacity: 0.5;
+    opacity: 0.85;
   }
 
   .session-count {
@@ -935,8 +953,10 @@
     flex-shrink: 0;
   }
 
-  .session-count::before {
-    content: "\2022 ";
+  /* A middle dot separates the count from the project before it. */
+  .session-project + .session-count::before {
+    content: "\00b7";
+    margin-right: 6px;
   }
 
   .continuation-badge {
@@ -949,11 +969,18 @@
 
   /* The star sits on the title line so it never shares space with the
      agent and machine slot on the meta line. */
+  /* The star sits over the time's spot instead of reserving its own
+     column, so titles keep the row's width. It shows on hover and while
+     starred; a starred row moves its time left to make room. */
   .star-btn {
-    align-self: flex-start;
-    margin-top: 3px;
+    position: absolute;
+    top: 4px;
+    right: 6px;
     width: 20px;
     height: 18px;
+    /* Takes the row's own surface (rest, hover, or selected) so it covers
+       the time cleanly. */
+    background: inherit;
     display: flex;
     align-items: center;
     justify-content: center;
