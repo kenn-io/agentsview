@@ -1340,22 +1340,19 @@ fixtures retain this field; missing identities remain source-local.
   verified against `codex/fc_stdin.jsonl` and the parser's function-call path.
   `TestCommitLinksNativePollOwnership` writes both representations through
   the public archive API and checks the originating commit call's location.
-  Reverified 2026-11-05 against the stored code-mode input path:
-  `TestCommitLinksParsing` covers a single `exec_command` command literal.
-  `TestCommitLinksNativePollOwnership` rejects new commit links from batches
-  with several tool calls, including completed and running batches. Their
-  outputs, process IDs, and working directories cannot identify the commit's
-  own execution. The unrelated-workdir and unrelated-`cd` cases also prevent
-  one shell execution's directory from leaking into another.
-  `TestCommitLinksNativePollOwnership/mixed_call_with_unowned_output`
-  reproduces an unrelated summary in a mixed commit-and-poll result. Only
-  output whose process ID identifies a commit call contributes a link there.
-  Reverified 2026-11-05 with the `single_poll_mixed` cases in the same test:
-  a poll combined with unrelated work also requires an execution ID on each
-  output block. Unidentified blocks contribute no links.
-  Reverified 2026-11-05 with `TestCommitLinksReusedProcessID`: a new commit
-  execution replaces the owner of a reused process ID after a batch poll,
-  preserving the new call's repository and prompt.
+  Reverified 2026-11-05 with
+  `TestCommitLinksCodeModeWithoutExecutionID` and
+  `TestCommitLinksNativePollOwnership`: scripts with exactly one tool call
+  and a fixed command literal can link commits without an output process ID.
+  `TestCommitLinksCodeModeFixedCommand` covers command decoding, workdir,
+  loops, and subjects mentioning tool names. Call syntax determines the number
+  of tool calls; bare tool names in commit subjects don't count. Command
+  literals containing `${` produce no links. A single-call `write_stdin`
+  script can poll an earlier commit execution without an output process ID.
+  Scripts with several tool calls cannot start new commit links. Their polls
+  need output process IDs matching earlier commit calls. The reused-process-ID
+  case checks that a new native commit execution owns its repository and prompt
+  after a batch poll.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)

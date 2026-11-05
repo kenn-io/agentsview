@@ -36,6 +36,7 @@ var (
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
+	commitToolCallRE          = regexp.MustCompile(`\btools\.\w+\s*\(`)
 	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
@@ -126,7 +127,7 @@ func commitRepository(input, cwd string) string {
 	if dir == "" {
 		dir = fields.Cwd
 	}
-	if dir == "" && !jsontext.Value(input).IsValid() {
+	if dir == "" && !jsontext.Value(input).IsValid() && len(commitToolCallRE.FindAllStringIndex(input, -1)) == 1 && commitCommandText(input) != "" {
 		if match := commitWorkdirRE.FindStringSubmatch(commitCommandRE.ReplaceAllString(input, "")); match != nil {
 			dir = match[1]
 			if strings.HasPrefix(dir, "\"") {
@@ -157,10 +158,13 @@ func commitCommandText(input string) string {
 	}
 	// A batch's output and process IDs do not identify which new call owns them.
 	matches := commitCommandRE.FindAllStringSubmatch(input, -1)
-	if len(matches) != 1 || commitPollRE.MatchString(input) {
+	if len(commitToolCallRE.FindAllStringIndex(input, -1)) != 1 || len(matches) != 1 {
 		return ""
 	}
 	literal := matches[0][1]
+	if strings.Contains(literal, "${") {
+		return ""
+	}
 	var decoded strings.Builder
 	for rest := literal[1 : len(literal)-1]; rest != ""; {
 		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
@@ -289,7 +293,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 			continue
 		}
 		// A call that only polls one execution owns its output even after it finishes.
-		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || strings.Count(call.input, "tools.") == 1)
+		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || len(commitToolCallRE.FindAllStringIndex(call.input, -1)) == 1)
 		if singlePoll {
 			var ok bool
 			if singleOwner, ok = pending[pollIDs[0]]; !ok {
@@ -328,6 +332,61 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		}
 	}
 	return links
+}
+
+func commitLinkCandidate(input, tool, category string) bool {
+	return (category == "Bash" || tool == "wait") &&
+		(invokesGitCommit(commitCommandText(input)) || len(commitPollIDs(input, tool)) > 0)
+}
+
+func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
+	// Replacements can remove evidence. Appends only affect links through
+	// commit commands and polls, including late results for existing calls.
+	refresh := update.ReplaceFromOrdinal != nil
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls {
+			refresh = refresh || commitLinkCandidate(call.InputJSON, call.ToolName, call.Category)
+		}
+	}
+	var ids []string
+	for _, link := range update.SubagentLinks {
+		if link.HasResult {
+			ids = append(ids, link.ToolUseID)
+		}
+	}
+	for _, result := range update.ToolCallResultUpdates {
+		if len(result.Events) > 0 {
+			ids = append(ids, result.ToolUseID)
+		}
+	}
+	for chunk := range slices.Chunk(ids, maxSQLVars-1) {
+		if refresh {
+			break
+		}
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := tx.Query(`SELECT COALESCE(input_json,''), tool_name, category FROM tool_calls
+ WHERE session_id=? AND tool_use_id IN `+placeholders, append([]any{sessionID}, args...)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var input, tool, category string
+			if err := rows.Scan(&input, &tool, &category); err != nil {
+				return err
+			}
+			refresh = refresh || commitLinkCandidate(input, tool, category)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if !refresh {
+		return bumpTranscriptRevision(tx, sessionID, true)
+	}
+	return bumpTranscriptRevisionTx(tx, sessionID)
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {

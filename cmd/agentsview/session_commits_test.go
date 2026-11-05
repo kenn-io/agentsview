@@ -20,8 +20,7 @@ func TestSessionCommits(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END", Timestamp: "2026-10-30T10:00:00Z"},
 		{SessionID: "s-commit", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{
-			{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`},
-			{SessionID: "s-commit", CallIndex: 1, ToolName: "Bash", Category: "Bash", ToolUseID: "exact-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}},
+			{SessionID: "s-commit", ToolName: "Bash", Category: "Bash", ToolUseID: "exact-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}},
 		}},
 	}))
 	_, err = d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:s-commit"}}})
@@ -42,6 +41,7 @@ func TestSessionCommits(t *testing.T) {
 			}
 		}
 		require.Len(t, transcript, 1)
+		assert.Equal(t, "abc1234", transcript[0].SHA)
 		assert.Equal(t, "exact-call", transcript[0].ToolUseID)
 		require.Len(t, trailer, 1)
 		require.NotNil(t, transcript[0].Turn)
@@ -53,8 +53,8 @@ func TestSessionCommits(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, out, "commit message")
 		assert.Contains(t, out, "Editor commit")
-		assert.Regexp(t, `SESSION\s+ORDINAL\s+CALL\s+TIME\s+SOURCE\s+SHA\s+BRANCH\s+SUBJECT\s+USER TURN`, out)
-		assert.Regexp(t, `s-commit\s+1\s+1\s+transcript\s+abc1234\s+main\s+Fix parser`, out)
+		assert.Regexp(t, `SESSION\s+ORDINAL\s+TIME\s+SOURCE\s+SHA\s+BRANCH\s+SUBJECT\s+USER TURN`, out)
+		assert.Regexp(t, `s-commit\s+1\s+transcript\s+abc1234\s+main\s+Fix parser`, out)
 		assert.Contains(t, out, "0: Fix parser ")
 		assert.Contains(t, out, "(estimated)")
 		assert.Contains(t, out, "…")
