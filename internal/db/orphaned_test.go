@@ -487,7 +487,7 @@ func TestCopyOrphanedDataPreservesHermesCronGroups(t *testing.T) {
 			if legacySchema {
 				conn, err := sql.Open("sqlite3", srcPath)
 				require.NoError(t, err)
-				_, err = conn.ExecContext(ctx, `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key`)
+				_, err = conn.ExecContext(ctx, `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; DROP TRIGGER IF EXISTS trg_sessions_usage_change_update; ALTER TABLE sessions DROP COLUMN group_key`)
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 			}

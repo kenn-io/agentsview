@@ -1410,6 +1410,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
 	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
+	}
+	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
 	d.mu.Unlock()
@@ -3234,6 +3237,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	progress.report("Migrating database columns")
+	if _, err := w.ExecContext(ctx, usageChangeJournalTriggerDropsSQL); err != nil {
+		return fmt.Errorf("dropping usage change journal triggers: %w", err)
+	}
 	if err := migrateMoneyColumnsLocked(ctx, w); err != nil {
 		return err
 	}
@@ -3254,6 +3260,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)
+	}
+	if _, err := w.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
+		return fmt.Errorf("installing usage change journal triggers: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

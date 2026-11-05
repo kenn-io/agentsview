@@ -1154,6 +1154,14 @@ END;
 -- trigger body referencing sync_marker here would fail to create against a
 -- pre-migration sessions table that doesn't have the column yet.
 
+-- Latest usage-affecting change per session, including hard deletions.
+CREATE TABLE IF NOT EXISTS usage_session_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_session_changes_revision
+    ON usage_session_changes(revision);
+
 -- Session-deletion journal: a compact publication journal recording hard
 -- session deletions so mirror pushes can apply bounded tombstone deltas
 -- instead of enumerating the whole archive. Unlike sync_marker, this only

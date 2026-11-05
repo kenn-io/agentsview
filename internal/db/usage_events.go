@@ -110,22 +110,82 @@ func replaceSessionUsageEventsTx(
 	events []UsageEvent,
 	enqueueArtifact bool,
 ) error {
-	if _, err := tx.Exec(
-		`DELETE FROM usage_events WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("deleting usage events: %w", err)
+	// Compare raw persisted values in insertion order. Keeping the common
+	// prefix avoids journaling unchanged rows and preserves timestamp ties.
+	type eventRow struct {
+		ordinal                                            sql.NullInt64
+		source, model, providerID                          string
+		input, output, cacheCreation, cacheRead, reasoning int
+		cost                                               sql.NullInt64
+		costStatus, costSource                             string
+		occurredAt                                         sql.NullString
+		dedupKey                                           string
+	}
+	incoming := make([]eventRow, len(events))
+	for i, ev := range events {
+		if ev.SessionID != "" && ev.SessionID != sessionID {
+			return fmt.Errorf("usage event session_id %q does not match %q", ev.SessionID, sessionID)
+		}
+		r := eventRow{
+			source: ev.Source, model: ev.Model, providerID: ev.ProviderID,
+			input: ev.InputTokens, output: ev.OutputTokens,
+			cacheCreation: ev.CacheCreationInputTokens, cacheRead: ev.CacheReadInputTokens,
+			reasoning: ev.ReasoningTokens, costStatus: ev.CostStatus, costSource: ev.CostSource,
+			occurredAt: sql.NullString{String: ev.OccurredAt, Valid: ev.OccurredAt != ""}, dedupKey: ev.DedupKey,
+		}
+		if ev.MessageOrdinal != nil {
+			r.ordinal = sql.NullInt64{Int64: int64(*ev.MessageOrdinal), Valid: true}
+		}
+		if ev.Cost != nil {
+			r.cost = sql.NullInt64{Int64: ev.Cost.Microdollars, Valid: true}
+		}
+		incoming[i] = r
+	}
+	rows, err := tx.Query(`
+		SELECT id, message_ordinal, source, model, provider_id,
+			input_tokens, output_tokens, cache_creation_input_tokens,
+			cache_read_input_tokens, reasoning_tokens, cost_microdollars,
+			cost_status, cost_source, occurred_at, dedup_key
+		FROM usage_events WHERE session_id = ? ORDER BY id`, sessionID)
+	if err != nil {
+		return fmt.Errorf("reading usage events for replacement: %w", err)
+	}
+	defer rows.Close()
+	var stored []eventRow
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		var r eventRow
+		if err := rows.Scan(&id, &r.ordinal, &r.source, &r.model, &r.providerID,
+			&r.input, &r.output, &r.cacheCreation, &r.cacheRead, &r.reasoning,
+			&r.cost, &r.costStatus, &r.costSource, &r.occurredAt, &r.dedupKey); err != nil {
+			return fmt.Errorf("scanning usage events for replacement: %w", err)
+		}
+		stored = append(stored, r)
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating usage events for replacement: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("closing usage events for replacement: %w", err)
+	}
+	prefix := 0
+	for prefix < len(stored) && prefix < len(incoming) && stored[prefix] == incoming[prefix] {
+		prefix++
+	}
+	if prefix == len(stored) && prefix == len(incoming) {
+		return nil
+	}
+	if prefix < len(stored) {
+		if _, err := tx.Exec(`DELETE FROM usage_events WHERE session_id = ? AND id >= ?`, sessionID, ids[prefix]); err != nil {
+			return fmt.Errorf("deleting usage events: %w", err)
+		}
 	}
 
-	for _, ev := range events {
+	for _, ev := range events[prefix:] {
 		if ev.SessionID == "" {
 			ev.SessionID = sessionID
-		}
-		if ev.SessionID != sessionID {
-			return fmt.Errorf(
-				"usage event session_id %q does not match %q",
-				ev.SessionID, sessionID,
-			)
 		}
 		var ordinal any
 		if ev.MessageOrdinal != nil {
