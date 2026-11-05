@@ -12,8 +12,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/server"
+	syncengine "go.kenn.io/agentsview/internal/sync"
 )
 
 // fakePassManager records every TryPass call and returns scripted
@@ -431,20 +434,20 @@ func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
 		synctest.Sleep(time.Second + 2*batteryRecheckInterval)
 		synctest.Wait()
 		assert.Zero(t, mgr.callCount())
-		assert.Equal(t, []extract.PassOptions{{}}, reconciler.callsSnapshot())
-		assert.EqualValues(t, 1, notified.Load())
+		assert.Equal(t, []extract.PassOptions{{}, {}, {}}, reconciler.callsSnapshot())
+		assert.EqualValues(t, 3, notified.Load())
 		for range 5 {
 			s.Notify()
 		}
 		synctest.Sleep(time.Second)
 		synctest.Wait()
-		assert.Equal(t, []extract.PassOptions{{}, {}}, reconciler.callsSnapshot())
-		assert.EqualValues(t, 2, notified.Load())
+		assert.Equal(t, []extract.PassOptions{{}, {}, {}, {}}, reconciler.callsSnapshot())
+		assert.EqualValues(t, 4, notified.Load())
 		battery.Store(false)
 		synctest.Sleep(batteryRecheckInterval)
 		synctest.Wait()
 		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
-		assert.EqualValues(t, 3, notified.Load())
+		assert.EqualValues(t, 5, notified.Load())
 	})
 }
 
@@ -463,11 +466,54 @@ func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) 
 		synctest.Sleep(2 * time.Minute)
 		synctest.Wait()
 		assert.Zero(t, mgr.callCount())
-		assert.Equal(t, []extract.PassOptions{{}}, reconciler.callsSnapshot())
+		assert.Positive(t, reconciler.callCount())
 		select {
 		case <-idled:
 		default:
 			assert.Fail(t, "battery reconciliation kept the startup lease")
 		}
+	})
+}
+
+func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		database := dbtest.OpenTestDB(t)
+		dbtest.SeedSessionWithMessages(t, database, "session", "project", []db.Message{
+			dbtest.UserMsg("session", 0, "aws "+"AKIA"+"7QHWN2DKR4FYPLJM"),
+		})
+		_, err := database.EnsureExtractGeneration(t.Context(), db.ExtractGeneration{
+			Fingerprint: "generation", Model: "model", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+		_, err = database.InsertExtractedRecallEntries(t.Context(), []db.RecallEntry{{
+			ID: "entry", Type: "fact", ReviewState: "unreviewed_auto", Status: "accepted",
+			Title: "Stored fact", Body: "Generated before signals were backfilled.",
+			SourceSessionID: "session", SourceRunID: "generation", ProvenanceOK: true,
+		}})
+		require.NoError(t, err)
+		mgr := &fakePassManager{}
+		s := newExtractScheduler(mgr, time.Second, 0, 0, nil)
+		s.onBattery, s.onBatteryMgr = func() bool { return true }, extract.NewReconciler(database)
+		go s.Run(t.Context())
+		defer s.Stop()
+		synctest.Sleep(time.Second)
+		synctest.Wait()
+		entry, err := database.GetRecallEntry(t.Context(), "entry")
+		require.NoError(t, err)
+		require.NotNil(t, entry)
+
+		engine := syncengine.NewEngine(t.Context(), database, syncengine.EngineConfig{})
+		defer engine.Close()
+		require.NoError(t, database.BackfillSignals(t.Context(), engine.BackfillSignalComputer()))
+		session, err := database.GetSession(t.Context(), "session")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		require.Positive(t, session.SecretLeakCount)
+		synctest.Sleep(batteryRecheckInterval)
+		synctest.Wait()
+		entry, err = database.GetRecallEntry(t.Context(), "entry")
+		require.NoError(t, err)
+		assert.Nil(t, entry, "periodic reconciliation must discover backfilled signals without Notify")
+		assert.Zero(t, mgr.callCount())
 	})
 }

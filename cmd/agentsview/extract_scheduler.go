@@ -148,20 +148,16 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// only reloads done sessions written to since their coverage stamp.
 	// Single-goroutine state, no locking needed.
 	pendingFull := true
-	reconcileOwed := true
 	deferOnBattery := func() bool {
 		if s.onBattery == nil || !s.onBattery() {
 			return false
 		}
-		if reconcileOwed {
-			started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
-			if err != nil {
-				log.Printf("extract scheduler: reconciliation failed: %v", err)
-			}
-			if started {
-				startupDone()
-				reconcileOwed = err != nil
-			}
+		started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
+		if err != nil {
+			log.Printf("extract scheduler: reconciliation failed: %v", err)
+		}
+		if started {
+			startupDone()
 		}
 		resetTimer(debounceTimer, batteryRecheckInterval)
 		return true
@@ -174,7 +170,6 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.stop:
 			return
 		case <-s.dirty:
-			reconcileOwed = true
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
 			if deferOnBattery() {
