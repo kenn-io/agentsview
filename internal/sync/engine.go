@@ -12005,16 +12005,30 @@ func (r *processResult) releaseStaged() {
 	}
 }
 
-// savedHistory returns the stored row for id only when it holds messages.
-// Placeholder rows, such as a Recall import or a session header written before
-// its content, have no history for a fallback parse to overwrite.
+// savedHistory returns the stored row for id only when it holds messages or
+// usage events. Placeholder rows, such as a Recall import or a session header
+// written before its content, have nothing for a fallback parse to overwrite.
 func savedHistory(ctx context.Context, store db.Store, id string) (*db.Session, error) {
 	stored, err := store.GetSessionFull(ctx, id)
 	if err != nil || stored == nil {
 		return nil, err
 	}
 	msgs, err := store.GetMessages(ctx, id, 0, 1, true)
-	if err != nil || len(msgs) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) > 0 {
+		return stored, nil
+	}
+	reader, ok := store.(interface {
+		GetUsageEvents(context.Context, string) ([]db.UsageEvent, error)
+	})
+	if !ok {
+		// Without a way to rule out saved usage, keep the row.
+		return stored, nil
+	}
+	events, err := reader.GetUsageEvents(ctx, id)
+	if err != nil || len(events) == 0 {
 		return nil, err
 	}
 	return stored, nil

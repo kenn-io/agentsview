@@ -797,9 +797,11 @@ func runLocalSyncAuthoritative(
 	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
 ) (bool, error) {
 	didResync, stats, err := runLocalSyncResult(ctx, appCfg, database, full)
-	if _, pending := errors.AsType[archivesource.DrainError](err); pending && ctx.Err() == nil && !database.NeedsResync() {
+	if _, pending := errors.AsType[archivesource.DrainError](err); pending && ctx.Err() == nil && !database.NeedsResync() && stats.Deferred == 0 {
 		// The coordinator drains attachments only after local ingestion
 		// completes. Its merged statistics may include attachment failures.
+		// An installed rebuild can still hold deferred sources, which must
+		// not reach an authoritative push.
 		log.Printf("attachment ingestion warning: %v", err)
 		return didResync, nil
 	}

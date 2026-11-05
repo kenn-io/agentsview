@@ -326,3 +326,36 @@ func TestStartupWithMissingParentReportsRetryingCompletion(t *testing.T) {
 		})
 	}
 }
+
+// A row without messages can still hold saved usage. A fork fallback must not
+// replace that usage while its parent is missing.
+func TestMissingParentForkKeepsMessagelessRowWithUsage(t *testing.T) {
+	const parent = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	const child = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	const id = "codex:" + child
+	root := t.TempDir()
+	path := writeOrphanCodexFork(t, root, child, parent)
+	database := openTestDB(t)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+		ID: id, Agent: "codex", Machine: "local", Project: "project",
+		FilePath: &path, Cwd: "/work/project",
+	}))
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{
+		{SessionID: id, Source: "saved", Model: "gpt-5", InputTokens: 70, OutputTokens: 30},
+	}))
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		Machine:   "local", DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncAll(t.Context(), nil)
+
+	assert.Equal(t, 1, stats.Deferred)
+	assert.Empty(t, messageContents(t, database, id))
+	events, err := database.GetUsageEvents(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "saved", events[0].Source)
+	assert.Equal(t, 30, events[0].OutputTokens)
+}
