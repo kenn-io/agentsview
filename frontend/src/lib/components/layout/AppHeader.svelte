@@ -165,6 +165,7 @@
 <TopBar
   {tabs}
   active={activeTab}
+  class={activeTab === "" ? "no-current-tab" : ""}
   onchange={(id) => router.navigate(id as Route)}
   bind:collapsed={navCollapsed}
   searchMinWidth={navCollapsed ? 48 : 300}
@@ -402,19 +403,37 @@
     letter-spacing: -0.01em;
   }
 
-  /* A fixed width keeps the bar from reflowing (and the tabs from
-     collapsing) when the picker opens into its filter field; the list
-     gets its own wider panel so long project names stay readable. */
+  /* The closed trigger keeps a fixed width so the bar never reflows (and
+     the tabs never collapse) when the picker opens. 128px leaves the
+     1440px bar about 20px of slack before its tabs collapse. */
   .project-picker {
+    --project-picker-open-width: 340px;
+    position: relative;
     display: flex;
-    width: 112px;
+    align-items: center;
+    width: 128px;
+    height: 26px;
     min-width: 0;
     --typeahead-min-width: 0px;
-    --typeahead-panel-min-width: 340px;
+    --typeahead-panel-min-width: var(--project-picker-open-width);
   }
 
   .project-picker :global(.kit-typeahead) {
     width: 100%;
+  }
+
+  /* Open, the filter field lifts out of the flow and widens to its list
+     over the neighbouring tabs. kit-ui anchors the list to this box, so
+     field and list share a left edge and a width. */
+  .project-picker:has(:global(.kit-typeahead__input)) :global(.kit-typeahead) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    /* No z-index: one would trap the list's fixed popover layer in this
+       box's stacking context, under the sidebar. Positioned, the field
+       already paints over the unpositioned tabs. */
+    width: var(--project-picker-open-width);
+    max-width: calc(100vw - 16px);
   }
 
   /* Fixed-height rows, and a list height rounded down to a whole number
@@ -431,6 +450,21 @@
 
   .project-picker :global(.kit-typeahead__body) {
     max-height: round(down, calc(50vh - 4px), var(--project-row));
+  }
+
+  /* Settings (and Friction when its tab is hidden) is not a tab, but
+     kit-ui TopBar falls back to marking the first tab current. Render that
+     tab like its neighbours; :root plus the bar class outranks the app.css
+     active rule, and hover still lifts it like any other tab. */
+  :global(:root .kit-top-bar.no-current-tab .kit-top-bar__tab.active) {
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-muted);
+  }
+
+  :global(:root .kit-top-bar.no-current-tab .kit-top-bar__tab.active:hover:not(:disabled)) {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
   }
 
   /* FitStages' sizing contract: the host is sized by the flexible search

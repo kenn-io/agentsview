@@ -183,3 +183,38 @@ test.describe("Navigation", () => {
     }
   });
 });
+
+test.describe("Top bar current tab", () => {
+  // Wide enough that the ten tabs never collapse into the dropdown.
+  test.use({ viewport: { width: 1600, height: 900 } });
+
+  async function tabLooks(page: import("@playwright/test").Page) {
+    const tabs = page.locator(".kit-top-bar__tabs .kit-top-bar__tab");
+    await expect(tabs.first()).toBeVisible();
+    // Park the pointer away from the bar so no tab is hovered.
+    await page.mouse.move(800, 600);
+    return tabs.evaluateAll((els) =>
+      els.map((el) => {
+        const s = getComputedStyle(el);
+        return {
+          label: el.textContent?.trim() ?? "",
+          look: `${s.backgroundColor}|${s.boxShadow}|${s.color}`,
+        };
+      }),
+    );
+  }
+
+  test("marks the route's tab on a tab page", async ({ page }) => {
+    await page.goto("/sessions");
+    const tabs = await tabLooks(page);
+    const sessions = tabs.find((t) => t.label === "Sessions");
+    const others = tabs.filter((t) => t.label !== "Sessions");
+    expect(others.every((t) => t.look !== sessions?.look)).toBe(true);
+  });
+
+  test("shows no tab as current on Settings", async ({ page }) => {
+    await page.goto("/settings");
+    const tabs = await tabLooks(page);
+    expect(new Set(tabs.map((t) => t.look)).size).toBe(1);
+  });
+});

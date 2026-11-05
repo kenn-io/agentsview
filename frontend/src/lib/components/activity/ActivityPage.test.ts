@@ -274,6 +274,38 @@ describe("ActivityPage refresh control", () => {
     activity.lastUpdatedAt = null;
   });
 
+  it("holds the report layout with placeholders and an announced status on first load", async () => {
+    stubActivityPageCollaborators();
+    activity.report = null;
+    activity.loading = true;
+
+    const component = mount(ActivityPage, { target: document.body });
+    try {
+      await flushEffects();
+      const status = screen.getByRole("status");
+      expect(status.textContent).toContain("Loading activity report");
+      // Seven stat placeholders, a chart block and a table block, none
+      // of them exposed to assistive tech.
+      expect(status.querySelectorAll(".skeleton-stat")).toHaveLength(7);
+      expect(status.querySelector(".skeleton-plot")).not.toBeNull();
+      expect(status.querySelectorAll(".skeleton-table .skeleton-row")).toHaveLength(5);
+      for (const block of status.querySelectorAll(".skeleton-bar")) {
+        expect(block.closest("[aria-hidden='true']")).not.toBeNull();
+      }
+
+      activity.report = projectReport();
+      await flushEffects();
+      expect(document.body.querySelector(".activity-skeleton")).toBeNull();
+    } finally {
+      await unmount(component);
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      document.body.innerHTML = "";
+      activity.report = null;
+      activity.loading = false;
+    }
+  });
+
   it("shows the in-progress note in the toolbar only while the period is in progress", async () => {
     stubActivityPageCollaborators();
     activity.report = {
