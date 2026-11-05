@@ -49,10 +49,8 @@ and `active_since` filters still use archive metadata and per-session rows.
 After a completed timezone coverage pass, daily reads apply session and model
 filters to day totals in SQL. They load install metadata only for authoritative
 sessions and exception owners. Distinct matching sessions come from daily rows
-plus surviving exceptions. Warm preparations skip window-session discovery. The
-pricing catalog and digest are shared across snapshots with the same archive
-identity and usage revision. Pricing writes advance that revision; in-memory
-pricing changes clear the shared catalog.
+plus surviving exceptions. Warm preparations skip window-session discovery. Each
+archive snapshot loads its pricing catalog and computes its digest.
 
 ### Dedup exceptions
 

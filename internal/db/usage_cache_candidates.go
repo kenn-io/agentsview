@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -193,7 +192,11 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
-	snapshot.PricingRows, snapshot.PricingDigest, err = db.usageSnapshotPricing(ctx, tx, snapshot.DatabaseID, snapshot.ChangeRevision)
+	snapshot.PricingRows, err = db.loadPricingMapFrom(ctx, tx)
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
+	snapshot.PricingDigest, err = export.EffectivePricingDigest(snapshot.PricingRows)
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
@@ -466,34 +469,4 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 		FromMillis: math.MinInt64, ToMillis: next.UTC().UnixMilli(),
 		ToLocalDate: filter.To,
 	}}
-}
-
-// Pricing writes advance the usage journal. A catalog can be shared only by
-// snapshots of the same archive generation and revision.
-type usagePricingCatalog struct {
-	mu         sync.Mutex
-	valid      bool
-	databaseID string
-	revision   int64
-	rows       []export.EffectivePricingRow
-	digest     string
-}
-
-func (db *DB) usageSnapshotPricing(ctx context.Context, tx *sql.Tx, databaseID string, revision int64) ([]export.EffectivePricingRow, string, error) {
-	catalog := &db.usagePricing
-	catalog.mu.Lock()
-	defer catalog.mu.Unlock()
-	if catalog.valid && catalog.databaseID == databaseID && catalog.revision == revision {
-		return catalog.rows, catalog.digest, nil
-	}
-	rows, err := db.loadPricingMapFrom(ctx, tx)
-	if err != nil {
-		return nil, "", err
-	}
-	digest, err := export.EffectivePricingDigest(rows)
-	if err != nil {
-		return nil, "", err
-	}
-	catalog.valid, catalog.databaseID, catalog.revision, catalog.rows, catalog.digest = true, databaseID, revision, rows, digest
-	return rows, digest, nil
 }

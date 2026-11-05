@@ -546,7 +546,7 @@ func buildUsageRollupSessions(
 		}
 		hasAuthoritative := false
 		for _, fact := range sessionFacts {
-			if fact.Fact.CostSource == CopilotReportedCostSource && fact.Fact.ReportedCostMicrodollars != nil {
+			if usageFactHasAuthoritativeCost(fact) {
 				hasAuthoritative = true
 			}
 		}

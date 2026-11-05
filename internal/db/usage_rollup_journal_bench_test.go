@@ -84,7 +84,12 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 		var writes []SessionBatchWrite
 		for i := start; i < min(start+256, count); i++ {
 			id := fmt.Sprintf("journal-%05d", i)
+			// Keep 40% in the last seven days and spread the rest over
+			// the preceding months, including the comparison window.
 			day := time.Date(2026, 8, 4+i%5, 12, 0, 0, 0, time.UTC)
+			if i%10 >= 4 {
+				day = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC).AddDate(0, 0, -4-i/10%80)
+			}
 			started := day.Format(time.RFC3339)
 			write := SessionBatchWrite{Session: Session{ID: id, Project: fmt.Sprintf("project-%d", i%4), Machine: fmt.Sprintf("machine-%d", i/4%2), Agent: []string{"codex", "claude"}[i/8%2], GitBranch: fmt.Sprintf("branch-%d", i%2), StartedAt: &started, UserMessageCount: 1 + i%3, IsAutomated: i%7 == 0}}
 			for j := range 3 {
@@ -106,9 +111,10 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	require.NoError(tb, err)
 	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
 	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
-	require.Equal(tb, count*300, want.Totals.InputTokens)
-	require.Equal(tb, count*60, want.Totals.OutputTokens)
-	require.Equal(tb, int64(count*420), want.Totals.TotalCost.Microdollars)
+	recent := count/10*4 + min(count%10, 4)
+	require.Equal(tb, recent*300, want.Totals.InputTokens)
+	require.Equal(tb, recent*60, want.Totals.OutputTokens)
+	require.Equal(tb, int64(recent*420), want.Totals.TotalCost.Microdollars)
 	return database, filter, want
 }
 

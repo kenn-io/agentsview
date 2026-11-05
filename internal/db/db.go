@@ -921,8 +921,6 @@ type DB struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
-	usagePricing usagePricingCatalog
-
 	customPricing       map[string]config.CustomModelRate
 	effectivePricing    map[string]export.ModelRates
 	emptyCatalogPricing map[string]export.ModelRates
@@ -1204,10 +1202,6 @@ func (db *DB) requireWritable() error {
 }
 
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
-	db.usagePricing.mu.Lock()
-	defer db.usagePricing.mu.Unlock()
-	db.usagePricing.valid = false
-
 	db.customPricing = p
 	db.effectivePricing = nil
 }
@@ -1217,10 +1211,6 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 func (db *DB) SetEffectivePricing(
 	p map[string]export.ModelRates,
 ) {
-	db.usagePricing.mu.Lock()
-	defer db.usagePricing.mu.Unlock()
-	db.usagePricing.valid = false
-
 	db.customPricing = nil
 	db.effectivePricing = make(map[string]export.ModelRates, len(p))
 	for model, rates := range p {
@@ -1234,10 +1224,6 @@ func (db *DB) SetEffectivePricing(
 func (db *DB) SetEmptyCatalogPricing(
 	p map[string]export.ModelRates,
 ) {
-	db.usagePricing.mu.Lock()
-	defer db.usagePricing.mu.Unlock()
-	db.usagePricing.valid = false
-
 	db.emptyCatalogPricing = make(map[string]export.ModelRates, len(p))
 	for model, rates := range p {
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
