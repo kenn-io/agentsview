@@ -249,12 +249,15 @@ func (d *daemonIngestion) restoreCollection() error {
 func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.clearPendingLocked()
+	d.catchup = nil
+	close(done)
+}
+func (d *daemonIngestion) clearPendingLocked() {
 	if d.pending {
 		d.pending = false
 		close(d.resumed)
 	}
-	d.catchup = nil
-	close(done)
 }
 
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
@@ -265,10 +268,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 		stats, err := runner(ctx, progress)
 		if err == nil {
 			d.mu.Lock()
-			if d.pending {
-				d.pending = false
-				close(d.resumed)
-			}
+			d.clearPendingLocked()
 			d.mu.Unlock()
 		}
 		return stats, err

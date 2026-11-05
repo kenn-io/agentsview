@@ -1001,7 +1001,7 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
 			if !probe && s.ingestionFreshness != nil &&
-				(r.Method != http.MethodPost || r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r))) {
+				(r.Method != http.MethodPost || (r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r)))) {
 				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
 			if !probe && (s.archiveStale() || pending) {
