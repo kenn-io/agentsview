@@ -1610,10 +1610,10 @@ commits. Stored rows survive checkout removal and archive rebuilds under policie
 that keep trailer links; rows for commits no longer reachable are kept.
 
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
-Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other
-sources, such as tags and stash, leave it empty.
+Git's traversal source with `refs/heads/` or `refs/remotes/` removed, excluding
+remote `HEAD` aliases; other sources, such as tags and stash, leave it empty.
 Their `committed_at` is the Git author time in UTC. Their `message_ordinal`
-is the suggested prompt's ordinal, or `-1` when no eligible prompt exists.
+is the last message ordinal at or before commit time, or `-1` when none exists.
 
 The suggested `turn` is the last real user prompt in transcript order with a
 usable timestamp at or before commit time. It carries

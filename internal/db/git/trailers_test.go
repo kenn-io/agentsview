@@ -44,6 +44,24 @@ func TestCommitTrailersHistory(t *testing.T) {
 	assert.Equal(t, "origin/older", commits[2].Branch)
 }
 
+func TestCommitTrailersCloneAhead(t *testing.T) {
+	skipIfNoGit(t)
+	origin := initRepo(t)
+	gitRun(t, origin, nil, "commit", "--allow-empty", "-qm", "Pushed\n\nAgent-Session: claude:pushed")
+	repo := t.TempDir()
+	gitRun(t, origin, nil, "clone", "-q", origin, repo)
+	configureTestRepoIdentity(t, repo)
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Local\n\nAgent-Session: claude:local")
+
+	commits, err := ScanCommitTrailers(t.Context(), repo)
+	require.NoError(t, err)
+	require.Len(t, commits, 2)
+	assert.Equal(t, []string{"claude:local"}, commits[0].Sessions)
+	assert.Equal(t, "main", commits[0].Branch)
+	assert.Equal(t, []string{"claude:pushed"}, commits[1].Sessions)
+	assert.Equal(t, "origin/main", commits[1].Branch)
+}
+
 func TestCommitTrailersSHA256(t *testing.T) {
 	skipIfNoGit(t)
 	repo := t.TempDir()

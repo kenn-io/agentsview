@@ -205,6 +205,33 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 	}
 }
 
+func TestTrailerCommitLinksOrdering(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "session-a", "project-a")
+	prompt := userMsg("session-a", 0, "Save the edit")
+	prompt.Timestamp = "2026-10-30T10:00:00Z"
+	commit := commitMessages("session-a", `{"command":"git commit -m fix"}`, "[main abc1234] Exact")[2]
+	commit.Ordinal = 1
+	commit.Timestamp = "2026-10-30T10:30:00Z"
+	insertMessages(t, d, prompt, commit)
+	sha := strings.Repeat("b", 40)
+	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
+		SHA: sha, CommittedAt: "2026-10-30T10:45:00Z", Sessions: []string{"claude:session-a"},
+	}}))
+
+	list, err := d.SessionCommitLinks(t.Context(), "session-a")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 2)
+	assert.Equal(t, "abc1234", list.Commits[0].SHA)
+	assert.Equal(t, sha, list.Commits[1].SHA)
+	assert.Equal(t, "trailer", list.Commits[1].Source)
+	assert.Equal(t, 1, list.Commits[1].MessageOrdinal)
+	require.NotNil(t, list.Commits[1].Turn)
+	assert.Equal(t, 0, list.Commits[1].Turn.Ordinal)
+	assert.Equal(t, "Save the edit", list.Commits[1].Turn.Text)
+	assert.True(t, list.Commits[1].Turn.Heuristic)
+}
+
 func TestTrailerCommitLinksTranscriptRewrite(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "session-a", "project-a")
