@@ -1104,7 +1104,7 @@ const codexThreadIdentityDataVersion = 137
 
 // CopyCommitTrailersFrom preserves Git evidence before rebuild reconciliation.
 func (d *DB) CopyCommitTrailersFrom(ctx context.Context, sourcePath string) error {
-	if d.ArchiveContent().OmitsToolContent() {
+	if d.ArchiveContent().UsageOnly() {
 		return nil
 	}
 	d.mu.Lock()

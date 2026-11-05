@@ -1545,8 +1545,8 @@ paths join onto the base using the transcript's path style; `~` paths stay
 literal. A later `cd` is ignored. A call that commits in two repositories
 records the first directory for both commits.
 
-Archives using `archive_content = "transcripts"` or `"usage"` omit transcript
-and trailer links under the same content policy.
+Archives using `archive_content = "transcripts"` keep trailer links but no
+transcript links; `"usage"` archives keep neither.
 
 ### Git trailer links
 
@@ -1562,8 +1562,8 @@ links. Merge commits count.
 minutes. Each pass rereads every repository's history, including fetched older
 branches. Only checkouts a local session ran in are read. If a checkout has
 disappeared, another session must still resolve to its repository to read new
-commits. Stored rows survive checkout removal and archive rebuilds under every
-archive policy; successful scans prune commits removed by rewritten history.
+commits. Stored rows survive checkout removal and archive rebuilds under policies
+that keep trailer links; rows for commits no longer reachable are kept.
 
 Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed; other

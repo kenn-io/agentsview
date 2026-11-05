@@ -568,7 +568,7 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 			require.NoError(t, fresh.CopyCommitTrailersFrom(t.Context(), old.Path()))
 			written, err := fresh.SessionCommitLinks(t.Context(), "written")
 			require.NoError(t, err)
-			if policy == config.ArchiveContentFull {
+			if !policy.UsageOnly() {
 				require.Len(t, written.Commits, 1)
 				assert.Equal(t, "trailer", written.Commits[0].Source)
 			} else {
@@ -579,7 +579,7 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 			}
 			trailers, err := fresh.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40)})
 			require.NoError(t, err)
-			if policy == config.ArchiveContentFull {
+			if !policy.UsageOnly() {
 				require.Len(t, trailers.Commits[0].Links, 1)
 				assert.Equal(t, "orphan", trailers.Commits[0].Links[0].SessionID)
 				assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
@@ -627,6 +627,15 @@ func TestCommitLinksWritePolicy(t *testing.T) {
 				require.Len(t, initial.Commits, 1)
 			} else {
 				assert.Empty(t, initial.Commits)
+			}
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s1"}, CommittedAt: tsZero}}))
+			trailers, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("b", 40)})
+			require.NoError(t, err)
+			if policy.UsageOnly() {
+				assert.Empty(t, trailers.Commits[0].Links)
+			} else {
+				require.Len(t, trailers.Commits[0].Links, 1)
+				assert.Equal(t, "trailer", trailers.Commits[0].Links[0].Source)
 			}
 			d = testDB(t)
 			insertSession(t, d, "s1", "project-a")

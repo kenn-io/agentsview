@@ -503,7 +503,7 @@ func applyArchiveContentToCopiedSessionsTx(
 	policy config.ArchiveContent, sourceVersion int,
 ) error {
 	var err error
-	if policy.OmitsToolContent() {
+	if policy.UsageOnly() {
 		owners, err := resolveTrailerOwners(ctx, tx, "1=1")
 		if err != nil {
 			return err

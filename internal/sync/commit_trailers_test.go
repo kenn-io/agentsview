@@ -171,37 +171,6 @@ func TestReconcileCommitTrailersRotatesAfterBudget(t *testing.T) {
 	assert.ElementsMatch(t, []string{first, later}, []string{list.Commits[0].Repository, list.Commits[1].Repository})
 }
 
-func TestReconcileCommitTrailersPrunesRewrittenHistory(t *testing.T) {
-	database, engine, repo, first, runGit := commitTrailerFixture(t)
-	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--amend", "--allow-empty", "-qm", "Amended\n\nAgent-Session: claude:editor-session")
-	second := runGit(repo, "rev-parse", "HEAD")
-	engine.ReconcileCommitTrailers(t.Context())
-	found, err := database.CommitSessionLinks(t.Context(), []string{first, second})
-	require.NoError(t, err)
-	assert.Empty(t, found.Commits[0].Links)
-	require.Len(t, found.Commits[1].Links, 1)
-	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--amend", "--allow-empty", "-qm", "Trailer removed")
-	engine.ReconcileCommitTrailers(t.Context())
-	found, err = database.CommitSessionLinks(t.Context(), []string{second})
-	require.NoError(t, err)
-	assert.Empty(t, found.Commits[0].Links)
-}
-
-func TestResyncKeepsPrunedCommitTrailersRemoved(t *testing.T) {
-	database, engine, repo, first, runGit := commitTrailerFixture(t)
-	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--amend", "--allow-empty", "-qm", "Amended\n\nAgent-Session: claude:editor-session")
-	second := runGit(repo, "rev-parse", "HEAD")
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
-	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 1)
-	assert.Equal(t, second, list.Commits[0].SHA)
-	found, err := database.CommitSessionLinks(t.Context(), []string{first})
-	require.NoError(t, err)
-	assert.Empty(t, found.Commits[0].Links)
-}
-
 func TestReconcileCommitTrailersKeepsFailedOrMissingRepository(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "failed", true: "missing"}[missing], func(t *testing.T) {

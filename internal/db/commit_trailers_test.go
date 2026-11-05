@@ -61,6 +61,40 @@ func TestTrailerCommitLinksOwnerAvailableAfterScan(t *testing.T) {
 	assert.Equal(t, sha, list.Commits[0].SHA)
 }
 
+func TestTrailerCommitLinksDuplicateOwnerIdentities(t *testing.T) {
+	for _, differentMetadata := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same metadata", true: "different metadata"}[differentMetadata], func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "codex:abc", "project-a", func(s *Session) { s.Agent = "codex" })
+			sha := strings.Repeat("a", 40)
+			commit := gitlog.TrailerCommit{SHA: sha, Sessions: []string{"claude:codex:abc"}, CommittedAt: tsZero}
+			commits := []gitlog.TrailerCommit{commit}
+			commit.Sessions = []string{"codex:abc"}
+			if differentMetadata {
+				commit.Branch = "feature"
+				commit.Subject = "Updated subject"
+			}
+			commits = append(commits, commit)
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", commits))
+
+			rows, err := d.SessionCommitLinkRows(t.Context(), "codex:abc")
+			require.NoError(t, err)
+			assert.Len(t, rows, 1)
+			snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "codex:abc")
+			require.NoError(t, err)
+			assert.Len(t, snapshot.CommitLinks, 1)
+			list, err := d.SessionCommitLinks(t.Context(), "codex:abc")
+			require.NoError(t, err)
+			require.Len(t, list.Commits, 1)
+			assert.Equal(t, sha, list.Commits[0].SHA)
+			found, err := d.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, found.Commits[0].Links, 1)
+			assert.Equal(t, "codex:abc", found.Commits[0].Links[0].SessionID)
+		})
+	}
+}
+
 func TestTrailerCommitLinksMissingOwner(t *testing.T) {
 	d := testDB(t)
 	owner := "codex:session"

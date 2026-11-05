@@ -9,9 +9,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestDuckDBTrailerDuplicateOwnerIdentities(t *testing.T) {
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "codex:abc", Agent: "codex", Project: "project-a", Machine: "m"}))
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	require.NoError(t, local.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
+		SHA: sha, Sessions: []string{"claude:codex:abc", "codex:abc"}, CommittedAt: "2026-01-01T00:00:00Z",
+	}}))
+	path := filepath.Join(t.TempDir(), "commits.duckdb")
+	_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	store := openPushedStore(t, path)
+	defer func() { require.NoError(t, store.Close()) }()
+	links, err := store.SessionCommitLinks(t.Context(), "codex:abc")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 1)
+	assert.Equal(t, sha, links.Commits[0].SHA)
+}
 
 func TestDuckDBCommitLinkParity(t *testing.T) {
 	local := newLocalDB(t)

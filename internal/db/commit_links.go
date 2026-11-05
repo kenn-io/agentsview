@@ -461,18 +461,22 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 // docs/internal/pando-adaptation.md for attribution and changes.
 const commitUserPrompt = `m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''`
 
-const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?))
+const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?)),
+ resolved_trailers AS (
+ SELECT t.*,o.session_id AS owner_id,
+ ROW_NUMBER() OVER (PARTITION BY o.session_id,t.sha ORDER BY t.session_id) AS owner_rank
+ FROM commit_trailers t JOIN trailer_owners o ON o.trailer_id=t.session_id)
  SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.source,
  (s.id IS NULL OR s.deleted_at IS NOT NULL),COALESCE(s.project,l.project),
  turn.ordinal, turn.content
  FROM (
  SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project,'transcript' AS source FROM commit_links
  UNION ALL
- SELECT o.session_id,t.sha,t.branch,t.subject,t.repository,
- COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=o.session_id AND ` + commitUserPrompt + `
+ SELECT t.owner_id,t.sha,t.branch,t.subject,t.repository,
+ COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=t.owner_id AND ` + commitUserPrompt + `
  AND julianday(m.timestamp)<=julianday(t.committed_at,'+5 minutes') ORDER BY m.ordinal DESC LIMIT 1),-1),
- -1,'',t.committed_at,t.project,'trailer' FROM commit_trailers t JOIN trailer_owners o ON o.trailer_id=t.session_id
- WHERE NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=o.session_id AND substr(t.sha,1,length(c.sha))=c.sha)
+ -1,'',t.committed_at,t.project,'trailer' FROM resolved_trailers t
+ WHERE t.owner_rank=1 AND NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.owner_id AND substr(t.sha,1,length(c.sha))=c.sha)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
@@ -480,17 +484,13 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
 
-// StoreTrailerCommitLinks replaces one repository's evidence after a full scan.
+// StoreTrailerCommitLinks adds or updates one repository's evidence after a full scan.
 // Call it only after a successful scan, including an empty result.
 // The stored session_id is the trailer's agent:ID, independent of archive owners.
 func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) error {
 	return d.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE commit_trailer_scan (
- session_id TEXT NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(session_id,sha)) WITHOUT ROWID`); err != nil {
-			return err
-		}
 		changed := map[string]bool{}
-		if d.ArchiveContent().OmitsToolContent() {
+		if d.ArchiveContent().UsageOnly() {
 			commits = nil
 		}
 		for _, c := range commits {
@@ -499,9 +499,6 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 				_, known := parser.AgentByType(parser.AgentType(agent))
 				if !ok || !known {
 					continue
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailer_scan(session_id,sha) VALUES (?,?)`, value, c.SHA); err != nil {
-					return err
 				}
 				result, err := tx.ExecContext(ctx, `INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES(?,?,?,?,?,?)
  ON CONFLICT(session_id,sha) DO UPDATE SET branch=COALESCE(NULLIF(commit_trailers.branch,''),excluded.branch),subject=excluded.subject,repository=COALESCE(NULLIF(commit_trailers.repository,''),excluded.repository),committed_at=excluded.committed_at
@@ -517,27 +514,6 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 					changed[value] = true
 				}
 			}
-		}
-		rows, err := tx.QueryContext(ctx, `DELETE FROM commit_trailers WHERE repository=? AND NOT EXISTS (
- SELECT 1 FROM commit_trailer_scan k WHERE k.session_id=commit_trailers.session_id AND k.sha=commit_trailers.sha) RETURNING session_id`, repo)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			changed[id] = true
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DROP TABLE commit_trailer_scan`); err != nil {
-			return err
 		}
 		if len(changed) == 0 {
 			return nil
