@@ -13,6 +13,38 @@ test.describe("Recent Edits feed", () => {
     await page.goto("/");
   });
 
+  for (const width of [320, 375]) {
+    test(`keeps the file name visible at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/recent-edits");
+      const row = page.locator(".re-file-row").first();
+      await expect(row).toBeVisible({ timeout: 5_000 });
+      await expect(row.locator(".re-project")).toHaveAttribute("title", /.+/);
+
+      const layout = await row.evaluate((element) => {
+        const rowRect = element.getBoundingClientRect();
+        const rect = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+        const path = element.querySelector<HTMLElement>(".re-path")!;
+        const project = rect(".re-project");
+        const pathRect = path.getBoundingClientRect();
+        const count = rect(".re-count");
+        return {
+          pathWidth: pathRect.width,
+          pathText: path.textContent ?? "",
+          pathClipped: path.scrollWidth > path.clientWidth + 1,
+          projectAbovePath: project.bottom <= pathRect.top + 1,
+          countInsideRow: count.right <= rowRect.right + 1,
+        };
+      });
+      // The fixture's short path ("server/handler.go") fits whole.
+      expect(layout.pathText).toContain("handler.go");
+      expect(layout.pathClipped).toBe(false);
+      expect(layout.pathWidth).toBeGreaterThan(80);
+      expect(layout.projectAbovePath).toBe(true);
+      expect(layout.countInsideRow).toBe(true);
+    });
+  }
+
   test("expand file row and jump to session transcript", async ({ page }) => {
     // Navigate to Recent Edits via its TopBar tab.
     await clickNavTab(page, "Recent Edits");

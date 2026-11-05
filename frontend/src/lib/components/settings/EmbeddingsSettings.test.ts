@@ -109,6 +109,22 @@ describe("EmbeddingsSettings", () => {
     unmount(component);
   });
 
+  it("formats embedded and missing coverage counts the same way", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(200));
+    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
+      generations: [{ ...BUILDING_GENERATION, embedded: 20_000, missing: 30_000 }],
+    });
+
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    await settle();
+
+    const coverage = document.body.querySelector(".gen-coverage")?.textContent ?? "";
+    expect(coverage).toContain("20.0K embedded");
+    expect(coverage).toContain("30.0K missing");
+
+    unmount(component);
+  });
+
   it("shows an estimating state while the daemon warms its estimate", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
       runningStatus(100, { estimate_ready: false }),

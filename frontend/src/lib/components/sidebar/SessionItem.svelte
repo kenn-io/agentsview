@@ -556,7 +556,9 @@
     {/if}
   </div>
 
-  {#if !compact}
+  <!-- The star floats over the gutter, so it steps aside while the rename
+       input has the row. -->
+  {#if !compact && !renaming}
     <button
       class="star-btn"
       class:starred={isStarred}
@@ -857,10 +859,12 @@
     font-size: 9px;
   }
 
-  /* The project truncates first, so counts, machine, and agent stay whole. */
+  /* The project truncates first, so counts, machine, and agent stay whole.
+     Its large shrink weight makes it absorb almost all of the shortfall
+     before the agent and machine group starts to give way. */
   .session-project {
     min-width: 0;
-    flex: 0 1 auto;
+    flex: 0 100 auto;
     /* The project leads line two, one step above the other metadata; it
        tells apart rows that share a title. */
     color: var(--text-secondary);
@@ -874,10 +878,12 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    justify-content: flex-end;
     margin-left: auto;
-    min-width: 0;
-    /* The project gives way first; this group only shrinks past 60%. */
-    flex-shrink: 0;
+    /* The project gives way first. Under real pressure this group shrinks
+       too, but keeps room for a readable agent prefix. */
+    flex: 0 1 auto;
+    min-width: 3.5em;
     max-width: 60%;
   }
 
@@ -885,7 +891,7 @@
      prefix with an ellipsis; the full text is in each tooltip. */
   .machine-tag {
     min-width: 0;
-    flex-shrink: 20;
+    flex-shrink: 1000;
     font-size: 10.5px;
     white-space: nowrap;
     overflow: hidden;
@@ -921,6 +927,13 @@
   .session-item:not(.compact) > :global(.kit-status-dot) {
     align-self: flex-start;
     margin-top: 11px;
+  }
+
+  /* The waiting bubble is 10px, so it sits 2px higher to share the dot's
+     center on the title line. */
+  .session-item:not(.compact) > :global(.kit-status-bubble) {
+    align-self: flex-start;
+    margin-top: 9px;
   }
 
   :global(.group-hint-icon) {
@@ -959,13 +972,13 @@
     flex-shrink: 0;
   }
 
-  /* The star sits on the title line so it never shares space with the
-     agent and machine slot on the meta line. */
   /* The star lives in the left gutter on line two, under the chevron and
      status dot, so it never takes the title's width or hides the time. */
   .star-btn {
     position: absolute;
-    top: 21px;
+    /* Below the 18px expand button (4px to 22px) with a 2px gap, and
+       inside the 42px row. */
+    top: 24px;
     /* Over the 18px tree gutter that starts after the row padding. */
     left: 10px;
     width: 18px;

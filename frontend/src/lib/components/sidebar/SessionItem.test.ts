@@ -81,6 +81,26 @@ describe("SessionItem identity", () => {
     expect(count?.title).toBe("1.2K user messages");
   });
 
+  it("removes the star while the title is being renamed", () => {
+    mountSession({ id: "rename-star" });
+    expect(document.querySelector(".star-btn")).not.toBeNull();
+
+    document
+      .querySelector<HTMLElement>(".session-name")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    flushSync();
+
+    const input = document.querySelector<HTMLInputElement>(".rename-input");
+    expect(input).not.toBeNull();
+    expect(document.querySelector(".star-btn")).toBeNull();
+
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushSync();
+
+    expect(document.querySelector(".rename-input")).toBeNull();
+    expect(document.querySelector(".star-btn")).not.toBeNull();
+  });
+
   it("uses the singular for one message", () => {
     mountSession({ id: "count-one", user_message_count: 1 });
     expect(document.querySelector<HTMLElement>(".session-count")?.title).toBe("1 user message");
