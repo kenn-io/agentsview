@@ -29,6 +29,7 @@ func TestDuckDBIncrementalRetainedCommitLinkScope(t *testing.T) {
 		require.NoError(t, err)
 		store = openPushedStore(t, path)
 	}
+	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() { push("commit-project") })
 	require.NoError(t, local.DeleteSession(t.Context(), "commit-delete"))
 	push("commit-project")
 	dbtest.AssertCommitLinkParity(t, local, store)

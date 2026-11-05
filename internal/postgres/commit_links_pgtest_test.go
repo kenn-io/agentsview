@@ -94,6 +94,10 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
+	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+	})
 	_, err = pg.ExecContext(ctx, `UPDATE messages SET content='different revision' WHERE session_id='commit-live' AND ordinal=0`)
 	require.NoError(t, err)
 	links, err := store.SessionCommitLinks(ctx, "commit-live")

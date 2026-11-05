@@ -1986,6 +1986,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"commit_trailers",
 	"commit_links",
 	"sessions",
 	"messages",

@@ -1442,6 +1442,9 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx, permanentDelete bo
 	if err != nil {
 		return 0, err
 	}
+	if err := retainTrailerProjectsTx(ctx, tx, ids); err != nil {
+		return 0, fmt.Errorf("retaining excluded trailer projects: %w", err)
+	}
 	children, err := sessionIDsTx(ctx, tx, `id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+excluded+`)
@@ -5748,6 +5751,9 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 	if err != nil {
 		return 0, err
 	}
+	if err := retainTrailerProjectsTx(ctx, tx, ids); err != nil {
+		return 0, fmt.Errorf("retaining deleted trailer projects: %w", err)
+	}
 	children, err := sessionIDsTx(ctx, tx, `id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+where+`)
@@ -7031,7 +7037,15 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 	if result.Findings, err = sessionSecretFindingsWithQuerier(ctx, tx, id); err != nil {
 		return nil, err
 	}
-	if result.CommitLinks, err = sessionCommitLinkRows(ctx, tx, "l.session_id=?", id); err != nil {
+	identities, err := json.Marshal(sessionTrailerIdentities(id))
+	if err != nil {
+		return nil, err
+	}
+	owners, err := resolveTrailerOwners(ctx, tx, `session_id IN (SELECT value FROM json_each(?))`, string(identities))
+	if err != nil {
+		return nil, err
+	}
+	if result.CommitLinks, err = sessionCommitLinkRows(ctx, tx, owners, "l.session_id=?", id); err != nil {
 		return nil, err
 	}
 	if result.Pins, err = pinnedMessagesWithQuerier(ctx, tx, id, ""); err != nil {

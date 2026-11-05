@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Find editor commits through `Agent-Session` trailers in local Git history.
+  Session commit lookups show the source and suggest the last prompt at or
+  before the commit time, marked as estimated, when the session has a message
+  within the preceding five minutes. Idle sessions have no suggested turn.
+  Trailer links survive transcript rewrites and checkout removal.
+
 - Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
   replicas after pushing the archive. Deleted sessions remain visible as missing
   records when the replica has project evidence for them. Hosted PostgreSQL

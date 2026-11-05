@@ -88,7 +88,7 @@ type SyncStats struct {
 	// TitlesUpdated counts native title changes copied onto stored sessions
 	// without a reparse; workers carry it back so the daemon notifies clients.
 	TitlesUpdated int `json:"titles_updated,omitempty"`
-	// LinksUpdated counts global, scoped, and queued parent-link repairs.
+	// LinksUpdated counts parent-link repairs and stored or changed trailer links.
 	// A pending retry can update parent_session_id while the poll's
 	// sync stats and tombstone count stay zero. Workers carry the count back
 	// to the daemon so it can notify clients about link-only repairs.
@@ -430,7 +430,7 @@ func (s *SyncStats) RecordCwdUpdated(n int) {
 	s.CwdUpdated += n
 }
 
-// RecordLinksUpdated records parent-link rows repaired without an ordinary
+// RecordLinksUpdated records link rows changed without an ordinary
 // session write. Zero and negative counts are ignored.
 func (s *SyncStats) RecordLinksUpdated(n int) {
 	if n > 0 {
