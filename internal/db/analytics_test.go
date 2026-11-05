@@ -5278,3 +5278,81 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	assert.Equal(t, 501, resp.TotalCalls)
 	t.Log("chunked and unchunked responses match; TotalCalls == 501")
 }
+
+func TestAnalyticsDateWindowPlan(t *testing.T) {
+	d := testDB(t)
+	seedAnalyticsData(t, d)
+	for _, tc := range []struct{ name, table, date, project, order, index string }{
+		{"short", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "", "", "idx_sessions_effective_start"},
+		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "", "", "idx_sessions_effective_start"},
+		{"project", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "project-alpha", "", "idx_sessions_project"},
+		{"top_broad", "sessions", "+COALESCE(NULLIF(started_at, ''), created_at)", "", " ORDER BY message_count DESC, id ASC LIMIT 10", "idx_sessions_message_count"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := baseFilter()
+			f.Project = tc.project
+			where, args := f.buildWhere(tc.date)
+			assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where+tc.order, args...), tc.index)
+		})
+	}
+}
+
+func TestAnalyticsDateWindowOldNullStart(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "old-null", "project-a", func(s *Session) { s.StartedAt = nil })
+	_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2020-01-01T12:00:00Z'")
+	require.NoError(t, err)
+	summary, err := d.GetAnalyticsSummary(t.Context(), baseFilter())
+	require.NoError(t, err)
+	assert.Zero(t, summary.TotalSessions)
+	top, err := d.GetAnalyticsTopSessions(t.Context(), baseFilter(), "messages")
+	require.NoError(t, err)
+	assert.Empty(t, top.Sessions)
+}
+
+func TestAnalyticsDateWindowEquivalence(t *testing.T) {
+	indexed, baseline := testDB(t), testDB(t)
+	_, err := baseline.getWriter().ExecContext(t.Context(), "DROP INDEX IF EXISTS idx_sessions_effective_start")
+	require.NoError(t, err)
+	for _, d := range []*DB{indexed, baseline} {
+		for i, started := range []*string{nil, new(""), new("2024-06-01T02:00:00+05:00"), new("2024-06-02T11:00:00Z"), new("2024-05-01T12:00:00Z")} {
+			id := fmt.Sprintf("session-%d", i)
+			insertSession(t, d, id, "project-a", func(s *Session) {
+				s.StartedAt, s.EndedAt, s.MessageCount = started, new("2024-06-02T12:00:00Z"), i+1
+			})
+			_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2024-06-01T12:00:00Z' WHERE id = ?", id)
+			require.NoError(t, err)
+			msg := asstMsgAt(id, 0, "hello", "2024-06-01T12:00:00Z")
+			msg.Model = "gpt-4o"
+			insertMessages(t, d, msg)
+		}
+	}
+	for _, zone := range []string{"UTC", "Pacific/Kiritimati", "Etc/GMT+12"} {
+		for _, model := range []string{"", "gpt-4o"} {
+			f := AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: zone, Model: model}
+			for _, tc := range []struct {
+				name string
+				read func(*DB) (any, error)
+			}{
+				{"summary", func(d *DB) (any, error) { return d.GetAnalyticsSummary(t.Context(), f) }},
+				{"activity", func(d *DB) (any, error) { return d.GetAnalyticsActivity(t.Context(), f, "day") }},
+				{"heatmap", func(d *DB) (any, error) { return d.GetAnalyticsHeatmap(t.Context(), f, "messages") }},
+				{"projects", func(d *DB) (any, error) { return d.GetAnalyticsProjects(t.Context(), f) }},
+				{"hour", func(d *DB) (any, error) { return d.GetAnalyticsHourOfWeek(t.Context(), f) }},
+				{"shape", func(d *DB) (any, error) { return d.GetAnalyticsSessionShape(t.Context(), f) }},
+				{"velocity", func(d *DB) (any, error) { return d.GetAnalyticsVelocity(t.Context(), f) }},
+				{"signals", func(d *DB) (any, error) { return d.GetAnalyticsSignals(t.Context(), f) }},
+				{"evidence", func(d *DB) (any, error) { return d.GetAnalyticsSignalSessions(t.Context(), f, "tool_retries", 10) }},
+				{"top", func(d *DB) (any, error) { return d.GetAnalyticsTopSessions(t.Context(), f, "messages") }},
+			} {
+				t.Run(zone+"/"+model+"/"+tc.name, func(t *testing.T) {
+					want, err := tc.read(baseline)
+					require.NoError(t, err)
+					got, err := tc.read(indexed)
+					require.NoError(t, err)
+					assert.Equal(t, want, got)
+				})
+			}
+		}
+	}
+}

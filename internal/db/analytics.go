@@ -5453,10 +5453,21 @@ func (db *DB) GetAnalyticsTopSessions(
 	}
 	defer release()
 
-	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
-		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
-	}
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	from, to := f.utcRange()
+	var candidates int
+	if err := db.getReader().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM (SELECT 1 FROM sessions WHERE "+dateCol+" BETWEEN ? AND ? LIMIT 1000)",
+		from, to).Scan(&candidates); err != nil {
+		return TopSessionsResponse{}, fmt.Errorf("probing top sessions date window: %w", err)
+	}
+	if candidates >= 1000 {
+		// Keep the ranking index walk for windows too large to sort cheaply.
+		dateCol = "+" + dateCol
+	}
+	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
+		return db.getAnalyticsTopSessionsGo(ctx, f, metric, dateCol)
+	}
 	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "sessions.id", true)
 
 	durationExpr := `ROUND((julianday(ended_at) -
@@ -5523,10 +5534,9 @@ func (db *DB) GetAnalyticsTopSessions(
 }
 
 func (db *DB) getAnalyticsTopSessionsGo(
-	ctx context.Context, f AnalyticsFilter, metric string,
+	ctx context.Context, f AnalyticsFilter, metric, dateCol string,
 ) (TopSessionsResponse, error) {
 	loc := f.location()
-	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)
 
 	var timeIDs map[string]bool
