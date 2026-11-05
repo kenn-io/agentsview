@@ -209,10 +209,10 @@ func (s Sessions) GetSessionVersion(ctx context.Context, id string) (int, int64,
 	return count, db.SessionVersionMarker(fileMtimePart, fileHashPart, s.backend.FormatTime(updated), fingerprint), true
 }
 
-func (s Sessions) scanSidebarRow(rows *sql.Rows, prefix []any) (db.SidebarSessionIndexRow, error) {
+func (s Sessions) scanSidebarRow(rows *sql.Rows, dest []any) (db.SidebarSessionIndexRow, error) {
 	var row db.SidebarSessionIndexRow
 	var startedAt, endedAt, createdAt any
-	dest := append(prefix,
+	dest = append(dest,
 		&row.ID, &row.ParentSessionID, &row.RelationshipType,
 		&row.Project, &row.ProjectAssigned, &row.Machine, &row.Agent,
 		&row.AgentLabel, &row.Entrypoint, &row.SessionKind, &row.DisplayName,

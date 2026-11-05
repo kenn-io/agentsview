@@ -1072,6 +1072,7 @@ func TestDuckDBSidebarIndexPaging(t *testing.T) {
 				{ID: "root-c", StartedAt: new("2026-01-02T00:00:00Z")},
 			},
 			check: func(t *testing.T, store *Store) {
+				t.Helper()
 				cursor := ""
 				for i, want := range [][]string{{"child-a", "root-a"}, {"root-b"}, {"root-c"}} {
 					page, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{Limit: 1, Cursor: cursor})
@@ -1092,6 +1093,7 @@ func TestDuckDBSidebarIndexPaging(t *testing.T) {
 			},
 			starredID: "starred-child",
 			check: func(t *testing.T, store *Store) {
+				t.Helper()
 				page, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{Starred: true, Limit: 1})
 				require.NoError(t, err)
 				assert.Equal(t, []string{"starred-child", "root"}, duckSidebarSessionIDs(page.Sessions))
