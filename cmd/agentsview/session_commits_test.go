@@ -42,6 +42,7 @@ func TestSessionCommits(t *testing.T) {
 		require.NotNil(t, exact)
 		// JSON preserves the full prompt; human output sanitizes and truncates it.
 		assert.Equal(t, &db.CommitTurn{Ordinal: 1, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, exact.Turn)
+		assert.Contains(t, out, `"heuristic":true`)
 	})
 	t.Run("human", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit")
@@ -54,7 +55,7 @@ func TestSessionCommits(t *testing.T) {
 		assert.Contains(t, out, "abc1234")
 		assert.Contains(t, out, "Fix parser")
 		assert.Contains(t, out, "1: Fix parser ")
-		assert.Contains(t, out, "(heuristic)")
+		assert.Contains(t, out, "(estimated)")
 		assert.Contains(t, out, "…")
 		assert.NotContains(t, out, "END")
 		assert.NotContains(t, out, "\x1b")

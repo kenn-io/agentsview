@@ -13,7 +13,7 @@ The latest release is
 
 - Find editor commits through `Agent-Session` trailers in local Git history.
   Session commit lookups show the source and suggest the last prompt at or
-  before the commit time, marked as heuristic. Trailer links survive transcript
+  before the commit time, marked as estimated. Trailer links survive transcript
   rewrites and checkout removal.
 
 - Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse

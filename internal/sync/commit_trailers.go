@@ -30,9 +30,6 @@ func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget t
 	if e.ephemeral || e.forceParse || e.db.ArchiveContent().UsageOnly() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	start := time.Now()
 	repositories, err := e.db.TrailerRepositories(ctx)
 	if err != nil {
 		log.Printf("trailer repositories: %v", err)
@@ -50,6 +47,9 @@ func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget t
 		}
 		paths[key] = identity.rootPath
 	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	start := time.Now()
 	if e.trailerScanAttempts == nil {
 		e.trailerScanAttempts = make(map[string]time.Time)
 	}
