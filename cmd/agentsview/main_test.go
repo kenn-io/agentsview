@@ -1029,7 +1029,7 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 		case at := <-calls:
 			return at
 		case <-time.After(10 * time.Second):
-			t.Fatal("watcher did not dispatch a file write")
+			require.FailNow(t, "watcher did not dispatch a file write")
 			return time.Time{}
 		}
 	}
