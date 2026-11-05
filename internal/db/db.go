@@ -5568,6 +5568,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	db.connMu.Lock()
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
+	db.archiveCommits.Add(1)
 	var oldReader *sql.DB
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
@@ -5632,6 +5633,7 @@ func (db *DB) CloseWriter() error {
 	defer db.mu.Unlock()
 	db.connMu.Lock()
 	old := db.writer.Swap(nil)
+	db.archiveCommits.Add(1)
 	db.writerClosed.Store(true)
 	pending := db.undrainedPools
 	db.undrainedPools = nil
@@ -5692,6 +5694,7 @@ func (db *DB) ReopenWriter() error {
 
 	db.connMu.Lock()
 	old := db.writer.Swap(writer)
+	db.archiveCommits.Add(1)
 	db.writerClosed.Store(false)
 	db.connMu.Unlock()
 

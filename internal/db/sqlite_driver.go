@@ -55,6 +55,7 @@ func (c *archiveWriterConnector) Connect(context.Context) (driver.Conn, error) {
 		return nil, err
 	}
 	conn.(*sqlite3.SQLiteConn).RegisterCommitHook(func() int {
+		// The count can precede commit visibility, bounding a stale read to one flight.
 		c.commits.Add(1)
 		return 0
 	})

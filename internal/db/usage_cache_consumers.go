@@ -50,6 +50,13 @@ type usageWindowObserver struct {
 	beforePrepare func(context.Context)
 }
 
+// SetUsageWindowObserverForTest observes preparations in tests outside this package.
+func (db *DB) SetUsageWindowObserverForTest(beforePrepare func(context.Context)) (restore func()) {
+	previous := db.usageWindowObserver
+	db.usageWindowObserver.beforePrepare = beforePrepare
+	return func() { db.usageWindowObserver = previous }
+}
+
 type usageWindowMemoKey struct{}
 
 type usageWindowMemo struct {

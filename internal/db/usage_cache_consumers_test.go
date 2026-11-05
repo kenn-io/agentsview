@@ -434,12 +434,17 @@ func TestConcurrentUsageReadsSeeCommitsAfterWriterHandoff(t *testing.T) {
 			writer := testDB(t)
 			seedLiveWriteSession(t, writer, "first", "project", "2026-08-10T09:00:00Z", 0, 10)
 			database := writer
+			before := database.archiveCommits.Load()
 			switch mode {
 			case "reopen":
 				require.NoError(t, writer.Reopen())
+				assert.Greater(t, database.archiveCommits.Load(), before+1, "reopen must invalidate sharing beyond the trigger-install commit")
 			case "reopen writer":
 				require.NoError(t, writer.CloseWriter())
+				assert.Equal(t, before+1, database.archiveCommits.Load(), "closing the writer must invalidate sharing")
+				before = database.archiveCommits.Load()
 				require.NoError(t, writer.ReopenWriter())
+				assert.Greater(t, database.archiveCommits.Load(), before+1, "reopening the writer must invalidate sharing beyond the trigger-install commit")
 			case "read-only":
 				reader, err := OpenReadOnly(t.Context(), writer.path)
 				require.NoError(t, err)
@@ -447,6 +452,7 @@ func TestConcurrentUsageReadsSeeCommitsAfterWriterHandoff(t *testing.T) {
 				database = reader
 			case "closed writer":
 				require.NoError(t, database.CloseWriter())
+				assert.Equal(t, before+1, database.archiveCommits.Load(), "closing the writer must invalidate sharing")
 				external, err := OpenPreparedTestDB(database.path)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, external.Close()) })

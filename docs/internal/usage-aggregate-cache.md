@@ -112,11 +112,11 @@ An aggregate request:
    before assembling the result.
 
 Concurrent aggregate requests with the same window, session predicate, and
-Cursor need share one capture, fill check, and rollup check. A request joins a
-preparation only when no archive commit has happened since it was keyed. A
-joiner therefore sees archive data at least as recent as its own capture would.
-Each request reads rollups with its own filter. Cache retirement or a changed
-install triggers a fresh capture that bypasses the shared result.
+Cursor need share one capture, fill check, and rollup check. Callers with a
+`Progress` callback prepare alone so each progress stream reports its own work.
+Any archive commit ends sharing with that preparation for later requests. Each
+request reads rollups with its own filter. Cache retirement or a changed install
+triggers a fresh capture that bypasses the shared result.
 
 Handles without an open archive writer prepare independently across requests,
 since they cannot track another writer's commits. Pairwise still reuses prepared
