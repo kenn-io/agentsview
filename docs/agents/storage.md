@@ -63,23 +63,28 @@ transaction or a pinned reader can push the WAL past it (249 MiB was observed).
 Before closing the replacement, the build runs a checked truncate checkpoint.
 The swap installs only the main file, so a failed checkpoint or close aborts it.
 
-When a Codex fork's replay parent is unavailable, a rebuild preserves an
-existing child and schedules it for retry. New messages and usage in that child
-remain absent from the archive until the parent and child source can be read
-and the source is reparsed. If the parent never returns, that delay is
-indefinite. A child with no saved messages is imported with its fallback
-transcript, even when a placeholder row exists, such as one created by a Recall
-import. That transcript may include copied parent messages and usage, and later
-appends are likewise held until recovery. The rebuild warns about the possible
-copied usage.
+Codex forks keep accepting available messages when their replay parent is
+unavailable. Each full fork write records parent turn membership and per-message
+source origins in `codex_fork_state`, in the same transaction as the transcript
+and usage. Rebuilds copy this provenance with retained orphan sessions. Forks use
+full parses so optional parser checkpoints cannot leave provenance behind.
 
-The stale parser version does not distinguish a previously resolved child from
-a fallback. Parser checkpoints are optional, do not persist the replay gate,
-and are not copied with orphaned sessions. Treating a stale row as a fallback
-or resuming it without proven source and content state can overwrite archived
-child history or count parent usage twice. Live updates for unresolved forks
-need durable provenance and crash-safe retry and recovery; the current rebuild
-keeps the existing history rather than guessing that boundary.
+A fork whose parent was read previously uses that saved evidence to remove the
+inherited prefix and keep child usage accurate. Without that evidence, the
+fallback transcript stays visible and may include copied parent messages. Sync
+warns about this uncertainty and withholds unverified token usage. The original
+token metadata stays in local provenance for later reconciliation. Saved messages
+and tool results absent from a shortened source remain archived. Retained
+historical usage events also survive.
+
+If the parent never appears, available messages continue updating across retries,
+restarts, and rebuilds. Usage for unverified messages remains unavailable. If the
+parent later appears, reconciliation removes only confirmed inherited turns and
+restores child usage, including retained child messages absent from the current
+source. Rows without source evidence stay preserved, with unverifiable usage withheld
+until returning source records establish its ownership. The stale parser version
+continues to request a parent lookup until the source can be parsed with its
+parent. A successful rebuild still installs while those retries remain queued.
 
 When an Antigravity CLI source yields a retryable low-fidelity transcript,
 sync and rebuild preserve any saved history and leave it stale for retry. A new

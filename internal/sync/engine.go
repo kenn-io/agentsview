@@ -3598,7 +3598,7 @@ func (e *Engine) resyncBuildLocked(
 	}
 	localStats := stats
 	if stats.Deferred > 0 {
-		warning := fmt.Sprintf("resync: %d sessions need retry; newly imported forks without their parent may include copied parent history and usage", stats.Deferred)
+		warning := fmt.Sprintf("resync: %d sessions need retry; forks without replay evidence may include copied parent messages; their token usage is withheld until reconciliation", stats.Deferred)
 		log.Print(warning)
 		stats.Warnings = append(stats.Warnings, warning)
 	}
@@ -11021,6 +11021,9 @@ func (e *Engine) collectAndBatchWithOptions(
 		for range r.providerFailureCount {
 			stats.RecordFailed()
 		}
+		if isCodexFormatAgent(r.agent) && r.deferredCount > 0 && !slices.Contains(stats.Warnings, codexForkUnresolvedWarning) {
+			stats.Warnings = append(stats.Warnings, codexForkUnresolvedWarning)
+		}
 		for range r.deferredCount {
 			stats.recordDeferred(r.path)
 		}
@@ -11319,6 +11322,11 @@ func (e *Engine) collectAndBatchWithOptions(
 				}
 				kept := allowed[:0]
 				for _, pr := range allowed {
+					if isCodexFormatAgent(r.agent) && pr.Session.CodexFork != nil {
+						// The shared writer reconciles explicit replay provenance atomically.
+						kept = append(kept, pr)
+						continue
+					}
 					if !r.needsRetryForSession(pr.Session.ID) {
 						kept = append(kept, pr)
 						continue
@@ -16465,6 +16473,17 @@ func (e *Engine) tryProviderIncrementalAppend(
 		}, true
 	}
 	path := providerDiscoveredPath(source)
+	if isCodexFormatAgent(file.Agent) {
+		fork, err := e.db.HasCodexForkSource(ctx, string(file.Agent), e.effectiveSourcePath(path))
+		if err != nil {
+			return processResult{err: err}, true
+		}
+		if fork {
+			// A full fork write updates provenance with content. This declines
+			// cursor resumption without defeating later unchanged-source gates.
+			return processResult{}, false
+		}
+	}
 	if path == "" {
 		return processResult{}, false
 	}
@@ -18663,7 +18682,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if claudeSources != nil {
+		if claudeSources != nil || pw.sess.CodexFork != nil {
 			// Keep contributing paths and content in the same transaction.
 			version := e.db.GetSessionDataVersion(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
 			stale := version > 0 && version < db.CurrentDataVersion()
@@ -18944,7 +18963,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 	derive bool,
-) (ingest.PreparedSession, sessionWriteVerdict, error) {
+) (preparedSessionWrite, sessionWriteVerdict, error) {
 	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
 		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
 	}, ingest.ContentOptions{
@@ -18953,17 +18972,17 @@ func (e *Engine) prepareSessionNormalizedContext(
 		ArchiveContent:          e.db.ArchiveContent(),
 	})
 	if err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	s, msgs := candidate.Session, candidate.Messages
 	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	if e.archiveSessionPolicy != nil {
 		keep, err := e.archiveSessionPolicy(ctx, &s, pw.sess.ID)
 		if err != nil || !keep {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
+			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
 	applySourceCwdResolution(
@@ -18982,48 +19001,66 @@ func (e *Engine) prepareSessionNormalizedContext(
 	// preserve/merge handling so a filtered session is not written by
 	// any downstream path.
 	if !e.cwdFilter.allows(s.Cwd) {
-		return ingest.PreparedSession{}, sessionWriteCwdFiltered, nil
+		return preparedSessionWrite{}, sessionWriteCwdFiltered, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 
 	candidate.Session, candidate.Messages = s, msgs
 	if e.localClaudeSubagentSources(pw) != nil {
 		missing, err := e.missingClaudeSubagentSource(ctx, s.ID)
 		if err != nil || missing {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
+			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
 	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
 	if err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	if history.Action == ingest.HistoryPreserve {
-		return ingest.PreparedSession{}, sessionWritePreserved, nil
+		return preparedSessionWrite{}, sessionWritePreserved, nil
 	}
 	candidate = history.Candidate
+	candidate, forkState, stagedToolKeys, err := e.reconcileCodexFork(ctx, candidate)
+	if err != nil {
+		return preparedSessionWrite{}, sessionWritePreserved, err
+	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	if err := ctx.Err(); err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
 		ArchiveContent:          e.db.ArchiveContent(),
 	}
-	prepared, err := ingest.FinalizeRows(ctx, candidate, options)
+	rows, err := ingest.FinalizeRows(ctx, candidate, options)
 	if err != nil {
-		return ingest.PreparedSession{}, sessionWritePreserved, err
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
+	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
+	if forkState != nil {
+		for _, m := range prepared.Messages {
+			digest, keyErr := codexForkMessageKey(m)
+			if keyErr != nil {
+				return preparedSessionWrite{}, sessionWritePreserved, keyErr
+			}
+			forkState.Messages[m.Ordinal].Digest = digest
+		}
+	}
+	if forkState != nil && len(prepared.UsageEvents) == 0 {
+		prepared.UsageEvents = forkState.RetainedUsage
+	}
+
 	if prepared.PlanUsage != nil {
 		prepared.PlanUsage.CountedUnder = applyIDPrefixToID(
 			e.idPrefix, prepared.PlanUsage.CountedUnder,
 		)
 	}
 	if candidate.Parsed.Session.Agent == parser.AgentCodexCloud {
-		if err := e.keepCodexCloudUsage(ctx, &prepared); err != nil {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
+		if err := e.keepCodexCloudUsage(ctx, &prepared.PreparedSession); err != nil {
+			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
 	if derive && pw.staged == nil && !e.disableSignalRecompute {
@@ -19355,11 +19392,27 @@ func (e *Engine) writeStagedFullParse(
 		}
 	}
 	positions := stagedToolCallPositions(msgs)
+	if write != nil && write.CodexForkState != nil {
+		sourcePositions := make(map[string]db.StagedToolCallPosition, len(write.StagedToolKeys))
+		for final, source := range write.StagedToolKeys {
+			sourcePositions[source] = positions[final]
+		}
+		positions = sourcePositions
+	}
 	var closure db.StagedSignalsFunc
 	if !e.disableSignalRecompute {
 		closure = func(verdicts map[string]db.StagedToolVerdict) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
+			if write != nil && write.CodexForkState != nil {
+				finalVerdicts := make(map[string]db.StagedToolVerdict, len(verdicts))
+				for final, source := range write.StagedToolKeys {
+					if verdict, ok := verdicts[source]; ok {
+						finalVerdicts[final] = verdict
+					}
+				}
+				verdicts = finalVerdicts
+			}
 			update, findings, err := e.computeFullSignalsAndSecretsForStorage(s, msgs, verdicts)
 			if err != nil {
 				return db.SessionSignalUpdate{}, nil, err
@@ -19378,6 +19431,9 @@ func (e *Engine) writeStagedFullParse(
 	cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
 		pw.sess.File.Path, pw,
 	)
+	if pw.sess.CodexFork != nil {
+		cp, blobs = nil, nil
+	}
 	if cpErr != nil {
 		log.Printf("checkpoint build %s: %v", pw.sess.File.Path, cpErr)
 		cp, blobs = nil, nil
@@ -19445,7 +19501,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if pw.staged != nil && provenance != nil {
+		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
 			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
 			if err != nil {
 				if isIntentionalSessionSkip(err) {
@@ -19562,7 +19618,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		snapshotProject := pw.sess.Project
 		var checkpoint *db.ParserCheckpoint
 		var checkpointBlobs *db.ParserCheckpointBlobs
-		if isCodexFormatAgent(pw.sess.Agent) {
+		if isCodexFormatAgent(pw.sess.Agent) && pw.sess.CodexFork == nil {
 			var checkpointErr error
 			checkpoint, checkpointBlobs, checkpointErr = e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
 			if checkpointErr != nil {
@@ -19581,6 +19637,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			return outcome
 		}
 		writes = append(writes, db.SessionBatchWrite{
+			CodexForkState:    prepared.codexForkState,
+			StagedToolKeys:    prepared.stagedToolKeys,
 			ArchiveProvenance: provenance,
 			Session:           s,
 			Messages:          msgs,
@@ -20130,7 +20188,7 @@ func remoteNameFromGitConfigSection(section string) string {
 func shouldReplaceFullParseMessages(
 	pw pendingWrite, forceReplace, stale, revivingSourceMissing bool,
 ) bool {
-	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
+	return forceReplace || pw.forceReplace || pw.needsRetry || pw.sess.CodexFork != nil || stale ||
 		revivingSourceMissing ||
 		isCodexFormatAgent(pw.sess.Agent) ||
 		// Kiro full parses rebuild the complete accepted message projection;
@@ -20538,7 +20596,7 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err != nil {
 		return err
 	}
-	if claudeSources != nil {
+	if claudeSources != nil || pw.sess.CodexFork != nil {
 		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true)
 		if outcome.err != nil {
 			return outcome.err
@@ -22019,7 +22077,7 @@ func (e *Engine) processAndWriteSessionFile(
 			res.needsRetryForSession(pr.Session.ID)
 		// Match the batch path: these fallback parses cannot replace saved
 		// history until the higher-fidelity source is available.
-		if (isCodexFormatAgent(file.Agent) || file.Agent == parser.AgentAntigravityCLI) && res.needsRetryForSession(pr.Session.ID) {
+		if (file.Agent == parser.AgentAntigravityCLI || (isCodexFormatAgent(file.Agent) && pr.Session.CodexFork == nil)) && res.needsRetryForSession(pr.Session.ID) {
 			stored, readErr := savedHistory(ctx, e.db, resultIDs[i])
 			if readErr != nil {
 				return false, sessionsChanged, fmt.Errorf("read deferred session %s: %w", resultIDs[i], readErr)

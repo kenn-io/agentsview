@@ -72,7 +72,7 @@ func TestRebuildKeepsHealthyHistoryWhenCodexParentIsMissing(t *testing.T) {
 	assert.Equal(t, []string{"healthy answer"}, messageContents(t, database, "codex:"+healthy))
 	assert.Equal(t, []string{"parent answer"}, messageContents(t, database, "codex:"+parent))
 	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
-	assert.Equal(t, 17, database.GetSessionDataVersion(t.Context(), "codex:"+child))
+	assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
 	assert.Equal(t, []string{childPath}, retry.Paths)
 	assert.True(t, engine.StartupReconciled())
 	usageBefore, err := database.GetSessionUsage(t.Context(), "codex:"+child, true)
@@ -91,8 +91,8 @@ func TestRebuildKeepsHealthyHistoryWhenCodexParentIsMissing(t *testing.T) {
 	))
 	again := engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 1, again.Deferred)
-	assert.Equal(t, 17, database.GetSessionDataVersion(t.Context(), "codex:"+child))
-	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
+	assert.Equal(t, []string{"child answer", "later answer"}, messageContents(t, database, "codex:"+child))
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o600))
 	recovered := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, recovered.Deferred)
@@ -136,7 +136,7 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 			usage, err := database.GetSessionUsage(t.Context(), "codex:"+child, true)
 			require.NoError(t, err)
 			require.NotNil(t, usage)
-			assert.Equal(t, 45, usage.TotalOutputTokens)
+			assert.Zero(t, usage.TotalOutputTokens)
 			assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
 			engine.Close()
 			engine = NewEngine(t.Context(), database, cfg)
@@ -149,19 +149,19 @@ func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
 				testjsonl.CodexTokenCountJSON(timestamp, 20, 7, 0),
 			))
 			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
-			// Without the parent, the stored history cannot be replaced safely.
-			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			// Available appends stay visible while the parent is unresolved.
+			assert.Equal(t, []string{"replayed answer", "child answer", "later answer"}, messageContents(t, database, "codex:"+child))
 			require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+child))
-			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			assert.Equal(t, []string{"replayed answer", "child answer", "later answer"}, messageContents(t, database, "codex:"+child))
 			usage, err = database.GetSessionUsage(t.Context(), "codex:"+child, true)
 			require.NoError(t, err)
 			require.NotNil(t, usage)
-			assert.Equal(t, 45, usage.TotalOutputTokens)
+			assert.Zero(t, usage.TotalOutputTokens)
 			engine.Close()
 			engine = NewEngine(t.Context(), database, cfg)
 			t.Cleanup(engine.Close)
 			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
-			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			assert.Equal(t, []string{"replayed answer", "child answer", "later answer"}, messageContents(t, database, "codex:"+child))
 			require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
@@ -334,7 +334,7 @@ func TestStartupWithMissingParentReportsRetryingCompletion(t *testing.T) {
 }
 
 // A row without messages can still hold saved usage. A fork fallback must not
-// replace that usage while its parent is missing.
+// replace that usage while its parent is missing, but available messages import.
 func TestMissingParentForkKeepsMessagelessRowWithUsage(t *testing.T) {
 	const parent = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 	const child = "ffffffff-ffff-4fff-8fff-ffffffffffff"
@@ -358,7 +358,7 @@ func TestMissingParentForkKeepsMessagelessRowWithUsage(t *testing.T) {
 	stats := engine.SyncAll(t.Context(), nil)
 
 	assert.Equal(t, 1, stats.Deferred)
-	assert.Empty(t, messageContents(t, database, id))
+	assert.Equal(t, []string{"available child history"}, messageContents(t, database, id))
 	events, err := database.GetUsageEvents(t.Context(), id)
 	require.NoError(t, err)
 	require.Len(t, events, 1)

@@ -63,6 +63,8 @@ type codexSessionIndexEntry struct {
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
 type codexSessionBuilder struct {
+	sourceLine   int
+	sourceTurnID string
 	codexCursorState
 	agent       AgentType
 	incremental bool
@@ -224,6 +226,7 @@ type codexToolCallRef struct {
 }
 
 type codexPendingEvent struct {
+	origin    CodexMessageOrigin
 	agentID   string
 	source    string
 	status    string
@@ -375,6 +378,10 @@ func (b *codexSessionBuilder) refreshPendingCallPositions() {
 func (b *codexSessionBuilder) processLine(ctx context.Context,
 	line string,
 ) (skip bool, err error) {
+	b.sourceLine++
+	if gjson.Get(line, "type").Str == codexTypeTurnContext {
+		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
+	}
 	tsStr := gjson.Get(line, "timestamp").Str
 	ts := parseTimestamp(tsStr)
 	if ts.IsZero() {
@@ -554,6 +561,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 
 	msg := ParsedMessage{
+		CodexOrigin:   CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID},
 		Role:          RoleType(role),
 		Content:       content,
 		DialogueText:  new(content),
@@ -587,6 +595,7 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	b.committedUsageTarget = nil
 	b.committedUsageBlockedByUser = true
 	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:   CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID},
 		Role:          RoleUser,
 		Content:       content,
 		DialogueText:  new(content),
@@ -795,6 +804,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID},
 		Role:            RoleAssistant,
 		Content:         content,
 		DialogueText:    new(""),
@@ -849,6 +859,7 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 	// The viewer hides tool markers, so the call shows once, as its block.
 	content := formatToolHeader("Tool", generatedImageCallName)
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID},
 		Role:            RoleAssistant,
 		Content:         content,
 		DialogueText:    new(""),
@@ -993,6 +1004,7 @@ func (b *codexSessionBuilder) handleSubagentNotification(ctx context.Context,
 
 	b.pendingAgentEvents[agentID] = append(
 		b.pendingAgentEvents[agentID], codexPendingEvent{
+			origin:    CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID},
 			agentID:   agentID,
 			source:    "subagent_notification",
 			status:    statusName,
@@ -1067,6 +1079,7 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 				}
 				key := agentID + "\x00" + ev.status + "\x00" + ev.text
 				b.sink.InsertOrphanMessage(key, ParsedMessage{
+					CodexOrigin:   ev.origin,
 					Ordinal:       ev.ordinal,
 					Role:          RoleUser,
 					Content:       ev.text,
@@ -2214,6 +2227,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		},
 	}
 
+	if b.forkGate.lineagePositive {
+		sess.CodexFork = &CodexForkInfo{ParentID: b.forkGate.parentSessionID, Resolved: b.forkGate.resolvedOnce, ParentTurns: b.parentTurnIDs}
+	}
 	if err := accumulateMessageTokenUsageContext(ctx, sess, msgs); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}

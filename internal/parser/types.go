@@ -1471,8 +1471,23 @@ type FileInfo struct {
 	ChangeTime int64
 }
 
+// CodexForkInfo records the replay evidence from one complete source parse.
+type CodexForkInfo struct {
+	ParentID    string
+	Resolved    bool
+	ParentTurns map[string]struct{}
+}
+
+// CodexMessageOrigin identifies a record within its source rollout.
+// Line counts valid JSON records, before replay filtering.
+type CodexMessageOrigin struct {
+	Line   int
+	TurnID string
+}
+
 // ParsedSession holds session metadata extracted from a JSONL file.
 type ParsedSession struct {
+	CodexFork  *CodexForkInfo `json:"-"`
 	ID         string
 	Project    string
 	Machine    string
@@ -1662,6 +1677,7 @@ type ParsedToolResultEvent struct {
 
 // ParsedMessage holds a single extracted message.
 type ParsedMessage struct {
+	CodexOrigin   CodexMessageOrigin `json:"-"`
 	Ordinal       int
 	Role          RoleType
 	Content       string

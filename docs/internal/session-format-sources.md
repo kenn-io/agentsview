@@ -774,11 +774,20 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade` cover the link and the
   upgrade, using the shape reported in
   [issue #2468](https://github.com/kenn-io/agentsview/issues/2468).
-  Rechecked the pinned fork writer on 2026-11-05: copied forks retain their
-  inherited prefix. If the parent is unavailable, rebuilds preserve an existing
-  child or retain a new child's full transcript with a retry marker; its usage
-  may include copied parent usage until the parent can be read. Synthetic
-  `TestRebuildMissingParentRemainsRetryableAcrossRestart` covers recovery.
+  Rechecked the pinned fork writer and subagent snapshot path on 2026-11-05:
+  copied forks retain their inherited prefix. Synthetic fixtures reproduce
+  frozen appends and copied usage after PR #2698. Fork writes now commit
+  replay membership and message origins with the transcript. Available messages
+  keep updating when the parent is missing. Previously observed parent turns
+  filter replay; otherwise sync warns about possible inherited messages and
+  withholds unverified token usage. Parent recovery removes confirmed replay and
+  restores child usage. `TestRebuildMissingParentRemainsRetryableAcrossRestart`,
+  `TestMissingParentForkPreservesShortenedHistoryAcrossReopen`, and
+  `TestCodexForkProvenanceFailureRollsBackContent` cover delayed recovery,
+  permanently unresolved retries, real database reopen, source truncation,
+  retained tool results and usage, staged publication, and atomic rollback.
+  `TestMissingParentForkPreservesLegacySourceHistory` also retains history
+  stored under the pre-version-40 source identity.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
@@ -928,7 +937,8 @@ fixtures retain this field; missing identities remain source-local.
   Reverified cold and warm inventories through denied and restored directory
   access on 2026-10-09. If the original exists but an archived parent page is
   missing, copied turns from that page can still be imported and counted
-  again; turn IDs are read from files, not retained in the archive. When
+  again if those turns were never observed. Fork provenance now retains
+  previously observed parent turn IDs across source removal. When
   upgrading an archive older than data version 131, newly split pages inherit
   the thread's permanent deletion or trash state. Permanent deletions and
   trash retain their whole-thread scope, including pages whose files return at
