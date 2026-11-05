@@ -148,6 +148,24 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// only reloads done sessions written to since their coverage stamp.
 	// Single-goroutine state, no locking needed.
 	pendingFull := true
+	reconcileOwed := true
+	deferOnBattery := func() bool {
+		if s.onBattery == nil || !s.onBattery() {
+			return false
+		}
+		if reconcileOwed {
+			started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
+			if err != nil {
+				log.Printf("extract scheduler: reconciliation failed: %v", err)
+			}
+			if started {
+				startupDone()
+				reconcileOwed = err != nil
+			}
+		}
+		resetTimer(debounceTimer, batteryRecheckInterval)
+		return true
+	}
 
 	for {
 		select {
@@ -156,17 +174,10 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.stop:
 			return
 		case <-s.dirty:
+			reconcileOwed = true
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			if s.onBattery != nil && s.onBattery() {
-				started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
-				if err != nil {
-					log.Printf("extract scheduler: reconciliation failed: %v", err)
-				}
-				if started {
-					startupDone()
-				}
-				resetTimer(debounceTimer, batteryRecheckInterval)
+			if deferOnBattery() {
 				continue
 			}
 			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
@@ -192,6 +203,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// top-up it carried.
 			if err == nil {
 				pendingFull = false
+				reconcileOwed = false
 			}
 		case <-tickC:
 			// A catchup tick also picks up a carried full pass: with the
@@ -199,9 +211,8 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			if s.onBattery != nil && s.onBattery() {
-				pendingFull = pendingFull || full
-				resetTimer(debounceTimer, batteryRecheckInterval)
+			if deferOnBattery() {
+				pendingFull = full
 				continue
 			}
 			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
@@ -214,6 +225,9 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
+				if err == nil {
+					reconcileOwed = false
+				}
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the

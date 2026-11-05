@@ -431,12 +431,43 @@ func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
 		synctest.Sleep(time.Second + 2*batteryRecheckInterval)
 		synctest.Wait()
 		assert.Zero(t, mgr.callCount())
-		assert.Equal(t, []extract.PassOptions{{}, {}, {}}, reconciler.callsSnapshot())
-		assert.EqualValues(t, 3, notified.Load())
+		assert.Equal(t, []extract.PassOptions{{}}, reconciler.callsSnapshot())
+		assert.EqualValues(t, 1, notified.Load())
+		for range 5 {
+			s.Notify()
+		}
+		synctest.Sleep(time.Second)
+		synctest.Wait()
+		assert.Equal(t, []extract.PassOptions{{}, {}}, reconciler.callsSnapshot())
+		assert.EqualValues(t, 2, notified.Load())
 		battery.Store(false)
 		synctest.Sleep(batteryRecheckInterval)
 		synctest.Wait()
 		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
-		assert.EqualValues(t, 4, notified.Load())
+		assert.EqualValues(t, 3, notified.Load())
+	})
+}
+
+func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		idled := make(chan struct{})
+		tracker := server.NewIdleTracker(time.Minute, func() { close(idled) })
+		go tracker.Run(ctx)
+		mgr, reconciler := &fakePassManager{}, &fakePassManager{}
+		s := newExtractScheduler(mgr, 30*time.Second, 10*time.Second, 0, tracker)
+		s.onBattery, s.onBatteryMgr = func() bool { return true }, reconciler
+		go s.Run(ctx)
+		defer s.Stop()
+		synctest.Sleep(2 * time.Minute)
+		synctest.Wait()
+		assert.Zero(t, mgr.callCount())
+		assert.Equal(t, []extract.PassOptions{{}}, reconciler.callsSnapshot())
+		select {
+		case <-idled:
+		default:
+			assert.Fail(t, "battery reconciliation kept the startup lease")
+		}
 	})
 }

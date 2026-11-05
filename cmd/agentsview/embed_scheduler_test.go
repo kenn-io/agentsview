@@ -1190,7 +1190,12 @@ func TestMessageSchedulerQueuesBuildOnSessionDeletion(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, vs.Scheduler)
 			t.Cleanup(func() { require.NoError(t, vs.Close()) })
-			require.Empty(t, vs.Scheduler.dirty, "setup must not queue a message build")
+			// Consume the startup signal to isolate the deletion notification.
+			select {
+			case release := <-vs.Scheduler.dirty:
+				release()
+			default:
+			}
 
 			srv := server.New(cfg, database, nil, vs.ServerOpts...)
 			ts := startTestServer(t, ln, srv.Handler())
@@ -1968,4 +1973,67 @@ func TestEmbedSchedulerReleasesIdleLeaseOnBattery(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestEmbedSchedulerBatteryBackstopClearsRetryTimer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakeEmbedManager{}
+		var battery atomic.Bool
+		battery.Store(true)
+		s := newEmbedScheduler(mgr, time.Second, 45*time.Second, false, nil)
+		s.onBattery = battery.Load
+		go s.Run(t.Context())
+		defer s.Stop()
+		synctest.Sleep(50 * time.Second)
+		synctest.Wait()
+		assert.Zero(t, mgr.callCount())
+		battery.Store(false)
+		synctest.Sleep(80 * time.Second)
+		synctest.Wait()
+		assert.Equal(t, []vector.BuildRequest{{Backstop: true}}, mgr.callsSnapshot())
+	})
+}
+
+func TestMessageSchedulerStartupBuildsOfflineImportedCorpus(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "offline", "project", []db.Message{
+		dbtest.UserMsg("offline", 0, "Embed this message after restarting the daemon."),
+	})
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	cfg := vectorTestConfig(dataDir)
+	cfg.Vector.Embed.Recall = false
+	embeddingsServer := cfg.Vector.Embeddings.Servers["local"]
+	embeddingsServer.Endpoint = stub.URL + "/v1"
+	cfg.Vector.Embeddings.Servers["local"] = embeddingsServer
+	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+	require.NoError(t, err)
+	defer vs.Close()
+	vs.Scheduler.debounce = 10 * time.Millisecond
+	go vs.Scheduler.Run(t.Context())
+	defer vs.Scheduler.Stop()
+	waitForSchedulerCondition(t, func() bool {
+		generations, listErr := directListGenerations(t.Context(), cfg, vector.MessageIndexSpec())
+		return listErr == nil && len(generations) == 1 && generations[0].Embedded == 1
+	}, "daemon startup did not embed an offline message")
+}
+
+func TestMessageSchedulerStartupBuildsRequireRunAfterSync(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dataDir := t.TempDir()
+		database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+		cfg := vectorTestConfig(dataDir)
+		cfg.Vector.Embed.RunAfterSync = new(false)
+		vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+		require.NoError(t, err)
+		defer vs.Close()
+		mgr := &fakeEmbedManager{}
+		vs.Scheduler.mgr = mgr
+		go vs.Scheduler.Run(t.Context())
+		defer vs.Scheduler.Stop()
+		synctest.Sleep(time.Minute)
+		synctest.Wait()
+		assert.Zero(t, mgr.callCount())
+	})
 }

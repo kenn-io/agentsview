@@ -248,6 +248,10 @@ passes, and a periodic backstop revisits sessions whose transcripts changed
 after extraction. Entries produced this way are stored `unreviewed_auto` — they
 remain outside trusted Recall until promoted.
 
+On battery, scheduled model passes wait until AC power returns, resuming within
+about a minute or at the next daemon start. Retraction of entries from trashed,
+automated, or secret-bearing sessions continues on battery.
+
 ```toml
 [recall.extract]
 enabled = true

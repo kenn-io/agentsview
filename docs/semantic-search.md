@@ -98,8 +98,7 @@ Automatic Recall embedding has a separate, default-off consent gate. Setting
 periodic backstops to send accepted Recall entry titles, bodies, and triggers to
 the configured embeddings endpoint. `run_after_sync` controls only session
 archive sync notifications; it does not suppress Recall startup or Recall
-corpus-mutation refreshes after that consent is enabled. On battery, the daemon
-waits for AC power before building; a manual build still runs. A manual
+corpus-mutation refreshes after that consent is enabled. A manual
 `agentsview index embeddings build --store recall` remains available without
 this setting because invoking that command is an explicit one-time request.
 Recall vector and hybrid queries fail closed as unavailable once the served
@@ -364,16 +363,21 @@ only when enabled): reduced vectors are renormalized prefixes, not
 byte-identical to native output, so enabling it — or changing `dimension` —
 makes the existing index stale and re-embeds the archive on the next build.
 
-The first scheduled build that `run_after_sync` triggers after enabling
-`[vector]` embeds the entire existing archive, not just deltas, since the mirror
-starts out empty and every document counts as pending. For a hosted embeddings
-API that is a real cost event, so run `agentsview index embeddings build`
-directly at a time of your choosing if you want to control when that initial
-cost lands, rather than letting the debounced after-sync scheduler trigger it on
-its own. The same cost event can recur on upgrade: when a new agentsview version
-changes the index's internal mirror schema or document-identity scheme, the next
-writable open resets the mirror, and with `run_after_sync = true` the next sync
-automatically re-embeds the entire archive against the configured endpoint.
+With `run_after_sync` enabled, the daemon queues a build at startup and after
+syncs. Scheduled builds wait on battery and resume within about a minute of AC
+power, or at the next daemon start if it exited while waiting; manual builds and
+`agentsview replica pg push --watch --embed` still run on battery.
+
+The first scheduled build after enabling `[vector]` embeds the entire existing
+archive, not just deltas, since the mirror starts out empty and every document
+counts as pending. For a hosted embeddings API that is a real cost event, so run
+`agentsview index embeddings build` directly at a time of your choosing if you
+want to control when that initial cost lands, rather than letting daemon startup
+or a sync trigger it. The same cost event can recur on upgrade: when a new
+agentsview version changes the index's internal mirror schema or
+document-identity scheme, the next writable open resets the mirror, and with
+`run_after_sync = true` the next scheduled build automatically re-embeds the
+entire archive against the configured endpoint.
 
 By default, `include_automated = false` keeps automated sessions (e.g. roborev)
 out of the embedding index entirely, mirroring session search's default
@@ -986,7 +990,7 @@ both) to an embeddings server that serves the published model. `pg serve` and
 fingerprint. A `[vector]` section in `config.toml` can't be combined with the
 `AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If PostgreSQL holds several
 published recipes, adoption refuses to guess and semantic search reports the
-count; stop the hub's `pg push --watch --embed`, remove obsolete generations
+count; stop the hub's `agentsview replica pg push --watch --embed`, remove obsolete generations
 with `agentsview replica pg vectors drop <id>`, then start the watcher and
 restart `pg serve`. Generations pushed before recipe publication have no recipe
 until a configured machine pushes them again. If `pg serve` starts before a

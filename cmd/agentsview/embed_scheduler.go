@@ -323,8 +323,8 @@ func (s *embedScheduler) run(
 				// will re-arm the timer when the loop receives it.
 				pendingRelease()
 				pendingRelease = nil
-				stopTimer(debounceTimer)
 			}
+			stopTimer(debounceTimer)
 		}
 	}
 }
@@ -805,6 +805,8 @@ func setupVectorServing(
 		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
 	}
 	if cfg.Vector.Embed.RunAfterSyncEnabled() {
+		// Re-queue work deferred past the previous daemon's idle exit.
+		scheduler.Notify()
 		// A permanent delete must reach the message mirror's journal refresh without waiting for a sync.
 		serverOpts = append(serverOpts, server.WithSessionMutationNotifier(scheduler.Notify))
 	}
