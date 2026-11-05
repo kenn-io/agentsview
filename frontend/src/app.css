@@ -467,12 +467,6 @@ button:disabled {
   --disabled-edge: var(--border-muted);
 }
 
-/* Light: at 58% the label (Recall's Generate) nearly vanished on white;
-   a step darker still reads as disabled but can be read. */
-:root:not(.dark) {
-  --disabled-ink: color-mix(in srgb, var(--text-muted) 72%, var(--bg-surface));
-}
-
 /* A disabled primary (Save token, Connect on a read-only server) keeps a
    muted accent fill so it still reads as the panel's main action, distinct
    from the empty outline of a disabled secondary. The ink mixes accent with
