@@ -185,8 +185,6 @@ CREATE TABLE usage_rollup_installs (
 );
 CREATE INDEX usage_rollup_installs_changes
     ON usage_rollup_installs (timezone_id, install_revision, source_change_revision);
-CREATE INDEX usage_rollup_installs_authoritative
-    ON usage_rollup_installs (timezone_id) WHERE has_authoritative = 1;
 CREATE TABLE usage_rollup_invalidations (
     timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES usage_cached_sessions(session_id) ON DELETE CASCADE,
@@ -928,7 +926,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        computed_aggregate_count, reported_count, base_request_count,
 		        discarded_snapshot_output_tokens
 		 FROM usage_daily_rollups LIMIT 0`,
-		`SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, matched_pattern, rate_ok, pricing_timestamp, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, web_search_requests, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count, discarded_snapshot_output_tokens FROM usage_day_totals LIMIT 0`,
+		`SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, matched_pattern, rate_ok, pricing_timestamp, row_count, input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals LIMIT 0`,
 		`SELECT rollup_install_id, local_date, model, user_message_count
 		 FROM usage_activity_rollups LIMIT 0`,
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,

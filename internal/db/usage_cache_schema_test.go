@@ -458,6 +458,14 @@ func TestUsageCacheLifecycleFollowsArchiveReopenAndClose(t *testing.T) {
 	require.NoError(t, database.Close())
 	require.Error(t, second.db.PingContext(t.Context()), "archive close must close its cache first")
 
+	database, err = Open(t.Context(), archivePath)
+	require.NoError(t, err)
+	reopenedCache, err := database.usageCache.Generation(t.Context(), databaseID)
+	require.NoError(t, err)
+	require.False(t, reopenedCache.temporary)
+	assert.Equal(t, first.path, reopenedCache.path, "a new archive open must reuse the persistent cache")
+	require.NoError(t, database.Close())
+
 	readOnly, err := OpenReadOnly(t.Context(), archivePath)
 	require.NoError(t, err)
 	readOnlyCache, err := readOnly.usageCache.Generation(

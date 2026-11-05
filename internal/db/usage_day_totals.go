@@ -2,32 +2,16 @@ package db
 
 import (
 	"context"
-	"slices"
+	"database/sql"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-// usageDayTotalsQuery pins totals, exceptional sessions, and session membership
-// to the same verified cache snapshot.
-func (cache *usageCache) usageDayTotalsQuery(ctx context.Context, prepared usagePreparedWindow, filter UsageFilter, resolver *export.PricingResolver) (usageFactsResult, error) {
-	conn, err := cache.db.Conn(ctx)
-	if err != nil {
-		return usageFactsResult{}, err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN`); err != nil {
-		return usageFactsResult{}, err
-	}
-	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`) }()
-	snapshot := prepared.snapshot
-	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
-	timezoneID, err := verifyPreparedUsageRollup(ctx, conn, identity.Key, prepared)
-	if err != nil {
-		return usageFactsResult{}, err
-	}
-	from, to := usageRollupDateBounds(snapshot)
+// readUsageDayTotals reads ordinary totals and prepares the exceptional session
+// metadata for the shared rollup query's exception fold.
+func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
+	from, to := usageRollupDateBounds(*snapshot)
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	where := `s.timezone_id=` + b.Add(timezoneID) + ` AND (` + b.Add(from) + `='' OR s.local_date>=` + b.Add(from) + `) AND (` + b.Add(to) + `='' OR s.local_date<=` + b.Add(to) + `)`
 	where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
@@ -76,9 +60,12 @@ func (cache *usageCache) usageDayTotalsQuery(ctx context.Context, prepared usage
 	if passing == "" {
 		passing = "1=1"
 	}
-	args := append(b.Args(), timezoneID, from, from, to, to)
+	args := append(b.Args(), timezoneID)
+	args = append(args, b.Args()...)
+	args = append(args, from, from, to, to, from, from, to, to)
 	rows, err = conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, (`+passing+`)
-        FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE s.timezone_id=? AND (s.has_authoritative=1 OR s.id IN (
+        FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE s.timezone_id=? AND ((s.has_authoritative=1 AND (`+passing+`) AND s.id IN (
+        SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE (?='' OR r.local_date>=?) AND (?='' OR r.local_date<=?))) OR s.id IN (
         SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE (?='' OR e.local_date>=?) AND (?='' OR e.local_date<=?)))`, args...)
 	if err != nil {
 		return usageFactsResult{}, err
@@ -103,26 +90,11 @@ func (cache *usageCache) usageDayTotalsQuery(ctx context.Context, prepared usage
 	if err := rows.Close(); err != nil {
 		return usageFactsResult{}, err
 	}
-	authoritative, err := readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, true)
+	authoritative, err := readUsageDailyRollups(ctx, conn, timezoneID, *snapshot, filter, true)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
 	result.Groups = append(result.Groups, authoritative.Groups...)
-	exceptions, err := readUsageRollupExceptions(ctx, conn, timezoneID, snapshot, filter)
-	if err != nil {
-		return usageFactsResult{}, err
-	}
-	groups, err := aggregateUsageRollupExceptions(exceptions, snapshot, filter, resolver)
-	if err != nil {
-		return usageFactsResult{}, err
-	}
-	result.Groups = append(result.Groups, groups...)
-	slices.SortFunc(result.Groups, compareUsageFactsGroup)
-	for _, group := range groups {
-		if group.SessionID != "" {
-			result.MatchingSessions[group.SessionID] = UsageSessionInfo{Project: group.Project, Agent: group.Agent}
-		}
-	}
 	if !filter.SkipSessionCounts {
 		b = NewQueryBuilder(SQLiteQueryDialect(), 0)
 		where = `s.timezone_id=` + b.Add(timezoneID) + ` AND (` + b.Add(from) + `='' OR r.local_date>=` + b.Add(from) + `) AND (` + b.Add(to) + `='' OR r.local_date<=` + b.Add(to) + `)`
@@ -148,9 +120,6 @@ func (cache *usageCache) usageDayTotalsQuery(ctx context.Context, prepared usage
 		if err := rows.Close(); err != nil {
 			return usageFactsResult{}, err
 		}
-	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return usageFactsResult{}, err
 	}
 	return result, nil
 }

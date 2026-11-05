@@ -168,7 +168,7 @@ func usageDayTotalsPageFilters(allHistory bool) []UsageFilter {
 	summary.Breakdowns = true
 	ranking.SkipSessionCounts = true
 	left.Agent, right.Agent = "codex", "claude"
-	prior.From, prior.To, prior.SkipSessionCounts = "2026-07-28", "2026-08-03", true
+	prior.From, prior.To = "2026-07-28", "2026-08-03"
 	return []UsageFilter{summary, ranking, left, right, prior}
 }
 

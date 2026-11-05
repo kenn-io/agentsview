@@ -78,6 +78,29 @@ func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
 	want, err := database.getDailyUsageLegacy(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
+	for _, tc := range []struct {
+		filter UsageFilter
+		owners []string
+	}{
+		{UsageFilter{From: "2026-08-05", To: "2026-08-05", Timezone: "UTC"}, nil},
+		{UsageFilter{From: "2026-08-03", To: "2026-08-03", Timezone: "UTC", Agent: "codex"}, []string{"duplicate-a", "duplicate-b"}},
+	} {
+		prepared, err := database.prepareUsageWindow(t.Context(), tc.filter, usageQueryKindDayTotals, true, nil)
+		require.NoError(t, err)
+		conn, err := cache.db.Conn(t.Context())
+		require.NoError(t, err)
+		identity := usageTimezoneIdentityFor(prepared.snapshot.location, prepared.snapshot.Intervals)
+		timezoneID, err := verifyPreparedUsageRollup(t.Context(), conn, identity.Key, prepared)
+		require.NoError(t, err)
+		_, err = readUsageDayTotals(t.Context(), conn, timezoneID, &prepared.snapshot, tc.filter)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		var owners []string
+		for _, session := range prepared.snapshot.Sessions {
+			owners = append(owners, session.ID)
+		}
+		assert.ElementsMatch(t, tc.owners, owners, "load window exception owners, leaving unrelated authoritative sessions unloaded")
+	}
 }
 
 func TestUsageDayTotalsInvalidation(t *testing.T) {

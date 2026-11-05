@@ -85,8 +85,12 @@ func (cache *usageCache) usageRollupQuery(
 	if err != nil {
 		return usageFactsResult{}, err
 	}
-	result, err := readUsageDailyRollups(
-		ctx, conn, timezoneID, snapshot, filter, false)
+	var result usageFactsResult
+	if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
+		result, err = readUsageDayTotals(ctx, conn, timezoneID, &snapshot, filter)
+	} else {
+		result, err = readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, false)
+	}
 	if err != nil {
 		return usageFactsResult{}, err
 	}
