@@ -828,6 +828,54 @@ func TestCommitLinkProjectSurvivesMoveDeletionAndResync(t *testing.T) {
 	assert.Equal(t, "abc1234", retained[0].SHA)
 }
 
+func TestTrailerCommitTranscriptPrefix(t *testing.T) {
+	const firstSHA = "abc1234000000000000000000000000000000000"
+	const secondSHA = "abc1234111111111111111111111111111111111"
+	for _, tt := range []struct {
+		name      string
+		collision bool
+		wantSHAs  []string
+	}{
+		{"unique", false, []string{"abc1234"}},
+		{"collision", true, []string{"abc1234", firstSHA, secondSHA}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "editor", "project-a")
+			insertMessages(t, d, commitMessages("editor", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
+			insertSession(t, d, "other", "project-a")
+			owners := []string{"claude:other"}
+			if tt.collision {
+				owners = append(owners, "claude:editor")
+			}
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{
+				{SHA: firstSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero},
+				{SHA: secondSHA, Sessions: owners, CommittedAt: tsZero},
+			}))
+
+			session, err := d.SessionCommitLinks(t.Context(), "editor")
+			require.NoError(t, err)
+			var shas []string
+			for _, link := range session.Commits {
+				shas = append(shas, link.SHA)
+			}
+			assert.ElementsMatch(t, tt.wantSHAs, shas)
+
+			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+			require.NoError(t, err)
+			require.Len(t, found.Commits, 1)
+			shas = nil
+			for _, link := range found.Commits[0].Links {
+				if link.SessionID == "editor" {
+					shas = append(shas, link.SHA)
+					assert.Equal(t, tt.collision, link.Ambiguous)
+				}
+			}
+			assert.ElementsMatch(t, tt.wantSHAs, shas)
+		})
+	}
+}
+
 func TestTrailerCommitHostOwners(t *testing.T) {
 	for _, tt := range []struct {
 		name, trailer string

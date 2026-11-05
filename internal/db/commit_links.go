@@ -558,7 +558,8 @@ const commitLinkSelect = `WITH trailer_owners AS (` + trailerOwnersSelect + `),
  COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=t.owner_id
  AND julianday(m.timestamp)<=julianday(t.committed_at) ORDER BY m.ordinal DESC LIMIT 1),-1),
  -1,'',t.committed_at,t.project,'trailer' FROM resolved_trailers t
- WHERE t.owner_rank=1 AND NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.owner_id AND substr(t.sha,1,length(c.sha))=c.sha)
+ WHERE t.owner_rank=1 AND NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.owner_id AND substr(t.sha,1,length(c.sha))=c.sha
+ AND (SELECT count(*) FROM resolved_trailers matching WHERE matching.owner_id=t.owner_id AND matching.owner_rank=1 AND substr(matching.sha,1,length(c.sha))=c.sha)=1)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
