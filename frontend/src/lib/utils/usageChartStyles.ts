@@ -1,6 +1,7 @@
 import type { UsageSummaryResponse } from "../api/generated/index";
 import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
 import { orderedChartSeriesStyleMap, type ChartPalette } from "./chartPalette.js";
+import { calmSeriesColor } from "./calmSeriesColor.js";
 
 export interface UsageChartStyleMaps {
   project: ReadonlyMap<string, SeriesStyle>;
@@ -17,6 +18,41 @@ function rankedIds(costs: ReadonlyMap<string, number>): string[] {
     .map(([id]) => id);
 }
 
+export interface UsageChartColorOptions {
+  /** Turns a palette color such as `var(--accent-blue)` into the current
+   * theme's hex so it can be calmed. Without it only hex colors are calmed. */
+  resolveColor?: (color: string) => string;
+  /** False keeps the palette's exact colors, as high contrast mode needs. */
+  calm?: boolean;
+}
+
+const MUTED = "var(--text-muted)";
+
+function calmColor(color: string, resolveColor?: (color: string) => string): string {
+  if (color === MUTED) return color;
+  const resolved = resolveColor?.(color) || color;
+  const calmed = calmSeriesColor(resolved);
+  return calmed === resolved ? color : calmed;
+}
+
+// Usage charts fill large areas, so their series colors are calmed one step.
+// The color-blind palette keeps its exact colors, which were chosen as a set
+// for color-vision separation.
+function usageStyleMap(
+  ids: readonly string[],
+  palette: ChartPalette,
+  options: UsageChartColorOptions,
+): ReadonlyMap<string, SeriesStyle> {
+  const styles = orderedChartSeriesStyleMap(ids, palette);
+  if (palette === "colorblind" || options.calm === false) return styles;
+  return new Map(
+    [...styles].map(([id, style]) => [
+      id,
+      { ...style, color: calmColor(style.color, options.resolveColor) },
+    ]),
+  );
+}
+
 function addCost(costs: Map<string, number>, id: string, microdollars: number) {
   costs.set(id, (costs.get(id) ?? 0) + microdollars);
 }
@@ -24,6 +60,7 @@ function addCost(costs: Map<string, number>, id: string, microdollars: number) {
 export function usageChartStyleMaps(
   summary: UsageSummaryResponse | null,
   palette: ChartPalette,
+  options: UsageChartColorOptions = {},
 ): UsageChartStyleMaps {
   const projects = new Map<string, number>();
   const models = new Map<string, number>();
@@ -59,8 +96,8 @@ export function usageChartStyleMaps(
   for (const [id, cost] of dailyAgents) agents.set(id, cost);
 
   return {
-    project: orderedChartSeriesStyleMap(rankedIds(projects), palette),
-    model: orderedChartSeriesStyleMap(rankedIds(models), palette),
-    agent: orderedChartSeriesStyleMap(rankedIds(agents), palette),
+    project: usageStyleMap(rankedIds(projects), palette, options),
+    model: usageStyleMap(rankedIds(models), palette, options),
+    agent: usageStyleMap(rankedIds(agents), palette, options),
   };
 }

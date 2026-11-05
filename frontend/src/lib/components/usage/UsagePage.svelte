@@ -57,16 +57,21 @@
   } from "../../stores/yokedDates.svelte.js";
   import { m } from "../../i18n/index.js";
   import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
+  import { resolveRootColor } from "../../utils/calmSeriesColor.js";
+  import { ui } from "../../stores/ui.svelte.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
 
-  const chartStyleMaps = $derived(
-    usageChartStyleMaps(
-      usage.colorSummary,
-      settings.chartPalette,
-    ),
-  );
+  // Series colors are calmed per theme, so reading the theme re-resolves
+  // the palette variables when it changes. High contrast keeps exact colors.
+  const chartStyleMaps = $derived.by(() => {
+    void ui.theme;
+    return usageChartStyleMaps(usage.colorSummary, settings.chartPalette, {
+      resolveColor: resolveRootColor,
+      calm: !ui.highContrast,
+    });
+  });
 
   // Keep projects already returned by the summary so a project remains
   // available after filtering removes it or the page is remounted.

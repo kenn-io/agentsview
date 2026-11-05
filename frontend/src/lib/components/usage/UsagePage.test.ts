@@ -742,8 +742,8 @@ describe("UsagePage refresh behavior", () => {
     settings.chartPalette = "matplotlib";
     await tick();
 
-    expect(firstMark()?.getAttribute("fill")).toBe("#1f77b4");
-    expect(firstDot()?.style.background).toBe("rgb(31, 119, 180)");
+    expect(firstMark()?.getAttribute("fill")).toBe("#3977a7");
+    expect(firstDot()?.style.background).toBe("rgb(57, 119, 167)");
   });
 
   it("loads agent metadata on mount for the Agent dropdown", async () => {

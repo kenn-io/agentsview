@@ -394,15 +394,13 @@
               class:patterned={row.style.fill !== "solid"}
               style="background: {row.swatch}"
             ></span>
-            <div class="list-info">
-              <span class="list-label">{row.label}</span>
-              <div class="list-bar-track">
-                <div
-                  class="list-bar-fill"
-                  style="width: {row.planOnly ? 0 : Math.max(row.pct * 100, 1)}%;
-                         background: {row.swatch};"
-                ></div>
-              </div>
+            <span class="list-label">{row.label}</span>
+            <div class="list-bar-track">
+              <div
+                class="list-bar-fill"
+                style="width: {row.planOnly ? 0 : Math.max(row.pct * 100, 1)}%;
+                       background: {row.swatch};"
+              ></div>
             </div>
             <span class="list-pct">
               {row.planOnly ? "" : `${(row.pct * 100).toFixed(1)}%`}
@@ -589,18 +587,23 @@
     color: var(--text-primary);
   }
 
-  /* List view */
+  /* List view: a bounded table so each name, bar, share, and total read
+     as one row instead of spreading across the full panel width. */
   .list-view {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    grid-template-columns: 18px 12px minmax(0, 15rem) minmax(96px, 1fr) auto auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    max-width: 880px;
   }
 
   .list-row {
-    display: flex;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: 8px;
-    padding: 4px 6px;
+    min-height: 26px;
+    padding: 3px 6px;
     border-radius: var(--radius-sm);
     transition: background 0.1s;
   }
@@ -610,7 +613,6 @@
   }
 
   .list-rank {
-    width: 18px;
     text-align: right;
     font-size: 11px;
     font-weight: 600;
@@ -619,22 +621,15 @@
   }
 
   .list-dot {
+    justify-self: center;
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .list-info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
   }
 
   .list-label {
-    font-size: 11px;
+    min-width: 0;
+    font-size: 12px;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
@@ -642,32 +637,32 @@
   }
 
   .list-bar-track {
-    height: 4px;
+    height: 6px;
     background: var(--bg-inset);
-    border-radius: 2px;
+    border-radius: 3px;
     overflow: hidden;
   }
 
   .list-bar-fill {
     height: 100%;
-    border-radius: 2px;
+    border-radius: 3px;
     transition: width 0.3s ease;
   }
 
   .list-pct {
-    flex-shrink: 0;
-    min-width: 36px;
+    min-width: 44px;
     text-align: right;
     font-size: 11px;
+    font-variant-numeric: tabular-nums;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
 
   .list-cost {
-    flex-shrink: 0;
-    min-width: 48px;
+    min-width: 64px;
     text-align: right;
-    font-size: 11px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
     font-weight: 500;
     font-family: var(--font-mono);
     color: var(--accent-blue);

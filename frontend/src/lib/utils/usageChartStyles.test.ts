@@ -75,13 +75,39 @@ function tenModelSummary(
 }
 
 describe("usageChartStyleMaps", () => {
-  it("assigns Matplotlib colors by aggregate cost descending", () => {
+  it("assigns calmed Matplotlib colors by aggregate cost descending", () => {
     const styles = usageChartStyleMaps(tenModelSummary(), "matplotlib").model;
 
     expect(styles.size).toBe(10);
+    // Matplotlib #1f77b4, #aec7e8, and #c5b0d5 with lower chroma.
+    expect(styles.get("model-zulu")?.color).toBe("#3977a7");
+    expect(styles.get("model-india")?.color).toBe("#b3c7e1");
+    expect(styles.get("model-alpha")?.color).toBe("#c3b2d0");
+  });
+
+  it("keeps exact Matplotlib colors when calming is off", () => {
+    const styles = usageChartStyleMaps(tenModelSummary(), "matplotlib", { calm: false }).model;
+
     expect(styles.get("model-zulu")?.color).toBe("#1f77b4");
     expect(styles.get("model-india")?.color).toBe("#aec7e8");
-    expect(styles.get("model-alpha")?.color).toBe("#c5b0d5");
+  });
+
+  it("calms theme variables through the resolver and keeps unresolved ones", () => {
+    const themed = usageChartStyleMaps(tenModelSummary(), "agentsview", {
+      resolveColor: (color) => (color === "var(--accent-blue)" ? "#3b82f6" : color),
+    }).model;
+    const colors = [...themed.values()].map((style) => style.color);
+
+    expect(colors).toContain("#4e85e0");
+    expect(colors).not.toContain("var(--accent-blue)");
+    expect(colors).toContain("var(--accent-purple)");
+  });
+
+  it("keeps the color-blind safe palette exact", () => {
+    const calmed = usageChartStyleMaps(tenModelSummary(), "colorblind").model;
+    const exact = usageChartStyleMaps(tenModelSummary(), "colorblind", { calm: false }).model;
+
+    expect([...calmed.values()]).toEqual([...exact.values()]);
   });
 
   it("keeps Matplotlib colors distinct when a filter exposes more models", () => {

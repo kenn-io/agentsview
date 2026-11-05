@@ -763,8 +763,8 @@ describe("CostTimeSeriesChart", () => {
     const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot")).map(
       (dot) => dot.style.background,
     );
-    expect(paths).toEqual(["#1f77b4", "#ff7f0e"]);
-    expect(dots).toEqual(["rgb(31, 119, 180)", "rgb(255, 127, 14)"]);
+    expect(paths).toEqual(["#3977a7", "#ef8a46"]);
+    expect(dots).toEqual(["rgb(57, 119, 167)", "rgb(239, 138, 70)"]);
     unmount(component);
   });
 });
