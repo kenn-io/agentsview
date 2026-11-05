@@ -3966,6 +3966,11 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		 ON messages(session_id, ordinal) WHERE is_compact_boundary = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sidechain
 		 ON messages(session_id) WHERE is_sidechain = 1`,
+		// Activity reports look back from each interval to the latest
+		// assistant turn with a model. Without this index that search steps
+		// through every earlier message when a transcript records no model.
+		`CREATE INDEX IF NOT EXISTS idx_messages_assistant_model
+		 ON messages(session_id, ordinal) WHERE role = 'assistant' AND model != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
