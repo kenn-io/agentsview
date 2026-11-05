@@ -87,10 +87,11 @@ test.describe("Recent Edits feed", () => {
           return { left: Math.round(r.left), right: Math.round(r.right) };
         }),
       );
+    const label = (column: number) => `.re-list thead th:nth-child(${column}) .kit-th__label`;
     const head = {
-      path: (await edges(".re-head .re-path"))[0]!,
-      count: (await edges(".re-head .re-count"))[0]!,
-      time: (await edges(".re-head .re-time"))[0]!,
+      path: (await edges(label(2)))[0]!,
+      count: (await edges(label(3)))[0]!,
+      time: (await edges(label(4)))[0]!,
     };
     for (const path of await edges(".re-file-row .re-path")) expect(path.left).toBe(head.path.left);
     // Every count, including the six-digit one and the one in the row
@@ -110,12 +111,56 @@ test.describe("Recent Edits feed", () => {
       await page.goto("/recent-edits");
       const path = page.locator(".re-file-row .re-path").first();
       await expect(path).toBeVisible();
-      await expect(page.locator(".re-head")).toBeVisible();
+      await expect(page.locator(".re-list thead")).toBeVisible();
       const widthPx = await path.evaluate((el) => el.getBoundingClientRect().width);
       // Enough for "server/handler.go" in the 12.5px mono face.
       expect(widthPx).toBeGreaterThanOrEqual(130);
     });
   }
+
+  test("columns resize by dragging a header edge and keep their width", async ({ page }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+
+    const layout = () =>
+      page.locator(".re-list").evaluate((list) => ({
+        columns: [...list.querySelectorAll("thead th")].map((th) =>
+          Math.round(th.getBoundingClientRect().width),
+        ),
+        overflow: list.querySelector(".kit-table")!.getBoundingClientRect().width -
+          list.getBoundingClientRect().width,
+        projectClipped: (() => {
+          const head = list.querySelector<HTMLElement>(".re-file-row .re-project-head")!;
+          return head.scrollWidth > head.clientWidth + 1;
+        })(),
+      }));
+    const before = await layout();
+    // The table opens at the list's width, with no sideways scrolling.
+    expect(before.overflow).toBeLessThanOrEqual(2);
+
+    const handle = page.locator(".re-list thead th").first().getByRole("separator");
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 100, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+
+    const widened = await layout();
+    expect(widened.columns[0]).toBeGreaterThanOrEqual(before.columns[0]! + 90);
+    // The long project name was cut at the starting width and shows whole
+    // once the column is wider.
+    expect(before.projectClipped).toBe(true);
+    expect(widened.projectClipped).toBe(false);
+
+    await page.reload();
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const reloaded = await layout();
+    expect(reloaded.columns[0]).toBe(widened.columns[0]);
+    // The file column gives way, so the table still fits.
+    expect(reloaded.overflow).toBeLessThanOrEqual(2);
+  });
 
   test("expand file row and jump to session transcript", async ({ page }) => {
     // Navigate to Recent Edits via its TopBar tab.
