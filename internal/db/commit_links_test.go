@@ -916,6 +916,21 @@ func TestTrailerCommitUpsert(t *testing.T) {
 	}
 }
 
+func TestTrailerCommitStoredAfterPurgeIsNotRetained(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "editor", "project-a")
+	require.NoError(t, d.DeleteSession(t.Context(), "editor"))
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
+	require.NoError(t, err)
+	links, err := d.SessionCommitLinks(t.Context(), "editor")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 1)
+	assert.True(t, links.Commits[0].Missing)
+	rows, err := d.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, rows, "a trailer without project evidence cannot be scoped for publication")
+}
+
 func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
 	const id = "editor"
 	d := testDB(t)

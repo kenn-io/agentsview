@@ -53,6 +53,35 @@ func TestDuckDBCommitLinkParity(t *testing.T) {
 	require.NoError(t, store.Close())
 }
 
+func TestDuckDBTrailerStoredAfterPurgeScope(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts storage.MirrorPushOptions
+	}{
+		{name: "unfiltered"},
+		{name: "include project", opts: storage.MirrorPushOptions{Projects: []string{"project-a"}}},
+		{name: "exclude project", opts: storage.MirrorPushOptions{ExcludeProjects: []string{"project-a"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			local := newLocalDB(t)
+			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "editor", Agent: "claude", Project: "project-a", Machine: "m"}))
+			require.NoError(t, local.DeleteSession(t.Context(), "editor"))
+			const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			_, err := local.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{"claude:editor"}, CommittedAt: "2026-01-01T00:00:00Z"}})
+			require.NoError(t, err)
+			path := filepath.Join(t.TempDir(), "commits.duckdb")
+			_, err = Push(t.Context(), path, local, "m", tt.opts, false, nil)
+			require.NoError(t, err)
+			store := openPushedStore(t, path)
+			defer func() { require.NoError(t, store.Close()) }()
+			links, err := store.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, links.Commits, 1)
+			assert.Empty(t, links.Commits[0].Links)
+		})
+	}
+}
+
 func TestDuckDBRetainedCommitLinkScope(t *testing.T) {
 	for _, force := range []bool{true, false} {
 		name := "full push with deletion before publication"

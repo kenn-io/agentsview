@@ -832,7 +832,7 @@ func (d *DB) RetainedCommitLinkRows(ctx context.Context) ([]CommitLinkRow, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := sessionCommitLinkRows(ctx, tx, owners, "s.id IS NULL")
+	rows, err := sessionCommitLinkRows(ctx, tx, owners, "s.id IS NULL AND (l.source<>'trailer' OR l.project<>'')")
 	if err != nil {
 		return nil, err
 	}
