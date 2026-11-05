@@ -14,7 +14,7 @@ require (
 	github.com/cenkalti/backoff/v7 v7.0.2
 	github.com/coder/websocket v1.8.15
 	github.com/danielgtaylor/huma/v2 v2.40.0
-	github.com/dlclark/regexp2/v2 v2.11.0
+	github.com/dlclark/regexp2/v2 v2.12.0
 	github.com/dmarkham/enumer v1.7.2
 	github.com/doordash-oss/oapi-codegen-dd/v3 v3.76.5
 	github.com/duckdb/duckdb-go/v2 v2.20000.0
