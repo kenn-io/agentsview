@@ -2409,8 +2409,9 @@ sudo sysctl fs.inotify.max_user_watches=524288
 
 ## Memory Behavior
 
-The serve daemon bounds its own memory, so no tuning is required. It installs a
-4 GiB Go soft memory limit, and on Linux it also limits glibc to two malloc
+The serve daemon installs a 4 GiB Go soft memory limit as a backstop so large
+requests run with normal GC pacing. Setting `GOMEMLIMIT` lower trades GC time
+for a smaller heap. On Linux it also limits glibc to two malloc
 arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
 off glibc's dynamic adjustment, which otherwise lets a long-running process stop
 trimming until as much as 64 MiB is free, so memory freed by the SQLite driver
