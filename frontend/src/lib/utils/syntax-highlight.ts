@@ -47,16 +47,17 @@ function getHighlighter(): Promise<HighlighterCore> {
 
   highlighterPromise = (async () => {
     // Grammars do not depend on the core modules, so every chunk loads at once.
-    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme, langModules] =
+    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme, lightTheme, langModules] =
       await Promise.all([
         import("shiki/core"),
         import("shiki/engine/javascript"),
         import("shiki/themes/catppuccin-mocha.mjs"),
+        import("shiki/themes/github-light.mjs"),
         Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load())),
       ]);
 
     const hl = await createHighlighterCore({
-      themes: [theme.default ?? theme],
+      themes: [theme.default ?? theme, lightTheme.default ?? lightTheme],
       langs: langModules.map((m) => m.default),
       engine: createJavaScriptRegexEngine(),
     });
@@ -78,13 +79,28 @@ function resolveLanguage(lang: string): string | null {
   return PRELOADED_LANGS.includes(resolved) ? resolved : null;
 }
 
+export interface HighlightOptions {
+  /**
+   * Also emit github-light token colors as `--shiki-light` (and
+   * `--shiki-light-font-style`) on each token, for a container that is
+   * light in the light theme. The inline color stays catppuccin-mocha, but
+   * its italics move to `--shiki-dark-font-style`, so the container must
+   * apply the font-style variable for the active theme.
+   */
+  lightTheme?: boolean;
+}
+
 /**
  * Highlight `code` for `lang` using Shiki (catppuccin-mocha, structure: "inline").
  * Returns null for unknown languages, over-threshold content, or any error.
  * Callers insert the result via `{@html}` — Shiki escapes the code text itself.
  * Line endings remain text nodes so copying and search retain source offsets.
  */
-export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
+export async function highlightToHtml(
+  code: string,
+  lang: string,
+  options: HighlightOptions = {},
+): Promise<string | null> {
   const resolved = resolveLanguage(lang);
   if (resolved === null) return null;
 
@@ -96,11 +112,19 @@ export async function highlightToHtml(code: string, lang: string): Promise<strin
   try {
     const hl = await getHighlighter();
 
-    const html = hl.codeToHtml(code.replace(/\r\n?/g, "\n"), {
-      lang: resolved,
-      theme: "catppuccin-mocha",
-      structure: "inline",
-    });
+    const source = code.replace(/\r\n?/g, "\n");
+    const html = options.lightTheme
+      ? hl.codeToHtml(source, {
+          lang: resolved,
+          themes: { dark: "catppuccin-mocha", light: "github-light" },
+          defaultColor: "dark",
+          structure: "inline",
+        })
+      : hl.codeToHtml(source, {
+          lang: resolved,
+          theme: "catppuccin-mocha",
+          structure: "inline",
+        });
 
     // Shiki's inline layout emits <br>, which is absent from textContent.
     // Restore source separators in our preformatted code containers. Literal

@@ -168,10 +168,11 @@
     color: var(--slow-fg);
   }
 
-  /* Recall the backend does not offer is a limit, not a failure: a calm
-     warning amber, kept apart from the error color above. */
+  /* Recall the backend does not offer is a limit, not a failure: it keeps
+     the muted state text every unavailable panel uses (Friction findings
+     included). Only a real failure takes the error color above. */
   .recall-unavailable {
-    color: color-mix(in srgb, var(--accent-amber) 70%, var(--text-primary));
+    color: var(--text-muted);
   }
 
   .recall-list {

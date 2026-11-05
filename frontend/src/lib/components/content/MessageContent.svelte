@@ -346,6 +346,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     padding: 10px 16px 12px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
   .message.is-user { border-left: var(--role-user-bar-width) var(--role-user-bar-style); }
+  /* One rail per block: the card's role rail already marks this message,
+     so a tool row inside it drops its own amber rule and reads as a quiet
+     inset. Pattern mode keeps the dashed tool rail, which tells roles
+     apart by line shape. */
+  :global(:root:not([data-message-role-patterns])) .message :global(.tool-block:not(.in-group)) {
+    border-left: none;
+  }
   .message-header { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 6px; }
   .role-icon {
     width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center;

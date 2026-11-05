@@ -35,9 +35,9 @@
       }}
     />
   </div>
-  <p class="setting-hint">{m.settings_tool_result_images_hint()}</p>
+  <p class="setting-hint control-offset">{m.settings_tool_result_images_hint()}</p>
   {#if restartRequired}
-    <p class="setting-hint" role="status" aria-live="polite">
+    <p class="setting-hint control-offset" role="status" aria-live="polite">
       {m.settings_tool_result_images_restart_notice()}
     </p>
   {/if}
@@ -64,6 +64,12 @@
     white-space: nowrap;
   }
 
+  /* Notes about the control sit under it, on the shared control column,
+     as Remote access and GitHub place theirs. */
+  .control-offset {
+    padding-left: calc(var(--setting-label-width, 148px) + 12px);
+  }
+
   .setting-hint {
     margin: 0;
     color: var(--text-muted);
@@ -72,6 +78,10 @@
   }
 
   @media (max-width: 640px) {
+    .control-offset {
+      padding-left: 0;
+    }
+
     .setting-row.option-row {
       flex-direction: column;
       align-items: stretch;

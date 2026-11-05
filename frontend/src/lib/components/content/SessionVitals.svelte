@@ -53,6 +53,8 @@
       .filter((call) => call.duration_ms != null)
       .map((call) => call.category),
   ));
+  let measuredRows = $derived(timing?.by_category.filter((cat) => measuredCategories.has(cat.category)) ?? []);
+  let unmeasuredRows = $derived(timing?.by_category.filter((cat) => !measuredCategories.has(cat.category)) ?? []);
   let toolTimeMeasured = $derived(timing?.tool_call_count === 0 || measuredCategories.size > 0);
   let activityKinds: { kind: ActivityKind; label: string }[] = $derived([
     { kind: "tool", label: m.session_vitals_activity_tool() },
@@ -541,12 +543,9 @@
           {/if}
         </header>
         {#if !categoryFilter}
-          <p class="v-hint">
-            {m.session_vitals_completed_turns_hint()}{#if measuredCategories.size === 0}<span class="v-hint-state">{" · "}{m.session_vitals_not_measured()}</span>{/if}
-          </p>
+          <p class="v-hint">{m.session_vitals_completed_turns_hint()}</p>
         {/if}
-        {#each timing.by_category as cat (cat.category)}
-          {@const isMeasured = measuredCategories.has(cat.category)}
+        {#each measuredRows as cat (cat.category)}
           {@const isActive = categoryFilter === cat.category}
           {@const isDimmed = categoryFilter !== null && !isActive}
           <button
@@ -558,18 +557,33 @@
             type="button"
           >
             <span class="agg-name">{cat.category}</span>
-            <span class="agg-bar" class:unmeasured={!isMeasured}>
+            <span class="agg-bar">
               <span
                 class="agg-fill"
                 style="width: {(cat.duration_ms / Math.max(timing.tool_duration_ms, 1)) * 100}%; background: {categoryToken(cat.category)};"
               ></span>
             </span>
-            <!-- An unmeasured row draws a dashed hairline and a dash; the
-                 section hint says "Not measured" once instead of on every
-                 row. -->
-            <span class="agg-val" class:unmeasured={!isMeasured}>{#if isMeasured}{formatDuration(cat.duration_ms)}{:else}<span aria-hidden="true">—</span><span class="kit-sr-only">{m.session_vitals_not_measured()}</span>{/if}</span>
+            <span class="agg-val">{formatDuration(cat.duration_ms)}</span>
           </button>
         {/each}
+        <!-- Categories without a reading share one muted line instead of a
+             row of dashes each; their names still toggle the filter. -->
+        {#if unmeasuredRows.length > 0}
+          <p class="unmeasured-line">
+            <span class="unmeasured-label">{m.session_vitals_not_measured()}</span>
+            {#each unmeasuredRows as cat (cat.category)}
+              {@const isActive = categoryFilter === cat.category}
+              <button
+                class="unmeasured-cat"
+                class:active={isActive}
+                class:dimmed={categoryFilter !== null && !isActive}
+                style={isActive ? `--ring: ${categoryToken(cat.category)};` : ""}
+                onclick={() => toggleCategory(cat.category)}
+                type="button"
+              >{cat.category}</button>
+            {/each}
+          </p>
+        {/if}
       </section>
     {/if}
 
@@ -870,9 +884,6 @@
     font-size: 11px;
     line-height: 1.4;
   }
-  .v-hint-state {
-    white-space: nowrap;
-  }
   .v-meta.live {
     color: var(--running-fg);
     animation: duration-pulse 1.6s ease-in-out infinite;
@@ -903,8 +914,9 @@
     opacity: 1;
   }
 
-  /* Labels read as sans text; monospace is kept for paths, IDs, and
-     numbers. */
+  /* Labels and values read as sans text: the repository, worktree, and
+     pull requests share one face with the counts below them, so the value
+     column does not switch between mono and sans. */
   .context-label {
     color: var(--text-muted);
     font-size: 11px;
@@ -914,8 +926,8 @@
   .context-value {
     overflow: hidden;
     color: var(--text-primary);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-family: var(--font-sans);
+    font-size: 12px;
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1009,8 +1021,7 @@
   .stat-grid .val.empty { color: var(--text-muted); }
   /* "Not measured" is an absence, not a reading: muted sans text, so it
      does not pass for a value. */
-  .stat-grid .val.unmeasured,
-  .agg-val.unmeasured {
+  .stat-grid .val.unmeasured {
     color: var(--text-muted);
     font-family: var(--font-sans);
     font-weight: 400;
@@ -1088,17 +1099,42 @@
     height: 100%;
     border-radius: 1px;
   }
-  /* An unmeasured row keeps the chart's shape with a dashed hairline where
-     the bar would be, ending at the muted dash in the value column, so the
-     row reads as "no reading" rather than a missing bar. */
-  .agg-bar.unmeasured {
-    height: 0;
-    background: transparent;
-    border-top: 1px dashed color-mix(in srgb, var(--text-muted) 45%, transparent);
-    border-radius: 0;
+  /* Categories with no reading: one muted line, "Not measured" then the
+     category names, which stay filter buttons. */
+  .unmeasured-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 8px;
+    margin: 2px 0 0;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
   }
-  .agg-row:has(.agg-bar.unmeasured) {
-    margin-bottom: 1px;
+  .unmeasured-cat {
+    padding: 0 3px;
+    margin: 0 -3px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.12s, opacity 0.18s, border-color 0.12s;
+  }
+  .unmeasured-cat:hover {
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+    color: var(--text-primary);
+  }
+  .unmeasured-cat.active {
+    background: color-mix(in srgb, var(--ring, transparent) 10%, transparent);
+    border-color: color-mix(in srgb, var(--ring, transparent) 30%, transparent);
+    color: var(--text-primary);
+  }
+  .unmeasured-cat.dimmed {
+    opacity: 0.4;
   }
   .agg-val {
     min-width: 56px;

@@ -111,11 +111,11 @@ describe("SessionVitals", () => {
   });
 
   it.each([
-    { duration: null, label: "Not measured" },
-    { duration: 0, label: "0ms" },
+    { duration: null, label: "Not measured", measured: false },
+    { duration: 0, label: "0ms", measured: true },
   ])(
     "distinguishes $label from missing timing and keeps its category filter",
-    async ({ duration, label }) => {
+    async ({ duration, label, measured }) => {
       const timing = timingWithCall();
       timing.tool_duration_ms = 0;
       timing.turns[0]!.calls[0]!.duration_ms = duration;
@@ -129,11 +129,23 @@ describe("SessionVitals", () => {
       await tick();
 
       expect(document.querySelectorAll(".stat-grid .val")[1]?.textContent?.trim()).toBe(label);
-      const category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
-        (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
-      );
-      // An unmeasured row shows a dash with "Not measured" for screen readers.
-      expect(category?.querySelector(".agg-val")?.textContent).toContain(label);
+      let category: HTMLButtonElement | undefined;
+      if (measured) {
+        category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+          (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
+        );
+        expect(category?.querySelector(".agg-val")?.textContent).toContain(label);
+      } else {
+        // An unmeasured category has no row of its own: it is a name on the
+        // one "Not measured" line.
+        expect(document.querySelectorAll(".agg-row")).toHaveLength(0);
+        const line = document.querySelector(".unmeasured-line");
+        expect(line?.textContent).toContain(label);
+        category = [...line!.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Bash",
+        );
+      }
+      expect(category).not.toBeUndefined();
       category!.click();
       await tick();
       expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
@@ -205,9 +217,10 @@ describe("SessionVitals", () => {
     expect(
       [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
     ).toEqual(["100%", "0%"]);
-    const readCategory = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
-      (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Read",
-    );
+    // Read has no measured call, so it sits on the "Not measured" line.
+    const readCategory = [
+      ...document.querySelectorAll<HTMLButtonElement>(".unmeasured-line button"),
+    ].find((button) => button.textContent?.trim() === "Read");
     expect(readCategory).not.toBeUndefined();
     readCategory!.click();
     await tick();

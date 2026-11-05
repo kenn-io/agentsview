@@ -50,13 +50,20 @@
 
 <style>
   .parallel-group {
-    /* The members drop their own bars, so the rail carries the tool marker. */
-    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
     background: transparent;
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    border-radius: var(--radius-sm);
     margin: 4px 0;
     padding: 0;
     overflow: hidden;
+  }
+  /* A parallel group always sits inside a message card, whose role rail
+     already marks the block. By default the group adds no rule of its own:
+     its members indent under the "parallel" label instead. Pattern mode
+     keeps the dashed tool rail, since it tells roles apart by line shape. */
+  :global(:root:not([data-message-role-patterns])) .pg-members { padding-left: 12px; }
+  :global(:root[data-message-role-patterns]) .parallel-group {
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   }
   /* Same header voice as ToolCallGroup's "3 tool calls": a 12px semibold
      sans label with the count in muted ink beside it. */

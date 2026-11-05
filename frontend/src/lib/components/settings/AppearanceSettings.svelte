@@ -189,13 +189,17 @@
     />
   </div>
 
+  <!-- Every switch sits in the control column with its On/Off state, as
+       High contrast does; the setting's name is the row label. -->
   <div class="setting-row">
+    <span class="setting-label">{m.appearance_render_unknown_xml_blocks()}</span>
     <Toggle
       checked={ui.renderUnknownXmlBlocksAsPreformatted}
       onchange={() => ui.toggleUnknownXmlBlocksAsPreformatted()}
       ariaLabel={m.appearance_render_unknown_xml_blocks()}
-      label={m.appearance_render_unknown_xml_blocks()}
-    />
+    >
+      {ui.renderUnknownXmlBlocksAsPreformatted ? m.appearance_on() : m.appearance_off()}
+    </Toggle>
   </div>
 
   <div class="setting-row column message-colors">
@@ -219,11 +223,16 @@
         {m.appearance_message_colors_reset_all()}
       </Button>
     </div>
-    <Toggle
-      checked={messageColors.patterns}
-      onchange={() => messageColors.setPatterns(!messageColors.patterns)}
-      label={m.appearance_message_colors_patterns()}
-    />
+    <div class="setting-row">
+      <span class="setting-label">{m.appearance_message_colors_patterns()}</span>
+      <Toggle
+        checked={messageColors.patterns}
+        onchange={() => messageColors.setPatterns(!messageColors.patterns)}
+        ariaLabel={m.appearance_message_colors_patterns()}
+      >
+        {messageColors.patterns ? m.appearance_on() : m.appearance_off()}
+      </Toggle>
+    </div>
     <div class="role-colors">
       {#each MESSAGE_ROLES as role (role)}
         {@const custom = messageColors.colors[role]}

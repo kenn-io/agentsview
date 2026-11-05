@@ -4,8 +4,15 @@
   import { yokedDates } from "../../stores/yokedDates.svelte.js";
 </script>
 
-<Toggle
-  checked={yokedDates.enabled}
-  onchange={(checked) => yokedDates.setEnabled(checked)}
-  label={m.settings_date_ranges_link()}
-/>
+<!-- The switch sits in the settings control column with its On/Off
+     state, like every other settings switch. -->
+<div class="setting-row">
+  <span class="setting-label">{m.settings_date_ranges_link()}</span>
+  <Toggle
+    checked={yokedDates.enabled}
+    onchange={(checked) => yokedDates.setEnabled(checked)}
+    ariaLabel={m.settings_date_ranges_link()}
+  >
+    {yokedDates.enabled ? m.appearance_on() : m.appearance_off()}
+  </Toggle>
+</div>

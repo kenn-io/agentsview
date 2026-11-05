@@ -166,7 +166,7 @@
     commandHtml = null;
     if (!highlight) return;
     let cancelled = false;
-    void highlightToHtml(source, "bash").then((html) => {
+    void highlightToHtml(source, "bash", { lightTheme: true }).then((html) => {
       if (!cancelled) commandHtml = html;
     }).catch(() => {
       // Keep the plain command if the optional syntax highlighter fails.
@@ -331,12 +331,6 @@
     margin: 0;
   }
   .tool-block.in-group { margin: 0; border-left: none; border-radius: 0; }
-  /* Light theme: a low-chroma warm wash over the tool surface, so tool rows
-     group apart from white prose cards and the near-white page. It mixes in
-     the tool accent, so a custom tool color carries through. */
-  :global(:root:not(.dark):not(.high-contrast)) .tool-block {
-    background: color-mix(in srgb, var(--role-tool-accent) 3%, var(--tool-bg));
-  }
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
   .tool-header {
@@ -390,9 +384,16 @@
   .show-more-btn:hover { background: var(--bg-surface-hover); }
   .tool-content { padding: 8px 14px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); line-height: 1.5; overflow-x: auto; border-top: 1px solid var(--border-muted); }
   .tool-command { background: var(--code-bg); color: var(--code-text); }
-  /* The echoed command is a dark code block with syntax colors in both
-     themes; the highlighter's palette is built for that surface. */
+  /* Dark keeps the dark code band with catppuccin token colors. Light uses
+     a light surface with github-light token colors, which hold 4.5:1 on
+     white, instead of a near-black band inside a pale tool row. */
   .tool-command code { font-family: inherit; }
+  .tool-command code :global(span) { font-style: var(--shiki-dark-font-style, inherit); }
+  :global(:root:not(.dark)) .tool-command { background: var(--bg-surface); color: var(--text-primary); }
+  :global(:root:not(.dark)) .tool-command code :global(span) {
+    color: var(--shiki-light, inherit) !important;
+    font-style: var(--shiki-light-font-style, inherit);
+  }
   .output-header {
     display: flex; align-items: center; gap: 6px; padding: 5px 10px; width: 100%; text-align: left;
     font-size: 12px; color: var(--text-secondary); min-width: 0; transition: background 0.1s; user-select: text; flex: 1 1 auto;

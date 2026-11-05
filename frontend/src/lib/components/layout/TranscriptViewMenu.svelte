@@ -106,7 +106,6 @@
       ? m.header_view_trigger_label_focused({ layout: layoutName })
       : m.header_view_trigger_label({ layout: layoutName })}
   >
-    <LayoutListIcon size="14" strokeWidth="1.75" aria-hidden="true" />
     <!-- Hidden copies of the label for every layout in both modes share
          one grid cell with the visible label, so the trigger is as wide as
          its widest label in the current language. Switching layouts or
@@ -117,9 +116,12 @@
           <span class="view-trigger-sizer" aria-hidden="true">{labelFor(layout.name(), inFocus)}</span>
         {/each}
       {/each}
-      <!-- The dot and chevron follow the visible label instead of the
-           widest one, so the reserved width reads as quiet space. -->
+      <!-- The icon, dot, and chevron travel with the visible label, which
+           sits at the end of the reserved width: the quiet space falls on
+           the title side, and the label stays beside the follow and sort
+           controls. -->
       <span class="view-trigger-current">
+        <LayoutListIcon size="14" strokeWidth="1.75" aria-hidden="true" />
         <span class="view-trigger-text">{triggerText}</span>
         <!-- Always laid out, so showing it does not change the trigger's
              width. -->
@@ -229,7 +231,7 @@
 
   /* Hug the visible label so the fill does not span the reserved width. */
   .view-trigger-current {
-    justify-self: start;
+    justify-self: end;
     max-width: 100%;
     border-radius: var(--radius-sm);
     transition: background var(--transition-fast, 0.1s), box-shadow var(--transition-fast, 0.1s);
@@ -278,10 +280,12 @@
     text-align: left;
   }
 
-  /* Each sizer reserves the dot and chevron that follow the label: two 6px
-     gaps, the 6px dot, and the 12px chevron. */
+  /* Each sizer reserves the icon before the label (14px and a 6px gap)
+     and the dot and chevron after it: two 6px gaps, the 6px dot, and the
+     12px chevron. */
   .view-trigger-sizer {
     visibility: hidden;
+    padding-left: 20px;
     padding-right: 30px;
   }
 
@@ -291,7 +295,7 @@
     gap: 6px;
   }
 
-  .view-trigger-current :global(svg) {
+  .view-trigger-current > :global(svg:last-child) {
     color: var(--text-muted);
   }
 

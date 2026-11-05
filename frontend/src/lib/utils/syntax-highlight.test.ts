@@ -39,6 +39,16 @@ describe("highlightToHtml", () => {
       expect(colors).toContain("color:#CBA6F7");
       expect(distinctColors(result!).size).toBeGreaterThanOrEqual(2);
     });
+
+    it("adds github-light token colors when asked, keeping the dark color inline", async () => {
+      const result = await highlightToHtml("const x = 1;", "typescript", { lightTheme: true });
+      expect(result).not.toBeNull();
+      const styles = spans(result!).map((s) => s.getAttribute("style") ?? "");
+      const keyword = styles.find((style) => style.startsWith("color:#CBA6F7"));
+      // github-light keyword red.
+      expect(keyword).toContain("--shiki-light:#D73A49");
+      expect(styles.every((style) => style.includes("--shiki-light:"))).toBe(true);
+    });
   });
 
   describe("alias resolution", () => {

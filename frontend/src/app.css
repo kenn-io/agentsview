@@ -123,7 +123,9 @@
   --user-bg: color-mix(in srgb, var(--accent-blue) 9%, var(--bg-surface));
   --assistant-bg: var(--bg-surface);
   --thinking-bg: color-mix(in srgb, var(--accent-purple) 4%, var(--bg-surface));
-  --tool-bg: color-mix(in srgb, var(--text-primary) 4.5%, var(--bg-surface));
+  /* Light tool runs are a neutral inset just under the page tone, so they
+     weigh less than prose; the amber stays on the rail, icon, and names. */
+  --tool-bg: color-mix(in srgb, var(--text-primary) 3.5%, var(--bg-surface));
   --code-bg: #1e1e2e; /* kit-ui-check-ignore: app token definition */
   --code-text: #cdd6f4; /* kit-ui-check-ignore: app token definition */
   --viewport-indicator: rgba(0, 0, 0, 0.08); /* kit-ui-check-ignore: app token definition */
@@ -365,7 +367,10 @@
  * large radius, and lifted shadow. The light backdrop dims the page a
  * little more than kit-ui's default so the dialog separates from it. */
 :root {
-  --overlay-shadow: var(--shadow-lg), var(--shadow-sm);
+  /* Light popovers (project picker, date picker, search palette) open over
+     white cards, where kit-ui's 10% lift barely shows; a softer, wider
+     shadow lifts them off the content without a hard edge. */
+  --overlay-shadow: 0 12px 32px rgba(16, 24, 40, 0.14), 0 2px 6px rgba(16, 24, 40, 0.08); /* kit-ui-check-ignore: light overlay elevation, upstream later */
   --overlay-bg: rgba(0, 0, 0, 0.42); /* kit-ui-check-ignore: light backdrop strength; dark keeps kit-ui's value */
 }
 

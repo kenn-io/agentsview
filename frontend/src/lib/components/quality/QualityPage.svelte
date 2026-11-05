@@ -678,8 +678,9 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         <div class="recommendation-list">
           {#each recommendations as rec}
             <Card level="default" padding="none" class="recommendation">
+              <!-- The section header carries the rule-based badge once for
+                   every card below it. -->
               <article class="recommendation-content">
-                <span class="badge rule">{m.insights_page_rule_based()}</span>
                 <strong>{rec.label}</strong>
                 <p>{rec.rationale}</p>
               </article>
@@ -690,7 +691,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       {#if sync.serverVersion?.friction_readable === true}
         <Card level="default" padding="none" class="friction-link-card">
           <article class="friction-link-content">
-            <span class="badge rule">{m.insights_page_rule_based()}</span>
             <strong>{m.friction_quality_card_title()}</strong>
             <p>{m.friction_quality_card_body()}</p>
             <a class="friction-link" href={router.buildHref("friction")} onclick={openFrictionLog}>
