@@ -508,8 +508,9 @@ func applyArchiveContentToCopiedSessionsTx(
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_trailers WHERE session_id IN (
-   SELECT key FROM json_each(?) WHERE value IN (SELECT id FROM `+tempIDsTable+`))`, owners); err != nil {
+		if _, err := tx.ExecContext(ctx, `WITH trailer_owners AS (`+trailerOwnersSelect+`)
+ DELETE FROM commit_trailers WHERE session_id IN (
+ SELECT trailer_id FROM trailer_owners WHERE session_id IN (SELECT id FROM `+tempIDsTable+`))`, owners); err != nil {
 			return err
 		}
 	}

@@ -828,6 +828,67 @@ func TestCommitLinkProjectSurvivesMoveDeletionAndResync(t *testing.T) {
 	assert.Equal(t, "abc1234", retained[0].SHA)
 }
 
+func TestTrailerCommitHostOwners(t *testing.T) {
+	for _, tt := range []struct {
+		name, trailer string
+		owners        []string
+		unrelated     []string
+	}{
+		{"claude", "claude:edit_%", []string{"edit_%", "host-a~edit_%", "host-b~edit_%"}, []string{"host-a~editXY", "host-a~Edit_%", "host-a~codex:edit_%"}},
+		{"codex", "codex:edit_%", []string{"codex:edit_%", "host-a~codex:edit_%", "host-b~codex:edit_%"}, []string{"host-a~codex:editXY", "host-a~codex:Edit_%", "host-a~edit_%"}},
+		{"imported only", "codex:edit", []string{"host-a~codex:edit", "host-b~codex:edit"}, []string{"host-a~edit"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			sha := strings.Repeat("a", 40)
+			// Evidence can arrive before the imported sessions, without a rescan.
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{tt.trailer}, CommittedAt: tsZero}}))
+			for _, id := range append(append([]string{}, tt.owners...), tt.unrelated...) {
+				insertSession(t, d, id, "project-a")
+				insertMessages(t, d, userMsg(id, 0, "Save the edit"))
+			}
+			t.Run("commit to sessions", func(t *testing.T) {
+				links, err := d.CommitSessionLinks(t.Context(), []string{sha})
+				require.NoError(t, err)
+				require.Len(t, links.Commits, 1)
+				var ids []string
+				for _, link := range links.Commits[0].Links {
+					ids = append(ids, link.SessionID)
+				}
+				assert.ElementsMatch(t, tt.owners, ids)
+			})
+			for _, id := range tt.owners {
+				t.Run(id, func(t *testing.T) {
+					links, err := d.SessionCommitLinks(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, links.Commits, 1)
+					assert.Equal(t, sha, links.Commits[0].SHA)
+					assert.Equal(t, id, links.Commits[0].SessionID)
+					assert.Equal(t, "trailer", links.Commits[0].Source)
+					rows, err := d.SessionCommitLinkRows(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, rows, 1)
+					assert.Equal(t, sha, rows[0].SHA)
+				})
+			}
+			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=?`, tsZero)
+			require.NoError(t, err)
+			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Subject: "Updated subject", Sessions: []string{tt.trailer}, CommittedAt: tsZero}}))
+			for _, id := range tt.owners {
+				var modified string
+				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id=?`, id).Scan(&modified))
+				assert.NotEqual(t, tsZero, modified)
+				require.NoError(t, d.DeleteSession(t.Context(), id))
+				links, err := d.SessionCommitLinks(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, links.Commits, 1)
+				assert.Equal(t, sha, links.Commits[0].SHA)
+				assert.True(t, links.Commits[0].Missing)
+			}
+		})
+	}
+}
+
 func TestTrailerCommitMirrorRows(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "editor", "project-a")

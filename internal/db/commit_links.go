@@ -541,7 +541,9 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 // docs/internal/pando-adaptation.md for attribution and changes.
 const commitUserPrompt = `m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''`
 
-const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?)),
+const trailerOwnersSelect = `SELECT o.key AS trailer_id,s.value AS session_id FROM json_each(?) o,json_each(o.value) s`
+
+const commitLinkSelect = `WITH trailer_owners AS (` + trailerOwnersSelect + `),
  resolved_trailers AS (
  SELECT t.*,o.session_id AS owner_id,
  ROW_NUMBER() OVER (PARTITION BY o.session_id,t.sha ORDER BY t.session_id) AS owner_rank
@@ -602,13 +604,13 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 		for id := range changed {
 			identities = append(identities, id)
 		}
-		owners, err := trailerIdentityOwners(identities)
+		owners, err := trailerIdentityOwners(ctx, tx, identities)
 		if err != nil {
 			return err
 		}
 		// Trailer changes can arrive without a transcript write. Advance the same
 		// session cursor that makes transcript changes eligible for mirror pushes.
-		_, err = tx.ExecContext(ctx, `UPDATE sessions SET local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (SELECT value FROM json_each(?))`, owners)
+		_, err = tx.ExecContext(ctx, `WITH trailer_owners AS (`+trailerOwnersSelect+`) UPDATE sessions SET local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (SELECT session_id FROM trailer_owners)`, owners)
 		return err
 	})
 }
@@ -624,7 +626,7 @@ func retainTrailerProjectsTx(ctx context.Context, tx *sql.Tx, ids []string) erro
 	for _, id := range ids {
 		identities = append(identities, sessionTrailerIdentities(id)...)
 	}
-	owners, err := trailerIdentityOwners(identities)
+	owners, err := trailerIdentityOwners(ctx, tx, identities)
 	if err != nil {
 		return err
 	}
@@ -632,9 +634,11 @@ func retainTrailerProjectsTx(ctx context.Context, tx *sql.Tx, ids []string) erro
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE commit_trailers SET project=(
- SELECT s.project FROM sessions s JOIN json_each(?1) o ON o.value=s.id WHERE o.key=commit_trailers.session_id)
- WHERE session_id IN (SELECT o.key FROM json_each(?1) o JOIN json_each(?2) selected ON selected.value=o.value)`, owners, string(selected))
+	_, err = tx.ExecContext(ctx, `WITH trailer_owners AS (`+trailerOwnersSelect+`), selected AS (SELECT value AS id FROM json_each(?))
+ UPDATE commit_trailers SET project=(
+ SELECT s.project FROM sessions s JOIN trailer_owners o ON o.session_id=s.id
+ JOIN selected ON selected.id=s.id WHERE o.trailer_id=commit_trailers.session_id ORDER BY s.id LIMIT 1)
+ WHERE session_id IN (SELECT o.trailer_id FROM trailer_owners o JOIN selected ON selected.id=o.session_id)`, owners, string(selected))
 	return err
 }
 
@@ -691,16 +695,26 @@ func resolveTrailerOwners(ctx context.Context, tx *sql.Tx, where string, args ..
 	if err != nil {
 		return "", err
 	}
-	return trailerIdentityOwners(identities)
+	return trailerIdentityOwners(ctx, tx, identities)
 }
 
-func trailerIdentityOwners(identities []string) (string, error) {
-	owners := make(map[string]string, len(identities))
+func trailerIdentityOwners(ctx context.Context, tx *sql.Tx, identities []string) (string, error) {
+	owners := make(map[string][]string, len(identities))
 	for _, value := range identities {
+		if _, resolved := owners[value]; resolved {
+			continue
+		}
 		agent, id, ok := strings.Cut(value, ":")
 		def, known := parser.AgentByPrefix(strings.TrimPrefix(agent+":", "claude:"))
 		if ok && known {
-			owners[value] = def.IDPrefix + id
+			b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+			predicate := sessionIDsPredicate(SessionFilter{IDs: []string{def.IDPrefix + id}}, b, "id")
+			args := append(b.Args(), b.Args()...)
+			matches, err := sessionIDsTx(ctx, tx, predicate+` UNION SELECT id FROM excluded_sessions WHERE `+predicate, args...)
+			if err != nil {
+				return "", err
+			}
+			owners[value] = matches
 		}
 	}
 	encoded, err := json.Marshal(owners)
@@ -709,6 +723,7 @@ func trailerIdentityOwners(identities []string) (string, error) {
 
 // Enumerate the trailer identities for this archive ID.
 func sessionTrailerIdentities(id string) []string {
+	_, id = parser.StripHostPrefix(id)
 	identities := []string{"claude:" + id}
 	if def, ok := parser.AgentByPrefix(id); ok && def.IDPrefix != "" {
 		identities = append(identities, id)

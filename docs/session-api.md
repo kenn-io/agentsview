@@ -1597,7 +1597,11 @@ transcript links; `"usage"` archives keep neither.
 Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
 `source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their
-registered prefix. Unknown agents and invalid trailer values are ignored.
+registered prefix. A trailer links every session with that archive ID, including
+copies imported from other hosts as `host~<archive-id>`. Both commit-to-session
+and session-to-commit lookups resolve these copies, even when they arrive after
+the Git scan. Matching is literal and case-sensitive. Unknown agents and invalid
+trailer values are ignored.
 Every matching line in the commit message counts, including lines in squash
 commit bodies. Inline mentions don't create links. Merge commits count.
 
