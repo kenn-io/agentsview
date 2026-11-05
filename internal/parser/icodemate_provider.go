@@ -153,15 +153,7 @@ func (p *icodemateProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 }
 
 func (p *icodemateProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	emit := func(source SourceRef) error {
-		if err := ctx.Err(); err != nil {
-			return discoveryYieldError{cause: err}
-		}
-		if err := yield(source); err != nil {
-			return discoveryYieldError{cause: err}
-		}
-		return nil
-	}
+	emit := wrapDiscoveryYield(ctx, yield)
 	var incomplete error
 	for _, sources := range []StreamingDiscoverer{p.opencode, p.cli} {
 		if err := sources.DiscoverEach(ctx, emit); err != nil {

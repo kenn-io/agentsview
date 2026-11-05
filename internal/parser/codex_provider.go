@@ -917,15 +917,7 @@ func (s codexSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (s codexSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	var incomplete error
-	emit := func(source SourceRef) error {
-		if err := ctx.Err(); err != nil {
-			return discoveryYieldError{cause: err}
-		}
-		if err := yield(source); err != nil {
-			return discoveryYieldError{cause: err}
-		}
-		return nil
-	}
+	emit := wrapDiscoveryYield(ctx, yield)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err

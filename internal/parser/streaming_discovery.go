@@ -61,6 +61,18 @@ func incompleteDiscoveryError(
 	}
 }
 
+func wrapDiscoveryYield(ctx context.Context, yield func(SourceRef) error) func(SourceRef) error {
+	return func(source SourceRef) error {
+		if err := ctx.Err(); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
+	}
+}
+
 func discoveryYieldCause(err error) (error, bool) {
 	yieldErr, hasYieldErr := errors.AsType[discoveryYieldError](err)
 	if !hasYieldErr {

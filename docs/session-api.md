@@ -1259,6 +1259,11 @@ A missing daemon ID returns a retry error while
 `GET /api/v1/sync/status` reports `startup_pending`, `archive_stale`, or `sync_pending`. Once
 all three are clear, it returns exit 2. Scheduled ingestion owns retries.
 
+`sync_pending` stays true while local ingestion catches up after an idle period,
+including a failed pass awaiting its scheduled retry. Local clients require a
+matching daemon API version. API 15 requires clients to recognize pending recovery
+before treating a missing session as final.
+
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
