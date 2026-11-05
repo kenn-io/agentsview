@@ -40,6 +40,10 @@
      which would collide with --accent-cyan below. agentsview uses teal and
      cyan as distinct agent-identity hues, so keep the greener teal. */
   --accent-teal: #0d9488; /* kit-ui-check-ignore: app token definition */
+  /* Usage charts calm their series colors, which leaves teal and green
+     hard to tell apart in light theme; Usage paints teal a step lighter
+     and bluer (oklch 0.68 0.11 200). */
+  --usage-series-teal: #20acb3; /* kit-ui-check-ignore: app token definition */
   /* Deliberate override: kit-ui's light --text-muted (#878ea0) is about
      3.3:1 on white, too faint for the metadata agentsview leans on. This
      value is 6.1:1 on the surface, 5.6:1 on the page background, and 5.2:1
@@ -121,6 +125,7 @@
 /* Dark theme — app-specific tokens */
 :root.dark {
   --accent-teal: #2dd4bf; /* kit-ui-check-ignore: app token definition */
+  --usage-series-teal: var(--accent-teal); /* kit-ui-check-ignore: app token definition */
   --accent-rose: #fb7185; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
   --accent-black: #b0b0b0; /* kit-ui-check-ignore: app token definition */
@@ -210,6 +215,13 @@
      picks a tool color or turns on patterns. */
   --role-tool-group-rail: var(--cat-mixed);
   --role-code-frame-style: solid;
+}
+
+/* Compact trades some line length for density: a modestly wider column
+   while that layout is on screen. The header, find bar, and session panels
+   read the same token, so they keep sharing both edges. */
+:root:has(.message-list-scroll.layout-compact) {
+  --reading-column: 960px;
 }
 
 :root[data-message-role-patterns] {

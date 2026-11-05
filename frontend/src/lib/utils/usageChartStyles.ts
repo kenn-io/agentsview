@@ -28,9 +28,26 @@ export interface UsageChartColorOptions {
 
 const MUTED = "var(--text-muted)";
 
+// Calmed light teal and green land at the same lightness only about 20
+// degrees of hue apart, so Usage paints teal from its own token
+// (--usage-series-teal in app.css), set apart in hue and lightness. A
+// resolver that does not know the token keeps the shared teal.
+const USAGE_SERIES_TOKENS: Readonly<Record<string, string>> = {
+  "var(--accent-teal)": "var(--usage-series-teal)",
+};
+
+function resolveUsageColor(color: string, resolveColor?: (color: string) => string): string {
+  const token = USAGE_SERIES_TOKENS[color];
+  if (token && resolveColor) {
+    const resolved = resolveColor(token);
+    if (resolved && resolved !== token) return resolved;
+  }
+  return resolveColor?.(color) || color;
+}
+
 function calmColor(color: string, resolveColor?: (color: string) => string): string {
   if (color === MUTED) return color;
-  const resolved = resolveColor?.(color) || color;
+  const resolved = resolveUsageColor(color, resolveColor);
   const calmed = calmSeriesColor(resolved);
   return calmed === resolved ? color : calmed;
 }
