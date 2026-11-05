@@ -293,22 +293,25 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 	}
 	// Only installs written since preparation can mix newer facts with this
 	// snapshot's metadata. The indexed range stays bounded by concurrent work.
-	rows, err := conn.QueryContext(ctx, `SELECT session_id FROM usage_rollup_installs WHERE timezone_id=? AND install_revision>=? AND (source_change_revision<>? OR source_pricing<>?)`, zone.id, prepared.installSeq, snapshot.ChangeRevision, catalog)
+	// Notifications can pair a conservative source revision with newer session
+	// metadata. Check the baked fields even when the revision stamp matches.
+	rows, err := conn.QueryContext(ctx, `SELECT session_id, source_change_revision, source_pricing, baked_agent, baked_started_at FROM usage_rollup_installs WHERE timezone_id=? AND install_revision>=?`, zone.id, prepared.installSeq)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
 	var sessions map[string]*usageQuerySession
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id, pricing, agent, startedAt string
+		var revision int64
+		if err := rows.Scan(&id, &revision, &pricing, &agent, &startedAt); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
 		if sessions == nil {
 			sessions = usageRollupSessionMap(snapshot)
 		}
-		if _, ok := sessions[id]; ok {
+		if session, ok := sessions[id]; ok && (revision != snapshot.ChangeRevision || pricing != catalog || agent != session.Agent || startedAt != session.StartedAt) {
 			_ = rows.Close()
 			return 0, errUsageCacheSourceChanged
 		}

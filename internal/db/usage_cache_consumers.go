@@ -202,10 +202,13 @@ func (db *DB) queryUsageRollupsOnce(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 	cursor bool, attempt int, key string,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
-	defer db.usageCache.admitUsageRead(attempt > usageFillMaxAttempts)()
+	releaseAdmission, err := db.usageCache.admitUsageRead(ctx, attempt > usageFillMaxAttempts)
+	if err != nil {
+		return usageQuerySnapshot{}, usageFactsResult{}, nil, err
+	}
+	defer releaseAdmission()
 	started := time.Now()
 	var prepared usagePreparedWindow
-	var err error
 	if attempt == 1 {
 		prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
 	} else {

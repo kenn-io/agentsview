@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -146,4 +147,125 @@ func TestUsageJournaledRetryHonorsBulkLane(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUsageJournaledAdmissionCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		holderExclusive bool
+		waiterExclusive bool
+		queuedRetry     bool
+	}{
+		{name: "shared behind exclusive", holderExclusive: true},
+		{name: "exclusive behind shared", waiterExclusive: true},
+		{name: "exclusive behind exclusive", holderExclusive: true, waiterExclusive: true},
+		{name: "shared behind queued exclusive", queuedRetry: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database := testDB(t)
+			seedJournaledUsage(t, database, "session")
+			filter := UsageFilter{Timezone: "UTC"}
+			warmJournaledUsage(t, database, filter)
+			held, resume := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(resume) })
+			filter.Progress = func(phase string) {
+				if phase == "Reading cached daily totals" {
+					close(held)
+					<-resume
+				}
+			}
+			holderDone := make(chan error, 1)
+			attempt := 1
+			if test.holderExclusive {
+				attempt = usageFillMaxAttempts + 1
+			}
+			go func() {
+				_, _, _, err := database.queryUsageRollupsOnce(t.Context(), filter, usageQueryKindToken, false, attempt, "")
+				holderDone <- err
+				close(holderDone)
+			}()
+			t.Cleanup(func() { unblock(); <-holderDone })
+			<-held
+			filter.Progress = nil
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var waiters sync.WaitGroup
+			t.Cleanup(func() { unblock(); waiters.Wait() })
+			start := func(exclusive bool) <-chan error {
+				done := make(chan error, 1)
+				waiters.Go(func() {
+					attempt := 1
+					if exclusive {
+						attempt = usageFillMaxAttempts + 1
+					}
+					_, _, _, err := database.queryUsageRollupsOnce(ctx, filter, usageQueryKindToken, false, attempt, "")
+					done <- err
+				})
+				return done
+			}
+			var retry <-chan error
+			if test.queuedRetry {
+				retry = start(true)
+			}
+			waiter := start(test.waiterExclusive)
+			cancel()
+			for _, done := range []<-chan error{waiter, retry} {
+				if done == nil {
+					continue
+				}
+				select {
+				case err := <-done:
+					require.ErrorIs(t, err, context.Canceled)
+				case <-time.After(time.Second):
+					require.FailNow(t, "canceled request remained blocked on admission")
+				}
+			}
+			unblock()
+			require.NoError(t, <-holderDone)
+		})
+	}
+}
+
+func TestUsageJournaledQueuedAdmissionCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := newUsageCacheManager("")
+		defer manager.cancel()
+		release, err := manager.admitUsageRead(t.Context(), false)
+		require.NoError(t, err)
+		defer release()
+		retryCtx, cancelRetry := context.WithCancel(t.Context())
+		defer cancelRetry()
+		retryDone := make(chan error, 1)
+		go func() {
+			release, err := manager.admitUsageRead(retryCtx, true)
+			if release != nil {
+				release()
+			}
+			retryDone <- err
+		}()
+		synctest.Wait() // The exclusive retry is queued behind the active report.
+		readerCtx, cancelReader := context.WithTimeout(t.Context(), time.Second)
+		defer cancelReader()
+		readerDone := make(chan error, 1)
+		go func() {
+			release, err := manager.admitUsageRead(readerCtx, false)
+			if release != nil {
+				release()
+			}
+			readerDone <- err
+		}()
+		synctest.Wait() // The queued retry holds off this subsequent reader.
+		select {
+		case err := <-readerDone:
+			require.FailNow(t, "reader bypassed the queued retry", "error: %v", err)
+		default:
+		}
+		require.ErrorIs(t, <-readerDone, context.DeadlineExceeded)
+		cancelRetry()
+		require.ErrorIs(t, <-retryDone, context.Canceled)
+		// Cancellation removed both waiters; another reader can share the holder.
+		releaseReader, err := manager.admitUsageRead(t.Context(), false)
+		require.NoError(t, err)
+		releaseReader()
+	})
 }
