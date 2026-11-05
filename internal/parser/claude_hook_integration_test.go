@@ -33,13 +33,14 @@ func TestClaudeHookImportRendersHookBodyVerbatim(t *testing.T) {
 		{"cancelled without timeout", "hook_cancelled", `,"timedOut":false,"timeoutMs":60000`, ""},
 		{"cancelled timeout", "hook_cancelled", `,"timedOut":true,"timeoutMs":60000`, "\n\nTimed out after 60000 ms"},
 		{"cancelled long timeout", "hook_cancelled", `,"timedOut":true,"timeoutMs":1000000`, "\n\nTimed out after 1000000 ms"},
-		{"summary all fields", "stop_hook_summary", `,"hookLabel":"PreToolUse","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook event: PreToolUse\n\nHook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nPrevented continuation: true\n\nStop reason: blocked"},
+		{"summary all fields", "stop_hook_summary", `,"hookLabel":"PreToolUse","hookCount":1,"hookInfos":[{"command":"echo hook"}],"hookErrors":["hook failed"],"preventedContinuation":true,"stopReason":"blocked"`, "Hook event: PreToolUse\n\nHook count: 1\n\nCommand: echo hook\n\nHook errors:\nhook failed\n\nAssistant blocked\n\nStop reason: blocked"},
 		{"summary errors", "stop_hook_summary", `,"hookErrors":["failed"]`, "Hook errors:\nfailed"},
 		{"summary stop reason", "stop_hook_summary", `,"stopReason":"stopped"`, "Stop reason: stopped"},
 		{"summary prompt", "stop_hook_summary", `,"hookInfos":[{"command":"check","promptText":"check the answer"}]`, "Command: check\n\nPrompt text:\ncheck the answer"},
 		{"summary additional context", "stop_hook_summary", `,"hookAdditionalContext":["keep going","check results"]`, "Additional context:\nkeep going\ncheck results"},
-		{"summary prevented continuation", "stop_hook_summary", `,"preventedContinuation":true`, "Prevented continuation: true"},
-		{"success stdout and stderr", "hook_success", `,"stdout":"{\"status\":\"ok\"}","stderr":"boom"`, "\n\nStdout:\n{\"status\":\"ok\"}\n\nStderr:\nboom"},
+		{"summary prevented continuation", "stop_hook_summary", `,"preventedContinuation":true`, "Assistant blocked"},
+		{"summary allowed continuation", "stop_hook_summary", `,"preventedContinuation":false,"stopReason":"completed"`, "Assistant allowed to continue\n\nStop reason: completed"},
+		{"success stdout and stderr", "hook_success", `,"stdout":"{\"status\":\"ok\"}","stderr":"boom"`, "\n\nOutput:\n{\"status\":\"ok\"}\n\nError output:\nboom"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

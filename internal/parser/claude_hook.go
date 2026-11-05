@@ -217,7 +217,11 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 			sections = append(sections, "Hook errors:\n"+strings.Join(summary.HookErrors, "\n"))
 		}
 		if summary.PreventedContinuation != nil {
-			sections = append(sections, fmt.Sprintf("Prevented continuation: %t", *summary.PreventedContinuation))
+			if *summary.PreventedContinuation {
+				sections = append(sections, "Assistant blocked")
+			} else {
+				sections = append(sections, "Assistant allowed to continue")
+			}
 		}
 		if summary.StopReason != "" {
 			sections = append(sections, "Stop reason: "+summary.StopReason)
@@ -227,10 +231,10 @@ func claudeHookSuccessBody(payload claudeHookSuccess) string {
 		sections = append(sections, "Content:\n"+payload.content)
 	}
 	if payload.stdout != "" {
-		sections = append(sections, "Stdout:\n"+payload.stdout)
+		sections = append(sections, "Output:\n"+payload.stdout)
 	}
 	if payload.stderr != "" {
-		sections = append(sections, "Stderr:\n"+payload.stderr)
+		sections = append(sections, "Error output:\n"+payload.stderr)
 	}
 	return strings.Join(sections, "\n\n")
 }
