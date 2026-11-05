@@ -296,6 +296,15 @@
     gap: 8px 16px;
   }
 
+  /* The page clips its overflow so the inventory panes can fill it; the
+     rules view scrolls inside it instead, so a long mapping list never
+     pushes the form and Apply mappings out of reach. */
+  .data-page > :global(.rules-view) {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   /* The page gap already separates the header from the content. */
   .data-page :global(.library-page-header) {
     margin-bottom: 4px;
