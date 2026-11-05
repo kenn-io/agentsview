@@ -201,7 +201,6 @@ func TestProbeTransport(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := readyConfig(tt.endpoint)
-			cfg.Timeout = time.Second
 			st, client := Probe(t.Context(), cfg)
 			assert.Equal(t, tt.want, st.State, st.Message)
 			assert.Equal(t, tt.want == StateReady, client != nil)
