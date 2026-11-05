@@ -109,11 +109,14 @@ at most 256 sessions.
 
 Every install records the archive revision and catalog digest used to build it.
 The install transaction rejects builds older than the stored revision, and the
-caller recaptures archive metadata. A timezone claim records both an archive
-revision and an install counter. A compare-and-set advances the claim from
-actual installed stamps; concurrent claim losers leave it alone. A completed
-pass uses the revision and install counter captured at its start. It records its
-catalog only when no intervening install used another catalog.
+caller recaptures archive metadata. If invalidation removed the newer install,
+accepting an older build lowers the timezone's claim in the same transaction.
+The next read replays the journal from that revision and repairs its dates. A
+timezone claim records both an archive revision and an install counter. A
+compare-and-set advances the claim from actual installed stamps; concurrent
+claim losers leave it alone. A completed pass uses the revision and install
+counter captured at its start. It records its catalog only when no intervening
+install used another catalog.
 
 A timezone without a completed pass, a new cache generation, a changed pricing
 catalog, or coverage outside the archive's revision range takes the full
@@ -125,8 +128,11 @@ whether a pass can vouch for the current rates.
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty
 windows run the same checks. A conflicting install or invalidated dedup peer
-uses the existing bounded recapture loop. Warm window reads load filter and
-attribution metadata, including the display fields shared with Top sessions.
+uses the existing bounded recapture loop. When cache attempts run out, daily
+usage, ranking, and billed-session counts read the archive directly. Activity
+matching counts keep using the full cache verification path. Warm window reads
+load filter and attribution metadata, including the display fields shared with
+Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor
@@ -144,8 +150,8 @@ timestamp.
 mutable timestamp fields and the value can decrease. Installation compares the
 complete source fingerprint after extraction rather than ordering marker values.
 A hard-deleted session is dropped as newer state. Other moving-source or
-archive-busy races retry at most three times, then fail instead of returning
-stale usage.
+archive-busy races retry at most three times. Exhausted cache freshness retries
+take the archive path described above; other failures return an error.
 
 Request cancellation detaches the waiter from shared fill work. The fill keeps
 running so retry storms converge. Rollup requests stop dispatching batches when

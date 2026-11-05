@@ -122,11 +122,6 @@ func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) 
 	gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, wantCounts, gotCounts)
-	wantMatching, err := database.getUsageMatchingSessionCountLegacy(t.Context(), filter)
-	require.NoError(t, err)
-	gotMatching, err := database.GetUsageMatchingSessionCount(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, wantMatching, gotMatching)
 }
 
 func TestUsageJournaledFreshness(t *testing.T) {
@@ -489,4 +484,212 @@ func TestUsageJournaledDedupInvalidation(t *testing.T) {
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 20, got.Totals.OutputTokens)
+}
+
+func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
+	for _, consumer := range []string{"daily", "ranking", "counts", "matching", "pass"} {
+		t.Run(consumer, func(t *testing.T) {
+			database := testDB(t)
+			seedUsageSnapshotSession(t, database, "original", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "original", []UsageEvent{{Source: "session", Model: "unique-model", InputTokens: 100}}))
+			filter := UsageFilter{From: "2026-08-11", To: "2026-08-11", Timezone: "UTC", SkipSessionCounts: true}
+			cache := warmJournaledUsage(t, database, filter)
+			// A request or pass retains this metadata while newer reads catch up.
+			delayed, err := database.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
+			require.NoError(t, err)
+			fills, err := cache.fill.Ensure(t.Context(), delayed.Versions, 0)
+			require.NoError(t, err)
+			resume := func() {
+				_, _, err := cache.rollup.Ensure(t.Context(), delayed, fills, export.NewPricingResolver(delayed.PricingRows))
+				require.NoError(t, err)
+			}
+			if consumer == "pass" {
+				zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(delayed.location, nil).Key)
+				require.NoError(t, err)
+				_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id='original'`)
+				require.NoError(t, err)
+				held, release := make(chan struct{}), make(chan struct{})
+				unblock := sync.OnceFunc(func() { close(release) })
+				var once atomic.Bool
+				cache.rollup.observer.beforeEnsure = func() {
+					if once.CompareAndSwap(false, true) {
+						close(held)
+						<-release
+					}
+				}
+				done := make(chan error, 1)
+				t.Cleanup(func() { unblock(); <-done })
+				go func() {
+					done <- database.runUsageCacheBackfillPass(t.Context(), time.Now(), delayed, zone.installSeq)
+					close(done)
+				}()
+				<-held
+				resume = func() { unblock(); require.NoError(t, <-done) }
+			}
+			_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET started_at='2026-08-11T09:00:00Z' WHERE id='original'`)
+			require.NoError(t, err)
+			first, err := database.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			require.Equal(t, 100, first.Totals.InputTokens)
+			seedUsageSnapshotSession(t, database, "sibling", "project-b", "2026-08-10T10:00:00Z", 0, 20, "model-a")
+			sibling, err := database.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
+			require.NoError(t, err)
+			_, err = cache.fill.Ensure(t.Context(), sibling.Versions, 0)
+			require.NoError(t, err)
+			var remaining int
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id='original'`).Scan(&remaining))
+			require.Zero(t, remaining)
+			resume()
+			// Each consumer must repair the date without another consumer warming it.
+			for range 2 {
+				switch consumer {
+				case "daily", "pass":
+					got, err := database.GetDailyUsage(t.Context(), filter)
+					require.NoError(t, err)
+					assert.Equal(t, 100, got.Totals.InputTokens)
+				case "ranking":
+					got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+					require.NoError(t, err)
+					assert.Len(t, got, 1)
+				case "counts":
+					got, err := database.GetUsageSessionCounts(t.Context(), filter)
+					require.NoError(t, err)
+					want, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
+					require.NoError(t, err)
+					assert.Equal(t, want, got)
+				case "matching":
+					got, err := database.GetUsageMatchingSessionCount(t.Context(), filter)
+					require.NoError(t, err)
+					assert.Equal(t, 1, got)
+				}
+			}
+		})
+	}
+}
+
+func TestUsageJournaledConcurrentWriter(t *testing.T) {
+	database := testDB(t)
+	for i := range 30 {
+		seedJournaledUsage(t, database, fmt.Sprintf("session-%02d", i))
+	}
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC", SkipSessionCounts: true}
+	warmJournaledUsage(t, database, filter)
+	ctx, cancel := context.WithCancel(t.Context())
+	writerDone := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(3 * time.Millisecond)
+		defer ticker.Stop()
+		for ordinal := 1; ; ordinal++ {
+			select {
+			case <-ctx.Done():
+				writerDone <- nil
+				return
+			case <-ticker.C:
+				// Let an in-flight write finish before joining the writer.
+				err := database.InsertMessages(context.WithoutCancel(t.Context()), []Message{{SessionID: "session-00", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}})
+				if err != nil {
+					writerDone <- err
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-writerDone) })
+	var readers sync.WaitGroup
+	for range 7 {
+		readers.Go(func() {
+			for range 10 {
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				if !assert.NoError(t, err) {
+					return
+				}
+				assert.GreaterOrEqual(t, got.Totals.InputTokens, 3000)
+			}
+		})
+	}
+	readers.Wait()
+}
+
+func TestUsageJournaledUntrustedReadsSharePass(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision=NULL`)
+	require.NoError(t, err)
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs`)
+	require.NoError(t, err)
+	held, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var once atomic.Bool
+	cache.rollup.observer.beforeEnsure = func() {
+		if once.CompareAndSwap(false, true) {
+			close(held)
+			<-release
+		}
+	}
+	var starts atomic.Int64
+	database.SetUsageCacheBackfillStarted(func() { starts.Add(1) })
+	t.Cleanup(func() { unblock(); database.StopUsageCacheBackfill() })
+	_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
+	require.NoError(t, err)
+	assert.False(t, trusted)
+	require.EqualValues(t, 1, starts.Load())
+	<-held
+	for range 10 {
+		_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
+		require.NoError(t, err)
+		assert.False(t, trusted)
+	}
+	unblock()
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	for range 2 {
+		prepared, trusted, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
+		require.NoError(t, err)
+		assert.True(t, trusted)
+		assert.True(t, prepared.journaled)
+	}
+	assert.EqualValues(t, 1, starts.Load())
+}
+
+func TestUsageJournaledRetryExhaustionReadsArchive(t *testing.T) {
+	for _, consumer := range []string{"daily", "ranking", "counts"} {
+		t.Run(consumer, func(t *testing.T) {
+			database := testDB(t)
+			seedJournaledUsage(t, database, "session")
+			filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC", SkipSessionCounts: true}
+			warmJournaledUsage(t, database, filter)
+			other, err := OpenIsolatedContext(t.Context(), database.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, other.Close()) })
+			reads := 0
+			filter.Progress = func(phase string) {
+				if phase != "Reading cached daily totals" {
+					return
+				}
+				reads++
+				// Another reader installs a newer snapshot after each preparation.
+				require.NoError(t, other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: reads, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
+				_, err := other.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
+				require.NoError(t, err)
+			}
+			switch consumer {
+			case "daily":
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 250, got.Totals.InputTokens)
+			case "ranking":
+				got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+				require.NoError(t, err)
+				want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
+				require.NoError(t, err)
+				assert.Equal(t, want, got)
+			case "counts":
+				got, err := database.GetUsageSessionCounts(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, UsageSessionCounts{Total: 1, ByProject: map[string]int{"project": 1}, ByAgent: map[string]int{"codex": 1}}, got)
+			}
+			assert.Equal(t, 3, reads, "each cache read must lose before falling back to the archive")
+		})
+	}
 }

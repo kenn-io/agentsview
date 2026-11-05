@@ -712,6 +712,13 @@ func installUsageRollupBuilds(
 		if err == nil && installedChangeRevision > build.ChangeRevision {
 			return errUsageRollupSuperseded
 		}
+		// A dedup invalidation can remove a newer install before this delayed
+		// build arrives. Replay journal changes from its snapshot on the next
+		// read, even when the zone already claimed those changes.
+		if _, err := conn.ExecContext(ctx, `UPDATE usage_rollup_timezones
+			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
+			return err
+		}
 		if err == nil && build.SessionID == usageRollupCursorSessionID &&
 			installedFactRevision > build.FactRevision {
 			return fmt.Errorf(

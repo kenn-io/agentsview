@@ -2038,8 +2038,8 @@ func PaddedUTCBound(ts string, hours int) string {
 	return padded.Format(time.RFC3339)
 }
 
-// getDailyUsageLegacy is the wide-row test oracle for the facts-backed path.
-// Production callers enter through GetDailyUsage in usage_cache_daily.go.
+// getDailyUsageLegacy reads the archive when cache retries are exhausted and
+// provides the wide-row test oracle for the facts-backed path.
 func (db *DB) getDailyUsageLegacy(
 	ctx context.Context, f UsageFilter,
 ) (DailyUsageResult, error) {
@@ -2785,7 +2785,8 @@ func sortTopSessions(result []TopSessionEntry, sortBy string, tokenTypes UsageTo
 	})
 }
 
-// getTopSessionsByCostLegacy is the wide-row test oracle for the facts path.
+// getTopSessionsByCostLegacy reads the archive when cache retries are exhausted
+// and provides the wide-row test oracle for the facts path.
 func (db *DB) getTopSessionsByCostLegacy(
 	ctx context.Context, f UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
@@ -3405,10 +3406,9 @@ func NewUsageSessionCounts(
 	return out
 }
 
-// getUsageSessionCountsLegacy is the wide-row test oracle. Sessions spanning
-// multiple days count
-// once. Soft-deleted sessions are excluded via
-// usageMessageEligibility.
+// getUsageSessionCountsLegacy is the archive fallback and wide-row test oracle.
+// Sessions spanning multiple days count once. Soft-deleted sessions are excluded
+// via usageMessageEligibility.
 //
 // Like GetDailyUsage and GetTopSessionsByCost, this query pads
 // the UTC bounds by +/-14h and applies a post-query LocalDate

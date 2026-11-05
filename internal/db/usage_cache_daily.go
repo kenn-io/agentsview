@@ -28,6 +28,11 @@ func (db *DB) GetDailyUsage(
 ) (DailyUsageResult, error) {
 	_, facts, resolver, err := db.queryUsageRollups(
 		ctx, filter, usageQueryKindToken, true)
+	// Concurrent refreshes can exhaust cache retries during a sync. Read the
+	// archive directly so the report can finish while cache installs change.
+	if usageCacheReadShouldRecapture(err) {
+		return db.getDailyUsageLegacy(ctx, filter)
+	}
 	if err != nil {
 		return DailyUsageResult{}, err
 	}

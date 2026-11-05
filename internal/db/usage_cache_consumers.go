@@ -122,9 +122,14 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	started := time.Now()
 	report("Reading archived sessions for this report")
 	filter.Progress = nil
-	prepared, ok, err := db.prepareJournaledUsageWindow(ctx, filter, kind, cursor, report)
-	if ok || err != nil {
-		return prepared, err
+	var prepared usagePreparedWindow
+	var err error
+	if kind != usageQueryKindActivity {
+		var ok bool
+		prepared, ok, err = db.prepareJournaledUsageWindow(ctx, filter, kind, cursor, report)
+		if ok || err != nil {
+			return prepared, err
+		}
 	}
 	snapshot := prepared.snapshot
 	if snapshot.DatabaseID == "" {
@@ -243,6 +248,9 @@ func (db *DB) GetTopSessionsByCost(
 ) ([]TopSessionEntry, error) {
 	snapshot, facts, _, err := db.queryUsageRollups(
 		ctx, filter, usageQueryKindToken, false)
+	if usageCacheReadShouldRecapture(err) {
+		return db.getTopSessionsByCostLegacy(ctx, filter, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +327,9 @@ func (db *DB) GetUsageSessionCounts(
 ) (UsageSessionCounts, error) {
 	_, facts, _, err := db.queryUsageRollups(
 		ctx, filter, usageQueryKindToken, false)
+	if usageCacheReadShouldRecapture(err) {
+		return db.getUsageSessionCountsLegacy(ctx, filter)
+	}
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}
