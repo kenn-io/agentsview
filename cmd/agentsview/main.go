@@ -31,6 +31,7 @@ import (
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
+	"go.kenn.io/agentsview/internal/power"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -57,7 +58,6 @@ const (
 	telemetryDailyCheckInterval    = time.Hour
 	unwatchedPollInterval          = 2 * time.Minute
 	watcherBatchDelay              = 500 * time.Millisecond
-	watcherSyncMinInterval         = 5 * time.Second
 	deferredStartupSyncGracePeriod = 30 * time.Second
 )
 
@@ -136,14 +136,12 @@ type serveOptions struct {
 }
 
 // serveMemoryLimitBytes is the default Go soft memory limit for the
-// long-running serve daemon. Full parses of multi-megabyte transcripts
-// otherwise balloon the heap to several hundred megabytes; the pages
-// are freed afterwards but macOS keeps them in the process RSS
-// indefinitely, so the daemon's reported memory ratchets to the
-// largest transient since startup. A soft limit makes the GC hold the
-// heap near the cap during those bursts instead. CGO memory (SQLite)
-// is outside the limit, so total RSS settles somewhat above it.
-const serveMemoryLimitBytes = 256 << 20
+// long-running serve daemon. It provides a backstop well above
+// the live heap of concurrent large analytics requests, about 350 MB each
+// on a 30k-session archive, so normal GC pacing runs during them. A lower
+// limit made those requests collect back to back. SQLite memory allocated
+// through cgo sits outside the limit.
+const serveMemoryLimitBytes = 4 << 30
 
 // applyServeMemoryLimit installs the default soft memory limit unless
 // the operator already set one via GOMEMLIMIT. Only the serve daemon
@@ -168,7 +166,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 	start := time.Now()
 	applyServeMemoryLimit()
-	applyServeMallocTuning()
 
 	if err := validateServeConfig(cfg); err != nil {
 		fatal("invalid serve config: %v", err)
@@ -357,6 +354,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("setting up recall extraction: %v", err)
 	}
 	if extractSched != nil {
+		if cfg.Recall.Extract.Enabled {
+			extractSched.onBattery = power.OnBattery
+			extractSched.onBatteryMgr = extract.NewReconciler(database)
+		}
 		if vectorServe.RecallMutationNotify != nil {
 			extractSched.onPassFinished = vectorServe.RecallMutationNotify
 		}
@@ -376,6 +377,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var memoryRefresh *memoryRefreshQueue
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
+		var queueRebuildRetry func(sync.WatchBatch)
 		engine = sync.NewEngine(ctx, database, sync.EngineConfig{
 			AgentDirs: cfg.AgentDirs,
 			RebuildSources: func(ctx context.Context) (sync.RebuildOptions, error) {
@@ -397,6 +399,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			OnStartupReconciled: func(stats sync.SyncStats, err error) {
 				onStartupReconciled(stats, err)
 			},
+			OnRebuildDeferred: func(batch sync.WatchBatch) { queueRebuildRetry(batch) },
 		})
 		defer engine.Close()
 		if frictionReviews != nil {
@@ -409,6 +412,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		ingestion := newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
+		queueRebuildRetry = ingestion.QueueWatchRetry
 		defer ingestion.Stop()
 		if opts.ReloadConfig != nil {
 			reloadIngestion = ingestion.Reload
@@ -423,7 +427,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		)
 		onStartupReconciled = func(stats sync.SyncStats, err error) {
 			acknowledgeStartup(stats, err)
-			if err == nil && stats.ProcessingComplete() && !database.NeedsResync() {
+			if err == nil && stats.ProcessingCompleteOrRetrying() && !database.NeedsResync() {
 				go idleTracker.Do(func() {
 					if _, err := attachedSources.Drain(ctx, nil); err != nil && ctx.Err() == nil {
 						log.Printf("archive sources: %v", err)
@@ -668,7 +672,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 		go func() {
 			defer close(auditDone)
-			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady)
+			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady, power.OnBattery)
 		}()
 		if startupRebuild {
 			select {
@@ -755,6 +759,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	defer startSetupTelemetry(ctx, telemetryReporter, cfg, database, broadcaster)()
 
 	if vectorServe.Scheduler != nil {
+		vectorServe.Scheduler.onBattery = power.OnBattery
 		go vectorServe.Scheduler.Run(ctx)
 		// Registered after the vectors.db Close defer above, so LIFO
 		// unwind order runs Stop (which waits for any in-flight
@@ -762,6 +767,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer vectorServe.Scheduler.Stop()
 	}
 	if vectorServe.RecallScheduler != nil {
+		vectorServe.RecallScheduler.onBattery = power.OnBattery
 		go vectorServe.RecallScheduler.Run(ctx)
 		defer vectorServe.RecallScheduler.Stop()
 	}
@@ -988,6 +994,7 @@ func deferStartupMaintenance(skipInitialSync, workerSyncDone bool) bool {
 func statsFromWorkerResult(r workerResult) sync.SyncStats {
 	if r.Stats != nil {
 		stats := *r.Stats
+		stats.SetDeferredRetryBatch(r.Deferred, r.DeferredRetry)
 		if r.Tombstoned > stats.Tombstoned {
 			stats.Tombstoned = r.Tombstoned
 		}
@@ -1412,6 +1419,10 @@ func runWorkerResyncBuild(
 		return nil
 	})
 	if doneStats.ArchiveRebuilt {
+		// Only the parent knows the replacement was installed. Return that
+		// fact to foreground callers as well as notifying the watcher.
+		result.Stats = &doneStats
+		engine.NotifyRebuildDeferred(doneStats)
 		engine.FinishStartupReconciled(doneStats)
 	} else if startup {
 		engine.RecordStartupReconciled(statsFromWorkerResult(result), barrierErr)
@@ -2404,7 +2415,7 @@ func startFileWatcher(
 	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
-		watcherSyncMinInterval,
+		cfg.SyncInterval,
 		onChange,
 		cfg.WatchExcludePatterns,
 		options,
@@ -3247,6 +3258,7 @@ func startArchiveAudit(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 	startupReady chan struct{},
+	onBattery func() bool,
 ) {
 	first := archiveAuditInterval
 	if database.NeedsResync() {
@@ -3261,11 +3273,16 @@ func startArchiveAudit(
 		func(ctx context.Context, delay time.Duration) bool {
 			timer := time.NewTimer(delay)
 			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return false
-			case <-timer.C:
-				return true
+			for {
+				select {
+				case <-ctx.Done():
+					return false
+				case <-timer.C:
+					if startupReady != nil || database.NeedsResync() || onBattery == nil || !onBattery() {
+						return true
+					}
+					timer.Reset(batteryRecheckInterval)
+				}
 			}
 		},
 		func(ctx context.Context) bool {

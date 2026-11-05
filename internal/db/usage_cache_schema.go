@@ -280,6 +280,8 @@ type usageCacheProbe struct {
 }
 
 type usageCacheManager struct {
+	usageWindowObserver usageWindowObserver
+
 	archivePath string
 	archive     *DB
 	ctx         context.Context

@@ -146,6 +146,11 @@ func (db *DB) applyArtifactImportedSession(
 		return result, err
 	}
 	if result.Written {
+		if write.ReplaceMessages {
+			if err := clearCodexForkSummaryParticipantsTx(ctx, tx, write.Session.ID); err != nil {
+				return ArtifactImportedSessionResult{}, err
+			}
+		}
 		if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{write.Session.ID}); err != nil {
 			return ArtifactImportedSessionResult{}, err
 		}

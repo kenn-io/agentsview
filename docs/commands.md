@@ -535,7 +535,7 @@ On startup, the server:
 1. Loads or creates `~/.agentsview/sessions.db`
 1. Runs initial sync across all discovered session directories
 1. Starts the file watcher (500ms event batching; watcher sync starts remain at
-    least five seconds apart)
+    least five seconds apart by default; see [`sync_interval`](/docs/configuration/#config-file))
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 

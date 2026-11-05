@@ -519,7 +519,6 @@ func projectToolResultImagesWithPut(
 			)
 			for k := range call.ResultEvents {
 				event := &call.ResultEvents[k]
-				PrepareToolResultEvent(event)
 				event.Content, stats = project(
 					event.Content, event.ContentLength, stats,
 				)

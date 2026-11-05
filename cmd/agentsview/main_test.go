@@ -1008,6 +1008,34 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 	assert.Equal(t, roots, fake.callRoots[1])
 }
 
+func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
+	projects := filepath.Join(t.TempDir(), "projects")
+	project := filepath.Join(projects, "project-a")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	cfg := config.Config{
+		SyncInterval: time.Second,
+		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
+	}
+	calls := make(chan time.Time, 8)
+	stop, open, unwatched, _, _ := startFileWatcher(cfg, nil,
+		func(context.Context, agentsync.WatchBatch) error {
+			calls <- time.Now()
+			return nil
+		}, agentsync.WatcherOptions{})
+	t.Cleanup(stop)
+	require.Empty(t, unwatched)
+	open()
+	path := filepath.Join(project, "active.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
+	first := receiveArchiveTest(t, calls)
+	require.NoError(t, os.WriteFile(path, []byte("second\n"), 0o600))
+	gap := receiveArchiveTest(t, calls).Sub(first)
+	// Callback timestamps follow dispatch; allow scheduling delay before the first timestamp.
+	const dispatchJitter = 250 * time.Millisecond
+	assert.GreaterOrEqual(t, gap, cfg.SyncInterval-dispatchJitter)
+	assert.Less(t, gap, 4*time.Second)
+}
+
 func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "codex-state")
 	require.NoError(t, os.Mkdir(parent, 0o755), "mkdir parent")

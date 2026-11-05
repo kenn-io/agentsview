@@ -1728,6 +1728,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'database_id',
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
+				'usage_change_revision',
 				'conversation_publication_revision',
 				'worktree_mapping_publication_revision'
 			)
@@ -1747,11 +1748,9 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	// The session_deletion_changes journal is deliberately NOT copied from
-	// the source: its only consumers (the DuckDB mirror and internal/db)
-	// full-rebuild after every resync because the database_id changed, so
-	// journal continuity across the swap has no consumer. The fresh
-	// database's journal starts over with its own counter.
+	// The session_deletion_changes and usage_session_changes journals start
+	// over with their own counters. Consumers rebuild after a resync changes
+	// database_id, so they don't need journal continuity across the swap.
 
 	if oldDBHasTable(ctx, tx, "project_identity_observations") {
 		identityColumn := func(name, fallback string) string {
@@ -2397,6 +2396,13 @@ func copySessionDataForIDs(
 		}
 	}
 
+	if oldDBHasTable(ctx, tx, "codex_fork_state") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO codex_fork_state (session_id, state_json)
+ SELECT copied.id, state.state_json FROM old_db.codex_fork_state state
+ JOIN `+tempIDsTable+` copied ON copied.source_id = state.session_id`); err != nil {
+			return fmt.Errorf("copying Codex fork provenance: %w", err)
+		}
+	}
 	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT OR IGNORE INTO claude_subagent_sources (session_id, file_path) "+
@@ -2605,19 +2611,29 @@ func copySessionDataForIDs(
 	}
 
 	if oldDBHasTable(ctx, tx, "tool_result_events") {
+		var metadataColumns []string
+		for _, column := range []string{"raw_content_digest", "summary_participates"} {
+			if oldDBHasColumn(ctx, tx, "tool_result_events", column) {
+				metadataColumns = append(metadataColumns, column)
+			}
+		}
+		metadata := ""
+		if len(metadataColumns) > 0 {
+			metadata = ", " + strings.Join(metadataColumns, ", ")
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal,
 				 call_index, tool_use_id, agent_id,
 				 subagent_session_id, source, status,
 				 content, content_length, timestamp,
-				 event_index)
+				 event_index`+metadata+`)
 			SELECT
 				`+sessionID+`, tool_call_message_ordinal,
 				call_index, tool_use_id, agent_id,
 				subagent_session_id, source, status,
 				content, content_length, timestamp,
-				event_index
+				event_index`+metadata+`
 			FROM old_db.tool_result_events
 			WHERE session_id IN (
 				SELECT source_id FROM `+tempIDsTable+`

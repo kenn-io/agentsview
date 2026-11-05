@@ -119,7 +119,7 @@
   /** Whether this session is a team member (received a <teammate-message>). */
   let isTeamSession = $derived(
     session.is_teammate
-      ?? session.first_message?.includes("<teammate-message")
+      ?? sessions.view(session).first_message?.includes("<teammate-message")
       ?? false,
   );
 
@@ -133,7 +133,7 @@
     if (name) {
       return { text: name, isShell: false };
     }
-    let msg = session.first_message ?? "";
+    let msg = sessions.view(session).first_message ?? "";
     if (msg.includes("<teammate-message")) {
       msg = msg
         .replace(/<teammate-message[^>]*>/g, "")
@@ -269,7 +269,7 @@
   function startRename() {
     renameValue =
       session.display_name
-      ?? normalizeMessagePreview(session.first_message)
+      ?? normalizeMessagePreview(sessions.view(session).first_message)
       ?? "";
     renaming = true;
     closeContextMenu();

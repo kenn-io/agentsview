@@ -1037,6 +1037,7 @@ func (b *directBackend) SessionUsage(
 func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
+	ctx = db.WithUsageWindowMemo(ctx)
 	var err error
 	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
 	if err != nil {

@@ -5278,3 +5278,110 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	assert.Equal(t, 501, resp.TotalCalls)
 	t.Log("chunked and unchunked responses match; TotalCalls == 501")
 }
+
+func TestAnalyticsDateWindowPlan(t *testing.T) {
+	d := testDB(t)
+	seedAnalyticsData(t, d)
+	for _, tc := range []struct {
+		name, from, to string
+		indexed        bool
+	}{
+		{"2-day", "2024-06-01", "2024-06-03", true},
+		{"90-day", "2024-06-01", "2024-08-30", true},
+		{"91-day", "2024-06-01", "2024-08-31", false},
+		{"year", "2024-01-01", "2025-01-01", false},
+		{"from-only", "2024-06-01", "", false},
+		{"to-only", "", "2024-06-03", false},
+		{"all-time", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := baseFilter()
+			f.From, f.To = tc.from, tc.to
+			for _, table := range []struct{ name, date string }{
+				{"sessions", "COALESCE(NULLIF(started_at, ''), created_at)"},
+				{"sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)"},
+			} {
+				where, args := f.buildWhere(table.date)
+				plan := queryPlanOf(t, d, "SELECT id FROM "+table.name+" WHERE "+where, args...)
+				if tc.indexed {
+					assert.Contains(t, plan, "idx_sessions_effective_start")
+				} else {
+					assert.NotContains(t, plan, "idx_sessions_effective_start")
+				}
+			}
+		})
+	}
+}
+
+func TestGetAnalyticsTopSessionsEmptyDateWindowWork(t *testing.T) {
+	for _, history := range []int{30000} {
+		t.Run(fmt.Sprintf("history_%d", history), func(t *testing.T) {
+			d := testDB(t)
+			_, err := d.getWriter().ExecContext(t.Context(), `
+				WITH RECURSIVE seq(n) AS (
+					SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1
+				)
+				INSERT INTO sessions (id, project, machine, agent, message_count, started_at)
+				SELECT printf('old-%06d', n), 'project-a', 'local', 'claude',
+					n + 1, '2024-01-01T12:00:00Z' FROM seq`, history)
+			require.NoError(t, err)
+
+			// Count date evaluations using NULLIF's semantics for the fixture's
+			// non-NULL text starts. A date-index seek uses stored expression
+			// values; an archive-wide ranking walk evaluates each old row.
+			// Register only on the reader, leaving the stored index intact.
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			var evaluations int
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other string) any {
+					evaluations++
+					if value == other {
+						return nil
+					}
+					return value
+				}, true)
+			}))
+			require.NoError(t, conn.Close())
+
+			for _, timezone := range []string{"UTC", "Asia/Kolkata"} {
+				t.Run(timezone, func(t *testing.T) {
+					evaluations = 0
+					resp, err := d.GetAnalyticsTopSessions(t.Context(), AnalyticsFilter{
+						From: "2024-06-01", To: "2024-06-02", Timezone: timezone,
+					}, "messages")
+					require.NoError(t, err)
+					assert.Equal(t, "messages", resp.Metric)
+					assert.Empty(t, resp.Sessions)
+					assert.LessOrEqual(t, evaluations, 16, "empty-window date evaluations must stay bounded as history grows")
+					t.Logf("date evaluations: %d", evaluations)
+				})
+			}
+		})
+	}
+}
+
+func TestAnalyticsDateWindowCreatedAtFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		startedAt *string
+	}{
+		{"null", nil},
+		{"empty", new("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "fallback", "project-a", func(s *Session) { s.StartedAt = tc.startedAt })
+			_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2024-06-02T12:00:00Z' WHERE id = 'fallback'")
+			require.NoError(t, err)
+			summary, err := d.GetAnalyticsSummary(t.Context(), baseFilter())
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary.TotalSessions)
+			top, err := d.GetAnalyticsTopSessions(t.Context(), baseFilter(), "messages")
+			require.NoError(t, err)
+			require.Len(t, top.Sessions, 1)
+			assert.Equal(t, "fallback", top.Sessions[0].ID)
+		})
+	}
+}

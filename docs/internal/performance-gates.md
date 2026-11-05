@@ -360,9 +360,10 @@ threshold check.
 
 `make perf-sim` runs the retained simulator in `cmd/perfsim`. See
 [the simulator guide](performance-simulator.md) for archive-size comparisons,
-append-only profiles, and analytic-query measurements. Its small correctness
-fixture runs in the normal Go suite. Large runs are opt-in; their process-wide
-allocation samples include background work and are not CI timing assertions.
+append-only profiles, and analytic-query measurements. The normal Go suite
+checks the correctness fixture and bounds JSONL append-time growth between
+1,000 and 10,000 sessions. The growth check skips under `-short`. Full simulator
+runs are opt-in; their process-wide allocation samples include background work.
 
 `BenchmarkCodexStreamingDiscovery` in `internal/parser` is a diagnostic
 benchmark, like `BenchmarkCodexIncrementalCursor`, outside the default gate

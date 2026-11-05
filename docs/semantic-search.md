@@ -363,6 +363,10 @@ only when enabled): reduced vectors are renormalized prefixes, not
 byte-identical to native output, so enabling it — or changing `dimension` —
 makes the existing index stale and re-embeds the archive on the next build.
 
+Scheduled builds wait on battery and resume once AC power returns, or at the
+next daemon start if it exited while waiting. Manual builds and
+`pg push --watch --embed` still run on battery.
+
 The first scheduled build that `run_after_sync` triggers after enabling
 `[vector]` embeds the entire existing archive, not just deltas, since the mirror
 starts out empty and every document counts as pending. For a hosted embeddings

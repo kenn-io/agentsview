@@ -122,7 +122,7 @@ func TestCodexProviderUnresolvedParentNeedsRetry(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
 	assert.Equal(t, DataVersionNeedsRetry, result.DataVersion)
-	assert.Contains(t, result.RetryReason, "parent turns")
+	assert.Contains(t, result.RetryReason, "forked from")
 	require.Len(t, result.Result.Messages, 2)
 	assert.Equal(t, "child task", result.Result.Messages[0].Content)
 	assert.Equal(t, "child answer", result.Result.Messages[1].Content)

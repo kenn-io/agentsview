@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -424,6 +425,28 @@ func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *tes
 	require.ErrorIs(t, err, readErr)
 	assert.Nil(t, res)
 	assert.ErrorIs(t, <-store.canceled, context.Canceled)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_PreparesOnce(t *testing.T) {
+	for _, selection := range []string{"default", "explicit"} {
+		t.Run(selection, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			seedPairwiseUsageFixture(t, d)
+			var prepares atomic.Int32
+			d.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+			be := service.NewDirectBackend(d, nil)
+			req := service.UsagePairwiseComparisonRequest{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+			}
+			if selection == "explicit" {
+				req.LeftDimension, req.LeftValue = "model", "claude-sonnet-4-20250514"
+				req.RightDimension, req.RightValue = "model", "gpt-4o"
+			}
+			_, err := be.UsagePairwiseComparison(t.Context(), req)
+			require.NoError(t, err)
+			assert.Equal(t, int32(1), prepares.Load())
+		})
+	}
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
