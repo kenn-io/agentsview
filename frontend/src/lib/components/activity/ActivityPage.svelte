@@ -529,7 +529,37 @@
         <Breakdowns report={activity.report} />
       </Card>
     {:else if activity.loading}
-      <div class="status">{m.activity_loading_report()}</div>
+      <!-- First load only: placeholders in the loaded layout (stat cards,
+           chart, sessions table) so the page does not jump when the report
+           lands. The toolbar's refresh status carries the live progress. -->
+      <div class="activity-skeleton" role="status">
+        <span class="kit-sr-only">{m.activity_loading_report()}</span>
+        <div class="skeleton-stats" aria-hidden="true">
+          {#each Array(7) as _, i (i)}
+            <Card level="default" padding="none" class="skeleton-stat">
+              <span class="skeleton-bar skeleton-value"></span>
+              <span class="skeleton-bar skeleton-label"></span>
+            </Card>
+          {/each}
+        </div>
+        <Card level="default" padding="none" class="chart-panel skeleton-chart">
+          <div class="skeleton-row" aria-hidden="true">
+            <span class="skeleton-bar skeleton-tabs"></span>
+            <span class="skeleton-bar skeleton-control"></span>
+          </div>
+          <span class="skeleton-bar skeleton-plot" aria-hidden="true"></span>
+        </Card>
+        <Card level="default" padding="none" class="chart-panel skeleton-table">
+          <span class="skeleton-bar skeleton-heading" aria-hidden="true"></span>
+          {#each Array(5) as _, i (i)}
+            <div class="skeleton-row" aria-hidden="true">
+              <span class="skeleton-bar skeleton-cell-wide"></span>
+              <span class="skeleton-bar skeleton-cell"></span>
+              <span class="skeleton-bar skeleton-cell"></span>
+            </div>
+          {/each}
+        </Card>
+      </div>
     {:else if activity.error}
       <div class="status error" {@attach errorTelemetry("analytics")}>
         <span>{activity.error}</span>
@@ -608,6 +638,80 @@
   .activity-content :global(.chart-panel) {
     padding: 12px;
     min-width: 0;
+  }
+
+  /* ── First-load skeleton ──
+   * Neutral blocks sized like the loaded report. A slow opacity pulse
+   * (no sweep) signals progress; reduced motion holds it still. */
+  .activity-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .skeleton-stats {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .skeleton-stats :global(.skeleton-stat) {
+    flex: 1;
+    min-width: 120px;
+    min-height: 78px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .skeleton-stats :global(.skeleton-stat > .kit-card__body) {
+    display: contents;
+  }
+
+  .activity-content :global(.skeleton-chart),
+  .activity-content :global(.skeleton-table) {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .activity-content :global(.skeleton-chart > .kit-card__body),
+  .activity-content :global(.skeleton-table > .kit-card__body) {
+    display: contents;
+  }
+
+  .skeleton-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .skeleton-bar {
+    display: block;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+    animation: skeleton-pulse 1.8s ease-in-out infinite alternate;
+  }
+
+  .skeleton-value { width: 44px; height: 18px; }
+  .skeleton-label { width: 72px; height: 10px; }
+  .skeleton-tabs { width: 300px; height: 22px; }
+  .skeleton-control { width: 140px; height: 22px; margin-left: auto; }
+  .skeleton-plot { height: 190px; }
+  .skeleton-heading { width: 80px; height: 12px; }
+  .skeleton-cell-wide { flex: 2; height: 10px; }
+  .skeleton-cell { flex: 1; height: 10px; }
+
+  @keyframes skeleton-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.5; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-bar {
+      animation: none;
+    }
   }
 
   .status {
