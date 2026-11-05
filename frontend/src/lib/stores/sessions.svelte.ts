@@ -644,10 +644,9 @@ class SessionsStore {
       // A rejected filter has no matching rows; showing the previous
       // filter's rows under it would mislabel them.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-        this.sessions = [];
+        this.resetPagination();
+        this.details.clear();
         this.sidebarIndexIds = new Set();
-        this.nextCursor = null;
-        this.total = 0;
         this.sidebarLoadError = error.message;
         return;
       }
@@ -684,7 +683,6 @@ class SessionsStore {
   }
 
   async hydrateVisibleSessions(ids: string[], version: number = this.sidebarIndexVersion) {
-    const uniqueIds = [...new Set(ids)];
     const cache = this.hydratedSessionsByVersion.get(version) ?? new Set<string>();
     this.hydratedSessionsByVersion.set(version, cache);
     const inflight =
@@ -693,7 +691,7 @@ class SessionsStore {
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
     const signal = this.routeSignal();
 
-    const uncached = uniqueIds.filter((id) => !cache.has(id));
+    const uncached = [...new Set(ids)].filter((id) => !cache.has(id));
     await Promise.all(
       uncached.map((id) => {
         const existing = inflight.get(id);
@@ -712,6 +710,7 @@ class SessionsStore {
             }
             cache.add(id);
             this.details.set(id, { ...this.details.get(id), ...hydrated });
+            this.mergeDetailIntoList(id);
             this.markActiveSessionFound(id);
           } catch (err) {
             // Visible hydration is best-effort; the skinny row remains usable.
@@ -1109,7 +1108,7 @@ class SessionsStore {
 
   private async hydrateSelectedIndexOnlySession(id: string) {
     const existing = this.byId.get(id);
-    if (!existing?.is_index_only) return;
+    if (!existing?.is_index_only || this.details.has(id)) return;
     await this.hydrateVisibleSessions([id]);
   }
 
@@ -1219,16 +1218,13 @@ class SessionsStore {
   private mergeDetailIntoList(id: string) {
     const detail = this.signalDetailCache.get(id);
     if (!detail) return;
-    const row = this.byId.get(id);
-    if (row) {
-      const s = this.view(row);
-      if (s.health_score_basis === undefined && detail.basis != null) {
-        this.details.set(id, {
-          ...s,
-          health_score_basis: detail.basis,
-          health_penalties: detail.penalties ?? undefined,
-        });
-      }
+    const s = this.byId.has(id) ? this.details.get(id) : undefined;
+    if (s && s.health_score_basis === undefined && detail.basis != null) {
+      this.details.set(id, {
+        ...s,
+        health_score_basis: detail.basis,
+        health_penalties: detail.penalties ?? undefined,
+      });
     }
   }
 

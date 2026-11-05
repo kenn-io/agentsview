@@ -541,6 +541,51 @@ describe("SessionsStore", () => {
   });
 
   describe("sidebar loading", () => {
+    it("hydrates the selected session after signal detail arrives first", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      api.getSession
+        .mockResolvedValueOnce(makeSession({ id: "row", health_score_basis: ["signal"] }))
+        .mockResolvedValueOnce(makeSession({ id: "row", first_message: "Loaded title" }));
+
+      await sessions.fetchSignalDetail("row");
+      await sessions.navigateToSession("row");
+
+      expect(sessions.activeSession?.first_message).toBe("Loaded title");
+      expect(sessions.activeSession?.health_score_basis).toEqual(["signal"]);
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+    });
+
+    it("reuses off-page details after an index reload and reselection", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      api.getSession.mockResolvedValue(makeSession({ id: "offpage", first_message: "Loaded title" }));
+      await sessions.load();
+      await sessions.navigateToSession("offpage");
+      await sessions.load();
+      sessions.deselectSession();
+
+      await sessions.navigateToSession("offpage");
+
+      expect(sessions.activeSession?.first_message).toBe("Loaded title");
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("discards old details when the index rejects a filter", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      api.getSession.mockResolvedValueOnce(makeSession({ id: "row", first_message: "Old title" }));
+      await sessions.load();
+      await sessions.navigateToSession("row");
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(400, "invalid filter"));
+      await sessions.load();
+      expect(sessions.sessions).toHaveLength(0);
+
+      await sessions.load();
+      expect(sessions.activeSession).toBeUndefined();
+      api.getSession.mockResolvedValueOnce(makeSession({ id: "row", first_message: "New title" }));
+      await sessions.hydrateVisibleSessions(["row"]);
+      expect(sessions.activeSession?.first_message).toBe("New title");
+    });
+
     it("keeps project edits when an older hydration completes", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
       await sessions.load();
