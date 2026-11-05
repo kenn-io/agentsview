@@ -29,6 +29,7 @@ import (
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // stubVectorPushSource is a no-op storage.VectorPushSource: the gating test
@@ -1388,5 +1389,49 @@ func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
 		require.ErrorIs(t, err, connectErr.Err)
 		assert.Equal(t, full, pushErrorBody(err.Error(), err).PushStarted,
 			"full=%t: only a push that rebuilt the archive counts as started", full)
+	}
+}
+
+// A rebuild can install while a fork stays deferred. A /resync request accepts
+// that, but a push must not publish the unresolved fork or its copied usage.
+func TestSyncThenRunForPushRejectsDeferredRebuild(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	for _, worker := range []bool{true, false} {
+		t.Run(fmt.Sprintf("worker=%v", worker), func(t *testing.T) {
+			root := t.TempDir()
+			const timestamp = "2026-09-01T10:00:00Z"
+			require.NoError(t, os.WriteFile(
+				filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl"),
+				[]byte(testjsonl.JoinJSONL(
+					testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+					testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+					testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+				)), 0o600))
+			opts := []syncRouteFixtureOption{
+				withDisabledAgents(nil, map[parser.AgentType][]string{parser.AgentCodex: {root}}),
+			}
+			if worker {
+				opts = append(opts, withLocalResyncRunner(func(
+					context.Context, func(syncpkg.Progress),
+				) (syncpkg.SyncStats, error) {
+					return syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1}, nil
+				}))
+			}
+			f := newSyncRouteFixture(t, opts...)
+			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+			t.Cleanup(engine.Close)
+
+			err := f.srv.syncThenRunForPush(
+				t.Context(), engine, f.db, true, nil, nil, nil,
+				func(bool) error {
+					require.FailNow(t, "push work must not run while a fork is deferred")
+					return nil
+				},
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "local sync processing incomplete")
+		})
 	}
 }

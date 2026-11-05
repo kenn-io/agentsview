@@ -682,8 +682,14 @@ func (s *Server) syncForPush(
 		}
 		return false, incomplete, nil
 	}
-	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
+	stats, err := s.runResyncWithFallback(ctx, engine, nil)
+	if err != nil {
 		return true, nil, err
+	}
+	// /resync accepts an installed rebuild that still has deferred forks.
+	// A push must not publish them or their copied parent usage.
+	if stats.Deferred > 0 {
+		return true, nil, requireProcessingComplete(stats)
 	}
 	return true, nil, ctx.Err()
 }
