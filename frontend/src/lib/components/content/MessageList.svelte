@@ -1126,6 +1126,15 @@
     padding-inline: 12px;
   }
 
+  /* Compact packs tool rows 2px tighter than the 24px Default rows (see
+     ToolBlock); the copy trim grows to match so the 26px hover button
+     still does not set the row height. */
+  .layout-compact :global(.tool-group-body),
+  .layout-compact :global(.pg-members) {
+    --tool-row-pad-block: 2px;
+    --tool-row-copy-trim: -2px;
+  }
+
   .layout-compact :global(.message-header) {
     margin-bottom: 4px;
     gap: 6px;
