@@ -50,25 +50,23 @@ type usageWindowObserver struct {
 	beforePrepare func(context.Context)
 }
 
+// SetUsageWindowPrepareForTest observes preparations. Call before starting reads.
+func (db *DB) SetUsageWindowPrepareForTest(beforePrepare func(context.Context)) {
+	db.usageCache.usageWindowObserver.beforePrepare = beforePrepare
+}
+
 type usageWindowMemoKey struct{}
 
 type usageWindowMemo struct {
 	mu      sync.Mutex
-	windows map[string]*usageWindowSlot
+	windows map[string]func() (usagePreparedWindow, error)
 }
 
 // WithUsageWindowMemo reuses prepared windows across reads in one request.
 func WithUsageWindowMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, usageWindowMemoKey{}, &usageWindowMemo{
-		windows: make(map[string]*usageWindowSlot),
+		windows: make(map[string]func() (usagePreparedWindow, error)),
 	})
-}
-
-type usageWindowSlot struct {
-	done     chan struct{}
-	prepared usagePreparedWindow
-	err      error
-	waiters  int
 }
 
 func (memo *usageWindowMemo) put(key string, value usagePreparedWindow) {
@@ -77,9 +75,9 @@ func (memo *usageWindowMemo) put(key string, value usagePreparedWindow) {
 	}
 	memo.mu.Lock()
 	defer memo.mu.Unlock()
-	slot := &usageWindowSlot{done: make(chan struct{}), prepared: value}
-	close(slot.done)
-	memo.windows[key] = slot
+	memo.windows[key] = sync.OnceValues(func() (usagePreparedWindow, error) {
+		return value, nil
+	})
 }
 
 func (memo *usageWindowMemo) drop(key string) {
@@ -103,35 +101,19 @@ func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind us
 	}
 	key := usageWindowKey(filter, kind, cursor)
 	memo.mu.Lock()
-	if slot, ok := memo.windows[key]; ok {
-		slot.waiters++
-		memo.mu.Unlock()
-		defer func() {
-			memo.mu.Lock()
-			slot.waiters--
-			memo.mu.Unlock()
-		}()
-		select {
-		case <-slot.done:
-			return slot.prepared, slot.err
-		case <-ctx.Done():
-			return usagePreparedWindow{}, ctx.Err()
-		}
+	prepare, ok := memo.windows[key]
+	if !ok {
+		prepare = sync.OnceValues(func() (usagePreparedWindow, error) {
+			prepared, err := db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+			if err != nil {
+				memo.drop(key)
+			}
+			return prepared, err
+		})
+		memo.windows[key] = prepare
 	}
-	slot := &usageWindowSlot{done: make(chan struct{}), waiters: 1}
-	memo.windows[key] = slot
 	memo.mu.Unlock()
-
-	prepared, err := db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
-	memo.mu.Lock()
-	slot.prepared, slot.err = prepared, err
-	slot.waiters--
-	if err != nil {
-		delete(memo.windows, key)
-	}
-	close(slot.done)
-	memo.mu.Unlock()
-	return prepared, err
+	return prepare()
 }
 
 func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, report func(string)) (usagePreparedWindow, error) {

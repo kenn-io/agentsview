@@ -8,7 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -291,19 +290,31 @@ func TestUsageWindowMemoSharesConcurrentSides(t *testing.T) {
 		}()
 	}
 	<-entered
-	key := usageWindowKey(filter, usageQueryKindToken, usageCursorIncluded(filter))
-	memo := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-	assert.Eventually(t, func() bool {
-		memo.mu.Lock()
-		defer memo.mu.Unlock()
-		slot := memo.windows[key]
-		return slot != nil && slot.waiters == 2
-	}, 10*time.Second, time.Millisecond)
-	assert.Equal(t, int32(1), prepares.Load())
 	unblock()
 	for range 2 {
 		got := <-done
 		require.NoError(t, got.err)
 		assert.Equal(t, wants[got.model], got.daily)
 	}
+	assert.Equal(t, int32(1), prepares.Load())
+}
+
+func TestUsageWindowMemoRecapturesAfterGenerationRetirement(t *testing.T) {
+	database := openDailyUsageFixtureDB(t)
+	filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
+	want := getDailyUsageLegacyForRollupTest(t, database, filter)
+	var prepares atomic.Int32
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+	ctx := WithUsageWindowMemo(t.Context())
+	first, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, first)
+	assert.Equal(t, int32(1), prepares.Load())
+
+	require.NoError(t, database.SetDatabaseIDForTest(t.Context(), "replacement-database-id"))
+	require.NoError(t, database.usageCache.RetireExcept("replacement-database-id"))
+	second, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, second)
+	assert.Equal(t, int32(2), prepares.Load())
 }
