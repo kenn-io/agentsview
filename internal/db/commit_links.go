@@ -285,8 +285,8 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		} else if len(pollIDs) == 0 {
 			continue
 		}
-		// One poll owns every output block, even when its process has finished.
-		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1
+		// A call that only polls one execution owns its output even after it finishes.
+		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || strings.Count(call.input, "tools.") == 1)
 		if singlePoll {
 			var ok bool
 			singleOwner, ok = pending[pollIDs[0]]
