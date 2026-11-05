@@ -22,7 +22,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v1"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -177,9 +177,9 @@ type commitOutput struct {
 // callOutput decodes shell results and all their running process or cell IDs.
 func callOutput(result string) ([]commitOutput, []string) {
 	var payload struct {
-		Output      *string `json:"output"`
-		OutputDelta *string `json:"output_delta"`
-		SessionID   int64   `json:"session_id"`
+		Output      *string        `json:"output"`
+		OutputDelta *string        `json:"output_delta"`
+		SessionID   jsontext.Value `json:"session_id"`
 	}
 	if json.Unmarshal([]byte(result), &payload) == nil {
 		output := payload.Output
@@ -189,8 +189,13 @@ func callOutput(result string) ([]commitOutput, []string) {
 		if output != nil {
 			var running []string
 			process := ""
-			if payload.SessionID != 0 {
-				process = strconv.FormatInt(payload.SessionID, 10)
+			if err := json.Unmarshal(payload.SessionID, &process); err != nil {
+				var id int64
+				if json.Unmarshal(payload.SessionID, &id) == nil && id != 0 {
+					process = strconv.FormatInt(id, 10)
+				}
+			}
+			if process != "" {
 				running = append(running, process)
 			}
 			return []commitOutput{{text: *output, process: process}}, running

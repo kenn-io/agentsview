@@ -96,7 +96,10 @@ func TestCommitLinksParsing(t *testing.T) {
 		{"cherry-pick", "[main abc1234] Fix parser", []string{"git cherry-pick abc1234"}, 0},
 		{"multiple", "[main (root-commit) abc1234] First\n[main def5678] Second\n[main def5678] Second", []string{"git commit -m one; git commit -m two"}, 2},
 		{"global option", "[main abc1234] Fix parser", []string{`git -c user.name=Example --no-pager commit -m fix`, `git -c 'user.name=Example User' commit -m fix`}, 1},
+		{"flag-only global options", "[main abc1234] Fix parser", []string{"git --no-advice commit -m fix", "git -p commit -m fix", "git -P commit -m fix"}, 1},
 		{"output delta", `{"session_id":null,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
+		{"retained string session ID", `{"session_id":"shell-7","state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
+		{"retained integer session ID", `{"session_id":7,"state":"completed","exit_code":0,"output_delta":"[main abc1234] Fix parser\n"}`, []string{"git commit -m fix"}, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, command := range tt.commands {
