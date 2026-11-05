@@ -33,7 +33,7 @@ func usageChangeJournalSQL() (string, string) {
 		if condition != "" {
 			condition = "WHEN " + condition
 		}
-		fmt.Fprintf(&creates, "CREATE TRIGGER IF NOT EXISTS %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
+		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id")
 	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count"}

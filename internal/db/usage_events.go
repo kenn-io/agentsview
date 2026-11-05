@@ -32,6 +32,25 @@ type UsageEvent struct {
 	DedupKey                 string
 }
 
+type usageEventRow struct {
+	ordinal                                            sql.NullInt64
+	source, model, providerID                          string
+	input, output, cacheCreation, cacheRead, reasoning int
+	cost                                               sql.NullInt64
+	costStatus, costSource                             string
+	occurredAt                                         sql.NullString
+	dedupKey                                           string
+}
+
+func (r *usageEventRow) scan(rows *sql.Rows, id *int64, sessionID *string) error {
+	return rows.Scan(
+		id, sessionID, &r.ordinal, &r.source, &r.model,
+		&r.input, &r.output, &r.providerID,
+		&r.cacheCreation, &r.cacheRead, &r.reasoning,
+		&r.cost, &r.costStatus, &r.costSource, &r.occurredAt, &r.dedupKey,
+	)
+}
+
 func (db *DB) ensureUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS usage_events (
@@ -112,21 +131,12 @@ func replaceSessionUsageEventsTx(
 ) error {
 	// Compare raw persisted values in insertion order. Keeping the common
 	// prefix avoids journaling unchanged rows and preserves timestamp ties.
-	type eventRow struct {
-		ordinal                                            sql.NullInt64
-		source, model, providerID                          string
-		input, output, cacheCreation, cacheRead, reasoning int
-		cost                                               sql.NullInt64
-		costStatus, costSource                             string
-		occurredAt                                         sql.NullString
-		dedupKey                                           string
-	}
-	incoming := make([]eventRow, len(events))
+	incoming := make([]usageEventRow, len(events))
 	for i, ev := range events {
 		if ev.SessionID != "" && ev.SessionID != sessionID {
 			return fmt.Errorf("usage event session_id %q does not match %q", ev.SessionID, sessionID)
 		}
-		r := eventRow{
+		r := usageEventRow{
 			source: ev.Source, model: ev.Model, providerID: ev.ProviderID,
 			input: ev.InputTokens, output: ev.OutputTokens,
 			cacheCreation: ev.CacheCreationInputTokens, cacheRead: ev.CacheReadInputTokens,
@@ -142,8 +152,8 @@ func replaceSessionUsageEventsTx(
 		incoming[i] = r
 	}
 	rows, err := tx.Query(`
-		SELECT id, message_ordinal, source, model, provider_id,
-			input_tokens, output_tokens, cache_creation_input_tokens,
+		SELECT id, session_id, message_ordinal, source, model,
+			input_tokens, output_tokens, provider_id, cache_creation_input_tokens,
 			cache_read_input_tokens, reasoning_tokens, cost_microdollars,
 			cost_status, cost_source, occurred_at, dedup_key
 		FROM usage_events WHERE session_id = ? ORDER BY id`, sessionID)
@@ -151,14 +161,13 @@ func replaceSessionUsageEventsTx(
 		return fmt.Errorf("reading usage events for replacement: %w", err)
 	}
 	defer rows.Close()
-	var stored []eventRow
+	var stored []usageEventRow
 	var ids []int64
 	for rows.Next() {
 		var id int64
-		var r eventRow
-		if err := rows.Scan(&id, &r.ordinal, &r.source, &r.model, &r.providerID,
-			&r.input, &r.output, &r.cacheCreation, &r.cacheRead, &r.reasoning,
-			&r.cost, &r.costStatus, &r.costSource, &r.occurredAt, &r.dedupKey); err != nil {
+		var storedSessionID string
+		var r usageEventRow
+		if err := r.scan(rows, &id, &storedSessionID); err != nil {
 			return fmt.Errorf("scanning usage events for replacement: %w", err)
 		}
 		stored = append(stored, r)
@@ -407,28 +416,25 @@ func usageEventsWithQuerier(
 	var out []UsageEvent
 	for rows.Next() {
 		var ev UsageEvent
-		var ordinal sql.NullInt64
-		var cost sql.NullInt64
-		var occurred sql.NullString
-		if err := rows.Scan(
-			&ev.ID, &ev.SessionID, &ordinal, &ev.Source, &ev.Model,
-			&ev.InputTokens, &ev.OutputTokens,
-			&ev.ProviderID, &ev.CacheCreationInputTokens, &ev.CacheReadInputTokens,
-			&ev.ReasoningTokens, &cost, &ev.CostStatus,
-			&ev.CostSource, &occurred, &ev.DedupKey,
-		); err != nil {
+		var r usageEventRow
+		if err := r.scan(rows, &ev.ID, &ev.SessionID); err != nil {
 			return nil, fmt.Errorf("scanning usage event: %w", err)
 		}
-		if ordinal.Valid {
-			v := int(ordinal.Int64)
+		ev.Source, ev.Model, ev.ProviderID = r.source, r.model, r.providerID
+		ev.InputTokens, ev.OutputTokens = r.input, r.output
+		ev.CacheCreationInputTokens, ev.CacheReadInputTokens = r.cacheCreation, r.cacheRead
+		ev.ReasoningTokens = r.reasoning
+		ev.CostStatus, ev.CostSource, ev.DedupKey = r.costStatus, r.costSource, r.dedupKey
+		if r.ordinal.Valid {
+			v := int(r.ordinal.Int64)
 			ev.MessageOrdinal = &v
 		}
-		if cost.Valid {
-			v := money.Money{Microdollars: cost.Int64}
+		if r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
 			ev.Cost = &v
 		}
-		if occurred.Valid {
-			ev.OccurredAt = occurred.String
+		if r.occurredAt.Valid {
+			ev.OccurredAt = r.occurredAt.String
 		}
 		out = append(out, ev)
 	}
