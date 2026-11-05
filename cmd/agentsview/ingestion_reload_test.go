@@ -306,9 +306,13 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 			case "failed":
 				require.Error(t, <-requested)
 				require.True(t, ingestion.Pending(), "a failed requested pass leaves catch-up pending")
+				require.False(t, ingestion.EnsureFresh(t.Context()))
+				require.NoError(t, ingestion.syncScheduled(t.Context()))
 			case "canceled":
 				require.NoError(t, <-requested)
 				require.True(t, ingestion.Pending(), "cancellation keeps catch-up pending even when its callback returns nil")
+				require.False(t, ingestion.EnsureFresh(t.Context()))
+				require.NoError(t, ingestion.syncScheduled(t.Context()))
 			}
 			require.True(t, ingestion.EnsureFresh(t.Context()))
 			headers, freshBody := searchIngestionArchive(t, ts.URL, query)
@@ -322,7 +326,7 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 	}
 }
 
-func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {
+func TestDaemonIngestionFailedCatchupRetriesOnSchedule(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	writeReloadGeminiSession(t, root, "retry")
@@ -337,7 +341,9 @@ func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {
 	ingestion.applying.Wait()
 	assert.False(t, ingestion.EnsureFresh(t.Context()))
 	assert.True(t, ingestion.Pending())
+	assert.False(t, ingestion.EnsureFresh(t.Context()))
 	// Recovery shares the engine's cached terminal parse-failure policy.
+	require.NoError(t, ingestion.syncScheduled(t.Context()))
 	require.True(t, ingestion.EnsureFresh(t.Context()))
 	assert.False(t, sessionImported(t, database, "gemini:retry"))
 }

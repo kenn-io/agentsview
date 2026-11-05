@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,8 +19,16 @@ func TestDaemonIngestionWakeIncludesPendingAttachedHistory(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unavailable=%v", unavailable), func(t *testing.T) {
 			cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir(), ArchiveSources: []config.ArchiveSource{archiveSourceCommandFixture(t)}, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {t.TempDir()}}}
+			writeReloadGeminiSession(t, cfg.AgentDirs[parser.AgentGemini][0], "local")
 			database := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+			engineCfg := localSyncEngineConfig(cfg)
+			var calls atomic.Int32
+			for _, factory := range parser.ProviderFactories() {
+				if factory.Definition().Type == parser.AgentGemini {
+					engineCfg.ProviderFactories = []parser.ProviderFactory{countingIngestionFactory{factory, &calls}}
+				}
+			}
+			engine := agentsync.NewEngine(t.Context(), database, engineCfg)
 			t.Cleanup(engine.Close)
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 			t.Cleanup(ingestion.Stop)
@@ -40,6 +49,19 @@ func TestDaemonIngestionWakeIncludesPendingAttachedHistory(t *testing.T) {
 			require.NoError(t, err)
 			if unavailable {
 				assert.Empty(t, messages)
+				firstPass := calls.Load()
+				assert.Positive(t, firstPass)
+				for range 5 {
+					assert.False(t, ingestion.EnsureFresh(t.Context()))
+				}
+				assert.Equal(t, firstPass, calls.Load(), "reads during a source failure must not repeat discovery")
+				require.NoError(t, os.Rename(cfg.ArchiveSources[0].Repository+"-offline", cfg.ArchiveSources[0].Repository))
+				require.NoError(t, ingestion.syncScheduled(t.Context()))
+				assert.False(t, ingestion.Pending())
+				messages, err = database.GetAllMessages(t.Context(), attachedPushSession)
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "archived message", messages[0].Content)
 			} else {
 				require.Len(t, messages, 1)
 				assert.Equal(t, "archived message", messages[0].Content)

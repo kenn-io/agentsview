@@ -211,6 +211,11 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 		return fresh
 	}
 	done := d.catchup
+	if done == nil && d.watchers != nil {
+		d.mu.Unlock()
+		finish()
+		return false
+	}
 	started := done == nil
 	if started {
 		done = make(chan struct{})
@@ -327,16 +332,24 @@ func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
 // catchUpScheduledSources runs the remote and attached-source passes the
 // scheduled tick skips while collection is released.
 func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
-	if remote := remoteSourceSyncRoots(cfg); len(remote) > 0 {
-		if stats := d.engine.SyncRootsSince(d.ctx, remote, time.Time{}, nil); !stats.ProcessingComplete() {
-			return errors.New("remote source sync incomplete")
-		}
+	if err := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg)); err != nil {
+		return err
 	}
 	if attached := d.attached.Load(); attached != nil {
 		_, err := attached.DrainScheduled(d.ctx)
 		return err
 	}
 	return nil
+}
+
+// syncScheduled retries incomplete recovery on the existing periodic cadence.
+func (d *daemonIngestion) syncScheduled(ctx context.Context) error {
+	if d.Pending() {
+		return d.RunSync(ctx, func(context.Context) error { return d.catchUpSources(d.Config()) })
+	}
+	cfg := d.Config()
+	runScheduledSyncPass(ctx, d.engine, scheduledReconcileTargets(cfg))
+	return d.catchUpScheduledSources(cfg)
 }
 
 // Reload reads the saved configuration and applies it in the background. It

@@ -49,7 +49,11 @@ func discoverCursorS3ByRoot(
 		if !isS3URI(root) {
 			continue
 		}
-		for _, file := range s3PrefixScan(root, cursorS3Scanner()) {
+		files, err := s3PrefixScan(root, cursorS3Scanner())
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
 			candidates = append(candidates, cursorS3Transcript{
 				root: root,
 				file: file,

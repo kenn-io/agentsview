@@ -109,7 +109,7 @@ func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
 		}, nil
 	}
 
-	got := s3PrefixScan(root, S3SessionScanner{
+	got, err := s3PrefixScan(root, S3SessionScanner{
 		Agent: AgentQwen,
 		Keep: func(rel string, _ []string) bool {
 			return strings.HasSuffix(rel, ".jsonl")
@@ -117,6 +117,7 @@ func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
 		Project: func(_ string, segs []string) string { return segs[0] },
 	})
 
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, keepURI, got[0].Path)
 	assert.Equal(t, AgentQwen, got[0].Agent)

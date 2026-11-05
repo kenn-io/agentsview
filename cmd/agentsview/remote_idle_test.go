@@ -26,10 +26,11 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 		t.Run(fmt.Sprintf("remote_forbidden=%v", forbidden), func(t *testing.T) {
 			content := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "overnight remote message", "remote-overnight").String()
 			var published atomic.Bool
+			var denied atomic.Bool
 			var requests atomic.Int32
 			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
-				if forbidden {
+				if denied.Load() {
 					w.WriteHeader(http.StatusForbidden)
 					_, _ = io.WriteString(w, "<Error><Code>AccessDenied</Code></Error>")
 					return
@@ -71,12 +72,18 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 			ingestion.Suspend()
 			ingestion.applying.Wait()
 			published.Store(true)
+			denied.Store(forbidden)
 			requests.Store(0)
 			if forbidden {
 				dbtest.WriteTestFile(t, filepath.Join(local, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
 			}
-			require.True(t, ingestion.EnsureFresh(t.Context()))
-			assert.False(t, ingestion.Pending())
+			assert.Equal(t, !forbidden, ingestion.EnsureFresh(t.Context()))
+			assert.Equal(t, forbidden, ingestion.Pending())
+			if forbidden {
+				endpoint := serveIngestionArchive(t, cfg, database, engine, ingestion)
+				headers, _ := searchIngestionArchive(t, endpoint.URL, "overnight")
+				assert.Equal(t, "true", headers.Get("X-Agentsview-Archive-Stale"))
+			}
 			assert.Positive(t, requests.Load(), "wake attempts remote imports")
 			id, message := "overnight", "overnight remote message"
 			if forbidden {
@@ -86,6 +93,15 @@ func TestDaemonIngestionWakeIncludesRemoteHistory(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
 			assert.Equal(t, message, messages[0].Content)
+			if forbidden {
+				denied.Store(false)
+				require.NoError(t, ingestion.syncScheduled(t.Context()))
+				assert.False(t, ingestion.Pending())
+				messages, err = database.GetAllMessages(t.Context(), "overnight")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "overnight remote message", messages[0].Content)
+			}
 		})
 	}
 }

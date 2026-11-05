@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestS3DiscoveryReportsListingFailure(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+	denied := errors.New("listing denied")
+	listS3Objects = func(string) ([]S3Object, error) { return nil, denied }
+	for _, agent := range []AgentType{AgentClaude, AgentCodex, AgentCursor, AgentIcodemate} {
+		t.Run(string(agent), func(t *testing.T) {
+			factory, ok := ProviderFactoryByType(agent)
+			require.True(t, ok)
+			provider := factory.NewProvider(ProviderConfig{Roots: []string{"s3://bucket/machine/raw/" + string(agent)}})
+			_, err := provider.Discover(t.Context())
+			require.ErrorIs(t, err, denied)
+			err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
+				require.FailNow(t, "failed listing must not emit sources")
+				return nil
+			})
+			require.ErrorIs(t, err, denied)
+		})
+	}
+}
 
 // TestClaudeSourceSetDiscoversS3Sessions verifies the Claude source set
 // enumerates s3:// roots through its provider Discover path and carries the
