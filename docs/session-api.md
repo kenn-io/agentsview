@@ -1579,12 +1579,14 @@ Quiet commits and summaries with shorter SHAs have no link. Older Codex commands
 stored as argument arrays are unsupported. Codex output received through a later
 `write_stdin` poll links to the original commit call when its process ID
 matches. Polls with no originating commit call produce no links. Code-mode
-output contributes a link only when its execution or process ID matches an
-earlier commit call. Known limitation: new commits started inside code-mode
-batches have no links, even when the batch contains only one shell call. The
-stored output IDs cannot be tied to the commit command. Each session records a
-SHA once, at its first matching call. Decorated log lines are excluded. A custom
-log format that prints one bare ref in the same shape as a commit summary can
+scripts with exactly one tool call and a fixed command literal can link commits,
+including output without a process ID. Command literals containing `${` have no
+links. A single-call `write_stdin` script can poll an earlier commit execution
+without an output process ID. Scripts with several tool calls cannot start new
+commit links; their polls need output process IDs matching an earlier commit
+call. Each session records a SHA once, at its first matching call. Decorated
+log lines are excluded. A custom log format that prints one bare ref in the
+same shape as a commit summary can
 still create a link when the call also invokes `git commit`; this is a known
 limitation.
 

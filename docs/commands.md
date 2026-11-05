@@ -2025,9 +2025,12 @@ paired with the original call. Calls spanning repositories use the first
 directory; the last `cd` before the first commit invocation adjusts it. Archives
 retaining only transcripts or usage have no links, and hosted PostgreSQL returns
 HTTP 501. Sessions permanently deleted before this release have no links. JSON
-output keeps `call_index`. Code-mode output needs an execution or process ID
-matching an earlier commit call. New commits started inside code-mode batches
-have no links because their output IDs cannot be tied to the commit command.
+output keeps `call_index`. Code-mode scripts with exactly one tool call and a
+fixed command literal can link commits, including output without a process ID.
+Command literals containing `${` have no links. A single-call `write_stdin`
+script can poll an earlier commit execution. Scripts with several tool calls
+cannot start new commit links; their polls need output process IDs matching an
+earlier commit call.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and

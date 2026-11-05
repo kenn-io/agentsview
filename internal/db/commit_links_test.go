@@ -28,7 +28,10 @@ func commitMessages(id, input, result string) []Message {
 func TestCommitLinksLateResult(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "claude:commit", "project-a")
-	insertMessages(t, d, commitMessages("claude:commit", `{"command":"git commit -m fix"}`, "")...)
+	messages := commitMessages("claude:commit", `{"command":"git commit -m fix"}`, "")
+	messages[2].ToolCalls[0].CallIndex = 1
+	messages[2].ToolCalls = append([]ToolCall{{SessionID: "claude:commit", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"true"}`}}, messages[2].ToolCalls...)
+	insertMessages(t, d, messages...)
 	before, err := d.SessionCommitLinks(t.Context(), "claude:commit")
 	require.NoError(t, err)
 	assert.Empty(t, before.Commits)
@@ -43,7 +46,7 @@ func TestCommitLinksLateResult(t *testing.T) {
 	assert.Equal(t, "claude:commit", link.SessionID)
 	assert.Equal(t, "abc1234", link.SHA)
 	assert.Equal(t, 2, link.MessageOrdinal)
-	assert.Equal(t, 0, link.CallIndex)
+	assert.Equal(t, 1, link.CallIndex)
 	assert.Equal(t, "commit-call", link.ToolUseID)
 	assert.False(t, link.Ambiguous)
 }
@@ -128,12 +131,40 @@ func TestCommitLinksParsing(t *testing.T) {
 func TestCommitLinksCodeModeWithoutExecutionID(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
-	messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m fix"}))`, `{"output":"[main abc1234] Fix parser\n"}`)
+	messages := commitMessages("s1", `const readCommand = "cat example.txt"; text(await tools.exec_command({cmd:"git commit -m fix"})); text(await tools.exec_command({cmd:readCommand}))`, `{"output":"[main abc1234] Fix parser\n"}`)
 	messages[2].ToolCalls[0].ToolName = "exec"
 	insertMessages(t, d, messages...)
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
 	assert.Empty(t, got.Commits)
+}
+
+func TestCommitLinksCodeModeFixedCommand(t *testing.T) {
+	for _, tt := range []struct {
+		name, input string
+		count       int
+	}{
+		{"double quoted", `text(await tools.exec_command({cmd:"git commit -m \"Document tools.exec_command\"",workdir:"/repo"}))`, 1},
+		{"single quoted", `text(await tools.exec_command({cmd:'git commit -m fix',workdir:'/repo'}))`, 1},
+		{"template literal", "text(await tools.exec_command({cmd:`git commit -m fix`,workdir:\"/repo\"}))", 1},
+		{"loop", `for (let i = 0; i < 1; i++) text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, 1},
+		{"interpolated", "text(await tools.exec_command({cmd:`git commit -m ${subject}`,workdir:\"/repo\"}))", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", tt.input, `{"output":"[main abc1234] Fix parser\n"}`)
+			messages[2].ToolCalls[0].ToolName = "exec"
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, tt.count)
+			if tt.count == 1 {
+				assert.Equal(t, "abc1234", got.Commits[0].SHA)
+				assert.Equal(t, "/repo", got.Commits[0].Repository)
+			}
+		})
+	}
 }
 
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
@@ -535,10 +566,14 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 	}
 	cases := []ownershipCase{
 		{
-			name: "single code mode execution without command ownership",
+			name: "single code mode execution",
 			messages: []Message{
 				call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m fix"}))`, `{"session_id":7,"output":"[main abc1234] Fix parser\n"}`),
 				call("write_stdin", "poll", `{"session_id":7}`, "[main def5678] Second\n"),
+			},
+			want: []ownedCommit{
+				{"abc1234", "commit-call", "", "Record the parser fix", tsZero, 2},
+				{"def5678", "commit-call", "", "Record the parser fix", tsZero, 2},
 			},
 		},
 		{
@@ -547,10 +582,11 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 				call("exec_command", "commit-call", `{"cmd":"git commit -m fix"}`, `{"session_id":7,"output":""}`),
 				call("exec", "poll", `text(await tools.write_stdin({session_id:7}))`, `{"output":"[main abc1234] Fix parser\n"}`),
 			},
+			want: []ownedCommit{{"abc1234", "commit-call", "", "Record the parser fix", tsZero, 2}},
 		},
 		{
 			name:     "failed commit with unrelated printed summary",
-			messages: []Message{call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"})); text(await tools.exec_command({cmd:"cat example.txt",workdir:"/other"}))`, `[{"type":"input_text","text":"{\"output\":\"nothing to commit\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main abc1234] Example\\n\"}"}]`)},
+			messages: []Message{call("exec", "commit-call", `const readCommand = "cat example.txt"; text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"})); text(await tools.exec_command({cmd:readCommand,workdir:"/other"}))`, `[{"type":"input_text","text":"{\"output\":\"nothing to commit\\n\"}"},{"type":"input_text","text":"{\"output\":\"[main abc1234] Example\\n\"}"}]`)},
 		},
 		{
 			name: "single poll mixed with unrelated command",
@@ -570,7 +606,7 @@ func TestCommitLinksNativePollOwnership(t *testing.T) {
 		{
 			name: "running batch with native polls",
 			messages: []Message{
-				call("exec", "commit-call", `text(await tools.exec_command({cmd:"git commit -m first"})); text(await tools.exec_command({cmd:"git commit -m second"}))`, `[{"type":"input_text","text":"{\"session_id\":7,\"output\":\"\"}"},{"type":"input_text","text":"{\"session_id\":8,\"output\":\"\"}"}]`),
+				call("exec", "commit-call", `const secondCommand = "git commit -m second"; text(await tools.exec_command({cmd:"git commit -m first"})); text(await tools.exec_command({cmd:secondCommand}))`, `[{"type":"input_text","text":"{\"session_id\":7,\"output\":\"\"}"},{"type":"input_text","text":"{\"session_id\":8,\"output\":\"\"}"}]`),
 				call("write_stdin", "poll-first", `{"session_id":7}`, "[main abc1234] First\n"),
 				call("write_stdin", "poll-second", `{"session_id":8}`, "[main def5678] Second\n"),
 			},
