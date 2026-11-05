@@ -208,9 +208,7 @@ describe("GeneratedInsightsPanel", () => {
     expect(mocks.generate).not.toHaveBeenCalled();
     // The reason sits beside the button and describes it.
     const reason = document.getElementById(generate!.getAttribute("aria-describedby")!);
-    expect(reason?.textContent?.trim()).toBe(
-      "Insight generation is unavailable for this archive",
-    );
+    expect(reason?.textContent?.trim()).toBe("Insight generation is unavailable for this archive");
   });
 
   it("explains a read-only archive beside the disabled Generate button", async () => {
