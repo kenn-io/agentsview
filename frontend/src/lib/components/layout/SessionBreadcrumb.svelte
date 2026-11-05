@@ -1616,16 +1616,36 @@
     flex-shrink: 0;
   }
 
-  /* The entrypoint qualifies the agent; keep it neutral so the agent
-     color stays the only identity fill in the strip. */
-  .agent-badge.entrypoint-badge {
+  /* The strip has one chip style, shared by the entrypoint, the health
+     grade, and the session ID: an 11px outlined label on no fill. Figures
+     (date, usage, cost, model) are plain muted text, so the title stays the
+     strongest element in the header. */
+  .agent-badge.entrypoint-badge,
+  .grade-badge,
+  .session-id {
+    display: inline-flex;
+    align-items: center;
     padding: 0 5px;
-    font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 500;
-    color: var(--text-secondary);
+    line-height: 16px;
+    background: transparent;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .grade-badge:hover,
+  .session-id:hover {
+    background: var(--bg-surface-hover);
+  }
+
+  /* The entrypoint qualifies the agent; keep it neutral so the agent
+     color stays the only identity color in the strip. */
+  .agent-badge.entrypoint-badge {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
   }
 
   .summary-badge {
@@ -1678,31 +1698,36 @@
     cursor: help;
   }
 
-  .session-time {
-    font-size: 11px;
+  /* Figures: one 12px muted size with tabular numerals and no fill. The
+     side padding only keeps their spacing. */
+  .session-time,
+  .token-badge,
+  .cost-badge,
+  .usage-breakdown-trigger,
+  .model-badge {
+    font-size: 12px;
+    font-weight: 400;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    background: transparent;
+    padding: 0 4px;
     white-space: nowrap;
+  }
+
+  /* A model name is an identifier, not a figure. */
+  .model-badge {
+    font-variant-numeric: normal;
+  }
+
+  .session-time {
     flex-shrink: 0;
   }
 
-  /* An outlined text chip, so the grade does not read as a role avatar. */
+  /* The grade keeps its ink so the chip still signals health. */
   .grade-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    background: transparent;
-    border: 1px solid var(--border-default);
+    font-weight: 600;
     color: color-mix(in srgb, var(--grade-ink) 62%, var(--text-primary));
     cursor: pointer;
-    line-height: 1.4;
-  }
-
-  .grade-badge:hover {
-    background: var(--bg-surface-hover);
   }
 
   /* The grade inks are dark, so dark mode needs a larger primary share
@@ -1814,16 +1839,10 @@
   }
 
   .session-id {
-    font-size: 11px;
-    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-family: var(--font-mono);
     color: var(--text-muted);
     cursor: pointer;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
     transition: color 0.15s, background 0.15s;
-    white-space: nowrap;
-    flex-shrink: 0;
   }
 
   /* Thin dividers split the strip into identity, run, and usage groups. */
@@ -1847,18 +1866,9 @@
 
   .session-id:hover {
     color: var(--text-secondary);
-    background: var(--bg-surface-hover);
   }
 
-  /* Usage figures lead the strip in secondary ink; the ID stays muted. */
   .token-badge {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-secondary);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
     flex-shrink: 0;
   }
 
@@ -1868,13 +1878,6 @@
   }
 
   .cost-badge {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-secondary);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
     flex-shrink: 0;
   }
 
@@ -1954,16 +1957,14 @@
     border-top: 1px solid var(--border-muted);
   }
 
+  /* Usage menus open from plain figures; a dotted underline marks them as
+     triggers without adding a chip. */
   .usage-breakdown-trigger {
     list-style: none;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-secondary);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
     cursor: pointer;
+    text-decoration: underline dotted;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+    text-underline-offset: 3px;
   }
 
   .usage-breakdown-trigger::-webkit-details-marker {
@@ -1971,9 +1972,10 @@
   }
 
   .usage-breakdown[open] .usage-breakdown-trigger,
+  .plan-usage[open] .usage-breakdown-trigger,
   .usage-breakdown-trigger:hover {
     color: var(--text-secondary);
-    background: var(--bg-surface-hover);
+    text-decoration-color: currentColor;
   }
 
   .usage-breakdown-menu {
@@ -2046,12 +2048,6 @@
     align-items: center;
     min-width: 0;
     max-width: min(280px, 28vw);
-    font-size: 11px;
-    color: var(--text-muted);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
     overflow: hidden;
     flex-shrink: 1;
   }
@@ -2192,14 +2188,13 @@
       align-content: center;
     }
 
-    /* The metadata row's chips share one 16px line, so the second row
-       costs 18px instead of 20px. */
+    /* The metadata row's figures share the chips' 16px line, so the
+       second row costs 18px instead of 20px. */
     .token-badge,
     .cost-badge,
     .usage-breakdown-trigger,
     .model-badge,
-    .session-id,
-    .grade-badge {
+    .session-time {
       line-height: 16px;
     }
 
