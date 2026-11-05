@@ -594,8 +594,8 @@
 
   /* List view: a full-width table. The name column fits the longest
      name (up to 13rem, longer names ellipsize), so each bar starts right
-     after the names and keeps most of the row; only
-     the bar flexes, and share and total keep a stable rhythm. */
+     after the names; only the bar column flexes, and share and total keep
+     a stable rhythm. */
   .list-view {
     display: grid;
     grid-template-columns: 18px 12px fit-content(13rem) minmax(96px, 1fr) 56px 88px;
@@ -616,9 +616,11 @@
       column-gap: 8px;
     }
 
-    .list-bar-track {
+    /* Outranks the base track rule below, which comes later. */
+    .list-view .list-bar-track {
       grid-column: 3 / -1;
       grid-row: 2;
+      max-width: none;
       margin-top: 3px;
     }
   }
@@ -662,7 +664,12 @@
     text-overflow: ellipsis;
   }
 
+  /* The bar shows a share, so its track stops at half the row: a full
+     row of grey rail behind bars a few pixels wide reads as empty space.
+     Share and total stay at the right edge. */
   .list-bar-track {
+    width: 100%;
+    max-width: 50cqi;
     height: 6px;
     background: var(--bg-inset);
     border-radius: 3px;

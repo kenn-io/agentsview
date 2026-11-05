@@ -186,3 +186,32 @@ test.describe("Usage attribution list on phones", () => {
     });
   }
 });
+
+test.describe("Usage attribution list on desktop", () => {
+  test("stops each bar track at about half the row", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/usage");
+    const panel = page.locator(".attribution-panel");
+    await expect(panel.locator(".tile").first()).toBeVisible();
+    await panel.getByRole("button", { name: "List", exact: true }).click();
+    const rows = panel.locator(".list-row");
+    await expect(rows.first()).toBeVisible();
+    const layout = await rows.evaluateAll((els) =>
+      els.map((row) => {
+        const box = (selector: string) => row.querySelector(selector)!.getBoundingClientRect();
+        return {
+          rowWidth: row.getBoundingClientRect().width,
+          rowRight: row.getBoundingClientRect().right,
+          barWidth: box(".list-bar-track").width,
+          costRight: box(".list-cost").right,
+        };
+      }),
+    );
+    for (const row of layout) {
+      expect(row.barWidth, JSON.stringify(row)).toBeGreaterThan(96);
+      expect(row.barWidth, JSON.stringify(row)).toBeLessThanOrEqual(row.rowWidth * 0.52);
+      // Share and total stay on the row's right edge.
+      expect(row.rowRight - row.costRight).toBeLessThan(12);
+    }
+  });
+});
