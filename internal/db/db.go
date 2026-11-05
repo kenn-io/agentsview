@@ -1410,6 +1410,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
 	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
+	}
+	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
 	d.mu.Unlock()
@@ -2963,6 +2966,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerDropsSQL); err != nil {
+		return fmt.Errorf("dropping usage change journal triggers: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, provider_freshnessDDL); err != nil {
 		return fmt.Errorf(
 			"creating provider_freshness side-table: %w", err)
@@ -2983,6 +2989,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing classification journal trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
+		return fmt.Errorf("installing usage change journal triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)
