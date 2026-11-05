@@ -637,7 +637,7 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it.each(["cost", "token"] as const)(
-    "folds tiny %s series into Other without changing daily totals",
+    "folds tiny %s series into Other while preserving daily stack heights",
     async (mode) => {
       usage.mode = mode;
       usage.setSelectedTokenTypes(["output"]);
@@ -649,7 +649,7 @@ describe("CostTimeSeriesChart", () => {
           [993, 5, 2, 0],
           [987, 5, 6, 2],
         ].map((values, day) => {
-          return modelDailyEntry(
+          const entry = modelDailyEntry(
             day,
             values.map((value, index) => ({
               modelName: names[index]!,
@@ -658,6 +658,10 @@ describe("CostTimeSeriesChart", () => {
               outputTokens: value,
             })),
           );
+          entry.totalCost = testMoney(1000);
+          entry.inputTokens = 400_000;
+          entry.outputTokens = 1000;
+          return entry;
         }),
       );
       const component = mountChart();
@@ -682,7 +686,9 @@ describe("CostTimeSeriesChart", () => {
         const other = Array.from(document.querySelectorAll(".tooltip-row")).find((row) =>
           row.textContent?.includes("Other"),
         );
-        expect(other?.textContent).toContain(mode === "cost" ? `$${value}.00` : String(value));
+        expect(other?.querySelector("dd")?.textContent?.trim()).toBe(
+          mode === "cost" ? `$${value}.00` : String(value),
+        );
       }
       unmount(component);
     },
