@@ -42,6 +42,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { reportTelemetry } from "../../utils/telemetry.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
+  import { topBarNoCurrentTab } from "./topBarNoCurrentTab.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import ImportModal from "../import/ImportModal.svelte";
   import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
@@ -148,6 +149,17 @@
   </button>
 {/snippet}
 
+<!-- Temporary: topBarNoCurrentTab corrects the pinned TopBar's fallback to
+     the first tab on routes without one. Remove the wrapper with it. -->
+<div
+  class="top-bar-host"
+  use:topBarNoCurrentTab={{
+    active: activeTab,
+    tabIds: tabs.map((tab) => tab.id),
+    placeholder: "—",
+    navLabel: m.nav_primary(),
+  }}
+>
 <TopBar
   {tabs}
   active={activeTab}
@@ -352,6 +364,7 @@
     </button>
   {/snippet}
 </TopBar>
+</div>
 
 <ImportModal
   bind:open={showImportModal}
@@ -446,10 +459,15 @@
     );
   }
 
+  .top-bar-host {
+    display: contents;
+  }
+
   /* Settings (and Friction when its tab is hidden) is not a tab, but
      kit-ui TopBar falls back to marking the first tab current. Render that
      tab like its neighbours; :root plus the bar class outranks the app.css
-     active rule, and hover still lifts it like any other tab. */
+     active rule, and hover still lifts it like any other tab. Remove with
+     topBarNoCurrentTab once kit-ui is bumped. */
   :global(:root .kit-top-bar.no-current-tab .kit-top-bar__tab.active) {
     background: transparent;
     box-shadow: none;
