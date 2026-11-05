@@ -41,9 +41,11 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 }
 
 type usagePreparedWindow struct {
-	snapshot usageQuerySnapshot
-	installs map[string]usageRollupInstall
-	timings  usageRollupRequestTimings
+	snapshot   usageQuerySnapshot
+	installs   map[string]usageRollupInstall
+	journaled  bool
+	installSeq int64
+	timings    usageRollupRequestTimings
 }
 
 // usageWindowObserver provides deterministic synchronization for tests.
@@ -120,6 +122,9 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	started := time.Now()
 	report("Reading archived sessions for this report")
 	filter.Progress = nil
+	if prepared, ok, err := db.prepareJournaledUsageWindow(ctx, filter, kind, cursor, report); ok || err != nil {
+		return prepared, err
+	}
 	snapshot, err := db.captureUsageQuery(ctx, filter, kind)
 	if err != nil {
 		return usagePreparedWindow{}, err
@@ -206,10 +211,10 @@ func (db *DB) queryUsageRollups(
 		var queryErr error
 		if kind == usageQueryKindActivity {
 			var matching map[string]UsageSessionInfo
-			matching, queryErr = cache.usageRollupActivityQuery(ctx, snapshot, filter, prepared.installs)
+			matching, queryErr = cache.usageRollupActivityQuery(ctx, prepared, filter)
 			facts.MatchingSessions = matching
 		} else {
-			facts, queryErr = cache.usageRollupQuery(ctx, snapshot, filter, prepared.installs, resolver)
+			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver)
 		}
 		timings := prepared.timings
 		timings.read = time.Since(readStarted)
@@ -233,7 +238,7 @@ func (db *DB) GetTopSessionsByCost(
 	ctx context.Context, filter UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
 	snapshot, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, false)
+		ctx, filter, usageQueryKindTop, false)
 	if err != nil {
 		return nil, err
 	}

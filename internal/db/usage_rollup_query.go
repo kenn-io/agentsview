@@ -56,10 +56,11 @@ func usageCursorIncluded(filter UsageFilter) bool {
 // usageRollupQuery reads compact daily rows and resolves only facts whose
 // deduplication can depend on the requested window or live session filters.
 func (cache *usageCache) usageRollupQuery(
-	ctx context.Context, snapshot usageQuerySnapshot, filter UsageFilter,
-	installs map[string]usageRollupInstall, resolver *export.PricingResolver,
+	ctx context.Context, prepared usagePreparedWindow, filter UsageFilter,
+	resolver *export.PricingResolver,
 ) (usageFactsResult, error) {
-	if len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
+	snapshot := prepared.snapshot
+	if !prepared.journaled && len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
 		return usageFactsResult{
 			MatchingSessions: make(map[string]UsageSessionInfo),
 		}, nil
@@ -80,8 +81,7 @@ func (cache *usageCache) usageRollupQuery(
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
-	timezoneID, err := verifyUsageRollupQuery(
-		ctx, conn, identity.Key, snapshot, installs)
+	timezoneID, err := verifyPreparedUsageRollup(ctx, conn, identity.Key, prepared)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -350,10 +350,10 @@ func readUsageRollupExceptions(
 }
 
 func (cache *usageCache) usageRollupActivityQuery(
-	ctx context.Context, snapshot usageQuerySnapshot, filter UsageFilter,
-	installs map[string]usageRollupInstall,
+	ctx context.Context, prepared usagePreparedWindow, filter UsageFilter,
 ) (map[string]UsageSessionInfo, error) {
-	if len(snapshot.Sessions) == 0 {
+	snapshot := prepared.snapshot
+	if !prepared.journaled && len(snapshot.Sessions) == 0 {
 		return make(map[string]UsageSessionInfo), nil
 	}
 	conn, err := cache.db.Conn(ctx)
@@ -372,8 +372,7 @@ func (cache *usageCache) usageRollupActivityQuery(
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
-	timezoneID, err := verifyUsageRollupQuery(
-		ctx, conn, identity.Key, snapshot, installs)
+	timezoneID, err := verifyPreparedUsageRollup(ctx, conn, identity.Key, prepared)
 	if err != nil {
 		return nil, err
 	}

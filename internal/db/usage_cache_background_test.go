@@ -378,7 +378,7 @@ func TestUsageCacheBackfillContinuesWhenSessionIsDeletedDuringRollup(t *testing.
 	}
 
 	require.NoError(t, database.runUsageCacheBackfillPass(
-		t.Context(), time.Now(), snapshot))
+		t.Context(), time.Now(), snapshot, 1))
 	require.NoError(t, <-deleted)
 	assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
 	assert.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"))

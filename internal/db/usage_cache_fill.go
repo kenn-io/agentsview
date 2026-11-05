@@ -57,6 +57,7 @@ type usageCursorFillCall struct {
 // callbacks must never be used for production work.
 type usageFillObserver struct {
 	messageNormalized      func()
+	beforeCursorCheck      func(int64)
 	beforeExtract          func([]usageSourceVersion)
 	afterExtract           func([]usageSourceVersion)
 	beforeInstall          func([]usageSourceVersion)
@@ -164,6 +165,9 @@ func (c *usageFillCoordinator) Ensure(
 	// newer than the one the caller asked for, which is a valid answer, so
 	// there is no post-hoc comparison against the caller's snapshot here.
 	if cursorHighWater > 0 {
+		if c.observer.beforeCursorCheck != nil {
+			c.observer.beforeCursorCheck(cursorHighWater)
+		}
 		if err := c.ensureCursor(ctx, cursorHighWater); err != nil {
 			return nil, err
 		}
@@ -1110,24 +1114,24 @@ func (c *usageFillCoordinator) invalidateChangedIdentitySharers(
 // consistent snapshot instead and never call it.
 func (c *usageFillCoordinator) recheckSourceVersions(
 	ctx context.Context, observed []usageSourceVersion,
-) (map[string]usageSourceVersion, error) {
+) (map[string]usageSourceVersion, int64, error) {
 	release, err := c.archive.acquireBulkRead(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer release()
 	conn, err := c.archive.getReader().Conn(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer conn.Close()
 	var priorBusyTimeout int
 	if err := conn.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(
 		&priorBusyTimeout); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if _, err := conn.ExecContext(ctx, `PRAGMA busy_timeout=0`); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() {
 		// Restore the pragma even after cancellation; the connection returns to the pool.
@@ -1136,7 +1140,7 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 	}()
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var databaseID string
@@ -1144,10 +1148,10 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
 	).Scan(&databaseID); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if databaseID != c.cache.databaseID {
-		return nil, fmt.Errorf("%w during session fill", errUsageCacheSourceChanged)
+		return nil, 0, fmt.Errorf("%w during session fill", errUsageCacheSourceChanged)
 	}
 	ids := make([]string, 0, len(observed))
 	for _, version := range observed {
@@ -1155,12 +1159,16 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 	}
 	current, err := loadUsageSourceVersions(ctx, tx, ids)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	revision, err := archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change")
+	if err != nil {
+		return nil, 0, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return current, nil
+	return current, revision, nil
 }
 
 // loadUsageSourceVersions reads the current source version of each requested
@@ -1779,7 +1787,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 		for index, id := range ids {
 			requested[index].SessionID = id
 		}
-		versions, err := c.recheckSourceVersions(c.ctx, requested)
+		versions, revision, err := c.recheckSourceVersions(c.ctx, requested)
 		if err != nil {
 			if c.ctx.Err() == nil {
 				log.Printf("usage cache notification source check: %v", err)
@@ -1805,7 +1813,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 				if err != nil && c.ctx.Err() == nil {
 					log.Printf("usage cache notification fill: %v", err)
 				}
-				c.archive.refreshUsageRollups(c.ctx, c.cache, fills)
+				c.archive.refreshUsageRollups(c.ctx, c.cache, fills, revision)
 			}
 		}
 	}

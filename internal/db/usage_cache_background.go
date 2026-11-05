@@ -193,16 +193,29 @@ func (db *DB) StopUsageCacheBackfill() {
 // written while it ran. Sessions written during the pass are picked up by
 // their own mutation notification.
 func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
+	databaseID, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return err
+	}
+	cache, release, err := db.usageCache.acquireGeneration(ctx, databaseID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	zone, err := readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(time.Local, nil).Key) //nolint:forbidigo // The pass covers the process-local timezone.
+	if err != nil {
+		return err
+	}
 	snapshot, err := db.captureUsageQuery(
 		ctx, UsageFilter{}, usageQueryKindActivity)
 	if err != nil {
 		return err
 	}
-	return db.runUsageCacheBackfillPass(ctx, time.Now(), snapshot)
+	return db.runUsageCacheBackfillPass(ctx, time.Now(), snapshot, zone.installSeq)
 }
 
 func (db *DB) runUsageCacheBackfillPass(
-	ctx context.Context, started time.Time, snapshot usageQuerySnapshot,
+	ctx context.Context, started time.Time, snapshot usageQuerySnapshot, installSeq int64,
 ) error {
 	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 	if err != nil {
@@ -223,6 +236,14 @@ func (db *DB) runUsageCacheBackfillPass(
 	locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
 	if err != nil {
 		return err
+	}
+	zones := make([]usageZoneCoverage, len(locations))
+	for i, location := range locations {
+		zones[i], err = readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(location, nil).Key)
+		if err != nil {
+			return err
+		}
+		zones[i].installSeq = installSeq
 	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
@@ -317,6 +338,15 @@ func (db *DB) runUsageCacheBackfillPass(
 		usageCacheMetadataBackfillCompletedAt,
 	); err != nil {
 		return fmt.Errorf("recording usage cache completion time: %w", err)
+	}
+	catalog, err := usagePricingIdentity(snapshot.PricingRows)
+	if err != nil {
+		return err
+	}
+	for i, location := range locations {
+		if err := cache.claimUsageZone(ctx, usageTimezoneIdentityFor(location, nil), zones[i], snapshot.ChangeRevision, catalog); err != nil {
+			return err
+		}
 	}
 	log.Printf("usage cache backfill: covered %d sessions (%d deleted), built %d daily rows and %d exception rows in %d groups in %s",
 		covered, deleted, dailyRows, exceptionRows, exceptionGroups,
@@ -603,7 +633,7 @@ func ensureUsageRollupsAcross(ctx context.Context, cache *usageCache, snapshot u
 	return total, nil
 }
 
-func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills map[string]usageFillResult) {
+func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills map[string]usageFillResult, revision int64) {
 	if !db.isUsageBackfillEnabled() {
 		return
 	}
@@ -622,6 +652,7 @@ func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills 
 			if err != nil {
 				return err
 			}
+			snapshot.ChangeRevision = min(snapshot.ChangeRevision, revision)
 			locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
 			if err != nil {
 				return err

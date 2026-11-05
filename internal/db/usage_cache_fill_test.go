@@ -180,7 +180,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			return nil
 		}, nil, true},
 		{"usage source recheck", func(ctx context.Context) error {
-			_, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
+			_, _, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
 			return err
 		}, nil, true},
 		{"usage backfill activity", func(ctx context.Context) error {
@@ -992,7 +992,7 @@ func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 		UPDATE sessions SET transcript_revision = 'newer' WHERE id = ?`,
 		oldVersion.SessionID)
 	require.NoError(t, err)
-	current, err := cache.fill.recheckSourceVersions(
+	current, _, err := cache.fill.recheckSourceVersions(
 		t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
 	require.NoError(t, err)
 	newVersion := current[oldVersion.SessionID]
@@ -1038,7 +1038,7 @@ func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions
 		SET transcript_revision='pending' WHERE id=?`, oldVersion.SessionID)
 	require.NoError(t, err)
-	current, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{oldVersion})
+	current, _, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{oldVersion})
 	require.NoError(t, err)
 	oldVersion = current[oldVersion.SessionID]
 	oldExtracted := make(chan struct{})
@@ -1073,7 +1073,7 @@ func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
 		WHERE id = ?`, oldVersion.SessionID)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
-	current, err = cache.fill.recheckSourceVersions(
+	current, _, err = cache.fill.recheckSourceVersions(
 		t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
 	require.NoError(t, err)
 	newVersion := current[oldVersion.SessionID]
@@ -1109,7 +1109,7 @@ func TestUsageFillRecheckRestoresReaderBusyTimeout(t *testing.T) {
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	_, err = cache.fill.recheckSourceVersions(t.Context(), snapshot.Versions[:1])
+	_, _, err = cache.fill.recheckSourceVersions(t.Context(), snapshot.Versions[:1])
 	require.NoError(t, err)
 	var timeout int
 	require.NoError(t, database.getReader().QueryRow(t.Context(),

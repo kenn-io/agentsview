@@ -18,6 +18,7 @@ type usageQueryKind int
 const (
 	usageQueryKindToken usageQueryKind = iota
 	usageQueryKindActivity
+	usageQueryKindTop
 )
 
 type usageSourceVersion struct {
@@ -68,6 +69,8 @@ type usageQueryInterval struct {
 }
 
 type usageQuerySnapshot struct {
+	ChangeRevision  int64
+	PricingRevision int64
 	DatabaseID      string
 	Sessions        []usageQuerySession
 	Versions        []usageSourceVersion
@@ -175,6 +178,15 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot pricing: %w", err)
 	}
 	snapshot.PricingRows = pricingRows
+	snapshot.ChangeRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change")
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
+
+	snapshot.PricingRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsagePricingRevisionKey, "usage pricing")
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
 
 	if err := capture(ctx, tx, &snapshot); err != nil {
 		return usageQuerySnapshot{}, err
@@ -429,4 +441,32 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 		FromMillis: math.MinInt64, ToMillis: next.UTC().UnixMilli(),
 		ToLocalDate: filter.To,
 	}}
+}
+
+// Window reads need attribution and the filter result. Top sessions also needs
+// its display fields, so it keeps the existing full metadata loader.
+func loadUsageWindowSessions(ctx context.Context, tx *sql.Tx, ids []string, filter UsageFilter, kind usageQueryKind, snapshot *usageQuerySnapshot) error {
+	if kind == usageQueryKindTop {
+		return loadUsageSnapshotSessions(ctx, tx, ids, filter, snapshot)
+	}
+	where, filterArgs := filter.appendUsageSessionFilterClauses("1=1", nil)
+	return queryChunked(ids, func(chunk []string) error {
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := tx.QueryContext(ctx, `SELECT s.id, s.project, s.agent, s.machine, COALESCE(s.started_at, ''), CASE WHEN (`+where+`) THEN 1 ELSE 0 END FROM sessions s WHERE s.deleted_at IS NULL AND s.id IN `+placeholders+` ORDER BY s.id`, append(append([]any(nil), filterArgs...), args...)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var session usageQuerySession
+			if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.PassesFilter); err != nil {
+				return err
+			}
+			session.StartedAtMillis, _, _ = usagefacts.ParseTimestamp(session.StartedAt)
+			session.StartedAtNanos = usagefacts.ParseTimestampNanos(session.StartedAt)
+			snapshot.Sessions = append(snapshot.Sessions, session)
+			snapshot.Versions = append(snapshot.Versions, usageSourceVersion{SessionID: session.ID})
+		}
+		return rows.Err()
+	})
 }

@@ -95,6 +95,8 @@ type usageRollupBuild struct {
 	PricingInputs, PricingHash string
 	Source                     usageSourceVersion
 	FactRevision               int64
+	ChangeRevision             int64
+	SourcePricing              string
 	Daily                      []usageDailyContribution
 	Activity                   []usageActivityContribution
 	Exceptions                 []usageExceptionRow

@@ -85,9 +85,9 @@ deletes the timezone rollup installs of every other session holding a changed
 identity, and rollup installation re-verifies inside its transaction that no
 finalized identity gained an outside member, retrying as a moved source
 otherwise. A finalized daily row therefore never survives gaining a sibling, and
-a cross-session winner still changes immediately: the next request verifies
-every candidate session and resolves the group from the latest exception rows of
-all members.
+a cross-session winner still changes immediately: the next request refreshes
+journaled sessions and resolves the group from the latest exception rows of all
+members.
 
 Cursor usage uses the same exception representation under a synthetic source
 install keyed by the Cursor high-water mark. Matching-session activity has
@@ -97,19 +97,34 @@ day: unbounded matching counts include it, while bounded reads exclude it.
 
 ## Freshness contract
 
-An aggregate request:
+After a completed timezone coverage pass, an aggregate request reads the archive
+change journal and refreshes only journaled sessions and cached sessions that
+lost their rollup install. It reads window IDs and missing installs in one cache
+transaction, then captures archive revisions, pricing, current session metadata,
+and changed-session fingerprints in one archive transaction. Cursor history is
+checked with the first refresh batch only. Each batch contains at most 256
+sessions.
 
-1. captures the archive database ID, candidate sessions, source fingerprints,
-   exact `agent` and `started_at`, live filter metadata, pricing rows, Cursor
-   high-water mark, and requested timezone;
-1. closes the archive snapshot before acquiring cache write locks;
-1. opens the generation named by cache format and archive database ID;
-1. fills missing or stale normalized facts for only the candidate sessions;
-1. builds missing or stale rollups for the requested timezone in batches of at
-   most 256 sessions, each with its own install transaction;
-1. rechecks source fingerprints and baked metadata before installing; and
-1. verifies all required installs inside one pinned cache read transaction
-   before assembling the result.
+Every install records the archive revision and catalog digest used to build it.
+A timezone claim records both an archive revision and an install counter. Its
+coverage is the lower of that claim and the oldest source revision installed
+since its counter. A compare-and-set advances the claim from actual installed
+stamps; concurrent claim losers leave it alone. A completed pass uses the
+revision and install counter captured at its start. It records its catalog only
+when no intervening install used another catalog.
+
+A timezone without a completed pass, a new cache generation, a changed pricing
+catalog, or coverage outside the archive's revision range takes the full
+candidate, fingerprint, fill, and rollup path. An untrusted request starts a
+coverage pass when background backfill is enabled and idle. Catalog checks
+include handle-specific custom pricing. Pricing triggers retain their latest
+revision even when prices revert, so an older pass cannot vouch for newer rates.
+
+Before reading rows, the pinned cache transaction checks timezone coverage,
+pricing, intervening installs for captured sessions, and missing installs. Empty
+windows run the same checks. A conflicting install or invalidated dedup peer
+uses the existing bounded recapture loop. Warm window reads load filter and
+attribution metadata; Top sessions also retains its display fields.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor

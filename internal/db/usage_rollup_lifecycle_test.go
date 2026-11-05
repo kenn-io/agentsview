@@ -221,7 +221,7 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 			require.Equal(t, 3, usageCacheCount(t, cache, "usage_rollup_days"))
 
 			snapshot.location = tt.local
-			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot))
+			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, 1))
 			locations, err := usageBackfillLocations(t.Context(), cache, tt.local)
 			require.NoError(t, err)
 
@@ -858,7 +858,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	}
 	result, err := cache.usageRollupQuery(
-		t.Context(), newSnapshot, filter, oldOutcome.installs,
+		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter,
 		export.NewPricingResolver(newSnapshot.PricingRows))
 	require.NoError(t, err)
 	require.Len(t, result.Groups, 1)
@@ -926,7 +926,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 		"rejecting the older build must preserve the newer install")
 
 	result, err := cache.usageRollupQuery(
-		t.Context(), newSnapshot, filter, newInstalls,
+		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: newInstalls}, filter,
 		export.NewPricingResolver(newSnapshot.PricingRows))
 	require.NoError(t, err)
 	var inputTokens int64

@@ -465,6 +465,14 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		}
 		builds = append(builds, cursorBuild)
 	}
+	catalog, err := usagePricingIdentity(snapshot.PricingRows)
+	if err != nil {
+		return nil, false, usageRollupMetrics{}, err
+	}
+	for i := range builds {
+		builds[i].SourcePricing = catalog
+		builds[i].ChangeRevision = snapshot.ChangeRevision
+	}
 	metrics := usageRollupMetrics{BuildDuration: time.Since(started)}
 	for _, build := range builds {
 		metrics.DailyRows += int64(len(build.Daily))
@@ -716,23 +724,23 @@ func installUsageRollupBuilds(
 			_, err = conn.ExecContext(ctx, `UPDATE usage_rollup_installs SET
 				source_sync_marker=?, source_transcript_rev=?, usage_event_fingerprint=?,
 				fact_install_revision=?, baked_agent=?, baked_started_at=?,
-				pricing_inputs=?, pricing_hash=?, install_revision=?, cached_at=?
+				pricing_inputs=?, pricing_hash=?, install_revision=?, cached_at=?, source_change_revision=?, source_pricing=?
 				WHERE id=?`,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
 				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
-				nextRevision, now, installID)
+				nextRevision, now, build.ChangeRevision, build.SourcePricing, installID)
 		} else {
 			result, insertErr := conn.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
 				timezone_id, session_id, source_sync_marker, source_transcript_rev,
 				usage_event_fingerprint, fact_install_revision, baked_agent,
 				baked_started_at, pricing_inputs, pricing_hash, install_revision,
-				cached_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
+				cached_at, source_change_revision, source_pricing
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
 				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
-				nextRevision, now)
+				nextRevision, now, build.ChangeRevision, build.SourcePricing)
 			if insertErr != nil {
 				return insertErr
 			}
@@ -849,6 +857,7 @@ func usageRollupCallKey(
 		usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key)
 	writeUsageHashString(digest, catalogHash)
 	writeUsageHashInt64(digest, snapshot.CursorHighWater)
+	writeUsageHashInt64(digest, snapshot.ChangeRevision)
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
 		sessions[session.ID] = session
