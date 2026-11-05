@@ -22,9 +22,6 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
-// A superseded build needs fresh archive metadata, not another fact-only retry.
-var errUsageRollupSuperseded = fmt.Errorf("%w: newer usage rollup already installed", errUsageCacheSourceChanged)
-
 const usageRollupCursorSessionID = "\x00cursor"
 
 // usageRollupMaxBuildAttempts bounds the reclassification retry an install
@@ -491,9 +488,6 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		ctx, conn, identity, snapshot.location, builds, cross)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
-		if errors.Is(err, errUsageRollupSuperseded) {
-			return nil, false, metrics, err
-		}
 		if errors.Is(err, errUsageCacheSourceChanged) {
 			return nil, false, metrics, nil
 		}
@@ -699,24 +693,19 @@ func installUsageRollupBuilds(
 		return err
 	}
 	dates := make(map[string]bool)
-	superseded := false
 	for _, build := range builds {
 		var installID int64
-		var installedFactRevision, installedChangeRevision int64
-		err := conn.QueryRowContext(ctx, `SELECT id, fact_install_revision, source_change_revision
+		var installedFactRevision int64
+		err := conn.QueryRowContext(ctx, `SELECT id, fact_install_revision
 			FROM usage_rollup_installs
 			WHERE timezone_id = ? AND session_id = ?`, timezoneID, build.SessionID).
-			Scan(&installID, &installedFactRevision, &installedChangeRevision)
+			Scan(&installID, &installedFactRevision)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err == nil && installedChangeRevision > build.ChangeRevision {
-			superseded = true
-			continue
-		}
-		// A dedup invalidation can remove a newer install before this delayed
-		// build arrives. Replay journal changes from its snapshot on the next
-		// read, even when the zone already claimed those changes.
+		// A delayed build can replace a newer install, or one a dedup
+		// invalidation removed. Replay journal changes from its snapshot on
+		// the next read, even when the zone already claimed those changes.
 		if _, err := conn.ExecContext(ctx, `UPDATE usage_rollup_timezones
 			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
 			return err
@@ -784,9 +773,6 @@ func installUsageRollupBuilds(
 		return fmt.Errorf("committing usage rollup install: %w", err)
 	}
 	committed = true
-	if superseded {
-		return errUsageRollupSuperseded
-	}
 	return nil
 }
 

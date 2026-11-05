@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +14,6 @@ import (
 	"sync"
 
 	"github.com/gofrs/flock"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -309,9 +307,6 @@ type usageCacheManager struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 
-	// reads admits report attempts; see admitUsageRead.
-	reads *semaphore.Weighted
-
 	mu          sync.Mutex
 	generations map[string]*usageCache
 	currentID   string
@@ -325,22 +320,7 @@ func newUsageCacheManager(archivePath string) *usageCacheManager {
 		generations: make(map[string]*usageCache),
 		ctx:         ctx,
 		cancel:      cancel,
-		reads:       semaphore.NewWeighted(math.MaxInt64),
 	}
-}
-
-// admitUsageRead shares the cache among report attempts. An exclusive attempt
-// waits for in-flight reports and holds off new ones, so their installs cannot
-// replace its prepared rollups before it reads them.
-func (m *usageCacheManager) admitUsageRead(ctx context.Context, exclusive bool) (func(), error) {
-	weight := int64(1)
-	if exclusive {
-		weight = math.MaxInt64
-	}
-	if err := m.reads.Acquire(ctx, weight); err != nil {
-		return nil, err
-	}
-	return func() { m.reads.Release(weight) }, nil
 }
 
 func (m *usageCacheManager) attachArchive(archive *DB) {

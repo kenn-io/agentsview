@@ -619,9 +619,7 @@ func ensureUsageRollupsAcross(ctx context.Context, cache *usageCache, snapshot u
 	for _, location := range locations {
 		snapshot.location = location
 		_, metrics, err := cache.rollup.Ensure(ctx, snapshot, fills, resolver)
-		// A newer install already covers a superseded background build.
-		// Foreground readers still retry with fresh archive metadata.
-		if err != nil && !errors.Is(err, errUsageRollupSuperseded) {
+		if err != nil {
 			return total, err
 		}
 		total.DailyRows += metrics.DailyRows

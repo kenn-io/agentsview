@@ -166,48 +166,33 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	// Deleted IDs must still reach Ensure, which removes their cached facts.
 	versions := make(map[string]usageSourceVersion, len(refresh.Versions))
-	sessions := make(map[string]usageQuerySession, len(refresh.Sessions))
-	for i, version := range refresh.Versions {
+	for _, version := range refresh.Versions {
 		versions[version.SessionID] = version
-		sessions[version.SessionID] = refresh.Sessions[i]
 	}
-	var resolver *export.PricingResolver
-	if len(refreshIDs) > 0 || snapshot.CursorHighWater > 0 {
-		resolver = export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
+	refresh.Versions = refresh.Versions[:0]
+	for _, id := range refreshIDs {
+		version, ok := versions[id]
+		if !ok {
+			version.SessionID = id
+		}
+		refresh.Versions = append(refresh.Versions, version)
 	}
-	installs := make(map[string]usageRollupInstall)
-	for start := 0; start < len(refreshIDs) || start == 0 && snapshot.CursorHighWater > 0; start += usageFillInstallBatchSize {
-		end := min(start+usageFillInstallBatchSize, len(refreshIDs))
-		batch := snapshot
-		batch.Sessions, batch.Versions = nil, nil
-		if start > 0 {
-			batch.CursorHighWater = 0
-		}
-		for _, id := range refreshIDs[start:end] {
-			version, ok := versions[id]
-			if !ok {
-				version.SessionID = id
-			} else {
-				batch.Sessions = append(batch.Sessions, sessions[id])
-			}
-			batch.Versions = append(batch.Versions, version)
-		}
+	refresh.CursorHighWater = snapshot.CursorHighWater
+	var installs map[string]usageRollupInstall
+	if len(refreshIDs) > 0 || refresh.CursorHighWater > 0 {
 		report("Checking the usage cache for this report")
-		fills, err := cache.fill.Ensure(ctx, batch.Versions, batch.CursorHighWater)
+		fills, err := cache.fill.Ensure(ctx, refresh.Versions, refresh.CursorHighWater)
 		if err != nil {
 			return usagePreparedWindow{}, false, err
 		}
 		snapshot.dropDeleted(maps.Clone(fills))
-		batch.dropDeleted(fills)
-		built, _, err := cache.rollup.Ensure(ctx, batch, fills, resolver)
+		refresh.dropDeleted(fills)
+		built, _, err := cache.rollup.Ensure(ctx, refresh, fills, export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest))
 		if err != nil {
 			return usagePreparedWindow{}, false, err
 		}
 		if install, ok := built[usageRollupCursorSessionID]; ok {
-			installs[usageRollupCursorSessionID] = install
-		}
-		if end == len(refreshIDs) {
-			break
+			installs = map[string]usageRollupInstall{usageRollupCursorSessionID: install}
 		}
 	}
 	err = cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, catalog)

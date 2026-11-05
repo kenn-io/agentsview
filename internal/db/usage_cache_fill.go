@@ -57,7 +57,6 @@ type usageCursorFillCall struct {
 // callbacks must never be used for production work.
 type usageFillObserver struct {
 	messageNormalized      func()
-	beforeCursorCheck      func(int64)
 	beforeExtract          func([]usageSourceVersion)
 	afterExtract           func([]usageSourceVersion)
 	beforeInstall          func([]usageSourceVersion)
@@ -165,9 +164,6 @@ func (c *usageFillCoordinator) Ensure(
 	// newer than the one the caller asked for, which is a valid answer, so
 	// there is no post-hoc comparison against the caller's snapshot here.
 	if cursorHighWater > 0 {
-		if c.observer.beforeCursorCheck != nil {
-			c.observer.beforeCursorCheck(cursorHighWater)
-		}
 		if err := c.ensureCursor(ctx, cursorHighWater); err != nil {
 			return nil, err
 		}
@@ -1011,15 +1007,10 @@ func (c *usageFillCoordinator) installSpoolBatch(
 	}
 	eligibleStable := make([]usageSourceVersion, 0, len(stable))
 	eligibleDeleted := make([]string, 0, len(deleted))
-	results := make(map[string]usageFillResult, len(stable)+len(deleted))
 	var lost []string
 	for _, version := range stable {
 		cached, exists := cachedSessions[version.SessionID]
-		// A concurrent fill may already have installed this exact source.
-		// Keep its revision so its newer rollups remain current.
-		if exists && cached.source.Equal(version) {
-			results[version.SessionID] = cached
-		} else if fillInstallExpectationMatches(cached, exists, expected[version.SessionID]) {
+		if fillInstallExpectationMatches(cached, exists, expected[version.SessionID]) {
 			eligibleStable = append(eligibleStable, version)
 		} else {
 			lost = append(lost, version.SessionID)
@@ -1033,6 +1024,8 @@ func (c *usageFillCoordinator) installSpoolBatch(
 			lost = append(lost, sessionID)
 		}
 	}
+	results := make(map[string]usageFillResult,
+		len(eligibleStable)+len(eligibleDeleted))
 	for _, sessionID := range eligibleDeleted {
 		results[sessionID] = usageFillResult{Deleted: true}
 	}

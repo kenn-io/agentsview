@@ -105,7 +105,7 @@ func warmJournaledUsage(t *testing.T, database *DB, filter UsageFilter) *usageCa
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 	// Keep races under the test's control. Request-triggered passes remain enabled.
 	database.StopUsageCacheBackfill()
-	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, nil)
+	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 	require.NoError(t, err)
 	require.True(t, prepared.journaled)
 	cache, err := database.usageCache.Generation(t.Context(), prepared.snapshot.DatabaseID)
@@ -209,7 +209,7 @@ func TestUsageJournaledTrustBoundaries(t *testing.T) {
 			case "custom pricing":
 				database.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: 3_000_000}})
 			}
-			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, nil)
+			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 			require.NoError(t, err)
 			assert.False(t, prepared.journaled)
 			assertJournaledUsageLegacy(t, database, filter)
@@ -262,7 +262,7 @@ func TestUsageJournaledForeignInstall(t *testing.T) {
 				filter.From = "2026-08-11"
 				filter.To = filter.From
 			}
-			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, nil)
+			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 			require.NoError(t, err)
 			require.True(t, prepared.journaled)
 			if empty {
@@ -300,7 +300,7 @@ func TestUsageJournaledNotificationCapturesNewerMetadata(t *testing.T) {
 			require.NoError(t, err)
 			fills, err := cache.fill.Ensure(t.Context(), captured.Versions, 0)
 			require.NoError(t, err)
-			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, nil)
+			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 			require.NoError(t, err)
 			require.True(t, prepared.journaled)
 			require.Equal(t, captured.ChangeRevision, prepared.snapshot.ChangeRevision)
@@ -332,7 +332,7 @@ func TestUsageJournaledNotificationCapturesNewerMetadata(t *testing.T) {
 	}
 }
 
-func TestUsageJournaledOlderRollupCannotReplaceNewer(t *testing.T) {
+func TestUsageJournaledOlderRollupRepaired(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")
 	filter := UsageFilter{Timezone: "UTC"}
@@ -368,84 +368,18 @@ func TestUsageJournaledOlderRollupCannotReplaceNewer(t *testing.T) {
 	require.NotNil(t, session)
 	session.Agent = "claude"
 	require.NoError(t, other.UpsertSession(t.Context(), *session))
-	// A second handle owns its own coordinator, so its newer build can finish.
+	// A second handle owns its own coordinator, so its newer build and claim
+	// finish before the older build installs.
 	_, err = other.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	require.NoError(t, other.Close())
-	var newerRevision int64
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision FROM usage_rollup_installs WHERE session_id='session'`).Scan(&newerRevision))
 	unblock()
-	buildErr := <-done
-	var installedRevision int64
-	var agent string
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&installedRevision, &agent))
-	assert.Equal(t, newerRevision, installedRevision)
-	assert.Equal(t, "claude", agent)
-	require.ErrorIs(t, buildErr, errUsageCacheSourceChanged)
-	var rebuilt atomic.Int64
-	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) { rebuilt.Add(int64(len(builds))) }
+	require.NoError(t, <-done)
+	coverage, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, coverage.revision.Int64, old.ChangeRevision, "replay changes after the older snapshot")
+	filter.Agent = "claude"
 	assertJournaledUsageLegacy(t, database, filter)
-	assert.Zero(t, rebuilt.Load())
-}
-
-func TestUsageJournaledDelayedFillPreservesCurrentRevision(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	filter := UsageFilter{Timezone: "UTC"}
-	cache := warmJournaledUsage(t, database, filter)
-	old, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-	require.NoError(t, err)
-	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-		SessionID: "session", Ordinal: 1, Role: "assistant", Model: "journal-model",
-		Timestamp: "2026-08-11T00:30:00Z", TokenUsage: []byte(`{"input_tokens":7}`),
-	}}))
-	current, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-	require.NoError(t, err)
-	fills, err := cache.fill.Ensure(t.Context(), current.Versions, 0)
-	require.NoError(t, err)
-	require.NotEqual(t, old.Versions[0].TranscriptRevision, current.Versions[0].TranscriptRevision)
-	delayed, err := cache.fill.FillBackground(t.Context(), old.Versions, 0)
-	require.NoError(t, err)
-	assert.Equal(t, fills["session"], delayed["session"], "extracting the current source again must preserve its installed revision")
-}
-
-func TestUsageJournaledSupersededBackgroundBuild(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	seedJournaledUsage(t, database, "peer")
-	filter := UsageFilter{Timezone: "UTC"}
-	cache := warmJournaledUsage(t, database, filter)
-	old, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-	require.NoError(t, err)
-	fills, err := cache.fill.Ensure(t.Context(), old.Versions, 0)
-	require.NoError(t, err)
-	session, err := database.GetSession(t.Context(), "session")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	session.Agent = "claude"
-	require.NoError(t, database.UpsertSession(t.Context(), *session))
-	_, err = database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	var newerRevision int64
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision FROM usage_rollup_installs WHERE session_id='session'`).Scan(&newerRevision))
-	require.Greater(t, newerRevision, old.ChangeRevision)
-	// The same batch must still install a peer that needs work.
-	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id='peer'`)
-	require.NoError(t, err)
-	_, err = ensureUsageRollupsAcross(t.Context(), cache, old, fills,
-		export.NewPricingResolver(old.PricingRows), []*time.Location{time.UTC})
-	require.NoError(t, err)
-	var installedRevision int64
-	var agent string
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&installedRevision, &agent))
-	assert.Equal(t, newerRevision, installedRevision)
-	assert.Equal(t, "claude", agent)
-	var peerTokens int64
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(d.input_tokens)
-		FROM usage_daily_rollups d JOIN usage_rollup_installs i ON i.id=d.rollup_install_id
-		JOIN usage_rollup_timezones z ON z.id=i.timezone_id
-		WHERE i.session_id='peer' AND z.timezone_key=?`, usageTimezoneIdentityFor(time.UTC, nil).Key).Scan(&peerTokens))
-	assert.EqualValues(t, 100, peerTokens)
 }
 
 func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
@@ -493,25 +427,6 @@ func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 			assert.Equal(t, wantCost, got.Totals.TotalCost.Microdollars)
 		})
 	}
-}
-
-func TestUsageJournaledBatchesCheckCursorOnce(t *testing.T) {
-	database := testDB(t)
-	for i := range 260 {
-		seedJournaledUsage(t, database, fmt.Sprintf("session-%03d", i))
-	}
-	filter := UsageFilter{Timezone: "UTC"}
-	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "journal-model", InputTokens: 7, DedupKey: "cursor"}}))
-	cache := warmJournaledUsage(t, database, filter)
-	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude'`)
-	require.NoError(t, err)
-	var checks atomic.Int64
-	cache.fill.observer.beforeCursorCheck = func(int64) { checks.Add(1) }
-	var sizes []int
-	cache.rollup.observer.beforeAttempt = func(fills map[string]usageFillResult) { sizes = append(sizes, len(fills)) }
-	assertJournaledUsageLegacy(t, database, filter)
-	assert.EqualValues(t, 1, checks.Load())
-	assert.Equal(t, []int{256, 4}, sizes)
 }
 
 func TestUsageJournaledPassRejectsForeignCatalog(t *testing.T) {

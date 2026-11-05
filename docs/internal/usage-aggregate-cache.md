@@ -97,6 +97,20 @@ day: unbounded matching counts include it, while bounded reads exclude it.
 
 ## Freshness contract
 
+Without a trusted timezone claim, an aggregate request:
+
+1. captures the archive database ID, candidate sessions, source fingerprints,
+   exact `agent` and `started_at`, live filter metadata, pricing rows, Cursor
+   high-water mark, and requested timezone;
+1. closes the archive snapshot before acquiring cache write locks;
+1. opens the generation named by cache format and archive database ID;
+1. fills missing or stale normalized facts for only the candidate sessions;
+1. builds missing or stale rollups for the requested timezone in batches of at
+   most 256 sessions, each with its own install transaction;
+1. rechecks source fingerprints and baked metadata before installing; and
+1. verifies all required installs inside one pinned cache read transaction
+   before assembling the result.
+
 After a completed timezone coverage pass, an aggregate request reads the archive
 change journal and refreshes only journaled sessions and cached sessions that
 lost their rollup install. Deleting an install queues its session in an indexed
@@ -104,14 +118,11 @@ worklist in the same transaction. Reinstalling it clears that entry, and
 deleting its cached facts removes it. Requests read window IDs and that worklist
 in one cache transaction, then capture archive revisions, pricing, current
 session metadata, and changed-session fingerprints in one archive transaction.
-Cursor history is checked with the first refresh batch only. Each batch contains
-at most 256 sessions.
 
 Every install records the archive revision and catalog digest used to build it.
-The install transaction rejects builds older than the stored revision, and the
-caller recaptures archive metadata. If invalidation removed the newer install,
-accepting an older build lowers the timezone's claim in the same transaction.
-The next read replays the journal from that revision and repairs its dates. A
+Installing a build older than the timezone's claim lowers the claim in the same
+transaction, whether the build replaces a newer install or one that invalidation
+removed. The next read replays the journal from that revision and repairs it. A
 timezone claim records both an archive revision and an install counter. A
 compare-and-set advances the claim from actual installed stamps; concurrent
 claim losers leave it alone. A completed pass uses the revision and install
@@ -119,21 +130,17 @@ counter captured at its start. It records its catalog only when no intervening
 install used another catalog.
 
 A timezone without a completed pass, a new cache generation, a changed pricing
-catalog, or coverage outside the archive's revision range takes the full
-candidate, fingerprint, fill, and rollup path. An untrusted request starts a
-coverage pass when background backfill is enabled and idle. Catalog checks
-include handle-specific custom pricing. The captured catalog digest determines
-whether a pass can vouch for the current rates.
+catalog, or coverage outside the archive's revision range takes the full path.
+An untrusted request starts a coverage pass when background backfill is enabled
+and idle. Catalog checks include handle-specific custom pricing. The captured
+catalog digest determines whether a pass can vouch for the current rates.
 
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty
 windows run the same checks. A conflicting install or invalidated dedup peer
-recaptures the request. Three attempts share the cache with other reports in the
-process. The final attempt waits for those in flight and holds off new ones
-until it reads, so concurrent installs cannot keep replacing its rollups during
-sync writes. Activity matching counts always take the full cache verification
-path. Warm window reads load filter and attribution metadata, including the
-display fields shared with Top sessions.
+sends the request's retries through the full path. Activity matching counts
+always take the full path. Warm window reads load filter and attribution
+metadata, including the display fields shared with Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor
