@@ -108,15 +108,19 @@
     padding-left: calc(var(--setting-label-width, 222px) + 12px);
   }
 
+  /* The button moves under the field when a long translated label
+     leaves the field too little room beside it. */
   .token-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
   /* Scoped to this row: a global flex: 1 collapsed the stacked inputs
      in Remote access to 18px. */
   .token-row :global(.setting-input.kit-text-input) {
-    flex: 1;
+    flex: 1 1 180px;
+    min-width: 0;
     font-family: var(--font-mono, monospace);
   }
 

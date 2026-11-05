@@ -413,8 +413,23 @@
   }
 
   .row-value {
+    min-width: 0;
     font-size: 12px;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
+  }
+
+  /* Phones: like the other settings rows, each label sits above its
+     value, so long model ids keep the full width. */
+  @media (max-width: 640px) {
+    .status-grid {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 2px;
+    }
+
+    .status-grid .row-value + .row-label {
+      margin-top: 6px;
+    }
   }
 
   .mono {

@@ -230,3 +230,144 @@ test.describe("Settings layout", () => {
     await expect(binary).toHaveValue("/usr/bin/kitty");
   });
 });
+
+// One provider with a path segment and an alternate home far wider than
+// the settings column, so nothing can fit by luck.
+async function withLongProviderPaths(page: Page) {
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const [first, ...rest] = body.session_providers ?? [];
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        session_providers: [
+          {
+            ...first,
+            dirs: ["/Users/someone/Library/Application Support/AnExtremelyLongApplicationDirectoryNameWithNoSeparatorsAtAll/sessions"],
+            homes_supported: true,
+            homes: ["/Volumes/ExternalDrive/AnotherExtremelyLongHomeDirectoryNameWithNoSeparatorsAnywhere/.agent"],
+          },
+          ...rest,
+        ],
+      },
+    });
+  });
+}
+
+for (const width of [1280, 375]) {
+  test(`Session providers keep long paths and their controls inside the panel at ${width}px`, async ({ page }) => {
+    await withLongProviderPaths(page);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings");
+    const nav = page.locator(".kit-settings__nav");
+    await nav.getByText("Session providers").first().click();
+    const row = page.locator(".provider-row").first();
+    await expect(row.locator(".provider-home")).toHaveCount(1);
+
+    const layout = await row.evaluate((element) => {
+      const panel = element.closest(".kit-settings__panel")!.getBoundingClientRect();
+      const details = element.querySelector(".provider-details")!.getBoundingClientRect();
+      const paths = [...element.querySelectorAll<HTMLElement>(".provider-path")].map((path) => {
+        const r = path.getBoundingClientRect();
+        const segs = [...path.querySelectorAll(".provider-path-seg")].map((s) => s.getBoundingClientRect().right);
+        return { right: Math.max(r.right, ...segs), overflow: path.scrollWidth > path.clientWidth + 1 };
+      });
+      const home = element.querySelector(".provider-home")!;
+      const homePath = home.querySelector(".provider-path")!;
+      const homeSegRight = Math.max(...[...homePath.querySelectorAll(".provider-path-seg")].map((s) => s.getBoundingClientRect().right));
+      const remove = home.querySelector("button")!.getBoundingClientRect();
+      const scroller = element.closest(".kit-settings__scroll") as HTMLElement | null;
+      return {
+        panelRight: panel.right,
+        detailsWidth: details.width,
+        detailsRight: details.right,
+        paths,
+        homeSegRight,
+        removeLeft: remove.left,
+        removeRight: remove.right,
+        scrollerOverflow: scroller ? scroller.scrollWidth > scroller.clientWidth + 1 : false,
+      };
+    });
+    expect(layout.detailsRight).toBeLessThanOrEqual(layout.panelRight + 0.5);
+    for (const path of layout.paths) {
+      expect(path.overflow, JSON.stringify(layout)).toBe(false);
+      expect(path.right).toBeLessThanOrEqual(layout.detailsRight + 0.5);
+    }
+    expect(layout.homeSegRight, JSON.stringify(layout)).toBeLessThanOrEqual(layout.removeLeft + 0.5);
+    expect(layout.removeRight).toBeLessThanOrEqual(layout.panelRight + 0.5);
+    expect(layout.scrollerOverflow).toBe(false);
+    if (width < 640) {
+      // Phones give the details the row's full width.
+      expect(layout.detailsWidth).toBeGreaterThanOrEqual(250);
+    }
+    const add = await row.locator(".provider-home-add").evaluate((element) => {
+      const input = element.querySelector(".kit-text-input")!.getBoundingClientRect();
+      const button = element.querySelector("button")!.getBoundingClientRect();
+      return { inputRight: input.right, inputBottom: input.bottom, buttonLeft: button.left, buttonTop: button.top, buttonRight: button.right };
+    });
+    expect(add.buttonRight, JSON.stringify(add)).toBeLessThanOrEqual(layout.panelRight + 0.5);
+    expect(add.inputRight <= add.buttonLeft + 0.5 || add.inputBottom <= add.buttonTop + 0.5).toBe(true);
+  });
+}
+
+for (const [width, locale] of [[761, "fr"], [375, "en"]] as const) {
+  test(`the GitHub token field and its action fit the panel at ${width}px in ${locale}`, async ({ page }) => {
+    await page.addInitScript((value) => localStorage.setItem("agentsview-locale", value), locale);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings");
+    await page.locator(".kit-settings__nav").getByText("GitHub", { exact: true }).first().click();
+    const row = page.locator(".token-row");
+    await expect(row).toBeVisible();
+    const layout = await row.evaluate((element) => {
+      const panel = element.closest(".kit-settings__panel")!.getBoundingClientRect();
+      const input = element.querySelector(".kit-text-input")!.getBoundingClientRect();
+      const button = element.querySelector("button")!;
+      const buttonRect = button.getBoundingClientRect();
+      return {
+        panelRight: panel.right,
+        inputWidth: input.width,
+        inputRight: input.right,
+        buttonLeft: buttonRect.left,
+        buttonRight: buttonRect.right,
+        buttonTop: buttonRect.top,
+        inputBottom: input.bottom,
+        labelClipped: button.scrollWidth > button.clientWidth + 1,
+      };
+    });
+    expect(layout.buttonRight, JSON.stringify(layout)).toBeLessThanOrEqual(layout.panelRight + 0.5);
+    expect(layout.labelClipped).toBe(false);
+    expect(layout.inputWidth, JSON.stringify(layout)).toBeGreaterThanOrEqual(160);
+    // Side by side or stacked, never overlapping.
+    expect(layout.inputRight <= layout.buttonLeft + 0.5 || layout.inputBottom <= layout.buttonTop + 0.5).toBe(true);
+  });
+}
+
+test("Embeddings status values stay inside the panel on a phone", async ({ page }) => {
+  await page.route("**/api/v1/embeddings/generations*", (route) => route.fulfill({ json: { generations: [] } }));
+  await page.route("**/api/v1/embeddings/status*", (route) =>
+    route.fulfill({
+      json: { running: false, done: 0, total: 0, eta_milliseconds: 0, model: "embeddinggemma-300m-qat-q8_0", dimension: 768 },
+    }),
+  );
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/settings");
+  await page.locator(".kit-settings__nav").getByText("Embeddings", { exact: true }).first().click();
+  const grid = page.locator(".status-grid").first();
+  await expect(grid).toBeVisible();
+  const layout = await grid.evaluate((element) => {
+    const panel = element.closest(".kit-settings__panel")!.getBoundingClientRect();
+    return [...element.querySelectorAll<HTMLElement>(".row-value")].map((value) => ({
+      right: value.getBoundingClientRect().right,
+      overflow: value.scrollWidth > value.clientWidth + 1,
+      panelRight: panel.right,
+    }));
+  });
+  expect(layout.length).toBeGreaterThan(1);
+  for (const value of layout) {
+    expect(value.overflow, JSON.stringify(value)).toBe(false);
+    expect(value.right, JSON.stringify(value)).toBeLessThanOrEqual(value.panelRight + 0.5);
+  }
+});
