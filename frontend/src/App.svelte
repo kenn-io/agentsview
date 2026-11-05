@@ -197,7 +197,9 @@
           },
         );
         messages.loadSession(id, ready);
-        sessions.loadChildSessions(id);
+        void ready.then((seen) => {
+          if (!seen) sessions.loadChildSessions(id);
+        });
         sessionTiming.load(id);
         pins.loadForSession(id);
       } else {

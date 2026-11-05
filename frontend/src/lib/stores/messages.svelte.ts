@@ -109,7 +109,7 @@ export class MessagesStore {
       : "";
   }
 
-  async loadSession(id: string, ready?: Promise<void>) {
+  async loadSession(id: string, ready?: Promise<unknown>) {
     const resumesCancelledLoad = this.sessionId === id && this.cancelledSessionId === id;
     if (
       this.sessionId === id &&
@@ -125,7 +125,7 @@ export class MessagesStore {
     return promise;
   }
 
-  private async doLoadSession(id: string, resumesCancelledLoad: boolean, ready?: Promise<void>) {
+  private async doLoadSession(id: string, resumesCancelledLoad: boolean, ready?: Promise<unknown>) {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();

@@ -83,7 +83,6 @@ class SyncStore {
   }
 
   private watchEventSource: EventSource | null = null;
-  private settleWatchReady: (() => void) | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
@@ -346,27 +345,25 @@ class SyncStore {
 
   watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
-    let settle!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      const timer = setTimeout(() => settle(), 1000);
-      settle = () => {
+    let settle!: (seen: boolean) => void;
+    const ready = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => settle(false), 1000);
+      settle = (seen) => {
         clearTimeout(timer);
-        resolve();
+        resolve(seen);
       };
     });
-    this.settleWatchReady = settle;
     const open = () => {
       this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
       const es = this.watchEventSource;
       es.addEventListener("session_ready", () => {
         if (this.watchEventSource !== es) return;
-        settle();
+        settle(true);
         onUpdate();
       });
-      es.addEventListener("error", settle);
     };
     if (typeof document === "undefined") {
-      settle();
+      open();
       return ready;
     }
     this.watchVisibilityHandler = () => {
@@ -380,13 +377,11 @@ class SyncStore {
     };
     document.addEventListener("visibilitychange", this.watchVisibilityHandler);
     if (!document.hidden) open();
-    else settle();
+    else settle(false);
     return ready;
   }
 
   unwatchSession() {
-    this.settleWatchReady?.();
-    this.settleWatchReady = null;
     if (this.watchVisibilityHandler) {
       document.removeEventListener("visibilitychange", this.watchVisibilityHandler);
       this.watchVisibilityHandler = null;
