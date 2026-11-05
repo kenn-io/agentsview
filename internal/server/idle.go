@@ -59,7 +59,8 @@ func (t *IdleTracker) Wrap(next http.Handler, basePath string) http.Handler {
 	})
 }
 
-// BeginWork keeps the server alive while internal work finishes.
+// BeginWork is nil-safe so foreground serve mode can share the same call sites
+// as background daemons without enabling idle reaping.
 func (t *IdleTracker) BeginWork() (func(), bool) {
 	if t == nil {
 		return func() {}, true

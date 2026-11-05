@@ -503,16 +503,15 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
-
 		ingestion.StartLiveActivity()
 		if idleTracker != nil {
 			idleTracker.SetSyncIdle(cfg.SyncIdleAfter, ingestion.Suspend)
 		}
-		memoryRefresh = newMemoryRefreshQueue()
 		go startPeriodicSync(
-			ctx, cfg, ingestion, engine, database, idleTracker,
+			ctx, cfg, ingestion, engine, database, writeLock, idleTracker,
 			validRemotes, emitter, attachedSources,
 		)
+		memoryRefresh = newMemoryRefreshQueue()
 		go runMemoryRefreshScheduler(
 			ctx, memoryRefresh.requests, memoryRefreshDebounce,
 			func() {
@@ -3204,6 +3203,7 @@ func startPeriodicSync(
 	ingestion *daemonIngestion,
 	engine *sync.Engine,
 	database *db.DB,
+	lock *writeOwnerLock,
 	idleTracker *server.IdleTracker,
 	validRemotes bool,
 	emitter sync.Emitter,

@@ -158,7 +158,6 @@ class SyncStore {
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats ?? null;
       this.archiveStale = status.archive_stale === true;
-      const catchupCompleted = this.syncPending && !this.archiveStale && !status.sync_pending;
       this.syncPending = status.sync_pending === true;
       const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
@@ -182,7 +181,7 @@ class SyncStore {
       } else if (statusProgressCompleted) {
         await this.loadStats();
         this.notifySyncComplete();
-      } else if ((changed || catchupCompleted) && !isInitial) {
+      } else if (changed && !isInitial) {
         await this.loadStats();
         this.notifySyncComplete();
       } else if (shouldRetryStats) {
