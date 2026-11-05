@@ -304,6 +304,12 @@ jobs:
             package: ./internal/duckdb
             suite: linux-duckdb
             timeout: 28
+          # The simulator compares wall times and needs the runner to itself.
+          - os: ubuntu-latest
+            name: ubuntu-latest, Simulator
+            package: ./cmd/perfsim
+            suite: linux-perfsim
+            timeout: 20
           - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
@@ -391,7 +397,7 @@ jobs:
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
         run: |
-          packages="$(go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$')"
+          packages="$(go list -tags fts5 ./... | grep -vE '/(cmd/perfsim|internal/(duckdb|sync))$')"
           go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
@@ -408,6 +414,7 @@ jobs:
           }
           $isolatedPackages = @(
             'go.kenn.io/agentsview/cmd/agentsview'
+            'go.kenn.io/agentsview/cmd/perfsim'
             'go.kenn.io/agentsview/internal/capture'
             'go.kenn.io/agentsview/internal/db'
             'go.kenn.io/agentsview/internal/duckdb'
@@ -578,6 +585,9 @@ jobs:
           - name: Capture
             suite: windows-capture
             package: ./internal/capture
+          - name: Simulator
+            suite: windows-perfsim
+            package: ./cmd/perfsim
           - name: Database, Parser
             suite: windows-db-parser
             package: ./internal/db ./internal/parser
@@ -869,6 +879,10 @@ jobs:
             suite: race-db-server
             runner: ubuntu-latest
             package: ./internal/db ./internal/server
+          - name: Simulator
+            suite: race-perfsim
+            runner: ubuntu-latest
+            package: ./cmd/perfsim
           - name: Other packages
             suite: race-other
             runner: ubuntu-latest
@@ -907,7 +921,7 @@ jobs:
         if: matrix.testSet == 'other'
         shell: bash
         run: |
-          packages="$(go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$')"
+          packages="$(go list ./... | grep -vE '/(cmd/(agentsview|perfsim)|internal/(db|server|duckdb|sync))$')"
           go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
