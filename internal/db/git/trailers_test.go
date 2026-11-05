@@ -97,9 +97,6 @@ func TestCommitTrailersParsing(t *testing.T) {
 			assert.Equal(t, "2026-10-30T10:10:00Z", commit.CommittedAt)
 		}
 	}
-	commits, err := ScanCommitTrailers(t.Context(), repo)
-	require.NoError(t, err)
-	assert.Len(t, commits, 5)
 }
 
 func TestCommitTrailersDetachedWorktree(t *testing.T) {

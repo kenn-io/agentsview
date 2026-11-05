@@ -47,6 +47,7 @@ func TestSessionCommits(t *testing.T) {
 				require.NotNil(t, exact)
 				assert.Equal(t, "abc1234", exact.SHA)
 				assert.Equal(t, "s-commit", exact.SessionID)
+				// JSON preserves the full prompt; human output sanitizes and truncates it.
 				assert.Equal(t, &db.CommitTurn{Ordinal: 1, Text: "Fix\x1b parser\n" + strings.Repeat("x", 200) + "END"}, exact.Turn)
 				return
 			}

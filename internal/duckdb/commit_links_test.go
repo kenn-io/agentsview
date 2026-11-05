@@ -30,6 +30,8 @@ func TestDuckDBTrailerDuplicateOwnerIdentities(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, links.Commits, 1)
 	assert.Equal(t, sha, links.Commits[0].SHA)
+	assert.Equal(t, "codex:abc", links.Commits[0].SessionID)
+	assert.Equal(t, "trailer", links.Commits[0].Source)
 }
 
 func TestDuckDBCommitLinkParity(t *testing.T) {

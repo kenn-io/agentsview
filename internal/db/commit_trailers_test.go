@@ -15,6 +15,8 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 	}{
 		{"claude", "claude:session", "claude", "session"},
 		{"codex", "codex:session_a", "codex", "codex:session_a"},
+		{"freebuff", "freebuff:project-a:123", "freebuff", "freebuff:project-a:123"},
+		{"codebuff", "codebuff:project-a:123", "codebuff", "codebuff:project-a:123"},
 		{"native colon", "codex:session:page", "codex", "codex:session:page"},
 		{"claude native colon", "claude:session:page", "claude", "session:page"},
 	} {
@@ -30,10 +32,12 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 			require.Len(t, found.Commits, 1)
 			require.Len(t, found.Commits[0].Links, 1)
 			assert.Equal(t, tt.owner, found.Commits[0].Links[0].SessionID)
+			assert.False(t, found.Commits[0].Links[0].Missing)
 			list, err := d.SessionCommitLinks(t.Context(), tt.owner)
 			require.NoError(t, err)
 			require.Len(t, list.Commits, 1)
 			assert.Equal(t, sha, list.Commits[0].SHA)
+			assert.Equal(t, "trailer", list.Commits[0].Source)
 		})
 	}
 }
@@ -159,9 +163,10 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 	for _, tt := range []struct {
 		name, owner, agent, trailer, committedAt string
 		messages                                 []Message
+		wantPrompt                               bool
 	}{
 		{
-			name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
+			wantPrompt: true, name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
 			messages: []Message{
 				{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
 				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Within tolerance", Timestamp: "2026-10-30T10:14:00Z"},
@@ -170,17 +175,20 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:14:00Z"},
 			},
 		},
-		{name: "no qualifying prompt", owner: "codex:thread", agent: "codex", trailer: "codex:thread", committedAt: tsZero},
+		{
+			name: "no qualifying prompt", owner: "codex:thread", agent: "codex", trailer: "codex:thread", committedAt: "2026-10-30T10:10:00Z",
+			messages: []Message{
+				{SessionID: "codex:thread", Ordinal: 0, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, tt.owner, "project-a", func(s *Session) { s.Agent = tt.agent })
-			if len(tt.messages) > 0 {
-				insertMessages(t, d, tt.messages...)
-			}
+			insertMessages(t, d, tt.messages...)
 			sha := strings.Repeat("a", 40)
 			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, CommittedAt: tt.committedAt, Sessions: []string{tt.trailer}}}))
-			if len(tt.messages) == 0 {
+			if !tt.wantPrompt {
 				found, err := d.CommitSessionLinks(t.Context(), []string{sha})
 				require.NoError(t, err)
 				require.Len(t, found.Commits[0].Links, 1)

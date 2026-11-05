@@ -174,12 +174,15 @@ func TestReconcileCommitTrailersLateRepository(t *testing.T) {
 	require.NoError(t, err)
 	runGit(late, "init", "-q", "-b", "main")
 	runGit(late, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Older\n\nAgent-Session: codex:older")
+	sha := runGit(late, "rev-parse", "HEAD")
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:older", Agent: "codex", Project: "project-a", Machine: "local", Cwd: late}))
 	engine.ReconcileCommitTrailers(t.Context())
 	list, err := database.SessionCommitLinks(t.Context(), "codex:older")
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 1)
 	assert.Equal(t, "trailer", list.Commits[0].Source)
+	assert.Equal(t, sha, list.Commits[0].SHA)
+	assert.Equal(t, late, list.Commits[0].Repository)
 }
 
 func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
@@ -205,27 +208,6 @@ func TestReconcileCommitTrailersRemovedCwd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Commits, 1)
 	assert.Equal(t, "Scratch", list.Commits[0].Subject)
-}
-
-func TestProjectIdentityRemovedCwd(t *testing.T) {
-	testutil.IsolateGit(t)
-	database := openTestDB(t)
-	repo, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Scratch\n\nAgent-Session: codex:removed"}} {
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = repo
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
-	}
-	cwd := filepath.Join(repo, "temporary", "nested")
-	require.NoError(t, os.MkdirAll(cwd, 0o700))
-	require.NoError(t, os.RemoveAll(filepath.Join(repo, "temporary")))
-	session := db.Session{ID: "codex:removed", Agent: "codex", Project: "project-a", Machine: "local", Cwd: cwd}
-	require.NoError(t, database.UpsertSession(t.Context(), session))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
-	t.Cleanup(engine.Close)
-	engine.ReconcileCommitTrailers(t.Context())
 	// A removed cwd retains its recorded root and unknown worktree relationship.
 	obs, ok := engine.projectIdentityObservation(session)
 	require.True(t, ok)
@@ -275,6 +257,7 @@ func TestReconcileCommitTrailersKeepsFailedOrMissingRepository(t *testing.T) {
 			if missing {
 				require.NoError(t, os.RemoveAll(repo))
 				engine.ReconcileCommitTrailers(t.Context())
+				require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))
 			} else {
 				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
 				require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))

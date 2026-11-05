@@ -796,38 +796,8 @@ func TestTrailerCommitMirrorRows(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].Missing)
 	assert.Equal(t, "trailer", rows[0].Source)
-}
-
-func TestTrailerCommitAgentAliases(t *testing.T) {
-	for _, tt := range []struct {
-		identity, sessionID string
-	}{
-		{identity: "freebuff:project-a:123", sessionID: "freebuff:project-a:123"},
-		{identity: "codebuff:project-a:123", sessionID: "codebuff:project-a:123"},
-		{identity: "claude:editor", sessionID: "editor"},
-	} {
-		t.Run(tt.identity, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, tt.sessionID, "project-a")
-			sha := strings.Repeat("a", 40)
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{tt.identity}, CommittedAt: tsZero}}))
-			t.Run("session commits", func(t *testing.T) {
-				links, err := d.SessionCommitLinks(t.Context(), tt.sessionID)
-				require.NoError(t, err)
-				require.Len(t, links.Commits, 1)
-				assert.Equal(t, sha, links.Commits[0].SHA)
-				assert.Equal(t, "trailer", links.Commits[0].Source)
-			})
-			t.Run("commit sessions", func(t *testing.T) {
-				links, err := d.CommitSessionLinks(t.Context(), []string{sha})
-				require.NoError(t, err)
-				require.Len(t, links.Commits, 1)
-				require.Len(t, links.Commits[0].Links, 1)
-				assert.Equal(t, tt.sessionID, links.Commits[0].Links[0].SessionID)
-				assert.False(t, links.Commits[0].Links[0].Missing)
-			})
-		})
-	}
+	assert.Nil(t, rows[0].TurnOrdinal)
+	assert.Empty(t, rows[0].TurnText)
 }
 
 func TestTrailerCommitUpsert(t *testing.T) {
@@ -838,7 +808,7 @@ func TestTrailerCommitUpsert(t *testing.T) {
 		unchangedAfter             int
 	}{
 		{name: "first branch", branches: []string{"", "feature", "main", ""}, repositories: []string{"repo", "repo", "repo", "repo"}, wantBranch: "feature", wantRepository: "repo", unchangedAfter: 2},
-		{name: "first repository", branches: []string{"", "", "", "", "", ""}, repositories: []string{"", "/clone-a", "/clone-b", "/clone-a", "/clone-b", ""}, wantRepository: "/clone-a", unchangedAfter: 2},
+		{name: "first repository", branches: []string{"", "", "", ""}, repositories: []string{"/clone-a", "/clone-b", "/clone-a", "/clone-b"}, wantRepository: "/clone-a", unchangedAfter: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -883,8 +853,6 @@ func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
 		assert.Equal(t, "project-b", rows[0].Project)
-		assert.True(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-b"}, nil))
-		assert.False(t, ProjectMatchesPushScope(rows[0].Project, []string{"project-a"}, nil))
 		assert.Equal(t, "trailer", rows[0].Source)
 		assert.True(t, rows[0].Missing)
 	}

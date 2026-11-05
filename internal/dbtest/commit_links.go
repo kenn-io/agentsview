@@ -120,6 +120,10 @@ func AssertTrailerIncrementalPush(t *testing.T, local *db.DB, reader func() db.C
 		nil,
 	} {
 		require.NoError(t, local.StoreTrailerCommitLinks(t.Context(), "trailer-repo", commits))
+		links, err := local.SessionCommitLinks(t.Context(), "commit-trailer")
+		require.NoError(t, err)
+		require.Len(t, links.Commits, 2)
+		assert.ElementsMatch(t, []string{strings.Repeat("b", 40), strings.Repeat("c", 40)}, []string{links.Commits[0].SHA, links.Commits[1].SHA})
 		push()
 		AssertCommitLinkParity(t, local, reader())
 	}
