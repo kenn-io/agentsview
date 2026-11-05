@@ -59,6 +59,7 @@
   "header_view_trigger": "Vue : {layout}",
   "header_view_trigger_focused": "Vue : {layout} · Requêtes et réponses",
   "header_view_trigger_label": "Vue de la transcription : {layout}",
+  "header_view_trigger_label_focused": "Vue de la transcription : {layout}, requêtes et réponses",
   "header_view_trigger_title": "Choisir la mise en page, le contenu et les types de blocs de cette transcription",
   "header_view_menu_label": "Vue de la transcription",
   "header_view_layout_heading": "Mise en page",

@@ -962,6 +962,89 @@ describe("SessionBreadcrumb", () => {
     unmount(component);
   });
 
+  it("keeps the transcript controls when the session details are missing", async () => {
+    ui.isMobileViewport = false;
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: undefined, onBack: () => {} },
+    });
+    await tick();
+    expect(document.querySelector(".session-breadcrumb .view-trigger")).not.toBeNull();
+    expect(
+      document.querySelector('.session-breadcrumb button[aria-label="Follow latest messages"]'),
+    ).not.toBeNull();
+    expect(document.querySelector(".session-breadcrumb .grade-badge")).toBeNull();
+    unmount(component);
+  });
+
+  describe("focus order follows the visual rows", () => {
+    const original = window.matchMedia;
+
+    function stubWidth(width: number) {
+      window.matchMedia = ((query: string) => {
+        const min = /min-width:\s*(\d+)px/.exec(query);
+        const max = /max-width:\s*(\d+)px/.exec(query);
+        const matches = (!min || width >= Number(min[1])) && (!max || width <= Number(max[1]));
+        return {
+          matches,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        } as unknown as MediaQueryList;
+      }) as typeof window.matchMedia;
+    }
+
+    afterEach(() => {
+      window.matchMedia = original;
+    });
+
+    // Document order is the Tab order; return each landmark's position in it.
+    function tabOrder(): string[] {
+      const names: Record<string, string> = {
+        ".view-trigger": "view",
+        '[aria-label="Copy link to session"]': "actions",
+        ".grade-badge": "grade",
+        ".session-id": "id",
+      };
+      const all = Array.from(document.querySelectorAll<HTMLElement>(".session-breadcrumb button"));
+      return all.flatMap((element) => {
+        const hit = Object.entries(names).find(([selector]) => element.matches(selector));
+        return hit ? [hit[1]] : [];
+      });
+    }
+
+    it("puts the title-row controls before the metadata from 1100px", async () => {
+      stubWidth(1280);
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await tick();
+      expect(tabOrder()).toEqual(["view", "actions", "grade", "id"]);
+    });
+
+    it("puts the actions first and the transcript controls ahead of the metadata below 1100px", async () => {
+      stubWidth(900);
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await tick();
+      expect(tabOrder()).toEqual(["actions", "view", "grade", "id"]);
+    });
+
+    it("keeps the phone strip order with the actions last", async () => {
+      stubWidth(400);
+      ui.isMobileViewport = true;
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await tick();
+      expect(tabOrder()).toEqual(["grade", "id", "actions"]);
+    });
+  });
+
   it("renders gemini with rose badge color", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,

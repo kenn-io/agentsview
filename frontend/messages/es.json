@@ -61,6 +61,7 @@
   "header_view_trigger": "Vista: {layout}",
   "header_view_trigger_focused": "Vista: {layout} · Solicitudes y respuestas",
   "header_view_trigger_label": "Vista de la transcripción: {layout}",
+  "header_view_trigger_label_focused": "Vista de la transcripción: {layout}, solicitudes y respuestas",
   "header_view_trigger_title": "Elige el diseño, el contenido y los tipos de bloque de esta transcripción",
   "header_view_menu_label": "Vista de la transcripción",
   "header_view_layout_heading": "Diseño",

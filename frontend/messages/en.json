@@ -59,6 +59,7 @@
   "header_view_trigger": "View: {layout}",
   "header_view_trigger_focused": "View: {layout} · Prompts and answers",
   "header_view_trigger_label": "Transcript view: {layout}",
+  "header_view_trigger_label_focused": "Transcript view: {layout}, prompts and answers",
   "header_view_trigger_title": "Choose the layout, content, and block types for this transcript",
   "header_view_menu_label": "Transcript view",
   "header_view_layout_heading": "Layout",

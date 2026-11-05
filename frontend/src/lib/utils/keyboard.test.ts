@@ -192,6 +192,34 @@ describe("registerShortcuts", () => {
       expect(sessions.activeSessionId).toBeNull();
     });
 
+    it("deselects the session when transcript content contains role=menu", () => {
+      sessions.activeSessionId = "s1";
+      const content = document.createElement("div");
+      content.className = "message-content";
+      content.innerHTML = '<div role="menu">Example</div>';
+      document.body.appendChild(content);
+      try {
+        fireKey("Escape");
+        expect(sessions.activeSessionId).toBeNull();
+      } finally {
+        content.remove();
+      }
+    });
+
+    it("leaves the session open while a kit-ui menu is open", () => {
+      sessions.activeSessionId = "s1";
+      const menu = document.createElement("div");
+      menu.className = "kit-menu__content";
+      menu.setAttribute("role", "menu");
+      document.body.appendChild(menu);
+      try {
+        fireKey("Escape");
+        expect(sessions.activeSessionId).toBe("s1");
+      } finally {
+        menu.remove();
+      }
+    });
+
     it("should prioritize closing modal over deselecting session", () => {
       ui.activeModal = "shortcuts";
       sessions.activeSessionId = "s1";

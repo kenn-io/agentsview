@@ -47,6 +47,12 @@
     (LAYOUTS.find((layout) => layout.id === ui.messageLayout) ?? LAYOUTS[0]!).name(),
   );
   const filtered = $derived(ui.hasBlockFilters);
+  const focused = $derived(ui.transcriptMode === "focused");
+  const triggerText = $derived(
+    focused
+      ? m.header_view_trigger_focused({ layout: layoutName })
+      : m.header_view_trigger({ layout: layoutName }),
+  );
 </script>
 
 <!-- A schematic of each layout: role header bars, message blocks, and tool
@@ -94,14 +100,18 @@
 <Menu align="end">
   <MenuTrigger
     class={["view-trigger", { filtered }]}
-    title={m.header_view_trigger_title()}
-    ariaLabel={m.header_view_trigger_label({ layout: layoutName })}
+    title={`${triggerText}\n${m.header_view_trigger_title()}`}
+    ariaLabel={focused
+      ? m.header_view_trigger_label_focused({ layout: layoutName })
+      : m.header_view_trigger_label({ layout: layoutName })}
   >
     <LayoutListIcon size="14" strokeWidth="1.75" aria-hidden="true" />
-    <span class="view-trigger-label">{ui.transcriptMode === "focused"
-      ? m.header_view_trigger_focused({ layout: layoutName })
-      : m.header_view_trigger({ layout: layoutName })}</span>
-    {#if ui.hasBlockFilters}<span class="view-filter-dot" aria-hidden="true"></span>{/if}
+    <!-- The text may be cut short; the tooltip and accessible name carry
+         it in full. -->
+    <span class="view-trigger-text">{triggerText}</span>
+    <!-- Always laid out, so showing it does not change the trigger's
+         width. -->
+    <span class="view-filter-dot" class:shown={filtered} aria-hidden="true"></span>
     <ChevronDownIcon size="12" strokeWidth="2" aria-hidden="true" />
   </MenuTrigger>
   <MenuContent ariaLabel={m.header_view_menu_label()} class="view-menu">
@@ -174,7 +184,9 @@
     font-weight: 500;
     color: var(--text-primary);
     white-space: nowrap;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 100%;
     margin-right: 4px;
   }
 
@@ -182,15 +194,24 @@
     background: var(--bg-surface-hover);
   }
 
-  /* A stable minimum width keeps neighbors (and the search field) from
-     shifting when the layout name changes. */
+  /* A fixed width keeps neighbors from shifting when the layout, content
+     mode, or language changes the label. Labels that do not fit end in an
+     ellipsis. A narrow pane may still shrink the trigger. */
   :global(.view-trigger) {
-    min-width: 132px;
+    width: 216px;
     justify-content: flex-start;
   }
 
-  :global(.view-trigger) :global(svg:last-child) {
-    margin-left: auto;
+  .view-trigger-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+  }
+
+  :global(.view-trigger) :global(svg) {
+    flex-shrink: 0;
   }
 
   /* Hidden block types get a small accent dot; amber is avoided because it
@@ -198,7 +219,12 @@
   .view-filter-dot {
     width: 6px;
     height: 6px;
+    flex-shrink: 0;
     border-radius: 50%;
+    background: transparent;
+  }
+
+  .view-filter-dot.shown {
     background: var(--accent-blue);
   }
 

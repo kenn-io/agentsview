@@ -61,6 +61,7 @@
   "header_view_trigger": "Görünüş: {layout}",
   "header_view_trigger_focused": "Görünüş: {layout} · Sorğular və cavablar",
   "header_view_trigger_label": "Transkript görünüşü: {layout}",
+  "header_view_trigger_label_focused": "Transkript görünüşü: {layout}, sorğular və cavablar",
   "header_view_trigger_title": "Bu transkript üçün düzülüşü, məzmunu və blok növlərini seçin",
   "header_view_menu_label": "Transkript görünüşü",
   "header_view_layout_heading": "Düzülüş",
