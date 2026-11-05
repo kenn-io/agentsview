@@ -24,6 +24,57 @@ func commitMessages(id, input, result string) []Message {
 	}
 }
 
+func TestCommitLinksShortProducerSHA(t *testing.T) {
+	for _, tt := range []struct{ name, command, output, branch string }{
+		{"summary", "git commit -m hello", "[master 6f84] hello\n", "master"},
+		{"root summary", "git commit -m hello", "[master (root-commit) 6f84] hello\n", "master"},
+		{"quiet log", "git commit -q -m hello && git log --oneline -1", "6f84 hello\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), tt.output)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "6f84", got.Commits[0].SHA)
+			assert.Equal(t, tt.branch, got.Commits[0].Branch)
+			assert.Equal(t, "hello", got.Commits[0].Subject)
+			_, err = d.CommitSessionLinks(t.Context(), []string{"6f84"})
+			assert.ErrorIs(t, err, ErrInvalidCommitSHA)
+		})
+	}
+}
+
+func TestCommitLinksCellToProcess(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m fix",workdir:"/repo"}))`, "Script running with cell ID cell-a")
+	messages[2].ToolCalls[0].ToolName = "exec"
+	for i, poll := range []struct{ tool, input, output string }{
+		{"wait", `{"cell_id":"cell-a"}`, "Process running with session ID 7"},
+		{"write_stdin", `{"session_id":7}`, "[main abc1234] Fix parser\n"},
+	} {
+		m := commitMessages("s1", poll.input, poll.output)[2]
+		m.Ordinal = 3 + i
+		m.ToolCalls[0].ToolName, m.ToolCalls[0].ToolUseID = poll.tool, poll.tool
+		if poll.tool == "wait" {
+			m.ToolCalls[0].Category = "Other"
+		}
+		messages = append(messages, m)
+	}
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.Equal(t, "commit-call", got.Commits[0].ToolUseID)
+	assert.Equal(t, 2, got.Commits[0].MessageOrdinal)
+	assert.Equal(t, "/repo", got.Commits[0].Repository)
+}
+
 func TestCommitLinksLateResult(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "claude:commit", "project-a")

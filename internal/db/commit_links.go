@@ -29,8 +29,9 @@ var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+	commitProducedSHARE       = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
 	commitCommandTokenRE      = regexp.MustCompile(commitCommandToken)
-	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{4,64})\] ([^\r\n]*)\r?$`)
 	commitQuietReadbackRE     = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)git\s+commit((?:\s+` + commitCommandToken + `)*?\s+(?:-q|--quiet)(?:\s+` + commitCommandToken + `)*?)\s*&&\s*git\s+(?:rev-parse\s+HEAD|log\s+(?:-1\s+--oneline|--oneline\s+-1))\s*(?:$|&&)`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
@@ -367,7 +368,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		for _, output := range outputs {
 			for line := range strings.SplitSeq(output.text, "\n") {
 				sha, subject, _ := strings.Cut(strings.TrimSpace(line), " ")
-				if commitSHARE.MatchString(sha) {
+				if commitProducedSHARE.MatchString(sha) {
 					quietSHA, quietSubject = sha, subject
 					quietOwner = cmp.Or(pending[output.process], singleOwner, call)
 					quietCount++
@@ -444,17 +445,18 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			return nil
 		}
 	}
-	running := map[string]bool{}
-	for _, call := range calls {
-		command := commitCommandText(call.input)
-		if invokesGitCommit(command) {
+	for loaded := 0; loaded < len(calls); {
+		running := map[string]bool{}
+		for _, call := range calls[loaded:] {
 			_, processes := callOutput(call.result)
 			for _, process := range processes {
 				running[process] = true
 			}
 		}
-	}
-	if len(running) > 0 {
+		loaded = len(calls)
+		if len(running) == 0 {
+			break
+		}
 		// Read poll inputs first so unrelated process output is never loaded.
 		rows, err := tx.Query(`SELECT id, input_json, tool_name FROM tool_calls
  WHERE session_id=? AND input_json IS NOT NULL
@@ -464,17 +466,18 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 			return err
 		}
 		defer rows.Close()
-		var ids []string
+		var pollIDs []string
 		for rows.Next() {
 			var id, input, tool string
 			if err := rows.Scan(&id, &input, &tool); err != nil {
 				return err
 			}
-			if invokesGitCommit(commitCommandText(input)) {
+			if slices.Contains(ids, id) {
 				continue
 			}
 			for _, process := range commitPollIDs(input, tool) {
 				if running[process] {
+					pollIDs = append(pollIDs, id)
 					ids = append(ids, id)
 					break
 				}
@@ -485,12 +488,10 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		if err != nil {
 			return err
 		}
-		if len(ids) > 0 {
-			for chunk := range slices.Chunk(ids, maxSQLVars-1) {
-				placeholders, args := InPlaceholders(chunk)
-				if err := load(`t.id IN `+placeholders, args...); err != nil {
-					return err
-				}
+		for chunk := range slices.Chunk(pollIDs, maxSQLVars-1) {
+			placeholders, args := InPlaceholders(chunk)
+			if err := load(`t.id IN `+placeholders, args...); err != nil {
+				return err
 			}
 		}
 	}
