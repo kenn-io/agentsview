@@ -2,11 +2,11 @@ package sync
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,6 +93,9 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		}
 	}
 	state := &db.CodexForkState{ParentID: info.ParentID, ParentKnown: info.Resolved, ParentTurns: maps.Clone(info.ParentTurns)}
+	if previous != nil && previous.ParentID == info.ParentID {
+		state.TurnContexts = slices.Clone(previous.TurnContexts)
+	}
 	if previous != nil && previous.ParentID == info.ParentID && previous.ParentKnown {
 		state.ParentKnown = true
 		if state.ParentTurns == nil {
@@ -102,6 +105,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	}
 
 	state.PreserveHistory = !info.Resolved
+	sourceContexts, classifyReplay := prepareCodexForkContexts(state, info.TurnContexts)
 
 	// Capture original scratch occurrence identities before replay removal or
 	// insertion of archived-only messages changes the final ordinal stream.
@@ -122,18 +126,15 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	}
 	incoming := make([]entry, 0, len(c.Messages))
 	// Saved membership can be more complete than the currently readable
-	// parent pages. An idless turn_context still opens the child boundary;
-	// distinguish it from pre-turn replay records by explicit turn presence.
-	replaying := state.ParentKnown
+	// parent pages. Classify with every source context, including empty turns.
 	for i, m := range c.Messages {
 		origin := c.Parsed.Messages[i].CodexOrigin
-		if replaying {
-			if _, inherited := state.ParentTurns[origin.TurnID]; inherited || (origin.TurnID == "" && !origin.InTurn) {
-				continue
-			}
-			replaying = false
+		turnContext := sourceContexts[origin.TurnContext]
+		inherited, known := classifyReplay(origin, turnContext)
+		if inherited {
+			continue
 		}
-		provisional := !state.ParentKnown
+		provisional := !known
 		var pendingUsage *db.CodexForkUsage
 		if provisional {
 			pendingUsage = &db.CodexForkUsage{TokenUsage: m.TokenUsage, ContextTokens: m.ContextTokens, OutputTokens: m.OutputTokens, HasContextTokens: m.HasContextTokens, HasOutputTokens: m.HasOutputTokens}
@@ -141,7 +142,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			m.ContextTokens, m.OutputTokens = 0, 0
 			m.HasContextTokens, m.HasOutputTokens = false, false
 		}
-		incoming = append(incoming, entry{message: m, provenance: db.CodexForkMessage{Origin: origin, Provisional: provisional, PendingUsage: pendingUsage}, source: i})
+		incoming = append(incoming, entry{message: m, provenance: db.CodexForkMessage{Origin: origin, Provisional: provisional, PendingUsage: pendingUsage, TurnContext: turnContext}, source: i})
 	}
 
 	// Occurrence queues preserve repeated identical messages. Legacy rows lack
@@ -175,7 +176,6 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	legacyCounts := make(map[[32]byte]int)
 	reserved := make([]bool, len(incoming))
 	priorMatches := make(map[int]int)
-	archivedReplaying := state.ParentKnown
 	for i, m := range prior {
 		if err := ctx.Err(); err != nil {
 			return c, nil, nil, err
@@ -190,15 +190,11 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				old = previous.Messages[m.Ordinal]
 			}
 		}
-		// Classify saved replay before reserving source occurrences. Pre-turn
-		// replay and idless child turns share an empty turn ID.
-		if archivedReplaying && old.Origin.Line > 0 {
-			_, inherited := state.ParentTurns[old.Origin.TurnID]
-			if inherited || (old.Origin.TurnID == "" && !old.Origin.InTurn) {
-				inheritedPrior[i] = true
-				continue
-			}
-			archivedReplaying = false
+		// Archive order can combine several snapshots. Classify each record
+		// using its own source prefix before reserving any incoming match.
+		if inherited, _ := classifyReplay(old.Origin, old.TurnContext); inherited {
+			inheritedPrior[i] = true
+			continue
 		}
 		_, projected := e.db.ProjectSessionForStorage(c.Session, []db.Message{m})
 		if len(projected) > 0 {
@@ -280,6 +276,9 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 					previousUsage.TokenUsage, previousUsage.ContextTokens, previousUsage.OutputTokens = usage.TokenUsage, usage.ContextTokens, usage.OutputTokens
 					previousUsage.HasContextTokens, previousUsage.HasOutputTokens = usage.HasContextTokens, usage.HasOutputTokens
 				}
+				if previousUsage.TokenUsage.Kind() == 'n' {
+					previousUsage.TokenUsage = nil
+				}
 				if current.provenance.Provisional {
 					usage := current.provenance.PendingUsage
 					if len(usage.TokenUsage) == 0 && !usage.HasContextTokens && !usage.HasOutputTokens {
@@ -348,6 +347,11 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 					}
 				}
 			}
+			// Earlier archive matches may already have emitted this source row.
+			// Publish its restored scalar usage and provenance as well as calls.
+			if ordinal, emitted := sourceOrdinals[current.source]; emitted {
+				merged[ordinal] = *current
+			}
 			for next <= match {
 				if !used[next] {
 					sourceOrdinals[incoming[next].source] = len(merged)
@@ -364,7 +368,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		}
 		// Remove only records positively identified as inherited replay. Source
 		// truncation alone never erases archived child messages or tool results.
-		if state.ParentKnown && old.Origin.Line > 0 {
+		if _, known := classifyReplay(old.Origin, old.TurnContext); known {
 			if old.Provisional && (old.Origin.TurnID != "" || old.Origin.InTurn) && old.PendingUsage != nil {
 				usage := old.PendingUsage
 				m.TokenUsage, m.ContextTokens, m.OutputTokens = usage.TokenUsage, usage.ContextTokens, usage.OutputTokens
@@ -432,6 +436,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			}
 		}
 	}
+	retainCodexForkContexts(state)
 	c.Session.FirstMessage = nil
 	for _, m := range c.Messages {
 		if m.Role == "user" && !m.IsSystem && m.SourceSubtype != parser.SourceSubtypeToolResult && strings.TrimSpace(m.Content) != "" {
@@ -451,6 +456,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	}
 	// Non-source usage, such as imported historical usage-only rows, is archive
 	// history too. Codex message usage above must not erase it during a retry.
+	retainedUsage := false
 	if len(c.Parsed.UsageEvents) == 0 {
 		for _, event := range retainedEvents {
 			if event.MessageOrdinal != nil {
@@ -466,10 +472,10 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				InputTokens: event.InputTokens, OutputTokens: event.OutputTokens, CacheCreationInputTokens: event.CacheCreationInputTokens, CacheReadInputTokens: event.CacheReadInputTokens,
 				ReasoningTokens: event.ReasoningTokens, Cost: event.Cost, CostStatus: event.CostStatus, CostSource: event.CostSource, OccurredAt: event.OccurredAt, DedupKey: event.DedupKey,
 			})
-			state.PreserveHistory = true
+			retainedUsage = true
 		}
 	}
-	if state.PreserveHistory {
+	if state.PreserveHistory || retainedUsage {
 		archived, err := store.GetSession(ctx, priorID)
 		if err != nil {
 			return c, nil, nil, err
@@ -511,21 +517,25 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolResultEvent, bool) {
 	type identity struct{ agent, status, digest string }
 	key := func(event db.ToolResultEvent) identity {
-		digest := event.RawContentDigest
-		if digest == nil {
-			hash := sha256.Sum256([]byte(event.Content))
-			digest = hash[:]
-		}
-		return identity{event.AgentID, event.Status, string(digest)}
+		return identity{event.AgentID, event.Status, string(event.RawContentDigest)}
 	}
 	currentByKey := make(map[identity]int, len(current))
 	for i, event := range current {
-		currentByKey[key(event)] = i
+		if event.RawContentDigest != nil {
+			currentByKey[key(event)] = i
+		}
 	}
 	merged := make([]db.ToolResultEvent, 0, len(saved)+len(current))
 	seen := make(map[identity]bool)
 	retained := false
 	appendEvent := func(event db.ToolResultEvent) {
+		// Archived display content cannot reconstruct raw provider identity.
+		// Keep each unknown occurrence without inventing a digest for it.
+		if event.RawContentDigest == nil {
+			event.EventIndex = len(merged)
+			merged = append(merged, event)
+			return
+		}
 		id := key(event)
 		if !seen[id] {
 			seen[id] = true
@@ -535,7 +545,7 @@ func mergeCodexForkResultEvents(saved, current []db.ToolResultEvent) ([]db.ToolR
 	}
 	next := 0
 	for _, event := range saved {
-		if anchor, ok := currentByKey[key(event)]; ok {
+		if anchor, ok := currentByKey[key(event)]; event.RawContentDigest != nil && ok {
 			// Restored source events before a shared event precede that anchor.
 			// Current order and metadata resolve conflicting old observations.
 			for next <= anchor {

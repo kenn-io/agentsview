@@ -154,13 +154,15 @@ func TestCodexForkReviewHealthySkipsArchivedPayload(t *testing.T) {
 					require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, MessageOrdinal: new(0), Source: "turn", Model: "gpt-5", OutputTokens: 5, OccurredAt: forkReviewTime, DedupKey: "historical"}}))
 				}
 				before := d.MessagesLoadCount()
-				require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
-				assert.Equal(t, before, d.MessagesLoadCount(), "authoritative full parses must not hydrate archived outputs")
-				if ordinalUsage {
-					events, err := d.GetUsageEvents(t.Context(), id)
-					require.NoError(t, err)
-					require.Len(t, events, 1)
-					assert.Equal(t, new(0), events[0].MessageOrdinal)
+				for range 3 {
+					require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+					assert.Equal(t, before, d.MessagesLoadCount(), "authoritative full parses must not hydrate archived outputs")
+					if ordinalUsage {
+						events, err := d.GetUsageEvents(t.Context(), id)
+						require.NoError(t, err)
+						require.Len(t, events, 1)
+						assert.Equal(t, new(0), events[0].MessageOrdinal)
+					}
 				}
 			})
 		}
@@ -384,5 +386,44 @@ func TestCodexForkReviewStagedResultPrefix(t *testing.T) {
 			require.Len(t, ms[0].ToolCalls[0].ResultEvents, 1)
 			assert.Equal(t, "remote-host~codex:agent-1", ms[0].ToolCalls[0].ResultEvents[0].SubagentSessionID)
 		})
+	}
+}
+
+func TestCodexForkRecoveredFullSourceStopsHydrating(t *testing.T) {
+	for _, stage := range []int64{1, 1 << 30} {
+		for _, ordinalUsage := range []bool{false, true} {
+			t.Run(strconv.FormatInt(stage, 10)+"/ordinal="+strconv.FormatBool(ordinalUsage), func(t *testing.T) {
+				e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+				id := "codex:" + forkReviewChild
+				body := meta + testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime), testjsonl.CodexFunctionCallJSON("exec_command", "", forkReviewTime), testjsonl.CodexFunctionCallOutputJSON("call_test", strings.Repeat("x", 32<<10), forkReviewTime))
+				require.NoError(t, os.WriteFile(cp, []byte(body), 0o600))
+				require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+				if ordinalUsage {
+					require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, MessageOrdinal: new(0), Source: "turn", Model: "gpt-5", OutputTokens: 5, OccurredAt: forkReviewTime, DedupKey: "historical"}}))
+				}
+				beforeRecovery, err := d.GetCodexForkState(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, beforeRecovery)
+				require.Len(t, beforeRecovery.Messages, 1)
+				require.NotNil(t, beforeRecovery.Messages[0].PendingUsage)
+				t.Logf("before recovery pending raw=%q", string(beforeRecovery.Messages[0].PendingUsage.TokenUsage))
+				require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))), 0o600))
+				require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+				state, err := d.GetCodexForkState(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, state)
+				t.Logf("after_recovery preserve=%v known=%v load_count=%d", state.PreserveHistory, state.ParentKnown, d.MessagesLoadCount())
+				before := d.MessagesLoadCount()
+				for refresh := range 3 {
+					require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+					state, err = d.GetCodexForkState(t.Context(), id)
+					require.NoError(t, err)
+					require.NotNil(t, state)
+					t.Logf("refresh=%d preserve=%v load_count=%d", refresh, state.PreserveHistory, d.MessagesLoadCount())
+					assert.False(t, state.PreserveHistory, "all original source records are available after parent recovery")
+					assert.Equal(t, before, d.MessagesLoadCount(), "recovered authoritative full parses must stop hydrating archived outputs")
+				}
+			})
+		}
 	}
 }

@@ -810,6 +810,15 @@ fixtures retain this field; missing identities remain source-local.
   the real parser, row preparation, and archive writer. Identical parent and
   child occurrences retain unknown usage until source evidence identifies it;
   complete occurrence sets, distinct timestamps, and current usage are controls.
+  `TestCodexForkMessageFreeChildBoundary` distinguishes the parser's correct
+  boundary from reconciliation, with named-parent and message-bearing controls.
+  `TestCodexForkReorderedArchivedReplay` covers child-only then replay-only
+  snapshots. `TestCodexForkMessageFreeBoundarySurvivesShortening` preserves that
+  source context through a shortened source and archive rebuild.
+  `TestCodexForkRestoredOrderKeepsUsage` exercises descending match indices in
+  unresolved and resolved writes. `TestCodexForkImportedResultOccurrences`
+  reaches nullable raw event metadata through `ApplyArtifactImportedSession`;
+  native digests remain a separate control in `TestCodexForkNativeResultIdentity`.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

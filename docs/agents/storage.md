@@ -92,9 +92,12 @@ Summary-only saved results keep their text and lengths when the source still
 contains the call but omits its output. Blocked results retain their permitted
 length metadata across repeated staged writes.
 
-Saved replay filtering stops at the first child turn, including when later child
-turns have no ID. Pre-turn replay leaves the transcript and preview when the
-parent returns. Known source occurrences claim their matches before legacy rows.
+Each saved message keeps its original ordered turn-context prefix, including
+turns that emitted no message. Prefixes share storage across snapshots and only
+referenced prefixes survive a write. Replay classification uses that source
+evidence rather than merged archive order. Pre-turn replay leaves the transcript
+and preview when the parent returns. Known source occurrences claim their
+matches before legacy rows.
 When fewer identical legacy occurrences return, their ownership remains unknown:
 keep those rows and their uncounted usage separately instead of assigning parent
 usage to a child. Repeating the same source does not add more occurrences.
@@ -104,6 +107,15 @@ Their non-summary usage adds to message totals, and context uses the highest
 measurement from either source. Retained history keeps chronological activity
 bounds even when its only remaining rows are usage events.
 Ordinal-only usage reconciliation reads message metadata without result bodies.
+Retaining usage alone does not require preserving message payloads on later
+refreshes. Restored usage also follows source entries emitted before their
+archived counterpart is reconciled.
+
+Archived result events without recorded raw digests remain separate occurrences.
+Sanitized or blocked display text cannot establish provider identity. Returning
+source events with real digests still deduplicate across retries; unknown
+historical occurrences remain alongside them when their identity cannot be
+proved.
 
 If the parent never appears, available messages continue updating across retries,
 restarts, and rebuilds. Usage for unverified messages remains unavailable. If the

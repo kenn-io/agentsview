@@ -1476,6 +1476,9 @@ type CodexForkInfo struct {
 	ParentID    string
 	Resolved    bool
 	ParentTurns map[string]struct{}
+	// TurnContexts contains every source turn ID, including empty IDs and
+	// contexts suppressed as replay, in source order.
+	TurnContexts []string
 }
 
 // CodexMessageOrigin identifies a record within its source rollout.
@@ -1484,6 +1487,9 @@ type CodexMessageOrigin struct {
 	Line   int
 	TurnID string
 	InTurn bool
+	// TurnContext is the 1-based index in CodexForkInfo.TurnContexts.
+	// Zero identifies a record before the first turn context.
+	TurnContext int
 }
 
 // ParsedSession holds session metadata extracted from a JSONL file.

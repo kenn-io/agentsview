@@ -27,6 +27,14 @@ type CodexForkMessage struct {
 	PendingUsage *CodexForkUsage
 	Origin       parser.CodexMessageOrigin
 	Provisional  bool
+	TurnContext  int
+}
+
+// CodexForkTurnContext shares source prefixes across retained snapshots.
+// Parent is a one-based index of an earlier context; zero starts a source.
+type CodexForkTurnContext struct {
+	Parent int
+	TurnID string
 }
 
 // CodexForkState is local archive provenance, independent of optional parser
@@ -37,6 +45,7 @@ type CodexForkState struct {
 	PreserveHistory bool
 	ParentTurns     map[string]struct{}
 	Messages        []CodexForkMessage
+	TurnContexts    []CodexForkTurnContext
 }
 
 func (db *DB) GetCodexForkState(ctx context.Context, sessionID string) (*CodexForkState, error) {
