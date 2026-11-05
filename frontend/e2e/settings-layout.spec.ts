@@ -156,6 +156,26 @@ test.describe("Settings layout", () => {
       }),
     );
     expect(new Set(nameOnSwitchLine)).toEqual(new Set([true]));
+    // Third column: every provider's configuration starts at one left
+    // edge, to the right of its switch and level with it.
+    const configuration = await panel.locator(".provider-row").evaluateAll((rows) =>
+      rows.map((row) => {
+        const track = row.querySelector(".kit-toggle__track")!.getBoundingClientRect();
+        const details = row.querySelector(".provider-details")!.getBoundingClientRect();
+        return {
+          left: Math.round(details.left),
+          clearOfSwitch: details.left >= track.right,
+          levelWithSwitch: details.top <= track.bottom,
+        };
+      }),
+    );
+    expect(new Set(configuration.map((item) => item.left)).size).toBe(1);
+    expect(configuration.every((item) => item.clearOfSwitch && item.levelWithSwitch)).toBe(true);
+    // The switch shows no Enabled/Disabled text; its name is in aria-label.
+    await expect(panel.locator(".provider-row .kit-toggle__label")).toHaveCount(0);
+    await expect(
+      panel.getByRole("switch", { name: "Enable Claude Code session sync" }),
+    ).toHaveCount(1);
     expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
 
     await openPanel("Remote access");
@@ -280,9 +300,15 @@ for (const width of [1280, 375]) {
       const homeSegRight = Math.max(...[...homePath.querySelectorAll(".provider-path-seg")].map((s) => s.getBoundingClientRect().right));
       const remove = home.querySelector("button")!.getBoundingClientRect();
       const scroller = element.closest(".kit-settings__scroll") as HTMLElement | null;
+      const name = element.querySelector(".provider-name")!.getBoundingClientRect();
+      const track = element.querySelector(".kit-toggle__track")!.getBoundingClientRect();
       return {
         panelRight: panel.right,
         detailsWidth: details.width,
+        detailsTop: details.top,
+        nameMid: name.top + name.height / 2,
+        trackMid: track.top + track.height / 2,
+        trackBottom: track.bottom,
         detailsRight: details.right,
         paths,
         homeSegRight,
@@ -300,8 +326,11 @@ for (const width of [1280, 375]) {
     expect(layout.removeRight).toBeLessThanOrEqual(layout.panelRight + 0.5);
     expect(layout.scrollerOverflow).toBe(false);
     if (width < 640) {
-      // Phones give the details the row's full width.
+      // Phones keep the name and switch on one line and give the
+      // configuration the row's full width below them.
       expect(layout.detailsWidth).toBeGreaterThanOrEqual(250);
+      expect(Math.abs(layout.nameMid - layout.trackMid)).toBeLessThanOrEqual(1);
+      expect(layout.detailsTop).toBeGreaterThanOrEqual(layout.trackBottom);
     }
     const add = await row.locator(".provider-home-add").evaluate((element) => {
       const input = element.querySelector(".kit-text-input")!.getBoundingClientRect();

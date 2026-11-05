@@ -81,6 +81,24 @@ describe("AgentDirSettings", () => {
     unmount(component);
   });
 
+  it("names each switch for its provider without visible state text", async () => {
+    const component = mount(AgentDirSettings, { target: document.body });
+    await tick();
+
+    const rows = [...document.body.querySelectorAll<HTMLElement>(".provider-row")];
+    expect(
+      rows.map((row) => ({
+        name: row.querySelector(".provider-name")?.textContent,
+        switchLabel: row.querySelector('input[role="switch"]')?.getAttribute("aria-label"),
+        switchText: row.querySelector(".kit-toggle")?.textContent?.trim(),
+      })),
+    ).toEqual([
+      { name: "Claude Code", switchLabel: "Enable Claude Code session sync", switchText: "" },
+      { name: "Gemini", switchLabel: "Enable Gemini session sync", switchText: "" },
+    ]);
+    await unmount(component);
+  });
+
   it("enables a disabled provider and confirms the change was applied", async () => {
     const save = vi.spyOn(settings, "save").mockImplementation(async (patch) => {
       settings.disabledAgents = patch.disabled_agents ?? [];
