@@ -26,7 +26,8 @@ The latest release is
   from stored Git summaries, including Codex output received through later
   polls. Summaries need SHAs of 7 to 64 characters; quiet commits have no link.
   The prompt is the last user turn before the commit call. Repository paths
-  follow the first directory in each call and only a leading `cd`.
+  follow the first commit invocation in each call, using the last `cd` before
+  it and any `git -C` options.
   Transcript-only and usage-only archives retain no links. Deleted sessions
   remain visible as missing records. Sessions permanently deleted before this
   release have no links.

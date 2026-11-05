@@ -36,7 +36,7 @@ var (
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
-	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
@@ -138,8 +138,10 @@ func commitRepository(input, cwd string) string {
 		cwd = resolve(cwd, dir)
 	}
 	command := commitCommandText(input)
-	if match := commitCDRE.FindStringSubmatch(command); match != nil {
-		cwd = resolve(cwd, match[1])
+	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
+		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
+			cwd = resolve(cwd, matches[len(matches)-1][1])
+		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
@@ -288,8 +290,8 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		} else if len(pollIDs) == 0 {
 			continue
 		}
-		// One poll owns every output block, even when its process has finished.
-		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1
+		// A call that only polls one execution owns its output even after it finishes.
+		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || strings.Count(call.input, "tools.") == 1)
 		if singlePoll {
 			var ok bool
 			singleOwner, ok = pending[pollIDs[0]]

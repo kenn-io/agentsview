@@ -31,8 +31,11 @@ func TestSessionCommits(t *testing.T) {
 		out, err := executeCommand(newRootCommand(), "session", "commits", "s-commit", "--format", "json")
 		require.NoError(t, err)
 		got := decodeCLIJSON[db.SessionCommitList](t, out)
-		require.NotEmpty(t, got.Commits)
+		require.Len(t, got.Commits, 2)
 		for _, commit := range got.Commits {
+			if commit.Source == "transcript" {
+				assert.Equal(t, "exact-call", commit.ToolUseID)
+			}
 			require.NotNil(t, commit.Turn)
 			// JSON preserves the full prompt; human output sanitizes and truncates it.
 			assert.Equal(t, "Fix\x1b parser\n"+strings.Repeat("x", 200)+"END", commit.Turn.Text)
@@ -43,11 +46,8 @@ func TestSessionCommits(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, out, "commit message")
 		assert.Contains(t, out, "Editor commit")
-		assert.Contains(t, out, "SOURCE")
-		assert.Contains(t, out, "transcript")
-		assert.Regexp(t, `s-commit\s+1\s+1\s+exact-call`, out)
-		assert.Contains(t, out, "abc1234")
-		assert.Contains(t, out, "Fix parser")
+		assert.Regexp(t, `SESSION\s+ORDINAL\s+CALL\s+TIME\s+SOURCE\s+SHA\s+BRANCH\s+SUBJECT\s+USER TURN`, out)
+		assert.Regexp(t, `s-commit\s+1\s+1\s+transcript\s+abc1234\s+main\s+Fix parser`, out)
 		assert.Contains(t, out, "0: Fix parser ")
 		assert.Contains(t, out, "(estimated)")
 		assert.Contains(t, out, "…")

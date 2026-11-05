@@ -37,7 +37,7 @@ func newSessionCommitsCommand() *cobra.Command {
 				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), list)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "SESSION\tORDINAL\tCALL\tTOOL USE ID\tTIME\tSOURCE\tSHA\tBRANCH\tSUBJECT\tUSER TURN")
+			fmt.Fprintln(tw, "SESSION\tORDINAL\tCALL\tTIME\tSOURCE\tSHA\tBRANCH\tSUBJECT\tUSER TURN")
 			for _, l := range list.Commits {
 				source := l.Source
 				if source == "trailer" {
@@ -54,7 +54,7 @@ func newSessionCommitsCommand() *cobra.Command {
 						turn += " (estimated)"
 					}
 				}
-				fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sanitizeTerminal(l.SessionID), l.MessageOrdinal, l.CallIndex, sanitizeTerminal(l.ToolUseID), sanitizeTerminal(l.CommittedAt), sanitizeTerminal(source), sanitizeTerminal(l.SHA), sanitizeTerminal(l.Branch), sanitizeTerminal(subject), turn)
+				fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n", sanitizeTerminal(l.SessionID), l.MessageOrdinal, l.CallIndex, sanitizeTerminal(l.CommittedAt), sanitizeTerminal(source), sanitizeTerminal(l.SHA), sanitizeTerminal(l.Branch), sanitizeTerminal(subject), turn)
 			}
 			return tw.Flush()
 		},
